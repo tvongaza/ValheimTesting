@@ -26,7 +26,8 @@ python3 scripts/validate.py
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.py` runs the 63 local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The CLI transport and its tests remain upstream-owned, not copied here. To test a mod, add this local feed plus nuget.org, then pin `Valheim.Testing` / `Valheim.Testing.Game` to `0.1.0-preview.4`.
+`validate.py` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The CLI transport and its tests remain upstream-owned, not copied here. To test a mod, add this local feed plus nuget.org, then pin `Valheim.Testing` to `0.1.0-preview.4` and `Valheim.Testing.Game` to
+`0.1.0-preview.5` (adds paint and human-walk evidence). CLI remains pinned at preview.4.
 
 ## Test pyramid
 
@@ -44,3 +45,7 @@ Before extraction, the library passed 63 tests; Roads' adapter verified 100 decl
 This is not arbitrary terrain/paint coverage, human walking acceptance, or MWL port gameplay validation. MWL's full-mode payment/delivery/ownership gate remains pending. See [the detailed guide](docs/testing-toolkit.md), [source provenance](PROVENANCE.md), and examples.
 
 Preview APIs may change. No release or upstream merge is implied by this repository.
+
+Follow-up examples: `PaintCheck` compares loaded raw paint channels;
+`WalkingReview` records a human-driven traversal without moving the character.
+Both build locally; native paint and human walking acceptance remain pending.
