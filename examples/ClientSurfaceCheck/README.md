@@ -41,5 +41,5 @@ are written to a new directory. Wrong expectations are retained with a failed
 result. Run the same plan again after a confirmed save, server restart and rejoin
 for persistence evidence; compare world/build pins in both runs.
 
-Package-only usage follows [TerrainCheck](../TerrainCheck/README.md): set `ToolkitPackageVersion=0.1.0-preview.9` and use the local feed containing Game preview.9 plus pure-helper/CLI preview.4 packages. The example has
+Package-only usage follows [TerrainCheck](../TerrainCheck/README.md): set `ToolkitPackageVersion=0.1.0-preview.10` and restore from NuGet.org. The example has
 no game or mod binary dependencies.

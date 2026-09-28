@@ -1,4 +1,4 @@
-// Build the exact pinned ValheimCLI transport package into the local feed.
+// Build the exact pinned ValheimCLI transport into the local feed as Valheim.Testing.Cli.
 // Needs only the .NET 10 SDK and Git; never needs a game install.
 //
 //   dotnet run scripts/bootstrap-cli.cs
@@ -23,6 +23,7 @@ using JsonDocument pinDoc = JsonDocument.Parse(File.ReadAllText(Path.Combine(roo
 string repository = pinDoc.RootElement.GetProperty("repository").GetString()!;
 string commit = pinDoc.RootElement.GetProperty("commit").GetString()!;
 string version = pinDoc.RootElement.GetProperty("version").GetString()!;
+string packageId = pinDoc.RootElement.GetProperty("publishedAs").GetString()!;
 
 string feed = Path.Combine(root, ".packages");
 Directory.CreateDirectory(feed);
@@ -49,16 +50,33 @@ try
     string project = Path.Combine(source, "Toolkit", "Valheim.Cli.Testing", "Valheim.Cli.Testing.csproj");
     if (!File.ReadAllText(project).Contains("<Version>" + version + "</Version>"))
         throw new InvalidOperationException("CLI package version mismatch: expected " + version);
-    Run("dotnet", "pack", project, "-c", "Release", "-m:1", "-o", feed);
+    // The package README describes this packaging; the transport's own client-library.md talks about
+    // building it from source. Only the packed README is replaced; no code changes.
+    File.Copy(Path.Combine(root, "docs", "packages", "Valheim.Testing.Cli.md"), Path.Combine(source, "docs", "client-library.md"), overwrite: true);
+    // Published by ValheimTesting under its own package family: this is the upstream ValheimCLI
+    // transport at the pinned commit, packaged unchanged. Its MIT license (copyright warp) is packed with it.
+    Run("dotnet", "pack", project, "-c", "Release", "-m:1", "-o", feed,
+        Property("PackageId", packageId),
+        Property("Authors", "warp and ValheimCLI contributors"),
+        Property("Description", "ValheimCLI's external client and YAML test-plan runner, packaged by ValheimTesting from ValheimCLI source at commit " + commit + ". No game assemblies."),
+        Property("PackageProjectUrl", "https://github.com/tvongaza/ValheimTesting"),
+        Property("RepositoryUrl", repository),
+        Property("RepositoryType", "git"),
+        Property("RepositoryCommit", commit),
+        Property("PackageTags", "valheim modding testing valheimcli"));
 }
 finally
 {
     DeleteTree(temp);
 }
-Console.WriteLine("Pinned CLI dependency ready: " + feed);
+Console.WriteLine($"Pinned CLI dependency ready as {packageId} {version}: {feed}");
 return 0;
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
+
+// MSBuild splits -p: values on ';' and ','; escape them (and '%') so each value arrives whole.
+static string Property(string name, string value) =>
+    "-p:" + name + "=" + value.Replace("%", "%25").Replace(";", "%3B").Replace(",", "%2C");
 
 // The repository root holds cli-dependency.json. Search upward from the working directory first:
 // CI path mapping can rewrite the compile-time source path CallerFilePath reports.

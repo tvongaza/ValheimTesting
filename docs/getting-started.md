@@ -15,15 +15,15 @@ dotnet run scripts/validate.cs
 
 Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all examples, runs the no-game examples, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
 
-The toolkit packages:
+The toolkit packages, all on NuGet.org:
 
 | Package | Exact version | Use |
 |---|---|---|
-| `Valheim.Testing` | `0.1.0-preview.5` | Composable terrain, zone state and recorded-input replay; no ValheimCLI dependency. **On NuGet.org.** |
-| `Valheim.Testing.Game` | `0.1.0-preview.9` | External game observations, owned sessions, comparisons and reports |
-| `Valheim.Cli.Testing` | `0.1.0-preview.4` | ValheimCLI-owned transport, consumed by the Game package |
+| `Valheim.Testing` | `0.1.0-preview.5` | Composable terrain, zone state and recorded-input replay; no ValheimCLI dependency |
+| `Valheim.Testing.Game` | `0.1.0-preview.10` | External game observations, owned sessions, comparisons and reports |
+| `Valheim.Testing.Cli` | `0.1.0-preview.4` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
 
-Versions need not match each other. `Valheim.Testing` restores from NuGet.org with no extra setup. `Valheim.Testing.Game` and `Valheim.Cli.Testing` are built locally and not yet published: add `.packages` alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
+Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
 
 ```sh
 dotnet restore path/to/MyMod.Tests.csproj -p:RestoreAdditionalProjectSources=/absolute/path/ValheimTesting/.packages
@@ -37,7 +37,7 @@ Pin only the package your test project needs:
 <!-- Pure test project; not the production mod project. -->
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.5]" />
 <!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.9]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.10]" />
 ```
 
 Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools and examples target net10.0. Keep the game-side plugin's existing target framework.

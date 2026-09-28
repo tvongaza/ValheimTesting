@@ -18,11 +18,11 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 |---|---|---|
 | `Valheim.Testing` | Composable terrain, multi-zone height/paint fixtures and exact recorded-input replay; no ValheimCLI dependency | netstandard2.0 |
 | `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net10.0 |
-| `Valheim.Cli.Testing` | Transport and YAML runner, maintained in the ValheimCLI repository | net9.0 |
+| `Valheim.Testing.Cli` | ValheimCLI's client transport and YAML runner, packaged unchanged from pinned ValheimCLI source (MIT, warp) | net9.0 |
 
 The dependency goes **ValheimTesting → ValheimCLI**, never the reverse. Game-side extension API and observers stay in ValheimCLI. Roads and MWL own their optional adapters and scenarios. No test package belongs in an ordinary player's plugin folder.
 
-Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. `Valheim.Testing` is published on [NuGet.org](https://www.nuget.org/packages/Valheim.Testing); `Valheim.Testing.Game` and the `Valheim.Cli.Testing` transport are not yet published and come from the local feed. Bootstrap builds that one dependency from tracked source into an ignored local feed; it does not compile or launch the game plugin.
+Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. All three packages are on NuGet.org: [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing), [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) and [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game). ValheimTesting publishes the transport as `Valheim.Testing.Cli` so it is clearly this toolkit's packaging, not an official ValheimCLI release; upstream's own project is `Valheim.Cli.Testing`. Bootstrap builds it from tracked source at the pinned commit into an ignored local feed; it does not compile or launch the game plugin.
 
 ## Start without a game
 
@@ -36,7 +36,7 @@ dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.cs` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` to `0.1.0-preview.5` (restores from NuGet.org). For `Valheim.Testing.Game` `0.1.0-preview.9` (net10.0), also add this local feed. ValheimCLI remains pinned at preview.4.
+`validate.cs` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.5` or `Valheim.Testing.Game` `0.1.0-preview.10` (net10.0); both restore from NuGet.org. The transport stays at `Valheim.Testing.Cli` `0.1.0-preview.4`. Use the local feed only to try a build that is not yet published.
 
 ## Test pyramid
 

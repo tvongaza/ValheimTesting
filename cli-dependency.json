@@ -2,6 +2,7 @@
   "repository": "https://github.com/tvongaza/valheimCLI.git",
   "commit": "f5bd90fe1998961268f1b6572fecfef03dd63642",
   "package": "Valheim.Cli.Testing",
+  "publishedAs": "Valheim.Testing.Cli",
   "version": "0.1.0-preview.4",
-  "status": "fork preview; upstream merge pending"
+  "status": "fork preview; upstream merge pending; ValheimTesting publishes this transport as Valheim.Testing.Cli"
 }
