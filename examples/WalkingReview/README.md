@@ -2,6 +2,13 @@
 
 `WalkingReview <host> <port> <pins-file> <route.json> <seconds 5..600> <new-output-directory>`
 
+From the repository root, after [bootstrap and pin setup](../../docs/getting-started.md):
+
+```sh
+dotnet run --project examples/WalkingReview -c Release -- \
+  127.0.0.1 5555 /absolute/pins.txt /absolute/route.json 120 /new/walk-result
+```
+
 Attach to a disposable, correctly pinned client with CLI World Tools installed.
 Arrange arrival and character protection separately; verify protection before
 walking. The observer issues no movement, teleport, cheats or save commands.

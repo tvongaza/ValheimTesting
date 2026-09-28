@@ -1,11 +1,13 @@
 # Read-only client terrain and support check
 
-Attach to an already prepared client with the stable CLI extension host. This
+Attach to an already prepared client with CLI core and World Tools. Follow [bootstrap and strict pin setup](../../docs/getting-started.md) first. This
 example never starts/stops a game, moves a player, changes cheats, or edits ground.
 The owner of the test arranges arrival separately and backs up the test character.
 
+From the repository root:
+
 ```sh
-dotnet run --project ClientSurfaceCheck.csproj -- localhost 5555 pins.txt plan.json /new/output
+dotnet run --project examples/ClientSurfaceCheck -c Release -- localhost 5555 pins.txt plan.json /new/output
 ```
 
 `pins.txt` must pin the world UID and exact loaded plugins. For a vanilla-client
@@ -39,6 +41,5 @@ are written to a new directory. Wrong expectations are retained with a failed
 result. Run the same plan again after a confirmed save, server restart and rejoin
 for persistence evidence; compare world/build pins in both runs.
 
-Package-only usage follows `TerrainCheck`: use a pinned `ToolkitPackageVersion`
-and a NuGet feed containing all three matching toolkit packages. The example has
+Package-only usage follows [TerrainCheck](../TerrainCheck/README.md): set `ToolkitPackageVersion=0.1.0-preview.5` and use the local feed containing Game preview.5 plus pure-helper/CLI preview.4 packages. The example has
 no game or mod binary dependencies.

@@ -2,6 +2,8 @@
 
 Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run without Valheim, Unity, Steam or a dedicated server. Optional system tests use the real game through the CLI.
 
+New to the framework? Follow [Add testing to a mod](docs/getting-started.md), then choose a runnable example from the [example index](examples/README.md). Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually.
+
 ## Packages and ownership
 
 | Package | Purpose | Runtime |
@@ -46,6 +48,5 @@ The paint fixture starts from explicit saved RGBA, preserves alpha and samples b
 
 Preview APIs may change. No release or upstream merge is implied by this repository.
 
-Follow-up examples: `PaintCheck` compares loaded raw paint channels;
-`WalkingReview` records a human-driven traversal without moving the character.
+Follow-up examples: [PaintCheck](examples/PaintCheck/README.md) compares loaded raw paint channels; [WalkingReview](examples/WalkingReview/README.md) records a human-driven traversal without moving the character.
 Both build locally; the bounded paved paint/reload check passed, while human walking acceptance remains pending.
