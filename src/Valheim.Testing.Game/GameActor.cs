@@ -48,6 +48,8 @@ public sealed class GameActor : IDisposable
             _verified = true;
         }
     }
+    /// <summary>After an attempted world transition, require fresh explicit environment pins.</summary>
+    public void InvalidateEnvironment() { lock (_sync) _verified = false; }
     public CommandResult Execute(string command)
     {
         lock (_sync)

@@ -33,7 +33,7 @@ dotnet run --project examples/NoGameTerrain -c Release
 ```
 
 `validate.py` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, add this local feed plus nuget.org, then pin `Valheim.Testing` to `0.1.0-preview.5` and `Valheim.Testing.Game` to
-`0.1.0-preview.6` (uses the new pure fixture package). ValheimCLI remains pinned at preview.4.
+`0.1.0-preview.7` (uses the new pure fixture package). ValheimCLI remains pinned at preview.4.
 
 ## Test pyramid
 

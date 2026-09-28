@@ -6,6 +6,7 @@ Start with the [getting-started guide](../docs/getting-started.md) to build the 
 |---|---|---|
 | [NoGameTerrain](NoGameTerrain/README.md) | How do independent expectations and exact replay work? | None; no game needed |
 | [SharedWorld](SharedWorld/README.md) | How do composed terrain, zone seams and isolated snapshots work? | None; no game needed |
+| [SessionControl](SessionControl/README.md) | How do I inspect readiness and explicitly join, leave or confirm a save? | Explicit session/save mutations; no process ownership |
 | [GameObserve](GameObserve/README.md) | Can I verify pins and read a generator sample through ValheimCLI? | Read-only attachment |
 | [TerrainCapture](TerrainCapture/README.md) | How do I save a bounded native terrain grid for exact replay? | Read-only attachment; writes a new local file |
 | [TerrainCheck](TerrainCheck/README.md) | Do declared generator or loaded-ground heights match? | Read-only attachment |

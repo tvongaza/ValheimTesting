@@ -83,3 +83,9 @@ Write a short report with:
 - The next bounded action, if one remains.
 
 Inspect evidence before publishing: logs may expose account identifiers, local paths, passwords or private world data. Do not commit game assemblies, diagnostic decompilation or saves. Report the measured scope accurately; a passing mock, a clean count or a correct-looking screenshot alone is not a full system test.
+
+## Captured inputs and session capabilities
+
+Use [TerrainCapture](../examples/TerrainCapture/README.md) for a bounded `valheim.world/terrain-grid` observation and validated exact replay. Keep generator and loaded-ground layers distinct. A replay is input, not an independent expected result.
+
+Use [SessionControl](../examples/SessionControl/README.md) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. These new capabilities have local tests; their native acceptance remains open.

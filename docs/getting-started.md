@@ -20,7 +20,7 @@ The current local feed contains:
 | Package | Exact version | Use |
 |---|---|---|
 | `Valheim.Testing` | `0.1.0-preview.5` | Composable terrain, zone state and recorded-input replay; no ValheimCLI dependency |
-| `Valheim.Testing.Game` | `0.1.0-preview.6` | External game observations, owned sessions, comparisons and reports |
+| `Valheim.Testing.Game` | `0.1.0-preview.7` | External game observations, owned sessions, comparisons and reports |
 | `Valheim.Cli.Testing` | `0.1.0-preview.4` | ValheimCLI-owned transport, consumed by the Game package |
 
 Versions need not match each other. These previews are built locally, not available from NuGet.org. Add `.packages` alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
@@ -37,7 +37,7 @@ Pin only the package your test project needs:
 <!-- Pure test project; not the production mod project. -->
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.5]" />
 <!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.6]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.7]" />
 ```
 
 Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools target net9.0 and examples can run on .NET 10. Keep the game-side plugin's existing target framework.
