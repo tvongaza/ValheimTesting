@@ -7,5 +7,6 @@ run('dotnet', 'test', 'tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj'
 for project in sorted((ROOT / 'examples').glob('*/*.csproj')):
     run('dotnet', 'build', str(project), '-c', 'Release', '-m:1')
 run('dotnet', 'run', '--project', 'examples/NoGameTerrain', '-c', 'Release', '--no-build')
+run('dotnet', 'run', '--project', 'examples/SharedWorld', '-c', 'Release', '--no-build')
 for name in ('Valheim.Testing', 'Valheim.Testing.Game'):
     run('dotnet', 'pack', f'src/{name}/{name}.csproj', '-c', 'Release', '--no-restore', '-m:1', '-o', str(ROOT / '.packages'))

@@ -14,10 +14,13 @@ public sealed class PlaneTerrain : ITerrain
     public float OriginHeight { get; }
     public float GradeX { get; }
     public float GradeZ { get; }
+    public TerrainBiome Biome { get; }
     public PlaneTerrain(float originHeight = 40, float gradeX = 0, float gradeZ = 0)
-    { OriginHeight = originHeight; GradeX = gradeX; GradeZ = gradeZ; }
+        : this(originHeight, gradeX, gradeZ, TerrainBiome.Meadows) { }
+    public PlaneTerrain(float originHeight, float gradeX, float gradeZ, TerrainBiome biome)
+    { OriginHeight = originHeight; GradeX = gradeX; GradeZ = gradeZ; Biome = biome; }
     public float GetHeight(float x, float z) => OriginHeight + x * GradeX + z * GradeZ;
-    public TerrainBiome GetBiome(float x, float z) => TerrainBiome.Meadows;
+    public TerrainBiome GetBiome(float x, float z) => Biome;
     public void GetRiverWeight(float x, float z, out float weight, out float width) { weight = 0; width = 0; }
 }
 internal static class TerrainMath

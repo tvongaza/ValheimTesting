@@ -1,10 +1,11 @@
 # Choose an example
 
-Start with the [getting-started guide](../docs/getting-started.md) to build the local package feed. Run commands from the repository root. All examples are built by `python3 scripts/validate.py`; validation executes only NoGameTerrain and never starts Valheim.
+Start with the [getting-started guide](../docs/getting-started.md) to build the local package feed. Run commands from the repository root. All examples are built by `python3 scripts/validate.py`; validation executes only NoGameTerrain and SharedWorld and never starts Valheim.
 
 | Example | Question it answers | Game effects |
 |---|---|---|
 | [NoGameTerrain](NoGameTerrain/README.md) | How do independent expectations and exact replay work? | None; no game needed |
+| [SharedWorld](SharedWorld/README.md) | How do composed terrain, zone seams and isolated snapshots work? | None; no game needed |
 | [GameObserve](GameObserve/README.md) | Can I verify pins and read a generator sample through ValheimCLI? | Read-only attachment |
 | [TerrainCheck](TerrainCheck/README.md) | Do declared generator or loaded-ground heights match? | Read-only attachment |
 | [ClientSurfaceCheck](ClientSurfaceCheck/README.md) | Does a client have the expected heightmap, collider and stationary support? | Read-only; arrange arrival separately |

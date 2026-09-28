@@ -17,6 +17,8 @@ This guide is for an AI agent working in a mod checkout or operating an explicit
 
 Use an existing mod-owned scenario when one fits. [Roads scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) cover empty saves, pending bridge respawn, terrain and paint. [MWL scenarios](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) cover full-mode port probes; their gameplay gate is still open. Server-only MWL cannot validate ports.
 
+For reusable synthetic ground and multi-zone height/paint state, read [Shared-world fixtures](shared-world.md). Do not move mod-specific compiler doubles into the shared library.
+
 ## First actions in a new checkout
 
 1. Read the local repository's instructions and check branch/worktree status. Keep other agents' edits and active sessions intact.

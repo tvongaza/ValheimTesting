@@ -12,7 +12,7 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 
 | Package | Purpose | Runtime |
 |---|---|---|
-| `Valheim.Testing` | Synthetic terrain and exact recorded-input replay; no ValheimCLI dependency | netstandard2.0 |
+| `Valheim.Testing` | Composable terrain, multi-zone height/paint fixtures and exact recorded-input replay; no ValheimCLI dependency | netstandard2.0 |
 | `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net9.0 |
 | `Valheim.Cli.Testing` | Transport and YAML runner, maintained in the ValheimCLI repository | net9.0 |
 
@@ -32,8 +32,8 @@ python3 scripts/validate.py
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.py` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, add this local feed plus nuget.org, then pin `Valheim.Testing` to `0.1.0-preview.4` and `Valheim.Testing.Game` to
-`0.1.0-preview.5` (adds paint and human-walk evidence). ValheimCLI remains pinned at preview.4.
+`validate.py` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, add this local feed plus nuget.org, then pin `Valheim.Testing` to `0.1.0-preview.5` and `Valheim.Testing.Game` to
+`0.1.0-preview.6` (uses the new pure fixture package). ValheimCLI remains pinned at preview.4.
 
 ## Test pyramid
 
@@ -46,7 +46,7 @@ Synthetic inputs are not Valheim's generator. Replaying captured inputs is not i
 
 ## Evidence and limits
 
-The library has 94 local tests. Roads supplies the first native scenarios: a 100-sample declared terrain/collider calibration, followed by a persistent two-zone native fixture. On Valheim 1.0.16, a ValheimCLI-only client matched 15 height/collider samples and three stationary grounded observations before and after confirmed server save/restart/rejoin. The later paint arm matched all 16 paved-core/verge RGBA samples across the same lifecycle. An unchanged-paint negative expectation failed exactly the eight painted samples and passed the untouched eight.
+The library has 116 local tests. Roads supplies the first native scenarios: a 100-sample declared terrain/collider calibration, followed by a persistent two-zone native fixture. On Valheim 1.0.16, a ValheimCLI-only client matched 15 height/collider samples and three stationary grounded observations before and after confirmed server save/restart/rejoin. The later paint arm matched all 16 paved-core/verge RGBA samples across the same lifecycle. An unchanged-paint negative expectation failed exactly the eight painted samples and passed the untouched eight.
 
 The paint fixture starts from explicit saved RGBA, preserves alpha and samples both sides of a zone seam. It does not establish arbitrary terrain, native dirt/fading-edge behavior, rendered appearance or human walking usability. MWL's full-mode payment/delivery/ownership gate remains pending. See [the detailed guide](docs/testing-toolkit.md), [source provenance](PROVENANCE.md), and examples.
 
@@ -58,3 +58,5 @@ Both build locally; the bounded paved paint/reload check passed, while human wal
 ## License
 
 MIT, copyright © 2026 Tys von Gaza. See [LICENSE](LICENSE). Attribution for imported and adapted code is retained in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); both files are included in the library packages.
+
+Shared-world fixtures: [guide and mod consumers](docs/shared-world.md), [runnable example](examples/SharedWorld/README.md). Height and paint grids are independent; snapshots are in-memory test state, not native saves.
