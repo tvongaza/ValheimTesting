@@ -31,4 +31,4 @@ Server save waits for any earlier save, checks vanilla refusal reasons, issues o
 
 An issued effect keeps the game-side operation gate while it settles, including after timeout, cancellation or pack retirement. Read-only state remains available. If the game never settles, the owner remains draining and a controlled process restart may be needed; a timeout is not permission to unload/reissue the operation.
 
-Local policy, loop, cancellation, pack-retirement and controlled-transport tests pass. Native join/leave/save and capture smoke checks for these new capabilities remain pending; prior text-command checks are not proof of this new surface.
+Local tests and the [bounded native campaign](../../docs/native-validation-20260927.md) pass for join/leave/save, stale-password recovery, strict repinning and a controlled in-flight owner retirement. The retirement fixture is not proof of cancellation timing for every real native operation.

@@ -12,4 +12,4 @@ Load a recorded input with `TerrainCapture.Load(path).Terrain`, then pass that `
 
 Grid coordinates, completeness and sample counts are checked before creating a replay. Mutable ground is sampled over multiple frames; the capture is not an atomic snapshot. Compare against independently authored expectations when testing correctness. Do not commit private fixture identities or game captures by default.
 
-Local capture/import tests pass and World Tools compiles against game references. Native capture and reload comparison remain to be run on a disposable fixture.
+Local capture/import tests and the [bounded native campaign](../../docs/native-validation-20260927.md) pass: generator and loaded-ground captures, exact file/replay round trips, unloaded-ground refusal, and loaded-ground equality after save/restart/rejoin.

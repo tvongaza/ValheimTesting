@@ -17,7 +17,7 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Exercise extension replacement | [ReloadCheck](../examples/ReloadCheck/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
 | Collect walking evidence | [WalkingReview](../examples/WalkingReview/README.md) | Acceptance without a separate human verdict |
 
-Use an existing mod-owned scenario when one fits. [Roads scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) cover empty saves, pending bridge respawn, terrain and paint. [MWL scenarios](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) cover full-mode port probes; their gameplay gate is still open. Server-only MWL cannot validate ports.
+Use an existing mod-owned scenario when one fits. [Roads scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) cover empty saves, pending bridge respawn, terrain and paint. [MWL scenarios](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) cover full-mode port probes; their bounded full-mode payment/delivery/ownership gate now passes. Server-only MWL cannot validate ports.
 
 For reusable synthetic ground and multi-zone height/paint state, read [Shared-world fixtures](shared-world.md). Do not move mod-specific compiler doubles into the shared library.
 
@@ -69,7 +69,7 @@ Terrain uses horizontal **x/z** and vertical **y**, in metres. Generator height,
 4. Confirm a save, leave the world, restart only the owned server, rejoin and reverify pins/readiness/arrival. Repeat the **original** expectation plan in another new output directory.
 5. Inspect every result, incomplete sample and game warning/error. Retain the original failed attempts; do not silently replace evidence or use a saved report from an older DLL.
 
-This recipe established a paved-core/verge fixture, not all native paint behavior. Dirt, fading edges and ordinary noisy earthworks need their own plans. A person judges appearance and walking; small acceptable bumps do not require more numerical research.
+This recipe established paved-core/verge paint. The [follow-up native campaign](native-validation-20260927.md) also established a declared dirt/fading-edge fixture. Ordinary noisy earthworks still need their own plans. A person judges appearance and walking; small acceptable bumps do not require more numerical research.
 
 ## Completion and handoff
 
@@ -90,7 +90,7 @@ Inspect evidence before publishing: logs may expose account identifiers, local p
 
 Use [TerrainCapture](../examples/TerrainCapture/README.md) for a bounded `valheim.world/terrain-grid` observation and validated exact replay. Keep generator and loaded-ground layers distinct. A replay is input, not an independent expected result.
 
-Use [SessionControl](../examples/SessionControl/README.md) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. These new capabilities have local tests; their native acceptance remains open.
+Use [SessionControl](../examples/SessionControl/README.md) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. These capabilities passed the [bounded native campaign](native-validation-20260927.md); mod readiness and human usability remain separate.
 
 ## Require strict expectations
 
