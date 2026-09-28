@@ -6,8 +6,11 @@ A local Ubuntu 24.04 image for owned native checks against the **Linux** Valheim
 - [BepInExPack_Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/) 5.4.2350 extracted over that directory, after its SHA-256 is verified;
 - the .NET 10 SDK (Microsoft's `dotnet-install.sh`, channel `10.0`) in `/opt/dotnet`;
 - a non-root `valheim` user that owns `/opt/valheim`.
+- git, for `scripts/bootstrap-cli.cs`.
 
 No credentials are needed or accepted. SteamCMD logs in anonymously; the dedicated server is free.
+
+**Verified** on a Linux x86-64 Docker host on 28 September 2026 with dedicated-server build 25527701: the image built, [LinuxServerSmoke](../../examples/LinuxServerSmoke/README.md) passed all five steps (BepInEx chainloader after about 5 s, the new world loaded after about 51 s), and `scripts/validate.cs` passed inside the container. Only the Apple Silicon (emulated) path below remains experimental.
 
 ## Keep the image private
 
