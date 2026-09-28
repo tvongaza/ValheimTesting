@@ -23,12 +23,13 @@ dotnet build examples/ReloadCheck/ReloadCheck.csproj -c Release
 
 dotnet examples/ReloadCheck/bin/Release/net9.0/ReloadCheck.dll \
   5555 artifacts/probe-a/ReloadProbe.dll artifacts/probe-b/ReloadProbe.dll \
-  /absolute/disposable-game/BepInEx/scripts /absolute/results/reload.json
+  /absolute/disposable-game/BepInEx/scripts /absolute/results/reload.json /private/menu-pins.txt
 ```
 
 Use the actual ValheimCLI port instead of `5555`. This example is local: DLL replacement
-must reach the same game as the loopback connection. The session owner must verify
-the installed core and ScriptEngine builds before running it.
+must reach the same game as the loopback connection. Supply a strict pins file listing the installed core, ScriptEngine and all other loaded plugins (and an exact world UID if run in a world). The driver requires the probe absent initially, then pins its A/B MD5 from the supplied artifacts and requires absence again after removal. It never trusts a running-game snapshot to invent an expected hash.
+
+Every command, including expected refusals and the second waiting connection, gets a `cli_expect --strict` preflight. During replacement only the explicit new pins are polled until they hold; no gameplay command bypasses a mismatch. If the game's persistent `[Expectations]` file is enabled, the fixture owner must keep its staged expectations consistent as well; this driver does not disable or overwrite that guard.
 
 The check keeps one control connection open throughout. It installs A, verifies
 its command and owned GameObject, starts a bounded waiting command on a second
@@ -47,7 +48,7 @@ on failure. It removes its deployed probe in `finally`; the session owner remain
 responsible for shutdown and checking restoration. Reports can contain local
 paths from `cli_build`; review before publishing.
 
-## Measured on 26 September 2026
+## Earlier native evidence — 26 September 2026
 
 Passed on real native ARM64 Mac Valheim (1.0.16, Unity 6000.0.75f1), launched
 headlessly at the main menu with BepInEx 5.4.23.5 and ScriptEngine 11.1. Both
@@ -62,3 +63,5 @@ additional gate and quiescence cases; Roads save/restart scenarios remain separa
 
 No BepInEx warning/error was logged. Unity emitted Apple native-library and
 headless resource-upload errors; this is not a claim of a clean graphics startup.
+
+The required pins-file argument and strict per-command/reload preflights were added afterward. They compile and have controlled-transport tests; this revised driver has not yet repeated that native campaign.

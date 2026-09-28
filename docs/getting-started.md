@@ -20,7 +20,7 @@ The current local feed contains:
 | Package | Exact version | Use |
 |---|---|---|
 | `Valheim.Testing` | `0.1.0-preview.5` | Composable terrain, zone state and recorded-input replay; no ValheimCLI dependency |
-| `Valheim.Testing.Game` | `0.1.0-preview.7` | External game observations, owned sessions, comparisons and reports |
+| `Valheim.Testing.Game` | `0.1.0-preview.8` | External game observations, owned sessions, comparisons and reports |
 | `Valheim.Cli.Testing` | `0.1.0-preview.4` | ValheimCLI-owned transport, consumed by the Game package |
 
 Versions need not match each other. These previews are built locally, not available from NuGet.org. Add `.packages` alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
@@ -37,7 +37,7 @@ Pin only the package your test project needs:
 <!-- Pure test project; not the production mod project. -->
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.5]" />
 <!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.7]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.8]" />
 ```
 
 Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools target net9.0 and examples can run on .NET 10. Keep the game-side plugin's existing target framework.
@@ -102,3 +102,13 @@ Most comparison examples take a new output directory and write `result.json`, `j
 Attachment examples never claim or restore the machine and do not own an existing game process. Owned session tools stop only processes they started; their disposable copies and reports remain for inspection. The operator owns station/account coordination, backups, protection and restoration. Review reports for private account/world data before publishing.
 
 For composable slopes, cliffs and terraces plus independent per-zone height/paint state, use the [shared-world guide](shared-world.md). Keep game-type shims and writer assertions in your mod.
+
+## Strict calls from tests
+
+Use `valheim-cli --expect-strict /private/pins.txt ...` when invoking the executable. Its flag is **`--expect-strict`**, not a global `--strict`. YAML plans can instead set `game.expect` and `game.expectStrict: true`. The underlying game command is `cli_expect --strict key=value ...`.
+
+For library consumers, `GameActor.VerifyEnvironment` validates and normalizes supplied expectations to strict mode even if the caller omitted the switch. Every subsequent command rechecks those same pins before dispatch; drift invalidates the actor and blocks the action. `Execute(..., requireSuccess: false)` lets a test inspect an expected command refusal but cannot bypass a pin failure. The transport itself is low-level: use an actor for test actions and observations.
+
+Strict mode rejects unlisted loaded plugins/worlds; it does not make `any` an exact build pin. Supply reviewed full hashes and the intended world identity. The preflight is a separate round trip, not an atomic lock on game state. For dispatch-time enforcement as well, configure the game's existing `[Expectations]` guard; tests never disable it.
+
+Reload tests must provide a pins file and explicitly advance the changed plugin's expected hash using the artifact they intend to install, then require absence on removal. Only `cli_expect --strict` is retried while that known transition settles. Repin after world changes. The owned-server startup identity probe is a narrow read-only bootstrap exception while world loading is incomplete; it checks token/PID/save-root identity, then verifies strict pins before returning an actor.

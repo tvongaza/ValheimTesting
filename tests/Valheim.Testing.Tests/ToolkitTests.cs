@@ -77,8 +77,8 @@ public class ToolkitTests
     }
     [Fact] public void FailedPinClearsPreviousVerification()
     {
-        var fake = new Fake(); using var actor = new GameActor("server", fake); actor.VerifyEnvironment("cli_expect plugin=sha");
-        fake.Ok = false; Assert.Throws<InvalidOperationException>(() => actor.VerifyEnvironment("cli_expect plugin=other"));
+        var fake = new Fake(); using var actor = new GameActor("server", fake); actor.VerifyEnvironment("cli_expect plugin=0123456789abcdef0123456789abcdef");
+        fake.Ok = false; Assert.Throws<InvalidOperationException>(() => actor.VerifyEnvironment("cli_expect plugin=abcdef0123456789abcdef0123456789"));
         Assert.Throws<InvalidOperationException>(() => actor.Execute("road_generate"));
     }
     [Fact] public void DuplicateStructuredRepliesAreRejected()
@@ -88,7 +88,7 @@ public class ToolkitTests
     [Fact] public void ReloadedInstanceRequiresExplicitRediscovery()
     {
         var fake = new Fake { Output = ["EXTENSION_RESULT {\"schemaVersion\":1,\"ok\":true,\"instance\":\"new\",\"extension\":\"roads\",\"data\":{}}"] };
-        using var actor = new GameActor("server", fake); actor.VerifyEnvironment("cli_expect plugin=sha");
+        using var actor = new GameActor("server", fake); actor.VerifyEnvironment("cli_expect plugin=0123456789abcdef0123456789abcdef");
         Assert.Throws<InvalidOperationException>(() => actor.Invoke(new("roads/query", "old", true, 1)));
     }
     [Fact] public void MutatingCapabilityCannotBePolled()

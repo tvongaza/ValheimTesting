@@ -28,7 +28,7 @@ public sealed class OwnedServerSession : IDisposable
         if (parts.Length != 2 || parts.Any(p => p.Length == 0 || p.Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch != '.' && ch != '-' && ch != '_')))
             throw new ArgumentException("Use one namespaced session capability, without arguments.");
         _sessionCapability = sessionCapability; _extension = parts[0];
-        _cancellation = cancellation; _launch = launch; _connect = connect; _saveRoot = Path.GetFullPath(saveRoot); _expectations = expectations;
+        _cancellation = cancellation; _launch = launch; _connect = connect; _saveRoot = Path.GetFullPath(saveRoot); _expectations = StrictExpectations.Normalize(expectations);
         _startup = startup; _command = command; _poll = poll ?? TimeSpan.FromMilliseconds(500);
         if (startup <= TimeSpan.Zero || command <= TimeSpan.Zero || _poll < TimeSpan.Zero) throw new ArgumentException("Invalid session deadlines.");
     }
@@ -51,6 +51,9 @@ public sealed class OwnedServerSession : IDisposable
                 var timeout = _startup - clock.Elapsed;
                 if (timeout > _command) timeout = _command;
                 if (timeout <= TimeSpan.Zero) break;
+                // Bootstrap exception: this adapter capability MUST be read-only. World pins cannot
+                // hold before loading completes. Prove our token/PID/save root first, then strict-pin
+                // before returning an actor or issuing any gameplay action.
                 var reply = transport.Execute("cli_extension " + _sessionCapability, timeout);
                 if (!reply.Ok)
                 {

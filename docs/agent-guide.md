@@ -91,3 +91,7 @@ Inspect evidence before publishing: logs may expose account identifiers, local p
 Use [TerrainCapture](../examples/TerrainCapture/README.md) for a bounded `valheim.world/terrain-grid` observation and validated exact replay. Keep generator and loaded-ground layers distinct. A replay is input, not an independent expected result.
 
 Use [SessionControl](../examples/SessionControl/README.md) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. These new capabilities have local tests; their native acceptance remains open.
+
+## Require strict expectations
+
+Executable calls use `--expect-strict <pins-file>`; in-game checks use `cli_expect --strict`. Prefer `GameActor`, which now normalizes strict pins and rechecks them before every command. Never fall back to raw transport when a strict check fails, even for an expected-refusal test. Reload drivers require explicit staged hashes from candidate artifacts; they may poll only those expected pins during replacement. The read-only owned-session bootstrap probe remains separate until world readiness allows strict checking. See [strict call setup](getting-started.md#strict-calls-from-tests).

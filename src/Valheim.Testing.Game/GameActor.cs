@@ -3,6 +3,7 @@ using valheim_cli.Testing;
 
 namespace Valheim.Testing.Game;
 
+/// <summary>Low-level transport. Use GameActor for strictly pinned test actions and observations.</summary>
 public interface IGameTransport : IDisposable
 {
     CommandResult Execute(string command, TimeSpan timeout);
@@ -30,6 +31,7 @@ public sealed class GameActor : IDisposable
     private readonly IGameTransport _transport;
     private readonly object _sync = new();
     private bool _verified;
+    private string _expectations = "";
     public string Name { get; }
     public TimeSpan CommandTimeout { get; set; } = TimeSpan.FromSeconds(30);
     public GameActor(string name, IGameTransport transport)
@@ -39,25 +41,58 @@ public sealed class GameActor : IDisposable
         lock (_sync)
         {
             _verified = false;
-            if (!expectationCommand.StartsWith("cli_expect ", StringComparison.Ordinal) || expectationCommand.IndexOfAny(new[] { '\r', '\n' }) >= 0)
-                throw new ArgumentException("Supply an explicit cli_expect command pinning the world and plugin builds.");
-            CommandResult response = _transport.Execute(expectationCommand, CommandTimeout);
-            RequireSuccess(response);
-            if (!PlanExpectations.Judge(new ExpectationSource { From = "actor" }, response.Output).Held)
-                throw new InvalidOperationException("Game did not confirm the requested environment pins.");
+            _expectations = StrictExpectations.Normalize(expectationCommand);
+            CheckEnvironment();
             _verified = true;
         }
     }
     /// <summary>After an attempted world transition, require fresh explicit environment pins.</summary>
     public void InvalidateEnvironment() { lock (_sync) _verified = false; }
-    public CommandResult Execute(string command)
+    /// <summary>Every command rechecks strict pins. False permits inspecting an expected command refusal, never a pin mismatch.</summary>
+    public CommandResult Execute(string command, bool requireSuccess = true)
     {
         lock (_sync)
         {
             if (!_verified) throw new InvalidOperationException("Verify the actor's world and plugin expectations before using it.");
             if (command.IndexOfAny(new[] { '\r', '\n' }) >= 0) throw new ArgumentException("One command per call.");
-            CommandResult result = _transport.Execute(command, CommandTimeout); RequireSuccess(result); return result;
+            _verified = false;
+            CheckEnvironment();
+            _verified = true;
+            CommandResult result = _transport.Execute(command, CommandTimeout);
+            if (requireSuccess) RequireSuccess(result);
+            return result;
         }
+    }
+    private void CheckEnvironment()
+    {
+        CommandResult response = _transport.Execute(_expectations, CommandTimeout);
+        RequireSuccess(response);
+        if (!PlanExpectations.Judge(new ExpectationSource { From = "actor", Strict = true }, response.Output).Held)
+            throw new InvalidOperationException("Game did not confirm the strict environment pins.");
+    }
+    /// <summary>Wait only for an explicitly specified reload's pins; never retry a gameplay action or relax the expected set.</summary>
+    public async Task WaitForEnvironment(string expectations, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        InvalidateEnvironment();
+        expectations = StrictExpectations.Normalize(expectations);
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var prior = CommandTimeout;
+        try
+        {
+            while (clock.Elapsed < timeout)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                CommandTimeout = timeout - clock.Elapsed;
+                if (CommandTimeout > prior) CommandTimeout = prior;
+                try { VerifyEnvironment(expectations); return; }
+                catch (InvalidOperationException) { /* Only explicit expectation checks are retried during reload. */ }
+                var remaining = timeout - clock.Elapsed;
+                if (remaining > TimeSpan.Zero) await Task.Delay(remaining < TimeSpan.FromMilliseconds(200) ? remaining : TimeSpan.FromMilliseconds(200), cancellation);
+            }
+            throw new TimeoutException("Expected strict environment did not appear; no gameplay action was issued.");
+        }
+        finally { CommandTimeout = prior; }
     }
     private static void RequireSuccess(CommandResult result)
     { if (!result.Ok) throw new InvalidOperationException($"{result.ErrorCode}: {result.Message}"); }

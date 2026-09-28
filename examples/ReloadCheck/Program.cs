@@ -6,9 +6,9 @@ using valheim_cli.Testing;
 
 // Attach to an already owned disposable game. This example never starts/stops it.
 // ScriptEngine must watch ONLY this probe; the CLI core remains in plugins/.
-if (args.Length != 5)
+if (args.Length != 6)
 {
-    Console.Error.WriteLine("Usage: ReloadCheck <port> <probe-A.dll> <probe-B.dll> <empty-scripts-dir> <report.json>");
+    Console.Error.WriteLine("Usage: ReloadCheck <port> <probe-A.dll> <probe-B.dll> <empty-scripts-dir> <report.json> <pins-file>");
     return 2;
 }
 var evidence = new List<object>();
@@ -22,12 +22,16 @@ try
 {
     if (!Directory.Exists(scripts) || Directory.EnumerateFiles(scripts, "*.dll", SearchOption.AllDirectories).Any())
         throw new InvalidOperationException("Use an empty, dedicated ScriptEngine directory: reload affects every script.");
-    ownsProbe = true;
+    const string probeGuid = "testing.cli.reload-probe";
+    string baselinePins = StrictExpectations.WithPlugin(StrictExpectations.Load(args[5]), probeGuid, "absent");
+    string PinsFor(string file) => StrictExpectations.WithPlugin(baselinePins, probeGuid, Convert.ToHexString(MD5.HashData(File.ReadAllBytes(file))));
+    string pinsA = PinsFor(args[1]), pinsB = PinsFor(args[2]);
     int port = int.Parse(args[0]);
-    using var control = new CliTransport("127.0.0.1", port);
+    using var control = new GameActor("reload-control", new CliTransport("127.0.0.1", port)) { CommandTimeout = TimeSpan.FromSeconds(15) };
+    control.VerifyEnvironment(baselinePins);
     CommandResult Run(string command)
     {
-        var result = control.Execute(command, TimeSpan.FromSeconds(15));
+        var result = control.Execute(command);
         evidence.Add(new { command, result.Ok, result.ErrorCode, result.Output });
         if (!result.Ok) throw new InvalidOperationException(command + ": " + result.ErrorCode);
         return result;
@@ -59,6 +63,8 @@ try
     }
     void Install(string source)
     {
+        control.InvalidateEnvironment();
+        ownsProbe = true;
         File.Copy(source, deployed + ".incoming", true);
         File.Move(deployed + ".incoming", deployed, true);
         evidence.Add(new { installed = Path.GetFileName(source), sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(deployed))) });
@@ -69,13 +75,15 @@ try
         evidence.Add(new { check = description, passed = true });
     }
     Install(args[1]);
+    await control.WaitForEnvironment(pinsA, TimeSpan.FromSeconds(45));
     var first = await AwaitRevision("0.1.0");
     string firstInstance = first.GetProperty("instance").GetString()!;
     var helloA = Hello();
     Require(helloA.GetProperty("instance").GetString() == firstInstance && helloA.GetProperty("data").GetProperty("leases").GetInt32() == 1, "A owns exactly one live resource");
     Run("cli_extension example.probe/removed");
-    using var waitingConnection = new CliTransport("127.0.0.1", port);
-    var pending = Task.Run(() => waitingConnection.Execute("cli_extension example.probe/wait", TimeSpan.FromSeconds(90)));
+    using var waitingConnection = new GameActor("reload-wait", new CliTransport("127.0.0.1", port)) { CommandTimeout = TimeSpan.FromSeconds(90) };
+    waitingConnection.VerifyEnvironment(pinsA);
+    var pending = Task.Run(() => waitingConnection.Execute("cli_extension example.probe/wait", requireSuccess: false));
     var pendingTimer = Stopwatch.StartNew();
     while (Hello().GetProperty("data").GetProperty("waiting").GetInt32() != 1)
     {
@@ -83,6 +91,7 @@ try
         await Task.Delay(200);
     }
     Install(args[2]);
+    await control.WaitForEnvironment(pinsB, TimeSpan.FromSeconds(45));
     var second = await AwaitRevision("0.2.0");
     Require(second.GetProperty("instance").GetString() != firstInstance, "B has a fresh registration identity");
     var cancelled = await pending.WaitAsync(TimeSpan.FromSeconds(20));
@@ -93,12 +102,14 @@ try
     var helloB = Hello();
     Require(helloB.GetProperty("data").GetProperty("revision").GetString() == "0.2.0" && helloB.GetProperty("data").GetProperty("leases").GetInt32() == 1,
         "B answers on the existing connection and A's resource is gone");
-    var removed = control.Execute("cli_extension example.probe/removed", TimeSpan.FromSeconds(15));
+    var removed = control.Execute("cli_extension example.probe/removed", requireSuccess: false);
     evidence.Add(new { removed.Ok, removed.ErrorCode, removed.Output });
     using (var doc = GameActor.ParseLine(removed, "EXTENSION_RESULT "))
         Require(!removed.Ok && doc.RootElement.GetProperty("code").GetString() == "no_extension_command", "Removed command cannot invoke A's code");
     Require(Run("cli_build").Output.SequenceEqual(originalBuild), "CLI core identity and load time are unchanged");
+    control.InvalidateEnvironment();
     File.Delete(deployed);
+    await control.WaitForEnvironment(baselinePins, TimeSpan.FromSeconds(45));
     var removalTimer = Stopwatch.StartNew();
     while (Probe() != null)
     {
