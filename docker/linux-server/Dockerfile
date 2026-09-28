@@ -3,7 +3,11 @@
 # PRIVATE, LOCAL IMAGE. It contains the Valheim dedicated server, downloaded by SteamCMD while the image
 # is built. Never push it to a registry, attach it to a release or publish a layer or export of it.
 # See README.md. The build uses anonymous SteamCMD and public downloads only: no credentials.
-FROM ubuntu:24.04
+#
+# x86-64 only: the server, SteamCMD (32-bit x86) and Doorstop have no arm64 builds. The platform is pinned so
+# an arm64 host (Apple Silicon) builds the amd64 image under emulation instead of a broken arm64 one; that path
+# is experimental. See README.md.
+FROM --platform=linux/amd64 ubuntu:24.04
 
 ARG DOTNET_CHANNEL=10.0
 ARG VALHEIM_SERVER_APP=896660

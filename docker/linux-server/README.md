@@ -21,6 +21,8 @@ From the repository root:
 docker build -t valheimtesting-linux-server:local docker/linux-server
 ```
 
+The image is x86-64 only: the Dockerfile pins `FROM --platform=linux/amd64`, because the server, SteamCMD and Doorstop have no arm64 builds.
+
 The build context is this directory only; no repository source enters the image. Each build downloads the current public dedicated-server build, so record `server-buildid.txt` with any result. The base image is pinned by tag, SteamCMD and the .NET SDK are not pinned to exact builds; the BepInEx pack is pinned by version and hash, and its launch script is checked for the loader variables `ServerLaunch` reproduces.
 
 ## Run a check inside the container
@@ -47,5 +49,25 @@ var process = new DirectServerProcess(start, logPrefix, Path.Combine(runtime, "B
 ```
 
 `ServerLaunch` detects Linux from `valheim_server.x86_64`, requires its execute bit and the BepInEx preloader and Doorstop library, and sets `DOORSTOP_ENABLED`, `DOORSTOP_TARGET_ASSEMBLY`, `LD_LIBRARY_PATH` (prepended), `LD_PRELOAD` (prepended) and `SteamAppId`. It starts the server executable directly, not the pack's shell script, so the session's PID check still holds.
+
+## Apple Silicon (experimental)
+
+There is no macOS dedicated server, and `ServerLaunch` refuses to launch a server on a macOS host. On an Apple Silicon Mac, Docker runs arm64 Linux, so this image only runs under x86-64 emulation. This path is **experimental and unverified**: no pass has been recorded on a Mac. Inside the container `ServerLaunch` sees a Linux host, so runners work unchanged.
+
+```sh
+docker build --platform linux/amd64 -t valheimtesting-linux-server:local docker/linux-server
+docker run --platform linux/amd64 --rm -it -v "$PWD:/src:ro" valheimtesting-linux-server:local bash
+```
+
+Caveats:
+
+- SteamCMD is a 32-bit x86 program. Rosetta does not translate 32-bit x86 code, so SteamCMD depends on Docker's QEMU emulation. It may hang or fail during the image build; a failed install stops the build after three attempts.
+- Everything in the container is emulated, including the .NET SDK and the server's world generation. Expect builds and boots to be several times slower than on an x86-64 host; raise the smoke's deadline (up to 1800 s) rather than trusting the default.
+- In Docker Desktop, enabling **Use Rosetta for x86_64/amd64 emulation on Apple Silicon** usually makes the 64-bit parts faster.
+- A pass under emulation shows the server boots under emulation. It is not evidence about native performance or timing.
+
+The supported Mac workflows are a Mac game client (launched through ValheimCLI, which handles macOS `Valheim.app`) and Mac-run tests or runners that talk to a Windows or Linux dedicated server on another machine. Use the container on a Mac for experiments only.
+
+## Networking
 
 The server listens on UDP 2456-2458 inside the container by default. The examples do not publish ports: nothing outside the container can join. Keep `-public 0` so a test server is never listed. A game client in a container is not supported.
