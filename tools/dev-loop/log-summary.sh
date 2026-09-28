@@ -16,6 +16,10 @@
 # Environment:
 #   VALHEIM_PATH  game folder that contains BepInEx (default: the Steam folder for this OS)
 #   VALHEIM_LOG   log file to read instead of <VALHEIM_PATH>/BepInEx/LogOutput.log
+#
+# Moved from ValheimCLI (commit ee4cd23) to ValheimTesting on 28 Sep 2026.
+# valheim-cli itself comes from a ValheimCLI release or build; see
+# tools/dev-loop/README.md.
 set -euo pipefail
 
 default_game_path() {

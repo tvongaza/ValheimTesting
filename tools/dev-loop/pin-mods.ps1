@@ -9,12 +9,12 @@
 # PowerShell twin of pin-mods.sh, for Windows PowerShell 5.1 and PowerShell 7.
 # Keep the two in step: same subcommands, environment and exit codes. Run it with
 #
-#   powershell -ExecutionPolicy Bypass -File examples\pin-mods.ps1 check pins.txt
+#   powershell -ExecutionPolicy Bypass -File tools\dev-loop\pin-mods.ps1 check pins.txt
 #
 # snapshot records every loaded BepInEx plugin by GUID and md5 (and with
 # --with-world the loaded world's name, uid and seed). The file is plain text:
 # edit a line to `any` when that plugin's build does not matter, or add
-# `name=absent` for a plugin that must not be loaded. See docs/expectations.md.
+# `name=absent` for a plugin that must not be loaded. See ValheimCLI's docs/expectations.md.
 #
 # Typical use: snapshot once from a known-good setup, commit the file next to
 # your tests, and check it at the start of every run:
@@ -33,6 +33,10 @@
 #
 # The game must be running with valheimCLI loaded. For a game on another
 # machine, forward its port first: ssh -N -L 5555:127.0.0.1:5555 host
+#
+# Moved from ValheimCLI (commit ee4cd23) to ValheimTesting on 28 Sep 2026.
+# valheim-cli itself comes from a ValheimCLI release or build; see
+# tools/dev-loop/README.md.
 
 function Get-Setting([string]$Name, [string]$Default) {
     $value = [Environment]::GetEnvironmentVariable($Name)

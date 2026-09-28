@@ -4,7 +4,7 @@
 #
 #   dev-loop.sh <MyMod.csproj> [test-plan.yaml]
 #
-# examples/smoke-plan.yaml is a plan to start from.
+# ValheimCLI's examples/smoke-plan.yaml is a plan to start from.
 #
 #   1. dotnet build -c Release (stops on a failed build)
 #   2. with a plan: writes a temporary copy of VALHEIM_EXPECTATIONS whose pin
@@ -42,6 +42,10 @@
 #   PROGRESS          heartbeat interval, e.g. 30s (default 15s; 0 disables)
 #   STALL             end a plan's wait after this long without change
 #                     (default 120s; 0 disables; a step's own stall: wins)
+#
+# Moved from ValheimCLI (commit ee4cd23) to ValheimTesting on 28 Sep 2026.
+# valheim-cli itself comes from a ValheimCLI release or build; see
+# tools/dev-loop/README.md.
 set -euo pipefail
 
 [ $# -ge 1 ] || { sed -n '2,6p' "$0" >&2; exit 4; }
