@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using valheim_cli.Testing;
 
 namespace Valheim.Testing.Game;
@@ -9,8 +10,33 @@ public interface IServerProcess : IDisposable
 {
     int Id { get; }
     bool HasExited { get; }
+    /// <summary>Completes with the exit code when the process exits; startup fails as soon as it does.</summary>
+    Task<int> WaitForExitAsync(CancellationToken cancellation);
     void Stop(TimeSpan timeout);
 }
+
+/// <summary>
+/// What an owned server's startup waits on instead of retrying connections. The process exit is always watched.
+/// Without <see cref="CliLog"/>, connecting falls back to bounded retries at the session's poll interval.
+/// </summary>
+public sealed class StartupEvents
+{
+    /// <summary>ValheimCLI's line once its command server accepts connections.</summary>
+    public static readonly Regex CliListening = new(@"Command server listening on \S+:\d+", RegexOptions.CultureInvariant);
+    /// <summary>The log ValheimCLI writes to, normally the runtime's BepInEx/LogOutput.log. No connection is tried before <see cref="Listening"/> appears in it.</summary>
+    public string? CliLog { get; init; }
+    public Regex Listening { get; init; } = CliListening;
+    /// <summary>Lines in <see cref="CliLog"/> that end startup at once, for example a required plugin's load error.</summary>
+    public IReadOnlyList<Regex> Failures { get; init; } = [];
+    /// <summary>
+    /// Opens a connection used only for state pushes, for example <c>() =&gt; StateWait.Connect(host, port)</c>.
+    /// Startup then waits for one of <see cref="ReadyStates"/> before the first readiness probe.
+    /// </summary>
+    public Func<StateWait>? States { get; init; }
+    public IReadOnlyList<string> ReadyStates { get; init; } = StateWait.WorldLoaded;
+    public IReadOnlyList<string> FailureStates { get; init; } = [];
+}
+
 public sealed class OwnedServerSession : IDisposable
 {
     private readonly Func<string, IServerProcess> _launch;
@@ -21,6 +47,8 @@ public sealed class OwnedServerSession : IDisposable
     private IServerProcess? _process;
     private GameActor? _actor;
     public List<int> StartedProcesses { get; } = [];
+    /// <summary>Events startup waits on; null keeps bounded connection retries. The process exit is watched either way.</summary>
+    public StartupEvents? Events { get; init; }
     public OwnedServerSession(Func<string, IServerProcess> launch, Func<IGameTransport> connect,
         string saveRoot, string expectations, string sessionCapability, TimeSpan startup, TimeSpan command, TimeSpan? poll = null, CancellationToken cancellation = default)
     {
@@ -32,62 +60,106 @@ public sealed class OwnedServerSession : IDisposable
         _startup = startup; _command = command; _poll = poll ?? TimeSpan.FromMilliseconds(500);
         if (startup <= TimeSpan.Zero || command <= TimeSpan.Zero || _poll < TimeSpan.Zero) throw new ArgumentException("Invalid session deadlines.");
     }
-    public GameActor Start()
+    public GameActor Start() => StartAsync().GetAwaiter().GetResult();
+    /// <summary>
+    /// Launches one owned server and returns its strictly pinned actor. Every stage races the process exit, which ends
+    /// startup at once with the exit code and the last log line. With <see cref="Events"/>, the first connection waits for
+    /// ValheimCLI's listening line and, optionally, a world-loaded state push. The adapter's own readiness has no event:
+    /// an unregistered or incomplete session observation is re-probed, read-only, every poll interval until the deadline.
+    /// </summary>
+    public async Task<GameActor> StartAsync()
     {
         _cancellation.ThrowIfCancellationRequested();
         if (_process != null) throw new InvalidOperationException("Stop the previous owned process before starting another.");
+        var events = Events;
         string token = Guid.NewGuid().ToString("N");
-        _process = _launch(token); StartedProcesses.Add(_process.Id);
-        var clock = Stopwatch.StartNew(); string last = "No CLI connection";
-        // Retry connection and incomplete startup observations only. Never retry a mutation.
-        while (clock.Elapsed < _startup)
+        // Opened before launch: a previous boot's lines in the same log can never satisfy this one.
+        using var log = events?.CliLog is { } cliLog ? new LogWait(cliLog) : null;
+        var process = _process = _launch(token); StartedProcesses.Add(process.Id);
+        var clock = Stopwatch.StartNew();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_cancellation);
+        var exited = process.WaitForExitAsync(stop.Token);
+        TimeSpan Left(string stage)
         {
-            _cancellation.ThrowIfCancellationRequested();
-            if (_process.HasExited) throw new InvalidOperationException("Owned server exited during startup.");
-            IGameTransport? transport = null;
-            try
-            {
-                transport = _connect();
-                var timeout = _startup - clock.Elapsed;
-                if (timeout > _command) timeout = _command;
-                if (timeout <= TimeSpan.Zero) break;
-                // Bootstrap exception: this adapter capability MUST be read-only. World pins cannot
-                // hold before loading completes. Prove our token/PID/save root first, then strict-pin
-                // before returning an actor or issuing any gameplay action.
-                var reply = transport.Execute("cli_extension " + _sessionCapability, timeout);
-                if (!reply.Ok)
-                {
-                    // The core may answer before the optional adapter is registered.
-                    if (StartupUnavailable(reply))
-                        last = "Console or session adapter not ready yet";
-                    else throw new InvalidOperationException("Session observation refused: " + reply.ErrorCode);
-                }
-                else
-                {
-                    using var document = GameActor.ParseLine(reply, "EXTENSION_RESULT ");
-                    bool ready = CheckIdentity(document.RootElement, token, _process.Id, _saveRoot, _extension);
-                    if (ready)
-                    {
-                        var actor = new GameActor("owned-server", transport) { CommandTimeout = _command };
-                        transport = null;
-                        try
-                        {
-                            actor.VerifyEnvironment(_expectations);
-                            if (_process.HasExited || clock.Elapsed >= _startup) throw new InvalidOperationException("Server exited or startup deadline expired during verification.");
-                            _actor = actor; return actor;
-                        }
-                        catch { actor.Dispose(); throw; }
-                    }
-                    last = "Owned server has not completed world/network loading";
-                }
-            }
-            catch (IOException) { last = "CLI transport unavailable"; }
-            catch (System.Net.Sockets.SocketException) { last = "CLI socket unavailable"; }
-            finally { transport?.Dispose(); }
-            var remaining = _startup - clock.Elapsed;
-            if (remaining > TimeSpan.Zero && _poll > TimeSpan.Zero) Thread.Sleep(remaining < _poll ? remaining : _poll);
+            var left = _startup - clock.Elapsed;
+            return left > TimeSpan.Zero ? left : throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, log?.Refresh());
         }
-        throw new TimeoutException("Server startup deadline: " + last);
+        async Task<Exception> Exited(string stage) => new WaitFailedException(stage, "owned server exited with code " + await exited.ConfigureAwait(false),
+            clock.Elapsed, log == null ? "no startup log configured" : log.Refresh());
+        async Task UntilExit(string stage, Func<TimeSpan, CancellationToken, Task> wait)
+        {
+            using var abandon = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+            var waiting = wait(Left(stage), abandon.Token);
+            if (await Task.WhenAny(waiting, exited).ConfigureAwait(false) == waiting) { await waiting.ConfigureAwait(false); return; }
+            abandon.Cancel();
+            try { await waiting.ConfigureAwait(false); } catch { /* Abandoned: the exit is the result. */ }
+            throw await Exited(stage).ConfigureAwait(false);
+        }
+        try
+        {
+            if (log != null)
+                await UntilExit("ValheimCLI listening", (left, ct) => log.WaitAsync(events!.Listening, left, events.Failures, ct)).ConfigureAwait(false);
+            if (events?.States is { } openStates)
+            {
+                using var states = openStates();
+                await UntilExit("world loaded", (left, ct) => states.WaitAsync(events.ReadyStates, left, events.FailureStates, ct)).ConfigureAwait(false);
+            }
+            const string stage = "owned server readiness";
+            string last = "No CLI connection";
+            // Retry incomplete read-only startup observations only (and, without a listening line, the connection). Never retry a mutation.
+            while (true)
+            {
+                _cancellation.ThrowIfCancellationRequested();
+                if (exited.IsCompleted) throw await Exited(stage).ConfigureAwait(false);
+                IGameTransport? transport = null;
+                try
+                {
+                    transport = _connect();
+                    var timeout = Left(stage);
+                    if (timeout > _command) timeout = _command;
+                    // Bootstrap exception: this adapter capability MUST be read-only. World pins cannot
+                    // hold before loading completes. Prove our token/PID/save root first, then strict-pin
+                    // before returning an actor or issuing any gameplay action.
+                    var reply = transport.Execute("cli_extension " + _sessionCapability, timeout);
+                    if (!reply.Ok)
+                    {
+                        // The core may answer before the optional adapter is registered.
+                        if (StartupUnavailable(reply))
+                            last = "Console or session adapter not ready yet";
+                        else throw new InvalidOperationException("Session observation refused: " + reply.ErrorCode);
+                    }
+                    else
+                    {
+                        using var document = GameActor.ParseLine(reply, "EXTENSION_RESULT ");
+                        bool ready = CheckIdentity(document.RootElement, token, process.Id, _saveRoot, _extension);
+                        if (ready)
+                        {
+                            var actor = new GameActor("owned-server", transport) { CommandTimeout = _command };
+                            transport = null;
+                            try
+                            {
+                                actor.VerifyEnvironment(_expectations);
+                                if (exited.IsCompleted || clock.Elapsed >= _startup) throw new InvalidOperationException("Server exited or startup deadline expired during verification.");
+                                _actor = actor; return actor;
+                            }
+                            catch { actor.Dispose(); throw; }
+                        }
+                        last = "Owned server has not completed world/network loading";
+                    }
+                }
+                catch (Exception error) when (error is IOException or System.Net.Sockets.SocketException)
+                {
+                    // After the listening line a failed connection is a fault, not a startup race.
+                    if (log != null) throw new WaitFailedException(stage, "ValheimCLI announced its listener but the connection failed: " + error.Message, clock.Elapsed, log.Refresh());
+                    last = error is IOException ? "CLI transport unavailable" : "CLI socket unavailable";
+                }
+                finally { transport?.Dispose(); }
+                var remaining = _startup - clock.Elapsed;
+                if (remaining <= TimeSpan.Zero) throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, last);
+                if (_poll > TimeSpan.Zero) await Task.WhenAny(Task.Delay(remaining < _poll ? remaining : _poll, stop.Token), exited).ConfigureAwait(false);
+            }
+        }
+        finally { stop.Cancel(); }
     }
     public static bool StartupUnavailable(CommandResult reply) => !reply.Ok &&
         (reply.Output.Any(x => x == "Error: Console not available (game not fully loaded)") ||
@@ -150,6 +222,11 @@ public sealed class DirectServerProcess : IServerProcess
         _process = Process.Start(start) ?? throw new IOException("Could not start owned server.");
         _stdout = Capture(_process.StandardOutput, logPrefix + ".stdout.log");
         _stderr = Capture(_process.StandardError, logPrefix + ".stderr.log");
+    }
+    public async Task<int> WaitForExitAsync(CancellationToken cancellation)
+    {
+        await _process.WaitForExitAsync(cancellation).ConfigureAwait(false);
+        return _process.ExitCode;
     }
     private static async Task Capture(StreamReader reader, string path)
     {

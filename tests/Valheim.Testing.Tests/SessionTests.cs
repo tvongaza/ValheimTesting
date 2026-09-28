@@ -70,7 +70,8 @@ public class SessionTests
     [Fact] public void ExitedProcessCannotBecomeReady()
     {
         var fake = new Host { ExitOnLaunch = true }; using var session = fake.Session();
-        Assert.Throws<InvalidOperationException>(() => session.Start()); Assert.DoesNotContain(fake.Events, x => x.StartsWith("probe"));
+        var error = Assert.Throws<WaitFailedException>(() => session.Start()); Assert.Contains("code 1", error.Reason);
+        Assert.DoesNotContain(fake.Events, x => x.StartsWith("probe"));
     }
     [Fact] public void CancelledSessionDoesNotLaunch()
     {
@@ -82,13 +83,13 @@ public class SessionTests
     [Fact] public void ConnectionLossHasBoundedStartupAndOwnedCleanup()
     {
         var fake = new Host { NoConnection = true }; var session = fake.Session(TimeSpan.FromMilliseconds(20));
-        Assert.Throws<TimeoutException>(() => session.Start()); session.Dispose();
+        Assert.Throws<WaitTimeoutException>(() => session.Start()); session.Dispose();
         Assert.Contains("stop1", fake.Events);
     }
     [Fact] public void NoWorldReadinessCannotPassOnAListeningSocket()
     {
         var fake = new Host { Ready = false }; using var session = fake.Session(TimeSpan.FromMilliseconds(20));
-        Assert.Throws<TimeoutException>(() => session.Start()); Assert.DoesNotContain(fake.Events, x => x.StartsWith("pins"));
+        Assert.Throws<WaitTimeoutException>(() => session.Start()); Assert.DoesNotContain(fake.Events, x => x.StartsWith("pins"));
     }
     [Fact] public void RecordingIncludesFailedRepliesAndClosesTransport()
     {
@@ -118,25 +119,92 @@ public class SessionTests
         }
         finally { unrelated.Kill(); unrelated.WaitForExit(); Directory.Delete(dir, true); }
     }
+    private const string Listening = "[Info   :valheimCLI] Command server listening on 127.0.0.1:5555\n";
+    private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
+    [Fact] public void NoConnectionIsTriedBeforeThisBootAnnouncesItsListener()
+    {
+        using var log = new TempLog(); log.Append("previous boot\n" + Listening);
+        var fake = new Host(); using var session = fake.Session(TimeSpan.FromMilliseconds(300), new StartupEvents { CliLog = log.Path });
+        var error = Assert.Throws<WaitTimeoutException>(() => session.Start());
+        Assert.Contains("listening", error.Target); Assert.Equal(0, fake.Connects);
+    }
+    [Fact] public void TheListeningLineLeadsToOneProbeWithoutRetries()
+    {
+        using var log = new TempLog();
+        var fake = new Host { OnLaunch = _ => log.Append("BepInEx loading\n" + Listening) };
+        using var session = fake.Session(Generous, new StartupEvents { CliLog = log.Path });
+        session.Start();
+        Assert.Equal(new[] { "launch1", "probe1", "pins1" }, fake.Events); Assert.Equal(1, fake.Connects);
+    }
+    [Fact] public void AFailureLineEndsStartupBeforeAnyConnection()
+    {
+        using var log = new TempLog();
+        var fake = new Host { OnLaunch = _ => log.Append("[Error  : BepInEx] Could not load [roads.testing]\n") };
+        using var session = fake.Session(Generous, new StartupEvents { CliLog = log.Path, Failures = [LogWait.Literal("[Error  : BepInEx]")] });
+        var error = Assert.Throws<WaitFailedException>(() => session.Start());
+        Assert.Equal("[Error  : BepInEx] Could not load [roads.testing]", error.LastSeen); Assert.Equal(0, fake.Connects);
+    }
+    [Fact] public void AnEarlyExitEndsStartupAtOnceWithItsCodeAndLastLogLine()
+    {
+        using var log = new TempLog();
+        var fake = new Host { OnLaunch = process => { log.Append("Fatal: port in use\n"); process.Exit(3); } };
+        using var session = fake.Session(Generous, new StartupEvents { CliLog = log.Path });
+        var error = Assert.Throws<WaitFailedException>(() => session.Start());
+        Assert.Contains("code 3", error.Reason); Assert.Equal("Fatal: port in use", error.LastSeen);
+        Assert.True(error.Elapsed < Generous); Assert.Equal(0, fake.Connects);
+    }
+    [Fact] public async Task StartupWaitsForTheWorldStateBeforeProbing()
+    {
+        using var log = new TempLog(); using var server = new FakeCliServer(StateWait.Loading);
+        var fake = new Host { OnLaunch = _ => log.Append(Listening) };
+        using var session = fake.Session(Generous, new StartupEvents { CliLog = log.Path, States = () => new StateWait(server.Connect()) { SafetyInterval = Timeout.InfiniteTimeSpan } });
+        var start = Task.Run(session.Start);
+        await server.Subscribed.WaitAsync(Generous);
+        // Loading, and only a push can change that here: no probe may have run.
+        Assert.DoesNotContain(fake.Events, x => x.StartsWith("probe"));
+        server.Push(StateWait.InWorldNoPlayer);
+        await start.WaitAsync(Generous);
+        Assert.Equal(new[] { "launch1", "probe1", "pins1" }, fake.Events);
+    }
+    [Fact] public async Task AnExitWhileTheWorldLoadsEndsStartupAtOnce()
+    {
+        using var log = new TempLog(); using var server = new FakeCliServer(StateWait.Loading);
+        Host.FakeProcess? launched = null;
+        var fake = new Host { OnLaunch = process => { launched = process; log.Append(Listening); } };
+        using var session = fake.Session(Generous, new StartupEvents { CliLog = log.Path, States = () => StateWait.Connect("127.0.0.1", server.Port) });
+        var start = Task.Run(session.Start);
+        await server.Subscribed.WaitAsync(Generous);
+        log.Append("Out of memory\n"); launched!.Exit(5);
+        var error = await Assert.ThrowsAsync<WaitFailedException>(() => start);
+        Assert.Contains("code 5", error.Reason); Assert.Equal("Out of memory", error.LastSeen);
+        Assert.DoesNotContain(fake.Events, x => x.StartsWith("probe"));
+    }
     private sealed class Host
     {
         public string Owner = "roads.testing";
         public bool RefuseStop, BadPins, BadPid, ExitOnLaunch, NoConnection, Ready = true;
         public List<string> Events = [], Tokens = [];
+        public int Connects;
+        public Action<FakeProcess>? OnLaunch;
         private FakeProcess? _current;
         public IServerProcess Launch(string token)
         {
             Tokens.Add(token); int id = Tokens.Count; Events.Add("launch" + id);
-            return _current = new FakeProcess(this, id) { Exited = ExitOnLaunch };
+            _current = new FakeProcess(this, id);
+            if (ExitOnLaunch) _current.Exit(1);
+            OnLaunch?.Invoke(_current);
+            return _current;
         }
         public IGameTransport Connect()
-        { if (NoConnection) throw new IOException("not yet"); return new Transport(this, _current!.Id, Tokens[^1]); }
-        public OwnedServerSession Session(TimeSpan? timeout = null) => new(Launch, Connect, Path.GetTempPath(), "cli_expect worlduid=1", Owner + "/session", timeout ?? TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(1));
-        private sealed class FakeProcess(Host host, int id) : IServerProcess
+        { Connects++; if (NoConnection) throw new IOException("not yet"); return new Transport(this, _current!.Id, Tokens[^1]); }
+        public OwnedServerSession Session(TimeSpan? timeout = null, StartupEvents? events = null) => new(Launch, Connect, Path.GetTempPath(), "cli_expect worlduid=1", Owner + "/session", timeout ?? TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(1)) { Events = events };
+        public sealed class FakeProcess(Host host, int id) : IServerProcess
         {
-            public bool Exited;
-            public int Id => id; public bool HasExited => Exited;
-            public void Stop(TimeSpan timeout) { host.Events.Add("stop" + id); if (host.RefuseStop) throw new TimeoutException(); Exited = true; }
+            private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public int Id => id; public bool HasExited => _exit.Task.IsCompleted;
+            public void Exit(int code) => _exit.TrySetResult(code);
+            public Task<int> WaitForExitAsync(CancellationToken cancellation) => _exit.Task.WaitAsync(cancellation);
+            public void Stop(TimeSpan timeout) { host.Events.Add("stop" + id); if (host.RefuseStop) throw new TimeoutException(); Exit(-1); }
             public void Dispose() => host.Events.Add("dispose" + id);
         }
         private sealed class Transport(Host host, int pid, string token) : IGameTransport

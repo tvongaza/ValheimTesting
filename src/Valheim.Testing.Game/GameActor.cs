@@ -70,14 +70,28 @@ public sealed class GameActor : IDisposable
         if (!PlanExpectations.Judge(new ExpectationSource { From = "actor", Strict = true }, response.Output).Held)
             throw new InvalidOperationException("Game did not confirm the strict environment pins.");
     }
-    /// <summary>Wait only for an explicitly specified reload's pins; never retry a gameplay action or relax the expected set.</summary>
-    public async Task WaitForEnvironment(string expectations, TimeSpan timeout, CancellationToken cancellation = default)
+    /// <summary>
+    /// Bounded fallback for a reload with no observable event: rechecks the pins every 200 ms. Prefer the overload that
+    /// waits for the reload's own event.
+    /// </summary>
+    public Task WaitForEnvironment(string expectations, TimeSpan timeout, CancellationToken cancellation = default) =>
+        WaitForEnvironment(expectations, timeout, (left, token) => Task.Delay(left < ReloadFallback ? left : ReloadFallback, token), cancellation);
+    private static readonly TimeSpan ReloadFallback = TimeSpan.FromMilliseconds(200);
+    /// <summary>
+    /// Wait only for an explicitly specified reload's pins; never retry a gameplay action or relax the expected set.
+    /// Checks now, then again each time <paramref name="changed"/> completes. It receives the remaining time and should
+    /// await the event that follows the change, for example the reloaded plugin's load line through a <see cref="LogWait"/>:
+    /// <c>(left, token) =&gt; log.WaitAsync(loadLine, left, cancellation: token)</c>. A failure it throws ends the wait.
+    /// </summary>
+    public async Task WaitForEnvironment(string expectations, TimeSpan timeout, Func<TimeSpan, CancellationToken, Task> changed, CancellationToken cancellation = default)
     {
+        ArgumentNullException.ThrowIfNull(changed);
         InvalidateEnvironment();
         expectations = StrictExpectations.Normalize(expectations);
-        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        WaitText.RequireTimeout(timeout);
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var prior = CommandTimeout;
+        string last = "pins not checked";
         try
         {
             while (clock.Elapsed < timeout)
@@ -86,11 +100,16 @@ public sealed class GameActor : IDisposable
                 CommandTimeout = timeout - clock.Elapsed;
                 if (CommandTimeout > prior) CommandTimeout = prior;
                 try { VerifyEnvironment(expectations); return; }
-                catch (InvalidOperationException) { /* Only explicit expectation checks are retried during reload. */ }
+                catch (InvalidOperationException error) { last = error.Message; /* Only explicit expectation checks are retried during reload. */ }
                 var remaining = timeout - clock.Elapsed;
-                if (remaining > TimeSpan.Zero) await Task.Delay(remaining < TimeSpan.FromMilliseconds(200) ? remaining : TimeSpan.FromMilliseconds(200), cancellation);
+                if (remaining <= TimeSpan.Zero) break;
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                deadline.CancelAfter(remaining);
+                // The event's own deadline is ours: its expiry is this wait's expiry.
+                try { await changed(remaining, deadline.Token).WaitAsync(remaining, cancellation).ConfigureAwait(false); }
+                catch (Exception error) when (!cancellation.IsCancellationRequested && error is TimeoutException or OperationCanceledException) { break; }
             }
-            throw new TimeoutException("Expected strict environment did not appear; no gameplay action was issued.");
+            throw new WaitTimeoutException("the expected strict environment (no gameplay action was issued)", clock.Elapsed, last);
         }
         finally { CommandTimeout = prior; }
     }

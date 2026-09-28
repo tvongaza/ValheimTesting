@@ -45,9 +45,31 @@ public class StrictExpectationsTests
     [Fact] public async Task ReloadWaitOnlyRetriesExplicitPinsAndNeverAcceptsUnprovenEnvironment()
     {
         var transport = new Fake { Drift = true }; using var actor = new GameActor("test",transport);
-        await Assert.ThrowsAsync<TimeoutException>(() => actor.WaitForEnvironment("cli_expect worlduid=7",TimeSpan.FromMilliseconds(20)));
+        await Assert.ThrowsAsync<WaitTimeoutException>(() => actor.WaitForEnvironment("cli_expect worlduid=7",TimeSpan.FromMilliseconds(20)));
         Assert.All(transport.Commands, x => Assert.Equal("cli_expect --strict worlduid=7",x));
         Assert.Throws<InvalidOperationException>(() => actor.Execute("change"));
+    }
+    [Fact] public async Task ReloadWaitRechecksPinsWhenTheReloadEventArrivesNotBefore()
+    {
+        var transport = new Fake { Drift = true }; using var actor = new GameActor("test", transport);
+        int events = 0;
+        await actor.WaitForEnvironment("cli_expect worlduid=7", TimeSpan.FromSeconds(60), (left, token) => { events++; transport.Drift = false; return Task.CompletedTask; });
+        Assert.Equal(1, events); Assert.Equal(2, transport.Commands.Count);
+        actor.Execute("change");
+    }
+    [Fact] public async Task AFailedReloadEventEndsTheWaitWithoutAnAction()
+    {
+        var transport = new Fake { Drift = true }; using var actor = new GameActor("test", transport);
+        await Assert.ThrowsAsync<WaitFailedException>(() => actor.WaitForEnvironment("cli_expect worlduid=7", TimeSpan.FromSeconds(60),
+            (left, token) => throw new WaitFailedException("probe load line", "a line matched failure /Error/", TimeSpan.Zero, "[Error  : BepInEx] probe")));
+        Assert.All(transport.Commands, x => Assert.Equal("cli_expect --strict worlduid=7", x));
+    }
+    [Fact] public async Task ReloadEventExpiryIsTheWaitsExpiry()
+    {
+        var transport = new Fake { Drift = true }; using var actor = new GameActor("test", transport);
+        var error = await Assert.ThrowsAsync<WaitTimeoutException>(() => actor.WaitForEnvironment("cli_expect worlduid=7", TimeSpan.FromMilliseconds(200),
+            (left, token) => Task.Delay(Timeout.InfiniteTimeSpan, token)));
+        Assert.Contains("strict environment", error.Target); Assert.Single(transport.Commands);
     }
     [Fact] public void ReloadPinsChangeOnlyExplicitPluginAndRetainStrictWorldAndOtherPins()
     {
