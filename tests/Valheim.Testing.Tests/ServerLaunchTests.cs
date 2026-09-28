@@ -33,7 +33,8 @@ public class ServerLaunchTests
     [Fact] public void RuntimeWithoutAServerIsRefused()
     {
         using var runtime = new Runtime(); runtime.Add("valheim.exe"); runtime.Add("valheim.x86_64");
-        Assert.Throws<FileNotFoundException>(() => ServerLaunch.Detect(runtime.Root));
+        var error = Assert.Throws<FileNotFoundException>(() => ServerLaunch.Detect(runtime.Root));
+        Assert.Contains("launch it with ClientLaunch", error.Message);
         Assert.Throws<DirectoryNotFoundException>(() => ServerLaunch.Detect(Path.Combine(runtime.Root, "missing")));
     }
     [Fact] public void DirectoryNamedLikeTheExecutableIsNotAServer()
@@ -132,6 +133,7 @@ public class ServerLaunchTests
         using var runtime = new Runtime(name); runtime.Add(file);
         var error = Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.Detect(runtime.Root));
         Assert.Contains("There is no macOS dedicated server", error.Message);
+        Assert.Contains("ClientLaunch", error.Message);
         Assert.Contains("container", error.Message);
         Assert.Contains("remote Windows/Linux host", error.Message);
         foreach (var host in new[] { ServerHost.Windows, ServerHost.Linux, ServerHost.MacOS })

@@ -37,9 +37,11 @@ public static class ServerLaunch
         bool windows = File.Exists(Path.Combine(runtime, WindowsExecutable)), linux = File.Exists(Path.Combine(runtime, LinuxExecutable));
         if (windows && linux) throw new InvalidOperationException($"Runtime contains both {WindowsExecutable} and {LinuxExecutable}; refusing to guess its platform.");
         if (!windows && !linux && IsMacClient(runtime))
-            throw new PlatformNotSupportedException($"{runtime} is the macOS Valheim game client ({MacClientBundle}), not a dedicated server. " + NoMacServer);
-        if (!windows && !linux) throw new FileNotFoundException($"Runtime contains neither {WindowsExecutable} nor {LinuxExecutable}.", runtime);
-        return windows ? ServerPlatform.Windows : ServerPlatform.Linux;
+            throw new PlatformNotSupportedException($"{runtime} is the macOS Valheim game client ({MacClientBundle}), not a dedicated server; ClientLaunch builds its launch. " + NoMacServer);
+        if (windows || linux) return windows ? ServerPlatform.Windows : ServerPlatform.Linux;
+        string? client = new[] { ClientLaunch.WindowsExecutable, ClientLaunch.LinuxExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(runtime, name)));
+        throw new FileNotFoundException($"Runtime contains neither {WindowsExecutable} nor {LinuxExecutable}." +
+            (client == null ? "" : $" It holds the game client {client}; launch it with ClientLaunch."), runtime);
     }
 
     /// <summary>
