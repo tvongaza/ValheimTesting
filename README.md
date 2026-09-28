@@ -17,27 +17,26 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 | Package | Purpose | Runtime |
 |---|---|---|
 | `Valheim.Testing` | Composable terrain, multi-zone height/paint fixtures and exact recorded-input replay; no ValheimCLI dependency | netstandard2.0 |
-| `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net9.0 |
+| `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net10.0 |
 | `Valheim.Cli.Testing` | Transport and YAML runner, maintained in the ValheimCLI repository | net9.0 |
 
 The dependency goes **ValheimTesting → ValheimCLI**, never the reverse. Game-side extension API and observers stay in ValheimCLI. Roads and MWL own their optional adapters and scenarios. No test package belongs in an ordinary player's plugin folder.
 
-Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. This is not a claim that preview packages are on NuGet. Bootstrap builds that one dependency from tracked source into an ignored local feed; it does not compile or launch the game plugin.
+Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. `Valheim.Testing` is published on [NuGet.org](https://www.nuget.org/packages/Valheim.Testing); `Valheim.Testing.Game` and the `Valheim.Cli.Testing` transport are not yet published and come from the local feed. Bootstrap builds that one dependency from tracked source into an ignored local feed; it does not compile or launch the game plugin.
 
 ## Start without a game
 
-Requires .NET 10 SDK (tests) and Python 3.12+ (bootstrap). Libraries remain net9/netstandard2.0; examples allow a newer runtime.
+Requires only the .NET 10 SDK and Git; the bootstrap and validation scripts are .NET file-based C# programs. The pure library targets netstandard2.0; the game library and examples target net10.0 and allow a newer runtime. The ValheimCLI transport package targets net9.0 and runs on .NET 10.
 
 ```sh
-python3 scripts/bootstrap-cli.py
+dotnet run scripts/bootstrap-cli.cs
 # Or use a local CLI clone; the script exports only the pinned commit:
-# python3 scripts/bootstrap-cli.py --source /path/to/valheimCLI
-python3 scripts/validate.py
+# dotnet run scripts/bootstrap-cli.cs -- --source /path/to/valheimCLI
+dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.py` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, add this local feed plus nuget.org, then pin `Valheim.Testing` to `0.1.0-preview.5` and `Valheim.Testing.Game` to
-`0.1.0-preview.8` (uses the new pure fixture package). ValheimCLI remains pinned at preview.4.
+`validate.cs` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` to `0.1.0-preview.5` (restores from NuGet.org). For `Valheim.Testing.Game` `0.1.0-preview.9` (net10.0), also add this local feed. ValheimCLI remains pinned at preview.4.
 
 ## Test pyramid
 
@@ -46,7 +45,7 @@ dotnet run --project examples/NoGameTerrain -c Release
 3. **Bounded game checks:** a few zones on a disposable server and ValheimCLI-only client; save/restart and replication when those boundaries change.
 4. **Human judgement:** short visual/walking checks when usability matters.
 
-Synthetic inputs are not Valheim's generator. Replaying captured inputs is not independent proof of the game's physics. Incomplete observations fail explicitly. Session ownership does not own Steam accounts, station claims or another operator's running game.
+Synthetic inputs are not Valheim's generator. Replaying captured inputs is not independent proof of the game's physics. Incomplete observations fail explicitly. Session ownership does not own Steam accounts, machine reservations or another operator's running game.
 
 ## Evidence and limits
 

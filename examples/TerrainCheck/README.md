@@ -13,7 +13,7 @@ dotnet run --project examples/TerrainCheck -c Release -- \
   127.0.0.1 5555 /absolute/pins.txt /absolute/height-plan.json /new/terrain-result
 ```
 
-For package-only use, copy this example directory elsewhere and build with `-p:ToolkitPackageVersion=0.1.0-preview.5 -p:RestoreAdditionalProjectSources=/absolute/ValheimTesting/.packages`. The property selects the Game package; its pure-helper and ValheimCLI dependencies remain preview.4. Requires .NET 9 or later at runtime; repository validation uses the .NET 10 SDK.
+For package-only use, copy this example directory elsewhere and build with `-p:ToolkitPackageVersion=0.1.0-preview.9 -p:RestoreAdditionalProjectSources=/absolute/ValheimTesting/.packages`. The property selects the Game package; its pure-helper and ValheimCLI dependencies remain preview.4. Requires .NET 9 or later at runtime; repository validation uses the .NET 10 SDK.
 
 Pin the fixture's world UID and plugin hashes in the expectations file. Supply
 1–256 distinct x/z coordinates and **independently derived** expected heights:

@@ -4,32 +4,32 @@ Start with the lowest test layer that answers the question. Existing xUnit tests
 
 ## 1. Build the preview packages without Valheim
 
-Use .NET 10 SDK and Python 3.12 or newer. From a fresh checkout:
+Use the .NET 10 SDK and Git; no other tooling is needed. From a fresh checkout:
 
 ```sh
 git clone https://github.com/tvongaza/ValheimTesting.git
 cd ValheimTesting
-python3 scripts/bootstrap-cli.py
-python3 scripts/validate.py
+dotnet run scripts/bootstrap-cli.cs
+dotnet run scripts/validate.cs
 ```
 
 Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all examples, runs the no-game examples, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
 
-The current local feed contains:
+The toolkit packages:
 
 | Package | Exact version | Use |
 |---|---|---|
-| `Valheim.Testing` | `0.1.0-preview.5` | Composable terrain, zone state and recorded-input replay; no ValheimCLI dependency |
-| `Valheim.Testing.Game` | `0.1.0-preview.8` | External game observations, owned sessions, comparisons and reports |
+| `Valheim.Testing` | `0.1.0-preview.5` | Composable terrain, zone state and recorded-input replay; no ValheimCLI dependency. **On NuGet.org.** |
+| `Valheim.Testing.Game` | `0.1.0-preview.9` | External game observations, owned sessions, comparisons and reports |
 | `Valheim.Cli.Testing` | `0.1.0-preview.4` | ValheimCLI-owned transport, consumed by the Game package |
 
-Versions need not match each other. These previews are built locally, not available from NuGet.org. Add `.packages` alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
+Versions need not match each other. `Valheim.Testing` restores from NuGet.org with no extra setup. `Valheim.Testing.Game` and `Valheim.Cli.Testing` are built locally and not yet published: add `.packages` alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
 
 ```sh
-dotnet restore path/to/MyMod.Tests.csproj \
-  --source /absolute/path/ValheimTesting/.packages \
-  --source https://api.nuget.org/v3/index.json
+dotnet restore path/to/MyMod.Tests.csproj -p:RestoreAdditionalProjectSources=/absolute/path/ValheimTesting/.packages
 ```
+
+`RestoreAdditionalProjectSources` adds the feed and keeps your configured NuGet.org source. Avoid passing NuGet.org as a second `--source`: with .NET SDK 10.0.401 on Windows, restore treated that URL as a local folder and failed.
 
 Pin only the package your test project needs:
 
@@ -37,10 +37,10 @@ Pin only the package your test project needs:
 <!-- Pure test project; not the production mod project. -->
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.5]" />
 <!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.8]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.9]" />
 ```
 
-Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools target net9.0 and examples can run on .NET 10. Keep the game-side plugin's existing target framework.
+Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools and examples target net10.0. Keep the game-side plugin's existing target framework.
 
 ## 2. Keep broad coverage in unit tests
 
@@ -99,7 +99,7 @@ Most comparison examples take a new output directory and write `result.json`, `j
 
 [WalkingReview](../examples/WalkingReview/README.md) records a person moving normally. A qualifying trace still needs a human verdict on usability and appearance. Small cosmetic bumps can be accepted; a test need not demand a perfect road.
 
-Attachment examples never claim or restore the machine and do not own an existing game process. Owned session tools stop only processes they started; their disposable copies and reports remain for inspection. The operator owns station/account coordination, backups, protection and restoration. Review reports for private account/world data before publishing.
+Attachment examples never claim or restore the machine and do not own an existing game process. Owned session tools stop only processes they started; their disposable copies and reports remain for inspection. The operator owns machine/account coordination, backups, protection and restoration. Review reports for private account/world data before publishing.
 
 For composable slopes, cliffs and terraces plus independent per-zone height/paint state, use the [shared-world guide](shared-world.md). Keep game-type shims and writer assertions in your mod.
 

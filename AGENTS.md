@@ -6,7 +6,7 @@ Read [the agent workflow](docs/agent-guide.md) before using the tools. For insta
 
 - Preserve the test pyramid: broad unit tests, controlled integration tests, small native checks, then human usability judgement. Use the cheapest layer that answers the question.
 - Keep mod-specific tests and adapters in the mod repository. This library owns reusable terrain inputs, lifecycle, observations and assertions. ValheimCLI owns transport and the game-side extension API. Production mods must not gain testing dependencies.
-- Run `python3 scripts/bootstrap-cli.py` then `python3 scripts/validate.py` for local validation. These never launch Valheim. Exact dependency versions are in project files and `cli-dependency.json`, not inferred from a neighboring checkout.
+- Run `dotnet run scripts/bootstrap-cli.cs` then `dotnet run scripts/validate.cs` for local validation. These never launch Valheim. Exact dependency versions are in project files and `cli-dependency.json`, not inferred from a neighboring checkout.
 - Real-game work requires an authorized disposable fixture and coordination with its operator. Follow that environment's claim/backup/restore procedure. A responsive ValheimCLI is not world readiness or permission to take over a machine. Never stop an attached game or a process merely by name.
 - Use strict expectations: `--expect-strict <file>` for executable calls or `cli_expect --strict` through GameActor; never bypass a failed preflight with raw transport.
 - Verify exact world/plugin pins, discover capabilities and require complete observations. Issue mutations once; poll only read-only observations. After reload, verify pins and rediscover the new instance explicitly.

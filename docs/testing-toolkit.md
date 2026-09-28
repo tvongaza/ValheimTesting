@@ -18,16 +18,16 @@ A successful fake transport run is an orchestration test, not an in-game pass. A
 | `valheimCLI.dll` | net48, stable BepInEx plugin: existing commands, transport, broker, extension host |
 | `Valheim.Cli.Testing` | net9, the same client and YAML runner used by the executable; source lives in `CLI/Testing` and compiles once for the executable |
 | `Valheim.Testing` | netstandard2.0, synthetic plane/island/ridge/river and exact captured-sample replay; works with net48/Mono and modern .NET |
-| `Valheim.Testing.Game` | net9, named actors, typed observations, bounded observation waits, fixture copies, comparisons and JSON/JUnit reports |
+| `Valheim.Testing.Game` | net10.0, named actors, typed observations, bounded observation waits, fixture copies, comparisons and JSON/JUnit reports |
 | Roads pilot | Separate Roads checkout: test-only world adapter, game observation plugin and system scenarios |
 
-The toolkit lives in this repository and consumes the ValheimCLI-owned transport as a pinned NuGet package. The upstream ValheimCLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the net9 test-side packages.
+The toolkit lives in this repository and consumes the ValheimCLI-owned transport as a pinned NuGet package. The upstream ValheimCLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the external (net9/net10) test-side packages.
 
 ## Run locally
 
 ```sh
-python3 scripts/bootstrap-cli.py
-python3 scripts/validate.py
+dotnet run scripts/bootstrap-cli.cs
+dotnet run scripts/validate.cs
 ```
 
 The Roads pilot checkout has its own existing net10.0/net48 suite, the four extracted-fixture parity tests, and a separate `ProceduralRoads.SystemTests.Tests` suite. Existing test fixtures retain exact synthetic outputs; this requirement is about changing the input model, not demanding identical real-game road shapes.
@@ -57,7 +57,7 @@ The bundled `valheim.world/terrain x z generator|loaded-ground` observation demo
 
 A `GameActor` wraps the existing transport; it never owns/stops the attached process. Verify `cli_expect` pins before using an actor. Require a capability/version, issue a mutation once, then poll its read-only observation. Unknown outcomes are failures, not permission to resend. Keep the command timeout below the overall scenario allowance: a synchronous read cannot be forcibly interrupted by an observation deadline.
 
-`WorldFixture.Copy` requires a hash manifest, refuses links and unexpected files, verifies copied bytes and creates its own new directory. It deletes only that copy; `Preserve=true` keeps it for debugging. Stop the owned game BEFORE disposing its world fixture. It does not own accounts, characters, ports or remote station locks. Those remain explicit session-operator responsibilities in preview 1.
+`WorldFixture.Copy` requires a hash manifest, refuses links and unexpected files, verifies copied bytes and creates its own new directory. It deletes only that copy; `Preserve=true` keeps it for debugging. Stop the owned game BEFORE disposing its world fixture. It does not own accounts, characters, ports or remote machine reservations. Those remain explicit session-operator responsibilities in preview 1.
 
 `ScenarioReport` records outcomes and teardown failure in JSON/JUnit. Use a unique output directory per run; include fixture/build/config hashes in `Provenance`. Output may contain player/world data; inspect before publishing. Do not include credentials in fixture configuration or logs.
 
@@ -112,7 +112,7 @@ the configured owner, verifies process/save identity, then strict environment
 pins. Define `complete` to include your mod's readiness. It retries bounded
 readiness observations, not mutations. Stop/restart owns only that process and
 refuses to start a replacement after failed cleanup. Per-boot logs preserve prior
-startup evidence. It does not own accounts, station locks or external processes.
+startup evidence. It does not own accounts, machine reservations or external processes.
 
 The previous Roads-local implementation passed dedicated-server checks. The
 extraction is covered by fast lifecycle/scenario tests and a second mod owner

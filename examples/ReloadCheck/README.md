@@ -21,7 +21,7 @@ dotnet build examples/ReloadProbe/ReloadProbe.csproj -c Release -p:ProbeRevision
 # Back in ValheimTesting; use absolute paths to the two built probe DLLs:
 dotnet build examples/ReloadCheck/ReloadCheck.csproj -c Release
 
-dotnet examples/ReloadCheck/bin/Release/net9.0/ReloadCheck.dll \
+dotnet examples/ReloadCheck/bin/Release/net10.0/ReloadCheck.dll \
   5555 artifacts/probe-a/ReloadProbe.dll artifacts/probe-b/ReloadProbe.dll \
   /absolute/disposable-game/BepInEx/scripts /absolute/results/reload.json /private/menu-pins.txt
 ```
@@ -64,4 +64,4 @@ additional gate and quiescence cases; Roads save/restart scenarios remain separa
 No BepInEx warning/error was logged. Unity emitted Apple native-library and
 headless resource-upload errors; this is not a claim of a clean graphics startup.
 
-The required pins-file argument and strict per-command/reload preflights were added afterward. They compile and have controlled-transport tests; this revised driver has not yet repeated that native campaign.
+The required pins-file argument and strict per-command/reload preflights were added afterward. They compile and have controlled-transport tests; the revised driver then passed the strict A/B/absent reload campaign recorded in [the native validation report](../../docs/native-validation-20260927.md).

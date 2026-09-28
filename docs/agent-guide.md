@@ -28,16 +28,16 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 3. Bootstrap the exact ValheimCLI dependency, then run local validation:
 
    ```sh
-   python3 scripts/bootstrap-cli.py
-   python3 scripts/validate.py
+   dotnet run scripts/bootstrap-cli.cs
+   dotnet run scripts/validate.cs
    ```
 
-   This needs no game, Steam or station. For a mod checkout, restore its test project from the resulting `.packages` feed plus NuGet.org. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
+   This needs no game, Steam or test machine. For a mod checkout, restore its test project from the resulting `.packages` feed plus NuGet.org. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
 4. If the task is satisfied by local tests, stop there. Otherwise prepare a bounded native test plan with explicit independent expectations and a negative control where useful. Do not invent a whole new runner for a check an example already performs.
 
 ## Before an authorized native run
 
-- Confirm which machine/process/world the user intended and whether another operator owns it. Use that environment's existing claim and restore helpers; this public library does not contain private station credentials or deployment scripts.
+- Confirm which machine/process/world the user intended and whether another operator owns it. Use that environment's existing reservation and restore procedure; this public library does not contain private machine credentials or deployment scripts.
 - Use disposable copies, free ports, exact candidate DLLs and a dedicated character where a client is needed. Verify backups and character protection before movement. Do not copy production saves or change admin membership unless the task actually authorizes it.
 - Install one core in plugins and each required pack in plugins **or** scripts, never both. Standard supplies save/join/protection; World Tools supplies observations; Reflection is needed only for `cli_call`. ScriptEngine reload affects all scripts in its directory. See [pack installation](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md).
 - Read `cli_manifest`, `cli_world` and `cli_extensions`. Pin actual plugin MD5s and world UID using the [strict pins format](getting-started.md#4-add-a-small-native-check-where-it-matters). Pins enforce identity, not authorization. Pin the tested mod `absent` on a ValheimCLI-only replication client, and list every other loaded plugin.

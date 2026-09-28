@@ -27,4 +27,4 @@ ValheimCLI core MD5 `058d033fb155d7ac5381250063bf613d` was unchanged through the
 
 Logs were retained and reviewed by message. Each client boot had BepInEx's Unity-log-writer startup error, before plugin execution. Warnings included BepInEx target versions, audio/lifecycle messages, missing-location warnings on the MWL-absent client, Jötunn ambiguities/mock failures and full-mode asset/shader issues. Expected refused saves and pin transitions were recorded too. Full-mode missing `MWL_StoneOutlook1` configuration and `8_PuzzleStand` definitions were not repaired or declared harmless by these tests. No clean-log or visual-quality certification is claimed.
 
-Restoration verified 422 original client-file hashes and 15 source-fixture-file hashes. The owned client/server processes were stopped and the station claim released. No production server was changed.
+Restoration verified 422 original client-file hashes and 15 source-fixture-file hashes. The owned client/server processes were stopped and the test machine released. No production server was changed.

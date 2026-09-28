@@ -1,6 +1,6 @@
 # Choose an example
 
-Start with the [getting-started guide](../docs/getting-started.md) to build the local package feed. Run commands from the repository root. All examples are built by `python3 scripts/validate.py`; validation executes only NoGameTerrain and SharedWorld and never starts Valheim.
+Start with the [getting-started guide](../docs/getting-started.md) to build the local package feed. Run commands from the repository root. All examples are built by `dotnet run scripts/validate.cs`; validation executes only NoGameTerrain and SharedWorld and never starts Valheim.
 
 | Example | Question it answers | Game effects |
 |---|---|---|

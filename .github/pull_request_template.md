@@ -12,7 +12,7 @@ List commands/checks actually run and their results. Include a discriminating re
 
 ## Not run and limitations
 
-State what remains unverified. If native validation is needed, give a small disposable-fixture plan. Do not claim game coverage from mock or replay agreement. Pure fixtures and docs do not require a station run.
+State what remains unverified. If native validation is needed, give a small disposable-fixture plan. Do not claim game coverage from mock or replay agreement. Pure fixtures and docs do not require a native run.
 
 ## Contribution checklist
 
