@@ -175,3 +175,12 @@ that console text as a completed request. Require the command's documented resul
 or observe its effect independently; do not treat transport completion as a
 successful mutation. This campaign used an authorized server peer teleport and
 client-owned arrival/support observations, without granting client admin rights.
+
+
+## Published-library validation update
+
+Current local layers: 94 shared-library tests, 802 CLI tests, 62 Roads scenario tests and 35 MWL adapter/scenario tests. Roads retains 774 production-source unit tests on .NET 10 and Mono. The Roads unit world delegates to the shared synthetic terrain model; Roads-specific doubles, assertions and scenarios remain in Roads. Normal mod builds do not depend on the test libraries.
+
+The native paint extension has now been exercised on Valheim 1.0.16: sixteen saved RGBA texels across two zones, paved core plus untouched painted verge, alpha preserved, before and after save/server restart/rejoin on a CLI-only client. The same plan failed exactly eight samples when deliberately given the unchanged pre-road expectation. Height, collider and stationary support checks passed alongside paint. Native dirt/fading-edge coverage, rendered appearance and human walking remain follow-ups.
+
+The four-pack layout also passed join and confirmed-save paths. Optional Reflection was removed and reloaded in a loaded dedicated world over the same connection; only its owner identity changed. This establishes lifecycle behavior, not reclamation of loaded assemblies. Native checks exposed a missing Mono verification build setting in the packs, which is corrected in CLI #40.

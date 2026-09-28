@@ -40,12 +40,12 @@ Synthetic inputs are not Valheim's generator. Replaying captured inputs is not i
 
 ## Evidence and limits
 
-Before extraction, the library passed 63 tests; Roads' adapter verified 100 declared terrain/collider samples, and a CLI-only client verified 15 native terrain/collider samples plus grounded stationary support before and after server save/restart/rejoin. A wrong unchanged-ground expectation failed eight samples. Extraction is verified locally and does not imply another game run.
+The library has 94 local tests. Roads supplies the first native scenarios: a 100-sample declared terrain/collider calibration, followed by a persistent two-zone native fixture. On Valheim 1.0.16, a CLI-only client matched 15 height/collider samples and three stationary grounded observations before and after confirmed server save/restart/rejoin. The later paint arm matched all 16 paved-core/verge RGBA samples across the same lifecycle. An unchanged-paint negative expectation failed exactly the eight painted samples and passed the untouched eight.
 
-This is not arbitrary terrain/paint coverage, human walking acceptance, or MWL port gameplay validation. MWL's full-mode payment/delivery/ownership gate remains pending. See [the detailed guide](docs/testing-toolkit.md), [source provenance](PROVENANCE.md), and examples.
+The paint fixture starts from explicit saved RGBA, preserves alpha and samples both sides of a zone seam. It does not establish arbitrary terrain, native dirt/fading-edge behavior, rendered appearance or human walking usability. MWL's full-mode payment/delivery/ownership gate remains pending. See [the detailed guide](docs/testing-toolkit.md), [source provenance](PROVENANCE.md), and examples.
 
 Preview APIs may change. No release or upstream merge is implied by this repository.
 
 Follow-up examples: `PaintCheck` compares loaded raw paint channels;
 `WalkingReview` records a human-driven traversal without moving the character.
-Both build locally; native paint and human walking acceptance remain pending.
+Both build locally; the bounded paved paint/reload check passed, while human walking acceptance remains pending.
