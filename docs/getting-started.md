@@ -112,6 +112,12 @@ For persistence, use the **same** independently declared plan before and after a
 
 The [Roads scenario guide](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) shows owned process/copy setup, manifests, preparation versus acceptance, empty-save, bridge respawn and native terrain/paint. MWL's [adapter guide](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) keeps its port probes separate; those require full mode and their bounded full-mode payment/delivery/ownership acceptance now passes.
 
+### On Linux or in a container
+
+The dedicated server also runs on Linux. Build the launch with `ServerLaunch.CreateStartInfo(runtime, arguments, environment)` (`Valheim.Testing.Game` `0.1.0-preview.11`, from the local feed until published) and pass it to `DirectServerProcess` as on Windows. It detects the platform from the runtime's executable, refuses a runtime with both or neither, and on Linux sets BepInEx's Doorstop variables and prepends to `LD_LIBRARY_PATH`/`LD_PRELOAD` without dropping existing entries. The [Linux image](../docker/linux-server/README.md) installs the free dedicated server with anonymous SteamCMD and BepInEx at build time; [LinuxServerSmoke](../examples/LinuxServerSmoke/README.md) is the smallest runner for it.
+
+What works: owned dedicated-server native checks on Linux, locally or in CI. Not yet: a game client in the cloud or a container, and remote hosts over SSH. The image contains game files; keep it local or inside the CI job and never publish it.
+
 ## 5. Read the result, then keep human judgement separate
 
 Most comparison examples take a new output directory and write `result.json`, `junit.xml`, command transcripts and residuals. Exit 0 establishes only that tool's assertions. The example READMEs describe their outputs and effects. Inspect game logs too; a passing scenario does not certify every loaded mod.

@@ -40,6 +40,14 @@ dotnet run --project examples/NoGameTerrain -c Release
 
 `validate.cs` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.5` or `Valheim.Testing.Game` `0.1.0-preview.10` (net10.0); both restore from NuGet.org. The transport stays at `Valheim.Testing.Cli` `0.1.0-preview.4`. Use the local feed only to try a build that is not yet published.
 
+## Linux and containers
+
+Owned dedicated-server checks can run on Linux as well as Windows. `ServerLaunch` detects a copied server runtime's platform from its executable (`valheim_server.exe` or `valheim_server.x86_64`) and builds the direct launch that `DirectServerProcess` and `OwnedServerSession` own, including BepInEx's Doorstop variables on Linux. It is new in `Valheim.Testing.Game` `0.1.0-preview.11`; use the local feed until that version is published. [docker/linux-server](docker/linux-server/README.md) builds a local image with the server, BepInEx and .NET 10, and the manual [Linux workflow](.github/workflows/native-linux.yml) boots it once with [LinuxServerSmoke](examples/LinuxServerSmoke/README.md). The Linux path has not yet recorded a native pass; treat it as experimental until it does.
+
+Not yet: game clients in the cloud or a container (client checks still need a desktop machine), and driving remote hosts over SSH, which is next.
+
+Server images contain Valheim's game files. Build them locally or in the CI job that uses them; never push, upload or publish an image, layer or server directory.
+
 ## Test pyramid
 
 1. **Unit/synthetic:** real mod decisions against small explicit inputs. Broad and fast.
