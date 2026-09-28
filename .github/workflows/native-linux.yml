@@ -1,0 +1,46 @@
+name: Native Linux server smoke
+# Manual only. Builds the private image in docker/linux-server (Valheim dedicated server via anonymous
+# SteamCMD, plus BepInEx) on the runner and boots the server once through ServerLaunch. The image is
+# never pushed, saved or uploaded: it contains game files. Only the smoke's logs and report are uploaded.
+# No secrets are used.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-linux-smoke
+  cancel-in-progress: false
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build the private image (never pushed)
+        timeout-minutes: 30
+        run: docker build --pull -t valheimtesting-linux-server:ci docker/linux-server
+      - name: Boot the dedicated server once with BepInEx
+        timeout-minutes: 20
+        run: |
+          docker run --init --name smoke -v "$GITHUB_WORKSPACE:/src:ro" valheimtesting-linux-server:ci \
+            bash -euo pipefail -c 'cp -r /src "$HOME/repo" && cd "$HOME/repo" && echo "Server build $(cat /opt/valheim/server-buildid.txt)" && exec dotnet run --project examples/LinuxServerSmoke -c Release -- /opt/valheim/server "$HOME/out" 600'
+      - name: Copy the logs and report out of the container
+        if: always()
+        run: |
+          mkdir -p smoke-out
+          docker cp smoke:/home/valheim/out/. smoke-out/ || echo "No smoke output to copy."
+          docker cp smoke:/opt/valheim/server-buildid.txt smoke-out/ || true
+          # Logs and reports only; the generated world stays behind.
+          rm -rf smoke-out/savedir
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-server-smoke
+          path: smoke-out/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Remove the container
+        if: always()
+        run: docker rm -f smoke || true
