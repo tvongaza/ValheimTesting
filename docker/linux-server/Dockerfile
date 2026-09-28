@@ -19,11 +19,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1
 
+# git is for scripts/bootstrap-cli.cs, which fetches the pinned ValheimCLI commit.
 # SteamCMD is 32-bit (lib32gcc-s1, lib32stdc++6). The server needs libatomic1 and PulseAudio client
 # libraries. The .NET SDK needs ICU, OpenSSL and zlib.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl unzip \
+      ca-certificates curl unzip git \
       lib32gcc-s1 lib32stdc++6 \
       libatomic1 libpulse0 libpulse-mainloop-glib0 \
       libicu74 libssl3t64 zlib1g tzdata \
