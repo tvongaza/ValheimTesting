@@ -1,0 +1,50 @@
+name: Publish packages
+# Builds Valheim.Testing, Valheim.Testing.Cli and Valheim.Testing.Game from this commit and publishes
+# them to NuGet.org with Trusted Publishing: no stored API key. GitHub issues a short-lived OIDC token,
+# NuGet.org exchanges it for a one-hour key, and only the `release` environment (which requires a
+# maintainer's approval) can request one. Versions already on NuGet.org are skipped, so a release that
+# bumps one package leaves the others untouched.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run scripts/bootstrap-cli.cs
+      - run: dotnet run scripts/validate.cs
+      - name: Pack release packages
+        run: |
+          mkdir -p release
+          for p in Valheim.Testing Valheim.Testing.Game; do
+            dotnet pack "src/$p/$p.csproj" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true
+          done
+          cp .packages/Valheim.Testing.Cli.*.nupkg release/
+          sha256sum release/*.nupkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: release/*.nupkg
+      - name: NuGet login (OIDC to temporary API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Push, dependencies first
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg; do
+            dotnet nuget push "$f" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done
