@@ -5,7 +5,7 @@ Assistant-written implementation notes. Preview prototype. The Roads dedicated s
 ## Test pyramid
 
 1. **Broad base: unit and synthetic tests.** Real mod code runs against small explicit doubles and reusable terrain inputs. Fast default CI, no Valheim installation. Test decisions, persistence formats, queues, ownership and failures here.
-2. **Smaller integration layer.** Exercise the CLI protocol/runner, adapter registry, fixture handling and scenario orchestration together with controlled transports. No game required for most of these.
+2. **Smaller integration layer.** Exercise the ValheimCLI protocol/runner, adapter registry, fixture handling and scenario orchestration together with controlled transports. No game required for most of these.
 3. **Small system-test cap.** Real dedicated server for save/restart and bridge respawn; one instrumented client for terrain replication/collision; one actual ScriptEngine reload to verify assembly binding. Prepared worlds, a few zones, bounded commands. Record unexecuted cases as pending.
 4. **Human judgement.** A short look/walk where appearance or usability matters. Do not turn every visual issue into an exact-coordinate assertion.
 
@@ -21,7 +21,7 @@ A successful fake transport run is an orchestration test, not an in-game pass. A
 | `Valheim.Testing.Game` | net9, named actors, typed observations, bounded observation waits, fixture copies, comparisons and JSON/JUnit reports |
 | Roads pilot | Separate Roads checkout: test-only world adapter, game observation plugin and system scenarios |
 
-The toolkit lives in this repository and consumes the CLI-owned transport as a pinned NuGet package. The upstream CLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the net9 test-side packages.
+The toolkit lives in this repository and consumes the ValheimCLI-owned transport as a pinned NuGet package. The upstream ValheimCLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the net9 test-side packages.
 
 ## Run locally
 
@@ -49,7 +49,7 @@ Mutation is the safe default (`readOnly: false`), requires devcommands, and uses
 
 If an effect continues after cancellation, install a `WaitForQuiescence` probe *before* issuing it. The core holds the gate and retiring owner until the probe confirms completion. A throwing/stuck probe leaves the owner blocked rather than claiming successful cleanup; diagnose and restart. The API cannot roll back arbitrary terrain/spawn/save effects.
 
-Use `cli_extensions` to discover commands, instance tokens and result versions. Use `cli_extension owner/command args` over the normal CLI connection. JSON values are bounded to 256 KiB/16 levels, strings/finite numbers/bools/arrays/string-keyed objects. Unsupported values fail explicitly. The actor rejects stale instance tokens and incomplete measurements. Arguments are single tokens in this preview; adapters validate their own grammar.
+Use `cli_extensions` to discover commands, instance tokens and result versions. Use `cli_extension owner/command args` over the normal ValheimCLI connection. JSON values are bounded to 256 KiB/16 levels, strings/finite numbers/bools/arrays/string-keyed objects. Unsupported values fail explicitly. The actor rejects stale instance tokens and incomplete measurements. Arguments are single tokens in this preview; adapters validate their own grammar.
 
 The bundled `valheim.world/terrain x z generator|loaded-ground` observation demonstrates reuse. It distinguishes raw generator height from actual loaded heightmap ground. Missing heightmap returns `complete: false` and null height; it does not invent a zero.
 
@@ -63,7 +63,7 @@ A `GameActor` wraps the existing transport; it never owns/stops the attached pro
 
 ## Small game validation gate
 
-- Reload probe A→B under ScriptEngine (**passed on Mac Valheim at the main menu, 26 September 2026; see [the repeatable check](../examples/ReloadCheck/README.md)**), with CLI core stable: change/remove a command, verify discovery and instance changed, retained command answers B, removed command is absent, connection remains usable.
+- Reload probe A→B under ScriptEngine (**passed on Mac Valheim at the main menu, 26 September 2026; see [the repeatable check](../examples/ReloadCheck/README.md)**), with ValheimCLI core stable: change/remove a command, verify discovery and instance changed, retained command answers B, removed command is absent, connection remains usable.
 - Roads empty-save scenario on a disposable old-network fixture: confirmed save, owned restart, zero cells/points/crossings, loaded-from-save true.
 - Roads pending bridge append→respawn: prove pending before action; compare frozen independent expected pieces with marked ZDOs by full transform and multiplicity; save/restart and compare again.
 - One matched-input replay/game boundary-road case and one Roads-absent instrumented-client observation: actual height, area readiness and collision. Preserve unknown/missing observations as incomplete. Use ordinary vanilla terrain for server-only acceptance.
@@ -73,7 +73,7 @@ Do not expand this into a full-world matrix per commit. These checks gate the pr
 ## Mod-owned adapters and compatibility commands
 
 MWL port/shipment probes now belong to `MoreWorldLocations.TestAdapter` in MWL's
-repository, with external assertions in `MoreWorldLocations.SystemTests`. The CLI
+repository, with external assertions in `MoreWorldLocations.SystemTests`. The ValheimCLI
 core no longer registers `cli_mwl_*` commands or resolves MWL types. Install the
 optional adapter to retain those command names. An older core that still owns
 the names is refused by the adapter rather than silently overwritten.
@@ -148,7 +148,7 @@ local test layer. It does not establish natural generator fidelity, paint or
 Roads-absent client replication; the temporary platform is not sent to a client.
 No new shared package or production-mod dependency was required.
 
-## Native terrain replicated to a CLI-only client (preview 3)
+## Native terrain replicated to a ValheimCLI-only client (preview 3)
 
 The Roads-owned persistent fixture now captures native pre-write vertices, writes
 real saved compiler deltas, and derives expected results independently from a
@@ -157,7 +157,7 @@ compare loaded heightmap vertices and **their own** mesh colliders separately.
 They also require three stationary, grounded local-player observations; correct
 position alone, flying, an attachment or an active teleport is insufficient.
 
-On Valheim 1.0.16 a client with only CLI loaded (Roads/MWL pinned absent) matched
+On Valheim 1.0.16 a client with only ValheimCLI loaded (Roads/MWL pinned absent) matched
 all 15 unique samples exactly, before and after a confirmed save/server restart/
 rejoin. A deliberately unchanged-ground expectation failed 8 samples. The earlier
 100-sample server calibration and no-write control remain a separate test.
@@ -165,7 +165,7 @@ This is a bounded replication/support gate, not paint, arbitrary generator
 fidelity, network routing, walking usability, or an MWL port gameplay test.
 
 Preview 3 adds the surface assertions and keeps packages version-aligned. Toolkit
-63 tests, CLI 792 tests, Roads scenarios 58 tests and MWL adapter 35 tests cover
+63 tests, ValheimCLI 792 tests, Roads scenarios 58 tests and MWL adapter 35 tests cover
 the local layers; Roads real-source tests pass 766/766 on both .NET 10 and Mono.
 The optional adapters and shared toolkit stay outside ordinary mod releases.
 
@@ -179,8 +179,8 @@ client-owned arrival/support observations, without granting client admin rights.
 
 ## Published-library validation update
 
-Current local layers: 94 shared-library tests, 802 CLI tests, 62 Roads scenario tests and 35 MWL adapter/scenario tests. Roads retains 774 production-source unit tests on .NET 10 and Mono. The Roads unit world delegates to the shared synthetic terrain model; Roads-specific doubles, assertions and scenarios remain in Roads. Normal mod builds do not depend on the test libraries.
+Current local layers: 94 shared-library tests, 802 ValheimCLI tests, 62 Roads scenario tests and 35 MWL adapter/scenario tests. Roads retains 774 production-source unit tests on .NET 10 and Mono. The Roads unit world delegates to the shared synthetic terrain model; Roads-specific doubles, assertions and scenarios remain in Roads. Normal mod builds do not depend on the test libraries.
 
-The native paint extension has now been exercised on Valheim 1.0.16: sixteen saved RGBA texels across two zones, paved core plus untouched painted verge, alpha preserved, before and after save/server restart/rejoin on a CLI-only client. The same plan failed exactly eight samples when deliberately given the unchanged pre-road expectation. Height, collider and stationary support checks passed alongside paint. Native dirt/fading-edge coverage, rendered appearance and human walking remain follow-ups.
+The native paint extension has now been exercised on Valheim 1.0.16: sixteen saved RGBA texels across two zones, paved core plus untouched painted verge, alpha preserved, before and after save/server restart/rejoin on a ValheimCLI-only client. The same plan failed exactly eight samples when deliberately given the unchanged pre-road expectation. Height, collider and stationary support checks passed alongside paint. Native dirt/fading-edge coverage, rendered appearance and human walking remain follow-ups.
 
-The four-pack layout also passed join and confirmed-save paths. Optional Reflection was removed and reloaded in a loaded dedicated world over the same connection; only its owner identity changed. This establishes lifecycle behavior, not reclamation of loaded assemblies. Native checks exposed a missing Mono verification build setting in the packs, which is corrected in CLI #40.
+The four-pack layout also passed join and confirmed-save paths. Optional Reflection was removed and reloaded in a loaded dedicated world over the same connection; only its owner identity changed. This establishes lifecycle behavior, not reclamation of loaded assemblies. Native checks exposed a missing Mono verification build setting in the packs, which is corrected in ValheimCLI #40.

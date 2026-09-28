@@ -1,6 +1,6 @@
 # Bounded terrain expectation check
 
-Read-only attachment to an already prepared game with the stable CLI core and World Tools pack. It
+Read-only attachment to an already prepared game with the stable ValheimCLI core and World Tools pack. It
 never launches/stops a process, moves a player, generates a zone or changes ground.
 Use the existing ownership/claim protocol separately. The output distinguishes
 raw generator heights from actual loaded heightmap ground; it does not test
@@ -13,7 +13,7 @@ dotnet run --project examples/TerrainCheck -c Release -- \
   127.0.0.1 5555 /absolute/pins.txt /absolute/height-plan.json /new/terrain-result
 ```
 
-For package-only use, copy this example directory elsewhere and build with `-p:ToolkitPackageVersion=0.1.0-preview.5 -p:RestoreAdditionalProjectSources=/absolute/ValheimTesting/.packages`. The property selects the Game package; its pure-helper and CLI dependencies remain preview.4. Requires .NET 9 or later at runtime; repository validation uses the .NET 10 SDK.
+For package-only use, copy this example directory elsewhere and build with `-p:ToolkitPackageVersion=0.1.0-preview.5 -p:RestoreAdditionalProjectSources=/absolute/ValheimTesting/.packages`. The property selects the Game package; its pure-helper and ValheimCLI dependencies remain preview.4. Requires .NET 9 or later at runtime; repository validation uses the .NET 10 SDK.
 
 Pin the fixture's world UID and plugin hashes in the expectations file. Supply
 1–256 distinct x/z coordinates and **independently derived** expected heights:

@@ -1,6 +1,6 @@
 # ValheimTesting
 
-Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run without Valheim, Unity, Steam or a dedicated server. Optional system tests use the real game through the CLI.
+Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run without Valheim, Unity, Steam or a dedicated server. Optional system tests use the real game through ValheimCLI.
 
 New to the framework? Follow [Add testing to a mod](docs/getting-started.md), then choose a runnable example from the [example index](examples/README.md). Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually.
 
@@ -12,13 +12,13 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 
 | Package | Purpose | Runtime |
 |---|---|---|
-| `Valheim.Testing` | Synthetic terrain and exact recorded-input replay; no CLI dependency | netstandard2.0 |
+| `Valheim.Testing` | Synthetic terrain and exact recorded-input replay; no ValheimCLI dependency | netstandard2.0 |
 | `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net9.0 |
-| `Valheim.Cli.Testing` | Transport and YAML runner, maintained in the CLI repository | net9.0 |
+| `Valheim.Cli.Testing` | Transport and YAML runner, maintained in the ValheimCLI repository | net9.0 |
 
-The dependency goes **ValheimTesting → CLI**, never the reverse. Game-side extension API and observers stay in CLI. Roads and MWL own their optional adapters and scenarios. No test package belongs in an ordinary player's plugin folder.
+The dependency goes **ValheimTesting → ValheimCLI**, never the reverse. Game-side extension API and observers stay in ValheimCLI. Roads and MWL own their optional adapters and scenarios. No test package belongs in an ordinary player's plugin folder.
 
-Until upstream merges the required transport/API changes, `cli-dependency.json` pins our CLI fork by full commit and exact package version. This is not a claim that preview packages are on NuGet. Bootstrap builds that one dependency from tracked source into an ignored local feed; it does not compile or launch the game plugin.
+Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. This is not a claim that preview packages are on NuGet. Bootstrap builds that one dependency from tracked source into an ignored local feed; it does not compile or launch the game plugin.
 
 ## Start without a game
 
@@ -32,21 +32,21 @@ python3 scripts/validate.py
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.py` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The CLI transport and its tests remain upstream-owned, not copied here. To test a mod, add this local feed plus nuget.org, then pin `Valheim.Testing` to `0.1.0-preview.4` and `Valheim.Testing.Game` to
-`0.1.0-preview.5` (adds paint and human-walk evidence). CLI remains pinned at preview.4.
+`validate.py` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, add this local feed plus nuget.org, then pin `Valheim.Testing` to `0.1.0-preview.4` and `Valheim.Testing.Game` to
+`0.1.0-preview.5` (adds paint and human-walk evidence). ValheimCLI remains pinned at preview.4.
 
 ## Test pyramid
 
 1. **Unit/synthetic:** real mod decisions against small explicit inputs. Broad and fast.
 2. **Integration:** transport, adapters, fixture handling and orchestration with controlled doubles.
-3. **Bounded game checks:** a few zones on a disposable server and CLI-only client; save/restart and replication when those boundaries change.
+3. **Bounded game checks:** a few zones on a disposable server and ValheimCLI-only client; save/restart and replication when those boundaries change.
 4. **Human judgement:** short visual/walking checks when usability matters.
 
 Synthetic inputs are not Valheim's generator. Replaying captured inputs is not independent proof of the game's physics. Incomplete observations fail explicitly. Session ownership does not own Steam accounts, station claims or another operator's running game.
 
 ## Evidence and limits
 
-The library has 94 local tests. Roads supplies the first native scenarios: a 100-sample declared terrain/collider calibration, followed by a persistent two-zone native fixture. On Valheim 1.0.16, a CLI-only client matched 15 height/collider samples and three stationary grounded observations before and after confirmed server save/restart/rejoin. The later paint arm matched all 16 paved-core/verge RGBA samples across the same lifecycle. An unchanged-paint negative expectation failed exactly the eight painted samples and passed the untouched eight.
+The library has 94 local tests. Roads supplies the first native scenarios: a 100-sample declared terrain/collider calibration, followed by a persistent two-zone native fixture. On Valheim 1.0.16, a ValheimCLI-only client matched 15 height/collider samples and three stationary grounded observations before and after confirmed server save/restart/rejoin. The later paint arm matched all 16 paved-core/verge RGBA samples across the same lifecycle. An unchanged-paint negative expectation failed exactly the eight painted samples and passed the untouched eight.
 
 The paint fixture starts from explicit saved RGBA, preserves alpha and samples both sides of a zone seam. It does not establish arbitrary terrain, native dirt/fading-edge behavior, rendered appearance or human walking usability. MWL's full-mode payment/delivery/ownership gate remains pending. See [the detailed guide](docs/testing-toolkit.md), [source provenance](PROVENANCE.md), and examples.
 

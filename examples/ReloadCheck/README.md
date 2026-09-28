@@ -1,17 +1,17 @@
 # ScriptEngine extension reload check
 
 This is a bounded real-game check of the optional extension lifecycle. It attaches
-through the shipped CLI transport; it does not launch or stop Valheim, create a
+through the shipped ValheimCLI transport; it does not launch or stop Valheim, create a
 world, or select a character. It works at the main menu.
 
-Keep the CLI core in `BepInEx/plugins`. Enable ScriptEngine's `LoadOnStart` and
+Keep the ValheimCLI core in `BepInEx/plugins`. Enable ScriptEngine's `LoadOnStart` and
 `EnableFileSystemWatcher`. Use an **empty, dedicated** `BepInEx/scripts` directory:
 ScriptEngine reloads every script when any DLL changes. Do not run this against a
 session whose scripts or game state belong to somebody else.
 
 Build the core and two revisions of the same example plugin. The probe embeds
 symbols because ScriptEngine expects symbols when loading an assembly. The
-outputs contain the probe only; do not copy a second CLI assembly into scripts.
+outputs contain the probe only; do not copy a second ValheimCLI assembly into scripts.
 
 ```sh
 # In the pinned CLI checkout (not this repository):
@@ -26,7 +26,7 @@ dotnet examples/ReloadCheck/bin/Release/net9.0/ReloadCheck.dll \
   /absolute/disposable-game/BepInEx/scripts /absolute/results/reload.json
 ```
 
-Use the actual CLI port instead of `5555`. This example is local: DLL replacement
+Use the actual ValheimCLI port instead of `5555`. This example is local: DLL replacement
 must reach the same game as the loopback connection. The session owner must verify
 the installed core and ScriptEngine builds before running it.
 
@@ -38,8 +38,8 @@ connection, then atomically replaces A with B. It requires:
 - A's active request ending with `extension_unloaded` and A's instance token.
 - A's removed command returning `no_extension_command` rather than executing old code.
 - Exactly one probe resource after replacement: A's resource was destroyed.
-- An unchanged CLI core build identity and load time.
-- No registered probe after deleting its file, with the CLI still responding.
+- An unchanged ValheimCLI core build identity and load time.
+- No registered probe after deleting its file, with ValheimCLI still responding.
 
 The probe logs iterator disposal and registered cleanup separately, including the
 number of active waits. The runner writes structured evidence and exits nonzero
@@ -51,7 +51,7 @@ paths from `cli_build`; review before publishing.
 
 Passed on real native ARM64 Mac Valheim (1.0.16, Unity 6000.0.75f1), launched
 headlessly at the main menu with BepInEx 5.4.23.5 and ScriptEngine 11.1. Both
-cleanup callbacks ran with zero active waits. The CLI core was unchanged.
+cleanup callbacks ran with zero active waits. The ValheimCLI core was unchanged.
 
 This establishes read-only active-command cancellation, replacement, owned
 GameObject cleanup, command removal, and connection continuity. It does not test

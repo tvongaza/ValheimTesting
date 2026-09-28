@@ -9,7 +9,7 @@ dotnet run --project examples/WalkingReview -c Release -- \
   127.0.0.1 5555 /absolute/pins.txt /absolute/route.json 120 /new/walk-result
 ```
 
-Attach to a disposable, correctly pinned client with CLI World Tools installed.
+Attach to a disposable, correctly pinned client with ValheimCLI World Tools installed.
 Arrange arrival and character protection separately; verify protection before
 walking. The observer issues no movement, teleport, cheats or save commands.
 A person drives normally while it samples local position, motion and support.

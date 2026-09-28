@@ -13,15 +13,15 @@ python3 scripts/bootstrap-cli.py
 python3 scripts/validate.py
 ```
 
-Bootstrap fetches the exact CLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all seven examples, runs the no-game example, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
+Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all seven examples, runs the no-game example, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
 
 The current local feed contains:
 
 | Package | Exact version | Use |
 |---|---|---|
-| `Valheim.Testing` | `0.1.0-preview.4` | Synthetic terrain, recorded-input replay and small assertions; no CLI dependency |
+| `Valheim.Testing` | `0.1.0-preview.4` | Synthetic terrain, recorded-input replay and small assertions; no ValheimCLI dependency |
 | `Valheim.Testing.Game` | `0.1.0-preview.5` | External game observations, owned sessions, comparisons and reports |
-| `Valheim.Cli.Testing` | `0.1.0-preview.4` | CLI-owned transport, consumed by the Game package |
+| `Valheim.Cli.Testing` | `0.1.0-preview.4` | ValheimCLI-owned transport, consumed by the Game package |
 
 Versions need not match each other. These previews are built locally, not available from NuGet.org. Add `.packages` alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
 
@@ -54,17 +54,17 @@ Roads demonstrates gradual adoption: its [SyntheticWorld adapter](https://github
 
 Use controlled transports to exercise wrong pins, incomplete replies, stale extension instances, timeouts and cleanup. Examples of these tests live in [`tests/Valheim.Testing.Tests`](../tests/Valheim.Testing.Tests). These test the driver and its failure handling; they do not prove that a mod saves correctly in the game.
 
-Put mod-specific assertions in the mod repository. Generic observations, session ownership and report writing belong here; transport and the extension API belong in CLI. Do not copy infrastructure into every mod.
+Put mod-specific assertions in the mod repository. Generic observations, session ownership and report writing belong here; transport and the extension API belong in ValheimCLI. Do not copy infrastructure into every mod.
 
 ## 4. Add a small native check where it matters
 
 Use the [example index](../examples/README.md) to choose an observer. Terrain has distinct layers: raw generator height, loaded heightmap, that map's collider, player support, and paint mask. Select the layer that answers the test question. A generator-height match says nothing about a client's loaded collider.
 
-For the current split CLI build, a typical disposable Roads fixture installs:
+For the current split ValheimCLI build, a typical disposable Roads fixture installs:
 
-| Component | Dedicated server | CLI-only observation client |
+| Component | Dedicated server | ValheimCLI-only observation client |
 |---|---|---|
-| Matching CLI core | Yes, in plugins | Yes, in plugins |
+| Matching ValheimCLI core | Yes, in plugins | Yes, in plugins |
 | Standard pack | Save/session commands | Character/session/protection commands |
 | World Tools pack | Terrain/world observations | Terrain/collider/paint/player observations |
 | Roads and optional Roads test adapter | Yes | Absent, explicitly pinned |
@@ -72,7 +72,7 @@ For the current split CLI build, a typical disposable Roads fixture installs:
 | Capture pack | Optional | Only for clutter controls |
 | ScriptEngine | Only for reload tests | Only for reload tests |
 
-Core stays in plugins. Put each optional pack in plugins **or** scripts, never both. See the CLI [pack installation and ownership guide](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md). An older monolithic CLI and extracted packs cannot be mixed.
+Core stays in plugins. Put each optional pack in plugins **or** scripts, never both. See the ValheimCLI [pack installation and ownership guide](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md). An older monolithic ValheimCLI and extracted packs cannot be mixed.
 
 Prepare private test settings, an independently specified fixture and a disposable character. Keep credentials out of committed plans and reports. Use `cli_manifest` to inspect actual loaded plugin hashes, `cli_world` for world identity, and `cli_extensions` to confirm the required capabilities. A strict pins file uses one `key=value` per line:
 
@@ -85,9 +85,9 @@ warpalicious.ProceduralRoads=absent
 warpalicious.More_World_Locations_AIO=absent
 ```
 
-This is an illustrative **client** file, not usable pins. Include every additional loaded plugin, such as ScriptEngine or other packs. On the server use the real mod/adapter hashes instead of `absent`. SHA-256 input manifests and plugin MD5 expectation pins serve different purposes; do not substitute one for the other. See [CLI expectations](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/README.md#know-what-you-are-testing).
+This is an illustrative **client** file, not usable pins. Include every additional loaded plugin, such as ScriptEngine or other packs. On the server use the real mod/adapter hashes instead of `absent`. SHA-256 input manifests and plugin MD5 expectation pins serve different purposes; do not substitute one for the other. See [ValheimCLI expectations](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/README.md#know-what-you-are-testing).
 
-Wait for the world and required zone to be loaded, arrange arrival/protection separately, and verify the client's actual position. A responsive CLI is not proof that world loading has finished. Missing maps or incomplete observations are failures, not zero-height or black-paint measurements.
+Wait for the world and required zone to be loaded, arrange arrival/protection separately, and verify the client's actual position. A responsive ValheimCLI is not proof that world loading has finished. Missing maps or incomplete observations are failures, not zero-height or black-paint measurements.
 
 For persistence, use the **same** independently declared plan before and after a confirmed save, server restart and client rejoin. Require `cli_save`'s completion result before stopping. Run a discriminating negative expectation too: unchanged pre-road paint should fail painted samples while untouched samples still pass. Never widen tolerances merely to make a fixture pass.
 

@@ -20,8 +20,8 @@ Use an existing mod-owned scenario when one fits. [Roads scenarios](https://gith
 ## First actions in a new checkout
 
 1. Read the local repository's instructions and check branch/worktree status. Keep other agents' edits and active sessions intact.
-2. Check [package ownership and setup](getting-started.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`. CLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
-3. Bootstrap the exact CLI dependency, then run local validation:
+2. Check [package ownership and setup](getting-started.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`. ValheimCLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
+3. Bootstrap the exact ValheimCLI dependency, then run local validation:
 
    ```sh
    python3 scripts/bootstrap-cli.py
@@ -36,8 +36,8 @@ Use an existing mod-owned scenario when one fits. [Roads scenarios](https://gith
 - Confirm which machine/process/world the user intended and whether another operator owns it. Use that environment's existing claim and restore helpers; this public library does not contain private station credentials or deployment scripts.
 - Use disposable copies, free ports, exact candidate DLLs and a dedicated character where a client is needed. Verify backups and character protection before movement. Do not copy production saves or change admin membership unless the task actually authorizes it.
 - Install one core in plugins and each required pack in plugins **or** scripts, never both. Standard supplies save/join/protection; World Tools supplies observations; Reflection is needed only for `cli_call`. ScriptEngine reload affects all scripts in its directory. See [pack installation](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md).
-- Read `cli_manifest`, `cli_world` and `cli_extensions`. Pin actual plugin MD5s and world UID using the [strict pins format](getting-started.md#4-add-a-small-native-check-where-it-matters). Pins enforce identity, not authorization. Pin the tested mod `absent` on a CLI-only replication client, and list every other loaded plugin.
-- Require full session readiness and the necessary loaded zones. An audit may hold world load while CLI answers. Arrange arrival separately and verify client-reported position/support rather than trusting a teleport request.
+- Read `cli_manifest`, `cli_world` and `cli_extensions`. Pin actual plugin MD5s and world UID using the [strict pins format](getting-started.md#4-add-a-small-native-check-where-it-matters). Pins enforce identity, not authorization. Pin the tested mod `absent` on a ValheimCLI-only replication client, and list every other loaded plugin.
+- Require full session readiness and the necessary loaded zones. An audit may hold world load while ValheimCLI answers. Arrange arrival separately and verify client-reported position/support rather than trusting a teleport request.
 
 ## Use the API's actual contracts
 
@@ -51,7 +51,7 @@ A capability includes its owner instance. After a reload, reverify environment p
 | `GameActor.Execute` returns | Transport succeeded; inspect the command's documented output/effect |
 | Structured `ok=false`, wrong instance/schema, or `complete=false` | Failure/incomplete evidence, not a passing empty result |
 | Save request says `Saving..` | Not enough; require the command's completed-save result before stopping |
-| CLI cannot execute due to game cheat confirmation | Record the refusal; do not bypass the gate or call it success |
+| ValheimCLI cannot execute due to game cheat confirmation | Record the refusal; do not bypass the gate or call it success |
 | Roads runner mode `validate` or `prepare-*` succeeds | Plan/preparation passed, not native scenario acceptance |
 | WalkingReview exits 0 | Trace qualifies for human review; verdict still starts `not-reviewed` |
 
@@ -60,7 +60,7 @@ Terrain uses horizontal **x/z** and vertical **y**, in metres. Generator height,
 ## Bounded paint/reload recipe
 
 1. Have the fixture owner prepare a small declared road/paint profile, preserving pre-write inputs and expected results. The observer does not write or load terrain. Use a stable saved paint baseline; an ungenerated zone's initial paint may not be a stable client-arrival expectation.
-2. Run PaintCheck against the loaded CLI-only client with exact pins and a new output directory. Pair it with ClientSurfaceCheck if collision/height is in scope.
+2. Run PaintCheck against the loaded ValheimCLI-only client with exact pins and a new output directory. Pair it with ClientSurfaceCheck if collision/height is in scope.
 3. Test the same observation with deliberately unchanged pre-road expectations. Only intentionally changed samples should fail; keep the negative report labelled separately.
 4. Confirm a save, leave the world, restart only the owned server, rejoin and reverify pins/readiness/arrival. Repeat the **original** expectation plan in another new output directory.
 5. Inspect every result, incomplete sample and game warning/error. Retain the original failed attempts; do not silently replace evidence or use a saved report from an older DLL.

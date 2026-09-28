@@ -1,6 +1,6 @@
 # First read-only game observation
 
-After [bootstrap and fixture/pin setup](../../docs/getting-started.md), attach to an already loaded disposable game with CLI core and World Tools:
+After [bootstrap and fixture/pin setup](../../docs/getting-started.md), attach to an already loaded disposable game with ValheimCLI core and World Tools:
 
 ```sh
 # From the ValheimTesting root; replace the example coordinates with your own.

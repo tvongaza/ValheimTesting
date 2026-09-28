@@ -1,6 +1,6 @@
 # Read-only client terrain and support check
 
-Attach to an already prepared client with CLI core and World Tools. Follow [bootstrap and strict pin setup](../../docs/getting-started.md) first. This
+Attach to an already prepared client with ValheimCLI core and World Tools. Follow [bootstrap and strict pin setup](../../docs/getting-started.md) first. This
 example never starts/stops a game, moves a player, changes cheats, or edits ground.
 The owner of the test arranges arrival separately and backs up the test character.
 
@@ -11,8 +11,8 @@ dotnet run --project examples/ClientSurfaceCheck -c Release -- localhost 5555 pi
 ```
 
 `pins.txt` must pin the world UID and exact loaded plugins. For a vanilla-client
-replication test include the tested mod as `absent`, alongside the CLI's exact MD5.
-Use only CLI on that client; the server may have the mod and its optional adapter.
+replication test include the tested mod as `absent`, alongside ValheimCLI's exact MD5.
+Use only ValheimCLI on that client; the server may have the mod and its optional adapter.
 
 ```json
 {
