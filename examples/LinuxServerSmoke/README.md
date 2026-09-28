@@ -2,7 +2,7 @@
 
 `LinuxServerSmoke <disposable-server-runtime> <new-output-directory> [seconds 30..1800] [port]`
 
-Boots one owned dedicated server with BepInEx through `ServerLaunch` and `DirectServerProcess`, waits for startup evidence, then stops exactly that process. It is written for the [Linux image](../../docker/linux-server/README.md) but takes whatever platform the runtime's executable names, so it also works on a Windows server copy.
+Boots one owned dedicated server with BepInEx through `ServerLaunch` and `DirectServerProcess`, waits for startup evidence, then stops exactly that process. It is written for the [Linux image](../../docker/linux-server/README.md) but takes whatever platform the runtime's executable names, so it also works on a Windows server copy. On a macOS host it stops at the first step: there is no macOS dedicated server, so run it inside the image instead.
 
 ```sh
 # Inside the Linux image, from a writable copy of this repository:

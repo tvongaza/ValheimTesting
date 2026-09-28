@@ -13,6 +13,14 @@ dotnet run scripts/bootstrap-cli.cs
 dotnet run scripts/validate.cs
 ```
 
+The same commands work on Windows, Linux and macOS; CI runs them on all three. What each host can do:
+
+| Host | Toolkit and tests | Game client (via ValheimCLI) | Dedicated server (native) | Server in a container | Remote server host |
+|---|---|---|---|---|---|
+| Windows | Yes | Yes | Yes | Linux image; not tested on Windows | Coming next (SSH, host profiles) |
+| Linux | Yes | Yes | Yes | Yes, verified | Coming next (SSH, host profiles) |
+| macOS | Yes | Yes, `Valheim.app` | **No**: there is no macOS dedicated server | Experimental (x86-64 emulation on Apple Silicon) | Recommended; coming next (SSH, host profiles) |
+
 Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all examples, runs the no-game examples, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
 
 The toolkit packages, all on NuGet.org:
@@ -112,11 +120,13 @@ For persistence, use the **same** independently declared plan before and after a
 
 The [Roads scenario guide](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) shows owned process/copy setup, manifests, preparation versus acceptance, empty-save, bridge respawn and native terrain/paint. MWL's [adapter guide](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) keeps its port probes separate; those require full mode and their bounded full-mode payment/delivery/ownership acceptance now passes.
 
-### On Linux or in a container
+### On Linux, macOS or in a container
 
 The dedicated server also runs on Linux. Build the launch with `ServerLaunch.CreateStartInfo(runtime, arguments, environment)` (`Valheim.Testing.Game` `0.1.0-preview.11`, from the local feed until published) and pass it to `DirectServerProcess` as on Windows. It detects the platform from the runtime's executable, refuses a runtime with both or neither, and on Linux sets BepInEx's Doorstop variables and prepends to `LD_LIBRARY_PATH`/`LD_PRELOAD` without dropping existing entries. The [Linux image](../docker/linux-server/README.md) installs the free dedicated server with anonymous SteamCMD and BepInEx at build time; [LinuxServerSmoke](../examples/LinuxServerSmoke/README.md) is the smallest runner for it.
 
-What works: owned dedicated-server native checks on Linux, locally or in CI. Not yet: a game client in the cloud or a container, and remote hosts over SSH. The image contains game files; keep it local or inside the CI job and never publish it.
+What works: owned dedicated-server native checks on Linux, locally or in CI; the image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026. Not yet: a game client in the cloud or a container, and remote hosts over SSH. The image contains game files; keep it local or inside the CI job and never publish it.
+
+On macOS, run the toolkit, tests and a Mac game client locally, and put the dedicated server on a Windows or Linux machine. There is no macOS dedicated server: `ServerLaunch` throws `PlatformNotSupportedException` on a macOS host rather than executing a Linux or Windows binary, and also when given a `Valheim.app` client as the server runtime. `Detect` still works on a Mac, so a runtime can be checked before it is copied elsewhere. The Linux image builds on Apple Silicon with `--platform linux/amd64`, but only under emulation; see its [Apple Silicon notes](../docker/linux-server/README.md#apple-silicon-experimental) and treat it as experimental.
 
 ## 5. Read the result, then keep human judgement separate
 

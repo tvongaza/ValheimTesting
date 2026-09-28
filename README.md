@@ -40,9 +40,19 @@ dotnet run --project examples/NoGameTerrain -c Release
 
 `validate.cs` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.5` or `Valheim.Testing.Game` `0.1.0-preview.10` (net10.0); both restore from NuGet.org. The transport stays at `Valheim.Testing.Cli` `0.1.0-preview.4`. Use the local feed only to try a build that is not yet published.
 
+## Platforms
+
+| Host | Toolkit and tests | Game client (via ValheimCLI) | Dedicated server (native) | Server in a container | Remote server host |
+|---|---|---|---|---|---|
+| Windows | Yes; CI | Yes | Yes, `valheim_server.exe` | Linux image; not tested on Windows | Coming next (SSH, host profiles) |
+| Linux | Yes; CI | Yes | Yes, `valheim_server.x86_64` | Yes, [docker/linux-server](docker/linux-server/README.md); verified | Coming next (SSH, host profiles) |
+| macOS | Yes; CI | Yes, `Valheim.app` | **No**: there is no macOS dedicated server | Experimental: x86-64 emulation on Apple Silicon | Recommended; coming next (SSH, host profiles) |
+
+The toolkit needs only the .NET 10 SDK on every host, and CI runs bootstrap and validation on all three. Game clients are launched by ValheimCLI, not this repository. On a Mac, run the tests and a Mac client locally and put the dedicated server on a Windows or Linux machine; `ServerLaunch` refuses to launch a server on a macOS host, and refuses a `Valheim.app` client passed as a server runtime, with that guidance.
+
 ## Linux and containers
 
-Owned dedicated-server checks can run on Linux as well as Windows. `ServerLaunch` detects a copied server runtime's platform from its executable (`valheim_server.exe` or `valheim_server.x86_64`) and builds the direct launch that `DirectServerProcess` and `OwnedServerSession` own, including BepInEx's Doorstop variables on Linux. It is new in `Valheim.Testing.Game` `0.1.0-preview.11`; use the local feed until that version is published. [docker/linux-server](docker/linux-server/README.md) builds a local image with the server, BepInEx and .NET 10, and the manual [Linux workflow](.github/workflows/native-linux.yml) boots it once with [LinuxServerSmoke](examples/LinuxServerSmoke/README.md). The Linux path has not yet recorded a native pass; treat it as experimental until it does.
+Owned dedicated-server checks can run on Linux as well as Windows. `ServerLaunch` detects a copied server runtime's platform from its executable (`valheim_server.exe` or `valheim_server.x86_64`) and builds the direct launch that `DirectServerProcess` and `OwnedServerSession` own, including BepInEx's Doorstop variables on Linux. It is new in `Valheim.Testing.Game` `0.1.0-preview.11`; use the local feed until that version is published. [docker/linux-server](docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10, and the manual [Linux workflow](.github/workflows/native-linux.yml) boots it once with [LinuxServerSmoke](examples/LinuxServerSmoke/README.md). The image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026 (server build 25527701); on Apple Silicon the image runs only under emulation and remains experimental.
 
 Not yet: game clients in the cloud or a container (client checks still need a desktop machine), and driving remote hosts over SSH, which is next.
 
