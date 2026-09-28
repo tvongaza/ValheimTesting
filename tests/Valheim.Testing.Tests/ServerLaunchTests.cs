@@ -3,17 +3,26 @@ using Xunit;
 
 public class ServerLaunchTests
 {
+    // A host that builds a Linux launch: Linux itself, or Windows for inspection only. macOS refuses (tested below).
+    // Launch-content tests inject it so they run unchanged on every OS, including macOS CI.
+    private static readonly ServerHost LinuxLaunchHost = OperatingSystem.IsWindows() ? ServerHost.Windows : ServerHost.Linux;
+
+    [Fact] public void CurrentHostFollowsTheOperatingSystem()
+    {
+        var expected = OperatingSystem.IsWindows() ? ServerHost.Windows : OperatingSystem.IsMacOS() ? ServerHost.MacOS : ServerHost.Linux;
+        Assert.Equal(expected, ServerLaunch.CurrentHost);
+    }
     [Fact] public void WindowsRuntimeIsDetectedFromItsExecutable()
     {
         using var runtime = Runtime.Windows();
         Assert.Equal(ServerPlatform.Windows, ServerLaunch.Detect(runtime.Root));
-        Assert.Equal(Path.Combine(runtime.Root, "valheim_server.exe"), ServerLaunch.RequireExecutable(runtime.Root));
+        Assert.Equal(Path.Combine(runtime.Root, "valheim_server.exe"), ServerLaunch.RequireExecutable(runtime.Root, ServerHost.Windows));
     }
     [Fact] public void LinuxRuntimeIsDetectedFromItsExecutable()
     {
         using var runtime = Runtime.Linux();
         Assert.Equal(ServerPlatform.Linux, ServerLaunch.Detect(runtime.Root));
-        Assert.Equal(Path.Combine(runtime.Root, "valheim_server.x86_64"), ServerLaunch.RequireExecutable(runtime.Root));
+        Assert.Equal(Path.Combine(runtime.Root, "valheim_server.x86_64"), ServerLaunch.RequireExecutable(runtime.Root, LinuxLaunchHost));
     }
     [Fact] public void RuntimeWithBothExecutablesIsRefused()
     {
@@ -36,22 +45,19 @@ public class ServerLaunchTests
     {
         using var runtime = Runtime.Linux(executable: false);
         string executable = Path.Combine(runtime.Root, "valheim_server.x86_64");
-        if (OperatingSystem.IsWindows())
-        {
-            // No Unix mode exists to read; the file's presence is the whole check.
-            Assert.Equal(executable, ServerLaunch.RequireExecutable(runtime.Root));
-            return;
-        }
-        Assert.Throws<InvalidOperationException>(() => ServerLaunch.RequireExecutable(runtime.Root));
-        Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(runtime.Root, []));
+        // No Unix mode exists to read on a Windows host; the file's presence is the whole check.
+        Assert.Equal(executable, ServerLaunch.RequireExecutable(runtime.Root, ServerHost.Windows));
+        if (OperatingSystem.IsWindows()) return; // Real file modes are needed for the Linux-host arm.
+        Assert.Throws<InvalidOperationException>(() => ServerLaunch.RequireExecutable(runtime.Root, ServerHost.Linux));
+        Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Linux));
         File.SetUnixFileMode(executable, File.GetUnixFileMode(executable) | UnixFileMode.UserExecute);
-        Assert.Equal(executable, ServerLaunch.RequireExecutable(runtime.Root));
+        Assert.Equal(executable, ServerLaunch.RequireExecutable(runtime.Root, ServerHost.Linux));
     }
     [Fact] public void WindowsLaunchUsesRuntimeAndCallerSettingsWithoutLinuxLoader()
     {
         using var runtime = Runtime.Windows();
         var start = ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode", "-nographics", "-savedir", "C:/saves with space"],
-            new Dictionary<string, string> { ["TEST_TOKEN"] = "abc" });
+            new Dictionary<string, string> { ["TEST_TOKEN"] = "abc" }, ServerHost.Windows);
         Assert.Equal(Path.Combine(runtime.Root, "valheim_server.exe"), start.FileName);
         Assert.Equal(runtime.Root, start.WorkingDirectory);
         Assert.False(start.UseShellExecute);
@@ -67,7 +73,7 @@ public class ServerLaunchTests
         var start = ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode", "-nographics"], new Dictionary<string, string>
         {
             ["LD_LIBRARY_PATH"] = "/opt/extra/lib:/opt/other/lib", ["LD_PRELOAD"] = "libcaller.so", ["TEST_TOKEN"] = "abc",
-        });
+        }, LinuxLaunchHost);
         Assert.Equal(Path.Combine(runtime.Root, "valheim_server.x86_64"), start.FileName);
         Assert.Equal(runtime.Root, start.WorkingDirectory);
         Assert.Equal("1", start.Environment["DOORSTOP_ENABLED"]);
@@ -81,7 +87,7 @@ public class ServerLaunchTests
     [Fact] public void EmptyLibraryPathsAddNoEmptyEntry()
     {
         using var runtime = Runtime.Linux();
-        var start = ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = "", ["LD_PRELOAD"] = "" });
+        var start = ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = "", ["LD_PRELOAD"] = "" }, LinuxLaunchHost);
         // A trailing ':' would add the working directory to the search path.
         Assert.Equal(Path.Combine(runtime.Root, "linux64") + ":" + Path.Combine(runtime.Root, "doorstop_libs"), start.Environment["LD_LIBRARY_PATH"]);
         Assert.Equal("libdoorstop_x64.so", start.Environment["LD_PRELOAD"]);
@@ -89,14 +95,14 @@ public class ServerLaunchTests
     [Fact] public void CallerSteamAppIdIsKept()
     {
         using var runtime = Runtime.Linux();
-        var start = ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { ["SteamAppId"] = "123" });
+        var start = ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { ["SteamAppId"] = "123" }, LinuxLaunchHost);
         Assert.Equal("123", start.Environment["SteamAppId"]);
     }
     [Theory] [InlineData("DOORSTOP_ENABLED")] [InlineData("DOORSTOP_TARGET_ASSEMBLY")]
     public void CallerCannotRedirectTheLinuxLoader(string name)
     {
         using var runtime = Runtime.Linux();
-        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { [name] = "0" }));
+        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { [name] = "0" }, LinuxLaunchHost));
     }
     [Theory]
     [InlineData("linux", "BepInEx/core/BepInEx.Preloader.dll")] [InlineData("linux", "doorstop_libs/libdoorstop_x64.so")]
@@ -105,13 +111,74 @@ public class ServerLaunchTests
     {
         using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
         File.Delete(Path.Combine(runtime.Root, missing));
-        Assert.Throws<FileNotFoundException>(() => ServerLaunch.CreateStartInfo(runtime.Root, []));
+        Assert.Throws<FileNotFoundException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, platform == "linux" ? LinuxLaunchHost : ServerHost.Windows));
     }
     [Fact] public void LinuxRuntimePathThatCannotBeListedIsRefused()
     {
         if (OperatingSystem.IsWindows()) return; // Windows paths are not valid in Linux search lists anyway.
         using var runtime = Runtime.Linux("server:copy");
-        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, []));
+        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Linux));
+        // A Windows host only builds the launch for inspection and does not check.
+        Assert.Equal(runtime.Root, ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Windows).WorkingDirectory);
+    }
+
+    [Theory]
+    [InlineData("Valheim.app", "Contents/MacOS/Valheim")] // the bundle itself
+    [InlineData("Valheim copy.app", "Contents/MacOS/Valheim")] // a renamed bundle, recognised by its executable
+    [InlineData("Valheim", "Valheim.app/Contents/MacOS/Valheim")] // a Steam install directory holding the bundle
+    [InlineData("Valheim", "Valheim.app/Contents/Info.plist")] // a partial copy: the bundle directory is enough
+    public void MacClientIsRefusedAsNotAServer(string name, string file)
+    {
+        using var runtime = new Runtime(name); runtime.Add(file);
+        var error = Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.Detect(runtime.Root));
+        Assert.Contains("There is no macOS dedicated server", error.Message);
+        Assert.Contains("container", error.Message);
+        Assert.Contains("remote Windows/Linux host", error.Message);
+        foreach (var host in new[] { ServerHost.Windows, ServerHost.Linux, ServerHost.MacOS })
+        {
+            Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root, host));
+            Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, host));
+        }
+    }
+    [Fact] public void ServerExecutableWinsOverAMacClientBesideIt()
+    {
+        using var runtime = Runtime.Linux(); runtime.Add("Valheim.app/Contents/MacOS/Valheim");
+        Assert.Equal(ServerPlatform.Linux, ServerLaunch.Detect(runtime.Root));
+    }
+    [Fact] public void EmptyDirectoryNamedLikeAnAppIsStillAMissingServer()
+    {
+        using var runtime = new Runtime("Server.app");
+        Assert.Throws<FileNotFoundException>(() => ServerLaunch.Detect(runtime.Root));
+    }
+    [Theory] [InlineData("linux")] [InlineData("windows")]
+    public void MacHostRefusesToLaunchEitherServer(string platform)
+    {
+        using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
+        // Detection reads the runtime's contents and still works on a Mac, e.g. to stage a copy for a container.
+        Assert.Equal(platform == "linux" ? ServerPlatform.Linux : ServerPlatform.Windows, ServerLaunch.Detect(runtime.Root));
+        var error = Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root, ServerHost.MacOS));
+        Assert.Contains("There is no macOS dedicated server", error.Message);
+        Assert.Contains("--platform linux/amd64", error.Message);
+        Assert.Contains("remote Windows/Linux host", error.Message);
+        Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode"], null, ServerHost.MacOS));
+    }
+    [Fact] public void MacHostRefusesBeforeReadingTheExecuteBit()
+    {
+        // A missing execute bit would otherwise report chmod, which cannot help on a Mac.
+        using var runtime = Runtime.Linux(executable: false);
+        Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root, ServerHost.MacOS));
+    }
+    [Fact] public void PublicOverloadsRefuseOnAMacHostOnly()
+    {
+        using var runtime = Runtime.Linux();
+        if (OperatingSystem.IsMacOS())
+        {
+            Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root));
+            Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, []));
+            return;
+        }
+        Assert.Equal(Path.Combine(runtime.Root, "valheim_server.x86_64"), ServerLaunch.RequireExecutable(runtime.Root));
+        Assert.Equal(runtime.Root, ServerLaunch.CreateStartInfo(runtime.Root, []).WorkingDirectory);
     }
 
     private sealed class Runtime : IDisposable

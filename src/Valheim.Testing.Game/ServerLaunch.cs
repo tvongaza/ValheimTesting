@@ -4,6 +4,10 @@ namespace Valheim.Testing.Game;
 
 public enum ServerPlatform { Windows, Linux }
 
+// The machine building the launch. macOS has no dedicated server of its own and cannot execute either one.
+// Other Unix hosts behave as Linux. Injectable so every host's branches are tested on any OS.
+internal enum ServerHost { Windows, Linux, MacOS }
+
 // Builds the direct launch DirectServerProcess needs from a copied BepInEx server runtime.
 // It reproduces the variables BepInExPack_Valheim's start_server_bepinex.sh exports, without the
 // script, so the started PID is the server's own and the session's PID handshake still holds.
@@ -16,34 +20,54 @@ public static class ServerLaunch
     private static readonly string Preloader = Path.Combine("BepInEx", "core", "BepInEx.Preloader.dll");
     private static readonly string LinuxDoorstop = Path.Combine("doorstop_libs", "libdoorstop_x64.so");
     private const string WindowsDoorstop = "winhttp.dll";
+    private const string MacClientBundle = "Valheim.app";
+    private const string NoMacServer = "There is no macOS dedicated server; run the Linux server image in a container " +
+        "(docker --platform linux/amd64, see docker/linux-server) or use a remote Windows/Linux host.";
 
-    /// <summary>Decides the platform from the runtime's contents, never from the host. Refuses an ambiguous or empty runtime.</summary>
+    internal static ServerHost CurrentHost =>
+        OperatingSystem.IsWindows() ? ServerHost.Windows : OperatingSystem.IsMacOS() ? ServerHost.MacOS : ServerHost.Linux;
+
+    /// <summary>
+    /// Decides the platform from the runtime's contents, never from the host. Refuses an ambiguous or empty runtime,
+    /// and a macOS game client (a Valheim.app bundle, or a directory holding one) with <see cref="PlatformNotSupportedException"/>.
+    /// </summary>
     public static ServerPlatform Detect(string runtimeDirectory)
     {
         string runtime = FullRuntime(runtimeDirectory);
         bool windows = File.Exists(Path.Combine(runtime, WindowsExecutable)), linux = File.Exists(Path.Combine(runtime, LinuxExecutable));
         if (windows && linux) throw new InvalidOperationException($"Runtime contains both {WindowsExecutable} and {LinuxExecutable}; refusing to guess its platform.");
+        if (!windows && !linux && IsMacClient(runtime))
+            throw new PlatformNotSupportedException($"{runtime} is the macOS Valheim game client ({MacClientBundle}), not a dedicated server. " + NoMacServer);
         if (!windows && !linux) throw new FileNotFoundException($"Runtime contains neither {WindowsExecutable} nor {LinuxExecutable}.", runtime);
         return windows ? ServerPlatform.Windows : ServerPlatform.Linux;
     }
 
-    /// <summary>Returns the detected server executable's full path. On a non-Windows host a Linux server must carry the user-execute bit.</summary>
-    public static string RequireExecutable(string runtimeDirectory) => Resolve(FullRuntime(runtimeDirectory)).Executable;
+    /// <summary>
+    /// Returns the detected server executable's full path. On a Linux host a Linux server must carry the user-execute bit.
+    /// A macOS host refuses with <see cref="PlatformNotSupportedException"/>: it can execute neither server.
+    /// </summary>
+    public static string RequireExecutable(string runtimeDirectory) => RequireExecutable(runtimeDirectory, CurrentHost);
+    internal static string RequireExecutable(string runtimeDirectory, ServerHost host) => Resolve(FullRuntime(runtimeDirectory), host).Executable;
 
     /// <summary>
     /// Start info for one owned BepInEx dedicated server. Caller environment is applied first. On Linux, Doorstop is
     /// enabled for BepInEx's preloader and the runtime's doorstop_libs/linux64 directories are prepended to any existing
     /// LD_LIBRARY_PATH/LD_PRELOAD, which are kept. SteamAppId defaults to the dedicated server's unless the caller sets it.
+    /// A Windows host builds a Linux launch for inspection only. A macOS host refuses with <see cref="PlatformNotSupportedException"/>
+    /// rather than executing a Linux or Windows binary: use the Linux container or a remote Windows/Linux host.
     /// </summary>
-    public static ProcessStartInfo CreateStartInfo(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null)
+    public static ProcessStartInfo CreateStartInfo(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null) =>
+        CreateStartInfo(runtimeDirectory, arguments, environment, CurrentHost);
+
+    internal static ProcessStartInfo CreateStartInfo(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment, ServerHost host)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         string runtime = FullRuntime(runtimeDirectory);
-        var (platform, executable) = Resolve(runtime);
+        var (platform, executable) = Resolve(runtime, host);
         RequireFile(runtime, Preloader, "BepInEx is not installed in the runtime");
         RequireFile(runtime, platform == ServerPlatform.Windows ? WindowsDoorstop : LinuxDoorstop, "BepInEx's Doorstop loader is missing from the runtime");
         environment ??= new Dictionary<string, string>();
-        var names = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var names = host == ServerHost.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         foreach (string name in new[] { "DOORSTOP_ENABLED", "DOORSTOP_TARGET_ASSEMBLY" })
             if (platform == ServerPlatform.Linux && environment.Keys.Any(key => names.Equals(key, name)))
                 throw new ArgumentException(name + " is set by ServerLaunch for BepInEx; remove it from the caller environment.", nameof(environment));
@@ -56,7 +80,7 @@ public static class ServerLaunch
         {
             // Both lists split on ':' (LD_LIBRARY_PATH also on ';'), so such a path cannot be represented.
             // Checked where the launch can run; a Windows host only builds this for inspection.
-            if (!OperatingSystem.IsWindows() && runtime.IndexOfAny([':', ';']) >= 0)
+            if (host != ServerHost.Windows && runtime.IndexOfAny([':', ';']) >= 0)
                 throw new ArgumentException("A Linux runtime path cannot contain ':' or ';'.", nameof(runtimeDirectory));
             start.Environment["DOORSTOP_ENABLED"] = "1";
             start.Environment["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(runtime, Preloader);
@@ -67,18 +91,27 @@ public static class ServerLaunch
         return start;
     }
 
-    private static (ServerPlatform Platform, string Executable) Resolve(string runtime)
+    private static (ServerPlatform Platform, string Executable) Resolve(string runtime, ServerHost host)
     {
         var platform = Detect(runtime);
         string executable = Path.Combine(runtime, platform == ServerPlatform.Windows ? WindowsExecutable : LinuxExecutable);
+        // Refused before any file mode is read: exec of an ELF or PE binary on macOS would fail with an opaque error.
+        if (host == ServerHost.MacOS)
+            throw new PlatformNotSupportedException($"This macOS host cannot run the {platform} dedicated server {executable}. " + NoMacServer);
         // Windows has no execute bit to read; there a Linux runtime can only be staged or inspected.
+        // The outer check is the real OS (Unix modes exist); the inner one is the host this launch is built for.
         if (!OperatingSystem.IsWindows())
         {
-            if (platform == ServerPlatform.Linux && (File.GetUnixFileMode(executable) & UnixFileMode.UserExecute) == 0)
+            if (host != ServerHost.Windows && platform == ServerPlatform.Linux && (File.GetUnixFileMode(executable) & UnixFileMode.UserExecute) == 0)
                 throw new InvalidOperationException($"{LinuxExecutable} is not executable; restore its mode (chmod u+x) in the runtime copy.");
         }
         return (platform, executable);
     }
+    // The bundle itself (any name, recognised by its executable), a directory named Valheim.app, or a Steam install holding one.
+    private static bool IsMacClient(string runtime) =>
+        string.Equals(Path.GetFileName(runtime), MacClientBundle, StringComparison.OrdinalIgnoreCase)
+        || File.Exists(Path.Combine(runtime, "Contents", "MacOS", "Valheim"))
+        || Directory.Exists(Path.Combine(runtime, MacClientBundle));
     private static string FullRuntime(string runtimeDirectory)
     {
         ArgumentException.ThrowIfNullOrEmpty(runtimeDirectory);
