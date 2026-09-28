@@ -75,6 +75,10 @@ The paint fixture starts from explicit saved RGBA, preserves alpha and samples b
 
 Preview APIs may change. No release or upstream merge is implied by this repository.
 
+## Developer-loop scripts
+
+[`tools/dev-loop`](tools/dev-loop/README.md) holds the bash and PowerShell scripts for a mod's edit-build-test loop (build, install, launch, run a strict plan, summarise the log) and for snapshotting and checking plugin pins. They moved here from ValheimCLI on 28 September 2026 and drive a `valheim-cli` executable taken from a ValheimCLI release or build; see [Developer loop](docs/getting-started.md#developer-loop).
+
 Follow-up examples: [PaintCheck](examples/PaintCheck/README.md) compares loaded raw paint channels; [WalkingReview](examples/WalkingReview/README.md) records a human-driven traversal without moving the character.
 Both build locally; the bounded paved paint/reload check passed, while human walking acceptance remains pending.
 

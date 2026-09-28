@@ -20,4 +20,6 @@ Observation tools attach to an already prepared game and never launch it. LinuxS
 
 Coordinates in sample JSON are illustrative, not known Valheim sites. A captured value can be replayed as input; comparing it with itself is not independent correctness evidence. Use a new output directory for each attempt, keep failed results, and do not commit private logs or credentials.
 
+For a mod's edit-build-test loop (build, install, launch, run a strict plan, summarise the log) use the scripts in [`tools/dev-loop`](../tools/dev-loop/README.md) rather than an example project; they drive the `valheim-cli` executable.
+
 Want to contribute an example or missing shared helper? See the [contribution guide](../CONTRIBUTING.md), including the worked terrain recipe and validation expectations.
