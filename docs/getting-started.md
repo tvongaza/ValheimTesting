@@ -2,7 +2,7 @@
 
 Start with the lowest test layer that answers the question. Existing xUnit tests do not need to be rewritten or moved to this repository. Test packages belong in test projects, not in a production mod or a player's plugins directory.
 
-## 1. Build the preview packages without Valheim
+## 1. Get the packages (no Valheim needed)
 
 Use the .NET 10 SDK and Git; no other tooling is needed. From a fresh checkout:
 
@@ -41,6 +41,25 @@ Pin only the package your test project needs:
 ```
 
 Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools and examples target net10.0. Keep the game-side plugin's existing target framework.
+
+## Using Visual Studio, Rider or VS Code
+
+The test projects are ordinary SDK-style xUnit projects, so IDE test runners discover them with no extra setup. The external tools and tests target net10.0, which needs an IDE that supports .NET 10:
+
+| IDE | Where tests appear | Notes |
+|---|---|---|
+| Visual Studio 2026 (Windows) | Test Explorer | Install the **.NET desktop development** workload; it includes the .NET Framework 4.8 targeting pack used by net48 test legs, which run natively on Windows. |
+| JetBrains Rider (Windows, macOS, Linux) | Unit Tests window | net48 test legs need Mono on macOS/Linux. |
+| VS Code with C# Dev Kit | Testing panel | Same .NET 10 SDK requirement. |
+
+Open the mod's **testing solution** rather than its main solution: `ProceduralRoads.Testing.slnx` or `MoreWorldLocations.Testing.slnx`. It contains the unit tests, the external runner and the runner's tests. Packages restore from NuGet.org automatically.
+
+Two things the command line passes explicitly are set another way in an IDE:
+
+- **Game install path.** Mod projects read Valheim's assemblies from the default Steam folder. If your Steam library is elsewhere, set a `VALHEIM_INSTALL` environment variable before starting the IDE, where the project supports it (the test adapters do), or follow the mod's own build instructions.
+- **The game-side test adapter** (`*.TestAdapter`) is deliberately not in the testing solution: it must compile against the exact ValheimCLI build you install. Build it from a terminal with `-p:CliDll=...`, or set a `CliDll` environment variable before starting the IDE.
+
+External runners are console programs. To run one from the IDE, set its command-line arguments in the project's debug or run settings (Visual Studio: project **Properties → Debug → Open debug launch profiles UI**; Rider: **Run → Edit Configurations**). Native runs still need a disposable game install, world and character.
 
 ## 2. Keep broad coverage in unit tests
 
