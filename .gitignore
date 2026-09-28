@@ -1,6 +1,8 @@
 bin/
 obj/
-.packages/
+# Local package feed: the directory must exist for NuGet.Config, its contents are build output.
+.packages/*
+!.packages/.gitkeep
 artifacts/
 .DS_Store
 *.user
