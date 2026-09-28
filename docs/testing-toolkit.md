@@ -16,12 +16,12 @@ A successful fake transport run is an orchestration test, not an in-game pass. A
 | Component | Runtime and purpose |
 |---|---|
 | `valheimCLI.dll` | net48, stable BepInEx plugin: existing commands, transport, broker, extension host |
-| `Valheim.Testing.Cli` | net9, the same client and YAML runner used by the executable, packaged from ValheimCLI's `Valheim.Cli.Testing` project (source in `CLI/Testing`) at a pinned commit |
+| `Valheim.Testing.Cli` | net10.0, the same client and YAML runner used by the executable, packaged from ValheimCLI's `Valheim.Cli.Testing` project (source in `CLI/Testing`) at a pinned commit |
 | `Valheim.Testing` | netstandard2.0, synthetic plane/island/ridge/river and exact captured-sample replay; works with net48/Mono and modern .NET |
 | `Valheim.Testing.Game` | net10.0, named actors, typed observations, bounded observation waits, fixture copies, comparisons and JSON/JUnit reports |
 | Roads pilot | Separate Roads checkout: test-only world adapter, game observation plugin and system scenarios |
 
-The toolkit lives in this repository and consumes the ValheimCLI transport as a pinned NuGet package, `Valheim.Testing.Cli`, built from ValheimCLI source. The upstream ValheimCLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the external (net9/net10) test-side packages.
+The toolkit lives in this repository and consumes the ValheimCLI transport as a pinned NuGet package, `Valheim.Testing.Cli`, built from ValheimCLI source. The upstream ValheimCLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the external (net10.0) test-side packages.
 
 ## Run locally
 

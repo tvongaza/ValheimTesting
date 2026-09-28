@@ -24,6 +24,10 @@ string repository = pinDoc.RootElement.GetProperty("repository").GetString()!;
 string commit = pinDoc.RootElement.GetProperty("commit").GetString()!;
 string version = pinDoc.RootElement.GetProperty("version").GetString()!;
 string packageId = pinDoc.RootElement.GetProperty("publishedAs").GetString()!;
+// Our package has its own version and target: the same pinned source, built for .NET 10 (the only modern runtime
+// the toolkit needs). "version" above is still checked against the upstream project.
+string packageVersion = pinDoc.RootElement.GetProperty("packageVersion").GetString()!;
+string targetFramework = pinDoc.RootElement.GetProperty("targetFramework").GetString()!;
 
 string feed = Path.Combine(root, ".packages");
 Directory.CreateDirectory(feed);
@@ -57,6 +61,11 @@ try
     // transport at the pinned commit, packaged unchanged. Its MIT license (copyright warp) is packed with it.
     Run("dotnet", "pack", project, "-c", "Release", "-m:1", "-o", feed,
         Property("PackageId", packageId),
+        Property("Version", packageVersion),
+        // Both: restore ignores a TargetFramework override but honours TargetFrameworks, while the build of this
+        // single-target project uses TargetFramework. Setting both keeps restore and build on the same target.
+        Property("TargetFramework", targetFramework),
+        Property("TargetFrameworks", targetFramework),
         Property("Authors", "warp and ValheimCLI contributors"),
         Property("Description", "ValheimCLI's external client and YAML test-plan runner, packaged by ValheimTesting from ValheimCLI source at commit " + commit + ". No game assemblies. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB."),
         Property("PackageProjectUrl", "https://github.com/tvongaza/ValheimTesting"),
@@ -69,7 +78,7 @@ finally
 {
     DeleteTree(temp);
 }
-Console.WriteLine($"Pinned CLI dependency ready as {packageId} {version}: {feed}");
+Console.WriteLine($"Pinned CLI dependency ready as {packageId} {packageVersion} ({targetFramework}, upstream {version}): {feed}");
 return 0;
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
