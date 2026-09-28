@@ -58,7 +58,7 @@ try
     Run("dotnet", "pack", project, "-c", "Release", "-m:1", "-o", feed,
         Property("PackageId", packageId),
         Property("Authors", "warp and ValheimCLI contributors"),
-        Property("Description", "ValheimCLI's external client and YAML test-plan runner, packaged by ValheimTesting from ValheimCLI source at commit " + commit + ". No game assemblies."),
+        Property("Description", "ValheimCLI's external client and YAML test-plan runner, packaged by ValheimTesting from ValheimCLI source at commit " + commit + ". No game assemblies. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB."),
         Property("PackageProjectUrl", "https://github.com/tvongaza/ValheimTesting"),
         Property("RepositoryUrl", repository),
         Property("RepositoryType", "git"),

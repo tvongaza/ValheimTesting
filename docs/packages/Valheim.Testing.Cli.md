@@ -5,3 +5,5 @@ ValheimCLI's external client and YAML test-plan runner, packaged by [ValheimTest
 The code is ValheimCLI's own `Valheim.Cli.Testing` project, built unchanged from the commit named in this package's repository metadata. It is not an official ValheimCLI release; ValheimCLI and its license (MIT, copyright warp) are at [github.com/jneb802/valheimCLI](https://github.com/jneb802/valheimCLI).
 
 Most test projects do not reference this package directly: use [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game), which depends on it. See the [getting-started guide](https://github.com/tvongaza/ValheimTesting/blob/main/docs/getting-started.md).
+
+Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.

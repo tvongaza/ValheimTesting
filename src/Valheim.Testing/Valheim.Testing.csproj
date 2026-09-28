@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
-    <Version>0.1.0-preview.5</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Deterministic terrain inputs and replay fixtures for Valheim mod tests. No Unity dependency.</Description>
+    <Version>0.1.0-preview.5</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Deterministic terrain inputs and replay fixtures for Valheim mod tests. No Unity dependency. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
     <PackageId>Valheim.Testing</PackageId><PackageProjectUrl>https://github.com/tvongaza/ValheimTesting</PackageProjectUrl><RepositoryUrl>https://github.com/tvongaza/ValheimTesting.git</RepositoryUrl><RepositoryType>git</RepositoryType><PackageTags>valheim;modding;testing;bepinex;terrain;xunit</PackageTags>
   </PropertyGroup>
   <ItemGroup><None Include="../../LICENSE" Pack="true" PackagePath="" /><None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" /><None Include="../../README.md" Pack="true" PackagePath="README.md" /></ItemGroup>
