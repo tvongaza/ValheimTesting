@@ -13,7 +13,7 @@ python3 scripts/bootstrap-cli.py
 python3 scripts/validate.py
 ```
 
-Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all seven examples, runs the no-game example, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
+Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all examples, runs the no-game examples, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
 
 The current local feed contains:
 
