@@ -14,8 +14,9 @@ Start with the [getting-started guide](../docs/getting-started.md) to build the 
 | [PaintCheck](PaintCheck/README.md) | Do loaded paint RGBA channels match an independent plan? | Read-only; does not load terrain |
 | [ReloadCheck](ReloadCheck/README.md) | Does optional extension replacement clean up and preserve the connection? | Replaces a disposable probe DLL; creates/removes its test resource |
 | [WalkingReview](WalkingReview/README.md) | Is there a usable trace for a human walking verdict? | Read-only recorder; a person drives |
+| [LinuxServerSmoke](LinuxServerSmoke/README.md) | Does a server runtime start with BepInEx and load a new world on this host? | Starts and stops one owned dedicated server; BepInEx writes into the disposable runtime |
 
-Observation tools attach to an already prepared game and never launch it. ReloadCheck requires an owned scripts directory on the same machine as its ValheimCLI connection. The Roads repository owns examples of complete [server lifecycle and mod scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md).
+Observation tools attach to an already prepared game and never launch it. LinuxServerSmoke is the exception: it owns and stops the one server it starts, usually inside the [Linux image](../docker/linux-server/README.md). ReloadCheck requires an owned scripts directory on the same machine as its ValheimCLI connection. The Roads repository owns examples of complete [server lifecycle and mod scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md).
 
 Coordinates in sample JSON are illustrative, not known Valheim sites. A captured value can be replayed as input; comparing it with itself is not independent correctness evidence. Use a new output directory for each attempt, keep failed results, and do not commit private logs or credentials.
 
