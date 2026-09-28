@@ -69,7 +69,7 @@ Wait for the event that announces a change, not for time to pass. Every wait tak
 |---|---|---|
 | A log line | `LogWait` | Opens at the file's current end (or a given byte offset), so earlier lines never match; the file may not exist yet. Matches complete lines only, checks optional failure patterns first, and re-reads a truncated or replaced file from its start. A `FileSystemWatcher` wakes the wait; a 2 s re-read covers filesystems that drop watcher events (network shares, container mounts). |
 | A process exit | `ProcessWait.ForExitAsync` | Returns the exit code; expiry leaves the process running for its owner to stop. |
-| A game state | `StateWait` | ValheimCLI's `SUBSCRIBE_STATE` push on a connection used for nothing else. A dedicated server's loaded world is `InWorldNoPlayer`. A state is not mod readiness. |
+| A game state | `StateWait` | Subscribes to ValheimCLI's state pushes on a connection used for nothing else, asks the current state once, then awaits `STATE_CHANGED` pushes with a pending read; nothing is sent while it waits. A push that arrives during the question counts. A dedicated server's loaded world is `InWorldNoPlayer`. A state is not mod readiness. |
 | No event | `Check.Eventually` | Bounded fallback: re-observes a read-only source at an interval, for example an adapter's `complete` flag. |
 
 ```csharp
@@ -80,7 +80,7 @@ await log.WaitAsync(StartupEvents.CliListening, TimeSpan.FromMinutes(5), [LogWai
 
 `OwnedServerSession` waits on these when given `Events = new StartupEvents { CliLog = ..., States = () => StateWait.Connect(host, port) }`: no connection before this boot's `Command server listening` line, then the world-loaded push, then the session probe. The process exit is always watched: a server that exits during startup fails it at once with its exit code and the last log line. Only the adapter's own readiness, which has no event, is re-probed at the poll interval. Without `Events`, connecting keeps its bounded retries. `GameActor.WaitForEnvironment` takes an event too, for example `(left, token) => log.WaitAsync(loadLine, left, cancellation: token)`: it rechecks the pins when the reload's line appears, not every 200 ms.
 
-`StateWait` limit: ValheimCLI's client exposes no awaitable read for pushes, so `StateWait` checks the bytes it has already received every 100 ms (nothing is sent) and asks for the state every 2 s, which recovers a push the client's own reads can swallow and notices a closed connection.
+`StateWait` closes its connection when a wait expires or is cancelled, because the abandoned read leaves the stream's position unknown; later waits on that instance fail, so connect a new one. A failure state, a closed connection or a line that is not a push fails the wait at once.
 
 `IServerProcess` gained `WaitForExitAsync`; custom implementations must add it. Startup and reload expiry now throw the subclasses above, so tests asserting the exact `TimeoutException` or `InvalidOperationException` type need updating.
 

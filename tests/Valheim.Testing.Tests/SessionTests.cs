@@ -157,7 +157,7 @@ public class SessionTests
     {
         using var log = new TempLog(); using var server = new FakeCliServer(StateWait.Loading);
         var fake = new Host { OnLaunch = _ => log.Append(Listening) };
-        using var session = fake.Session(Generous, new StartupEvents { CliLog = log.Path, States = () => new StateWait(server.Connect()) { SafetyInterval = Timeout.InfiniteTimeSpan } });
+        using var session = fake.Session(Generous, new StartupEvents { CliLog = log.Path, States = () => new StateWait(server.Connect()) });
         var start = Task.Run(session.Start);
         await server.Subscribed.WaitAsync(Generous);
         // Loading, and only a push can change that here: no probe may have run.
