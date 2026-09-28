@@ -18,7 +18,7 @@ A successful fake transport run is an orchestration test, not an in-game pass. A
 | `valheimCLI.dll` | net48, stable BepInEx plugin: existing commands, transport, broker, extension host |
 | `Valheim.Testing.Cli` | net10.0, the same client and YAML runner used by the executable, packaged from ValheimCLI's `Valheim.Cli.Testing` project (source in `CLI/Testing`) at a pinned commit |
 | `Valheim.Testing` | netstandard2.0, synthetic plane/island/ridge/river and exact captured-sample replay; works with net48/Mono and modern .NET |
-| `Valheim.Testing.Game` | net10.0, named actors, typed observations, bounded observation waits, fixture copies, comparisons and JSON/JUnit reports |
+| `Valheim.Testing.Game` | net10.0, named actors, typed observations, event waits (log line, process exit, game state) with bounded fallbacks, fixture copies, comparisons and JSON/JUnit reports |
 | Roads pilot | Separate Roads checkout: test-only world adapter, game observation plugin and system scenarios |
 
 The toolkit lives in this repository and consumes the ValheimCLI transport as a pinned NuGet package, `Valheim.Testing.Cli`, built from ValheimCLI source. The upstream ValheimCLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the external (net10.0) test-side packages.
@@ -60,6 +60,29 @@ A `GameActor` wraps the existing transport; it never owns/stops the attached pro
 `WorldFixture.Copy` requires a hash manifest, refuses links and unexpected files, verifies copied bytes and creates its own new directory. It deletes only that copy; `Preserve=true` keeps it for debugging. Stop the owned game BEFORE disposing its world fixture. It does not own accounts, characters, ports or remote machine reservations. Those remain explicit session-operator responsibilities in preview 1.
 
 `ScenarioReport` records outcomes and teardown failure in JSON/JUnit. Use a unique output directory per run; include fixture/build/config hashes in `Provenance`. Output may contain player/world data; inspect before publishing. Do not include credentials in fixture configuration or logs.
+
+## Waiting
+
+Wait for the event that announces a change, not for time to pass. Every wait takes an explicit, finite timeout; there is no default. Expiry throws `WaitTimeoutException` (a `TimeoutException`) and an early failure throws `WaitFailedException` (an `InvalidOperationException`). Both report what was awaited, the elapsed time and the last thing seen.
+
+| Source | Wait | Notes |
+|---|---|---|
+| A log line | `LogWait` | Opens at the file's current end (or a given byte offset), so earlier lines never match; the file may not exist yet. Matches complete lines only, checks optional failure patterns first, and re-reads a truncated or replaced file from its start. A `FileSystemWatcher` wakes the wait; a 2 s re-read covers filesystems that drop watcher events (network shares, container mounts). |
+| A process exit | `ProcessWait.ForExitAsync` | Returns the exit code; expiry leaves the process running for its owner to stop. |
+| A game state | `StateWait` | ValheimCLI's `SUBSCRIBE_STATE` push on a connection used for nothing else. A dedicated server's loaded world is `InWorldNoPlayer`. A state is not mod readiness. |
+| No event | `Check.Eventually` | Bounded fallback: re-observes a read-only source at an interval, for example an adapter's `complete` flag. |
+
+```csharp
+using var log = new LogWait(Path.Combine(runtime, "BepInEx", "LogOutput.log")); // before launching
+// ... start the server ...
+await log.WaitAsync(StartupEvents.CliListening, TimeSpan.FromMinutes(5), [LogWait.Literal("[Fatal")]);
+```
+
+`OwnedServerSession` waits on these when given `Events = new StartupEvents { CliLog = ..., States = () => StateWait.Connect(host, port) }`: no connection before this boot's `Command server listening` line, then the world-loaded push, then the session probe. The process exit is always watched: a server that exits during startup fails it at once with its exit code and the last log line. Only the adapter's own readiness, which has no event, is re-probed at the poll interval. Without `Events`, connecting keeps its bounded retries. `GameActor.WaitForEnvironment` takes an event too, for example `(left, token) => log.WaitAsync(loadLine, left, cancellation: token)`: it rechecks the pins when the reload's line appears, not every 200 ms.
+
+`StateWait` limit: ValheimCLI's client exposes no awaitable read for pushes, so `StateWait` checks the bytes it has already received every 100 ms (nothing is sent) and asks for the state every 2 s, which recovers a push the client's own reads can swallow and notices a closed connection.
+
+`IServerProcess` gained `WaitForExitAsync`; custom implementations must add it. Startup and reload expiry now throw the subclasses above, so tests asserting the exact `TimeoutException` or `InvalidOperationException` type need updating.
 
 ## Small game validation gate
 
@@ -109,8 +132,8 @@ to your prepared child process, and have your adapter report the exact token,
 PID, actual save root, `dedicated` and `complete`, under source
 `owned-test-session`. The session requires a valid extension result envelope from
 the configured owner, verifies process/save identity, then strict environment
-pins. Define `complete` to include your mod's readiness. It retries bounded
-readiness observations, not mutations. Stop/restart owns only that process and
+pins. Define `complete` to include your mod's readiness. Startup waits on events
+(see [Waiting](#waiting)) and re-probes only incomplete readiness observations, never mutations. Stop/restart owns only that process and
 refuses to start a replacement after failed cleanup. Per-boot logs preserve prior
 startup evidence. It does not own accounts, machine reservations or external processes.
 

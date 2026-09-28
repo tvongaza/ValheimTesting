@@ -114,7 +114,7 @@ warpalicious.More_World_Locations_AIO=absent
 
 This is an illustrative **client** file, not usable pins. Include every additional loaded plugin, such as ScriptEngine or other packs. On the server use the real mod/adapter hashes instead of `absent`. SHA-256 input manifests and plugin MD5 expectation pins serve different purposes; do not substitute one for the other. See [ValheimCLI expectations](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/README.md#know-what-you-are-testing).
 
-Wait for the world and required zone to be loaded, arrange arrival/protection separately, and verify the client's actual position. A responsive ValheimCLI is not proof that world loading has finished. Missing maps or incomplete observations are failures, not zero-height or black-paint measurements.
+Wait for the world and required zone to be loaded (on events where they exist, see [Waiting](testing-toolkit.md#waiting)), arrange arrival/protection separately, and verify the client's actual position. A responsive ValheimCLI is not proof that world loading has finished. Missing maps or incomplete observations are failures, not zero-height or black-paint measurements.
 
 For persistence, use the **same** independently declared plan before and after a confirmed save, server restart and client rejoin. Require `cli_save`'s completion result before stopping. Run a discriminating negative expectation too: unchanged pre-road paint should fail painted samples while untouched samples still pass. Never widen tolerances merely to make a fixture pass.
 
@@ -146,7 +146,7 @@ For library consumers, `GameActor.VerifyEnvironment` validates and normalizes su
 
 Strict mode rejects unlisted loaded plugins/worlds; it does not make `any` an exact build pin. Supply reviewed full hashes and the intended world identity. The preflight is a separate round trip, not an atomic lock on game state. For dispatch-time enforcement as well, configure the game's existing `[Expectations]` guard; tests never disable it.
 
-Reload tests must provide a pins file and explicitly advance the changed plugin's expected hash using the artifact they intend to install, then require absence on removal. Only `cli_expect --strict` is retried while that known transition settles. Repin after world changes. The owned-server startup identity probe is a narrow read-only bootstrap exception while world loading is incomplete; it checks token/PID/save-root identity, then verifies strict pins before returning an actor.
+Reload tests must provide a pins file and explicitly advance the changed plugin's expected hash using the artifact they intend to install, then require absence on removal. Only `cli_expect --strict` is rechecked while that known transition settles; pass `WaitForEnvironment` the reload's own log line (a `LogWait`) so it rechecks when the plugin has loaded rather than on a timer. Repin after world changes. The owned-server startup identity probe is a narrow read-only bootstrap exception while world loading is incomplete; it checks token/PID/save-root identity, then verifies strict pins before returning an actor.
 
 ## Developer loop
 
