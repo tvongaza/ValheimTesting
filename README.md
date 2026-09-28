@@ -4,6 +4,10 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 
 New to the framework? Follow [Add testing to a mod](docs/getting-started.md), then choose a runnable example from the [example index](examples/README.md). Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually.
 
+## AI agent entry point
+
+Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). A [CLAUDE.md](CLAUDE.md) pointer keeps Claude-based assistants on the same instructions. The guide covers tool discovery, strict pins, one-shot mutations, result interpretation, test-layer limits and restoration/handoff.
+
 ## Packages and ownership
 
 | Package | Purpose | Runtime |

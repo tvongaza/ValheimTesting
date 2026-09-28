@@ -1,0 +1,83 @@
+# Agent workflow: Valheim unit and system tests
+
+This guide is for an AI agent working in a mod checkout or operating an explicitly authorized test fixture. Begin with [AGENTS.md](../AGENTS.md). Examples are actual runnable programs; their READMEs state required inputs, effects and output contracts.
+
+## Choose the smallest useful task
+
+| Task | Start here | What success does not prove |
+|---|---|---|
+| Test a mod decision on declared terrain | [NoGameTerrain](../examples/NoGameTerrain/README.md), then call real mod code from its own tests | Native noise, physics or save encoding |
+| Test driver failure/cleanup behavior | [Library tests](../tests/Valheim.Testing.Tests), controlled transports | Runtime Harmony/RPC timing |
+| Read a game sample | [GameObserve](../examples/GameObserve/README.md) | That the sampled value is independently correct |
+| Compare generator or loaded ground | [TerrainCheck](../examples/TerrainCheck/README.md) | Collider, paint or walking behavior |
+| Compare client ground and support | [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md) | Human usability |
+| Compare loaded paint | [PaintCheck](../examples/PaintCheck/README.md) | Rendered appearance or every biome's alpha meaning |
+| Exercise extension replacement | [ReloadCheck](../examples/ReloadCheck/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
+| Collect walking evidence | [WalkingReview](../examples/WalkingReview/README.md) | Acceptance without a separate human verdict |
+
+Use an existing mod-owned scenario when one fits. [Roads scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) cover empty saves, pending bridge respawn, terrain and paint. [MWL scenarios](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) cover full-mode port probes; their gameplay gate is still open. Server-only MWL cannot validate ports.
+
+## First actions in a new checkout
+
+1. Read the local repository's instructions and check branch/worktree status. Keep other agents' edits and active sessions intact.
+2. Check [package ownership and setup](getting-started.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`. CLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
+3. Bootstrap the exact CLI dependency, then run local validation:
+
+   ```sh
+   python3 scripts/bootstrap-cli.py
+   python3 scripts/validate.py
+   ```
+
+   This needs no game, Steam or station. For a mod checkout, restore its test project from the resulting `.packages` feed plus NuGet.org. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
+4. If the task is satisfied by local tests, stop there. Otherwise prepare a bounded native test plan with explicit independent expectations and a negative control where useful. Do not invent a whole new runner for a check an example already performs.
+
+## Before an authorized native run
+
+- Confirm which machine/process/world the user intended and whether another operator owns it. Use that environment's existing claim and restore helpers; this public library does not contain private station credentials or deployment scripts.
+- Use disposable copies, free ports, exact candidate DLLs and a dedicated character where a client is needed. Verify backups and character protection before movement. Do not copy production saves or change admin membership unless the task actually authorizes it.
+- Install one core in plugins and each required pack in plugins **or** scripts, never both. Standard supplies save/join/protection; World Tools supplies observations; Reflection is needed only for `cli_call`. ScriptEngine reload affects all scripts in its directory. See [pack installation](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md).
+- Read `cli_manifest`, `cli_world` and `cli_extensions`. Pin actual plugin MD5s and world UID using the [strict pins format](getting-started.md#4-add-a-small-native-check-where-it-matters). Pins enforce identity, not authorization. Pin the tested mod `absent` on a CLI-only replication client, and list every other loaded plugin.
+- Require full session readiness and the necessary loaded zones. An audit may hold world load while CLI answers. Arrange arrival separately and verify client-reported position/support rather than trusting a teleport request.
+
+## Use the API's actual contracts
+
+Prefer [`GameActor`](../src/Valheim.Testing.Game/GameActor.cs) with [`RecordingTransport`](../src/Valheim.Testing.Game/OwnedServerSession.cs) where the example uses it. Verify expectations before actions; require the named capability and result schema. `Observe` accepts read-only capabilities; `Invoke` issues one action. Extension arguments are single tokens in this preview.
+
+A capability includes its owner instance. After a reload, reverify environment pins and rediscover it; never reuse an old capability or retry a mutation merely because a reply was lost. If an action has an uncertain outcome, query a read-only state observation before deciding what to do next.
+
+| Observation | Correct interpretation |
+|---|---|
+| Socket connects / command transport completes | The channel worked; the action may still have been refused |
+| `GameActor.Execute` returns | Transport succeeded; inspect the command's documented output/effect |
+| Structured `ok=false`, wrong instance/schema, or `complete=false` | Failure/incomplete evidence, not a passing empty result |
+| Save request says `Saving..` | Not enough; require the command's completed-save result before stopping |
+| CLI cannot execute due to game cheat confirmation | Record the refusal; do not bypass the gate or call it success |
+| Roads runner mode `validate` or `prepare-*` succeeds | Plan/preparation passed, not native scenario acceptance |
+| WalkingReview exits 0 | Trace qualifies for human review; verdict still starts `not-reviewed` |
+
+Terrain uses horizontal **x/z** and vertical **y**, in metres. Generator height, loaded ground, a heightmap's own collider, player support and RGBA masks are distinct layers. A black out-of-range texel or missing map must remain incomplete. Do not switch to generator height when a loaded-ground assertion cannot be sampled.
+
+## Bounded paint/reload recipe
+
+1. Have the fixture owner prepare a small declared road/paint profile, preserving pre-write inputs and expected results. The observer does not write or load terrain. Use a stable saved paint baseline; an ungenerated zone's initial paint may not be a stable client-arrival expectation.
+2. Run PaintCheck against the loaded CLI-only client with exact pins and a new output directory. Pair it with ClientSurfaceCheck if collision/height is in scope.
+3. Test the same observation with deliberately unchanged pre-road expectations. Only intentionally changed samples should fail; keep the negative report labelled separately.
+4. Confirm a save, leave the world, restart only the owned server, rejoin and reverify pins/readiness/arrival. Repeat the **original** expectation plan in another new output directory.
+5. Inspect every result, incomplete sample and game warning/error. Retain the original failed attempts; do not silently replace evidence or use a saved report from an older DLL.
+
+This recipe established a paved-core/verge fixture, not all native paint behavior. Dirt, fading edges and ordinary noisy earthworks need their own plans. A person judges appearance and walking; small acceptable bumps do not require more numerical research.
+
+## Completion and handoff
+
+Stop only owned processes and perform the environment's restore/hash check before releasing its claim. Attached read-only tools dispose their connection, not the game. A failed teardown is a failure to report, even if scenario assertions passed. Do not automatically retry a destructive teardown.
+
+Write a short report with:
+
+- Source/review revisions and actual installed DLL hashes; world/fixture identity without credentials.
+- Local and native checks run, their explicit pass/fail outcomes, and any negative control.
+- What was not run and what each layer cannot establish.
+- Paths to result JSON/JUnit, residuals and logs; new output directory for each attempt.
+- Warnings/errors requiring follow-up, restoration evidence and ownership release.
+- The next bounded action, if one remains.
+
+Inspect evidence before publishing: logs may expose account identifiers, local paths, passwords or private world data. Do not commit game assemblies, diagnostic decompilation or saves. Report the measured scope accurately; a passing mock, a clean count or a correct-looking screenshot alone is not a full system test.

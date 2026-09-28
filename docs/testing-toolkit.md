@@ -130,9 +130,9 @@ example with hand-derived plane expectations and explicit unknown replay data.
 Neither a replay of its own capture nor a synthetic plane alone establishes
 Valheim terrain conversion or client physics. The declared server calibration and native-input client gate below now cover those specific boundaries.
 
-The package examples accept `-p:ToolkitPackageVersion=0.1.0-preview.4` instead of
+The package examples accept `-p:ToolkitPackageVersion=0.1.0-preview.5` instead of
 project references. Copy just an example directory outside this repository, add
-the packaged `packages/` directory as a NuGet source alongside nuget.org (for
+the built `.packages/` directory as a NuGet source alongside nuget.org (for
 YamlDotNet), restore and run/build with that property. No game, Unity, BepInEx or
 Roads assemblies belong in these NuGet packages. They are external test-driver
 libraries; do not install them as game plugins.
