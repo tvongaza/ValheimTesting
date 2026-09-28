@@ -1,5 +1,7 @@
 # Instructions for agents using or changing ValheimTesting
 
+Before submitting changes, read [CONTRIBUTING.md](CONTRIBUTING.md) for extension contracts, evidence requirements and PR scope.
+
 Read [the agent workflow](docs/agent-guide.md) before using the tools. For installation and examples, follow [getting started](docs/getting-started.md) and the [example index](examples/README.md). These files describe this repository's current preview API; do not assume an older upstream ValheimCLI has it.
 
 - Preserve the test pyramid: broad unit tests, controlled integration tests, small native checks, then human usability judgement. Use the cheapest layer that answers the question.

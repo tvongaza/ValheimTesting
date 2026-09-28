@@ -38,4 +38,6 @@ The library does not call either mod or duplicate its grading, smoothing, terrai
 
 These fixtures model declared terrain and mutable state. They do not reproduce native noise, biome blending, physics, ZDO ownership, compiler serialization, paint texture sampling or Unity scheduling. Keep a few independent native checks for those boundaries and human review for how the result looks and walks. The previously measured Roads paint/reload campaign remains separate evidence; it did not validate every synthetic shape introduced here.
 
-Recorded-grid import and general diagnostic rendering remain follow-ups. `ReplayTerrain` still performs exact lookup and refuses missing samples; no implicit interpolation was added.
+[TerrainCapture](../examples/TerrainCapture/README.md) now imports validated bounded grids for exact replay. Its new native capability check remains open. General diagnostic rendering remains a follow-up; no implicit interpolation was added.
+
+To contribute a new shape, state model or consumer example, follow the [synthetic-world contribution recipe](../CONTRIBUTING.md#extend-the-synthetic-world). Prefer a small reusable contract and independent expectations over copying a mod's fake game types into this library.

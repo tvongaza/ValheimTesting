@@ -2,6 +2,8 @@
 
 This guide is for an AI agent working in a mod checkout or operating an explicitly authorized test fixture. Begin with [AGENTS.md](../AGENTS.md). Examples are actual runnable programs; their READMEs state required inputs, effects and output contracts.
 
+For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTING.md). It maps changes to the right repository and includes a synthetic-fixture recipe and PR checklist.
+
 ## Choose the smallest useful task
 
 | Task | Start here | What success does not prove |

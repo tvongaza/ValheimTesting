@@ -18,3 +18,5 @@ Start with the [getting-started guide](../docs/getting-started.md) to build the 
 Observation tools attach to an already prepared game and never launch it. ReloadCheck requires an owned scripts directory on the same machine as its ValheimCLI connection. The Roads repository owns examples of complete [server lifecycle and mod scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md).
 
 Coordinates in sample JSON are illustrative, not known Valheim sites. A captured value can be replayed as input; comparing it with itself is not independent correctness evidence. Use a new output directory for each attempt, keep failed results, and do not commit private logs or credentials.
+
+Want to contribute an example or missing shared helper? See the [contribution guide](../CONTRIBUTING.md), including the worked terrain recipe and validation expectations.
