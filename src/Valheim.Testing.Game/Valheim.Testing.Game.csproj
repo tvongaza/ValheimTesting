@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
-    <Version>0.1.0-preview.5</Version><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Fixtures and typed assertions for Valheim integration tests using the shared CLI transport.</Description>
+    <Version>0.1.0-preview.5</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Fixtures and typed assertions for Valheim integration tests using the shared CLI transport.</Description>
   </PropertyGroup>
   <ItemGroup><PackageReference Include="Valheim.Cli.Testing" Version="[0.1.0-preview.4]" /><ProjectReference Include="../Valheim.Testing/Valheim.Testing.csproj" /></ItemGroup>
-  <ItemGroup><None Include="../../LICENSE" Pack="true" PackagePath="" /><None Include="../../README.md" Pack="true" PackagePath="README.md" /></ItemGroup>
+  <ItemGroup><None Include="../../LICENSE" Pack="true" PackagePath="" /><None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" /><None Include="../../README.md" Pack="true" PackagePath="README.md" /></ItemGroup>
 </Project>

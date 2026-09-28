@@ -54,3 +54,7 @@ Preview APIs may change. No release or upstream merge is implied by this reposit
 
 Follow-up examples: [PaintCheck](examples/PaintCheck/README.md) compares loaded raw paint channels; [WalkingReview](examples/WalkingReview/README.md) records a human-driven traversal without moving the character.
 Both build locally; the bounded paved paint/reload check passed, while human walking acceptance remains pending.
+
+## License
+
+MIT, copyright © 2026 Tys von Gaza. See [LICENSE](LICENSE). Attribution for imported and adapted code is retained in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); both files are included in the library packages.
