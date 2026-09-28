@@ -15,11 +15,11 @@ dotnet run scripts/validate.cs
 
 The same commands work on Windows, Linux and macOS; CI runs them on all three. What each host can do:
 
-| Host | Toolkit and tests | Game client (via ValheimCLI) | Dedicated server (native) | Server in a container | Remote server host |
+| Host | Toolkit and tests | Game client (`ClientLaunch`, driven by ValheimCLI) | Dedicated server (native) | Server in a container | Remote server host |
 |---|---|---|---|---|---|
-| Windows | Yes | Yes | Yes | Linux image; not tested on Windows | Coming next (SSH, host profiles) |
-| Linux | Yes | Yes | Yes | Yes, verified | Coming next (SSH, host profiles) |
-| macOS | Yes | Yes, `Valheim.app` | **No**: there is no macOS dedicated server | Experimental (x86-64 emulation on Apple Silicon) | Recommended; coming next (SSH, host profiles) |
+| Windows | Yes | Yes, `valheim.exe` | Yes | Linux image; not tested on Windows | Coming next (SSH, host profiles) |
+| Linux | Yes | Yes, `valheim.x86_64`; needs a display | Yes | Yes, verified | Coming next (SSH, host profiles) |
+| macOS | Yes | Yes, `Valheim.app`; x86_64 under Rosetta; native arm64 needs a universal Doorstop | **No**: there is no macOS dedicated server | Experimental (x86-64 emulation on Apple Silicon) | Recommended; coming next (SSH, host profiles) |
 
 Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all examples, runs the no-game examples, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
 
