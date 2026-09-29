@@ -121,6 +121,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Build the private image (never pushed, saved, cached or uploaded)
+        id: build
         timeout-minutes: 30
         run: |
           args=()
@@ -151,7 +152,7 @@ jobs:
         id: collect
         if: always()
         env:
-          BUILD: ${{ steps.image.outcome }}
+          BUILD: ${{ steps.build.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
           EXAMPLE: ${{ steps.example.outcome }}
           BUILD_ID: ${{ steps.image.outputs.build-id }}
@@ -177,7 +178,7 @@ jobs:
             fi
           }
           {
-            echo "Dedicated server build: ${BUILD_ID:-unknown}. Steps: image $BUILD, smoke $SMOKE, example $EXAMPLE; negative control: $NEGATIVE_CONTROL."
+            echo "Dedicated server build: ${BUILD_ID:-unknown}. Steps: image build $BUILD, smoke $SMOKE, example $EXAMPLE; negative control: $NEGATIVE_CONTROL."
             echo
             report "LinuxServerSmoke" evidence/smoke/result.json
             report "Example preparation (new world, sites from the generator)" evidence/example/prepare/result.json
