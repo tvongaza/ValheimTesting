@@ -39,7 +39,7 @@ dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Published on NuGet.org: `Valheim.Testing` `0.1.0-preview.5`, `Valheim.Testing.Game` `0.1.0-preview.10` (net10.0) and `Valheim.Testing.Cli` `0.1.0-preview.4`. This branch builds the next candidates, `Valheim.Testing` `0.1.0-preview.6`, `Valheim.Testing.Game` `0.1.0-preview.11`, `Valheim.Testing.Cli` `0.1.0-preview.5` and `Valheim.Testing.Doubles` `0.1.0-preview.3`; they restore only from the local `.packages` feed until they are published.
+`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Published on NuGet.org: `Valheim.Testing` `0.1.0-preview.5`, `Valheim.Testing.Game` `0.1.0-preview.10` (net10.0) and `Valheim.Testing.Cli` `0.1.0-preview.4`. This branch builds the next candidates, `Valheim.Testing` `0.1.0-preview.6`, `Valheim.Testing.Game` `0.1.0-preview.11`, `Valheim.Testing.Cli` `0.1.0-preview.5` and `Valheim.Testing.Doubles` `0.1.0-preview.4`; they restore only from the local `.packages` feed until they are published.
 
 ## Platforms
 

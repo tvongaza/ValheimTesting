@@ -121,16 +121,31 @@ public partial class Heightmap
     // _TerrainCompiler in the game.
     public static UnityEngine.Color m_paintMaskDirt = new(1f, 0f, 0f, 1f);
     public static UnityEngine.Color m_paintMaskPaved = new(0f, 0f, 1f, 1f);
-    public static Heightmap? Registered;
+    /// <summary>The loaded zone heightmaps, as the game's own list. <c>ValheimWorldScope.RegisterHeightmap</c> loads one per zone.</summary>
+    public static System.Collections.Generic.List<Heightmap> s_heightmaps = new();
+    /// <summary>The heightmap loaded last. Setting it leaves that one heightmap loaded (or none), as a single-zone test wants.</summary>
+    public static Heightmap? Registered
+    {
+        get => s_heightmaps.Count == 0 ? null : s_heightmaps[s_heightmaps.Count - 1];
+        set => s_heightmaps = value == null ? new() : new() { value };
+    }
 
     public Transform transform = new();
+    public int m_width = 64;
     public float m_scale = 1f;
     public TerrainComp? m_terrainComp;
     public int PokeCount;
 
-    public static Heightmap? FindHeightmap(UnityEngine.Vector3 point) => Registered;
-    public static System.Collections.Generic.List<Heightmap> GetAllHeightmaps() =>
-        Registered == null ? new() : new() { Registered };
+    /// <summary>Whether the point lies in this heightmap's zone (edges included), as in the game.</summary>
+    public bool IsPointInside(UnityEngine.Vector3 point, float radius = 0f)
+    {
+        float half = m_width * m_scale * 0.5f; var centre = transform.position;
+        return point.x + radius >= centre.x - half && point.x - radius <= centre.x + half
+            && point.z + radius >= centre.z - half && point.z - radius <= centre.z + half;
+    }
+    /// <summary>The first loaded heightmap that contains the point, or null where no zone is loaded, as in the game.</summary>
+    public static Heightmap? FindHeightmap(UnityEngine.Vector3 point) => s_heightmaps.Find(h => h.IsPointInside(point));
+    public static System.Collections.Generic.List<Heightmap> GetAllHeightmaps() => new(s_heightmaps);
     /// <summary>Like the game: the zone's live compiler, or a new one (with a new ZDO) if it has none.</summary>
     public TerrainComp GetAndCreateTerrainCompiler() => m_terrainComp ??= new TerrainComp(this, 64);
     /// <summary>Valheim 1.0: the argument selects which late pass rebuilds
@@ -182,7 +197,7 @@ public partial class Heightmap
 
     public static Heightmap CreateForZone(Vector2s zoneID, int width = 64, bool withCompiler = true)
     {
-        var hm = new Heightmap { m_scale = ZoneSystem.ZoneSize / width };
+        var hm = new Heightmap { m_width = width, m_scale = ZoneSystem.ZoneSize / width };
         hm.transform.position = ZoneSystem.GetZonePos(zoneID);
         if (withCompiler)
             hm.m_terrainComp = new TerrainComp(hm, width);
@@ -361,14 +376,16 @@ public partial class TerrainComp
     public bool[] m_modifiedPaint;
     public int SaveCount;
 
-    /// <summary>The zone's live compiler: the one on the registered heightmap, if that heightmap has one.</summary>
+    /// <summary>The zone's live compiler: the one on the loaded heightmap whose zone holds the position, if it has one.</summary>
     public static TerrainComp? FindTerrainCompiler(UnityEngine.Vector3 pos)
     {
-        var hm = Heightmap.Registered;
-        if (hm?.m_terrainComp == null)
-            return null;
-        return UnityEngine.Mathf.Abs(hm.transform.position.x - pos.x) < 32f && UnityEngine.Mathf.Abs(hm.transform.position.z - pos.z) < 32f
-            ? hm.m_terrainComp : null;
+        foreach (var hm in Heightmap.s_heightmaps)
+        {
+            float half = hm.m_width * hm.m_scale * 0.5f;
+            if (hm.m_terrainComp != null && UnityEngine.Mathf.Abs(hm.transform.position.x - pos.x) < half && UnityEngine.Mathf.Abs(hm.transform.position.z - pos.z) < half)
+                return hm.m_terrainComp;
+        }
+        return null;
     }
 
     /// <summary>A new compiler for the heightmap's zone with its own ZDO, registered with the ZDOMan when there is one and owned by us.</summary>

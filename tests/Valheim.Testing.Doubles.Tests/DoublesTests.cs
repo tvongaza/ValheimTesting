@@ -223,6 +223,53 @@ public sealed class DoublesTests : IDisposable
         }
         Assert.Same(manager, Jotunn.Managers.NetworkManager.Instance);
     }
+    [Fact] public void LoadedZonesAreFoundByPositionAndAReloadReplacesTheZone()
+    {
+        var before = Heightmap.s_heightmaps;
+        using (var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithTerrain(new Valheim.Testing.PlaneTerrain(30f)).WithZdos())
+        {
+            var west = scope.RegisterHeightmap(new Vector2s(0, 0)); var east = scope.RegisterHeightmap(new Vector2s(1, 0));
+            Assert.Same(west, Heightmap.FindHeightmap(new UnityEngine.Vector3(10, 0, 0)));
+            Assert.Same(east, Heightmap.FindHeightmap(new UnityEngine.Vector3(70, 0, 0)));
+            Assert.Null(Heightmap.FindHeightmap(new UnityEngine.Vector3(200, 0, 0)));
+            Assert.Same(east.m_terrainComp, TerrainComp.FindTerrainCompiler(new UnityEngine.Vector3(64, 0, 0)));
+            Assert.Equal(2, Heightmap.GetAllHeightmaps().Count); Assert.Same(east, Heightmap.Registered);
+            var reloaded = scope.RegisterHeightmap(new Vector2s(0, 0));
+            Assert.Equal(new[] { east, reloaded }, Heightmap.GetAllHeightmaps());
+            scope.UnloadHeightmap(new Vector2s(1, 0));
+            Assert.Null(TerrainComp.FindTerrainCompiler(new UnityEngine.Vector3(64, 0, 0)));
+        }
+        Assert.Same(before, Heightmap.s_heightmaps);
+    }
+    [Fact] public void AFootprintCheckNamesChangesOutsideItIncludingFlagOnlyOnes()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithTerrain(new Valheim.Testing.PlaneTerrain(30f)).WithZdos();
+        var tc = scope.RegisterHeightmap(new Vector2s(0, 0)).m_terrainComp!;
+        for (int i = 0; i < tc.m_levelDelta.Length; i++) { tc.m_levelDelta[i] = 0.5f; tc.m_paintMask[i] = new UnityEngine.Color(0.2f, 0.4f, 0.6f, 0.3f); }
+        var before = Valheim.Testing.Doubles.TerrainSnapshot.Of(tc);
+        Assert.Throws<Valheim.Testing.Doubles.TerrainAssertException>(() => Valheim.Testing.Doubles.TerrainAssert.OnlyChangedWithin(before, tc, (x, z) => true));
+        Valheim.Testing.Doubles.TerrainAssert.OnlyChangedWithin(before, tc, (x, z) => false, requireChange: false);
+        int centre = 32 * 65 + 32, corner = 0;
+        tc.m_levelDelta[centre] = 2f;
+        Valheim.Testing.Doubles.TerrainAssert.OnlyChangedWithin(before, tc, (x, z) => Math.Abs(x) < 2 && Math.Abs(z) < 2);
+        tc.m_modifiedPaint[corner] = true; // A flag alone is a change.
+        var error = Assert.Throws<Valheim.Testing.Doubles.TerrainAssertException>(() => Valheim.Testing.Doubles.TerrainAssert.OnlyChangedWithin(before, tc, (x, z) => Math.Abs(x) < 2 && Math.Abs(z) < 2));
+        Assert.Contains("at (-32.00, -32.00): paint flag False->True", error.Message);
+        Assert.Throws<Valheim.Testing.Doubles.TerrainAssertException>(() => Valheim.Testing.Doubles.TerrainAssert.Unchanged(before, tc));
+    }
+    [Fact] public void ASeamCheckFailsWhenOnlyOneZoneWasWrittenAndPassesWhenBothAgree()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithTerrain(new Valheim.Testing.PlaneTerrain(30f)).WithZdos();
+        var west = scope.RegisterHeightmap(new Vector2s(0, 0)); var east = scope.RegisterHeightmap(new Vector2s(1, 0));
+        // The shared column is x = 32: the west zone's last vertex column and the east zone's first.
+        for (int z = 0; z <= 64; z++) west.m_terrainComp!.m_levelDelta[z * 65 + 64] = 1.5f;
+        west.RebuildTerrain(); east.RebuildTerrain();
+        var error = Assert.Throws<Valheim.Testing.Doubles.TerrainAssertException>(() => Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, east));
+        Assert.Contains("65 of 65 shared vertices", error.Message);
+        for (int z = 0; z <= 64; z++) east.m_terrainComp!.m_levelDelta[z * 65] = 1.5f;
+        east.RebuildTerrain();
+        Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, east);
+    }
     [Fact] public void TerrainWorldMapsTheToolkitsBiomes()
     {
         var world = new Valheim.Testing.Doubles.TerrainWorld(new Valheim.Testing.PlaneTerrain(35f));
