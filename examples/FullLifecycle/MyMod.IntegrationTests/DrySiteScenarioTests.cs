@@ -77,6 +77,15 @@ public sealed class DrySiteScenarioTests : IDisposable
         Assert.Null(_world.ClientTransport); // Nothing after the failure ran, not even the client launch.
     }
 
+    [Fact] public void AMissingHarmonyPatchFailsFirstAndNamesIt()
+    {
+        _world.PatchMissing = true;
+        var report = Run(_world.Plan());
+        Assert.Equal(new[] { "server: the mod's Harmony patches are applied" }, Failed(report));
+        Assert.Contains("RegisterCommands::Postfix on Terminal::InitTerminal", report.Steps.Single(s => !s.Passed).Error);
+        Assert.Equal(0, _world.MarkCommands);
+    }
+
     [Fact] public void AnIncompleteServerObservationIsAFailureNotAnEmptyResult()
     {
         _world.OmitServerSummary = true;

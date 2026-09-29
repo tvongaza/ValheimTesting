@@ -16,7 +16,7 @@ internal sealed class TestWorld
     public const string WorldUid = "4242";
     private readonly List<(float X, float Z)> _markers = [], _saved = [];
     public int Restarts, MarkCommands;
-    public bool LoseMarkReply, OmitServerSummary, ConfirmSaves = true, ClientSeesMarkers = true, ConfirmProtection = true;
+    public bool LoseMarkReply, OmitServerSummary, ConfirmSaves = true, ClientSeesMarkers = true, ConfirmProtection = true, PatchMissing;
     /// <summary>How many session readings report the socket closed before it opens (a first boot's late socket).</summary>
     public int ClosedReadings;
     public int SessionReadings;
@@ -63,7 +63,8 @@ internal sealed class TestWorld
             })
             .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
             .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport"))
-            .Extension("mymod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = ++SessionReadings > ClosedReadings });
+            .Extension("mymod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = ++SessionReadings > ClosedReadings })
+            .Extension("mymod.testing", "harmony", _ => Census());
         Servers.Add(transport);
         return transport.Actor("server", "cli_expect worlduid=" + WorldUid);
     }
@@ -109,6 +110,25 @@ internal sealed class TestWorld
                 return ScriptedTransport.Ok([.. lines]);
             });
     }
+
+    // The adapter's census, filtered to the mod: its postfix on the terminal's command setup (unless its target went
+    // missing, when HarmonyX applies nothing there) and another mod's prefix on the same method.
+    private object Census() => new
+    {
+        source = "harmony-patches", complete = true, owner = LifecyclePlan.ModPlugin,
+        methods = PatchMissing ? Array.Empty<object>() : new object[]
+        {
+            new
+            {
+                method = "Terminal::InitTerminal()",
+                patches = new[]
+                {
+                    new { owner = "other.mod", kind = "prefix", priority = 400, index = 0, before = Array.Empty<string>(), after = Array.Empty<string>(), patch = "Other.Hooks::Prefix()" },
+                    new { owner = LifecyclePlan.ModPlugin, kind = "postfix", priority = 400, index = 0, before = Array.Empty<string>(), after = Array.Empty<string>(), patch = "MyMod.Plugin+RegisterCommands::Postfix()" },
+                },
+            },
+        },
+    };
 
     private static bool Near((float X, float Z) marker, float x, float z) => MathF.Abs(marker.X - x) <= 8 && MathF.Abs(marker.Z - z) <= 8;
     private static (float X, float Z) Coordinates(string command, int first, int? second = null)
