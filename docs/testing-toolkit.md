@@ -20,6 +20,8 @@ A successful fake transport run is an orchestration test, not an in-game pass. A
 | `Valheim.Testing` | netstandard2.0, synthetic plane/island/ridge/river and exact captured-sample replay; works with net48/Mono and modern .NET |
 | `Valheim.Testing.Game` | net10.0, named actors, typed observations, event waits (log line, process exit, game state) with bounded fallbacks, fixture copies, comparisons and JSON/JUnit reports |
 | `Valheim.Testing.Doubles` | source package, compiled into the consumer: partial doubles of the Unity, Valheim, BepInEx and Jotunn types mod logic uses (see [Game doubles](#game-doubles)) |
+| `Valheim.Testing.Bindings` | netstandard2.0, offline check that a built mod's references into the game assemblies still bind, with Mono.Cecil (see [Offline binding check](#offline-binding-check-valheimtestingbindings-preview-1)) |
+| `Valheim.Testing.Bindings.Tool` | net10.0 .NET tool `valheim-bindings`: the same check as a CI step |
 | Roads pilot | Separate Roads checkout: test-only world adapter, game observation plugin and system scenarios |
 
 The toolkit lives in this repository and consumes the ValheimCLI transport as a pinned NuGet package, `Valheim.Testing.Cli`, built from ValheimCLI source. The upstream ValheimCLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the external (net10.0) test-side packages.
@@ -300,6 +302,26 @@ It restores references, not contents. Nothing is deep-copied, so changing an obj
 
 Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity objects have no components, physics or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: no peers connect, and routed RPCs are only checked for size. Test what the game does natively with `Valheim.Testing.Game` against a real server.
 
+### Global keys, terrain modifier order and location placement
+
+These doubles model world state that Valheim 1.0.16 keeps and mods read or add to. Their tests derive the expected values by hand from the game's rules.
+
+Global keys (`ZoneSystem`):
+- `SetGlobalKey` and `RemoveGlobalKey` (by `GlobalKeys` member, `GlobalKeys` and a float value, or string) are routed calls to the server. On the server the change applies at once and the whole list is broadcast to `Everybody` as the `GlobalKeys` routed call. A client changes nothing locally: its call goes out through `ZRoutedRpc.instance`, and each broadcast replaces its whole list, so a key only the client added (with the game's private `GlobalKeyAdd`, public here) is gone. Deliver a broadcast to a client with `ZRoutedRpc.instance.Deliver(serverId, "GlobalKeys", keys)`.
+- The handlers exist only after `ZoneSystem.Start()`, which the game runs when the game scene starts, with `Game.Start`. The server registers `SetGlobalKey` and `RemoveGlobalKey`, a client `GlobalKeys`. A key set on the server before that is dropped without an error. `OnNewPeer(peer)` sends a new peer the whole list.
+- Keys are stored lower case as `name` or `name value`, split at the first space. Setting a name again replaces its value. `GetGlobalKey(name)` finds a key by name in any case, whatever its value; `GetGlobalKey(key, out float)` reads the value; `GetGlobalKeyExact(line)` needs the whole line. Any string is a key. Members of `GlobalKeys` before `NonServerOption` are world modifiers.
+- A save keeps the other keys (`SaveGlobalKeys`, `LoadGlobalKeys`). The server writes world modifiers into the world's starting keys (`WorldStartingGlobalKeys`, null when no world is loaded, as on a client), and `SetStartingGlobalKeys` reads them back after a restart.
+
+Terrain modifiers (`TerrainModifier`): `Awake()` puts a modifier in the live list and `OnDestroy()` takes it out, as when the object spawns and goes. `TerrainModifier.GetAllInstances()` returns the list in the order a heightmap applies it:
+1. Non-player before player (`m_playerModifiction`).
+2. Lower `m_sortOrder`.
+3. Earlier creation time. It is read at `Awake` from the ZDO's `terrainModifierTimeCreated` long, so it survives a save and restart. 1.0.16 writes that value only when it converts a world saved before its ZDO rework, so a modifier placed since reads 0 and sorts before a converted one.
+4. Smaller squared distance of the whole position from the origin, height included. At the same ground distance, a higher modifier comes later, so a sort by ground distance alone gets the order wrong.
+
+The list is sorted again only when a modifier joins or leaves. The game's sort is unstable; a full tie keeps joining order here. `Heightmap.ModifiersInApplyOrder()` lists the enabled modifiers that reach a zone (radius + 4 m, as `TerrainVSModifier`). The game applies the zone's terrain compiler after them. What a modifier does to the heights is not modelled. `ValheimWorldScope.WithTerrainModifiers()` starts a fresh live list, and the scope puts the previous one back.
+
+Locations (`ZoneSystem.ZoneLocation`) have the game's placement fields and defaults. `m_minAltitude` and `m_maxAltitude` are metres above the water level (y = 30), not absolute heights. `ZoneLocation.AltitudeAboveWater(y)` and `IsAltitudeAllowed(y)` evaluate them as the placement does (both ends allowed; 30 m is fixed, not read from `m_waterLevel`). A definition written with absolute heights passes on a flat world near 30 m and fails elsewhere. `SlopeRotationYaw(downhill)` is the yaw a slope-rotated location gets: local +Z faces downhill, rounded to 22.5 degrees. `CheckPlacement(x, z, world, terrainDelta)` returns the first rule a point fails: origin distance, biome (the default `None` matches no biome), altitude, distance from the centre, then terrain delta. It does not check the biome area, forest, similar locations, vegetation or zone occupancy. Nothing generates or places locations.
+
 ## Static overrides (preview 6)
 
 Mods keep settings, switches and caches in statics. A test that changes one must put back the value it found, not the default it expects; a hard-coded reset silently changes every later test when the default moves. `StaticOverride` in `Valheim.Testing` does this for static fields, static properties (private setters included) and environment variables:
@@ -360,6 +382,53 @@ Limits: an owned client must run in the desktop session where Steam is running a
 ## Game-side adapter helpers (Valheim.Testing.Adapter, preview 1)
 
 A mod's owned server runs need a small test adapter plugin in the server runtime: `OwnedServerSession` proves it started that very server by reading a `session` capability (token, process ID, save root, dedicated, readiness). `Valheim.Testing.Adapter` is a source package compiled into that adapter, which references ValheimCLI and the game (so this repository builds none of it). `TestExtension.Register(id, version, tokenVariable, modReady, registered, logError, commands...)` waits for ValheimCLI's extension API, then registers the mod's extension with the `session` capability and any test commands of its own; The session reports complete when the world is up and `modReady` returns true, and reports `acceptingConnections` separately: a dedicated server opens its game socket only when world generation finishes, on a first boot about 17 s after the world has loaded, and a join before that times out. `OwnedServerSession.WaitUntilJoinable(server, capability, timeout)` waits for it; call it just before the first join so the wait overlaps other work (server-side steps, an owned client's launch) instead of lengthening startup. `TestExtension.DevcommandsFlag()` reads the raw devcommands flag that ValheimCLI's extension gate uses. The example's [adapter](../examples/FullLifecycle/MyMod.TestAdapter/Plugin.cs) is the whole pattern in a dozen lines.
+
+## Offline binding check (Valheim.Testing.Bindings, preview 1)
+
+A game update that removes, renames or retypes a member breaks a mod only when the runtime first compiles a method that uses it: `MissingFieldException`, `MissingMethodException` or `TypeLoadException`, possibly hours into play (the modding wiki's examples are `Terminal.m_input` in 0.217.14 and `SEMan.HaveStatusEffect` in 0.218.15). Building against stale publicized assemblies hides the same break until then. `Valheim.Testing.Bindings` finds it from the built DLL in seconds, before any native run: it reads the mod with Mono.Cecil and resolves every game reference against the assemblies you supply, without loading or running either.
+
+What is checked, the way the runtime binds it:
+
+- Every type, field and method the mod names in method bodies, signatures, locals, catch clauses, base types, interfaces, generic constraints, explicit overrides, attributes (including `typeof(...)` arguments) and the module's reference tables. Properties and events are their accessor methods (`get_Level`).
+- A field matches by name and field type; a method by name, static or instance, generic arity, return type and parameter types, with byref, arrays and their rank, pointers, generic instances and modifiers compared exactly. Members are looked for in the type and then its base types, so a member moved to a base class still binds. Nested types are resolved through their declaring types and type forwarders are followed into the target assembly.
+- A reference that does not bind is **missing**, listed once with every mod method (or type, field or attribute) that uses it, and with what the assembly has instead when that is a clue: the other overloads, the field's new type, a property that became a field.
+- A member or type that binds but is not accessible from the mod (private, internal, or protected used outside a derived type) is an **access** finding, a separate list. See below.
+- References into an assembly you did not supply are counted per assembly as **not checked**, never reported as missing. If the lookup of a member reaches a base type in an assembly you did not supply (a game type's `MonoBehaviour` base, say), the member is still reported missing, with a note that it was not searched there.
+
+Supply the game's managed directory with `--game-dir` (the client's `valheim_Data/Managed` holds `assembly_valheim`, `assembly_utils`, the Unity modules and the framework the game runs on; add `BepInEx/core` for BepInEx and Harmony) or individual files with `--game-file`, which are matched by the assembly name inside them, so a pinned copy may have any file name. `--only <name>` limits which assemblies from the directories are checked. `assembly_valheim` must be supplied whenever the mod references it, so a wrong path fails instead of checking nothing; `--require <name>` adds others.
+
+**Publicized assemblies and access.** Mods commonly compile against publicized copies of the game assemblies, where every member is public, and reach private members at run time. Checked against the real assemblies, each such reference is an access finding even if nothing changed, so access findings never fail the check by default: missing references are what break. Each access finding says whether the mod carries `[assembly: IgnoresAccessChecksTo("<assembly>")]` for that assembly (some publicizer build tasks add it), which declares the access as intended: those are **info**, the rest **warning**. `--fail-on-access` fails on warnings only. Checking against the publicized copy the mod was built with still finds removals, but reports no access findings.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Every checked reference binds (access findings may be listed) |
+| 1 | At least one missing reference; with `--fail-on-access`, also an access finding without `IgnoresAccessChecksTo` |
+| 2 | Bad arguments, an unreadable or missing file or directory, or a required assembly not supplied: the check is incomplete |
+
+Run it in the job that builds the plugin, since both need the game's assemblies, and before anything launches the game:
+
+```yaml
+      # After the step that builds the plugin.
+      - name: Check that game references still bind
+        shell: bash
+        run: |
+          dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.1 --tool-path .tools
+          .tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "$VALHEIM_MANAGED"
+```
+
+`VALHEIM_MANAGED` is wherever that job finds the game's `Managed` directory: a self-hosted runner's install, or the dedicated server from anonymous SteamCMD (app 896660), whose `valheim_server_Data/Managed` holds the server's own copies of the game assemblies; check a client mod against the client's where you can. As for any build, do not commit game assemblies or upload them as artifacts or public caches. The package version is this source's; use the newest published one.
+
+From a test instead:
+
+```csharp
+var options = new BindingCheckOptions();
+options.GameDirectories.Add(managedDirectory);
+BindingReport report = BindingCheck.Check(modDll, options);
+Assert.Empty(report.MissingRequired);
+Assert.True(report.Binds, string.Join("\n", report.Missing.Select(f => $"{f.Member}: {string.Join(", ", f.UsedBy)}")));
+```
+
+Limits: only metadata references are checked. Members found by name at run time are not: Harmony's `[HarmonyPatch(typeof(T), "Method")]` and `AccessTools` lookups (`nameof` compiles to a string too), reflection, and Jötunn or prefab names. Neither are type-shape changes that fail when a mod type loads (a game interface gaining a member the mod's class must implement, a base class becoming sealed or gaining an abstract member) or generic constraint changes. An attribute whose arguments name an enum from an assembly that cannot be found is noted, and the types in its arguments are not checked. A pass says the checked references bind, not that the mod behaves correctly with the new game version. The tests build a miniature game in three versions and two mods at test time; the tool has not been run against a real Valheim update in this repository.
 
 ## Build tools for mods
 

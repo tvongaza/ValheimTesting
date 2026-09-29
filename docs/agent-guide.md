@@ -38,6 +38,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 
 ## Before an authorized native run
 
+- Go through the [runtime hygiene checklist](runtime-hygiene.md): clean runtime, load order, local test characters, join/teleport timing and evidence rules.
 - Confirm which machine/process/world the user intended and whether another operator owns it. Use that environment's existing reservation and restore procedure; this public library does not contain private machine credentials or deployment scripts.
 - Use disposable copies, free ports, exact candidate DLLs and a dedicated character where a client is needed. Verify backups and character protection before movement. Do not copy production saves or change admin membership unless the task actually authorizes it.
 - Install one core in plugins and each required pack in plugins **or** scripts, never both. Standard supplies save/join/protection; World Tools supplies observations; Reflection is needed only for `cli_call`. ScriptEngine reload affects all scripts in its directory. See [pack installation](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md).
