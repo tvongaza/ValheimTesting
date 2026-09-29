@@ -74,8 +74,9 @@ public partial class Localization
         return translated;
     }
 
-    // Each word runs from a '$' to the next end character (or the end of the text); scanning stops once fewer than two
-    // characters are left, so a '$' in the last place stays as it is.
+    // Each word runs from a '$' to the next end character (or the end of the text). Scanning stops once fewer than two
+    // characters are left to scan from, so a text that is only "$" stays as it is, while a '$' found at the end of a
+    // longer text is an empty word and becomes "[]", as in the game.
     private string ReplaceWords(string text)
     {
         var result = new System.Text.StringBuilder(text.Length);

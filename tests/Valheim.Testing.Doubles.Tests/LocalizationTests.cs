@@ -18,6 +18,7 @@ public sealed class LocalizationTests : IDisposable
         Assert.Equal("Picked 3 of Coins", l.Localize("$msg_picked", "3", "Coins")); // the placeholders come from the translation
         Assert.Equal("Picked [1]", l.Localize("Picked $1", "3")); // in the text itself, $1 is a word, as in the game
         Assert.Equal("", l.Localize("")); Assert.Equal("English", l.GetSelectedLanguage());
+        Assert.Equal("cost []", l.Localize("cost $")); Assert.Equal("$", l.Localize("$")); // a trailing '$' is an empty word; a lone '$' is left
     }
 
     [Fact] public void ATextLocalizedBeforeItsWordWasAddedKeepsItsBracketsFromTheCache()

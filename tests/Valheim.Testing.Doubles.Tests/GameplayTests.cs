@@ -211,6 +211,31 @@ public sealed class GameplayTests : IDisposable
         Assert.Equal(1, disabled.GetComponent<ZNetView>().GetZDO().GetInt(ZDOVars.s_enabled)); // as the game: the component's own flag is saved
     }
 
+    [Fact] public void APickableWakingWithAPickedZdoHidesItsPartOrIsRemoved()
+    {
+        _scope.WithZdos();
+        var berries = Item("Raspberry", 50);
+        var withPart = Asleep(ZNetScene.instance!.AddPrefab("RaspberryBush"));
+        var fruit = new GameObject("fruit"); fruit.transform.SetParent(withPart.transform);
+        var bush = withPart.AddComponent<Pickable>(); bush.m_itemPrefab = berries; bush.m_hideWhenPicked = fruit;
+        var plain = Asleep(ZNetScene.instance.AddPrefab("Mushroom"));
+        plain.AddComponent<Pickable>().m_itemPrefab = berries;
+
+        // Copies made asleep (under the inactive holder), their ZDOs marked picked as a load would, then woken.
+        var loadedBush = Object.Instantiate(withPart, withPart.transform.parent!);
+        loadedBush.GetComponent<ZNetView>().GetZDO().Set(ZDOVars.s_picked, true);
+        loadedBush.transform.SetParent(null);
+        var picked = loadedBush.GetComponent<Pickable>();
+        Assert.True(picked.GetPicked()); Assert.False(picked.m_hideWhenPicked!.activeSelf); Assert.False(picked.CanBePicked());
+        var loadedMushroom = Object.Instantiate(plain, plain.transform.parent!);
+        var mushroomZdo = loadedMushroom.GetComponent<ZNetView>().GetZDO();
+        mushroomZdo.Set(ZDOVars.s_picked, true);
+        loadedMushroom.transform.SetParent(null);
+        Assert.DoesNotContain(loadedMushroom, ZNetScene.instance.Live); Assert.Contains(mushroomZdo, ZDOMan.instance!.DestroyQueue);
+        Object.EndOfFrame();
+        Assert.True(loadedMushroom == null); Assert.False(loadedBush == null); // neither respawning nor hiding a part: removed
+    }
+
     [Fact] public void ASpawnAreaPicksByWeight()
     {
         var area = new GameObject("spawner").AddComponent<SpawnArea>();

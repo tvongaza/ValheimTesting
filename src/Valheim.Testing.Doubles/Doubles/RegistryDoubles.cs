@@ -305,7 +305,8 @@ public partial class Piece : MonoBehaviour
         public int GetAmount(int qualityLevel)
         {
             if (qualityLevel <= 1) return m_amount;
-            // Levels 2 and 3 add a step each; from level 4 each level adds half a step. An upgrader resource adds the base amount.
+            // Levels 2 and 3 add a step each, level 4 two more (4 steps), and each level after that half a step. An
+            // upgrader resource adds the base amount.
             float steps = qualityLevel < 4 ? qualityLevel - 1 : 4f + (qualityLevel - 4) * 0.5f;
             int baseAmount = m_upgraderResource ? m_amount : 0;
             return (int)Math.Floor(steps * m_amountPerLevel + (float)baseAmount);

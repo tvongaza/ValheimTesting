@@ -6,7 +6,8 @@
 // ReSharper disable InconsistentNaming
 // Unity's object model beyond UnityDoubles.cs: components on game objects, the transform hierarchy, activation, the
 // MonoBehaviour messages, coroutines and Invoke driven one frame at a time (Object.RunFrame), Instantiate's copy of
-// serialized fields, and the clock, log and random numbers mod code reads. Unity 6 member names only.
+// serialized fields, and the clock, log and random numbers mod code reads. Unity 6 member names, plus obsolete
+// forwarders for the older names Unity 6 still compiles.
 using System;
 using System.Collections;
 using System.Collections.Generic;

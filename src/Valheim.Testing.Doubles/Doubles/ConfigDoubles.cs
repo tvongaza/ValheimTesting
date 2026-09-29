@@ -6,7 +6,8 @@
 // ReSharper disable InconsistentNaming
 // BepInEx 5.4.23's configuration (ConfigFile, ConfigEntry<T>, definitions, descriptions, acceptable values and the TOML
 // value converter) over an in-memory disk, the plugin base class and attributes a plugin class compiles against, and
-// the rest of the logging API. Written from BepInEx's documented behaviour; the file format is the one BepInEx writes.
+// the rest of the logging API. Parts are adapted from BepInEx 5.4.23 (MIT, Copyright (c) 2018 Bepis; see
+// THIRD-PARTY-NOTICES.md): ConfigFile.Save, the description lines, SetSerializedValue/ClampValue and TomlTypeConverter.
 using System;
 using System.Collections;
 using System.Collections.Generic;
