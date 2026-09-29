@@ -1,5 +1,5 @@
 name: Publish packages
-# Builds Valheim.Testing, Valheim.Testing.Cli and Valheim.Testing.Game from this commit and publishes
+# Builds Valheim.Testing, Valheim.Testing.Cli, Valheim.Testing.Game and Valheim.Testing.Doubles from this commit and publishes
 # them to NuGet.org with Trusted Publishing: no stored API key. GitHub issues a short-lived OIDC token,
 # NuGet.org exchanges it for a one-hour key, and only the `release` environment (which requires a
 # maintainer's approval) can request one. Versions already on NuGet.org are skipped, so a release that
@@ -45,6 +45,6 @@ jobs:
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg; do
+          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.Doubles.*.nupkg; do
             dotnet nuget push "$f" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
