@@ -5,8 +5,7 @@
 #nullable enable
 // ReSharper disable InconsistentNaming
 // Localization as the game (1.0.16) translates: $words, $KEY_<binding> through ZInput, $1.. insertion and the
-// 100-entry cache; ZInput's key-binding strings; and PlatformPrefs, which can be made unavailable, as it is while
-// plugins load on a dedicated server.
+// 100-entry cache; ZInput's key-binding strings; and PlatformPrefs in memory.
 using System;
 using System.Collections.Generic;
 
@@ -17,8 +16,7 @@ using System.Collections.Generic;
 /// active). Results are cached (100 entries, least recently used first out) except those that are empty or report a
 /// missing key or button, and <see cref="AddWord"/> does not clear the cache, as in the game: a text localized before its
 /// word was added keeps its "[word]". <see cref="instance"/> is made on first use and reads the saved language from
-/// <see cref="PlatformPrefs"/>, so it throws where PlatformPrefs does. There are no language files: translations are the
-/// words added.
+/// <see cref="PlatformPrefs"/>. There are no language files: translations are the words added.
 /// </summary>
 public partial class Localization
 {
@@ -69,32 +67,29 @@ public partial class Localization
     {
         if (string.IsNullOrEmpty(text)) return text;
         if (m_cache.TryGetValue(text, out var hit)) { m_recent.Remove(hit); m_recent.AddFirst(hit); return hit.Value.Translated; }
-        var result = new System.Text.StringBuilder();
-        int at = 0;
-        while (FindNextWord(text, at, out string word, out int wordStart, out int wordEnd))
-        {
-            result.Append(text, at, wordStart - at);
-            result.Append(Translate(word));
-            at = wordEnd;
-        }
-        result.Append(text.Substring(at));
-        string translated = result.ToString();
+        string translated = ReplaceWords(text);
         if (translated == "" || translated.Contains("MISSING KEY") || translated.Contains("MISSING BUTTON")) return translated;
         if (m_cache.Count >= CacheSize) { var oldest = m_recent.Last!; m_recent.RemoveLast(); m_cache.Remove(oldest.Value.Text); }
         m_cache[text] = m_recent.AddFirst((text, translated));
         return translated;
     }
 
-    private static bool FindNextWord(string text, int startIndex, out string word, out int wordStart, out int wordEnd)
+    // Each word runs from a '$' to the next end character (or the end of the text); scanning stops once fewer than two
+    // characters are left, so a '$' in the last place stays as it is.
+    private string ReplaceWords(string text)
     {
-        word = ""; wordStart = -1; wordEnd = -1;
-        if (startIndex >= text.Length - 1) return false;
-        wordStart = text.IndexOf('$', startIndex);
-        if (wordStart == -1) return false;
-        int end = text.IndexOfAny(s_endChars, wordStart);
-        if (end != -1) { word = text.Substring(wordStart + 1, end - wordStart - 1); wordEnd = end; }
-        else { word = text.Substring(wordStart + 1); wordEnd = text.Length; }
-        return true;
+        var result = new System.Text.StringBuilder(text.Length);
+        int copied = 0;
+        while (copied < text.Length - 1)
+        {
+            int dollar = text.IndexOf('$', copied);
+            if (dollar < 0) break;
+            int end = text.IndexOfAny(s_endChars, dollar);
+            if (end < 0) end = text.Length;
+            result.Append(text, copied, dollar - copied).Append(Translate(text.Substring(dollar + 1, end - dollar - 1)));
+            copied = end;
+        }
+        return result.Append(text, copied, text.Length - copied).ToString();
     }
 
     private string Translate(string word)
@@ -146,10 +141,12 @@ public partial class ZInput
 }
 
 /// <summary>
-/// The game's saved preferences, in memory. While <see cref="Unavailable"/> is set every call throws
-/// <see cref="InvalidOperationException"/> with that reason: <c>ValheimWorldScope.AsDedicatedServer</c> sets it while
-/// plugins load, because on a dedicated server the platform (Steamworks) is not initialized yet. A value read with another
-/// type's getter gives the default, as PlayerPrefs does.
+/// The game's saved preferences, in memory. A value read with another type's getter gives the default, as PlayerPrefs
+/// does. On a 1.0.16 dedicated server the preferences fall back to PlayerPrefs and work while plugins load, so no preset
+/// makes them unavailable. <see cref="Unavailable"/> is an explicit opt-in for the failure some clients hit before 1.0
+/// (0.221.10: Steamworks was not initialized yet when a plugin's Awake touched Localization): while it is set, every call
+/// throws <see cref="InvalidOperationException"/> with that reason, and so does a first <c>Localization.instance</c>,
+/// which reads the saved language.
 /// </summary>
 public static partial class PlatformPrefs
 {

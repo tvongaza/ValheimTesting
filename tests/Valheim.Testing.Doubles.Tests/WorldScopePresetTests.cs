@@ -6,7 +6,7 @@ using BepInEx.Configuration;
 using Valheim.Testing.Doubles;
 using Xunit;
 
-// A plugin that localizes in Awake: safe on a client, a failure on a dedicated server where the platform is not up yet.
+// A plugin that localizes in Awake: fine on a 1.0.16 client and dedicated server; it failed on some pre-1.0 clients.
 [BepInPlugin("example.eager", "Eager", "1.0.0")]
 public sealed class EagerPlugin : BaseUnityPlugin
 {
@@ -91,23 +91,32 @@ public sealed class WorldScopePresetTests
         Assert.Empty(ZNet.instance.GetPeers()); Assert.Contains(remote, Player.GetAllPlayers());
     }
 
-    [Fact] public void APluginAwakeThatLocalizesFailsOnADedicatedServer()
+    [Fact] public void APluginAwakeThatLocalizesWorksOnADedicatedServer()
     {
+        // In 1.0.16 PlatformPrefs falls back to PlayerPrefs on a dedicated server, so this is safe there.
         using var scope = new ValheimWorldScope().AsDedicatedServer().WithConfigFiles().WithScene();
+        Assert.Equal("[eager_hello]", scope.LoadPlugin<EagerPlugin>().Greeting);
+        Assert.True(scope.LoadPlugin<PatientPlugin>().Enabled.Value);
+    }
+
+    [Fact] public void OptingIntoThePre10PlatformFailureMakesALocalizingAwakeThrow()
+    {
+        using var scope = new ValheimWorldScope().AsClient().WithConfigFiles().WithScene();
+        PlatformPrefs.Unavailable = "Steamworks is not initialized yet (a pre-1.0 client)";
         var error = Assert.Throws<InvalidOperationException>(() => scope.LoadPlugin<EagerPlugin>());
-        Assert.Contains("PlatformPrefs", error.Message); Assert.Contains("dedicated server", error.Message);
+        Assert.Contains("Steamworks is not initialized yet", error.Message);
         Assert.Throws<InvalidOperationException>(() => PlatformPrefs.GetString("language"));
-        // Written to wait, the same work is safe: Awake binds config only, and the text is made once the game has started.
+        // Written to wait, the same work is safe: Awake binds config only, and the text is made once the platform is up.
         var patient = scope.LoadPlugin<PatientPlugin>();
         Assert.True(patient.Enabled.Value);
-        scope.FinishStartup();
+        PlatformPrefs.Unavailable = null;
         Localization.instance.AddWord("eager_hello", "Hello");
         Assert.Equal("Hello", patient.Greeting());
     }
 
-    [Fact] public void ThePluginAwakeThatFailsOnADedicatedServerIsFineOnAClient()
+    [Fact] public void TheOptInIsRestoredWithTheScope()
     {
-        using var scope = new ValheimWorldScope().AsClient().WithConfigFiles().WithScene();
-        Assert.Equal("[eager_hello]", scope.LoadPlugin<EagerPlugin>().Greeting);
+        using (new ValheimWorldScope().AsClient()) PlatformPrefs.Unavailable = "down";
+        Assert.Null(PlatformPrefs.Unavailable);
     }
 }

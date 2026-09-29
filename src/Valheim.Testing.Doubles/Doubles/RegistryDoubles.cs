@@ -6,7 +6,7 @@
 // ReSharper disable InconsistentNaming
 // The game's registries, keyed by a name's stable hash: ObjectDB (items, recipes, status effects) and ZNetScene's
 // prefabs, with the lifecycle mods register in (ObjectDB wakes at the main menu and again with each world) and the
-// items, recipes, status effects and pieces they hold. A registry can hold prefabs back as "not yet loaded".
+// items, recipes, status effects and pieces they hold. A test can hold entries back as not registered yet.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -36,12 +36,16 @@ public partial class ObjectDB : MonoBehaviour
     /// <summary>Runs at the end of <see cref="CopyOtherDB"/>, as a Harmony postfix would. <c>ValheimWorldScope</c> restores it.</summary>
     public static Action<ObjectDB>? CopyOtherDBPostfix;
 
-    /// <summary>Stable hashes of items held back as not loaded yet: lookups return null and are recorded in <see cref="EarlyLookups"/>. A test switch, not a game field.</summary>
-    public readonly HashSet<int> NotYetLoaded = new();
-    /// <summary>Every lookup that returned null only because its item was not loaded yet.</summary>
+    /// <summary>
+    /// Stable hashes of items a test holds back as not registered yet, standing for a registration another mod or a later
+    /// pass has still to make: name and hash lookups return null for them and are recorded in <see cref="EarlyLookups"/>.
+    /// A test switch, not a game field; the game's registries hold every registered entry and look it up directly.
+    /// </summary>
+    public readonly HashSet<int> NotYetRegistered = new();
+    /// <summary>Every lookup that returned null only because its item was held back as not registered yet.</summary>
     public readonly List<string> EarlyLookups = new();
-    public void MarkNotYetLoaded(params string[] names) { foreach (var name in names) NotYetLoaded.Add(name.GetStableHashCode()); }
-    public void FinishLoading() => NotYetLoaded.Clear();
+    public void MarkNotYetRegistered(params string[] names) { foreach (var name in names) NotYetRegistered.Add(name.GetStableHashCode()); }
+    public void FinishRegistering() => NotYetRegistered.Clear();
 
     public void Awake()
     {
@@ -87,14 +91,14 @@ public partial class ObjectDB : MonoBehaviour
     public bool TryGetItemPrefab(int hash, out GameObject prefab)
     {
         bool found = m_itemByHash.TryGetValue(hash, out var item);
-        if (found && NotYetLoaded.Contains(hash)) { EarlyLookups.Add(item!.name); found = false; }
+        if (found && NotYetRegistered.Contains(hash)) { EarlyLookups.Add(item!.name); found = false; }
         prefab = found ? item! : null!;
         return found;
     }
     public bool TryGetItemPrefab(ItemDrop.ItemData.SharedData sharedData, out GameObject prefab)
     {
         bool found = m_itemByData.TryGetValue(sharedData, out var item);
-        if (found && NotYetLoaded.Contains(item!.name.GetStableHashCode())) { EarlyLookups.Add(item.name); found = false; }
+        if (found && NotYetRegistered.Contains(item!.name.GetStableHashCode())) { EarlyLookups.Add(item.name); found = false; }
         prefab = found ? item! : null!;
         return found;
     }
@@ -141,12 +145,16 @@ public partial class ZNetScene : MonoBehaviour
     /// <summary>Runs at the end of <see cref="Awake"/>, as a Harmony postfix would. <c>ValheimWorldScope</c> restores it.</summary>
     public static Action<ZNetScene>? AwakePostfix;
 
-    /// <summary>Stable hashes of prefabs held back as not loaded yet: lookups return null and are recorded in <see cref="EarlyLookups"/>. A test switch, not a game field.</summary>
-    public readonly HashSet<int> NotYetLoaded = new();
-    /// <summary>Every lookup that returned null only because its prefab was not loaded yet.</summary>
+    /// <summary>
+    /// Stable hashes of prefabs a test holds back as not registered yet, standing for a registration another mod or a later
+    /// pass has still to make: name and hash lookups return null for them and are recorded in <see cref="EarlyLookups"/>.
+    /// A test switch, not a game field; the game's registries hold every registered entry and look it up directly.
+    /// </summary>
+    public readonly HashSet<int> NotYetRegistered = new();
+    /// <summary>Every lookup that returned null only because its prefab was held back as not registered yet.</summary>
     public readonly List<string> EarlyLookups = new();
-    public void MarkNotYetLoaded(params string[] names) { foreach (var name in names) NotYetLoaded.Add(name.GetStableHashCode()); }
-    public void FinishLoading() => NotYetLoaded.Clear();
+    public void MarkNotYetRegistered(params string[] names) { foreach (var name in names) NotYetRegistered.Add(name.GetStableHashCode()); }
+    public void FinishRegistering() => NotYetRegistered.Clear();
 
     public void Awake()
     {
@@ -164,11 +172,11 @@ public partial class ZNetScene : MonoBehaviour
         m_namedPrefabs.Add(hash, prefab);
     }
 
-    public bool HasPrefab(int hash) => m_namedPrefabs.ContainsKey(hash) && !NotYetLoaded.Contains(hash);
+    public bool HasPrefab(int hash) => m_namedPrefabs.ContainsKey(hash);
     public GameObject? GetPrefab(int hash)
     {
         if (!m_namedPrefabs.TryGetValue(hash, out var prefab)) return null;
-        if (NotYetLoaded.Contains(hash)) { EarlyLookups.Add(prefab.name); return null; }
+        if (NotYetRegistered.Contains(hash)) { EarlyLookups.Add(prefab.name); return null; }
         return prefab;
     }
     public GameObject? GetPrefab(string name) => GetPrefab(name.GetStableHashCode());
@@ -297,8 +305,10 @@ public partial class Piece : MonoBehaviour
         public int GetAmount(int qualityLevel)
         {
             if (qualityLevel <= 1) return m_amount;
-            float levels = qualityLevel >= 4 ? 4f + (qualityLevel - 4) / 2f : qualityLevel - 1;
-            return (int)Math.Floor(levels * m_amountPerLevel + (float)(m_upgraderResource ? m_amount : 0));
+            // Levels 2 and 3 add a step each; from level 4 each level adds half a step. An upgrader resource adds the base amount.
+            float steps = qualityLevel < 4 ? qualityLevel - 1 : 4f + (qualityLevel - 4) * 0.5f;
+            int baseAmount = m_upgraderResource ? m_amount : 0;
+            return (int)Math.Floor(steps * m_amountPerLevel + (float)baseAmount);
         }
     }
 }

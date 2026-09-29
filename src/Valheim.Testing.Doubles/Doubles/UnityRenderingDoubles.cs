@@ -137,6 +137,10 @@ namespace UnityEngine
         public RigidbodyInterpolation interpolation;
         public Vector3 position { get => transform.position; set => transform.position = value; }
         public Quaternion rotation { get => transform.rotation; set => transform.rotation = value; }
+        // The pre-Unity-6 names still compile in Unity 6, with an obsolete warning.
+        [Obsolete("velocity has been renamed to linearVelocity in Unity 6.")] public Vector3 velocity { get => linearVelocity; set => linearVelocity = value; }
+        [Obsolete("drag has been renamed to linearDamping in Unity 6.")] public float drag { get => linearDamping; set => linearDamping = value; }
+        [Obsolete("angularDrag has been renamed to angularDamping in Unity 6.")] public float angularDrag { get => angularDamping; set => angularDamping = value; }
     }
 
     /// <summary>A shader, known by name.</summary>
@@ -265,8 +269,8 @@ namespace UnityEngine
         }
     }
 
-    /// <summary>Unity 6's light types (Area is now Rectangle).</summary>
-    public enum LightType { Spot = 0, Directional = 1, Point = 2, Rectangle = 3, Disc = 4, Pyramid = 5, Box = 6, Tube = 7 }
+    /// <summary>Unity 6's light types (Area is now Rectangle; the old name remains, obsolete).</summary>
+    public enum LightType { Spot = 0, Directional = 1, Point = 2, Rectangle = 3, Disc = 4, Pyramid = 5, Box = 6, Tube = 7, [Obsolete("Area has been renamed to Rectangle.")] Area = 3 }
     public enum LightShadows { None = 0, Hard = 1, Soft = 2 }
 
     /// <summary>A light's settings, with Unity's defaults. It lights nothing.</summary>
@@ -281,8 +285,8 @@ namespace UnityEngine
         public float shadowStrength = 1f;
     }
 
-    /// <summary>Unity 6's animator update modes (AnimatePhysics is now Fixed).</summary>
-    public enum AnimatorUpdateMode { Normal = 0, Fixed = 1, UnscaledTime = 2 }
+    /// <summary>Unity 6's animator update modes (AnimatePhysics is now Fixed; the old name remains, obsolete).</summary>
+    public enum AnimatorUpdateMode { Normal = 0, Fixed = 1, UnscaledTime = 2, [Obsolete("AnimatePhysics has been renamed to Fixed.")] AnimatePhysics = 1 }
 
     /// <summary>
     /// An animator's parameters and settings. A parameter set by name and one set by <see cref="StringToHash"/> of that

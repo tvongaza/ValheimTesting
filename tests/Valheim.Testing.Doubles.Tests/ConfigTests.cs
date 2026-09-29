@@ -153,7 +153,7 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal("say \\\"hi\\\"\\tnow", TomlTypeConverter.ConvertToString("say \"hi\"\tnow", typeof(string)));
         Assert.Equal(@"C:\mods\x", TomlTypeConverter.ConvertToValue<string>(@"C:\mods\x")); // a Windows path is read as it is
         Assert.Equal("a\\b", TomlTypeConverter.ConvertToString("a\\b", typeof(string))); // a backslash is written unescaped
-        Assert.Throws<ArgumentException>(() => new ConfigFile(Path("types.cfg"), false).Bind("A", "V", new UnityEngine.Vector3(), ""));
+        Assert.Throws<ArgumentException>(() => new ConfigFile(Path("types.cfg"), false).Bind("A", "V", DateTime.Now, "")); // BepInEx has no converter for it
         Assert.Equal(new[] { 1 }, new[] { new AcceptableValueList<int>(1, 2).Clamp(3) }.Cast<int>());
     }
 }

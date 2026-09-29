@@ -32,8 +32,10 @@ public sealed class GameplayTests : IDisposable
         Assert.Equal(350f, Utils.FixDegAngle(-10f)); Assert.Equal(20f, Utils.DegDistance(350f, 10f));
         Assert.Equal(90f, Utils.YawFromDirection(new Vector3(1, 0, 0)), 3);
         Assert.Equal(5f, Utils.DistanceXZ(new Vector3(0, 100, 0), new Vector3(3, -7, 4)));
-        Assert.Equal(-2, Utils.FloorToInt(-1.5f)); Assert.Equal(2, Utils.RoundToInt(1.5f));
-        Assert.Equal(-70000, Utils.FloorToInt(-70000.5f)); // exact only within the game's ±64000 window (Mathf says -70001)
+        Assert.Equal(-2, Utils.FloorToInt(-1.5f));
+        Assert.Equal(3, Utils.RoundToInt(2.5f)); Assert.Equal(-1, Utils.RoundToInt(-1.5f)); // halves round up (Mathf gives 2 and -2)
+        Assert.Equal(1, Utils.FloorToInt(0.999f)); // shifted by 64000 in float, 0.999 lands on 1 (Mathf gives 0)
+        Assert.Equal(-70000, Utils.FloorToInt(-70000.5f)); // below -64000 it truncates toward zero (Mathf gives -70001)
         Assert.Equal(2f, Utils.Lerp(0f, 2f, 2f)); Assert.Equal(-2f, Utils.Lerp(0f, 2f, -1f)); // clamped above 1 only
         Assert.Equal(3, Utils.Mod(-1, 4)); Assert.Equal((short)32767, 40000.ClampToShort());
         Assert.True("Troll_Boss".CustomStartsWith("Troll")); Assert.False("troll".CustomStartsWith("Troll")); Assert.True("ruins_tower".CustomEndsWith("_tower"));
@@ -115,7 +117,29 @@ public sealed class GameplayTests : IDisposable
         var first = items.GetDropListItems();
         var stack = Assert.Single(first);
         Assert.InRange(stack.m_stack, 5, 10); Assert.Same(coins, stack.m_dropPrefab); Assert.NotSame(coins.GetComponent<ItemDrop>().m_itemData, stack);
-        Assert.Same(first, items.GetDropListItems()); // the game's shared list: the next call clears and refills it
+        var next = new DropTable().GetDropListItems(); // the game's shared list: the next call clears it, whichever table makes it
+        Assert.Same(first, next); Assert.Empty(first);
+    }
+
+    [Fact] public void DropCountsIncludeTheMaximumWeightsBiasThePickAndStackRangesFollowTheirKind()
+    {
+        var coins = Item("Coins", 50); var ruby = Item("Ruby", 50);
+        var table = new DropTable { m_dropMin = 1, m_dropMax = 2 };
+        table.m_drops.Add(new DropTable.DropData { m_item = coins, m_stackMin = 1, m_stackMax = 1, m_weight = 3f });
+        table.m_drops.Add(new DropTable.DropData { m_item = ruby, m_stackMin = 1, m_stackMax = 1, m_weight = 1f });
+        UnityEngine.Random.InitState(11);
+        var rolls = Enumerable.Range(0, 2000).Select(_ => table.GetDropList()).ToList();
+        Assert.Equal(new[] { 1, 2 }, rolls.Select(r => r.Count).Distinct().OrderBy(n => n)); // m_dropMax is included
+        double coinShare = rolls.Sum(r => r.Count(d => d == coins)) / (double)rolls.Sum(r => r.Count);
+        Assert.InRange(coinShare, 0.70, 0.80); // weight 3 of 4
+
+        DropTable Single(int min, int max, bool dontScale) =>
+            new() { m_drops = { new DropTable.DropData { m_item = coins, m_stackMin = min, m_stackMax = max, m_weight = 1f, m_dontScale = dontScale } } };
+        var scaled = Single(1, 3, false); var unscaled = Single(1, 3, true);
+        Assert.Equal(new[] { 1, 2, 3 }, Enumerable.Range(0, 400).Select(_ => scaled.GetDropList().Count).Distinct().OrderBy(n => n)); // rounded, both ends included
+        Assert.Equal(new[] { 1, 2 }, Enumerable.Range(0, 400).Select(_ => unscaled.GetDropList().Count).Distinct().OrderBy(n => n)); // an int roll: m_stackMax excluded
+        var itemStacks = Enumerable.Range(0, 400).Select(_ => Single(40, 60, false).GetDropListItems().Single().m_stack).ToList();
+        Assert.Equal(40, itemStacks.Min()); Assert.Equal(50, itemStacks.Max()); // item stacks include the maximum, capped at the item's stack size
     }
 
     [Fact] public void AnInventoryTopsUpMatchingStacksBeforeUsingANewSlot()
@@ -173,7 +197,8 @@ public sealed class GameplayTests : IDisposable
         picked.SetPicked(true);
         Assert.False(picked.m_hideWhenPicked!.activeSelf); Assert.False(picked.CanBePicked()); Assert.Equal("", picked.GetHoverText());
         Assert.Equal(1, bush.GetComponent<ZNetView>().GetZDO().GetInt(ZDOVars.s_picked));
-        Assert.False(bush == null); // it hides a part, so it stays
+        Object.EndOfFrame(); // it hides a part, so it stays: not destroyed and its ZDO not queued
+        Assert.False(bush == null); Assert.Contains(bush, ZNetScene.instance.Live); Assert.Empty(ZDOMan.instance!.DestroyQueue);
 
         var once = Object.Instantiate(bushPrefab, new Vector3(3, 30, 3), default(Quaternion));
         var single = once.GetComponent<Pickable>(); single.m_hideWhenPicked = null;
@@ -190,9 +215,9 @@ public sealed class GameplayTests : IDisposable
     {
         var area = new GameObject("spawner").AddComponent<SpawnArea>();
         Assert.Null(area.SelectWeightedPrefab());
-        var troll = new SpawnArea.SpawnData { m_prefab = new GameObject("Troll"), m_weight = 0f };
         var greyling = new SpawnArea.SpawnData { m_prefab = new GameObject("Greyling"), m_weight = 1f };
-        area.m_prefabs.Add(troll); area.m_prefabs.Add(greyling);
+        var troll = new SpawnArea.SpawnData { m_prefab = new GameObject("Troll"), m_weight = 0f };
+        area.m_prefabs.Add(greyling); area.m_prefabs.Add(troll); // the zero-weight entry last: a pick that fell back to the last entry would find it
         UnityEngine.Random.InitState(1);
         Assert.All(Enumerable.Range(0, 20).Select(_ => area.SelectWeightedPrefab()), pick => Assert.Same(greyling, pick));
         Assert.Equal(20, area.m_maxTotal); Assert.Equal(15f, area.m_levelupChance);

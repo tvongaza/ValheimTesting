@@ -71,6 +71,18 @@ namespace UnityEngine
             return all.Length == 0 ? null : all[0];
         }
 
+        // The pre-Unity-6 names still compile in Unity 6 (and the game uses them), with an obsolete warning.
+        [Obsolete("FindObjectsOfType is obsolete in Unity 6: use FindObjectsByType (it sorts by instance id).")]
+        public static T[] FindObjectsOfType<T>() where T : Object => FindObjectsByType<T>(FindObjectsInactive.Exclude, FindObjectsSortMode.InstanceID);
+        [Obsolete("FindObjectsOfType is obsolete in Unity 6: use FindObjectsByType (it sorts by instance id).")]
+        public static T[] FindObjectsOfType<T>(bool includeInactive) where T : Object =>
+            FindObjectsByType<T>(includeInactive ? FindObjectsInactive.Include : FindObjectsInactive.Exclude, FindObjectsSortMode.InstanceID);
+        [Obsolete("FindObjectOfType is obsolete in Unity 6: use FindFirstObjectByType or FindAnyObjectByType.")]
+        public static T? FindObjectOfType<T>() where T : Object => FindFirstObjectByType<T>();
+        [Obsolete("FindObjectOfType is obsolete in Unity 6: use FindFirstObjectByType or FindAnyObjectByType.")]
+        public static T? FindObjectOfType<T>(bool includeInactive) where T : Object =>
+            FindFirstObjectByType<T>(includeInactive ? FindObjectsInactive.Include : FindObjectsInactive.Exclude);
+
         /// <summary>
         /// Runs one frame of Unity's player loop over the components the doubles know: advances the clock
         /// (<c>Time.time</c>, <c>Time.realtimeSinceStartup</c>, <c>Time.deltaTime</c>, <c>Time.frameCount</c>), calls
@@ -527,15 +539,18 @@ namespace UnityEngine
         // with Unity's rules for serialized fields (UnitySerialization), then parents it and wakes it.
         internal void CopyHierarchyInto(GameObject copy)
         {
+            // Take this copy's parent now: an Instantiate in a woken Awake must not see it (nor leave its own map behind).
+            var parent = s_unityPendingParent; bool worldStays = s_unityPendingWorldStays;
+            s_unityPendingParent = null;
             var map = new Dictionary<Object, Object>();
             var pairs = new List<(Component Source, Component Copy)>();
             MapHierarchy(this, copy, map, pairs);
             foreach (var (source, target) in pairs) UnitySerialization.CopySerializedFields(source, target, map);
             if (copy.View is { } view) s_unityComponents.Add(view);
             if (copy.Wear is { } wear) s_unityComponents.Add(wear);
-            s_unityLastCloneMap = map;
-            if (s_unityPendingParent is { } parent) copy.OwnTransform.SetParent(parent, s_unityPendingWorldStays);
+            if (parent is not null) copy.OwnTransform.SetParent(parent, worldStays);
             if (copy.activeInHierarchy) HierarchyActivityChanged(copy, true);
+            s_unityLastCloneMap = map;
         }
         private static void MapHierarchy(GameObject source, GameObject copy, Dictionary<Object, Object> map, List<(Component, Component)> pairs)
         {

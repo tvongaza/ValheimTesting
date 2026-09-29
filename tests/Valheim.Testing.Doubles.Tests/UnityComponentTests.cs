@@ -39,6 +39,14 @@ public sealed class Ticker : MonoBehaviour
     private void Tick() => Steps.Add("tick" + ++m_ticks);
 }
 
+// Instantiates another object from its Awake, as spawners and effects do.
+public sealed class Spawner : MonoBehaviour
+{
+    public GameObject? Template;
+    public GameObject? Made;
+    private void Awake() { if (Template != null) Made = Instantiate(Template); }
+}
+
 public interface IMarked { }
 public sealed class MarkedBehaviour : MonoBehaviour, IMarked { }
 
@@ -288,6 +296,30 @@ public sealed class UnityComponentTests : IDisposable
         Assert.Equal(5, UnityEngine.Random.Range(5, 5));
         Assert.InRange(UnityEngine.Random.Range(1f, 2f), 1f, 2f);
     }
+
+    [Fact] public void AnInstantiateInsideAwakeDoesNotTakeTheOuterParentOrReplaceTheOuterCopy()
+    {
+        var holder = new GameObject("prefabs"); holder.SetActive(false);
+        var prefab = new GameObject("spawner"); prefab.transform.SetParent(holder.transform);
+        var spawner = prefab.AddComponent<Spawner>(); spawner.Template = new GameObject("made");
+        var parent = new GameObject("parent");
+        var copy = Object.Instantiate(prefab, parent.transform);
+        var made = copy.GetComponent<Spawner>().Made!;
+        Assert.Same(parent.transform, copy.transform.parent); Assert.Null(made.transform.parent);
+        var copied = Object.Instantiate(spawner); // a component's copy while the copy's Awake instantiates too
+        Assert.NotSame(spawner, copied); Assert.Same(copied, copied.gameObject.GetComponent<Spawner>()); Assert.NotNull(copied.Made);
+    }
+
+#pragma warning disable CS0618 // the obsolete names are the point
+    [Fact] public void PreUnity6NamesStillCompileAndForwardToTheUnity6Ones()
+    {
+        var body = new GameObject("b").AddComponent<Rigidbody>();
+        body.velocity = new Vector3(1, 2, 3); Assert.Equal(2f, body.linearVelocity.y);
+        body.drag = 0.5f; Assert.Equal(0.5f, body.linearDamping);
+        Assert.Same(body, Object.FindObjectOfType<Rigidbody>()); Assert.Equal(new[] { body }, Object.FindObjectsOfType<Rigidbody>());
+        Assert.Equal(LightType.Rectangle, LightType.Area); Assert.Equal(AnimatorUpdateMode.Fixed, AnimatorUpdateMode.AnimatePhysics);
+    }
+#pragma warning restore CS0618
 
     [Fact] public void OnModernDotNetTheRuntimesModuleInitializerAttributeIsUsed() =>
         // The net48 polyfill must not shadow the runtime's own type where it exists.

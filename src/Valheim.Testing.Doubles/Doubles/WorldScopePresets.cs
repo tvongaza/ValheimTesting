@@ -44,9 +44,8 @@ namespace Valheim.Testing.Doubles
     /// Role presets. Each installs a fresh network, ZDOs, zone system and scene (or, at the main menu, none), and the
     /// players the role has:
     /// <list type="bullet">
-    /// <item><see cref="AsDedicatedServer"/>: <c>IsServer()</c> and <c>IsDedicated()</c> true, no local player. It starts
-    /// while plugins load: <see cref="PlatformPrefs"/> (and so a first <c>Localization.instance</c>, which reads the saved
-    /// language) throw until <see cref="FinishStartup"/>, because the game has no Steam client then.</item>
+    /// <item><see cref="AsDedicatedServer"/>: <c>IsServer()</c> and <c>IsDedicated()</c> true, no local player.
+    /// Localization and PlatformPrefs work, as on a 1.0.16 dedicated server.</item>
     /// <item><see cref="AsHost"/>: a listen server: <c>IsServer()</c> true, not dedicated, a local player.</item>
     /// <item><see cref="AsClient"/>: not the server, a local player.</item>
     /// <item><see cref="AtMainMenu"/>: no world (<c>ZNet.instance</c>, <c>ZDOMan.instance</c>, <c>ZNetScene.instance</c> and the
@@ -98,20 +97,17 @@ namespace Valheim.Testing.Doubles
         }
 
         /// <summary>
-        /// A dedicated server while its plugins load: server, dedicated, no local player, a world's singletons, fresh
-        /// preferences and localization, and <see cref="PlatformPrefs"/> unavailable until <see cref="FinishStartup"/>, so
-        /// a plugin's Awake that touches <c>Localization.instance</c> or PlatformPrefs throws here as it can in the game.
+        /// A dedicated server: server, dedicated, no local player, a world's singletons, and fresh preferences and
+        /// localization. In 1.0.16 PlatformPrefs falls back to PlayerPrefs on a dedicated server, so a plugin's Awake may
+        /// touch Localization and PlatformPrefs here; to test against the pre-1.0 client failure instead, set
+        /// <see cref="PlatformPrefs.Unavailable"/> (the scope restores it).
         /// </summary>
         public ValheimWorldScope AsDedicatedServer()
         {
             EnterWorld(server: true, dedicated: true);
             Player.m_localPlayer = null;
-            PlatformPrefs.Unavailable = "on a dedicated server Steamworks is not initialized while plugins load. " +
-                "Touch Localization and PlatformPrefs later (after the game has started), not from a plugin's Awake.";
             return this;
         }
-        /// <summary>The game has started: the platform is initialized, so PlatformPrefs and Localization work.</summary>
-        public ValheimWorldScope FinishStartup() { PlatformPrefs.Unavailable = null; return this; }
 
         /// <summary>A listen-server host: server, not dedicated, with a local player at <paramref name="position"/> (owned by this session). A broadcast runs both its server and client handlers.</summary>
         public ValheimWorldScope AsHost(UnityEngine.Vector3 position = default)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using HarmonyLib;
 using Xunit;
@@ -23,6 +24,7 @@ internal static class SetterPatch { private static void Prefix() { } }
 internal sealed class Hidden
 {
     private int m_count = 3;
+    internal float m_health = 1.5f;
     internal static string s_label = "static";
     private string Name { get; set; } = "hidden";
     private Hidden? m_next;
@@ -47,6 +49,9 @@ public sealed class HarmonyTests
         var setter = HarmonyMethod.Merge(HarmonyMethodExtensions.GetFromType(typeof(SetterPatch)));
         Assert.Equal(MethodType.Setter, setter.methodType); Assert.Equal(new[] { "first.mod", "second.mod" }, setter.before);
         Assert.Throws<ArgumentException>(() => new HarmonyPatch(typeof(Terminal), "M", new[] { typeof(int) }, new[] { ArgumentType.Ref, ArgumentType.Out }));
+        var named = new HarmonyPatch("Not.A.Type, Nowhere", "Method").info; // recorded, resolved only when patching
+        Assert.Null(named.declaringType); Assert.Equal("Method", named.methodName); Assert.Null(named.methodType);
+        Assert.Equal(Priority.High, HarmonyMethod.Merge(new List<HarmonyMethod> { new HarmonyPriority(Priority.High).info, new HarmonyPatch("M").info }).priority); // -1 does not overwrite
     }
 
     [Fact] public void PatchAllFindsEveryPatchClassButPatchesNothing()
@@ -59,12 +64,16 @@ public sealed class HarmonyTests
             Assert.Contains(typeof(RecordedPatch), classes); Assert.Contains(typeof(MergedPatch), classes); Assert.Contains(typeof(SetterPatch), classes);
             Assert.DoesNotContain(typeof(Hidden), classes);
             Assert.Equal("GetPrefab", harmony.Patches.Single(p => p.PatchClass == typeof(MergedPatch)).Target.methodName);
+            Assert.Equal(MethodType.Normal, harmony.Patches.Single(p => p.PatchClass == typeof(RecordedPatch)).Target.methodType); // Normal when unset, as HarmonyX
+            Assert.Equal(MethodType.Setter, harmony.Patches.Single(p => p.PatchClass == typeof(SetterPatch)).Target.methodType);
             Assert.True(Harmony.HasAnyPatches("test.doubles"));
             harmony.PatchAll(typeof(HarmonyTests).Assembly);
             Assert.Equal(classes.Count, harmony.Patches.Count); // patching twice records each class once
         }
         finally { harmony.UnpatchSelf(); }
         Assert.False(Harmony.HasAnyPatches("test.doubles"));
+        var single = Harmony.CreateAndPatchAll(typeof(Hidden), "test.single"); // PatchAll(Type) takes a class without attributes
+        try { Assert.Equal(typeof(Hidden), single.Patches.Single().PatchClass); } finally { single.UnpatchSelf(); }
         Assert.Throws<ArgumentException>(() => new Harmony(""));
     }
 
@@ -91,7 +100,10 @@ public sealed class HarmonyTests
         Assert.False(t.Field("nope").FieldExists()); Assert.Null(t.Field("nope").GetValue());
         Assert.Null(t.Field("nope").Field("deeper").GetValue()); t.Field("nope").SetValue(1); // no throw, as in Harmony
         Assert.Null(Traverse.Create<Hidden>().Field("m_count").GetValue()); // an instance field without an instance
-        Assert.Throws<InvalidOperationException>(() => t.Method("Add", 1).SetValue(2));
+        Assert.Throws<Exception>(() => t.Method("Add", 1).SetValue(2)); // HarmonyX throws a plain Exception
+        Assert.Throws<Exception>(() => t.Field("m_count").GetValue(1));
+        Assert.Throws<InvalidCastException>(() => t.Field<int>("m_health").Value); // a typed read casts, as HarmonyX's
+        Assert.Equal(typeof(float), t.Field("m_health").GetValueType()); Assert.Null(t.Field("nope").ToString());
         Assert.Throws<System.Reflection.AmbiguousMatchException>(() => AccessTools.Method(typeof(Hidden), "Add"));
         Assert.NotNull(AccessTools.Method(typeof(Hidden), "Add", new[] { typeof(int) }));
         Assert.Equal(typeof(Hidden), AccessTools.TypeByName("Hidden"));

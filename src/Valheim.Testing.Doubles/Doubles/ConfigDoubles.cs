@@ -30,6 +30,7 @@ namespace BepInEx.Logging
         public ManualLogSource(string sourceName) { SourceName = sourceName; }
         public void LogFatal(object data) => Write("FATAL", data);
         public void LogMessage(object data) => Write("MSG  ", data);
+        public void Dispose() { }
         public void Log(LogLevel level, object data)
         {
             if ((level & LogLevel.Fatal) != 0) LogFatal(data);
@@ -103,6 +104,8 @@ namespace BepInEx
         public BepInPlugin Metadata { get; internal set; } = null!;
         public BaseUnityPlugin? Instance { get; internal set; }
         public string Location { get; internal set; } = "";
+        public IEnumerable<BepInDependency> Dependencies { get; internal set; } = new BepInDependency[0];
+        public IEnumerable<BepInProcess> Processes { get; internal set; } = new BepInProcess[0];
     }
 
     /// <summary>
@@ -117,7 +120,12 @@ namespace BepInEx
         {
             var metadata = (BepInPlugin?)Attribute.GetCustomAttribute(GetType(), typeof(BepInPlugin))
                 ?? throw new InvalidOperationException($"Can't create an instance of {GetType().FullName} because it inherits from BaseUnityPlugin and the BepInPlugin attribute is missing.");
-            Info = new PluginInfo { Metadata = metadata, Instance = this, Location = GetType().Assembly.Location };
+            Info = new PluginInfo
+            {
+                Metadata = metadata, Instance = this, Location = GetType().Assembly.Location,
+                Dependencies = GetType().GetCustomAttributes(typeof(BepInDependency), true).Cast<BepInDependency>().ToArray(),
+                Processes = GetType().GetCustomAttributes(typeof(BepInProcess), true).Cast<BepInProcess>().ToArray(),
+            };
             Logger = BepInEx.Logging.Logger.CreateLogSource(metadata.Name);
             Config = new ConfigFile(Path.Combine(Paths.ConfigPath, metadata.GUID + ".cfg"), false, metadata);
         }
@@ -333,21 +341,28 @@ namespace BepInEx.Configuration
             {
                 if (!s_files.TryGetValue(ConfigFilePath, out var text)) throw new FileNotFoundException("Could not find file '" + ConfigFilePath + "'.", ConfigFilePath);
                 OrphanedEntries.Clear();
-                string section = string.Empty;
-                foreach (string rawLine in text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None))
+                foreach (var (definition, value) in Settings(text))
                 {
-                    string line = rawLine.Trim();
-                    if (line.StartsWith("#")) continue;
-                    if (line.StartsWith("[") && line.EndsWith("]")) { section = line.Substring(1, line.Length - 2); continue; }
-                    string[] split = line.Split(new[] { '=' }, 2);
-                    if (split.Length != 2) continue;
-                    var definition = new ConfigDefinition(section, split[0].Trim());
-                    string value = split[1].Trim();
                     if (Entries.TryGetValue(definition, out var entry)) entry.SetSerializedValue(value);
                     else OrphanedEntries[definition] = value;
                 }
             }
             OnConfigReloaded();
+        }
+
+        // The settings a file holds, in order: "[Section]" lines open a section, "#" lines are comments, and every other
+        // line with an '=' is "key = value" (trimmed, split at the first '='). Anything else is skipped.
+        private static IEnumerable<(ConfigDefinition Definition, string Value)> Settings(string text)
+        {
+            string section = string.Empty;
+            foreach (var line in text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None).Select(l => l.Trim()))
+            {
+                if (line.StartsWith("#")) continue;
+                if (line.StartsWith("[") && line.EndsWith("]")) { section = line.Substring(1, line.Length - 2); continue; }
+                int equals = line.IndexOf('=');
+                if (equals < 0) continue;
+                yield return (new ConfigDefinition(section, line.Substring(0, equals).Trim()), line.Substring(equals + 1).Trim());
+            }
         }
 
         /// <summary>Writes the file as BepInEx does.</summary>
@@ -474,7 +489,8 @@ namespace BepInEx.Configuration
     /// How config values are written and read, as BepInEx's: strings escaped (a backslash is written as is, and text that
     /// looks like a Windows path is read unescaped), bool lower-case, whole numbers in the current culture, float, double
     /// and decimal in the invariant culture, enums by name (read case-insensitively), and UnityEngine.Color as RRGGBBAA hex.
-    /// Unity's JSON-based converters (Vector2/3/4, Quaternion, Rect) are not here: register one with <see cref="AddConverter"/>.
+    /// BepInEx also converts Vector2, Vector3, Vector4, Quaternion (with Unity's JsonUtility) and Rect; those are not here,
+    /// so binding one throws where BepInEx would not: register a converter with <see cref="AddConverter"/> if a test needs it.
     /// </summary>
     public static partial class TomlTypeConverter
     {
@@ -540,46 +556,33 @@ namespace BepInEx.Configuration
             return new UnityEngine.Color(((bits >> 24) & 0xFF) / 255f, ((bits >> 16) & 0xFF) / 255f, ((bits >> 8) & 0xFF) / 255f, (bits & 0xFF) / 255f);
         }
 
+        // The characters written as a backslash sequence, and their letters. A backslash itself is written as it is (as
+        // BepInEx does), so reading "\\" back gives one backslash and an unknown sequence keeps its backslash.
+        private static readonly (char Raw, char Code)[] s_escapes =
+            { ('\0', '0'), ('\a', 'a'), ('\b', 'b'), ('\t', 't'), ('\n', 'n'), ('\v', 'v'), ('\f', 'f'), ('\r', 'r'), ('\'', '\''), ('"', '"') };
         private static string Escape(string text)
         {
             if (string.IsNullOrEmpty(text)) return string.Empty;
             var escaped = new StringBuilder(text.Length + 2);
             foreach (char c in text)
-                escaped.Append(c switch
-                {
-                    '\0' => @"\0", '\a' => @"\a", '\b' => @"\b", '\t' => @"\t", '\n' => @"\n", '\v' => @"\v", '\f' => @"\f", '\r' => @"\r",
-                    '\'' => @"\'", '"' => "\\\"",
-                    _ => c.ToString(), // a backslash is written as it is, as BepInEx does
-                });
+            {
+                int i = Array.FindIndex(s_escapes, e => e.Raw == c);
+                if (i >= 0) escaped.Append('\\').Append(s_escapes[i].Code); else escaped.Append(c);
+            }
             return escaped.ToString();
         }
         private static string Unescape(string text)
         {
             if (string.IsNullOrEmpty(text)) return text;
             var result = new StringBuilder(text.Length);
-            for (int i = 0; i < text.Length;)
+            for (int i = 0; i < text.Length; i++)
             {
-                int slash = text.IndexOf('\\', i);
-                if (slash < 0 || slash == text.Length - 1) slash = text.Length;
-                result.Append(text, i, slash - i);
-                if (slash >= text.Length) break;
-                char c = text[slash + 1];
-                switch (c)
-                {
-                    case '0': result.Append('\0'); break;
-                    case 'a': result.Append('\a'); break;
-                    case 'b': result.Append('\b'); break;
-                    case 't': result.Append('\t'); break;
-                    case 'n': result.Append('\n'); break;
-                    case 'v': result.Append('\v'); break;
-                    case 'f': result.Append('\f'); break;
-                    case 'r': result.Append('\r'); break;
-                    case '\'': result.Append('\''); break;
-                    case '"': result.Append('"'); break;
-                    case '\\': result.Append('\\'); break;
-                    default: result.Append('\\').Append(c); break;
-                }
-                i = slash + 2;
+                if (text[i] != '\\' || i == text.Length - 1) { result.Append(text[i]); continue; }
+                char code = text[++i];
+                int known = code == '\\' ? -2 : Array.FindIndex(s_escapes, e => e.Code == code);
+                if (known == -2) result.Append('\\');
+                else if (known >= 0) result.Append(s_escapes[known].Raw);
+                else result.Append('\\').Append(code);
             }
             return result.ToString();
         }

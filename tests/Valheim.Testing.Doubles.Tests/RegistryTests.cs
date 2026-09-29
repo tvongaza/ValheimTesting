@@ -76,21 +76,22 @@ public sealed class RegistryTests : IDisposable
         Assert.Throws<ArgumentException>(() => scene.m_namedPrefabs.Add("piece_b".GetStableHashCode(), new GameObject("piece_b"))); // as a mod adding directly
     }
 
-    [Fact] public void AnEarlyLookupAgainstPrefabsNotYetLoadedReturnsNullAsInTheGame()
+    // A registration another mod or a later pass has still to make, held back by the test: lookups miss and are recorded.
+    [Fact] public void ALookupBeforeARegistrationIsMadeMissesAndIsRecorded()
     {
         var scene = new ZNetScene(); scene.m_prefabs.Add(new GameObject("Troll")); scene.Awake();
-        scene.MarkNotYetLoaded("Troll");
-        Assert.Null(scene.GetPrefab("Troll")); Assert.False(scene.HasPrefab("Troll".GetStableHashCode()));
-        Assert.Equal(new[] { "Troll" }, scene.EarlyLookups);
-        scene.FinishLoading();
+        scene.MarkNotYetRegistered("Troll");
+        Assert.Null(scene.GetPrefab("Troll")); Assert.Equal(new[] { "Troll" }, scene.EarlyLookups);
+        Assert.True(scene.HasPrefab("Troll".GetStableHashCode())); // the index itself is untouched
+        scene.FinishRegistering();
         Assert.NotNull(scene.GetPrefab("Troll")); Assert.Single(scene.EarlyLookups);
 
         _scope.WithObjectDB(new[] { Item("Coins") });
         var db = _scope.LoadWorldObjectDB();
-        db.MarkNotYetLoaded("Coins");
+        db.MarkNotYetRegistered("Coins");
         Assert.Null(db.GetItemPrefab("Coins")); Assert.False(db.TryGetItemPrefab("Coins", out _));
         Assert.Equal(new[] { "Coins", "Coins" }, db.EarlyLookups);
-        db.FinishLoading(); Assert.NotNull(db.GetItemPrefab("Coins"));
+        db.FinishRegistering(); Assert.NotNull(db.GetItemPrefab("Coins"));
         // The existing AddPrefab registers at once.
         using var scoped = new ValheimWorldScope().WithScene();
         var added = ZNetScene.instance!.AddPrefab("wood_pole2");
