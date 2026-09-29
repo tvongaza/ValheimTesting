@@ -1,0 +1,71 @@
+#!/bin/bash
+# Launch the Valheim client in /home/steam/valheim as the steam user on :0 (root), next to a logged-in Steam client.
+#   vt-launch-valheim [--vanilla] [--env NAME]... [game arguments...]
+# --env NAME passes NAME from this environment to the game (e.g. a join password that ValheimCLI reads by name).
+# Launches with BepInEx (as ClientLaunch does for Linux) and refuses when its loader files are missing; only --vanilla
+# launches without it. Waits for Steam to be logged in ("Logged On" in its connection log) and for the main menu.
+# Refuses when a client is already running. A launch that fails early (Steam not reachable, X error in GL setup) is
+# stopped (only the process this launch started, and only once it is proven gone) and retried twice. Prints the game's
+# PID; its identity (PID and start time) is kept for vt-stop-game. Exit 0 at the menu, 2 for a refused request,
+# 3 when a client is already running, 1 for any other failure.
+# VT_GAME_DIR, VT_STEAM_SETTLE and VT_RETRY_DELAY exist for tests with an inert game.
+set -uo pipefail
+G="${VT_GAME_DIR:-/home/steam/valheim}"; L=/home/steam/.config/unity3d/IronGate/Valheim/Player.log
+CONN=/home/steam/.local/share/Steam/logs/connection_log.txt
+PIDF=/home/steam/valheim.pid; IDF=/home/steam/valheim.identity
+ENV=(HOME=/home/steam DISPLAY=:0 SteamAppId=892970 SteamGameId=892970); GAME_ENV=(); VANILLA=0; ARGS=(-console)
+while [ $# -gt 0 ]; do case "$1" in
+    --vanilla) VANILLA=1; shift ;;
+    --env) [ $# -ge 2 ] && [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "vt-launch-valheim: --env needs a variable name"; exit 2; }
+           [ -n "${!2-}" ] || { echo "vt-launch-valheim: --env $2 is not set"; exit 2; }; ENV+=("$2=${!2}"); shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+esac; done
+[ -f "$G/valheim.x86_64" ] || { echo "vt-launch-valheim: no client at $G/valheim.x86_64"; exit 2; }
+if [ $VANILLA = 0 ]; then
+    missing=()
+    for f in BepInEx/core/BepInEx.Preloader.dll doorstop_libs/libdoorstop_x64.so; do [ -f "$G/$f" ] || missing+=("$f"); done
+    [ ${#missing[@]} = 0 ] || { echo "vt-launch-valheim: BepInEx is not installed in $G (missing ${missing[*]}); install BepInExPack_Valheim, or pass --vanilla to launch without it"; exit 2; }
+    GAME_ENV+=(DOORSTOP_ENABLED=1 "DOORSTOP_TARGET_ASSEMBLY=$G/BepInEx/core/BepInEx.Preloader.dll" "LD_LIBRARY_PATH=$G/doorstop_libs" LD_PRELOAD=libdoorstop_x64.so)
+fi
+if { [ -s "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; } || vt-pids valheim.x86_64 > /dev/null; then echo "vt-launch-valheim: a client is already running; refusing a second"; exit 3; fi
+chmod +x "$G/valheim.x86_64"
+# "Logged On" can precede the client being ready for games by a while: a game started too early cannot reach Steam
+# ("Steamworks is not initialized"), which launch() detects and retries. (No ActiveUser in registry.vdf here.)
+# Steam's log offers no event to wait on here: checked once a second, 180 s deadline.
+for i in $(seq 1 180); do grep -q "\[Logged On" "$CONN" 2>/dev/null && break; [ $i = 180 ] && { echo "vt-launch-valheim: Steam not logged in after 180 s"; exit 1; }; sleep 1; done
+sleep "${VT_STEAM_SETTLE:-45}"
+# Identity = PID + start time (field 22 of /proc/PID/stat, counted after the name, which may contain spaces): a reused
+# PID has another start time. exec keeps the start time, so it is the same before and after vt-exec-game execs the game.
+started() { local s; s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1; s=${s##*) }; set -- $s; [ "$1" != Z ] && echo "${20}"; }
+alive() { [ -n "$ST" ] && [ "$(started "$P")" = "$ST" ]; }
+launch() {
+    rm -f "$L" "$PIDF" "$IDF"; P=; ST=; REASON=
+    # vt-exec-game records its own PID and execs the game, so the PID is the game's (Unity renames its main thread,
+    # so process names are not a lasting identity); Doorstop's variables reach only the game.
+    runuser -u steam -- env "${ENV[@]}" setsid -f vt-exec-game "$PIDF" "$G" "${GAME_ENV[@]}" ./valheim.x86_64 "${ARGS[@]}" > /home/steam/valheim.out 2>&1 < /dev/null
+    for _ in $(seq 1 50); do [ -s "$PIDF" ] && break; sleep 0.1; done
+    P=$(cat "$PIDF" 2>/dev/null); [ -n "$P" ] && ST=$(started "$P")
+    [ -n "$ST" ] || { echo "vt-launch-valheim: the game did not start"; tail -5 /home/steam/valheim.out; return 1; }
+    echo "$P $ST" > "$IDF"
+    # The game's log offers no event to wait on here: checked once a second, 180 s deadline.
+    for _ in $(seq 1 180); do
+        grep -q "Starting music menu" "$L" 2>/dev/null && { echo "$P"; return 0; }
+        grep -q "Steamworks is not initialized" "$L" 2>/dev/null && { REASON="Steamworks is not initialized"; return 4; }
+        if ! alive; then
+            grep -q "X Error of failed request" /home/steam/valheim.out 2>/dev/null && { REASON="X error in GL setup"; return 4; }
+            echo "vt-launch-valheim: the game exited"; tail -5 /home/steam/valheim.out; return 1
+        fi
+        sleep 1
+    done
+    echo "vt-launch-valheim: no main menu within 180 s"; return 1
+}
+launch; rc=$?
+# A start that races Steam's own startup fails early; the same launch succeeds once Steam has settled. Two retries,
+# each reported. Only this launch's process is stopped, and only a proven stop allows another launch.
+for attempt in 2 3; do
+    [ $rc = 4 ] || break
+    echo "vt-launch-valheim: early failure ($REASON); attempt $attempt in ${VT_RETRY_DELAY:-30} s" >&2
+    vt-stop-game >&2 || { echo "vt-launch-valheim: the failed attempt (PID $P) could not be stopped; not retrying"; exit 1; }
+    sleep "${VT_RETRY_DELAY:-30}"; launch; rc=$?
+done
+exit $rc

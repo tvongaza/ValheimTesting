@@ -1,0 +1,4 @@
+#!/bin/bash
+# Screenshot of display :0 to the given PNG path (default /tmp/vt-screen.png).
+set -euo pipefail
+OUT="${1:-/tmp/vt-screen.png}"; DISPLAY=:0 import -window root "$OUT"; echo "$OUT"

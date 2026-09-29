@@ -1,0 +1,21 @@
+#!/bin/bash
+# Stage a LOCAL test character (never Steam Cloud) for the steam user (root):
+#   vt-stage-character [--replace] <name> < <name>.fch
+# <name> is a character file name: letters, digits, '_' and '-'. The data goes to a temporary file next to the
+# destination and is published only when it was read completely and is not empty. An existing character of that
+# name is kept unless --replace is given. Creating one in game needs the character-select screen; a staged file does not.
+set -euo pipefail
+REPLACE=0; [ "${1-}" = --replace ] && { REPLACE=1; shift; }
+N="${1-}"
+[ $# = 1 ] && [[ $N =~ ^[A-Za-z0-9_-]+$ ]] || { echo "usage: vt-stage-character [--replace] <name> < file.fch   (name: letters, digits, '_' or '-')" >&2; exit 2; }
+D=/home/steam/.config/unity3d/IronGate/Valheim/characters_local; F="$D/$N.fch"
+runuser -u steam -- mkdir -p "$D"
+if [ $REPLACE = 0 ] && [ -e "$F" ]; then echo "vt-stage-character: $F exists; kept (pass --replace to overwrite it)" >&2; exit 1; fi
+T=$(mktemp "$D/.$N.fch.XXXXXX"); trap 'rm -f "$T"' EXIT
+cat > "$T" || { echo "vt-stage-character: reading the character data failed; nothing staged" >&2; exit 1; }
+[ -s "$T" ] || { echo "vt-stage-character: no character data on stdin (use docker exec -i); nothing staged" >&2; exit 1; }
+chown steam:steam "$T"; chmod 0644 "$T"
+if [ $REPLACE = 1 ]; then mv -f "$T" "$F"
+# A hard link never replaces a file that appeared in the meantime.
+elif ! ln "$T" "$F" 2>/dev/null; then echo "vt-stage-character: $F exists; kept (pass --replace to overwrite it)" >&2; exit 1; fi
+echo "vt-stage-character: $F ($(stat -c %s "$F") bytes)"
