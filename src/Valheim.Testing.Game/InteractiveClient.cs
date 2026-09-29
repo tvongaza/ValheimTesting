@@ -214,9 +214,10 @@ public static class InteractiveClient
     /// Starts <paramref name="launch"/> in <paramref name="host"/>'s desktop session and returns the game's process, identified by
     /// process ID and start time. <paramref name="launchDirectory"/> is a new absolute directory on the host for this launch's evidence:
     /// the launch spec (no secrets), the recorded process identity, and the game's standard output (Linux) or the launcher's error
-    /// (Windows). Secret variables are read here first; a missing one is refused before anything runs. Their values travel only in
-    /// the script's standard input, reach only the game's environment (on Windows through a file in the user's temporary directory
-    /// that the launcher deletes as it reads it) and are redacted from every reply. It returns when the game process exists, not
+    /// (Windows). Secret variables are read here first; a missing one is refused before anything runs. Their values never enter the
+    /// composed script (which the host's wrapper writes to a temporary file): they follow it on standard input, the wrapper keeps
+    /// them in memory, and they reach only the game's environment (on Windows through a file in the user's temporary directory
+    /// that the launcher deletes as it reads it). They are redacted from every reply. It returns when the game process exists, not
     /// when it is ready: wait for its log line or state through the host and a <see cref="CliTunnel"/>.
     /// </summary>
     /// <param name="timeout">How long the start may take, at least 15 s. A reply lost past it is an unknown outcome: a client (and, on
@@ -235,23 +236,26 @@ public static class InteractiveClient
         launchDirectory = CheckDirectory(host, launchDirectory, windows);
 
         var secretValues = new List<string>();
-        var secretLines = new StringBuilder();
+        var secretTokens = new List<string>();
         foreach (string name in launch.SecretVariables)
         {
             string value = System.Environment.GetEnvironmentVariable(name)
                 ?? throw new InvalidOperationException($"Set {name} in this runner's environment (from a secret store); the client on {host.Name} receives it at launch.");
             if (value.Contains('\0')) throw new InvalidOperationException(name + " contains a NUL character.");
-            string line = Base64(name + "=" + value);
-            secretLines.Append(line).Append('\n');
-            secretValues.Add(value); secretValues.Add(line);
+            string token = Base64(name + "=" + value);
+            secretTokens.Add(token);
+            secretValues.Add(value); secretValues.Add(token);
         }
-        if (secretLines.Length > 0) secretValues.Add(secretLines.ToString().TrimEnd('\n'));
+        if (secretTokens.Count > 1) secretValues.Add(string.Join(' ', secretTokens));
+        // Secrets must not enter the composed script, which the host's wrapper keeps in a temporary file while it runs.
+        if (secretTokens.Count > 0 && host is not ScriptedGameHost)
+            throw new NotSupportedException($"Secret variables need a local, SSH or container host; {host.Name} is a {host.GetType().Name}.");
 
         string seconds = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture);
         string? task = windows ? TaskPrefix + Guid.NewGuid().ToString("N") : null;
         var variables = new Dictionary<string, string>
         {
-            ["install"] = launch.Install, ["dir"] = launchDirectory, ["spec"] = launch.Spec(), ["secrets"] = secretLines.ToString(), ["seconds"] = seconds,
+            ["install"] = launch.Install, ["dir"] = launchDirectory, ["spec"] = launch.Spec(), ["seconds"] = seconds,
             ["files"] = string.Join('\n', launch.RequiredFiles),
         };
         if (windows) { variables["task"] = task!; variables["launcher"] = InteractiveScripts.WindowsLauncher; }
@@ -262,7 +266,10 @@ public static class InteractiveClient
             variables["display"] = display.Display; variables["wayland"] = display.WaylandDisplay ?? "";
             variables["runtime"] = display.RuntimeDirectory ?? ""; variables["xauthority"] = display.XAuthority ?? "";
         }
-        var result = Redact(await host.RunAsync(windows ? InteractiveScripts.WindowsStart : InteractiveScripts.LinuxStart, variables, timeout, cancellation).ConfigureAwait(false), secretValues);
+        string script = windows ? InteractiveScripts.WindowsStart : InteractiveScripts.LinuxStart;
+        var result = Redact(await (host is ScriptedGameHost scripted
+            ? scripted.RunWithSecretsAsync(script, variables, secretTokens, timeout, cancellation)
+            : host.RunAsync(script, variables, timeout, cancellation)).ConfigureAwait(false), secretValues);
         return await ReadStartAsync(host, launch.Platform, launchDirectory, task, result).ConfigureAwait(false);
     }
 
@@ -470,10 +477,13 @@ internal static class WindowsCommandLine
 // with one verdict line the C# side requires. Line endings are normalised because a checkout may have converted this file to CRLF.
 internal static class InteractiveScripts
 {
-    // Variables: install, files, dir, spec, secrets, task, launcher, seconds. Runs as the SSH user (or locally). The user's
+    // Variables: install, files, dir, spec, task, launcher, seconds; secrets arrive in VT_SECRETS (base64 NAME=value tokens,
+    // space separated), which the wrapper keeps in memory and this script clears at once. Runs as the SSH user (or locally). The user's
     // desktop sessions are the sessions other than 0 (services, and SSH) in which it runs processes; tasklist reports them
     // without administrator rights. The task runs launcher.ps1 in that session with the user's interactive token.
     public static readonly string WindowsStart = """
+        $secrets = [Environment]::GetEnvironmentVariable('VT_SECRETS')
+        [Environment]::SetEnvironmentVariable('VT_SECRETS', $null)
         $utf8 = New-Object Text.UTF8Encoding $false
         $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
         foreach ($file in ($files -split "`n")) {
@@ -507,9 +517,10 @@ internal static class InteractiveScripts
         $verdict = $null
         try {
             if ($secrets) {
-                # The user's own temporary directory, not the launch directory, which is evidence.
+                # The hand-off to the desktop session: a file in the user's own temporary directory (not the launch directory,
+                # which is evidence) that the launcher deletes as it reads it.
                 $secretFile = Join-Path ([IO.Path]::GetTempPath()) ('vt-secrets-' + [Guid]::NewGuid().ToString('N'))
-                [IO.File]::WriteAllText($secretFile, $secrets, $utf8)
+                [IO.File]::WriteAllText($secretFile, (($secrets -split ' ') -join "`n") + "`n", $utf8)
                 [IO.File]::AppendAllText($specFile, 'secrets ' + [Convert]::ToBase64String($utf8.GetBytes($secretFile)) + "`n", $utf8)
             }
             $service = New-Object -ComObject Schedule.Service
@@ -639,11 +650,12 @@ internal static class InteractiveScripts
         started() { local s; s=$(cat "/proc/$1/stat" 2> /dev/null) || return 1; s=${s##*) }; set -- $s; [ "$1" != Z ] && echo "${20}"; }
         """;
 
-    // Variables: install, files, exe, dir, spec, secrets, display, wayland, runtime, xauthority, seconds. Steam is a process named
+    // Variables: install, files, exe, dir, spec, display, wayland, runtime, xauthority, seconds; secrets arrive in VT_SECRETS
+    // (base64 NAME=value tokens, space separated), which the wrapper keeps in memory and this script clears at once. Steam is a process named
     // steam running as this user, on the display when its environment says. The game runs under a small recorder in its own
     // session (setsid), so the SSH session's end does not reach it; the recorder writes the game's PID (env execs the game in
     // place, so it is the game's), then its exit code.
-    public static readonly string LinuxStart = ("set -u\n" + LinuxStarted + "\n" + """
+    public static readonly string LinuxStart = ("set -u\nsecrets=${VT_SECRETS:-}\nunset VT_SECRETS\n" + LinuxStarted + "\n" + """
         if [ "$(uname -s)" != Linux ]; then echo "VT-INTERACTIVE unsupported this host runs $(uname -s); a Linux client needs a Linux host"; exit 0; fi
         while IFS= read -r f; do
             if [ -n "$f" ] && [ ! -f "$install/$f" ]; then echo "VT-INTERACTIVE missing $f"; exit 0; fi
@@ -701,12 +713,12 @@ internal static class InteractiveScripts
                 arg) args+=("$text") ;;
             esac
         done <<< "$spec"
-        # Secrets are exported here, never put on a command line; every process from here to the game inherits them.
-        while IFS= read -r value; do
-            [ -n "$value" ] || continue
+        # Secrets are exported here from memory, never written to a file or put on a command line; every process from here to
+        # the game inherits them.
+        for value in $secrets; do
             text=$(decode "$value") || exit 3
             export "${text%x}"
-        done <<< "$secrets"
+        done
         cd -- "$install" || exit 3
         setsid bash -c 'p=$1; x=$2; shift 2; "$@" & g=$!; printf "%s\n" "$g" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
             vt-client "$dir/pid" "$dir/exit" env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$install/$exe" ${args[@]+"${args[@]}"} \

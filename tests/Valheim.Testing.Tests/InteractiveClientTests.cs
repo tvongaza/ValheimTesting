@@ -206,7 +206,7 @@ public class InteractiveClientTests
         Assert.Empty(fake.Calls);
     }
 
-    [Theory, InlineData(true), InlineData(false)] public async Task ASecretTravelsOnlyInTheScriptsInputAndIsRedactedFromEveryReply(bool windows)
+    [Theory, InlineData(true), InlineData(false)] public async Task ASecretStaysOutOfTheComposedScriptAndIsRedactedFromEveryReply(bool windows)
     {
         string variable = "VT_TEST_CANARY_" + Guid.NewGuid().ToString("N");
         string canary = "canary-" + Guid.NewGuid().ToString("N");
@@ -221,11 +221,12 @@ public class InteractiveClientTests
                 : HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, [], null, [variable]);
             var error = await Assert.ThrowsAsync<HostOperationException>(() => InteractiveClient.StartAsync(host, launch, windows ? WindowsLaunch : LinuxLaunch, Timeout));
             Assert.Contains("[redacted]", error.Message);
+            // The composed script counts as visible: the host's wrapper writes it to a temporary file.
             var visible = new[] { error.Message, error.Result.Stdout, error.Result.Stderr, error.ToString(), launch.Spec(), string.Join(' ', fake.Calls[0].Arguments),
-                string.Join(' ', launch.Environment.Values), string.Join(' ', launch.Arguments) };
+                string.Join(' ', launch.Environment.Values), string.Join(' ', launch.Arguments), FakeLauncher.Script(fake.Calls[0]) };
             foreach (string text in visible) { Assert.DoesNotContain(canary, text); Assert.DoesNotContain(line, text); }
-            // It did travel, on standard input only, as the value the host exports to the game.
-            Assert.Contains(line, FakeLauncher.Script(fake.Calls[0]));
+            // It did travel: on the secrets line of standard input, which the wrapper keeps in memory.
+            Assert.Equal(line, FakeLauncher.Secrets(fake.Calls[0]));
 
             // Negative control: the same value as a plain environment value is evidence, and the same scan finds it.
             var leaky = windows ? HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, [], new Dictionary<string, string> { ["LEAKY"] = canary })
@@ -534,4 +535,84 @@ public class InteractiveClientDisplayTests
         if (Environment.GetEnvironmentVariable("VALHEIM_TESTING_REQUIRE_HOSTS") != "1") return;
         Assert.False(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VALHEIM_TESTING_DISPLAY")), "VALHEIM_TESTING_DISPLAY is not set");
     }
+}
+
+// The wrapper's hand-off of secrets through real shells: the script sees them in VT_SECRETS, and no file in the wrapper's own
+// temporary directory (the composed script and the upload) holds them while the script runs. The negative control passes the
+// same value as an ordinary variable, which the same scan finds in the script file.
+internal static class SecretHandOffChecks
+{
+    private const string Bash = """
+        set -u
+        secrets=${VT_SECRETS:-}; unset VT_SECRETS
+        dir=$(dirname -- "$0")
+        needles=()
+        for t in $secrets; do v=$(printf %s "$t" | base64 -d); printf 'got %s\n' "$v"; needles+=("$t" "$v"); done
+        if [ -n "${needle:-}" ]; then needles+=("$needle"); fi
+        for f in "$dir"/*; do
+            for n in ${needles[@]+"${needles[@]}"}; do if grep -qF -- "$n" "$f"; then printf 'leaked %s\n' "$(basename -- "$f")"; fi; done
+        done
+        if env | grep -q '^VT_SECRETS='; then echo still-set; fi
+        """;
+    private const string PowerShell = """
+        $secrets = [Environment]::GetEnvironmentVariable('VT_SECRETS')
+        [Environment]::SetEnvironmentVariable('VT_SECRETS', $null)
+        $dir = Split-Path -Parent $PSCommandPath
+        $needles = @()
+        foreach ($t in ("$secrets" -split ' ')) { if ($t) { $v = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($t)); 'got ' + $v; $needles += $t; $needles += $v } }
+        if ($needle) { $needles += $needle }
+        foreach ($f in [IO.Directory]::GetFiles($dir)) {
+            $text = [IO.File]::ReadAllText($f)
+            foreach ($n in $needles) { if ($text.Contains($n)) { 'leaked ' + [IO.Path]::GetFileName($f) } }
+        }
+        if ([Environment]::GetEnvironmentVariable('VT_SECRETS')) { 'still-set' }
+        """;
+
+    public static async Task SecretsReachTheScriptButNoFile(ScriptedGameHost host)
+    {
+        string canary = "canary-" + Guid.NewGuid().ToString("N");
+        string token = InteractiveClientTests.Base64("VT_JOIN_PASSWORD=" + canary);
+        string script = host.Shell.Kind == HostShellKind.Bash ? Bash : PowerShell;
+        var result = (await host.RunWithSecretsAsync(script, null, [token, InteractiveClientTests.Base64("SECOND=two words")], GameHostChecks.Generous)).EnsureSuccess("Handing over secrets");
+        Assert.Contains("got VT_JOIN_PASSWORD=" + canary + "\n", result.Stdout);
+        Assert.Contains("got SECOND=two words\n", result.Stdout);
+        Assert.DoesNotContain("leaked", result.Stdout);
+        Assert.DoesNotContain("still-set", result.Stdout);
+
+        var control = (await host.RunWithSecretsAsync(script, new Dictionary<string, string> { ["needle"] = canary }, [], GameHostChecks.Generous)).EnsureSuccess("Control");
+        Assert.Contains("leaked script", control.Stdout);
+    }
+}
+
+public class SecretHandOffTests
+{
+    [Fact] public async Task ASecretIsOneBase64TokenOnItsOwnLine()
+    {
+        var fake = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0));
+        var host = new LocalGameHost("here", HostShell.Bash, fake);
+        await Assert.ThrowsAsync<ArgumentException>(() => host.RunWithSecretsAsync("true", null, ["not base64 \n"], TimeSpan.FromSeconds(10)));
+        Assert.Empty(fake.Calls);
+        await host.RunWithSecretsAsync("true", null, ["QUI9Yw==", "Qz1k"], TimeSpan.FromSeconds(10));
+        Assert.Equal("QUI9Yw== Qz1k", FakeLauncher.Secrets(fake.Calls[0]));
+        Assert.DoesNotContain("QUI9Yw==", FakeLauncher.Script(fake.Calls[0]));
+        await host.RunAsync("true", null, TimeSpan.FromSeconds(10));
+        Assert.Equal("", FakeLauncher.Secrets(fake.Calls[1]));
+        await Assert.ThrowsAsync<ArgumentException>(() => host.RunAsync("true", new Dictionary<string, string> { ["VT_SECRETS"] = "x" }, TimeSpan.FromSeconds(10)));
+    }
+
+    public static TheoryData<string> Shells => LocalGameHostShellTests.Shells;
+    [Theory, MemberData(nameof(Shells))] public Task SecretsReachTheScriptButNoFile(string shell) =>
+        SecretHandOffChecks.SecretsReachTheScriptButNoFile(new LocalGameHost("local-" + shell, HostShell.Parse(shell)));
+}
+
+[Trait("Category", "GameHosts")]
+public class RemoteSecretHandOffTests
+{
+    public static TheoryData<string> Shells => SshGameHostIntegrationTests.Shells;
+    [SshTheory, MemberData(nameof(Shells))] public Task SecretsReachTheScriptButNoFileOverSsh(string shell) =>
+        SecretHandOffChecks.SecretsReachTheScriptButNoFile(new SshGameHost("ssh-" + shell, Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_DESTINATION")!, HostShell.Parse(shell),
+            int.TryParse(Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_PORT"), out int port) ? port : 0,
+            (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_OPTIONS") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)));
+    [ContainerTheory, InlineData("bash")] public Task SecretsReachTheScriptButNoFileInAContainer(string shell) =>
+        SecretHandOffChecks.SecretsReachTheScriptButNoFile(new ContainerGameHost("ctr", Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER")!, HostShell.Parse(shell)));
 }

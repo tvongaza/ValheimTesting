@@ -33,12 +33,10 @@ internal sealed class FakeLauncher : IProcessLauncher
     public static ProcessExit Exit(int code, string stdout = "", string stderr = "") => new(ProcessEnd.Exited, code, stdout, stderr, TimeSpan.FromMilliseconds(5));
     /// <summary>The wrapper's exit report, as the host writes it at the end of stderr.</summary>
     public static string Report(int code) => "\n[vt-exit] " + code + "\n";
-    /// <summary>The script a call sent: the first line of stdin, base64.</summary>
-    public static string Script(ProcessCall call)
-    {
-        string line = Encoding.ASCII.GetString(call.Input).TrimEnd('\n');
-        return Encoding.UTF8.GetString(Convert.FromBase64String(line));
-    }
+    /// <summary>The script a call sent: the first line of stdin, base64. The host's wrapper writes it to a temporary file.</summary>
+    public static string Script(ProcessCall call) => Encoding.UTF8.GetString(Convert.FromBase64String(Encoding.ASCII.GetString(call.Input).Split('\n')[0]));
+    /// <summary>The secrets line a call sent: the second line of stdin, which the host's wrapper keeps in memory.</summary>
+    public static string Secrets(ProcessCall call) => Encoding.ASCII.GetString(call.Input).Split('\n')[1];
 }
 
 /// <summary>An ssh port forward that listens on the requested loopback port until stopped.</summary>

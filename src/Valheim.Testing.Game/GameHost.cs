@@ -236,7 +236,7 @@ public abstract class ScriptedGameHost : IGameHost
     private static readonly HashSet<string> BashReserved = new(StringComparer.Ordinal)
     {
         "PATH", "IFS", "HOME", "PWD", "OLDPWD", "SHELL", "UID", "EUID", "PPID", "ENV", "BASH", "BASH_ENV", "BASHPID", "CDPATH", "SHELLOPTS",
-        "BASHOPTS", "GLOBIGNORE", "PS4", "LD_PRELOAD", "LD_LIBRARY_PATH", "SECONDS", "RANDOM", "LINENO", "VT_UPLOAD",
+        "BASHOPTS", "GLOBIGNORE", "PS4", "LD_PRELOAD", "LD_LIBRARY_PATH", "SECONDS", "RANDOM", "LINENO", "VT_UPLOAD", "VT_SECRETS",
     };
     // PowerShell's automatic variables; names ending in Preference are refused separately.
     private static readonly HashSet<string> PowerShellReserved = new(StringComparer.OrdinalIgnoreCase)
@@ -274,6 +274,21 @@ public abstract class ScriptedGameHost : IGameHost
     /// </summary>
     public Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default) =>
         RunCoreAsync(script, variables, null, null, timeout, cancellation);
+
+    private static readonly Regex SecretToken = new("^[A-Za-z0-9+/]+={0,2}$", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// <see cref="RunAsync"/> with secret values that never enter the composed script, which the host's wrapper writes to a
+    /// temporary file. Each token (base64, so one word) travels on its own line of standard input after the script; the wrapper
+    /// keeps that line in memory and hands it to the script as the environment variable <c>VT_SECRETS</c> (the tokens separated
+    /// by spaces), which the script should read and clear first. Callers redact the replies themselves.
+    /// </summary>
+    internal Task<HostResult> RunWithSecretsAsync(string script, IReadOnlyDictionary<string, string>? variables, IReadOnlyList<string> secrets, TimeSpan timeout,
+        CancellationToken cancellation = default)
+    {
+        foreach (string token in secrets)
+            if (!SecretToken.IsMatch(token ?? "")) throw new ArgumentException("A secret travels as base64 tokens.", nameof(secrets));
+        return RunCoreAsync(script, variables, null, null, timeout, cancellation, string.Join(' ', secrets));
+    }
 
     /// <summary>
     /// Takes an advisory lock at <paramref name="lockPath"/>, a directory on the host, for <paramref name="owner"/> (a run id).
@@ -493,17 +508,19 @@ public abstract class ScriptedGameHost : IGameHost
         };
     }
 
-    private async Task<HostResult> RunCoreAsync(string script, IReadOnlyDictionary<string, string>? variables, Stream? upload, Stream? output, TimeSpan timeout, CancellationToken cancellation)
+    private async Task<HostResult> RunCoreAsync(string script, IReadOnlyDictionary<string, string>? variables, Stream? upload, Stream? output, TimeSpan timeout, CancellationToken cancellation,
+        string secrets = "")
     {
         WaitText.RequireTimeout(timeout);
-        var exit = await Launcher.RunAsync(Call(script, variables, upload, output, null, timeout), cancellation).ConfigureAwait(false);
+        var exit = await Launcher.RunAsync(Call(script, variables, upload, output, null, timeout, secrets), cancellation).ConfigureAwait(false);
         return Interpret(exit);
     }
 
-    private ProcessCall Call(string script, IReadOnlyDictionary<string, string>? variables, Stream? upload, Stream? output, Func<string, bool>? lines, TimeSpan timeout)
+    private ProcessCall Call(string script, IReadOnlyDictionary<string, string>? variables, Stream? upload, Stream? output, Func<string, bool>? lines, TimeSpan timeout,
+        string secrets = "")
     {
         var (executable, arguments) = WrapperCommand();
-        return new(executable, arguments, Payload(Compose(Shell.Kind, script, variables)), upload, output, lines, timeout);
+        return new(executable, arguments, Payload(Compose(Shell.Kind, script, variables), secrets), upload, output, lines, timeout);
     }
 
     /// <summary>The full script the host runs: preferences (PowerShell), variables as literals, the script and (PowerShell) a final <c>exit 0</c>.</summary>
@@ -544,8 +561,12 @@ public abstract class ScriptedGameHost : IGameHost
         return text.Append('\'').ToString();
     }
 
-    /// <summary>What standard input carries: the script as one line of base64 (UTF-8), then any upload's raw bytes.</summary>
-    internal static byte[] Payload(string composed) => Encoding.ASCII.GetBytes(Convert.ToBase64String(Utf8.GetBytes(composed)) + "\n");
+    /// <summary>
+    /// What standard input carries: the script as one line of base64 (UTF-8), then the secrets line (space-separated base64 tokens,
+    /// usually empty), then any upload's raw bytes.
+    /// </summary>
+    internal static byte[] Payload(string composed, string secrets = "") =>
+        Encoding.ASCII.GetBytes(Convert.ToBase64String(Utf8.GetBytes(composed)) + "\n" + secrets + "\n");
 
     /// <summary>The shell's own arguments that start the wrapper, when no other shell parses them first.</summary>
     internal static IReadOnlyList<string> WrapperArguments(HostShell shell) => shell.Kind == HostShellKind.Bash

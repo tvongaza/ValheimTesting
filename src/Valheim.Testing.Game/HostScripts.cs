@@ -7,17 +7,19 @@ namespace Valheim.Testing.Game;
 internal static class HostScripts
 {
     // Started as `bash -c '<this>'` (by the ssh login shell, docker exec or locally), so it holds no single quote and no
-    // newline. It reads the script (one base64 line), keeps the rest of stdin as the upload, runs the script with an empty
-    // stdin and reports its exit code on its own line of stderr. A script that never arrived intact ends without that report.
+    // newline. It reads the script (one base64 line) into a temporary file and the secrets line into memory only (the
+    // script's VT_SECRETS), keeps the rest of stdin as the upload, runs the script with an empty stdin and reports its exit
+    // code on its own line of stderr. A script that never arrived intact ends without that report.
     public const string BashWrapper =
         "d=$(mktemp -d) || exit 125; " +
-        "if IFS= read -r s && printf %s \"$s\" | base64 -d > \"$d/script\" && cat > \"$d/upload\"; then " +
-        "VT_UPLOAD=\"$d/upload\" \"$BASH\" \"$d/script\" < /dev/null; r=$?; rm -rf \"$d\"; " +
+        "if IFS= read -r s && IFS= read -r k && printf %s \"$s\" | base64 -d > \"$d/script\" && cat > \"$d/upload\"; then " +
+        "VT_UPLOAD=\"$d/upload\" VT_SECRETS=\"$k\" \"$BASH\" \"$d/script\" < /dev/null; r=$?; rm -rf \"$d\"; " +
         "printf \"\\n[vt-exit] %d\\n\" \"$r\" >&2; exit \"$r\"; fi; " +
         "rm -rf \"$d\"; echo \"vt: the script did not arrive intact\" >&2; exit 125";
 
     // Sent as -EncodedCommand, so its length (not the script's) meets the command-line limit. Runs under Windows
-    // PowerShell 5.1 and PowerShell 7. Output goes through Console.Out as UTF-8, so 5.1 does not re-encode it to the
+    // PowerShell 5.1 and PowerShell 7. The script's line goes to a temporary file, the secrets line only into memory (the
+    // process variable VT_SECRETS while the script runs), the rest of stdin to the upload file. Output goes through Console.Out as UTF-8, so 5.1 does not re-encode it to the
     // OEM code page, and errors are written as plain text rather than CLIXML.
     public static readonly string PowerShellWrapper = """
         try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }
@@ -27,15 +29,25 @@ internal static class HostScripts
         $vtDir = Join-Path ([IO.Path]::GetTempPath()) ('vt-' + [Guid]::NewGuid().ToString('N'))
         try {
             $vtIn = [Console]::OpenStandardInput()
-            $vtLine = New-Object IO.MemoryStream
+            $vtLines = @((New-Object IO.MemoryStream), (New-Object IO.MemoryStream))
             $vtBuffer = New-Object byte[] 65536
+            $vtStage = 0
             $vtRest = -1
             while ($vtRest -lt 0) {
                 $vtRead = $vtIn.Read($vtBuffer, 0, $vtBuffer.Length)
                 if ($vtRead -le 0) { throw 'the script did not arrive intact' }
-                $vtAt = [Array]::IndexOf($vtBuffer, [byte]10, 0, $vtRead)
-                if ($vtAt -lt 0) { $vtLine.Write($vtBuffer, 0, $vtRead) } else { $vtLine.Write($vtBuffer, 0, $vtAt); $vtRest = $vtAt + 1 }
+                $vtFrom = 0
+                while ($vtRest -lt 0 -and $vtFrom -lt $vtRead) {
+                    $vtAt = [Array]::IndexOf($vtBuffer, [byte]10, $vtFrom, $vtRead - $vtFrom)
+                    if ($vtAt -lt 0) { $vtLines[$vtStage].Write($vtBuffer, $vtFrom, $vtRead - $vtFrom); $vtFrom = $vtRead }
+                    else {
+                        $vtLines[$vtStage].Write($vtBuffer, $vtFrom, $vtAt - $vtFrom); $vtFrom = $vtAt + 1
+                        if ($vtStage -eq 0) { $vtStage = 1 } else { $vtRest = $vtFrom }
+                    }
+                }
             }
+            $vtLine = $vtLines[0]
+            $vtSecrets = [Text.Encoding]::ASCII.GetString($vtLines[1].ToArray())
             [void][IO.Directory]::CreateDirectory($vtDir)
             $vtScript = Join-Path $vtDir 'script.ps1'
             $vtText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Text.Encoding]::ASCII.GetString($vtLine.ToArray())))
@@ -52,11 +64,14 @@ internal static class HostScripts
         $vtCode = 1
         try {
             $global:LASTEXITCODE = 0
+            if ($vtSecrets) { [Environment]::SetEnvironmentVariable('VT_SECRETS', $vtSecrets) }
+            $vtSecrets = $null
             & $vtScript | Out-String -Stream | ForEach-Object { [Console]::Out.WriteLine($_) }
             $vtCode = $LASTEXITCODE
         } catch {
             $vtErr.WriteLine(($_ | Out-String).Trim())
         } finally {
+            [Environment]::SetEnvironmentVariable('VT_SECRETS', $null)
             Remove-Item -LiteralPath $vtDir -Recurse -Force -ErrorAction SilentlyContinue
         }
         [Console]::Out.Flush()
