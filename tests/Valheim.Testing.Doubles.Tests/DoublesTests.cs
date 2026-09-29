@@ -104,6 +104,25 @@ public sealed class DoublesTests : IDisposable
         var large = new ZPackage(); large.Write(new byte[600 * 1024]);
         Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.InvokeRoutedRPC(1, "big", large));
     }
+    [Fact] public void AScopeRestoresEveryWorldSingleton()
+    {
+        var before = WorldGenerator.instance; var zdos = ZDOMan.instance;
+        using (var scope = new Valheim.Testing.Doubles.ValheimWorldScope())
+        {
+            scope.WithTerrain(new Valheim.Testing.PlaneTerrain(42f)).WithZdos().AsServer();
+            var hm = scope.RegisterHeightmap(new Vector2s(0, 0), width: 4);
+            var log = scope.CaptureLog();
+            Assert.Equal(42f, WorldGenerator.instance!.GetHeight(10, 10)); Assert.NotSame(zdos, ZDOMan.instance);
+            Assert.Same(hm, Heightmap.Registered); Assert.True(ZNet.instance.Server); Assert.Same(log, BepInEx.Logging.ManualLogSource.Captured);
+        }
+        Assert.Same(before, WorldGenerator.instance); Assert.Same(zdos, ZDOMan.instance);
+        Assert.Null(Heightmap.Registered); Assert.False(ZNet.instance.Server); Assert.Null(BepInEx.Logging.ManualLogSource.Captured);
+    }
+    [Fact] public void TerrainWorldMapsTheToolkitsBiomes()
+    {
+        var world = new Valheim.Testing.Doubles.TerrainWorld(new Valheim.Testing.PlaneTerrain(35f));
+        Assert.Equal(35f, world.GetHeight(0, 0)); Assert.Equal(Heightmap.Biome.Meadows, world.GetBiome(0, 0));
+    }
     [Fact] public void LogLinesCanBeCaptured()
     {
         BepInEx.Logging.ManualLogSource.Captured = new List<string>();
