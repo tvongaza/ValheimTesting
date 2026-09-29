@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
@@ -48,7 +49,13 @@ public sealed class SshGameHost : ScriptedGameHost
 
     /// <param name="destination"><c>user@host</c>, <c>ssh://user@host:port</c> or an ssh-config alias. Never a password.</param>
     /// <param name="port">The ssh port; 0 leaves it to the destination or the ssh config.</param>
-    /// <param name="sshOptions">Extra <c>-o</c> options as <c>Name=value</c>, for example <c>IdentityFile=/path/key</c>.</param>
+    /// <param name="sshOptions">
+    /// Extra <c>-o</c> options as <c>Name=value</c>, for example <c>IdentityFile=/path/key</c>; the value is taken literally and may
+    /// contain spaces, quotes and backslashes (<c>User=Some Name</c>, <c>IdentityFile=C:\Users\Some Name\.ssh\key</c>). ssh reads a
+    /// <c>-o</c> value like a config line, so such a value is passed as <c>Name="value"</c>, escaped the way ssh reads it. The value
+    /// must not be empty or contain a control character such as a tab or a line break. The space-separated <c>Name value</c> form is
+    /// not accepted.
+    /// </param>
     /// <param name="connectTimeout">ssh's ConnectTimeout; 10 s by default.</param>
     /// <param name="sshExecutable">The OpenSSH client; <c>ssh</c> from PATH by default.</param>
     public SshGameHost(string name, string destination, HostShell shell, int port = 0, IEnumerable<string>? sshOptions = null, TimeSpan? connectTimeout = null, string sshExecutable = "ssh")
@@ -65,7 +72,7 @@ public sealed class SshGameHost : ScriptedGameHost
         if (ConnectTimeout < TimeSpan.FromSeconds(1)) throw new ArgumentOutOfRangeException(nameof(connectTimeout), "Use a connect timeout of at least one second.");
         ArgumentException.ThrowIfNullOrWhiteSpace(sshExecutable);
         _ssh = sshExecutable;
-        _options = (sshOptions ?? []).Select(CheckOption).ToArray();
+        _options = (sshOptions ?? []).Select(option => OptionArgument(CheckOption(option))).ToArray();
     }
 
     public override GameHostKind Kind => GameHostKind.Ssh;
@@ -170,14 +177,39 @@ public sealed class SshGameHost : ScriptedGameHost
     internal static string CheckOption(string option)
     {
         int equals = option?.IndexOf('=') ?? -1;
-        if (option == null || equals <= 0 || !OptionName.IsMatch(option[..equals]) || option.Any(char.IsControl))
+        if (option == null || equals <= 0 || !OptionName.IsMatch(option[..equals]))
             throw new ArgumentException($"An ssh option is Name=value, for example IdentityFile=/path/key; got '{option}'.", nameof(option));
         string name = option[..equals];
+        if (equals == option.Length - 1)
+            throw new ArgumentException($"The ssh option {name} has no value.", nameof(option));
+        if (option.Any(char.IsControl))
+            throw new ArgumentException($"The ssh option {name} has a control character (such as a tab or a line break) in its value, which an ssh option cannot carry.", nameof(option));
         if (FixedOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
             throw new ArgumentException(name + " is set by SshGameHost and cannot be overridden.", nameof(option));
         if (RefusedOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
             throw new ArgumentException(name + " is refused: " + (name.Equals("Port", StringComparison.OrdinalIgnoreCase) ? "pass the port setting instead." : "the host opens only its own loopback CLI tunnel."), nameof(option));
         return option;
+    }
+
+    /// <summary>
+    /// The <c>-o</c> argument for a checked <c>Name=value</c> option. ssh parses it like a config line (OpenSSH 8.7 and later, on every
+    /// OS): spaces separate words, single and double quotes group, a backslash escapes a quote, a backslash or (outside quotes) a space, and a word starting with <c>#</c> is a comment. A value that ssh would not read back unchanged is passed as
+    /// <c>Name="value"</c>, with a backslash before each <c>"</c> and before each backslash that precedes a backslash, a quote or the
+    /// closing quote. Any other value is passed unchanged. Older OpenSSH groups double quotes without escapes, so a value with spaces
+    /// that needs no escape (a Windows path with a space, for example) reads the same there.
+    /// </summary>
+    internal static string OptionArgument(string option)
+    {
+        int equals = option.IndexOf('=');
+        string value = option[(equals + 1)..];
+        if (!value.StartsWith('#') && value.IndexOfAny([' ', '"', '\'']) < 0 && !value.Contains(@"\\", StringComparison.Ordinal)) return option;
+        var quoted = new StringBuilder(option, 0, equals + 1, option.Length + 8).Append('"');
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (value[i] == '"' || (value[i] == '\\' && (i + 1 == value.Length || value[i + 1] is '\\' or '"' or '\''))) quoted.Append('\\');
+            quoted.Append(value[i]);
+        }
+        return quoted.Append('"').ToString();
     }
 }
 
