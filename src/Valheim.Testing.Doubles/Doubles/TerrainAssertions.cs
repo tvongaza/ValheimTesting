@@ -30,6 +30,8 @@ namespace Valheim.Testing.Doubles
     public sealed partial class TerrainSnapshot
     {
         private readonly global::Heightmap _heightmap;
+        private readonly float _x, _z;
+        private readonly int _width;
         private readonly float[] _level, _smooth;
         private readonly bool[] _modifiedHeight, _modifiedPaint;
         private readonly UnityEngine.Color[] _paint;
@@ -37,6 +39,7 @@ namespace Valheim.Testing.Doubles
         private TerrainSnapshot(TerrainComp compiler)
         {
             _heightmap = compiler.m_hmap;
+            _x = _heightmap.transform.position.x; _z = _heightmap.transform.position.z; _width = compiler.m_width;
             _level = (float[])compiler.m_levelDelta.Clone(); _smooth = (float[])compiler.m_smoothDelta.Clone();
             _modifiedHeight = (bool[])compiler.m_modifiedHeight.Clone(); _modifiedPaint = (bool[])compiler.m_modifiedPaint.Clone();
             _paint = (UnityEngine.Color[])compiler.m_paintMask.Clone();
@@ -47,7 +50,10 @@ namespace Valheim.Testing.Doubles
         /// <summary>Every vertex of <paramref name="now"/> that differs from this snapshot, exactly (no tolerance).</summary>
         public List<TerrainChange> ChangesIn(TerrainComp now)
         {
-            if (now.m_levelDelta.Length != _level.Length) throw new ArgumentException("The compiler has a different size from the snapshot.", nameof(now));
+            // A comparison with another zone's or another size's compiler would report nonsense, or nothing.
+            var at = now.m_hmap.transform.position;
+            if (at.x != _x || at.z != _z) throw new ArgumentException($"The compiler belongs to the zone at ({at.x}, {at.z}); the snapshot was taken at ({_x}, {_z}).", nameof(now));
+            if (now.m_width != _width || now.m_levelDelta.Length != _level.Length) throw new ArgumentException("The compiler has a different grid from the snapshot.", nameof(now));
             var changes = new List<TerrainChange>();
             for (int i = 0; i < _level.Length; i++)
             {
@@ -95,13 +101,20 @@ namespace Valheim.Testing.Doubles
         {
             if (a.m_terrainComp == null || b.m_terrainComp == null) throw new ArgumentException("Both zones need a terrain compiler.");
             if (a.LastRenderedHeights == null || b.LastRenderedHeights == null) throw new ArgumentException("Rebuild both zones (Heightmap.RebuildTerrain) before comparing their seam.");
+            if (float.IsNaN(tolerance) || float.IsInfinity(tolerance) || tolerance < 0) throw new ArgumentOutOfRangeException(nameof(tolerance), "A finite, non-negative tolerance is required.");
+            if (ReferenceEquals(a, b) || (a.transform.position.x == b.transform.position.x && a.transform.position.z == b.transform.position.z))
+                throw new ArgumentException("Compare two different zones; a zone always agrees with itself.");
+            if (a.m_terrainComp.m_width != b.m_terrainComp.m_width) throw new ArgumentException("The zones have different grids.");
             var shared = SharedVertices(a, b);
-            if (shared.Count == 0) throw new ArgumentException("The zones do not share an edge.");
+            // Neighbours share a whole edge; a corner or nothing means the zones are not side by side.
+            if (shared.Count != a.m_terrainComp.m_width + 1) throw new ArgumentException($"The zones share {shared.Count} vertices, not a whole edge of {a.m_terrainComp.m_width + 1}; pass side-by-side neighbours.");
             var problems = new List<string>();
             foreach (var (ia, ib, x, z) in shared)
             {
                 float ha = a.LastRenderedHeights[ia] + a.transform.position.y, hb = b.LastRenderedHeights[ib] + b.transform.position.y;
-                if (Math.Abs(ha - hb) > tolerance) problems.Add($"({x:F2}, {z:F2}): height {ha:F3} vs {hb:F3}");
+                // A non-finite height compares false with everything, so it would otherwise pass.
+                if (float.IsNaN(ha) || float.IsInfinity(ha) || float.IsNaN(hb) || float.IsInfinity(hb)) problems.Add($"({x:F2}, {z:F2}): height {ha} vs {hb} is not finite");
+                else if (Math.Abs(ha - hb) > tolerance) problems.Add($"({x:F2}, {z:F2}): height {ha:F3} vs {hb:F3}");
                 var pa = a.m_terrainComp!.m_paintMask[ia]; var pb = b.m_terrainComp!.m_paintMask[ib];
                 if (pa.r != pb.r || pa.g != pb.g || pa.b != pb.b || pa.a != pb.a)
                     problems.Add($"({x:F2}, {z:F2}): paint ({pa.r:F2},{pa.g:F2},{pa.b:F2},{pa.a:F2}) vs ({pb.r:F2},{pb.g:F2},{pb.b:F2},{pb.a:F2})");
