@@ -200,6 +200,14 @@ or observe its effect independently; do not treat transport completion as a
 successful mutation. This campaign used an authorized server peer teleport and
 client-owned arrival/support observations, without granting client admin rights.
 
+`PlayerPlacement` (preview 11) packages that procedure for any mod's client check:
+
+- `Protect(client)` turns on god, ghost and debug modes (`cli_set_player_safety true`) and requires the game to read all three back; debug flying stays off.
+- `Arrive(server, client, point, timeout)` finds the server's only connected player with a character (none or several is refused), asks the server once to teleport it just above the point with the game's own teleport, and waits until the client's own observations show the player settled there. A teleport reply is never taken as arrival, and a timeout does not repeat the teleport.
+- `RequireSupported(client, point)` takes three readings half a second apart, each of which must show the player grounded and stationary on the declared ground; a `SupportException` carries every reading.
+
+Declare the support point on dry ground: a player standing in water is not grounded at the ground's height, so the check fails, which is correct but tells you nothing about the road. `examples/ClientSurfaceCheck` uses `RequireSupported`.
+
 
 ## Published-library validation update
 

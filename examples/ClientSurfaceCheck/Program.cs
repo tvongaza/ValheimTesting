@@ -21,15 +21,11 @@ try
     // Without a declared dry support point, grounding is not checked; the report says so rather than passing it.
     report.Provenance["grounding"]=plan.Support==null?"not checked: the plan declares no support point":"checked";
     if(plan.Support is not { } support){report.Write(output);owns=false;return report.Passed?0:1;}
-    var cap=actor.RequireCapability("valheim.world/player-support");
-    var states=new List<JsonElement>();
     report.Step("three stationary grounded observations",()=>{
-        for(int i=0;i<3;i++){
-            if(i>0)Thread.Sleep(500);
-            var state=actor.Observe(cap);states.Add(state.Data);
-            File.WriteAllText(Path.Combine(output,"support.json"),JsonSerializer.Serialize(states,new JsonSerializerOptions{WriteIndented=true}));
-            if(!SurfaceProbe.Supported(state,support))throw new InvalidOperationException("Player is not settled on the declared ground; observer does not move the player.");
-        }
+        IReadOnlyList<JsonElement> states;
+        try{states=PlayerPlacement.RequireSupported(actor,support);}
+        catch(SupportException e){states=e.Readings;File.WriteAllText(Path.Combine(output,"support.json"),JsonSerializer.Serialize(states,new JsonSerializerOptions{WriteIndented=true}));throw new InvalidOperationException("Player is not settled on the declared ground; observer does not move the player.",e);}
+        File.WriteAllText(Path.Combine(output,"support.json"),JsonSerializer.Serialize(states,new JsonSerializerOptions{WriteIndented=true}));
     });
 }
 catch(Exception e){try{report.Step("client check failed",()=>throw new InvalidOperationException(e.Message,e));}catch{}Console.Error.WriteLine(e.Message);}
