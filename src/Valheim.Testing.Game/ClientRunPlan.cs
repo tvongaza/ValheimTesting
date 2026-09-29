@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using valheimCLI;
 
 namespace Valheim.Testing.Game;
@@ -30,23 +31,51 @@ public sealed class ClientRunPlan
     public int StartSeconds { get; set; } = 300;
     public int JoinSeconds { get; set; } = 180;
     public int ArrivalSeconds { get; set; } = 120;
+    /// <summary>Owned only: every entry the install's <c>BepInEx/patchers</c> holds, by name; the launch refuses any other.</summary>
+    public string[] Patchers { get; set; } = [];
+    /// <summary>
+    /// Owned only: the install's game build, BepInEx core and patchers by SHA256 (<see cref="Valheim.Testing.Game.InstallPins.Of"/>),
+    /// checked before launch. Required for an owned client unless <see cref="Pinning"/> is <c>none</c>. An attached
+    /// client's install is its operator's and is not read, so its build is not pinned (the game refuses a join only across
+    /// network versions).
+    /// </summary>
+    public InstallPins? InstallPins { get; set; }
+    /// <summary>
+    /// <c>strict</c>, the default when omitted, or <c>none</c>: the explicit opt-out. An unpinned client lists no
+    /// <see cref="Pins"/> or <see cref="InstallPins"/>, its actor runs without <c>cli_expect</c> (warned at start) and its
+    /// command record starts with the "environment not pinned" marker.
+    /// </summary>
+    public string Pinning { get; set; } = EnvironmentPinning.Strict;
+    /// <summary>Whether <see cref="Pinning"/> is <c>strict</c>; refuses any value but <c>strict</c> or <c>none</c>.</summary>
+    [JsonIgnore] public bool Pinned => EnvironmentPinning.IsStrict(Pinning, "The client's");
 
     public bool Owned => Mode == "owned";
 
     /// <summary>
     /// The rules every client section follows, plus <paramref name="absentPlugins"/>, which must be pinned <c>absent</c>
-    /// when the claim is what a client without them sees (a server-only mod).
+    /// when the claim is what a client without them sees (a server-only mod). An owned client pins its install
+    /// (<see cref="InstallPins"/>). An explicitly unpinned client (<see cref="Pinning"/> <c>none</c>) must leave out every
+    /// pin, and <paramref name="absentPlugins"/> are then not checked.
     /// </summary>
     public void Validate(params string[] absentPlugins)
     {
+        bool pinned = Pinned;
         if (Mode is not ("owned" or "attach")) throw new ArgumentException("Client mode is owned or attach.");
         if (Owned && !Path.IsPathFullyQualified(Install)) throw new ArgumentException("An owned client needs the full path of its install.");
-        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0)) throw new ArgumentException("An attached client is launched by its operator; leave out install and launch arguments.");
+        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Patchers.Length != 0 || InstallPins != null))
+            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments and patchers.");
+        BepInExLoader.CheckPatcherNames(Patchers);
         if (string.IsNullOrWhiteSpace(Host) || Port is < 1024 or > 65535) throw new ArgumentException("Give the client's ValheimCLI host and port.");
         if (Owned && Host is not ("127.0.0.1" or "localhost")) throw new ArgumentException("An owned client runs on this machine; its ValheimCLI host is 127.0.0.1.");
         foreach (string? token in new[] { Join, Character, PasswordVariable })
             if (token != null && (token.Length == 0 || token.Any(char.IsWhiteSpace))) throw new ArgumentException("Join address, character and password variable must be single tokens.");
         if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600) throw new ArgumentException("Client timeouts are out of range.");
+        if (!pinned)
+        {
+            if (Pins.Count != 0 || InstallPins != null)
+                throw new ArgumentException("A client with pinning \"none\" lists no pins and no installPins: nothing would check them. Remove them, or remove \"pinning\" to keep strict pins.");
+            return;
+        }
         if (Pins.ContainsKey("worlduid") || Pins.ContainsKey("world")) throw new ArgumentException("Leave the world out of the client pins; the runner pins the server's world.");
         if (!Pins.TryGetValue("valheimCLI.valheimCLI", out var cli) || cli.Length != 32 || !cli.All(Uri.IsHexDigit)) throw new ArgumentException("Pin the client's exact ValheimCLI MD5.");
         foreach (string plugin in absentPlugins)
@@ -54,12 +83,22 @@ public sealed class ClientRunPlan
         foreach (var pin in Pins)
             if (pin.Value != "absent" && (pin.Value.Length != 32 || !pin.Value.All(Uri.IsHexDigit))) throw new ArgumentException($"Client plugin {pin.Key} needs an exact MD5 or absent.");
         _ = MenuExpectations; // Parses the pins before anything launches.
+        if (Owned)
+            (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, BepInEx core and patchers in installPins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\"."))
+                .Validate("client install");
     }
 
-    /// <summary>Strict pins at the menu: plugins only.</summary>
-    public string MenuExpectations => Expect(Pins.Select(p => p.Key + "=" + p.Value));
-    /// <summary>Strict pins once joined: plugins and the server's world.</summary>
-    public string WorldExpectations(string worldUid) => Expect(Pins.Select(p => p.Key + "=" + p.Value).Append("worlduid=" + worldUid));
+    /// <summary>Strict pins at the menu: plugins only. <see cref="EnvironmentPinning.None"/> for an unpinned client.</summary>
+    public string MenuExpectations => !Pinned ? EnvironmentPinning.None : Expect(Pins.Select(p => p.Key + "=" + p.Value));
+    /// <summary>Strict pins once joined: plugins and the server's world. <see cref="EnvironmentPinning.None"/> for an unpinned client.</summary>
+    public string WorldExpectations(string worldUid) => !Pinned ? EnvironmentPinning.None : Expect(Pins.Select(p => p.Key + "=" + p.Value).Append("worlduid=" + worldUid));
+    /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>
+    public void CheckInstallPins()
+    {
+        if (!Owned || !Pinned) return;
+        (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, BepInEx core and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."))
+            .Check(Install, "client install");
+    }
     private static string Expect(IEnumerable<string> lines)
     {
         var errors = new List<string>();

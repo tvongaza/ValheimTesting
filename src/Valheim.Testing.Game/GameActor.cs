@@ -30,18 +30,36 @@ public sealed class GameActor : IDisposable
 {
     private readonly IGameTransport _transport;
     private readonly object _sync = new();
-    private bool _verified;
+    private bool _verified, _pinned = true;
     private string _expectations = "";
     public string Name { get; }
     public TimeSpan CommandTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// False once the actor was explicitly unpinned (<see cref="VerifyEnvironment"/> with <see cref="EnvironmentPinning.None"/>)
+    /// and not verified with pins since.
+    /// </summary>
+    public bool Pinned { get { lock (_sync) return _pinned; } }
     public GameActor(string name, IGameTransport transport)
     { Name = name; _transport = transport; }
+    /// <summary>
+    /// Checks the strict pins now and before every command. <see cref="EnvironmentPinning.None"/> instead of a
+    /// <c>cli_expect</c> command is the explicit opt-out: the actor then runs commands without any pin check, prints
+    /// <see cref="EnvironmentPinning.Warning"/> when it becomes unpinned, and reports <see cref="Pinned"/> false until it is
+    /// verified with pins again. A transition still needs this call again, pinned or not.
+    /// </summary>
     public void VerifyEnvironment(string expectationCommand)
     {
         lock (_sync)
         {
             _verified = false;
+            if (expectationCommand == EnvironmentPinning.None)
+            {
+                if (_pinned) EnvironmentPinning.Warn($"game actor \"{Name}\"");
+                _pinned = false; _expectations = ""; _verified = true;
+                return;
+            }
             _expectations = StrictExpectations.Normalize(expectationCommand);
+            _pinned = true;
             CheckEnvironment();
             _verified = true;
         }
@@ -55,9 +73,12 @@ public sealed class GameActor : IDisposable
         {
             if (!_verified) throw new InvalidOperationException("Verify the actor's world and plugin expectations before using it.");
             if (command.IndexOfAny(new[] { '\r', '\n' }) >= 0) throw new ArgumentException("One command per call.");
-            _verified = false;
-            CheckEnvironment();
-            _verified = true;
+            if (_pinned)
+            {
+                _verified = false;
+                CheckEnvironment();
+                _verified = true;
+            }
             CommandResult result = _transport.Execute(command, CommandTimeout);
             if (requireSuccess) RequireSuccess(result);
             return result;
@@ -87,6 +108,7 @@ public sealed class GameActor : IDisposable
     {
         ArgumentNullException.ThrowIfNull(changed);
         InvalidateEnvironment();
+        if (expectations == EnvironmentPinning.None) { VerifyEnvironment(expectations); return; } // Nothing to wait for.
         expectations = StrictExpectations.Normalize(expectations);
         WaitText.RequireTimeout(timeout);
         var clock = System.Diagnostics.Stopwatch.StartNew();

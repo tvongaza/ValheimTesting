@@ -2,7 +2,8 @@ name: Local test layers
 # Bootstrap and local validation on every supported toolkit OS: library tests, example builds, the two
 # no-game examples, package-consuming mod tests and packing. Never launches Valheim or a server. The scripts are .NET file-based
 # programs, so the same commands run in each runner's default shell. No secrets are used. The mod-example job runs
-# the ModWithTests workflow template's commands against the published packages.
+# the ModWithTests workflow template's commands against the published packages. The game-hosts job drives the real ssh
+# and docker paths of the game hosts against a throwaway sshd on localhost and a throwaway container.
 # Pushes to main and pull requests only: a branch with an open PR would otherwise run everything twice.
 on:
   push:
@@ -54,6 +55,65 @@ jobs:
       - run: cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
       - run: dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
         working-directory: ${{ runner.temp }}/mod
+  game-hosts:
+    name: game hosts (ssh to localhost, container)
+    # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only
+    # a key generated for this run (bash and pwsh sessions, a loopback port forward), and an Ubuntu container on the host
+    # network driven with docker exec. Both are removed at the end; the keys live in the runner's temporary directory.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      VALHEIM_TESTING_REQUIRE_HOSTS: '1'
+      VALHEIM_TESTING_SSH_PORT: '2222'
+      VALHEIM_TESTING_SSH_SHELLS: bash,pwsh
+      VALHEIM_TESTING_CONTAINER: vt-game-host
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Start a throwaway sshd on 127.0.0.1:2222
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/sshd"
+          mkdir -p "$d"
+          if [ ! -x /usr/sbin/sshd ]; then sudo apt-get update -q && sudo apt-get install -y -q openssh-server; fi
+          ssh-keygen -q -t ed25519 -N '' -C vt-host -f "$d/host_key"
+          ssh-keygen -q -t ed25519 -N '' -C vt-client -f "$d/client_key"
+          cp "$d/client_key.pub" "$d/authorized_keys"
+          printf '%s\n' "Port 2222" "ListenAddress 127.0.0.1" "HostKey $d/host_key" "PidFile $d/sshd.pid" \
+            "AuthorizedKeysFile $d/authorized_keys" "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
+            "PubkeyAuthentication yes" "UsePAM yes" "StrictModes no" "AllowTcpForwarding local" "AllowAgentForwarding no" \
+            "X11Forwarding no" > "$d/sshd_config"
+          sudo mkdir -p /run/sshd
+          sudo /usr/sbin/sshd -f "$d/sshd_config" -E "$d/sshd.log"
+          echo "[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$d/host_key.pub")" > "$d/known_hosts"
+          echo "VALHEIM_TESTING_SSH_DESTINATION=$(id -un)@127.0.0.1" >> "$GITHUB_ENV"
+          {
+            echo "VALHEIM_TESTING_SSH_OPTIONS<<VT_OPTIONS"
+            echo "IdentityFile=$d/client_key"
+            echo "IdentitiesOnly=yes"
+            echo "UserKnownHostsFile=$d/known_hosts"
+            echo "StrictHostKeyChecking=yes"
+            echo "VT_OPTIONS"
+          } >> "$GITHUB_ENV"
+          ssh -o BatchMode=yes -o IdentityFile="$d/client_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$d/known_hosts" \
+            -o StrictHostKeyChecking=yes -p 2222 "$(id -un)@127.0.0.1" 'echo "ssh to localhost works; pwsh: $(command -v pwsh)"'
+      - name: Start a throwaway container on the host network
+        run: docker run -d --rm --name vt-game-host --network host ubuntu:24.04 sleep 1800
+      - run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release --filter Category=GameHosts
+      - name: Stop the sshd and the container
+        if: always()
+        run: |
+          docker rm -f vt-game-host || true
+          if [ -f "$RUNNER_TEMP/sshd/sshd.pid" ]; then sudo kill "$(cat "$RUNNER_TEMP/sshd/sshd.pid")" || true; fi
+          cat "$RUNNER_TEMP/sshd/sshd.log" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/sshd"
   test-runners:
     name: test runners (${{ matrix.os }})
     # tools/test-runners for real: a copy of ModWithTests that also targets net48 (the two changes its README

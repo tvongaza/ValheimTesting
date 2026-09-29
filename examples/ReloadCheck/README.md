@@ -42,6 +42,9 @@ connection, then atomically replaces A with B. It requires:
 - An unchanged ValheimCLI core build identity and load time.
 - No registered probe after deleting its file, with ValheimCLI still responding.
 
+The atomic replacement and the registration waits are the toolkit's `ExtensionReload`
+(`Install`, `WaitForReplacement`, `WaitForRemoval`), which other hot-reload smoke tests can use.
+
 The probe logs iterator disposal and registered cleanup separately, including the
 number of active waits. The runner writes structured evidence and exits nonzero
 on failure. It removes its deployed probe in `finally`; the session owner remains

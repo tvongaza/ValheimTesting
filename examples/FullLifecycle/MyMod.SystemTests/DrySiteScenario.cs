@@ -8,6 +8,7 @@ namespace MyMod.SystemTests;
 /// <summary>
 /// The example mod's end-to-end scenario on an owned server, with the mod's own expectations and the toolkit's pieces:
 /// <list type="number">
+/// <item>The mod's Harmony patch is applied (the adapter's census), so a missing target fails here, by name.</item>
 /// <item>Neither site has a marker yet (the fresh fixture copy), so any marker found later is the mod's.</item>
 /// <item>The mod marks the dry site and refuses the wet one, each asked exactly once.</item>
 /// <item>The server's saved objects show one marker at the dry site and none at the wet one.</item>
@@ -17,77 +18,49 @@ namespace MyMod.SystemTests;
 /// rejoins and sees it again, then leaves.</item>
 /// <item>Optionally, a person looks at it (<see cref="ReviewSettings"/>); the verdict is recorded, never scored.</item>
 /// </list>
-/// The client is closed in every outcome: an owned client's process is stopped, an attached one is left running.
+/// The toolkit's <see cref="ClientRounds"/> runs the client rounds; this scenario supplies the checks and step names. The
+/// client is closed in every outcome: an owned client's process is stopped, an attached one is left running.
 /// </summary>
 public static class DrySiteScenario
 {
     public const string Marker = "wood_pole2";
     /// <summary>How far from a site a marker may stand and still count as that site's.</summary>
     public const float MarkerRadius = 1.5f;
+    /// <summary>The Harmony patches the mod declares (its <c>[HarmonyPatch]</c> classes); each must be applied.</summary>
+    public static readonly DeclaredPatch[] Patches = [new("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix")];
 
     public static void Run(LifecyclePlan plan, GameActor server, Func<GameActor> restartOwnedServer, Func<ClientSession> openClient,
         Action<GameActor> waitUntilJoinable, ScenarioReport report, string output, CancellationToken cancellation = default, TimeSpan? settleFor = null)
     {
         var client = plan.Client ?? throw new ArgumentException("The run mode needs the plan's client section.");
+        report.Step("server: the mod's Harmony patches are applied", () =>
+            HarmonyCensus.Read(server, "mymod.testing/harmony", LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, Patches).RequireApplied());
         report.Step("no marker at either site before the mod acts", () => { RequireServerMarkers(server, plan.DrySite, 0); RequireServerMarkers(server, plan.WetSite, 0); });
         report.Step("the mod marks the dry site", () => RequireReply(server.Execute(Mark(plan.DrySite)), "OK: marked "));
         report.Step("the mod refuses the wet site", () => RequireReply(server.Execute(Mark(plan.WetSite)), "REFUSED: "));
         report.Step("server: one marker at the dry site, none at the wet site", () => { RequireServerMarkers(server, plan.DrySite, 1); RequireServerMarkers(server, plan.WetSite, 0); });
 
-        ClientSession? session = null;
-        try
+        // The client rounds are the toolkit's (ClientRounds): join, protect, arrive, then this mod's measurement; between
+        // the rounds a confirmed save, the client leaves and only the owned server restarts. It always closes the client.
+        new ClientRounds
         {
-            report.Step(client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned",
-                () => session = openClient());
-            var round = new Round(plan, client, session!.Actor, waitUntilJoinable, report, output, settleFor, cancellation);
-            round.Run(server, "first");
-            report.Step("confirmed world save", () => server.SaveConfirmed());
-            round.Leave("first");
-            report.Step("restart only the owned server", () => server = restartOwnedServer());
-            report.Step("after restart: the server still has one marker at the dry site, none at the wet site",
-                () => { RequireServerMarkers(server, plan.DrySite, 1); RequireServerMarkers(server, plan.WetSite, 0); });
-            round.Run(server, "after-restart");
-            if (plan.Review.Enabled) Review(plan, report, output, cancellation);
-            round.Leave("after-restart");
-        }
-        finally
-        {
-            if (session != null)
-                report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose);
-        }
-    }
-
-    private sealed record Round(LifecyclePlan Plan, ClientRunPlan Client, GameActor Actor, Action<GameActor> WaitUntilJoinable, ScenarioReport Report,
-        string Output, TimeSpan? SettleFor, CancellationToken Cancellation)
-    {
-        public void Run(GameActor server, string round)
-        {
-            var session = new SessionControl(Actor);
-            // Only now: the server's socket may open late on a first boot, and the steps before this overlap that wait.
-            Report.Step($"{round}: the server accepts game connections", () => WaitUntilJoinable(server));
-            Report.Step($"{round}: join the owned server with the disposable character", () =>
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = output, WaitUntilJoinable = waitUntilJoinable,
+            RestartServer = restartOwnedServer, Arrival = new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
+            ArriveStep = "arrive beside the marker", SettleFor = settleFor, Cancellation = cancellation,
+        }.Run(server, openClient,
+            measure: round =>
             {
-                session.Join(Client.Join, Client.Character, Client.PasswordVariable); // Turns devcommands on first. Exactly once.
-                Actor.VerifyEnvironment(Client.WorldExpectations(Plan.WorldUid));
-                session.WaitForWorld(Plan.WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
-            });
-            Report.Step($"{round}: protect the player", () => PlayerPlacement.Protect(Actor));
-            var stand = new HeightExpectation(Plan.Arrival.X, Plan.Arrival.Z, Plan.Arrival.Ground);
-            Report.Step($"{round}: arrive beside the marker", () =>
-                Write($"{round}-arrival.json", PlayerPlacement.Arrive(server, Actor, stand, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor)));
-            Report.Step($"{round}: the client sees the marker at the dry site", () => RequireClientMarkers(Actor, Plan.DrySite, 1));
-        }
-        public void Leave(string round) => Report.Step($"{round}: the client leaves to its menu", () =>
-        {
-            new SessionControl(Actor).Leave();
-            Actor.VerifyEnvironment(Client.MenuExpectations); // A transition always needs fresh pins.
-        });
-        private void Write(string name, JsonElement value) => File.WriteAllText(Path.Combine(Output, name), value.GetRawText());
+                round.Step("the client sees the marker at the dry site", () => RequireClientMarkers(round.Client, plan.DrySite, 1));
+                if (round.Last && plan.Review.Enabled) Review(plan, report, output, cancellation);
+            },
+            afterRestart: round => round.Step("the server still has one marker at the dry site, none at the wet site",
+                () => { RequireServerMarkers(round.Server, plan.DrySite, 1); RequireServerMarkers(round.Server, plan.WetSite, 0); }));
     }
 
     public static string Mark(Site site) => string.Create(CultureInfo.InvariantCulture, $"mymod_mark {site.X} {site.Z}");
 
-    private static void RequireReply(valheim_cli.Testing.CommandResult reply, string prefix)
+    /// <summary>Requires exactly one <c>OK:</c> or <c>REFUSED:</c> reply from the mod, and that it is the expected one.</summary>
+    public static void RequireReply(valheim_cli.Testing.CommandResult reply, string prefix)
     {
         if (reply.Output.Count(line => line.StartsWith("OK: ", StringComparison.Ordinal) || line.StartsWith("REFUSED: ", StringComparison.Ordinal)) != 1 ||
             !reply.Output.Any(line => line.StartsWith(prefix, StringComparison.Ordinal)))
