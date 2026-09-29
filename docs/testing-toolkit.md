@@ -154,7 +154,7 @@ example with hand-derived plane expectations and explicit unknown replay data.
 Neither a replay of its own capture nor a synthetic plane alone establishes
 Valheim terrain conversion or client physics. The declared server calibration and native-input client gate below now cover those specific boundaries.
 
-The package examples accept `-p:ToolkitPackageVersion=0.1.0-preview.5` instead of
+The package examples accept `-p:ToolkitPackageVersion=0.1.0-preview.6` instead of
 project references. Copy just an example directory outside this repository, add
 the built `.packages/` directory as a NuGet source alongside nuget.org (for
 YamlDotNet), restore and run/build with that property. No game, Unity, BepInEx or
@@ -272,6 +272,19 @@ using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(30f)).Wit
 It restores references, not contents. Nothing is deep-copied, so changing an object the scope did not install (adding a peer to the `ZNet` that was already there) outlives the test; install a fresh one with a builder instead. A mod's own statics are not the scope's: reset them in the test.
 
 Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity objects have no components, physics or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: no peers connect, and routed RPCs are only checked for size. Test what the game does natively with `Valheim.Testing.Game` against a real server.
+
+## Static overrides (preview 6)
+
+Mods keep settings, switches and caches in statics. A test that changes one must put back the value it found, not the default it expects; a hard-coded reset silently changes every later test when the default moves. `StaticOverride` in `Valheim.Testing` does this for static fields, static properties (private setters included) and environment variables:
+
+```csharp
+using var plain = StaticOverride.Set(() => MyMod.Meander, 0f)
+    .And(() => MyMod.Enabled, false)
+    .AndKeep(() => MyMod.Counter)            // changed by the code under test; restored anyway
+    .AndEnvironment("MYMOD_DEBUG", "1");     // null removes the variable
+```
+
+Dispose restores in reverse order, also when the test throws. A restore that fails does not stop the others; the failures are reported together afterwards. A constant, a readonly field, a property without a setter or anything but `() => Type.Member` is refused when the override is created. Statics are process-wide, so tests that override them must not run in parallel with tests that read them.
 
 ## Linux dedicated server (preview 11)
 

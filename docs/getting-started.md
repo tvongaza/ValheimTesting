@@ -27,7 +27,7 @@ The toolkit packages. The versions below are this branch's; the ones marked "loc
 
 | Package | Exact version | Use |
 |---|---|---|
-| `Valheim.Testing` | `0.1.0-preview.5` | Composable terrain, zone state and recorded-input replay; no ValheimCLI dependency |
+| `Valheim.Testing` | `0.1.0-preview.6` (local feed; NuGet.org has `0.1.0-preview.5`) | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
 | `Valheim.Testing.Game` | `0.1.0-preview.11` (local feed; NuGet.org has `0.1.0-preview.10`) | External game observations, owned sessions, comparisons and reports |
 | `Valheim.Testing.Cli` | `0.1.0-preview.5` (local feed; NuGet.org has `0.1.0-preview.4`) | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
 | `Valheim.Testing.Doubles` | `0.1.0-preview.2` (local feed; not on NuGet.org yet) | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
@@ -44,7 +44,7 @@ Pin only the package your test project needs:
 
 ```xml
 <!-- Pure test project; not the production mod project. -->
-<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.5]" />
+<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.6]" />
 <!-- A separate external system-test project instead uses: -->
 <PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.11]" />
 ```
