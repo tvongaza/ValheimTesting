@@ -23,16 +23,16 @@ The same commands work on Windows, Linux and macOS; CI runs them on all three. W
 
 Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all examples, runs the no-game examples, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
 
-The toolkit packages, all on NuGet.org:
+The toolkit packages. The versions below are this branch's; the ones marked "local feed" are candidates that are not on NuGet.org yet:
 
 | Package | Exact version | Use |
 |---|---|---|
 | `Valheim.Testing` | `0.1.0-preview.5` | Composable terrain, zone state and recorded-input replay; no ValheimCLI dependency |
-| `Valheim.Testing.Game` | `0.1.0-preview.11` | External game observations, owned sessions, comparisons and reports |
-| `Valheim.Testing.Cli` | `0.1.0-preview.5` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
-| `Valheim.Testing.Doubles` | `0.1.0-preview.1` (local feed until published) | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
+| `Valheim.Testing.Game` | `0.1.0-preview.11` (local feed; NuGet.org has `0.1.0-preview.10`) | External game observations, owned sessions, comparisons and reports |
+| `Valheim.Testing.Cli` | `0.1.0-preview.5` (local feed; NuGet.org has `0.1.0-preview.4`) | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
+| `Valheim.Testing.Doubles` | `0.1.0-preview.2` (local feed; not on NuGet.org yet) | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
 
-Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
+Versions need not match each other. Published versions restore from NuGet.org with no extra setup. For a local-feed candidate, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
 
 ```sh
 dotnet restore path/to/MyMod.Tests.csproj -p:RestoreAdditionalProjectSources=/absolute/path/ValheimTesting/.packages

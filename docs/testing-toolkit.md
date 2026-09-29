@@ -249,7 +249,29 @@ The doubles copy the game where mod code depends on it, and their own tests chec
 - Valheim 1.0's locations-generated flag is set from a save without raising the event.
 - A routed RPC over Steam's 512 KiB limit fails.
 
-`WorldGenerator` is virtual, so tests plug in synthetic worlds; `Valheim.Testing`'s terrain works well behind it.
+`WorldGenerator` is virtual, so tests plug in synthetic worlds; `TerrainWorld` puts any `Valheim.Testing` terrain behind it.
+
+Setup, in the unit-test project (not the mod project):
+
+```xml
+<PropertyGroup><LangVersion>10</LangVersion></PropertyGroup> <!-- or newer; net48 test legs default to C# 7.3 -->
+<ItemGroup>
+  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.2]" PrivateAssets="all" />
+  <Compile Include="../MyMod/Src/RoadMath.cs" /> <!-- the mod's pure-logic sources -->
+</ItemGroup>
+```
+
+The doubles are process-wide statics, as the game's singletons are, so add `[assembly: CollectionBehavior(DisableTestParallelization = true)]` once in the test project.
+
+`ValheimWorldScope` gives each test its own world. It records which objects `WorldGenerator.instance`, `ZDOMan.instance`, `ZoneSystem.instance`, `ZNetScene.instance`, `ZNet.instance`, `ZRoutedRpc.instance`, `Heightmap.Registered` and the log capture refer to, plus the server flag and the clock, and puts them back on dispose, also when the test throws. Builders install fresh objects: `WithWorld`/`WithTerrain`, `WithZdos`, `WithZoneSystem`, `WithScene`, `WithNetwork(server)` (a `ZNet` with no peers and a new `ZRoutedRpc`), `AsServer`, `RegisterHeightmap` and `CaptureLog`.
+
+```csharp
+using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(30f)).WithZdos().WithNetwork(server: true);
+```
+
+It restores references, not contents. Nothing is deep-copied, so changing an object the scope did not install (adding a peer to the `ZNet` that was already there) outlives the test; install a fresh one with a builder instead. A mod's own statics are not the scope's: reset them in the test.
+
+Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity objects have no components, physics or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: no peers connect, and routed RPCs are only checked for size. Test what the game does natively with `Valheim.Testing.Game` against a real server.
 
 ## Linux dedicated server (preview 11)
 
