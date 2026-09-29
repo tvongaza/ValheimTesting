@@ -209,6 +209,13 @@ The native paint extension has now been exercised on Valheim 1.0.16: sixteen sav
 
 The four-pack layout also passed join and confirmed-save paths. Optional Reflection was removed and reloaded in a loaded dedicated world over the same connection; only its owner identity changed. This establishes lifecycle behavior, not reclamation of loaded assemblies. Native checks exposed a missing Mono verification build setting in the packs, which is corrected in ValheimCLI #40.
 
+## Test fakes
+
+`Valheim.Testing.Game.Fakes` tests scenario and session code without a game:
+- `ScriptedTransport` answers strict pins, the extension listing, registered extension commands (in the real `EXTENSION_RESULT` envelope), confirmed saves and any command a test registers. It throws on anything unscripted, records every command, and `Actor()` returns a pinned `GameActor` on it.
+- `FakeOwnedServer` launches `FakeServerProcess`es and answers the session probe and pins as an owned server with a session adapter. Switches make each failure happen: not ready, wrong PID, refused pins, exit on launch, refused connections, refused stop. Gates hold a connection or pin check open. `ConnectEntered`/`PinEntered` let a test inject a failure at exactly that stage, and `Events` records the lifecycle.
+- `TempRuntime` is a runtime directory whose BepInEx log a test appends to or rewrites, as each boot does.
+
 ## Game doubles
 
 `Valheim.Testing.Doubles` lets a unit-test project compile a mod's pure-logic source files (linked with `<Compile Include="../YourMod/Src/....cs" />`) without Unity, Valheim or BepInEx. It is a source package: its files compile into your test project and stand in for the game's types under their real names (`UnityEngine.Vector3`, the global `ZDO`, `ZDOMan`, `ZNetView`, `ZNetScene`, `Heightmap`, `TerrainComp`, `ZoneSystem`, `WorldGenerator`, `ZNet`, `ZRoutedRpc`, `ZPackage`, `BepInEx.Logging.ManualLogSource`, Jotunn's `CustomRPC`). So the test project must not also reference the game's assemblies. It needs C# 10 and works on net48 and modern .NET. Reference it with `PrivateAssets="all"` (it is a development dependency).
