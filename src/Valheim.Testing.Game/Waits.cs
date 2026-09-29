@@ -13,13 +13,16 @@ public sealed class WaitTimeoutException(string target, TimeSpan elapsed, string
     public TimeSpan Elapsed { get; } = elapsed;
     public string? LastSeen { get; } = lastSeen;
 }
-public sealed class WaitFailedException(string target, string reason, TimeSpan elapsed, string? lastSeen)
-    : InvalidOperationException($"Stopped waiting for {target} after {WaitText.Seconds(elapsed)}: {reason}; last seen: {lastSeen ?? "nothing"}.")
+/// <param name="context">Lines seen just before <paramref name="lastSeen"/>, oldest first, for example the log lines leading to a failure line.</param>
+public sealed class WaitFailedException(string target, string reason, TimeSpan elapsed, string? lastSeen, IReadOnlyList<string>? context = null)
+    : InvalidOperationException($"Stopped waiting for {target} after {WaitText.Seconds(elapsed)}: {reason}; last seen: {lastSeen ?? "nothing"}." + WaitText.Context(context))
 {
     public string Target { get; } = target;
     public string Reason { get; } = reason;
     public TimeSpan Elapsed { get; } = elapsed;
     public string? LastSeen { get; } = lastSeen;
+    /// <summary>Lines seen just before <see cref="LastSeen"/>, oldest first; empty when the wait kept none.</summary>
+    public IReadOnlyList<string> Context { get; } = context ?? [];
 }
 internal static class WaitText
 {
@@ -29,6 +32,8 @@ internal static class WaitText
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout), "A wait needs an explicit, positive timeout.");
     }
     public static string Seconds(TimeSpan elapsed) => elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " s";
+    public static string Context(IReadOnlyList<string>? lines) =>
+        lines is not { Count: > 0 } ? "" : " Lines before it:" + string.Concat(lines.Select(line => Environment.NewLine + "  " + line));
 }
 
 public static class ProcessWait

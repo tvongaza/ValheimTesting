@@ -157,6 +157,40 @@ public class ProcessWaitTests
     }
 }
 
+public class LogWaitEvidenceTests
+{
+    private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
+    [Fact] public void OutputCountsOnlyWhatWasWrittenAfterTheWaitOpened()
+    {
+        using var file = new TempLog(); file.Append("previous boot\n");
+        using var log = new LogWait(file.Path);
+        Assert.False(log.HasOutput()); // The previous boot's log is still there, unchanged: nothing new was written.
+        file.Append("[Message:   BepInEx] BepInEx 5.4.23.2\n");
+        Assert.True(log.HasOutput());
+        using var missing = new TempLog();
+        using var never = new LogWait(missing.Path);
+        Assert.False(never.HasOutput());
+    }
+    [Fact] public void AReplacedLogCountsAsOutput()
+    {
+        using var file = new TempLog(); file.Append(new string('x', 400) + "\n");
+        using var log = new LogWait(file.Path);
+        File.WriteAllText(file.Path, "boot 2\n");
+        Assert.True(log.HasOutput());
+    }
+    [Fact] public async Task AFailureCarriesTheLinesBeforeItButNotAReplacedFilesLines()
+    {
+        using var file = new TempLog();
+        using var log = new LogWait(file.Path);
+        file.Append("boot 1 a\nboot 1 b\n");
+        await Assert.ThrowsAsync<WaitTimeoutException>(() => log.WaitAsync("never", TimeSpan.FromMilliseconds(200)));
+        File.WriteAllText(file.Path, "boot 2 a\nFATAL\n");
+        var error = await Assert.ThrowsAsync<WaitFailedException>(() => log.WaitAsync("never", Generous, ["FATAL"]));
+        Assert.Equal("FATAL", error.LastSeen); Assert.Equal(new[] { "boot 2 a" }, error.Context);
+        Assert.EndsWith("Lines before it:" + Environment.NewLine + "  boot 2 a", error.Message);
+    }
+}
+
 // A log file in its own temporary directory, appended the way a game appends: open, write, close.
 internal sealed class TempLog : IDisposable
 {

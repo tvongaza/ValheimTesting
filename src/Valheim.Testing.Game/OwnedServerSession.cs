@@ -29,6 +29,19 @@ public sealed class StartupEvents
     /// </summary>
     public static readonly IReadOnlyList<Regex> BepInExPluginLoadFailures =
         [new(@"^\[(?:Warning|Error|Fatal) *: *BepInEx\] (?:Could not load|Error loading) \[", RegexOptions.CultureInvariant)];
+    /// <summary>
+    /// Lines that mean the runtime's assemblies do not fit the game: a <c>TypeLoadException</c>, <c>MissingMethodException</c>
+    /// or <c>MissingFieldException</c> anywhere in a line (a leftover preloader patcher or a mod built for another game
+    /// version), and ValheimCLI's packs reporting that its core never became ready ("CLI core 1.1 is not ready."). Before
+    /// ValheimCLI listens, all of them mean the run cannot work, so startup should end at once instead of at its deadline.
+    /// </summary>
+    public static readonly IReadOnlyList<Regex> RuntimeLoadFailures =
+    [
+        new(@"\b(?:TypeLoadException|MissingMethodException|MissingFieldException)\b", RegexOptions.CultureInvariant),
+        new(@"^\[(?:Error|Fatal) *:[^\]]*\] CLI core \S+ is not ready\.", RegexOptions.CultureInvariant),
+    ];
+    /// <summary><see cref="BepInExPluginLoadFailures"/> and <see cref="RuntimeLoadFailures"/>: what the owned server and client startups fail on.</summary>
+    public static readonly IReadOnlyList<Regex> StartupFailures = [.. BepInExPluginLoadFailures, .. RuntimeLoadFailures];
     /// <summary>The log ValheimCLI writes to, normally the runtime's BepInEx/LogOutput.log. No connection is tried before <see cref="Listening"/> appears in it.</summary>
     public string? CliLog { get; init; }
     public Regex Listening { get; init; } = CliListening;
@@ -41,6 +54,11 @@ public sealed class StartupEvents
     public Func<StateWait>? States { get; init; }
     public IReadOnlyList<string> ReadyStates { get; init; } = StateWait.WorldLoaded;
     public IReadOnlyList<string> FailureStates { get; init; } = [];
+
+    // A process that exits before BepInEx writes its log never ran BepInEx: the reason is in Unity's own log.
+    internal static string NoBepInExLog(string bepInExLog, string? playerLog) =>
+        $" before BepInEx wrote {bepInExLog}. Read the Unity player log ({playerLog ?? "Player.log, or the file passed with -logFile"}) for the reason;" +
+        " security software that blocks or quarantines the game or BepInEx's Doorstop loader is a known cause";
 }
 
 public sealed class OwnedServerSession : IDisposable
@@ -92,7 +110,8 @@ public sealed class OwnedServerSession : IDisposable
             var left = _startup - clock.Elapsed;
             return left > TimeSpan.Zero ? left : throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, log?.Refresh());
         }
-        async Task<Exception> Exited(string stage) => new WaitFailedException(stage, "owned server exited with code " + await exited.ConfigureAwait(false),
+        async Task<Exception> Exited(string stage) => new WaitFailedException(stage, "owned server exited with code " + await exited.ConfigureAwait(false) +
+            (log != null && !log.HasOutput() ? StartupEvents.NoBepInExLog(log.LogPath, null) : ""),
             clock.Elapsed, log == null ? "no startup log configured" : log.Refresh());
         async Task UntilExit(string stage, Func<TimeSpan, CancellationToken, Task> wait)
         {
