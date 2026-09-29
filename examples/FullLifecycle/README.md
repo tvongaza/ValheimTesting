@@ -59,6 +59,15 @@ The runner prints `PASS` or `FAIL` and exits 0 only on a pass. After the client 
 
 Either way the server is always owned: the runner copies the fixtures, starts that copy, proves by the adapter's identity handshake that it is talking to the process it started, and stops only that process.
 
+## The rounds
+
+The client half of the scenario is the toolkit's `ClientRounds` (see [Plan rules and client rounds](../../docs/testing-toolkit.md#plan-rules-and-client-rounds-preview-13)). `DrySiteScenario` supplies only what is this mod's:
+- the arrival point and the name of its step (`arrive beside the marker`);
+- the measurement: the client sees the marker at the dry site, and in the last round the optional human review;
+- the check after the restart: the server still has one marker at the dry site and none at the wet site.
+
+The helper waits until the server accepts connections, then joins, protects and arrives, and runs the measurement. Between the two rounds (`first`, `after-restart`) it saves with confirmation, has the client leave and restarts only the owned server; after the last round the client leaves. It closes the client in every outcome. Each round's steps in `result.json` start with the round's name, and its evidence files do too (`first-arrival.json`, `after-restart-arrival.json`). `LifecyclePlan` uses the toolkit's plan rules (`RequireScenario`) for the generic checks and keeps its own for the sites.
+
 ## Cleanup and its limits
 
 On any failure, including a failed step, an exception or Ctrl+C, the runner still stops the owned client, then the owned server, and writes the report. The copies stay in the output directory for inspection; the pinned sources are never changed.
