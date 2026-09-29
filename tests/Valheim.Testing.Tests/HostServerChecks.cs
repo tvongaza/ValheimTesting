@@ -143,13 +143,13 @@ public class LocalHostServerTests
 [Trait("Category", "GameHosts")]
 public class SshHostServerIntegrationTests
 {
-    private static IGameHost Host() => new SshGameHost("ssh-bash", Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_DESTINATION")!, HostShell.Bash,
+    private static IGameHost Host(string shell) => new SshGameHost("ssh-" + shell, Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_DESTINATION")!, HostShell.Parse(shell),
         int.TryParse(Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_PORT"), out int port) ? port : 0,
         (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_OPTIONS") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     public static TheoryData<string> Shells => new() { "bash" };
 
     [SshTheory, MemberData(nameof(Shells))] public Task AServerRunsFromAVerifiedCopyAndStopsByIdentity(string shell) =>
-        HostServerChecks.AServerRunsFromAVerifiedCopyAndStopsByIdentity(Host(), Path.GetTempPath());
+        HostServerChecks.AServerRunsFromAVerifiedCopyAndStopsByIdentity(Host(shell), Path.GetTempPath());
 }
 
 [Trait("Category", "GameHosts")]

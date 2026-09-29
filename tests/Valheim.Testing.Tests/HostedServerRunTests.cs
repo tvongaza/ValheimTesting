@@ -360,7 +360,7 @@ public sealed class HostedServerRunTests : IDisposable
 
     [Fact] public async Task AnotherRunsLockRefusesTheRunBeforeTheHostIsTouched()
     {
-        var host = NewHost(NewServer()) { HeldBy = "other-runner run-x [0123]" };
+        var host = NewHost(NewServer()); host.HeldBy = "other-runner run-x [0123]";
         var (plan, profile) = Write(host);
         Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, NewServer())));
         var step = Step("take the server host's lock");
@@ -421,7 +421,7 @@ public sealed class HostedServerRunTests : IDisposable
 
     [Fact] public async Task ABusyCliPortOnTheHostIsRefusedBeforeTheTunnel()
     {
-        var host = NewHost(NewServer()) { PortBusy = true };
+        var host = NewHost(NewServer()); host.PortBusy = true;
         var (plan, profile) = Write(host);
         Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, NewServer())));
         Assert.Contains("already listens on port 5577", Step("CLI port is free on the server host").GetProperty("Error").GetString());
