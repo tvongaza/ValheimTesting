@@ -113,3 +113,45 @@ public class BepInExLoaderTests
         public void Dispose() => Directory.Delete(_parent, true);
     }
 }
+
+// A leftover preloader patcher rewrites game types before any plugin loads; a runtime's patchers are the plan's or none.
+public sealed class BepInExPatchersTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("patchers-").FullName;
+    public void Dispose() => Directory.Delete(_root, true);
+    private string Patchers => Path.Combine(_root, "BepInEx", "patchers");
+    private void Add(string name, bool directory = false)
+    {
+        Directory.CreateDirectory(Patchers);
+        if (directory) Directory.CreateDirectory(Path.Combine(Patchers, name)); else File.WriteAllText(Path.Combine(Patchers, name), "patcher");
+    }
+
+    [Fact] public void NoOrAnEmptyPatchersDirectoryIsClean()
+    {
+        BepInExLoader.RequirePatchers(_root, [], "runtime");
+        Directory.CreateDirectory(Patchers);
+        BepInExLoader.RequirePatchers(_root, [], "runtime");
+    }
+    [Fact] public void NamedPatchersAreAccepted()
+    {
+        Add("HookGenPatcher", directory: true); Add("Other.Patcher.dll");
+        BepInExLoader.RequirePatchers(_root, ["Other.Patcher.dll", "HookGenPatcher"], "runtime");
+    }
+    [Fact] public void ALeftoverPatcherIsRefusedByName()
+    {
+        Add("HookGenPatcher", directory: true); Add("RemovedMod.Preloader.dll");
+        var error = Assert.Throws<InvalidOperationException>(() => BepInExLoader.RequirePatchers(_root, ["HookGenPatcher"], "runtime"));
+        Assert.Contains("RemovedMod.Preloader.dll", error.Message); Assert.DoesNotContain("HookGenPatcher,", error.Message);
+        Assert.Contains("empty patchers directory", error.Message);
+    }
+    [Fact] public void ANamedPatcherThatIsNotThereIsRefused()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => BepInExLoader.RequirePatchers(_root, ["HookGenPatcher"], "runtime"));
+        Assert.Contains("HookGenPatcher", error.Message);
+    }
+    [Theory]
+    [InlineData("sub/Patcher.dll")] [InlineData(@"sub\Patcher.dll")] [InlineData("..")] [InlineData(" ")]
+    public void PatcherNamesAreSingleEntries(string name) =>
+        Assert.Throws<ArgumentException>(() => BepInExLoader.CheckPatcherNames([name]));
+    [Fact] public void APatcherIsNamedOnce() => Assert.Throws<ArgumentException>(() => BepInExLoader.CheckPatcherNames(["A.dll", "a.dll"]));
+}
