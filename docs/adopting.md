@@ -38,6 +38,8 @@ If your mod has no CI yet, copy the example's [workflow](../examples/ModWithTest
 
 [FullLifecycle](../examples/FullLifecycle/README.md) shows the whole path on one small feature: the unit test, integration tests of the scenario against scripted replies, and a native run with an owned server and an owned or attached client through save, restart and rejoin, plus an optional human look. Copy its layout; the steps below explain the choices.
 
+Before the first native run, go through the [runtime hygiene checklist](runtime-hygiene.md): a clean runtime, load order, test characters, join and teleport timing, and what counts as evidence.
+
 For a mod that writes terrain on the server, a useful next check is: “the client without my mod sees the declared ground and paint, including after a save/restart.” For another kind of mod, replace this with one observable behavior at its actual game boundary.
 
 1. **Define the expectation in your mod repository.** Choose a small disposable fixture and expected values independently of the observer. Use the sample plan schema in [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md) or [PaintCheck](../examples/PaintCheck/README.md); sample coordinates are illustrative, not universal game sites.
@@ -56,5 +58,6 @@ Client arrival/protection remains required even if your first check is read-only
 - **A package will not restore?** Check published versus local-feed status and the exact version. Do not substitute a different preview silently.
 - **A game type conflicts or is missing?** Do not mix source doubles with game assemblies. Link a smaller production helper, or add the required modeled member deliberately.
 - **Can I run tests concurrently?** Pure immutable inputs can be independent; tests using game singletons or static overrides must be serialized.
+- **A native run hangs, or passes with a clean log but proves nothing?** Check the [runtime hygiene checklist](runtime-hygiene.md). Link it from your mod's docs instead of copying it.
 - **Does a passing synthetic test prove the mod works in Valheim?** It proves the tested decision on declared inputs. Native observations, save/replication and human usability have their own evidence.
 - **What do I report?** The production behavior tested, exact package/build versions, checks actually run, failed/incomplete evidence and what remains untested. Do not publish credentials, game binaries or private saves.
