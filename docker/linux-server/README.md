@@ -71,6 +71,23 @@ Caveats:
 
 The supported Mac workflows are a Mac game client (launched through ValheimCLI, which handles macOS `Valheim.app`) and Mac-run tests or runners that talk to a Windows or Linux dedicated server on another machine. Use the container on a Mac for experiments only.
 
+## Scheduled checks in CI
+
+[`native-server-checks.yml`](../../.github/workflows/native-server-checks.yml) builds this image on a GitHub-hosted runner and runs two checks in fresh containers of it:
+
+1. [LinuxServerSmoke](../../examples/LinuxServerSmoke/README.md): the server starts, loads BepInEx and creates a new world.
+2. The [FullLifecycle](../../examples/FullLifecycle/README.md#the-server-half-alone) example's server half: ValheimCLI (core, Standard and WorldTools, from the commit in `cli-dependency.json`), the example mod and its adapter are built against this server's own assemblies; `prepare-server` creates a new world and picks a dry and a wet site from its generator heights; the pinned `dry-site-server` run then has the mod mark one and refuse the other, confirms a save, restarts only its server and finds the marker again.
+
+**When.** Every night at 03:23 UTC, and every four hours a cheap job asks Steam (anonymous `app_info_print`, no download) for the public branch's build id and runs the checks only if that build has not been checked yet. The checked build ids are remembered in the Actions cache as a text file. A run can also be started by hand (**Actions > Scheduled native server checks > Run workflow**, or `gh workflow run native-server-checks.yml --ref <branch>`; `watch_only` makes it decide like the watch); only the default branch's copy runs on schedule.
+
+**Results.** The run summary shows the server's Steam build id, each check's result and failed steps, and the list and size of uploaded files. The `native-server-checks` artifact (14 days) holds `result.json`, `junit.xml`, the server and BepInEx logs and the recorded commands, and `server-buildid.txt`. A failed scheduled run opens the issue *Scheduled native server checks are failing* (labels `ci`, `native`), or comments on it while it is open; close it once the checks pass again. Only that job gets `issues: write`. A manual run prints the issue it would post instead (a dry run with a read-only token) unless it runs on the default branch with `tracking_issue: open`.
+
+**Negative controls**, by hand, are expected to fail and never post an issue: `negative_control: plugin-pin` pins a wrong MD5 for the mod, so the pinned run refuses the server before the scenario; `bepinex-hash` builds the image with a wrong BepInExPack hash, so the build stops.
+
+**What it does not cover.** There is no game client and no Steam login: nothing about joining, what a client sees, crossplay or the Windows server. It checks the current public server build with the pinned BepInExPack; a new BepInExPack is picked up by updating the pin here. A pass shows the server path works on that build, not that every mod or world does.
+
+**Game files.** The image is built with `--no-cache`, never pushed, saved or cached, and removed with the runner. The runtime copies, the world, the publicized assemblies and the plan (it holds the throwaway server password) stay in the containers; the upload step refuses anything but `.json`, `.jsonl`, `.xml`, `.log`, `.absent` and `server-buildid.txt` files and anything over 20 MB. No secrets are used. The logs can contain the runner's network details.
+
 ## Networking
 
 The server listens on UDP 2456-2458 inside the container by default. The examples do not publish ports: nothing outside the container can join. Keep `-public 0` so a test server is never listed. A game client in a container is not supported.
