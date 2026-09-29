@@ -126,6 +126,7 @@ public sealed class HostLock : IAsyncDisposable
     internal HostLock(IGameHost host, string path, string owner, TimeSpan timeout) { _host = host; Path = path; Owner = owner; _timeout = timeout; }
     public string HostName => _host.Name;
     public string Path { get; }
+    /// <summary>The exact claimant in the lock: the owner given to <c>AcquireLockAsync</c> plus a unique id for this acquisition.</summary>
     public string Owner { get; }
     /// <summary>Removes the lock if it still names <see cref="Owner"/>. Only the first call acts.</summary>
     public async Task<HostLockResult> ReleaseAsync(CancellationToken cancellation = default)
@@ -277,15 +278,21 @@ public abstract class ScriptedGameHost : IGameHost
 
     /// <summary>
     /// Takes an advisory lock at <paramref name="lockPath"/>, a directory on the host, for <paramref name="owner"/> (a run id).
-    /// The claim is the exclusive creation of <c>owner</c> inside it (O_EXCL, or CreateNew on Windows), which exactly one claimer
-    /// can win; the directory itself may already exist. A lock naming this exact owner (compared ordinally, never as a pattern) is
-    /// taken again, so a claim whose reply was lost can be repeated safely. Another owner's lock, or an unproven claim, throws
-    /// <see cref="HostLockException"/>; nothing is waited for or retried. A lock left by a crashed run stays until a person removes it.
+    /// The claim is the exclusive creation of an owner file inside it (O_EXCL, or CreateNew on Windows), which exactly one claimer
+    /// can win; the directory itself may already exist. Each acquisition claims as <paramref name="owner"/> plus a unique id
+    /// (<see cref="HostLock.Owner"/>), so two runs that pass the same owner never both hold the lock, and only this handle can
+    /// release it. Another claimant's lock, or an unproven claim, throws <see cref="HostLockException"/>; nothing is waited for or
+    /// retried. An unproven claim's message names the claimant it tried: check the lock with it before deciding what to do.
+    /// A lock left by a crashed run stays until a person removes it.
     /// </summary>
     public async Task<HostLock> AcquireLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default)
     {
-        var result = await LockAsync("claim", lockPath, owner, timeout, cancellation).ConfigureAwait(false);
-        if (result.State is HostLockState.Claimed or HostLockState.Yours) return new HostLock(this, lockPath, owner, timeout);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        if (owner.Length > 200) throw new ArgumentException("An owner is at most 200 characters; a unique id is added to it.", nameof(owner));
+        string claimant = owner + " [" + Guid.NewGuid().ToString("N") + "]";
+        var result = await LockAsync("claim", lockPath, claimant, timeout, cancellation).ConfigureAwait(false);
+        if (result.State is HostLockState.Claimed or HostLockState.Yours) return new HostLock(this, lockPath, claimant, timeout);
+        if (result.State == HostLockState.Unknown) result = result with { Detail = result.Detail + $" The claim was made as '{claimant}'." };
         throw new HostLockException(result);
     }
     /// <summary>Reads the lock: <see cref="HostLockState.Free"/>, <see cref="HostLockState.Yours"/> or <see cref="HostLockState.HeldByOther"/>. Changes nothing.</summary>
@@ -461,7 +468,7 @@ public abstract class ScriptedGameHost : IGameHost
     {
         RequireAbsolute(lockPath, nameof(lockPath));
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
-        if (owner.Length > 200 || owner.Any(char.IsControl)) throw new ArgumentException("An owner is one line of at most 200 characters.", nameof(owner));
+        if (owner.Length > 240 || owner.Any(char.IsControl)) throw new ArgumentException("An owner is one line of at most 240 characters.", nameof(owner));
         var result = await RunAsync(HostScripts.Lock(Shell.Kind), new Dictionary<string, string> { ["action"] = action, ["lock"] = lockPath, ["owner"] = owner },
             timeout, cancellation).ConfigureAwait(false);
         return ReadLockVerdict(action, owner, lockPath, Name, result);
