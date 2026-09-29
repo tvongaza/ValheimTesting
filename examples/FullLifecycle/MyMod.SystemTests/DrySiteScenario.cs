@@ -8,6 +8,7 @@ namespace MyMod.SystemTests;
 /// <summary>
 /// The example mod's end-to-end scenario on an owned server, with the mod's own expectations and the toolkit's pieces:
 /// <list type="number">
+/// <item>The mod's Harmony patch is applied (the adapter's census), so a missing target fails here, by name.</item>
 /// <item>Neither site has a marker yet (the fresh fixture copy), so any marker found later is the mod's.</item>
 /// <item>The mod marks the dry site and refuses the wet one, each asked exactly once.</item>
 /// <item>The server's saved objects show one marker at the dry site and none at the wet one.</item>
@@ -24,11 +25,15 @@ public static class DrySiteScenario
     public const string Marker = "wood_pole2";
     /// <summary>How far from a site a marker may stand and still count as that site's.</summary>
     public const float MarkerRadius = 1.5f;
+    /// <summary>The Harmony patches the mod declares (its <c>[HarmonyPatch]</c> classes); each must be applied.</summary>
+    public static readonly DeclaredPatch[] Patches = [new("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix")];
 
     public static void Run(LifecyclePlan plan, GameActor server, Func<GameActor> restartOwnedServer, Func<ClientSession> openClient,
         Action<GameActor> waitUntilJoinable, ScenarioReport report, string output, CancellationToken cancellation = default, TimeSpan? settleFor = null)
     {
         var client = plan.Client ?? throw new ArgumentException("The run mode needs the plan's client section.");
+        report.Step("server: the mod's Harmony patches are applied", () =>
+            HarmonyCensus.Read(server, "mymod.testing/harmony", LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, Patches).RequireApplied());
         report.Step("no marker at either site before the mod acts", () => { RequireServerMarkers(server, plan.DrySite, 0); RequireServerMarkers(server, plan.WetSite, 0); });
         report.Step("the mod marks the dry site", () => RequireReply(server.Execute(Mark(plan.DrySite)), "OK: marked "));
         report.Step("the mod refuses the wet site", () => RequireReply(server.Execute(Mark(plan.WetSite)), "REFUSED: "));

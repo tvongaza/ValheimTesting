@@ -14,7 +14,7 @@ string root = FindRoot();
 Run("dotnet", "test", "tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "-c", "Release", "-m:1");
 Run("dotnet", "test", "tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj", "-c", "Release", "-m:1");
 // The adapter source is compiled into a mod's game-side adapter against the game; here, against declared signatures
-// (see the project for what that does and does not prove).
+// and the real HarmonyX (see the project for what that does and does not prove).
 Run("dotnet", "build", "tests/Valheim.Testing.Adapter.CompileCheck/Valheim.Testing.Adapter.CompileCheck.csproj", "-c", "Release", "-m:1");
 // Pack the pure packages before the consumer example restores them. This exercises
 // the actual source-package layout rather than linking the doubles directory.
