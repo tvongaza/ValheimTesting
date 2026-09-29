@@ -21,6 +21,7 @@ public sealed class DoublesTests : IDisposable
     public DoublesTests() { ZDOMan.instance = new ZDOMan(); ZNetScene.instance = new ZNetScene(); ZoneSystem.instance = new ZoneSystem(); }
     public void Dispose()
     {
+        UnityEngine.Object.EndOfFrame();
         ZDOMan.instance = null; ZNetScene.instance = null; ZoneSystem.instance = null; WorldGenerator.instance = null;
         Heightmap.Registered = null; Heightmap.TestBaseHeight = null; Heightmap.TestTerrainPass = null;
     }
@@ -55,11 +56,114 @@ public sealed class DoublesTests : IDisposable
         var theirs = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(2, 30, 2), UnityEngine.Quaternion.Euler(0, 0, 0));
         theirs.GetComponent<ZNetView>().GetZDO().SetOwner(99);
         Assert.Same(ours.View, ZNetScene.instance.FindInstance(ours.View!.GetZDO()));
+        var ourZdo = ours.View.GetZDO();
         ZNetScene.instance.Destroy(ours); ZNetScene.instance.Destroy(theirs);
+        Assert.Null(ZNetScene.instance.FindInstance(ourZdo)); Assert.Empty(ZNetScene.instance.Live);
+        Assert.Null(ours.View.GetZDO()); Assert.False(ours.View.IsValid()); // the view let go of its ZDO, as the game's ResetZDO does
+        Assert.False(ours == null); Assert.False(ours.Destroyed); // the object itself goes at the end of the frame
+        Assert.Equal(2, UnityEngine.Object.EndOfFrame());
         Assert.True(ours.Destroyed); Assert.True(theirs.Destroyed);
-        Assert.Equal(new[] { ours.View.GetZDO() }, ZDOMan.instance!.DestroyQueue);
+        Assert.Equal(new[] { ourZdo }, ZDOMan.instance!.DestroyQueue);
         Assert.Null(ZNetScene.instance.GetPrefab("missing"));
         Assert.Null(prefab.GetComponent<ZNetView>());
+    }
+    [Fact] public void ADestroyedObjectEqualsNullOnlyThroughUnitysOperators()
+    {
+        var live = new UnityEngine.GameObject("stone");
+        var destroyed = new UnityEngine.GameObject("stone");
+        UnityEngine.Object.DestroyImmediate(destroyed);
+        Assert.True(destroyed == null); Assert.False(destroyed != null); Assert.True(destroyed!.Equals(null)); // the reference itself is not null
+        Assert.False(destroyed is null); Assert.Same(destroyed, destroyed ?? live); // is null and ?? see the reference
+        // The game's player throws a NullReferenceException here; the double's message names the destroyed object.
+        Assert.Contains("GameObject 'stone' was destroyed", Assert.Throws<NullReferenceException>(() => destroyed?.name).Message);
+        Assert.Contains("'stone' was destroyed", Assert.Throws<NullReferenceException>(() => destroyed!.GetComponent<ZNetView>()).Message);
+        bool entered = false;
+        if (destroyed) entered = true;
+        Assert.False(entered);
+        // A live object and a real null reference behave as before.
+        bool exists = live; Assert.True(exists); Assert.False(live == null); Assert.True(live != null); Assert.False(live.Equals(null));
+        Assert.Equal("stone", live.name); Assert.False(live == destroyed);
+        UnityEngine.GameObject? none = null; bool noneExists = none;
+        Assert.True(none == null); Assert.False(noneExists);
+    }
+    [Fact] public void DestroyWaitsForTheEndOfTheFrameAndDestroyImmediateDoesNot()
+    {
+        var beam = new UnityEngine.GameObject("beam");
+        UnityEngine.Object.Destroy(beam); UnityEngine.Object.Destroy(beam);
+        Assert.False(beam == null); Assert.Equal("beam", beam.name); // still alive this frame, as in Unity
+        Assert.Equal(1, UnityEngine.Object.EndOfFrame());
+        Assert.True(beam == null); Assert.True(beam!.Destroyed);
+        Assert.Equal(0, UnityEngine.Object.EndOfFrame());
+        var pole = new UnityEngine.GameObject("pole");
+        UnityEngine.Object.Destroy(pole); UnityEngine.Object.DestroyImmediate(pole);
+        Assert.True(pole == null); Assert.Equal(0, UnityEngine.Object.EndOfFrame());
+        UnityEngine.Object.Destroy(null); UnityEngine.Object.DestroyImmediate(null);
+    }
+    [Fact] public void AScopeEndsTheFrameSoNoDestroyOutlivesTheTest()
+    {
+        var beam = new UnityEngine.GameObject("beam");
+        using (new Valheim.Testing.Doubles.ValheimWorldScope()) UnityEngine.Object.Destroy(beam);
+        Assert.True(beam.Destroyed); Assert.Equal(0, UnityEngine.Object.EndOfFrame());
+    }
+    [Fact] public void ComponentsAreDestroyedWithTheirObjectAndKeepOnlyTheirOwnFields()
+    {
+        var prefab = ZNetScene.instance!.AddPrefab("wood_wall", health: 400f);
+        var wall = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(3, 30, 3), UnityEngine.Quaternion.Euler(0, 0, 0));
+        var view = wall.GetComponent<ZNetView>(); var wear = wall.GetComponent<WearNTear>();
+        Assert.Same(wall, view.gameObject); Assert.Equal("wood_wall", wear.name); Assert.Same(view, wear.GetComponent<ZNetView>());
+        UnityEngine.Object.Destroy(wall);
+        UnityEngine.Object.EndOfFrame();
+        Assert.True(view == null); Assert.True(wear == null);
+        Assert.Equal(400f, wear!.m_health); Assert.NotNull(view!.GetZDO()); // the component's own C# members still answer, as in Unity
+        Assert.Contains("ZNetView 'wood_wall' was destroyed", Assert.Throws<NullReferenceException>(() => view.gameObject).Message);
+        Assert.Contains("WearNTear 'wood_wall' was destroyed", Assert.Throws<NullReferenceException>(() => wear?.GetComponent<ZNetView>()).Message);
+        // A plain Destroy does not touch the scene, as in the game: the destroyed view is still found, and only == null sees it.
+        Assert.Contains(wall, ZNetScene.instance.Live);
+        var found = ZNetScene.instance.FindInstance(view.GetZDO());
+        Assert.Same(view, found); Assert.True(found == null);
+        // Destroying one component leaves the object; GetComponent then finds none.
+        var door = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(4, 30, 4), UnityEngine.Quaternion.Euler(0, 0, 0));
+        UnityEngine.Object.DestroyImmediate(door.GetComponent<WearNTear>());
+        Assert.Null(door.GetComponent<WearNTear>()); Assert.False(door == null); Assert.NotNull(door.GetComponent<ZNetView>());
+    }
+    [Fact] public void DestroyingKeepsObjectsAsDistinctKeysAndListEntries()
+    {
+        var a = new UnityEngine.GameObject("same"); var b = new UnityEngine.GameObject("same");
+        var byObject = new Dictionary<UnityEngine.GameObject, int> { [a] = 1, [b] = 2 };
+        var list = new List<UnityEngine.GameObject> { a, b };
+        Assert.False(a == b); Assert.NotEqual(a, b);
+        UnityEngine.Object.DestroyImmediate(a); UnityEngine.Object.DestroyImmediate(b);
+        Assert.False(a == b); Assert.NotEqual(a, b); // two destroyed objects are still two objects, as in Unity
+        Assert.Equal(1, byObject[a]); Assert.Equal(2, byObject[b]);
+        Assert.Equal(1, list.IndexOf(b)); Assert.True(list.Remove(a)); Assert.Same(b, Assert.Single(list));
+    }
+    // Mod code in the shape the modding wiki warns about: ?. does not see a destroyed object, == null does.
+    private static class PieceHealth
+    {
+        public static float WithConditionalAccess(IEnumerable<UnityEngine.GameObject> pieces) =>
+            pieces.Sum(piece => piece?.GetComponent<WearNTear>()?.m_health ?? 0f);
+        public static float WithUnityNullCheck(IEnumerable<UnityEngine.GameObject> pieces)
+        {
+            float total = 0f;
+            foreach (var piece in pieces)
+            {
+                if (piece == null) continue;
+                var wear = piece.GetComponent<WearNTear>();
+                if (wear != null) total += wear.m_health;
+            }
+            return total;
+        }
+    }
+    [Fact] public void AConditionalAccessOnADestroyedObjectThrowsWhereAnExplicitNullCheckSkipsIt()
+    {
+        var prefab = ZNetScene.instance!.AddPrefab("stone_wall", health: 1500f);
+        var kept = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(1, 30, 1), UnityEngine.Quaternion.Euler(0, 0, 0));
+        var removed = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(2, 30, 2), UnityEngine.Quaternion.Euler(0, 0, 0));
+        var pieces = new[] { kept, removed };
+        Assert.Equal(3000f, PieceHealth.WithConditionalAccess(pieces)); Assert.Equal(3000f, PieceHealth.WithUnityNullCheck(pieces));
+        UnityEngine.Object.Destroy(removed); UnityEngine.Object.EndOfFrame();
+        Assert.Throws<NullReferenceException>(() => PieceHealth.WithConditionalAccess(pieces));
+        Assert.Equal(1500f, PieceHealth.WithUnityNullCheck(pieces));
     }
     [Fact] public void RebuildUsesTheGeneratorThenTheModsHooksAndClampsCompilerDeltas()
     {
@@ -201,13 +305,15 @@ public sealed class DoublesTests : IDisposable
         var got = new List<(long, int, string)>();
         ZRoutedRpc.instance.Register<int, string>("Mod_Ping", (sender, n, text) => got.Add((sender, n, text)));
         ZRoutedRpc.instance.Register("Mod_Fail", _ => throw new InvalidOperationException("handler failed"));
+        // As in the game, a broadcast and a call to the server (this peer, session 1) run the local handler at once.
         ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, "Mod_Ping", 3, "hi");
         ZRoutedRpc.instance.InvokeRoutedRPC("Mod_Ping", 4, "server");
-        Assert.Equal(new[] { (0L, "Mod_Ping"), (42L, "Mod_Ping") }, ZRoutedRpc.instance.Invoked.Select(x => (x.Target, x.Method)));
+        Assert.Equal(new[] { (0L, "Mod_Ping"), (1L, "Mod_Ping") }, ZRoutedRpc.instance.Invoked.Select(x => (x.Target, x.Method)));
         ZRoutedRpc.instance.Deliver(7, "Mod_Ping", 5, "back");
-        Assert.Equal(new[] { (7L, 5, "back") }, got);
+        Assert.Equal(new[] { (1L, 3, "hi"), (1L, 4, "server"), (7L, 5, "back") }, got);
         Assert.Equal("handler failed", Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.Deliver(7, "Mod_Fail")).Message);
-        Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.Deliver(7, "Mod_Unknown"));
+        ZRoutedRpc.instance.Deliver(7, "Mod_Unknown"); // dropped without an error, as in the game
+        Assert.Equal("Mod_Unknown", Assert.Single(ZRoutedRpc.instance.Dropped).Method);
     }
     [Fact] public void JotunnRpcsAreKeptByNameAndTheScopeGivesAFreshManager()
     {

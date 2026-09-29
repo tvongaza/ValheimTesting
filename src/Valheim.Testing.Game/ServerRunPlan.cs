@@ -10,9 +10,11 @@ public sealed class PinnedDirectory
 {
     public string Source { get; set; } = "";
     public Dictionary<string, string> Sha256 { get; set; } = [];
-    public void Validate()
+    public void Validate() => Validate(requireHashes: true);
+    /// <summary>Without <paramref name="requireHashes"/> (an explicitly unpinned plan) the hashes may be left out; listed ones are still full SHA256.</summary>
+    public void Validate(bool requireHashes)
     {
-        if (!Path.IsPathFullyQualified(Source) || Sha256.Count == 0) throw new ArgumentException("A full source path and fixture hashes are required.");
+        if (!Path.IsPathFullyQualified(Source) || (requireHashes && Sha256.Count == 0)) throw new ArgumentException("A full source path and fixture hashes are required.");
         foreach (var hash in Sha256)
             if (hash.Value.Length != 64 || !hash.Value.All(Uri.IsHexDigit)) throw new ArgumentException("Use full SHA256 fixture hashes.");
     }
@@ -23,7 +25,7 @@ public sealed class PinnedDirectory
 /// from it and add the mod's scenario fields; <see cref="Read{T}"/> refuses unknown fields. <c>{runtime}</c>,
 /// <c>{world}</c> and <c>{port}</c> in arguments and environment values expand to the copies and the CLI port.
 /// </summary>
-public class ServerRunPlan
+public partial class ServerRunPlan
 {
     public string Scenario { get; set; } = "";
     public PinnedDirectory Runtime { get; set; } = new();
@@ -34,9 +36,33 @@ public class ServerRunPlan
     public Dictionary<string, string> Environment { get; set; } = [];
     /// <summary>Strict ValheimCLI expectations: <c>worlduid</c> and an exact MD5 for every listed plugin.</summary>
     public Dictionary<string, string> Pins { get; set; } = [];
+    /// <summary>
+    /// The runtime's game build, BepInEx core and patchers by SHA256 (<see cref="InstallPins.Of"/> computes them), checked
+    /// on the copy before launch: what ValheimCLI cannot report in game. Required unless <see cref="Pinning"/> is <c>none</c>.
+    /// </summary>
+    public InstallPins? RuntimePins { get; set; }
+    /// <summary>
+    /// <c>strict</c>, the default when omitted, or <c>none</c>: an explicit opt-out for trying the toolkit before keeping
+    /// pins. An unpinned plan lists no <see cref="Pins"/> or <see cref="RuntimePins"/> and may leave out the fixture
+    /// hashes (copies are then recorded as found); the runner warns at start and marks every report and evidence file
+    /// "environment not pinned" (<see cref="EnvironmentPinning"/>).
+    /// </summary>
+    public string Pinning { get; set; } = EnvironmentPinning.Strict;
+    /// <summary>Whether <see cref="Pinning"/> is <c>strict</c>; refuses any value but <c>strict</c> or <c>none</c>.</summary>
+    [JsonIgnore] public bool Pinned => EnvironmentPinning.IsStrict(Pinning, "The plan's");
     public int Port { get; set; } = 5577;
     public int StartupSeconds { get; set; } = 300;
     public int CommandSeconds { get; set; } = 30;
+    /// <summary>
+    /// Every entry the runtime's <c>BepInEx/patchers</c> holds, by name. A clean runtime is BepInEx core and your plugins
+    /// with an empty patchers directory; the runner refuses one holding anything not named here.
+    /// </summary>
+    public string[] Patchers { get; set; } = [];
+    /// <summary>
+    /// This run's severities for the teardown log scan's patterns (<see cref="LogScanner.Names"/>), each with a written
+    /// reason, for example <c>"rpc-method-missing": { "severity": "Failure", "reason": "..." }</c>.
+    /// </summary>
+    public Dictionary<string, LogClassification> LogScan { get; set; } = [];
 
     public static T Read<T>(string path) where T : ServerRunPlan =>
         JsonSerializer.Deserialize<T>(File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow })
@@ -46,11 +72,16 @@ public class ServerRunPlan
     /// The rules every pinned dedicated-server plan follows: pinned sources, port and time bounds, a known executable,
     /// no runner-owned session token or Doorstop variable in the environment, <c>-batchmode -nographics</c> and exactly
     /// one <c>-savedir {world}</c>, and strict pins with <c>worlduid</c>, an exact MD5 for each of
-    /// <paramref name="requiredPlugins"/> and for every other listed plugin, and no <c>worldfiles</c>.
+    /// <paramref name="requiredPlugins"/> and for every other listed plugin, no <c>worldfiles</c>, and
+    /// <see cref="RuntimePins"/>. Patcher names are single entries and each log scan classification names a known pattern
+    /// with a reason. An explicitly unpinned plan (<see cref="Pinning"/> <c>none</c>) follows the same rules without the
+    /// pins, which it must leave out, and may leave out the fixture hashes.
     /// </summary>
     public void ValidateServerPlan(IEnumerable<string> requiredPlugins, string sessionTokenVariable)
     {
-        Runtime.Validate(); World.Validate();
+        bool pinned = Pinned;
+        Runtime.Validate(pinned); World.Validate(pinned);
+        CheckPatchersAndLogScan();
         if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120)
             throw new ArgumentException("Invalid port or time budget.");
         if (!string.IsNullOrEmpty(Executable) && Executable != ServerLaunch.WindowsExecutable && Executable != ServerLaunch.LinuxExecutable)
@@ -63,6 +94,12 @@ public class ServerRunPlan
         if (savedir < 0 || savedir + 1 >= Arguments.Length || Arguments[savedir + 1] != "{world}" || Arguments.Count(x => x == "-savedir") != 1 ||
             !Arguments.Contains("-batchmode") || !Arguments.Contains("-nographics"))
             throw new ArgumentException("Dedicated launch requires -batchmode -nographics and exactly one -savedir {world}.");
+        if (!pinned)
+        {
+            if (Pins.Count != 0 || RuntimePins != null)
+                throw new ArgumentException("A plan with pinning \"none\" lists no pins and no runtimePins: nothing would check them. Remove them, or remove \"pinning\" to keep strict pins.");
+            return;
+        }
         var errors = new List<string>();
         var parsed = Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), errors);
         if (errors.Count != 0) throw new ArgumentException("Invalid environment pins: " + string.Join("; ", errors));
@@ -73,6 +110,9 @@ public class ServerRunPlan
         if (parsed.Any(x => !Expectations.IsWorldKey(x.Key) && (x.Value == "any" || x.Value == "absent")))
             throw new ArgumentException("All listed plugins require exact MD5 pins.");
         if (Pins.ContainsKey("worldfiles")) throw new ArgumentException("World bytes change after save; pin input SHA256 and persistent worlduid instead.");
+        if (RuntimePins == null)
+            throw new ArgumentException("Pin the runtime's game build, BepInEx core and patchers in runtimePins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\".");
+        RuntimePins.Validate("runtime");
     }
     public static string ExecutableFor(ServerPlatform platform) => platform == ServerPlatform.Windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable;
     /// <summary>The runtime decides the platform (<see cref="ServerLaunch.Detect"/>); a stated executable must agree with it.</summary>
@@ -87,6 +127,21 @@ public class ServerRunPlan
         if ((platform == ServerPlatform.Windows) != windowsHost)
             throw new PlatformNotSupportedException($"A {platform} dedicated-server runtime must run on a {platform} host; use validate here, or run on a matching host or container.");
     }
+    /// <summary>The plan's patcher names and log scan classifications are well formed (the runner checks them for every plan).</summary>
+    public void CheckPatchersAndLogScan()
+    {
+        BepInExLoader.CheckPatcherNames(Patchers);
+        LogScanner.CheckClassifications(LogScan);
+    }
+    /// <summary>Refuses a runtime whose <c>BepInEx/patchers</c> holds an entry <see cref="Patchers"/> does not name, or lacks one it names.</summary>
+    public void CheckRuntimePatchers(string runtime) => BepInExLoader.RequirePatchers(runtime, Patchers, "runtime");
+    /// <summary>
+    /// Pinned: refuses a runtime whose game build, BepInEx core or patchers are not <see cref="RuntimePins"/>. Unpinned:
+    /// checks nothing. Either way returns what the runtime holds, for the report.
+    /// </summary>
+    public InstallPins CheckRuntimePins(string runtime) => !Pinned ? InstallPins.Of(runtime) :
+        (RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, BepInEx core and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."))
+            .Check(runtime, "runtime");
     public void CheckOutput(string output)
     {
         output = Path.GetFullPath(output);
@@ -98,17 +153,20 @@ public class ServerRunPlan
                 throw new ArgumentException("Output must be outside both pinned sources.");
         }
     }
-    public string ExpectCommand => Expectations.ExpectCommand(Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), new()), strict: true);
+    /// <summary>The strict <c>cli_expect</c> command, or <see cref="EnvironmentPinning.None"/> for an unpinned plan (see <see cref="GameActor.VerifyEnvironment"/>).</summary>
+    public string ExpectCommand => !Pinned ? EnvironmentPinning.None :
+        Expectations.ExpectCommand(Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), new()), strict: true);
     public string Expand(string value, string runtime, string world) => value.Replace("{runtime}", runtime).Replace("{world}", world).Replace("{port}", Port.ToString(CultureInfo.InvariantCulture));
     /// <summary>
     /// What an owned dedicated server's startup waits on: ValheimCLI's listening line in this boot's BepInEx log (a
-    /// previous boot's lines never count; a BepInEx plugin-load failure ends startup at once), then the loaded-world push
+    /// previous boot's lines never count; a plugin-load failure, a type-load or missing-member exception, or ValheimCLI's
+    /// "core is not ready" ends startup at once: <see cref="StartupEvents.StartupFailures"/>), then the loaded-world push
     /// on a loopback connection of its own. A world state is not mod readiness: the session observation decides that.
     /// </summary>
     public StartupEvents DedicatedStartupEvents(string runtime) => new()
     {
         CliLog = Path.Combine(runtime, "BepInEx", "LogOutput.log"),
-        Failures = Game.StartupEvents.BepInExPluginLoadFailures,
+        Failures = Game.StartupEvents.StartupFailures,
         States = () => StateWait.Connect("127.0.0.1", Port),
         ReadyStates = [StateWait.InWorldNoPlayer],
     };

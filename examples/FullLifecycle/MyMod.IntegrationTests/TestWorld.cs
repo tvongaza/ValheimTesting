@@ -16,7 +16,7 @@ internal sealed class TestWorld
     public const string WorldUid = "4242";
     private readonly List<(float X, float Z)> _markers = [], _saved = [];
     public int Restarts, MarkCommands;
-    public bool LoseMarkReply, OmitServerSummary, ConfirmSaves = true, ClientSeesMarkers = true, PatchMissing;
+    public bool LoseMarkReply, OmitServerSummary, ConfirmSaves = true, ClientSeesMarkers = true, ConfirmProtection = true, PatchMissing;
     /// <summary>How many session readings report the socket closed before it opens (a first boot's late socket).</summary>
     public int ClosedReadings;
     public int SessionReadings;
@@ -91,7 +91,10 @@ internal sealed class TestWorld
                 worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined, saving = false, loadError = false,
                 connectionStatus = joined ? "Connected" : "None",
             })
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
+            // ValheimCLI's reply reads each mode back; one that did not take makes it an error line.
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok(ConfirmProtection
+                ? "OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"
+                : "ERROR: code=safety_not_applied playerSafety enabled=True god=True ghost=False debugMode=True cheats=True"))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => new
             {

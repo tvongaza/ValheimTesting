@@ -15,23 +15,29 @@ public sealed class PinnedServerRunTests : IDisposable
     private string Output => Path.Combine(_root, "out");
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
 
-    private string WritePlan(bool linux)
+    // runtimePins: the pins to write (default: the runtime's own). Unpinned: pinning "none", no pins and no fixture manifests.
+    private string WritePlan(bool linux, string[]? patchers = null, Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false)
     {
         Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
         string server = Path.Combine(Runtime, linux ? ServerLaunch.LinuxExecutable : ServerLaunch.WindowsExecutable);
         File.WriteAllText(server, "server");
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
+        FakeInstalls.Server(Runtime);
         File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "world");
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
-        var plan = new
+        var plan = new Dictionary<string, object>
         {
-            scenario = "smoke",
-            runtime = new { source = Runtime, sha256 = WorldFixture.Manifest(Runtime) },
-            world = new { source = World, sha256 = WorldFixture.Manifest(World) },
-            arguments = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
-            pins = new Dictionary<string, string> { ["worlduid"] = "1" },
-            port = port < 1024 ? 5577 : port,
+            ["scenario"] = "smoke",
+            ["runtime"] = new { source = Runtime, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(Runtime) },
+            ["world"] = new { source = World, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(World) },
+            ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
+            ["pins"] = unpinned ? new Dictionary<string, string>() : new Dictionary<string, string> { ["worlduid"] = "1" },
+            ["port"] = port < 1024 ? 5577 : port,
+            ["patchers"] = patchers ?? [],
+            ["logScan"] = logScan ?? [],
         };
+        if (unpinned) plan["pinning"] = "none";
+        else plan["runtimePins"] = runtimePins ?? InstallPins.Of(Runtime);
         string path = Path.Combine(_root, "plan.json");
         File.WriteAllText(path, JsonSerializer.Serialize(plan));
         return path;
@@ -55,9 +61,12 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
-        Assert.Equal(new[] { "copy and verify pinned runtime", "copy and verify pinned world", "copied runtime has the plan's server executable", "prepared only; no game launched" },
+        Assert.Equal(new[] { "copy and verify pinned runtime", "copy and verify pinned world", "copied runtime has the plan's server executable",
+                "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers", "prepared only; no game launched" },
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
         Assert.Equal("validate", result.GetProperty("Provenance").GetProperty("mode").GetString());
+        Assert.Equal(InstallPins.Of(Runtime).Game, result.GetProperty("Provenance").GetProperty("runtimeGameSha256").GetString());
+        Assert.Equal("strict", result.GetProperty("Pinning").GetString());
         Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json"))); Assert.True(File.Exists(Path.Combine(Output, "junit.xml")));
     }
     [Fact] public async Task ExistingEvidenceIsNeverOverwrittenAndBadUsageIsRefused()
@@ -128,7 +137,62 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(new[] { StateWait.InWorldNoPlayer }, events.ReadyStates);
         Assert.NotNull(events.States);
         Assert.Matches(events.Listening, "[Info   :valheimCLI] Command server listening on 127.0.0.1:5591");
-        Assert.Same(StartupEvents.BepInExPluginLoadFailures, events.Failures);
+        Assert.Same(StartupEvents.StartupFailures, events.Failures);
+    }
+    [Fact] public async Task ALeftoverPatcherFailsValidationUnlessThePlanNamesIt()
+    {
+        Directory.CreateDirectory(Path.Combine(Runtime, "BepInEx", "patchers"));
+        File.WriteAllText(Path.Combine(Runtime, "BepInEx", "patchers", "RemovedMod.Preloader.dll"), "patcher");
+        string plan = WritePlan(linux: HostRunsLinux);
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
+        var step = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "copied runtime's BepInEx patchers are the plan's");
+        Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("RemovedMod.Preloader.dll", step.GetProperty("Error").GetString());
+        // Named, the same runtime passes.
+        plan = WritePlan(linux: HostRunsLinux, patchers: ["RemovedMod.Preloader.dll"]);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", plan, Output + "-named"], Options()));
+    }
+    // A scenario-registered log (an owned client's) is scanned with the run's at teardown: a patch on a method that does
+    // not exist fails a passing scenario, unless the plan reclassifies it with a reason.
+    private const string BrokenPatchLog = "[Message:   BepInEx] BepInEx 5.4.23.2\n[Error  :   BepInEx] Error loading [Broken Mod 1.0.0] : Exception has been thrown by the target of an invocation.\n" +
+        "System.ArgumentException: Undefined target method for patch method static System.Void BrokenMod.Patches::Postfix()\n";
+    private Func<PinnedServerRunContext<ServerRunPlan>, Task> RegistersClientLog(string text) => run =>
+    {
+        string path = Path.Combine(run.Output, "client-boot.game-0.log"); File.WriteAllText(path, text);
+        run.Logs.Add(new RunLog("client BepInEx log", path, Required: true));
+        return Task.CompletedTask;
+    };
+    [Fact] public async Task TheTeardownScanFailsAPassingScenarioOnABrokenPatch()
+    {
+        if (OperatingSystem.IsMacOS()) return;
+        string plan = WritePlan(linux: HostRunsLinux);
+        var server = new FakeOwnedServer("test.mod");
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(RegistersClientLog(BrokenPatchLog), server)));
+        Assert.Contains("stop1", server.Events);
+        var result = Result();
+        var scan = Assert.Single(result.GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "scan run logs");
+        Assert.False(scan.GetProperty("Passed").GetBoolean());
+        Assert.Contains("client BepInEx log: harmony-undefined-target x1, first at line 3", scan.GetProperty("Error").GetString());
+        Assert.Equal("client BepInEx log", Assert.Single(result.GetProperty("Logs").EnumerateArray()).GetProperty("Role").GetString());
+    }
+    [Fact] public async Task ACleanLogOrAReclassifiedPatternPassesTheScan()
+    {
+        if (OperatingSystem.IsMacOS()) return;
+        string plan = WritePlan(linux: HostRunsLinux);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(RegistersClientLog("[Message:   BepInEx] BepInEx 5.4.23.2\n"), new FakeOwnedServer("test.mod"))));
+        Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "scan run logs" && s.GetProperty("Passed").GetBoolean());
+        plan = WritePlan(linux: HostRunsLinux, logScan: new() { ["harmony-undefined-target"] = new { severity = "Warning", reason = "The broken patch is the mod's known, reported issue." } });
+        string output = Output + "-reclassified";
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, output], Options(RegistersClientLog(BrokenPatchLog), new FakeOwnedServer("test.mod"))));
+        using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json")));
+        var count = result.RootElement.GetProperty("Logs")[0].GetProperty("Counts").EnumerateArray().Single(c => c.GetProperty("Pattern").GetString() == "harmony-undefined-target");
+        Assert.Equal(1, count.GetProperty("Count").GetInt32()); Assert.Equal("Warning", count.GetProperty("Severity").GetString());
+        Assert.Equal("The broken patch is the mod's known, reported issue.", count.GetProperty("Reason").GetString());
+    }
+    [Fact] public async Task AnUnknownLogScanNameIsRefusedBeforeCopying()
+    {
+        string plan = WritePlan(linux: HostRunsLinux, logScan: new() { ["no-such-pattern"] = new { severity = "Warning", reason = "x" } });
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
+        Assert.False(Directory.Exists(Output));
     }
     [Fact] public void TheGenericPlanRulesHold()
     {
@@ -137,6 +201,7 @@ public sealed class PinnedServerRunTests : IDisposable
             Runtime = new() { Source = Path.GetTempPath(), Sha256 = new() { ["a"] = new string('a', 64) } },
             World = new() { Source = Path.GetTempPath(), Sha256 = new() { ["b"] = new string('b', 64) } },
             Arguments = ["-batchmode", "-nographics", "-savedir", "{world}"], Pins = new() { ["worlduid"] = "1", ["my.mod"] = new string('1', 32) },
+            RuntimePins = new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) },
         };
         plan.ValidateServerPlan(["my.mod"], "TOKEN");
         Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan(["other.mod"], "TOKEN"));
