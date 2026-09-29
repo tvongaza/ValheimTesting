@@ -22,8 +22,20 @@ public sealed class ClientRunPlan
     public int Port { get; set; }
     /// <summary>Every plugin the client loads by exact MD5, or <c>absent</c>. No world key: the runner adds the server's.</summary>
     public Dictionary<string, string> Pins { get; set; } = [];
-    /// <summary>The server address the client joins, host:port.</summary>
+    /// <summary>The server address the client joins, host:port. Left out for a <see cref="Crossplay"/> or hosting (<see cref="HostWorld"/>) client.</summary>
     public string Join { get; set; } = "";
+    /// <summary>
+    /// Joins the server's crossplay (PlayFab) lobby instead of its address (<see cref="SessionControl.JoinCrossplay"/>),
+    /// for a server plan with <see cref="ServerRunPlan.Crossplay"/>. Leave out <see cref="Join"/> and
+    /// <see cref="PasswordVariable"/>: the crossplay join command would carry a password as text, so the fixture server runs
+    /// private without one.
+    /// </summary>
+    public bool Crossplay { get; set; }
+    /// <summary>
+    /// The client hosts this fixture world from its menu (a listen server) instead of joining a server
+    /// (<see cref="HostRounds"/>). Leave out <see cref="Join"/>, <see cref="PasswordVariable"/> and <see cref="Crossplay"/>.
+    /// </summary>
+    public HostWorldPlan? HostWorld { get; set; }
     /// <summary>An existing, disposable local character (never a cloud character).</summary>
     public string Character { get; set; } = "";
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
@@ -67,9 +79,16 @@ public sealed class ClientRunPlan
         BepInExLoader.CheckPatcherNames(Patchers);
         if (string.IsNullOrWhiteSpace(Host) || Port is < 1024 or > 65535) throw new ArgumentException("Give the client's ValheimCLI host and port.");
         if (Owned && Host is not ("127.0.0.1" or "localhost")) throw new ArgumentException("An owned client runs on this machine; its ValheimCLI host is 127.0.0.1.");
-        foreach (string? token in new[] { Join, Character, PasswordVariable })
+        if (HostWorld != null && (Join.Length != 0 || PasswordVariable != null || Crossplay))
+            throw new ArgumentException("A hosting client (hostWorld) joins no server: leave out join, passwordVariable and crossplay; hostWorld.crossplay hosts a crossplay world.");
+        if (HostWorld != null && Host is not ("127.0.0.1" or "localhost"))
+            throw new ArgumentException("A hosting client runs on this machine, where the runner places the fixture world in its save directory; its ValheimCLI host is 127.0.0.1.");
+        if (Crossplay && (Join.Length != 0 || PasswordVariable != null))
+            throw new ArgumentException("A crossplay client joins the server's PlayFab lobby, not an address, and the crossplay join command would carry a password as text: leave out join and passwordVariable, and run the crossplay fixture server private without a password.");
+        foreach (string? token in new[] { HostWorld == null && !Crossplay ? Join : null, Character, PasswordVariable })
             if (token != null && (token.Length == 0 || token.Any(char.IsWhiteSpace))) throw new ArgumentException("Join address, character and password variable must be single tokens.");
         if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600) throw new ArgumentException("Client timeouts are out of range.");
+        HostWorld?.Validate(pinned);
         if (!pinned)
         {
             if (Pins.Count != 0 || InstallPins != null)
