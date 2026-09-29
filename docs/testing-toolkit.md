@@ -18,7 +18,7 @@ A successful fake transport run is an orchestration test, not an in-game pass. A
 | `valheimCLI.dll` | net48, stable BepInEx plugin: existing commands, transport, broker, extension host |
 | `Valheim.Testing.Cli` | net10.0, the same client and YAML runner used by the executable, packaged from ValheimCLI's `Valheim.Cli.Testing` project (source in `CLI/Testing`) at a pinned commit |
 | `Valheim.Testing` | netstandard2.0, synthetic plane/island/ridge/river and exact captured-sample replay; works with net48/Mono and modern .NET |
-| `Valheim.Testing.Game` | net10.0, named actors, typed observations, event waits (log line, process exit, game state) with bounded fallbacks, fixture copies, comparisons and JSON/JUnit reports |
+| `Valheim.Testing.Game` | net10.0, named actors, typed observations, event waits (log line, process exit, game state) with bounded fallbacks, fixture copies, comparisons and JSON/JUnit reports, game hosts (local, SSH, container) and environment profiles |
 | `Valheim.Testing.Doubles` | source package, compiled into the consumer: partial doubles of the Unity, Valheim, BepInEx and Jotunn types mod logic uses (see [Game doubles](#game-doubles)) |
 | `Valheim.Testing.Bindings` | netstandard2.0, offline check that a built mod's references into the game assemblies still bind, with Mono.Cecil (see [Offline binding check](#offline-binding-check-valheimtestingbindings-preview-1)) |
 | `Valheim.Testing.Bindings.Tool` | net10.0 .NET tool `valheim-bindings`: the same check as a CI step |
@@ -358,7 +358,7 @@ macOS has no dedicated server. `Detect` refuses a macOS game client (a `Valheim.
 
 The image pins `linux/amd64` and was verified on a Linux x86-64 Docker host on 28 September 2026 (server build 25527701): the smoke passed all five steps and `validate.cs` passed inside the container.
 
-Limits: this boots a server with no ValheimCLI or mod plugins; it does not test save, networking or gameplay, and Steam's backend connection is recorded but not required. Unit tests cover detection, refusal and environment merging with fake files. Game clients in the cloud are not supported, and remote hosts over SSH are the next step. Images contain game files and must never be pushed or published.
+Limits: this boots a server with no ValheimCLI or mod plugins; it does not test save, networking or gameplay, and Steam's backend connection is recorded but not required. Unit tests cover detection, refusal and environment merging with fake files. Game clients in the cloud are not supported; for remote hosts over SSH see [Game hosts](#game-hosts-and-environment-profiles-preview-13). Images contain game files and must never be pushed or published.
 
 ## Game client launch (preview 11)
 
@@ -395,6 +395,53 @@ Limits: an owned client must run in the desktop session where Steam is running a
 ## Game-side adapter helpers (Valheim.Testing.Adapter, preview 1)
 
 A mod's owned server runs need a small test adapter plugin in the server runtime: `OwnedServerSession` proves it started that very server by reading a `session` capability (token, process ID, save root, dedicated, readiness). `Valheim.Testing.Adapter` is a source package compiled into that adapter, which references ValheimCLI and the game (so this repository builds none of it). `TestExtension.Register(id, version, tokenVariable, modReady, registered, logError, commands...)` waits for ValheimCLI's extension API, then registers the mod's extension with the `session` capability and any test commands of its own; The session reports complete when the world is up and `modReady` returns true, and reports `acceptingConnections` separately: a dedicated server opens its game socket only when world generation finishes, on a first boot about 17 s after the world has loaded, and a join before that times out. `OwnedServerSession.WaitUntilJoinable(server, capability, timeout)` waits for it; call it just before the first join so the wait overlaps other work (server-side steps, an owned client's launch) instead of lengthening startup. `TestExtension.DevcommandsFlag()` reads the raw devcommands flag that ValheimCLI's extension gate uses. The example's [adapter](../examples/FullLifecycle/MyMod.TestAdapter/Plugin.cs) is the whole pattern in a dozen lines.
+
+## Game hosts and environment profiles (preview 13)
+
+A mod author often edits on one machine and runs the game on another: a Windows gaming PC, a Linux box, a container, a rented VM. macOS has no dedicated server at all. An **environment profile** says where each game process of a run lives, and an `IGameHost` does the work on that machine.
+
+```json
+{
+  "hosts": {
+    "linux-box":  { "kind": "ssh", "platform": "linux", "shell": "bash", "destination": "tester@linux-box.example",
+                    "sshOptions": ["IdentityFile=~/.ssh/valheim_tests"], "lock": "/var/tmp/valheim-testing/lock" },
+    "gaming-pc":  { "kind": "ssh", "platform": "windows", "shell": "powershell", "destination": "tester@gaming-pc.example",
+                    "lock": "C:\\ValheimTesting\\lock" },
+    "server-ctr": { "kind": "container", "platform": "linux", "shell": "bash", "container": "valheim-server", "user": "valheim",
+                    "lock": "/home/valheim/lock" }
+  },
+  "server": { "host": "linux-box", "install": "/opt/valheim/server", "runtime": "/srv/valheim-testing/runs", "cliPort": 5577, "gamePort": 2456 },
+  "clients": { "player": { "host": "gaming-pc", "install": "C:\\Games\\Valheim", "runtime": "C:\\ValheimTesting\\runs", "cliPort": 5578 } }
+}
+```
+
+`EnvironmentProfile.Read(path)` refuses unknown fields and validates everything at once before anything starts: known kinds, platforms and shells (`powershell` is Windows PowerShell 5.1, Windows only; `pwsh` anywhere; no `bash` on Windows), ssh destinations and options as `SshGameHost` accepts them (no password, the port given once), absolute paths in the host's own style, a runtime directory outside the install, no server on a macOS host, one game client per host, no ValheimCLI port used twice on one host, and no two roles reached on the same port of this machine (a local host's or container's CLI port, an SSH role's `localCliPort`). A `local` host must describe this machine's platform. `CreateHost(name)`, `CreateServerHost()` and `CreateClientHost(name)` return the hosts. A profile describes one person's machines, so keep it beside the mod's tests, not in them; it holds no credentials. SSH uses keys or an agent only (BatchMode is always on, a password is never accepted), and the host key must already be known.
+
+| Operation | `IGameHost` | Contract |
+|---|---|---|
+| Run a script | `RunAsync(script, variables, timeout)` | bash or PowerShell. The script travels on standard input, never on a command line, and each variable arrives as a quoted literal no shell interprets. A small wrapper on the host reports the script's own exit code, so a Windows login shell that turns every failure into 1 still returns the real code. |
+| Take the host lock | `AcquireLockAsync(lockPath, owner, timeout)` | The exclusive creation of an owner file in the lock directory; exactly one run wins. Each acquisition claims as the given owner plus a unique id (`HostLock.Owner`), so two runs that pass the same owner never both hold the lock and only the holding handle releases it. Another claimant's lock throws `HostLockException` with its holder, at once: nothing waits or retries. An unproven claim names the claimant it tried, to check with before deciding what to do. Disposing the `HostLock` releases it and throws if the release cannot be proven. A lock left by a crashed run stays until a person removes it. |
+| Ship a revision or files | `ShipRevisionAsync(repository, revision, dir, timeout)`, `ShipFilesAsync(localDir, dir, timeout)` | `git archive` of a commit (tracked files only, never the working tree) or a local directory, as a tar checked by SHA-256 on the host and extracted into a new directory; `SOURCE.txt` there records the commit, tree and hash. |
+| Follow a log | `LogOffsetAsync(log, timeout)`, then `WaitForLogAsync(log, offset, success, failures, timeout)` | Event driven on the host (`tail -F`, or a file watcher under PowerShell); lines are matched here with .NET regular expressions, failure patterns first. Take the offset before the action whose line you await. The log may not exist yet. A log the game recreates at each boot is best given a fresh path (the run's own runtime copy) and offset 0. Expiry returns `TimedOut`; `EnsureMatched()` throws the same `WaitFailedException` and `WaitTimeoutException` as `LogWait`. |
+| Fetch evidence | `FetchDirectoryAsync(dir, localDir, timeout)` | A tar of the host directory, hash and size checked on both ends, extracted into a new local directory; entries that would land outside it are refused. |
+| Reach ValheimCLI | `OpenCliTunnelAsync(cliPort, readyTimeout, localPort = 0)` | See below. |
+
+A host result is `Exited` with the script's code, `TransportFailed` (ssh exit 255, a Docker error or a missing executable, without the host's report), or `Unknown`. A deadline always gives `Unknown` with `TimedOut` set: the script may not have run, may have finished or may still be running. `Succeeded` and `Failed` are both false for it, and a lock claim that timed out is `HostLockState.Unknown`, neither yours nor free. Nothing is retried, because a mutation must never be repeated blindly; check with a read-only script before deciding what to do.
+
+ValheimCLI listens on its host's loopback only, and stays that way. For an SSH host, `OpenCliTunnelAsync` starts `ssh -N -L 127.0.0.1:<local>:127.0.0.1:<cliPort>` with `ExitOnForwardFailure` and `GatewayPorts=no`; neither end is ever bound beyond loopback. A requested local port already in use is refused before ssh starts (a client would otherwise reach whatever listens there); 0 picks a free one. Checking the port and ssh binding it are separate steps, so another process can take it in between: ssh then exits (ExitOnForwardFailure) and the tunnel fails, but a readiness probe made before ssh exited could reach that process. ssh would also open the `LocalForward`, `RemoteForward` and `DynamicForward` entries an ssh config gives the host, possibly beyond loopback, and `ClearAllForwardings` would clear the tunnel's own forward too, so a host whose effective config (`ssh -G`) has any is refused. The tunnel is ready when a local connection succeeds, and disposing it stops that ssh process and no other. Connect as usual to `127.0.0.1:tunnel.LocalPort`, for example `StateWait.Connect(tunnel.Address, tunnel.LocalPort)`. A local host's CLI is its own port. A container's CLI is reachable only when the container shares the Docker host's network (`--network host`, Linux, a local Docker daemon): a published port reaches the container's own interface, never its loopback, so any other network mode is refused. Script runs pass `ClearAllForwardings=yes`, so an ssh config cannot add listeners to them.
+
+| Host | Kind | Shell | Install (example) | Runtime and lock (example) | Server | Client | Tools the scripts use |
+|---|---|---|---|---|---|---|---|
+| Windows | `ssh` (OpenSSH Server; any login shell) or `local` | `powershell` or `pwsh` | `C:\Program Files (x86)\Steam\steamapps\common\Valheim dedicated server` | `C:\ValheimTesting\runs`, `C:\ValheimTesting\lock` | Yes | Only in the signed-in desktop session; an SSH session has none | `System32\tar.exe` (Windows 10 1803, Server 2019 or later); hashes use .NET, not `Get-FileHash`, which Windows PowerShell cannot load under PowerShell 7's module path |
+| Linux | `ssh` or `local` | `bash` (POSIX login shell) or `pwsh` | `/opt/valheim/server` | `/srv/valheim-testing/runs`, `/var/tmp/valheim-testing/lock` | Yes | With a display ([docker/linux-client](../docker/linux-client/README.md)) | coreutils (`base64`, `mktemp`, `sha256sum`, `tail -F`), `tar` |
+| macOS | `local` or `ssh` (Remote Login) | `bash` or `pwsh` | `/Users/<you>/Library/Application Support/Steam/steamapps/common/Valheim` | `/Users/<you>/ValheimTesting/runs`, `/Users/<you>/ValheimTesting/lock` | **No** (refused by the profile) | In the signed-in desktop session | `shasum`, BSD `tail` and `tar` |
+| Linux container | `container` (`docker exec -i`) | `bash` | `/opt/valheim/server` ([docker/linux-server](../docker/linux-server/README.md)) | `/home/valheim/runs`, `/home/valheim/lock` | Yes | [docker/linux-client](../docker/linux-client/README.md) | as Linux |
+
+Paths are literal: they arrive as quoted values, so spaces are fine, and they must be absolute because an SSH session's working directory is the user's home. A lock is per host, so two containers on one machine are two hosts. A bash host needs a POSIX login shell for SSH; a PowerShell host works under cmd.exe, bash or PowerShell.
+
+CI checks every host kind: unit tests with fake processes cover the commands each kind starts, transport failures, timeouts (unknown outcome) and lock contention; the same end-to-end checks (literal values and exit codes, a timeout, lock contention, shipping a revision and files, fetching them back, following a log from an offset) run through a real local bash, Windows PowerShell and pwsh on every CI OS, and the `game hosts` job runs them over a real ssh to a throwaway sshd on localhost (bash and pwsh sessions, the loopback tunnel, an unreachable port) and into a throwaway container on the host network.
+
+Limits: this is the host layer. `ServerLaunch`, `ClientLaunch`, `OwnedServerSession` and `ClientSession` still start and own processes on this machine; driving them on a remote host through a profile is a follow-up. A server-only native run on a Linux container host driven over SSH from another OS has **not** been done yet. An `ssh` client on Windows is the system OpenSSH client; Windows as an SSH *host* has been checked only through the local Windows PowerShell path in CI, not over a real SSH session.
 
 ## Offline binding check (Valheim.Testing.Bindings, preview 1)
 
