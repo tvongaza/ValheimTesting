@@ -1,0 +1,76 @@
+<Project>
+  <!--
+    Valheim.GameReferences.targets (ValheimTesting tools/game-references, version 1)
+
+    Import at the end of the project, after Valheim.GameReferences.props at its start. Properties set anywhere
+    in the project, on the command line (-p:ValheimPath=...) or in the environment are read here:
+
+      ValheimPath    the game folder (default: the VALHEIM_PATH environment variable, else the Steam folder for
+                     this OS; on Linux ~/.steam/steam, the link Steam keeps to its install). The one property most
+                     projects need.
+      ValheimManaged the folder holding assembly_valheim.dll (default: found under ValheimPath: valheim_Data/Managed,
+                     Valheim.app/Contents/Resources/Data/Managed or valheim_server_Data/Managed)
+      BepInExCore    the folder holding BepInEx.dll (default: ValheimPath/BepInEx/core)
+      UseValheimCli  true in a project that compiles against ValheimCLI, such as a test adapter; it then needs
+      CliDll         the ValheimCLI core (valheimCLI.dll) installed in the test runtime. There is deliberately no
+                     default: an adapter compiles against the exact core it will run with.
+
+    Before assembly references are resolved, every listed file is checked and the build stops with an error that
+    names each missing file and the property that locates it. Game assemblies are never copied to the output.
+  -->
+  <PropertyGroup>
+    <ValheimGameReferencesTargetsImported>true</ValheimGameReferencesTargetsImported>
+    <_ValheimPathFrom>ValheimPath</_ValheimPathFrom>
+    <_ValheimPathFrom Condition="'$(ValheimPath)' == '' And '$(VALHEIM_PATH)' != ''">the VALHEIM_PATH environment variable</_ValheimPathFrom>
+    <ValheimPath Condition="'$(ValheimPath)' == ''">$(VALHEIM_PATH)</ValheimPath>
+    <_ValheimPathFrom Condition="'$(ValheimPath)' == ''">the default Steam folder; neither ValheimPath nor VALHEIM_PATH is set</_ValheimPathFrom>
+    <ValheimPath Condition="'$(ValheimPath)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">C:\Program Files (x86)\Steam\steamapps\common\Valheim</ValheimPath>
+    <ValheimPath Condition="'$(ValheimPath)' == '' And $([MSBuild]::IsOSPlatform('OSX'))">$(HOME)/Library/Application Support/Steam/steamapps/common/Valheim</ValheimPath>
+    <ValheimPath Condition="'$(ValheimPath)' == ''">$(HOME)/.steam/steam/steamapps/common/Valheim</ValheimPath>
+
+    <_ValheimManagedFrom>ValheimManaged</_ValheimManagedFrom>
+    <_ValheimManagedFrom Condition="'$(ValheimManaged)' == ''">ValheimPath</_ValheimManagedFrom>
+    <ValheimManaged Condition="'$(ValheimManaged)' == '' And Exists('$(ValheimPath)/valheim_Data/Managed')">$(ValheimPath)/valheim_Data/Managed</ValheimManaged>
+    <ValheimManaged Condition="'$(ValheimManaged)' == '' And Exists('$(ValheimPath)/Valheim.app/Contents/Resources/Data/Managed')">$(ValheimPath)/Valheim.app/Contents/Resources/Data/Managed</ValheimManaged>
+    <ValheimManaged Condition="'$(ValheimManaged)' == '' And Exists('$(ValheimPath)/valheim_server_Data/Managed')">$(ValheimPath)/valheim_server_Data/Managed</ValheimManaged>
+
+    <_BepInExCoreFrom>BepInExCore</_BepInExCoreFrom>
+    <_BepInExCoreFrom Condition="'$(BepInExCore)' == ''">ValheimPath</_BepInExCoreFrom>
+    <BepInExCore Condition="'$(BepInExCore)' == ''">$(ValheimPath)/BepInEx/core</BepInExCore>
+  </PropertyGroup>
+
+  <Target Name="AddValheimGameReferences" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <_ValheimDoublesReference Include="@(PackageReference)" Condition="'%(PackageReference.Identity)' == 'Valheim.Testing.Doubles'" />
+    </ItemGroup>
+    <Error Condition="'@(_ValheimDoublesReference)' != ''"
+           Text="$(MSBuildProjectFile) references both the game's assemblies (Valheim.GameReferences) and Valheim.Testing.Doubles, whose types have the same names. Keep game references in the mod and its adapter, and the doubles in a separate unit-test project that links the mod's sources." />
+
+    <Error Condition="'@(ValheimReference)' != '' And '$(ValheimManaged)' == '' And !Exists('$(ValheimPath)')"
+           Text="Valheim is not installed at '$(ValheimPath)' ($(_ValheimPathFrom)). Set ValheimPath to the game folder, with -p:ValheimPath=&lt;folder&gt; or the VALHEIM_PATH environment variable, or ValheimManaged to the folder holding assembly_valheim.dll." />
+    <Error Condition="'@(ValheimReference)' != '' And '$(ValheimManaged)' == ''"
+           Text="'$(ValheimPath)' ($(_ValheimPathFrom)) has no valheim_Data/Managed, Valheim.app/Contents/Resources/Data/Managed or valheim_server_Data/Managed folder. Set ValheimPath to the game folder, or ValheimManaged to the folder holding assembly_valheim.dll." />
+
+    <ItemGroup>
+      <_ValheimGameReference Include="@(ValheimReference)" Condition="'%(ValheimReference.File)' == ''" HintPath="$(ValheimManaged)/%(ValheimReference.Identity).dll" ValheimFolder="managed" />
+      <_ValheimGameReference Include="@(ValheimReference)" Condition="'%(ValheimReference.File)' != ''" HintPath="$(ValheimManaged)/%(ValheimReference.File)" ValheimFolder="managed" />
+      <_ValheimGameReference Include="@(BepInExReference)" Condition="'%(BepInExReference.File)' == ''" HintPath="$(BepInExCore)/%(BepInExReference.Identity).dll" ValheimFolder="bepinex" />
+      <_ValheimGameReference Include="@(BepInExReference)" Condition="'%(BepInExReference.File)' != ''" HintPath="$(BepInExCore)/%(BepInExReference.File)" ValheimFolder="bepinex" />
+      <_ValheimMissingManaged Include="@(_ValheimGameReference)" Condition="'%(_ValheimGameReference.ValheimFolder)' == 'managed' And !Exists('%(_ValheimGameReference.HintPath)')" />
+      <_ValheimMissingBepInEx Include="@(_ValheimGameReference)" Condition="'%(_ValheimGameReference.ValheimFolder)' == 'bepinex' And !Exists('%(_ValheimGameReference.HintPath)')" />
+    </ItemGroup>
+    <Error Condition="'@(_ValheimMissingManaged)' != ''"
+           Text="Game assemblies not found in '$(ValheimManaged)' (from $(_ValheimManagedFrom)): @(_ValheimMissingManaged->'%(Identity) (%(HintPath))', ', '). Check that ValheimPath is a complete Valheim install, or correct the ValheimReference items." />
+    <Error Condition="'@(_ValheimMissingBepInEx)' != ''"
+           Text="BepInEx assemblies not found in '$(BepInExCore)' (from $(_BepInExCoreFrom)): @(_ValheimMissingBepInEx->'%(Identity) (%(HintPath))', ', '). Install BepInEx in the game folder, or set BepInExCore to the folder holding BepInEx.dll." />
+
+    <Error Condition="'$(UseValheimCli)' == 'true' And '$(CliDll)' == ''"
+           Text="$(MSBuildProjectFile) sets UseValheimCli: pass -p:CliDll=&lt;path&gt; with the ValheimCLI core (valheimCLI.dll) installed in the test runtime. There is no default, so the project compiles against the exact core it will run with." />
+    <Error Condition="'$(UseValheimCli)' == 'true' And !Exists('$(CliDll)')"
+           Text="CliDll does not exist: '$(CliDll)'. Pass -p:CliDll= with the ValheimCLI core (valheimCLI.dll) installed in the test runtime." />
+    <ItemGroup>
+      <_ValheimGameReference Include="valheimCLI" Condition="'$(UseValheimCli)' == 'true'" HintPath="$(CliDll)" ValheimFolder="cli" />
+      <Reference Include="@(_ValheimGameReference)" Private="false" />
+    </ItemGroup>
+  </Target>
+</Project>
