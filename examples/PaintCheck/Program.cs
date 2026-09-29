@@ -6,8 +6,7 @@ if(args.Length!=5){Console.Error.WriteLine("PaintCheck <host> <port> <pins-file>
 var output=Path.GetFullPath(args[4]);bool owns=false;var report=new ScenarioReport("loaded-paint-check");
 try
 {
-    var plan=JsonSerializer.Deserialize<Plan>(File.ReadAllText(args[3]),new JsonSerializerOptions{PropertyNameCaseInsensitive=true,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow})??throw new ArgumentException("Empty plan.");
-    PaintProbe.Validate(plan.ExpectedFrom,plan.Samples,plan.Tolerance);
+    var plan=PaintPlan.Read(args[3]);
     if(!PlanExpectations.TryLoad(args[2],true,out var pins,out var error))throw new ArgumentException(error);
     if(Path.Exists(output))throw new IOException("Use a new output directory.");
     Directory.CreateDirectory(output);owns=true;
@@ -24,9 +23,3 @@ try
 catch(Exception e){try{report.Step("paint check failed",()=>throw new InvalidOperationException(e.Message,e));}catch{}Console.Error.WriteLine(e.Message);}
 finally{if(owns)report.Write(output);}
 return report.Passed?0:1;
-public sealed class Plan
-{
-    public string ExpectedFrom{get;set;}="";
-    public float Tolerance{get;set;}=.01f;
-    public List<PaintExpectation> Samples{get;set;}=[];
-}

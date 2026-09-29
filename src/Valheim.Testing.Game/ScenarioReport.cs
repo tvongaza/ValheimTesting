@@ -17,6 +17,25 @@ public sealed class ScenarioReport
         try { action(); Steps.Add(new(name, true, clock.Elapsed.TotalSeconds, "")); }
         catch (Exception error) { Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, error.Message)); throw; }
     }
+    /// <summary>
+    /// The async twin of <see cref="Step"/>: records the awaited action's outcome and time and rethrows its failure. With
+    /// <paramref name="failure"/>, the failure is rethrown as an <see cref="InvalidOperationException"/> with that message
+    /// and the original as its inner exception.
+    /// </summary>
+    public async Task StepAsync(string name, Func<Task> action, string? failure = null)
+    {
+        var clock = Stopwatch.StartNew();
+        try { await action().ConfigureAwait(false); Steps.Add(new(name, true, clock.Elapsed.TotalSeconds, "")); }
+        catch (Exception error)
+        {
+            if (failure == null || error is OperationCanceledException) { Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, error.Message)); throw; }
+            var wrapped = new InvalidOperationException(failure, error);
+            Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, failure + " " + error.Message));
+            throw wrapped;
+        }
+    }
+    /// <summary>Records a failure outside any step (for example in the runner around the scenario), so the report cannot pass.</summary>
+    public void RecordFailure(string name, Exception error) => Steps.Add(new(name, false, 0, error.Message));
     public void Write(string directory)
     {
         Directory.CreateDirectory(directory);

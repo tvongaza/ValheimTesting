@@ -148,6 +148,23 @@ public sealed class GameActor : IDisposable
         var data = Invoke(command, arguments);
         return new Observation(data.GetProperty("source").GetString()!, data.GetProperty("complete").GetBoolean(), data);
     }
+    /// <summary>Observes and requires a complete observation from <paramref name="source"/>.</summary>
+    public Observation ObserveComplete(Capability command, string source, params string[] arguments)
+    {
+        var observation = Observe(command, arguments);
+        observation.RequireComplete(source);
+        return observation;
+    }
+    /// <summary>
+    /// Saves the world with <c>cli_save</c> and requires ValheimCLI's confirmation line (<c>OK: SAVE ...</c>), which it
+    /// returns. Anything else is a failure: never restart or compare persistence after an unconfirmed save.
+    /// </summary>
+    public string SaveConfirmed()
+    {
+        var reply = Execute("cli_save");
+        return reply.Output.FirstOrDefault(line => line.StartsWith("OK: SAVE ", StringComparison.Ordinal))
+            ?? throw new InvalidOperationException("No confirmed world save.");
+    }
     public static JsonDocument ParseLine(CommandResult reply, string prefix)
     {
         string[] lines = reply.Output.Where(x => x.StartsWith(prefix, StringComparison.Ordinal)).ToArray();

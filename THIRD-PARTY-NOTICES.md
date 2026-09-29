@@ -39,3 +39,12 @@ Copyright 2023 Azumatt/Tykea
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Adapted Procedural Roads test code
+
+Adapted from the ProceduralRoads test projects, as proposed in [jneb802/ProceduralRoads#33](https://github.com/jneb802/ProceduralRoads/pull/33) at [ea6de3c](https://github.com/tvongaza/ProceduralRoads/tree/ea6de3c9dbc1f3bdcea92ea2d3991f5d34e8e3c2), and its follow-up revisions by the same author. The repository MIT license above ("Adapted synthetic terrain") applies to this material too.
+
+- `src/Valheim.Testing.Doubles/Doubles/`: from `ProceduralRoads.Tests/Shims/` (`UnityShims.cs`, `ValheimShims.cs`, `BepInExShims.cs`, `ManualNetworkShims.cs`); Roads' own terrain logic was moved out behind the `Heightmap` hooks. `TerrainWorld` and `ValheimWorldScope` are new, replacing per-test world setup there.
+- `src/Valheim.Testing.Game/Fakes/`: from the scripted transports and fake servers in the ProceduralRoads system-test tests.
+- `src/Valheim.Testing.Game/PinnedServerRun.cs` and `ServerRunPlan.cs`: from `ProceduralRoads.SystemTests/Program.cs` and `RunPlan.cs`.
+- `TransformMatch` in `src/Valheim.Testing.Game/Matching.cs`: from the system tests' `PieceComparison`.

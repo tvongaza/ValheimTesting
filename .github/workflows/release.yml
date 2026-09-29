@@ -27,7 +27,7 @@ jobs:
       - name: Pack release packages
         run: |
           mkdir -p release
-          for p in Valheim.Testing Valheim.Testing.Game; do
+          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.Doubles; do
             dotnet pack "src/$p/$p.csproj" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true
           done
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
