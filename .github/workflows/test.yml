@@ -3,7 +3,12 @@ name: Local test layers
 # no-game examples, package-consuming mod tests and packing. Never launches Valheim or a server. The scripts are .NET file-based
 # programs, so the same commands run in each runner's default shell. No secrets are used. The mod-example job runs
 # the ModWithTests workflow template's commands against the published packages.
-on: [push, pull_request]
+# Pushes to main and pull requests only: a branch with an open PR would otherwise run everything twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -20,11 +25,11 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # Runner images carry a .NET SDK, but not necessarily 10; pin the channel on every OS.
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - run: dotnet --info

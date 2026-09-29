@@ -2,7 +2,13 @@ name: Tests
 # Runs the mod's tests on every push and pull request. Builds only the test project: the plugin project
 # references Valheim, Unity and BepInEx assemblies that a hosted runner does not have, and those must not
 # be committed or uploaded. Uses no game, Steam account or secret.
-on: [push, pull_request]
+# Pushes to main and pull requests only: a branch with an open PR would otherwise run twice.
+# Change main if your default branch has another name.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
