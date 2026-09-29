@@ -66,6 +66,8 @@ public sealed class OwnedServerSession : IDisposable
     /// startup at once with the exit code and the last log line. With <see cref="Events"/>, the first connection waits for
     /// ValheimCLI's listening line and, optionally, a world-loaded state push. The adapter's own readiness has no event:
     /// an unregistered or incomplete session observation is re-probed, read-only, every poll interval until the deadline.
+    /// The startup deadline bounds everything, including connecting and the final pin verification, which gets only the
+    /// time left (at most the command timeout).
     /// </summary>
     public async Task<GameActor> StartAsync()
     {
@@ -95,13 +97,36 @@ public sealed class OwnedServerSession : IDisposable
             try { await waiting.ConfigureAwait(false); } catch { /* Abandoned: the exit is the result. */ }
             throw await Exited(stage).ConfigureAwait(false);
         }
+        // A blocking call (connecting, a command) raced against the process exit and the time left. When either wins,
+        // startup ends at once: `abandon` (or the caller's cleanup) closes what the call is blocked on, a result that
+        // still arrives afterwards (a late connection) is disposed, never leaked, and `afterAbandoned` runs once the
+        // call has returned, for cleanup that must wait for it.
+        async Task<T> Bounded<T>(string stage, Func<T> call, string? lastSeen = null, Action? abandon = null, Action? afterAbandoned = null)
+        {
+            var left = Left(stage);
+            // A thread of its own: a busy thread pool must not delay startup, and a blocked call must not hold a pool thread.
+            var running = Task.Factory.StartNew(call, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            using var expiry = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+            var first = await Task.WhenAny(running, exited, Task.Delay(left, expiry.Token)).ConfigureAwait(false);
+            expiry.Cancel();
+            if (first == running) return await running.ConfigureAwait(false);
+            try { abandon?.Invoke(); } catch { /* Best effort: the call is abandoned either way. */ }
+            _ = running.ContinueWith(late =>
+            {
+                if (late.IsCompletedSuccessfully) (late.Result as IDisposable)?.Dispose(); else _ = late.Exception;
+                afterAbandoned?.Invoke();
+            }, TaskScheduler.Default);
+            _cancellation.ThrowIfCancellationRequested();
+            if (first == exited) throw await Exited(stage).ConfigureAwait(false);
+            throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, lastSeen ?? log?.Refresh());
+        }
         try
         {
             if (log != null)
                 await UntilExit("ValheimCLI listening", (left, ct) => log.WaitAsync(events!.Listening, left, events.Failures, ct)).ConfigureAwait(false);
             if (events?.States is { } openStates)
             {
-                using var states = openStates();
+                using var states = await Bounded("world loaded", openStates).ConfigureAwait(false);
                 await UntilExit("world loaded", (left, ct) => states.WaitAsync(events.ReadyStates, left, events.FailureStates, ct)).ConfigureAwait(false);
             }
             const string stage = "owned server readiness";
@@ -114,13 +139,13 @@ public sealed class OwnedServerSession : IDisposable
                 IGameTransport? transport = null;
                 try
                 {
-                    transport = _connect();
+                    var connected = transport = await Bounded(stage, _connect, last).ConfigureAwait(false);
                     var timeout = Left(stage);
                     if (timeout > _command) timeout = _command;
                     // Bootstrap exception: this adapter capability MUST be read-only. World pins cannot
                     // hold before loading completes. Prove our token/PID/save root first, then strict-pin
                     // before returning an actor or issuing any gameplay action.
-                    var reply = transport.Execute("cli_extension " + _sessionCapability, timeout);
+                    var reply = await Bounded(stage, () => connected.Execute("cli_extension " + _sessionCapability, timeout), last).ConfigureAwait(false);
                     if (!reply.Ok)
                     {
                         // The core may answer before the optional adapter is registered.
@@ -134,15 +159,22 @@ public sealed class OwnedServerSession : IDisposable
                         bool ready = CheckIdentity(document.RootElement, token, process.Id, _saveRoot, _extension);
                         if (ready)
                         {
-                            var actor = new GameActor("owned-server", transport) { CommandTimeout = _command };
-                            transport = null;
+                            // Verification gets the time left, not a full command timeout.
+                            var verify = Left(stage);
+                            var actor = new GameActor("owned-server", transport) { CommandTimeout = verify < _command ? verify : _command };
+                            var attached = transport!; transport = null;
+                            // Disposing the actor waits for its running command, so an abandoned verification closes the
+                            // transport at once (ending the command) and disposes the actor once the command returns.
+                            bool abandoned = false;
                             try
                             {
-                                actor.VerifyEnvironment(_expectations);
+                                await Bounded(stage, () => { actor.VerifyEnvironment(_expectations); return true; },
+                                    abandon: () => { abandoned = true; attached.Dispose(); }, afterAbandoned: actor.Dispose).ConfigureAwait(false);
                                 if (exited.IsCompleted || clock.Elapsed >= _startup) throw new InvalidOperationException("Server exited or startup deadline expired during verification.");
+                                actor.CommandTimeout = _command;
                                 _actor = actor; return actor;
                             }
-                            catch { actor.Dispose(); throw; }
+                            catch { if (!abandoned) actor.Dispose(); throw; }
                         }
                         last = "Owned server has not completed world/network loading";
                     }

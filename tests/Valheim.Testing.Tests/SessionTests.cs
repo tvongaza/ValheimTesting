@@ -77,7 +77,7 @@ public class SessionTests
     {
         using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
         var fake = new Host();
-        using var session = new OwnedServerSession(fake.Launch, fake.Connect, Path.GetTempPath(), "cli_expect worlduid=1", "roads.testing/session", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), cancellation: cancellation.Token);
+        using var session = new OwnedServerSession(fake.Launch, fake.Connect, Path.GetTempPath(), "cli_expect worlduid=1", "roads.testing/session", Generous, TimeSpan.FromSeconds(1), cancellation: cancellation.Token);
         Assert.Throws<OperationCanceledException>(() => session.Start()); Assert.Empty(fake.Tokens);
     }
     [Fact] public void ConnectionLossHasBoundedStartupAndOwnedCleanup()
@@ -179,12 +179,80 @@ public class SessionTests
         Assert.Contains("code 5", error.Reason); Assert.Equal("Out of memory", error.LastSeen);
         Assert.DoesNotContain(fake.Events, x => x.StartsWith("probe"));
     }
+    // The startup deadline bounds blocking calls too: the fakes below block until released, ignoring their timeouts.
+    [Fact] public void AStalledConnectionCannotOutliveTheStartupDeadline()
+    {
+        using var gate = new ManualResetEventSlim();
+        var fake = new Host { ConnectGate = gate }; using var session = fake.Session(TimeSpan.FromSeconds(1));
+        var clock = Stopwatch.StartNew();
+        Assert.Throws<WaitTimeoutException>(() => session.Start());
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10));
+        Assert.Equal(1, Volatile.Read(ref fake.Connects)); // The deadline expired in the stalled connection, the stage under test.
+        // The connection that completes afterwards is closed, not leaked.
+        gate.Set();
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref fake.Disconnects) == 1, TimeSpan.FromSeconds(10)));
+    }
+    [Fact] public void AnExitWhileConnectingEndsStartupAtOnce()
+    {
+        using var gate = new ManualResetEventSlim();
+        var fake = new Host { ConnectGate = gate };
+        // The exit comes once the connection is under way, the stage under test.
+        fake.OnLaunch = process => _ = Task.Run(() => { fake.ConnectEntered.Wait(TimeSpan.FromSeconds(30)); process.Exit(4); });
+        using var session = fake.Session(Generous);
+        var clock = Stopwatch.StartNew();
+        var error = Assert.Throws<WaitFailedException>(() => session.Start());
+        Assert.Contains("code 4", error.Reason); Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10));
+        gate.Set();
+    }
+    [Fact] public void VerificationGetsOnlyTheTimeLeftAndTheActorKeepsItsCommandTimeout()
+    {
+        var fake = new Host(); using var session = fake.Session(TimeSpan.FromSeconds(30), command: TimeSpan.FromSeconds(60));
+        var actor = session.Start();
+        Assert.Single(fake.PinTimeouts); Assert.True(fake.PinTimeouts[0] <= TimeSpan.FromSeconds(30));
+        Assert.Equal(TimeSpan.FromSeconds(60), actor.CommandTimeout);
+    }
+    [Fact] public void AStalledVerificationCannotOutliveTheStartupDeadline()
+    {
+        using var gate = new ManualResetEventSlim();
+        var fake = new Host { PinGate = gate }; using var session = fake.Session(TimeSpan.FromSeconds(2), command: TimeSpan.FromSeconds(60));
+        var clock = Stopwatch.StartNew();
+        Assert.Throws<WaitTimeoutException>(() => session.Start());
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10));
+        Assert.Contains("pins1", fake.Snapshot()); // The deadline expired in verification, the stage under test.
+        // The abandoned verification's transport was closed at once; the actor is disposed when the command returns.
+        Assert.Equal(1, Volatile.Read(ref fake.Disconnects));
+        gate.Set();
+    }
+    [Fact] public void AnExitDuringVerificationEndsStartupAtOnce()
+    {
+        using var gate = new ManualResetEventSlim();
+        var fake = new Host { PinGate = gate };
+        // The exit comes once verification is under way, the stage under test.
+        fake.OnLaunch = process => _ = Task.Run(() => { fake.PinEntered.Wait(TimeSpan.FromSeconds(30)); process.Exit(5); });
+        using var session = fake.Session(Generous, command: TimeSpan.FromSeconds(60));
+        var error = Assert.Throws<WaitFailedException>(() => session.Start());
+        Assert.Contains("code 5", error.Reason); Assert.Contains("pins1", fake.Snapshot()); Assert.True(error.Elapsed < TimeSpan.FromSeconds(10));
+        gate.Set();
+    }
+    [Fact] public void NoVerificationStartsOnceTheStartupTimeIsSpent()
+    {
+        var fake = new Host { ProbeDelay = TimeSpan.FromSeconds(3) }; using var session = fake.Session(TimeSpan.FromSeconds(1), command: TimeSpan.FromSeconds(60));
+        Assert.Throws<WaitTimeoutException>(() => session.Start());
+        Assert.Contains("probe1", fake.Snapshot()); // The time ran out during the readiness probe, before verification.
+        Assert.DoesNotContain("pins1", fake.Snapshot());
+    }
+
     private sealed class Host
     {
         public string Owner = "roads.testing";
         public bool RefuseStop, BadPins, BadPid, ExitOnLaunch, NoConnection, Ready = true;
         public List<string> Events = [], Tokens = [];
-        public int Connects;
+        public int Connects, Disconnects;
+        public ManualResetEventSlim? ConnectGate, PinGate;
+        public readonly ManualResetEventSlim ConnectEntered = new(), PinEntered = new();
+        public TimeSpan ProbeDelay;
+        public List<TimeSpan> PinTimeouts = [];
+        public string[] Snapshot() { lock (Events) return Events.ToArray(); }
         public Action<FakeProcess>? OnLaunch;
         private FakeProcess? _current;
         public IServerProcess Launch(string token)
@@ -196,8 +264,14 @@ public class SessionTests
             return _current;
         }
         public IGameTransport Connect()
-        { Connects++; if (NoConnection) throw new IOException("not yet"); return new Transport(this, _current!.Id, Tokens[^1]); }
-        public OwnedServerSession Session(TimeSpan? timeout = null, StartupEvents? events = null) => new(Launch, Connect, Path.GetTempPath(), "cli_expect worlduid=1", Owner + "/session", timeout ?? TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(1)) { Events = events };
+        {
+            Interlocked.Increment(ref Connects); if (NoConnection) throw new IOException("not yet");
+            var transport = new Transport(this, _current!.Id, Tokens[^1]);
+            ConnectEntered.Set();
+            ConnectGate?.Wait(TimeSpan.FromSeconds(30));
+            return transport;
+        }
+        public OwnedServerSession Session(TimeSpan? timeout = null, StartupEvents? events = null, TimeSpan? command = null) => new(Launch, Connect, Path.GetTempPath(), "cli_expect worlduid=1", Owner + "/session", timeout ?? Generous, command ?? TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(1)) { Events = events };
         public sealed class FakeProcess(Host host, int id) : IServerProcess
         {
             private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -212,12 +286,18 @@ public class SessionTests
             public CommandResult Execute(string command, TimeSpan timeout)
             {
                 if (command.StartsWith("cli_expect"))
-                { host.Events.Add("pins" + pid); return new() { Ok = !host.BadPins, Output = [host.BadPins ? "ERROR: pins" : "OK: EXPECT"] }; }
+                {
+                    lock (host.Events) { host.Events.Add("pins" + pid); host.PinTimeouts.Add(timeout); }
+                    host.PinEntered.Set();
+                    host.PinGate?.Wait(TimeSpan.FromSeconds(30));
+                    return new() { Ok = !host.BadPins, Output = [host.BadPins ? "ERROR: pins" : "OK: EXPECT"] };
+                }
                 if (command != "cli_extension " + host.Owner + "/session") throw new InvalidOperationException("Wrong session capability requested.");
-                host.Events.Add("probe" + pid);
+                lock (host.Events) host.Events.Add("probe" + pid);
+                if (host.ProbeDelay > TimeSpan.Zero) Thread.Sleep(host.ProbeDelay);
                 return new() { Ok = true, Output = ["EXTENSION_RESULT " + Reply(token, host.BadPid ? 99 : pid, Path.GetTempPath(), host.Ready, extension: host.Owner).GetRawText()] };
             }
-            public void Dispose() => host.Events.Add("disconnect" + pid);
+            public void Dispose() { lock (host.Events) host.Events.Add("disconnect" + pid); Interlocked.Increment(ref host.Disconnects); }
         }
     }
 }
