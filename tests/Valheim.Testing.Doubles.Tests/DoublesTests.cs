@@ -195,6 +195,34 @@ public sealed class DoublesTests : IDisposable
         Assert.Same(character, ZDOMan.instance.GetZDO(peers[0].m_characterID));
         Assert.True(peers[1].m_characterID.IsNone()); Assert.Null(ZDOMan.instance.GetZDO(ZDOID.None));
     }
+    [Fact] public void RoutedRpcsAreRecordedAndDeliveredToTheirHandlers()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithNetwork();
+        var got = new List<(long, int, string)>();
+        ZRoutedRpc.instance.Register<int, string>("Mod_Ping", (sender, n, text) => got.Add((sender, n, text)));
+        ZRoutedRpc.instance.Register("Mod_Fail", _ => throw new InvalidOperationException("handler failed"));
+        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, "Mod_Ping", 3, "hi");
+        ZRoutedRpc.instance.InvokeRoutedRPC("Mod_Ping", 4, "server");
+        Assert.Equal(new[] { (0L, "Mod_Ping"), (42L, "Mod_Ping") }, ZRoutedRpc.instance.Invoked.Select(x => (x.Target, x.Method)));
+        ZRoutedRpc.instance.Deliver(7, "Mod_Ping", 5, "back");
+        Assert.Equal(new[] { (7L, 5, "back") }, got);
+        Assert.Equal("handler failed", Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.Deliver(7, "Mod_Fail")).Message);
+        Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.Deliver(7, "Mod_Unknown"));
+    }
+    [Fact] public void JotunnRpcsAreKeptByNameAndTheScopeGivesAFreshManager()
+    {
+        var manager = Jotunn.Managers.NetworkManager.Instance;
+        using (new Valheim.Testing.Doubles.ValheimWorldScope().WithNetwork())
+        {
+            var a = Jotunn.Managers.NetworkManager.Instance.AddRPC("A", (_, _) => null!, (_, _) => null!);
+            var b = Jotunn.Managers.NetworkManager.Instance.AddRPC("B", (_, _) => null!, (_, _) => null!);
+            Assert.Same(a, Jotunn.Managers.NetworkManager.Instance.Rpcs["A"]); Assert.Same(b, Jotunn.Managers.NetworkManager.Instance.Rpc);
+            a.SendPackage(new List<ZNetPeer> { new() { m_uid = 5 }, new() { m_uid = 6 } }, new ZPackage());
+            Assert.Equal(new[] { 5L, 6L }, a.Sent.Select(s => s.Peer)); Assert.Empty(b.Sent);
+            Assert.NotSame(manager, Jotunn.Managers.NetworkManager.Instance);
+        }
+        Assert.Same(manager, Jotunn.Managers.NetworkManager.Instance);
+    }
     [Fact] public void TerrainWorldMapsTheToolkitsBiomes()
     {
         var world = new Valheim.Testing.Doubles.TerrainWorld(new Valheim.Testing.PlaneTerrain(35f));

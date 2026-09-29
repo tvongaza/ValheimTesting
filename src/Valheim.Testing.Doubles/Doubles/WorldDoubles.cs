@@ -33,7 +33,7 @@ namespace Valheim.Testing.Doubles
 
     /// <summary>
     /// The game's process-wide singletons for one test. Created, it records which objects the singletons refer to
-    /// (<c>WorldGenerator</c>, <c>ZDOMan</c>, <c>ZoneSystem</c>, <c>ZNetScene</c>, <c>ZNet</c>, <c>ZRoutedRpc</c>, the
+    /// (<c>WorldGenerator</c>, <c>ZDOMan</c>, <c>ZoneSystem</c>, <c>ZNetScene</c>, <c>ZNet</c>, <c>ZRoutedRpc</c>, Jotunn's <c>NetworkManager</c>, the
     /// registered heightmap, the log capture, the console commands and the local player) plus the server flag and the clock; disposed, it puts those references
     /// and values back. It restores references, not contents: nothing is deep-copied, so a test that mutates an object it
     /// did not install (adds a peer to the existing <c>ZNet</c>, a ZDO to the existing <c>ZDOMan</c>) leaves that change
@@ -52,6 +52,7 @@ namespace Valheim.Testing.Doubles
         private readonly List<string>? _captured = BepInEx.Logging.ManualLogSource.Captured;
         private readonly ZNet _net = ZNet.instance;
         private readonly ZRoutedRpc _rpc = ZRoutedRpc.instance;
+        private readonly Jotunn.Managers.NetworkManager _jotunn = Jotunn.Managers.NetworkManager.Instance;
         private readonly System.Collections.Generic.Dictionary<string, Terminal.ConsoleCommand> _commands = Terminal.commands;
         private readonly Player? _localPlayer = Player.m_localPlayer;
         private readonly bool _server = ZNet.instance.Server;
@@ -64,8 +65,12 @@ namespace Valheim.Testing.Doubles
         public ValheimWorldScope WithZoneSystem() { ZoneSystem.instance = new ZoneSystem(); return this; }
         /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>).</summary>
         public ValheimWorldScope WithScene() { ZNetScene.instance = new ZNetScene(); return this; }
-        /// <summary>A new <c>ZNet</c> with no peers, as the server or a client, and a new <c>ZRoutedRpc</c>.</summary>
-        public ValheimWorldScope WithNetwork(bool server = true) { ZNet.instance = new ZNet { Server = server }; ZRoutedRpc.instance = new ZRoutedRpc(); return this; }
+        /// <summary>A new <c>ZNet</c> with no peers, as the server or a client, a new <c>ZRoutedRpc</c> and a new Jotunn <c>NetworkManager</c>.</summary>
+        public ValheimWorldScope WithNetwork(bool server = true)
+        {
+            ZNet.instance = new ZNet { Server = server }; ZRoutedRpc.instance = new ZRoutedRpc(); Jotunn.Managers.NetworkManager.Instance = new Jotunn.Managers.NetworkManager();
+            return this;
+        }
         /// <summary>No console commands yet: the mod's registration in this test fills a fresh table.</summary>
         public ValheimWorldScope WithCommands() { Terminal.commands = new System.Collections.Generic.Dictionary<string, Terminal.ConsoleCommand>(); return this; }
         /// <summary>A local player standing at <paramref name="position"/>, as on a client or a host; without it there is none, as on a dedicated server.</summary>
@@ -81,7 +86,7 @@ namespace Valheim.Testing.Doubles
             WorldGenerator.instance = _world; ZDOMan.instance = _zdos; ZoneSystem.instance = _zones; ZNetScene.instance = _scene;
             global::Heightmap.Registered = _heightmap; BepInEx.Logging.ManualLogSource.Captured = _captured;
             Terminal.commands = _commands; Player.m_localPlayer = _localPlayer;
-            ZNet.instance = _net; ZRoutedRpc.instance = _rpc; _net.Server = _server; UnityEngine.Time.realtimeSinceStartup = _time;
+            ZNet.instance = _net; ZRoutedRpc.instance = _rpc; Jotunn.Managers.NetworkManager.Instance = _jotunn; _net.Server = _server; UnityEngine.Time.realtimeSinceStartup = _time;
         }
     }
 }
