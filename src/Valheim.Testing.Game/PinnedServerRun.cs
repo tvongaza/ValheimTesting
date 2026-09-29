@@ -19,6 +19,12 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public required string SessionTokenVariable { get; init; }
     /// <summary>Launching modes beyond <c>run</c>, for fixture preparation; they never pass an acceptance test.</summary>
     public IReadOnlyList<string> PrepareModes { get; init; } = [];
+    /// <summary>
+    /// Which scenarios a mode runs, for example <c>["prepare-bridge"] = ["bridge-respawn"]</c>: a listed mode with a plan
+    /// of any other scenario is refused before anything is copied (<see cref="ServerRunPlan.CheckModeScenario"/>). Modes
+    /// not listed run every scenario. Each key must be <c>validate</c>, <c>run</c> or one of <see cref="PrepareModes"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string[]> ModeScenarios { get; init; } = new Dictionary<string, string[]>();
     /// <summary>Refuses a mode and plan that do not belong together (throw <see cref="ArgumentException"/>).</summary>
     public Action<string, TPlan>? CheckMode { get; init; }
     /// <summary>Adds the mod's provenance (scenario details) to the report.</summary>
@@ -67,6 +73,8 @@ public static class PinnedServerRun
     public static async Task<int> MainAsync<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
     {
         string[] modes = ["validate", "run", .. options.PrepareModes];
+        if (options.ModeScenarios.Keys.FirstOrDefault(key => !modes.Contains(key)) is { } unknown)
+            throw new ArgumentException($"ModeScenarios lists {unknown}, which is not one of this runner's modes ({string.Join(", ", modes)}).", nameof(options));
         if (args.Length != 3 || !modes.Contains(args[0]))
         {
             Console.Error.WriteLine($"Usage: {options.Name} {string.Join("|", modes)} <plan.json> <new-output-directory>");
@@ -93,6 +101,7 @@ public static class PinnedServerRun
                     throw new PlatformNotSupportedException("macOS has no dedicated server and cannot run the Windows or Linux one. Use validate here (it never launches a game), or run in the Linux server container or on a Windows or Linux host.");
                 ServerRunPlan.CheckLaunchHost(platform, OperatingSystem.IsWindows());
             }
+            plan.CheckModeScenario(mode, options.ModeScenarios);
             options.CheckMode?.Invoke(mode, plan);
             report.Provenance["planSha256"] = WorldFixture.Hash(args[1]);
             report.Provenance["scenario"] = plan.Scenario;

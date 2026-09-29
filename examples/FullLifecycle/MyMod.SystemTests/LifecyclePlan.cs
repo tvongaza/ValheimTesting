@@ -30,7 +30,7 @@ public sealed class LifecyclePlan : ServerRunPlan
     {
         var plan = Read<LifecyclePlan>(path);
         plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
-        if (plan.Scenario != "dry-site-lifecycle") throw new ArgumentException("This runner only runs the dry-site-lifecycle scenario.");
+        plan.RequireScenario("dry-site-lifecycle");
         plan.DrySite.Validate("dry site", requireGround: true); plan.WetSite.Validate("wet site", requireGround: true); plan.Arrival.Validate("arrival point", requireGround: true);
         // The plan must agree with itself before any game starts: a "dry" site declared under the rule's threshold would
         // make a correct mod fail, and the reverse would let a broken one pass.

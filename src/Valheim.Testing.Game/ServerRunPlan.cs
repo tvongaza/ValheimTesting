@@ -23,7 +23,7 @@ public sealed class PinnedDirectory
 /// from it and add the mod's scenario fields; <see cref="Read{T}"/> refuses unknown fields. <c>{runtime}</c>,
 /// <c>{world}</c> and <c>{port}</c> in arguments and environment values expand to the copies and the CLI port.
 /// </summary>
-public class ServerRunPlan
+public partial class ServerRunPlan
 {
     public string Scenario { get; set; } = "";
     public PinnedDirectory Runtime { get; set; } = new();
