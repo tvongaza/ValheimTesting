@@ -241,6 +241,8 @@ public static class ServerFixture
         {
             scenario = LifecyclePlan.ServerScenario,
             runtime = new { source = runtime, sha256 = runtimeHashes },
+            // Strict pins name the runtime's game build, BepInEx core and patchers as found in the runtime being pinned.
+            runtimePins = InstallPins.Of(runtime),
             world = new { source = world, sha256 = WorldFixture.Manifest(world) },
             executable = ServerRunPlan.ExecutableFor(platform),
             arguments,

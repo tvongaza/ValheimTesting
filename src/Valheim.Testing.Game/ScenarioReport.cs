@@ -12,7 +12,19 @@ public sealed class ScenarioReport
     /// <summary>The teardown log scans (<see cref="ScanLogs"/>), one per log.</summary>
     public List<LogFileScan> Logs { get; } = new();
     public bool Passed => Steps.Count > 0 && Steps.All(x => x.Passed);
+    /// <summary><c>strict</c>, or <c>none</c> once <see cref="MarkNotPinned"/> recorded an explicit opt-out.</summary>
+    public string Pinning { get; private set; } = EnvironmentPinning.Strict;
     public ScenarioReport(string name) => Name = name;
+    /// <summary>
+    /// Records that this run's environment is not pinned, and why: <see cref="Pinning"/> <c>none</c>, the provenance entry
+    /// <c>environment</c> ("environment not pinned: ..."), and in <c>junit.xml</c> a suite property and a skipped test case
+    /// of that name, so the marker shows wherever the result is read. A pass stays a pass.
+    /// </summary>
+    public void MarkNotPinned(string why)
+    {
+        Pinning = EnvironmentPinning.None;
+        Provenance["environment"] = EnvironmentPinning.NotPinned + ": " + why;
+    }
     public void Step(string name, Action action)
     {
         var clock = Stopwatch.StartNew();
@@ -69,7 +81,14 @@ public sealed class ScenarioReport
     {
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "result.json"), JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-        var suite = new XElement("testsuite", new XAttribute("name", Name), new XAttribute("tests", Steps.Count), new XAttribute("failures", Steps.Count(x => !x.Passed)));
+        bool unpinned = Pinning != EnvironmentPinning.Strict;
+        var suite = new XElement("testsuite", new XAttribute("name", Name), new XAttribute("tests", Steps.Count + (unpinned ? 1 : 0)), new XAttribute("failures", Steps.Count(x => !x.Passed)));
+        if (unpinned)
+        {
+            string marker = Provenance.GetValueOrDefault("environment", EnvironmentPinning.NotPinned);
+            suite.Add(new XAttribute("skipped", 1), new XElement("properties", new XElement("property", new XAttribute("name", "environment"), new XAttribute("value", marker))),
+                new XElement("testcase", new XAttribute("name", EnvironmentPinning.NotPinned), new XAttribute("time", 0), new XElement("skipped", new XAttribute("message", marker))));
+        }
         foreach (var step in Steps) suite.Add(new XElement("testcase", new XAttribute("name", step.Name), new XAttribute("time", step.Seconds), step.Passed ? null : new XElement("failure", step.Error)));
         new XDocument(suite).Save(Path.Combine(directory, "junit.xml"));
     }
