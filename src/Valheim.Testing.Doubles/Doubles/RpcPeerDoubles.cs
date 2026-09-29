@@ -252,7 +252,10 @@ public sealed partial class ZNet
         return false;
     }
 
-    /// <summary>The players in the game: the ready peers, and the host when it has a local player.</summary>
+    /// <summary>
+    /// The players in the game, approximated: the ready peers, and the host when it has a local player. The game counts its
+    /// player list, which it refreshes on joins and leaves and which includes the host unless the server is headless.
+    /// </summary>
     public int GetNrOfPlayers()
     {
         int players = Player.m_localPlayer != null ? 1 : 0;

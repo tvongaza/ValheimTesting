@@ -125,8 +125,9 @@ public sealed class HandshakeTests
     /// <summary>
     /// A mod's version handshake, written as a mod patches it in: each side registers and sends its version when a
     /// connection opens (a prefix on OnNewConnection), and a prefix on RPC_PeerInfo stops a peer the server has not
-    /// validated. <see cref="Defer"/> false is the common pattern that refuses at once; true holds the peer info until the
-    /// version arrives, then lets the game's handler run.
+    /// validated. <see cref="Defer"/> false refuses at once; true holds the peer info until the version arrives, then lets
+    /// the game's handler run. Sent from the prefix, the version precedes ServerHandshake on the same ordered connection,
+    /// so it always arrives before the peer info; a mod that sends it later is what the late case below stands for.
     /// </summary>
     private sealed class ModVersionCheck
     {
@@ -181,7 +182,8 @@ public sealed class HandshakeTests
         Assert.Equal(ZNet.ConnectionStatus.Connected, matching.Status);
     }
 
-    // Issue #34: the version message arrives after the client's peer info. Sent on time, both checks let the client in.
+    // Issue #34: a client that sends its version later than its OnNewConnection prefix (here: after its peer info). Sent
+    // from the prefix, the version always comes first on the ordered connection and both checks let the client in.
     [Theory]
     [InlineData(false, false, ZNet.ConnectionStatus.Connected)]
     [InlineData(true, false, ZNet.ConnectionStatus.Connected)]

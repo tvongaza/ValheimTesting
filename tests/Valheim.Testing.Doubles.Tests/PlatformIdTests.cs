@@ -117,6 +117,17 @@ public sealed class PlatformIdTests
         Assert.Contains(log, l => l.StartsWith("Exception in ZRpc::HandlePackage: ") && l.Contains("InvalidCastException"));
     }
 
+    // Steam refuses a message over 512 KiB; a crossplay connection has its own send path, so the Steam limit does not apply.
+    [Fact] public void TheSteamMessageLimitAppliesOnlyOnSteam()
+    {
+        using var scope = new ValheimWorldScope().WithNetwork().WithZdos();
+        var big = new ZPackage(); big.Write(new byte[600 * 1024]);
+        Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, "Mod_Big", big));
+        ZNet.instance.OnlineBackend = OnlineBackendType.PlayFab;
+        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, "Mod_Big", big);
+        Assert.Equal("Mod_Big", Assert.Single(ZRoutedRpc.instance.Invoked).Method);
+    }
+
     // A crossplay server: the peer is a PlayFab socket, its host name carries the platform, and the connection starts
     // compressing once the versions match.
     [Fact] public void ACrossplayClientJoinsAndIsCheckedByItsPrefixedId()
