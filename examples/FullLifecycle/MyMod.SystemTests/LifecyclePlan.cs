@@ -29,6 +29,8 @@ public sealed class LifecyclePlan : ServerRunPlan
     public static LifecyclePlan ReadValidated(string path)
     {
         var plan = Read<LifecyclePlan>(path);
+        // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
+        if (!plan.Pinned || plan.Client is { Pinned: false }) throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
         plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
         if (plan.Scenario != "dry-site-lifecycle") throw new ArgumentException("This runner only runs the dry-site-lifecycle scenario.");
         plan.DrySite.Validate("dry site", requireGround: true); plan.WetSite.Validate("wet site", requireGround: true); plan.Arrival.Validate("arrival point", requireGround: true);
