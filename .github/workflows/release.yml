@@ -1,9 +1,15 @@
 name: Publish packages
-# Builds Valheim.Testing, Valheim.Testing.Cli, Valheim.Testing.Game, Valheim.Testing.Doubles and Valheim.Testing.Adapter from this commit and publishes
+# Builds Valheim.Testing, Valheim.Testing.Cli, Valheim.Testing.Game, Valheim.Testing.Doubles, Valheim.Testing.Adapter, Valheim.Testing.Bindings
+# and Valheim.Testing.Bindings.Tool from this commit and publishes
 # them to NuGet.org with Trusted Publishing: no stored API key. GitHub issues a short-lived OIDC token,
 # NuGet.org exchanges it for a one-hour key, and only the `release` environment (which requires a
 # maintainer's approval) can request one. Versions already on NuGet.org are skipped, so a release that
 # bumps one package leaves the others untouched.
+#
+# A release is a `v<yyyy>.<mm>.<dd>` tag on a main commit (`.2`, `.3` for a later release the same day). The
+# packages are versioned independently, so the tag names the release, not a package version. After the push,
+# the github-release job creates the GitHub release for the tag: which package versions are new, those
+# packages and their checksums. A manual run on main publishes without a GitHub release.
 on:
   workflow_dispatch:
   push:
@@ -19,6 +25,17 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse a tag that is not on main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main."
+            exit 1
+          fi
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
@@ -27,15 +44,47 @@ jobs:
       - name: Pack release packages
         run: |
           mkdir -p release
-          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.Doubles Valheim.Testing.Adapter; do
+          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.Doubles Valheim.Testing.Adapter Valheim.Testing.Bindings Valheim.Testing.Bindings.Tool; do
             dotnet pack "src/$p/$p.csproj" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true
           done
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
-          sha256sum release/*.nupkg
+          (cd release && sha256sum *.nupkg)
+      # Before the push, so "new" means this run publishes it. A version already on NuGet.org is skipped by the
+      # push, and its package here is a rebuild with different bytes, so it is not attached to the GitHub
+      # release. The exact package URL answers at once; the search index is not consulted.
+      - name: Record which versions are new
+        run: |
+          mkdir -p notes new
+          {
+            echo "| Package | Version | In this release |"
+            echo "|---|---|---|"
+          } > notes/packages.md
+          for f in release/*.nupkg; do
+            name=$(basename "$f" .nupkg)
+            id=$(printf '%s' "$name" | sed -E 's/\.[0-9]+\.[0-9]+\.[0-9]+(-.*)?$//')
+            version=${name#"$id."}
+            lower=$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')
+            url="https://api.nuget.org/v3-flatcontainer/$lower/$version/$lower.$version.nupkg"
+            status=$(curl -s -o /dev/null -w '%{http_code}' -I "$url")
+            case "$status" in
+              200) state="already published" ;;
+              404) state="**new**"; cp "$f" new/ ;;
+              *) echo "::error::Could not tell whether $id $version is published (HTTP $status from $url)."; exit 1 ;;
+            esac
+            echo "| [$id](https://www.nuget.org/packages/$id/$version) | \`$version\` | $state |" >> notes/packages.md
+          done
+          cat notes/packages.md
       - uses: actions/upload-artifact@v7
         with:
           name: packages
           path: release/*.nupkg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: |
+            notes/packages.md
+            new/*.nupkg
+          if-no-files-found: error
       - name: NuGet login (OIDC to temporary API key)
         uses: NuGet/login@v1
         id: login
@@ -45,6 +94,43 @@ jobs:
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.Doubles.*.nupkg release/Valheim.Testing.Adapter.*.nupkg; do
+          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.Doubles.*.nupkg release/Valheim.Testing.Adapter.*.nupkg release/Valheim.Testing.Bindings.[0-9]*.nupkg release/Valheim.Testing.Bindings.Tool.*.nupkg; do
             dotnet nuget push "$f" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
+  github-release:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          new=(dist/new/*.nupkg)
+          if [ ${#new[@]} -eq 0 ]; then
+            echo "::error::No package version is new in $GITHUB_REF_NAME; bump a <Version> before tagging."
+            exit 1
+          fi
+          (cd dist/new && sha256sum *.nupkg) > dist/SHA256SUMS
+          {
+            echo "Built from \`$GITHUB_SHA\` and published to NuGet.org by [this run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+            echo
+            cat dist/notes/packages.md
+            echo
+            echo "The new packages and their SHA-256 checksums are attached. Pin exact versions; see [package versions and feeds](https://github.com/$GITHUB_REPOSITORY/blob/main/docs/getting-started.md#package-versions-and-feeds)."
+          } > dist/notes.md
+          # Package IDs have no hyphen, so one in a file name is a prerelease version.
+          prerelease=()
+          for f in "${new[@]}"; do
+            case "${f##*/}" in *-*) prerelease=(--prerelease) ;; esac
+          done
+          gh release create "$GITHUB_REF_NAME" "${new[@]}" dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes-file dist/notes.md --generate-notes "${prerelease[@]}"
