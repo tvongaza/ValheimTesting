@@ -67,7 +67,8 @@ public partial class RoutedMethod<T, U, V, B, K, M> { public delegate void Metho
 /// the local handler at once, before anything is sent; a call to a name nobody registered is dropped without an error.
 /// <see cref="Sent"/> holds what each ready peer would receive, <see cref="Dropped"/> every call that found no handler,
 /// and <see cref="Invoked"/> every call as made. <see cref="Deliver"/> and <see cref="Receive"/> handle a call as if it
-/// arrived from a peer. A package over Steam's 512 KiB message limit fails. Nothing is sent anywhere.
+/// arrived from a peer. On Steam (<see cref="ZNet.OnlineBackend"/>), a package over Steam's 512 KiB message limit fails.
+/// Nothing is sent anywhere.
 /// </summary>
 public sealed partial class ZRoutedRpc
 {
@@ -138,7 +139,9 @@ public sealed partial class ZRoutedRpc
     {
         var parameters = new ZPackage(); var types = new List<Type>();
         SerializeArguments(method, args, parameters, types);
-        if (parameters.Size() > SteamMessageLimit) throw new InvalidOperationException("Vanilla message exceeds Steam's limit");
+        // Steam refuses a message over its limit; a crossplay (PlayFab) connection has its own send path, not modelled here.
+        if (ZNet.instance.OnlineBackend == OnlineBackendType.Steamworks && parameters.Size() > SteamMessageLimit)
+            throw new InvalidOperationException("Vanilla message exceeds Steam's limit");
         Invoked.Add((target, method, args));
         long id = PeerId;
         var data = new RoutedRPCData
