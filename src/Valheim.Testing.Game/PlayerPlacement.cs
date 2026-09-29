@@ -65,9 +65,11 @@ public static class PlayerPlacement
 
     /// <summary>
     /// Unless <paramref name="skipIntro"/> is false, first ends a first-join intro (<see cref="SkipIntro"/>), which is a
-    /// no-op for a character that has spawned before. Then waits until the client's player has stood still somewhere for
+    /// no-op for a character that has spawned before. Then waits until the client's player has held still somewhere for
     /// <paramref name="settleFor"/> (default 3 s): a first join rides in on the Valkyrie, and the game refuses a teleport
-    /// within 2 s of a spawn or of the previous teleport, silently in both cases. Then has the server teleport the only connected player to <paramref name="point"/> (a little
+    /// within 2 s of a spawn or of the previous teleport, silently in both cases. Still, not grounded: a character that
+    /// logged out where this world copy has water spawns swimming, and the game teleports a swimming player as readily as
+    /// a standing one. Then has the server teleport the only connected player to <paramref name="point"/> (a little
     /// above it, so the character settles onto the ground) exactly once, and waits on the client until its player stands
     /// settled there (<see cref="SurfaceProbe.Supported"/>). Returns the observation that established arrival. The one
     /// timeout covers the intro and both waits. Times out without retrying the teleport: a lost reply is an unknown outcome, not a
@@ -84,15 +86,15 @@ public static class PlayerPlacement
         // The intro gets at most a minute of the budget, and never less than the command's one-second minimum.
         if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
         Observation? last = null;
-        // Settled anywhere, and for long enough: the game drops a teleport while the player is attached (the first-join
+        // Still anywhere, and for long enough: the game drops a teleport while the player is attached (the first-join
         // Valkyrie), loading or already teleporting, and within 2 s of a spawn (its teleport cooldown).
-        TimeSpan? settledSince = null;
+        TimeSpan? stillSince = null;
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
             last = client.Observe(support);
-            if (!Settled(last)) settledSince = null;
-            else if ((settledSince ??= clock.Elapsed) + still <= clock.Elapsed) break;
+            if (!ReadyToTeleport(last)) stillSince = null;
+            else if ((stillSince ??= clock.Elapsed) + still <= clock.Elapsed) break;
             if (clock.Elapsed >= timeout)
                 throw new TimeoutException($"The player never stood still before the teleport within {timeout.TotalSeconds:F0} s; last reading: {last.Data.GetRawText()}. Nothing was teleported.");
             cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
@@ -113,11 +115,13 @@ public static class PlayerPlacement
             (last == null ? "none" : last.Data.GetRawText()) + ". The teleport was not repeated.");
     }
 
-    private static bool Settled(Observation observation)
+    // Grounded is not required: the game's teleport refuses only a player that is already teleporting or within its cooldown,
+    // and a swimming player (grounded false, bobbing at a few centimetres a second) is teleported like a standing one.
+    private static bool ReadyToTeleport(Observation observation)
     {
         if (!observation.Complete) return false;
         var d = observation.Data;
-        return d.GetProperty("grounded").GetBoolean() && !d.GetProperty("attached").GetBoolean() && !d.GetProperty("teleporting").GetBoolean() &&
+        return !d.GetProperty("attached").GetBoolean() && !d.GetProperty("teleporting").GetBoolean() &&
             !d.GetProperty("dead").GetBoolean() && d.GetProperty("speed").GetSingle() <= .15f;
     }
 

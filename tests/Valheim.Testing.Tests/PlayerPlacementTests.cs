@@ -101,6 +101,33 @@ public class PlayerPlacementTests
         PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), settleFor: TimeSpan.FromSeconds(1));
         Assert.True(teleported - firstStill >= TimeSpan.FromSeconds(1), $"teleported {(teleported - firstStill)?.TotalMilliseconds:F0} ms after the player first stood still");
     }
+    // 29 Sep native run: two copies of one world pinned the same world UID, and the character had logged out on the other
+    // copy's raised road, which this copy does not have. It spawned swimming (grounded false, y 28, bobbing at 6 cm/s),
+    // never "stood still" on the ground, and the arrival timed out before the teleport it needed.
+    [Fact] public void APlayerSwimmingAtTheSpawnIsTeleportedOnce()
+    {
+        bool teleported = false;
+        var serverTransport = new ScriptedTransport()
+            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=280.0,28.07,-384.0 zone=4,-6"))
+            .OnPrefix("cli_teleport_peer ", _ => { teleported = true; return ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"); });
+        var clientTransport = NoIntro().Extension("valheim.world", "player-support", _ => teleported
+            ? Standing()
+            : new { source = "local-player-support", complete = true, x = 280f, y = 28.07f, z = -384f, speed = .06f, grounded = false, flying = false, attached = false, dead = false, teleporting = false, units = "metres" });
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        var arrived = PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(10), settleFor: TimeSpan.Zero);
+        Assert.True(arrived.GetProperty("grounded").GetBoolean());
+        Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
+    }
+    [Fact] public void AFallingPlayerIsNotTeleported()
+    {
+        var serverTransport = new ScriptedTransport()
+            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
+            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
+        var clientTransport = NoIntro().Extension("valheim.world", "player-support", _ => Standing(y: 60f, grounded: false, speed: 3));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.Contains("Nothing was teleported", Assert.Throws<TimeoutException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(1), settleFor: TimeSpan.Zero)).Message);
+        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+    }
     [Fact] public void APlayerThatNeverStandsStillIsNotTeleported()
     {
         var serverTransport = new ScriptedTransport()
