@@ -63,7 +63,8 @@ jobs:
     # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only
     # a key generated for this run (bash and pwsh sessions, a loopback port forward), and an Ubuntu container on the host
     # network driven with docker exec. Both are removed at the end; the keys live in the runner's temporary directory. An Xvfb
-    # display on :99 carries the interactive client checks (a stand-in Steam and game), locally and over the ssh.
+    # display on :99 carries the interactive client checks (a stand-in Steam and game), locally and over the ssh. The lease
+    # contention checks open ten ssh sessions at once, beyond sshd's default MaxStartups of 10 unauthenticated connections.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -93,7 +94,7 @@ jobs:
           printf '%s\n' "Port 2222" "ListenAddress 127.0.0.1" "HostKey $d/host_key" "PidFile $d/sshd.pid" \
             "AuthorizedKeysFile $d/authorized_keys" "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
             "PubkeyAuthentication yes" "UsePAM yes" "StrictModes no" "AllowTcpForwarding local" "AllowAgentForwarding no" \
-            "X11Forwarding no" > "$d/sshd_config"
+            "X11Forwarding no" "MaxStartups 100" > "$d/sshd_config"
           sudo mkdir -p /run/sshd
           sudo /usr/sbin/sshd -f "$d/sshd_config" -E "$d/sshd.log"
           echo "[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$d/host_key.pub")" > "$d/known_hosts"

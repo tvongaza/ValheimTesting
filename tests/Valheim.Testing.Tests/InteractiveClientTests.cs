@@ -459,6 +459,7 @@ public class InteractiveClientDisplayTests
         var launch = HostClientLaunch.Create(ClientPlatform.Linux, install, ["+name", "it's $HOME"], new Dictionary<string, string> { ["VT_VISIBLE"] = "plain value" }, [variable]);
         var host = Host(kind);
         var started = new List<Process>();
+        InteractiveClientProcess? client = null;
         Environment.SetEnvironmentVariable(variable, canary);
         try
         {
@@ -477,7 +478,7 @@ public class InteractiveClientDisplayTests
             started.Add(bystander);
 
             string launchDirectory = Path.Combine(root.Path, "launch-2");
-            var client = await InteractiveClient.StartAsync(host, launch, launchDirectory, Generous, new LinuxDisplay(display));
+            client = await InteractiveClient.StartAsync(host, launch, launchDirectory, Generous, new LinuxDisplay(display));
             await WaitForFileAsync(argumentsFile);
             Assert.Equal("-console\n+name\nit's $HOME\n", File.ReadAllText(argumentsFile));
             string environment = File.ReadAllText($"/proc/{client.Id}/environ").Replace('\0', '\n');
@@ -509,6 +510,10 @@ public class InteractiveClientDisplayTests
         {
             Environment.SetEnvironmentVariable(variable, null);
             foreach (var process in started) { try { process.Kill(); } catch (InvalidOperationException) { } process.Dispose(); }
+            // A failed check leaves no stand-in game behind: the same identity-checked stop, through the local shell, which is always reachable.
+            if (client != null)
+                await new InteractiveClientProcess(new LocalGameHost("cleanup", HostShell.Bash), ClientPlatform.Linux, client.Id, client.StartIdentity, client.LaunchDirectory, null)
+                    .StopAsync(TimeSpan.FromSeconds(30));
         }
     }
 
