@@ -10,8 +10,9 @@ name: Scheduled native server checks
 # No game files leave the runner: the image is never pushed, saved, cached or uploaded, and the artifact holds only
 # .json/.jsonl/.xml/.log files (checked before upload). The only cache is the last checked build id, a text file. No
 # secrets. The token is read-only except in the tracking-issue job, which alone gets issues: write and runs only for
-# a scheduled run, or a manual run on the default branch that asks for it. Every other failing run prints the issue it
-# would post (dry run) with a read-only token.
+# a scheduled run, or a manual run on the default branch that asks for it. It only ever comments on an open issue that
+# the workflow opened itself (author github-actions[bot], labels ci and native); a same-titled issue by anyone else is
+# ignored. Every other failing run prints the issue it would post (dry run) with a read-only token.
 on:
   schedule:
     - cron: '23 3 * * *'   # Nightly: always runs the checks.
@@ -240,6 +241,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Check the lookup ignores issues the workflow did not open
+        run: .github/scripts/tracking-issue.sh --self-test
       - name: Open or update the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -270,6 +273,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Check the lookup ignores issues the workflow did not open
+        run: .github/scripts/tracking-issue.sh --self-test
       - name: Print what the tracking issue would receive
         env:
           GH_TOKEN: ${{ github.token }}
