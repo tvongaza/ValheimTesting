@@ -14,6 +14,8 @@ internal static class FakeInstalls
     private static void Write(string root, string managed)
     {
         Keep(Path.Combine(root, managed, InstallPins.GameAssemblyName), "game build 1");
+        Keep(Path.Combine(root, managed, "assembly_utils.dll"), "utils build 1");
+        Keep(Path.Combine(root, managed, "UnityEngine.dll"), "unity");
         Keep(Path.Combine(root, "BepInEx", "core", "BepInEx.dll"), "bepinex 5.4.23");
     }
     private static void Keep(string path, string text)
@@ -46,26 +48,57 @@ public sealed class PinningTests : IDisposable
         string core = Path.Combine(_root, "core");
         Directory.CreateDirectory(Path.Combine(core, "sub"));
         File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core"); File.WriteAllText(Path.Combine(core, "sub", "Harmony.dll"), "harmony");
-        // Independently computed: `find . -type f | sed 's|^./||' | LC_ALL=C sort | while read f; do printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"; done | sha256sum`.
-        Assert.Equal("9e6d27b3afaa350014b2dd4471bac1be23e7c393918834d56f396f7d2db3fadf", InstallPins.DirectoryHash(core));
+        // Independently computed: `find . -type f ! -name .DS_Store ! -name '._*' | sed 's|^./||' | LC_ALL=C sort |
+        // while read f; do printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"; done | sha256sum`.
+        const string expected = "9e6d27b3afaa350014b2dd4471bac1be23e7c393918834d56f396f7d2db3fadf";
+        Assert.Equal(expected, InstallPins.DirectoryHash(core));
+        // Finder and AppleDouble files that a copy through macOS adds are not part of the listing.
+        File.WriteAllText(Path.Combine(core, ".DS_Store"), "finder"); File.WriteAllText(Path.Combine(core, "sub", "._Harmony.dll"), "appledouble");
+        Assert.Equal(expected, InstallPins.DirectoryHash(core));
+        // The control: any other added file changes it.
+        File.WriteAllText(Path.Combine(core, "sub", "_Harmony.dll"), "x");
+        Assert.NotEqual(expected, InstallPins.DirectoryHash(core));
         // Empty and absent folders both hash the empty listing.
         Directory.CreateDirectory(Path.Combine(_root, "empty"));
         Assert.Equal("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", InstallPins.DirectoryHash(Path.Combine(_root, "empty")));
         Assert.Equal(InstallPins.DirectoryHash(Path.Combine(_root, "empty")), InstallPins.DirectoryHash(Path.Combine(_root, "absent")));
     }
 
-    [Fact] public void TheSameInstallPasses()
+    [Fact] public void TheGamePinIsTheListingOfEveryGameAssembly()
+    {
+        string managed = Path.Combine(Install, "valheim_Data", "Managed");
+        Directory.CreateDirectory(managed);
+        File.WriteAllText(Path.Combine(managed, "assembly_valheim.dll"), "valheim"); File.WriteAllText(Path.Combine(managed, "assembly_utils.dll"), "utils");
+        File.WriteAllText(Path.Combine(managed, "assembly_guiutils.dll"), "guiutils"); File.WriteAllText(Path.Combine(managed, "UnityEngine.dll"), "engine");
+        File.WriteAllText(Path.Combine(managed, ".DS_Store"), "finder"); File.WriteAllText(Path.Combine(managed, "._assembly_valheim.dll"), "appledouble");
+        // Independently computed: `ls assembly_*.dll | LC_ALL=C sort | while read f; do printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"; done | sha256sum`.
+        Assert.Equal("b747c41472cc84979b104fd21d041a2fe6ffc93578d1560cbc621ef698c28c07", InstallPins.GameHash(Install));
+        // Unity's own assemblies are not the game's build.
+        File.WriteAllText(Path.Combine(managed, "UnityEngine.dll"), "engine 2");
+        Assert.Equal("b747c41472cc84979b104fd21d041a2fe6ffc93578d1560cbc621ef698c28c07", InstallPins.GameHash(Install));
+    }
+
+    [Fact] public void TheSameInstallPassesAndMacMetadataIsIgnored()
     {
         FakeInstalls.Client(Install);
+        Directory.CreateDirectory(Path.Combine(Install, "BepInEx", "patchers"));
         var pins = InstallPins.Of(Install);
         pins.Validate("client install");
-        Assert.Equal(WorldFixture.Hash(Path.Combine(Install, "valheim_Data", "Managed", "assembly_valheim.dll")), pins.Game);
         Assert.Equal(pins.Game, pins.Check(Install, "client install").Game);
+        // A copy through macOS adds Finder and AppleDouble files everywhere; none of them changes a pin.
+        foreach (string folder in new[] { Path.Combine("valheim_Data", "Managed"), Path.Combine("BepInEx", "core"), Path.Combine("BepInEx", "patchers") })
+        {
+            File.WriteAllText(Path.Combine(Install, folder, ".DS_Store"), "finder");
+            File.WriteAllText(Path.Combine(Install, folder, "._BepInEx.dll"), "appledouble");
+        }
+        File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", "._assembly_valheim.dll"), "appledouble");
+        pins.Check(Install, "client install");
     }
 
     // Negative controls: each changed part is refused and named, and only it.
     [Theory]
     [InlineData("game", "the game build differs")]
+    [InlineData("game-utils", "the game build differs")]
     [InlineData("core", "BepInEx core differs")]
     [InlineData("core-added", "BepInEx core differs")]
     [InlineData("patcher", "the patchers differ")]
@@ -78,6 +111,7 @@ public sealed class PinningTests : IDisposable
         switch (change)
         {
             case "game": File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", "assembly_valheim.dll"), "game build 2 (hotfix)"); break;
+            case "game-utils": File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", "assembly_utils.dll"), "utils build 2"); break;
             case "core": File.WriteAllText(Path.Combine(Install, "BepInEx", "core", "BepInEx.dll"), "bepinex 5.4.24"); break;
             case "core-added": File.WriteAllText(Path.Combine(Install, "BepInEx", "core", "Extra.dll"), "x"); break;
             case "patcher": File.WriteAllText(Path.Combine(Install, "BepInEx", "patchers", "Hooks.dll"), "patcher 2"); break;

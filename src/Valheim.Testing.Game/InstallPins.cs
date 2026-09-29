@@ -47,20 +47,25 @@ public static class EnvironmentPinning
 /// What a game install or server runtime holds that ValheimCLI cannot report in game, pinned on disk before launch. Each
 /// value is a full SHA256; <see cref="Of"/> computes them.
 /// <list type="bullet">
-/// <item><see cref="Game"/>: the game's code, <c>&lt;executable&gt;_Data/Managed/assembly_valheim.dll</c> (in a macOS
-/// bundle <c>Valheim.app/Contents/Resources/Data/Managed</c>). It changes with every game build, including hotfixes and
-/// the <c>default_old</c> and <c>default_pre1_0</c> branches.</item>
+/// <item><see cref="Game"/>: the game's own code, every <c>assembly_*.dll</c> in the Managed folder that holds
+/// <c>assembly_valheim.dll</c> (<c>&lt;executable&gt;_Data/Managed</c>, in a macOS bundle
+/// <c>Valheim.app/Contents/Resources/Data/Managed</c>): <c>assembly_valheim</c>, <c>assembly_utils</c>,
+/// <c>assembly_guiutils</c>, <c>assembly_postprocessing</c> and the rest. A game update or another branch
+/// (<c>default_old</c>, <c>default_pre1_0</c>) that changes any of them changes this pin; one that changes only assets
+/// or Unity's own assemblies does not.</item>
 /// <item><see cref="BepInExCore"/>: <c>BepInEx/core</c>, the loader itself (another BepInEx or BepInExPack version).</item>
 /// <item><see cref="Patchers"/>: the contents of <c>BepInEx/patchers</c>, which rewrite game assemblies before any plugin
 /// loads (the plan's patcher names say which entries it holds; this says which builds).</item>
 /// </list>
-/// A folder's value is the SHA256 of its listing: one line per file, <c>&lt;sha256&gt;  &lt;relative path&gt;\n</c> with
-/// <c>/</c> separators, ordered by path (ordinal), as <c>sha256sum</c> prints it. An empty or absent folder hashes the
-/// empty listing.
+/// Each value is the SHA256 of a listing: one line per file, <c>&lt;sha256&gt;  &lt;relative path&gt;\n</c> with
+/// <c>/</c> separators, ordered by path (ordinal), as <c>sha256sum</c> prints it. Finder's <c>.DS_Store</c> and
+/// AppleDouble <c>._*</c> files are left out. An empty or absent folder hashes the empty listing.
 /// </summary>
 public sealed class InstallPins
 {
     public const string GameAssemblyName = "assembly_valheim.dll";
+    /// <summary>The game's own assemblies in its Managed folder, which <see cref="Game"/> covers.</summary>
+    public const string GameAssemblies = "assembly_*.dll";
     public static readonly string CoreDirectory = Path.Combine("BepInEx", "core");
 
     public string Game { get; set; } = "";
@@ -76,7 +81,7 @@ public sealed class InstallPins
     }
     private IEnumerable<(string Name, string Value)> Values => [("game", Game), ("bepinexCore", BepInExCore), ("patchers", Patchers)];
 
-    /// <summary>The pins of the install at <paramref name="root"/>: its game assembly, BepInEx core and patchers, as found.</summary>
+    /// <summary>The pins of the install at <paramref name="root"/>: its game assemblies, BepInEx core and patchers, as found.</summary>
     public static InstallPins Of(string root)
     {
         root = Path.GetFullPath(root);
@@ -84,7 +89,7 @@ public sealed class InstallPins
         if (!Directory.Exists(core)) throw new DirectoryNotFoundException("BepInEx is not installed here: " + core);
         return new()
         {
-            Game = WorldFixture.Hash(GameAssembly(root)),
+            Game = GameHash(root),
             BepInExCore = DirectoryHash(core),
             Patchers = DirectoryHash(Path.Combine(root, BepInExLoader.Patchers)),
         };
@@ -101,7 +106,7 @@ public sealed class InstallPins
         var found = Of(root);
         var differences = new List<string>();
         if (!Same(found.Game, Game))
-            differences.Add($"the game build differs ({Path.GetRelativePath(Path.GetFullPath(root), GameAssembly(root))} is {found.Game}, pinned game {Game}): a game update or another branch");
+            differences.Add($"the game build differs ({Path.GetRelativePath(Path.GetFullPath(root), Path.GetDirectoryName(GameAssembly(root))!)}/{GameAssemblies} is {found.Game}, pinned game {Game}): a game update or another branch");
         if (!Same(found.BepInExCore, BepInExCore))
             differences.Add($"BepInEx core differs ({CoreDirectory} is {found.BepInExCore}, pinned bepinexCore {BepInExCore}): another BepInEx or BepInExPack build");
         if (!Same(found.Patchers, Patchers))
@@ -127,15 +132,36 @@ public sealed class InstallPins
         throw new InvalidOperationException($"More than one game assembly under {root}: {string.Join(", ", found)}; refusing to guess which runs.");
     }
 
+    /// <summary>
+    /// The <see cref="Game"/> value: the listing hash of every <see cref="GameAssemblies"/> file directly in the Managed
+    /// folder that holds <see cref="GameAssembly"/>.
+    /// </summary>
+    public static string GameHash(string root)
+    {
+        string managed = Path.GetDirectoryName(GameAssembly(root))!;
+        // Filtered by name here rather than by the search pattern, so every platform matches alike (case-sensitive, as a shell glob).
+        return ListingHash(managed, Directory.EnumerateFiles(managed).Where(path =>
+            Path.GetFileName(path) is var name && name.StartsWith("assembly_", StringComparison.Ordinal) && name.EndsWith(".dll", StringComparison.Ordinal)));
+    }
+
     /// <summary>The SHA256 of a folder's listing (see <see cref="InstallPins"/>); an empty or absent folder hashes the empty listing.</summary>
-    public static string DirectoryHash(string directory)
+    public static string DirectoryHash(string directory) =>
+        ListingHash(directory, Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories) : []);
+
+    /// <summary>Finder's <c>.DS_Store</c> and AppleDouble <c>._*</c> files, which copying through macOS adds; never part of a listing.</summary>
+    public static bool IsMacMetadata(string path)
+    {
+        string name = Path.GetFileName(path);
+        return name == ".DS_Store" || name.StartsWith("._", StringComparison.Ordinal);
+    }
+
+    private static string ListingHash(string directory, IEnumerable<string> files)
     {
         var listing = new StringBuilder();
-        if (Directory.Exists(directory))
-            foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
-                .Select(path => (Path: path, Relative: Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '/')))
-                .OrderBy(file => file.Relative, StringComparer.Ordinal))
-                listing.Append(WorldFixture.Hash(file.Path)).Append("  ").Append(file.Relative).Append('\n');
+        foreach (var file in files.Where(path => !IsMacMetadata(path))
+            .Select(path => (Path: path, Relative: Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '/')))
+            .OrderBy(file => file.Relative, StringComparer.Ordinal))
+            listing.Append(WorldFixture.Hash(file.Path)).Append("  ").Append(file.Relative).Append('\n');
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(listing.ToString()))).ToLowerInvariant();
     }
 

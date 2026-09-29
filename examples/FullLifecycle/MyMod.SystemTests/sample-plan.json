@@ -12,7 +12,7 @@
     "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
   },
   "runtimePins": {
-    "game": "<sha256 of valheim_server_Data/Managed/assembly_valheim.dll>",
+    "game": "<InstallPins.Of(runtime).Game>",
     "bepinexCore": "<InstallPins.Of(runtime).BepInExCore>",
     "patchers": "<InstallPins.Of(runtime).Patchers>"
   },
@@ -27,7 +27,7 @@
     "port": 5556,
     "pins": { "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>", "example.mymod": "absent" },
     "installPins": {
-      "game": "<sha256 of valheim_Data/Managed/assembly_valheim.dll>",
+      "game": "<InstallPins.Of(install).Game>",
       "bepinexCore": "<InstallPins.Of(install).BepInExCore>",
       "patchers": "<InstallPins.Of(install).Patchers>"
     },
