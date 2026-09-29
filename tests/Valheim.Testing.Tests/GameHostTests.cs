@@ -124,7 +124,8 @@ public class GameHostTests
         var error = await Assert.ThrowsAsync<HostLockException>(() => Host(kind, fake).AcquireLockAsync(Lock, "run-42", Timeout));
         Assert.Equal(HostLockState.HeldByOther, error.State); Assert.Equal("run-41 on another machine", error.Holder);
         string script = FakeLauncher.Script(fake.Calls[0]);
-        Assert.Contains("action='claim'", script); Assert.Contains("lock='/var/tmp/vt-lock'", script); Assert.Contains("owner='run-42'", script);
+        Assert.Contains("action='claim'", script); Assert.Contains("lock='/var/tmp/vt-lock'", script);
+        Assert.Matches(@"owner='run-42 \[[0-9a-f]{32}\]'", script);
     }
 
     [Theory, MemberData(nameof(Kinds))] public async Task AClaimWhoseReplyTimedOutIsUnknownNotHeldOrFree(string kind)
@@ -132,20 +133,36 @@ public class GameHostTests
         var fake = new FakeLauncher().TimesOut();
         var error = await Assert.ThrowsAsync<HostLockException>(() => Host(kind, fake).AcquireLockAsync(Lock, "run-42", Timeout));
         Assert.Equal(HostLockState.Unknown, error.State); Assert.Null(error.Holder);
-        Assert.Contains("not proven", error.Message);
+        Assert.Contains("not proven", error.Message); Assert.Contains("The claim was made as 'run-42 [", error.Message);
     }
 
     [Fact] public async Task ALockIsReleasedOnDisposeAndAnUnprovenReleaseThrows()
     {
         var fake = new FakeLauncher().Exits(0, "VT-LOCK claimed\n", FakeLauncher.Report(0)).Exits(0, "VT-LOCK released\n", FakeLauncher.Report(0));
         var host = Host("ssh", fake);
-        await using (var held = await host.AcquireLockAsync(Lock, "run-42", Timeout)) Assert.Equal("run-42", held.Owner);
-        Assert.Contains("action='release'", FakeLauncher.Script(fake.Calls[1]));
+        string claimant;
+        await using (var held = await host.AcquireLockAsync(Lock, "run-42", Timeout)) claimant = held.Owner;
+        Assert.StartsWith("run-42 [", claimant);
+        Assert.Contains($"owner='{claimant}'", FakeLauncher.Script(fake.Calls[0]));
+        Assert.Contains("action='release'", FakeLauncher.Script(fake.Calls[1])); Assert.Contains($"owner='{claimant}'", FakeLauncher.Script(fake.Calls[1]));
 
         fake.Exits(0, "VT-LOCK yours\n", FakeLauncher.Report(0)).Exits(255, "", "Connection reset\n");
         var again = await host.AcquireLockAsync(Lock, "run-42", Timeout);
         var error = await Assert.ThrowsAsync<HostLockException>(async () => await again.DisposeAsync());
         Assert.Equal(HostLockState.Unknown, error.State);
+    }
+
+    [Fact] public async Task TwoAcquisitionsWithTheSameOwnerClaimAsDifferentClaimants()
+    {
+        // Two runs that both call themselves "nightly" must not both hold the lock: each claim carries its own id.
+        var fake = new FakeLauncher().Exits(0, "VT-LOCK claimed\n", FakeLauncher.Report(0)).Exits(0, "VT-LOCK held\nnightly [x]\n", FakeLauncher.Report(0));
+        var host = Host("local", fake);
+        var first = await host.AcquireLockAsync(Lock, "nightly", Timeout);
+        var error = await Assert.ThrowsAsync<HostLockException>(() => host.AcquireLockAsync(Lock, "nightly", Timeout));
+        Assert.Equal(HostLockState.HeldByOther, error.State);
+        string Owner(int call) => Regex.Match(FakeLauncher.Script(fake.Calls[call]), "owner='([^']*)'").Groups[1].Value;
+        Assert.Equal(first.Owner, Owner(0)); Assert.NotEqual(Owner(0), Owner(1));
+        await Assert.ThrowsAsync<ArgumentException>(() => host.AcquireLockAsync(Lock, new string('x', 201), Timeout));
     }
 
     [Fact] public void LockRepliesAreReadStrictly()
@@ -282,9 +299,10 @@ public class GameHostTests
     [Fact] public async Task AnSshTunnelBindsLoopbackOnlyAndStopsItsOwnProcessOnDispose()
     {
         FakeForward? forward = null;
-        var fake = new FakeLauncher { OnStart = arguments => forward = new FakeForward(arguments) };
+        var fake = new FakeLauncher { OnStart = arguments => forward = new FakeForward(arguments) }.Exits(0, "user tester\nhostname box.example\nport 22\n");
         using (var tunnel = await Host("ssh", fake).OpenCliTunnelAsync(5577, Timeout))
         {
+            Assert.Contains("-G", fake.Calls.Single().Arguments);
             var arguments = fake.Started.Single().Arguments;
             Assert.Contains("ExitOnForwardFailure=yes", arguments); Assert.Contains("GatewayPorts=no", arguments); Assert.DoesNotContain("ClearAllForwardings=yes", arguments);
             Assert.Equal($"127.0.0.1:{tunnel.LocalPort}:127.0.0.1:5577", arguments[arguments.ToList().IndexOf("-L") + 1]);
@@ -303,7 +321,7 @@ public class GameHostTests
             var fake = new FakeLauncher { OnStart = arguments => new FakeForward(arguments) };
             int port = ((IPEndPoint)busy.LocalEndpoint).Port;
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Host("ssh", fake).OpenCliTunnelAsync(5577, Timeout, port));
-            Assert.Contains("already in use", error.Message); Assert.Empty(fake.Started);
+            Assert.Contains("already in use", error.Message); Assert.Empty(fake.Calls); Assert.Empty(fake.Started);
         }
         finally { busy.Stop(); }
     }
@@ -311,10 +329,25 @@ public class GameHostTests
     [Fact] public async Task AnSshTunnelWhoseSshExitsFailsAtOnceAndIsCleanedUp()
     {
         FakeForward? forward = null;
-        var fake = new FakeLauncher { OnStart = arguments => forward = new FakeForward(arguments, listen: false, exitCode: 255, stderr: "Permission denied (publickey).\n") };
+        var fake = new FakeLauncher { OnStart = arguments => forward = new FakeForward(arguments, listen: false, exitCode: 255, stderr: "Permission denied (publickey).\n") }.Exits(0, "hostname box\n");
         var error = await Assert.ThrowsAsync<WaitFailedException>(() => Host("ssh", fake).OpenCliTunnelAsync(5577, Timeout));
         Assert.Contains("exited with code 255", error.Message); Assert.Equal("Permission denied (publickey).", error.LastSeen);
         Assert.True(forward!.Disposed);
+    }
+
+    [Theory]
+    [InlineData("localforward 0.0.0.0:8080 [127.0.0.1]:80")]
+    [InlineData("RemoteForward [0.0.0.0]:9000 [localhost]:9000")]
+    [InlineData("dynamicforward 1080")]
+    public async Task AnSshTunnelRefusesAHostWhoseConfigAddsForwards(string forward)
+    {
+        // ssh would open these beside the tunnel, possibly beyond loopback; ClearAllForwardings would clear the tunnel's own too.
+        var fake = new FakeLauncher { OnStart = arguments => new FakeForward(arguments) }.Exits(0, "user tester\nhostname box.example\n" + forward + "\r\nport 22\n");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Host("ssh", fake).OpenCliTunnelAsync(5577, Timeout));
+        Assert.Contains(forward, error.Message); Assert.Empty(fake.Started);
+        var broken = new FakeLauncher { OnStart = arguments => new FakeForward(arguments) }.Exits(255, "", "Bad configuration option\n");
+        Assert.Contains("Bad configuration option", (await Assert.ThrowsAsync<InvalidOperationException>(() => Host("ssh", broken).OpenCliTunnelAsync(5577, Timeout))).Message);
+        Assert.Empty(broken.Started);
     }
 
     [Fact] public async Task LocalAndContainerHostsReachTheCliPortItselfOrRefuse()
@@ -398,6 +431,10 @@ public class EnvironmentProfileTests
     [InlineData("\"gamePort\": 2456", "\"gamePort\": 0", "gamePort must be")]
     [InlineData("\"localCliPort\": 15578", "\"localCliPort\": 15578, \"gamePort\": 2458", "only the server has a gamePort")]
     [InlineData("\"user\": \"valheim\",", "\"user\": \"valheim\", \"port\": 22,", "belong to an ssh host")]
+    [InlineData("\"platform\": \"windows\", \"shell\": \"powershell\"", "\"platform\": \"windows\", \"shell\": \"bash\"", "bash on Windows")]
+    [InlineData("\"destination\": \"tester@linux-box.example\", \"port\": 2222", "\"destination\": \"ssh://tester@linux-box.example:2200\", \"port\": 2222", "give the port once")]
+    [InlineData("\"destination\": \"tester@windows-pc.example\"", "\"destination\": \"tester:secret@windows-pc.example\"", "Passwords are never accepted")]
+    [InlineData("[\"IdentityFile=~/.ssh/valheim_tests\"]", "[\"LocalForward=0.0.0.0:1 127.0.0.1:2\"]", "LocalForward is refused")]
     public void AnInconsistentProfileIsRefusedBeforeAnythingStarts(string find, string replace, string expected)
     {
         string json = Sample.Replace(find, replace);
@@ -405,6 +442,25 @@ public class EnvironmentProfileTests
         var error = Record.Exception(() => EnvironmentProfile.Parse(json));
         Assert.NotNull(error);
         Assert.Contains(expected, error.Message);
+    }
+
+    [Fact] public void ALocalHostAndAHostNetworkContainerNeverShareACliPort()
+    {
+        // Both are reached on this machine's own loopback, so one port would reach whichever answered first.
+        string shell = Platform == "windows" ? "powershell" : "bash", root = Platform == "windows" ? "C:/vt" : "/tmp/vt";
+        string json = $$"""
+            { "hosts": { "here": { "kind": "local", "platform": "{{Platform}}", "shell": "{{shell}}", "lock": "{{root}}/lock" },
+                         "ctr": { "kind": "container", "platform": "linux", "shell": "bash", "container": "vt-server", "lock": "/home/valheim/lock" },
+                         "far": { "kind": "ssh", "platform": "linux", "shell": "bash", "destination": "far.example", "lock": "/tmp/lock" } },
+              "server": { "host": "ctr", "install": "/opt/valheim/server", "runtime": "/home/valheim/runs", "cliPort": 5577, "gamePort": 2456 },
+              "clients": { "me": { "host": "here", "install": "{{root}}/game", "runtime": "{{root}}/runs", "cliPort": CLIENTPORT },
+                           "far": { "host": "far", "install": "/games/valheim", "runtime": "/tmp/runs", "cliPort": 5577, "localCliPort": FARPORT } } }
+            """;
+        Assert.Contains("server and client me would all be reached on local port 5577",
+            Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json.Replace("CLIENTPORT", "5577").Replace("FARPORT", "0"))).Message);
+        Assert.Contains("client me and client far would all be reached on local port 5578",
+            Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json.Replace("CLIENTPORT", "5578").Replace("FARPORT", "5578"))).Message);
+        EnvironmentProfile.Parse(json.Replace("CLIENTPORT", "5578").Replace("FARPORT", "15577"));
     }
 
     [Fact] public void TwoClientsNeverShareAHost()

@@ -63,17 +63,18 @@ internal static class GameHostChecks
         string path = root + "/lock";
         Assert.Equal(HostLockState.Free, (await host.CheckLockAsync(path, "run-a", Generous)).State);
         var first = await host.AcquireLockAsync(path, "run-a", Generous);
+        Assert.StartsWith("run-a [", first.Owner);
         var refused = await Assert.ThrowsAsync<HostLockException>(() => host.AcquireLockAsync(path, "run-b", Generous));
-        Assert.Equal(HostLockState.HeldByOther, refused.State); Assert.Equal("run-a", refused.Holder);
-        // A repeated claim by the holder (a lost reply) is still its own; another run's release changes nothing.
-        await using (await host.AcquireLockAsync(path, "run-a", Generous)) { }
-        Assert.Equal(HostLockState.Free, (await host.CheckLockAsync(path, "run-a", Generous)).State);
-        first = await host.AcquireLockAsync(path, "run-a", Generous);
-        Assert.Equal(HostLockState.HeldByOther, (await host.ReleaseLockAsync(path, "run-b", Generous)).State);
-        Assert.Equal(HostLockState.Yours, (await host.CheckLockAsync(path, "run-a", Generous)).State);
+        Assert.Equal(HostLockState.HeldByOther, refused.State); Assert.Equal(first.Owner, refused.Holder);
+        // Another run that passes the same owner string is refused too, and the bare owner releases nothing.
+        var same = await Assert.ThrowsAsync<HostLockException>(() => host.AcquireLockAsync(path, "run-a", Generous));
+        Assert.Equal(HostLockState.HeldByOther, same.State);
+        Assert.Equal(HostLockState.HeldByOther, (await host.ReleaseLockAsync(path, "run-a", Generous)).State);
+        Assert.Equal(HostLockState.Yours, (await host.CheckLockAsync(path, first.Owner, Generous)).State);
         Assert.Equal(HostLockState.Released, (await first.ReleaseAsync()).State);
+        Assert.Equal(HostLockState.Free, (await host.CheckLockAsync(path, first.Owner, Generous)).State);
         await using var second = await host.AcquireLockAsync(path, "run-b", Generous);
-        Assert.Equal("run-b", second.Owner);
+        Assert.StartsWith("run-b [", second.Owner);
     });
 
     public static Task ShippedFilesComeBackAsEvidence(IGameHost host, string parent) => WithRootAsync(host, parent, async root =>

@@ -64,8 +64,13 @@ public sealed class EnvironmentProfile
             errors.Add($"Clients {string.Join(", ", shared.Select(client => client.Key))} share host '{shared.Key}'; a host runs one game client.");
         foreach (var shared in roles.GroupBy(role => (role.Value.Host, role.Value.CliPort)).Where(group => group.Count() > 1))
             errors.Add($"{string.Join(" and ", shared.Select(role => role.Role))} use the same ValheimCLI port {shared.Key.CliPort} on host '{shared.Key.Host}'.");
-        foreach (var shared in roles.Where(role => role.Value.LocalCliPort != 0).GroupBy(role => role.Value.LocalCliPort).Where(group => group.Count() > 1))
-            errors.Add($"{string.Join(" and ", shared.Select(role => role.Role))} use the same local CLI port {shared.Key}.");
+        // The ports each role is reached on here: a local host's and a (host-network) container's CLI port is this machine's
+        // own, and an ssh role's tunnel listens on its localCliPort. Two roles must never meet on one.
+        var here = roles.Select(role => (role.Role, Port: Hosts.TryGetValue(role.Value.Host ?? "", out var roleHost)
+                ? ((roleHost.Kind is "local" or "container") ? role.Value.CliPort : role.Value.LocalCliPort) : 0))
+            .Where(role => role.Port != 0);
+        foreach (var shared in here.GroupBy(role => role.Port).Where(group => group.Count() > 1))
+            errors.Add($"{string.Join(" and ", shared.Select(role => role.Role))} would all be reached on local port {shared.Key}.");
         if (errors.Count != 0) throw new ArgumentException("Invalid environment profile: " + string.Join(" ", errors));
     }
 
@@ -127,14 +132,27 @@ public sealed class HostProfile
         if (Platform is not ("windows" or "linux" or "macos")) errors.Add($"{where}: platform must be windows, linux or macos.");
         if (Shell is not ("bash" or "pwsh" or "powershell")) errors.Add($"{where}: shell must be bash, pwsh or powershell.");
         else if (Shell == "powershell" && Platform != "windows") errors.Add($"{where}: Windows PowerShell (powershell) runs only on Windows; use pwsh.");
+        else if (Shell == "bash" && Platform == "windows") errors.Add($"{where}: bash on Windows (WSL or Git Bash) sees other paths and tools; use powershell or pwsh.");
         if (Kind == "container" && Platform != "linux") errors.Add($"{where}: a container host's platform is linux.");
         if ((Kind == "ssh") == string.IsNullOrWhiteSpace(Destination)) errors.Add($"{where}: " + (Kind == "ssh" ? "an ssh host needs a destination." : "only an ssh host has a destination."));
         if ((Kind == "container") == string.IsNullOrWhiteSpace(Container)) errors.Add($"{where}: " + (Kind == "container" ? "a container host needs a container." : "only a container host has a container."));
         if (Kind != "ssh" && (Port != 0 || SshOptions.Length != 0)) errors.Add($"{where}: port and sshOptions belong to an ssh host.");
         if (Kind != "container" && User != null) errors.Add($"{where}: user belongs to a container host.");
         if (Port is < 0 or > 65535) errors.Add($"{where}: port must be 0 to 65535.");
+        if (Kind == "ssh" && !string.IsNullOrWhiteSpace(Destination))
+        {
+            if (Port != 0 && Destination.StartsWith("ssh://", StringComparison.Ordinal)) errors.Add($"{where}: give the port once, in the ssh:// destination or as port.");
+            Collect(errors, where, () => SshGameHost.CheckDestination(Destination));
+            foreach (string option in SshOptions ?? []) Collect(errors, where, () => SshGameHost.CheckOption(option));
+        }
         if (ConnectSeconds is < 1 or > 300) errors.Add($"{where}: connectSeconds must be 1 to 300.");
         if (!IsAbsolutePath(Lock)) errors.Add($"{where}: lock must be an absolute path on the host.");
+    }
+
+    private static void Collect(List<string> errors, string where, Action check)
+    {
+        try { check(); }
+        catch (ArgumentException error) { errors.Add($"{where}: {error.Message.Split(" (Parameter", 2)[0]}"); }
     }
 
     /// <summary>A path on this host that does not depend on a home or working directory: drive or UNC on Windows, rooted elsewhere.</summary>

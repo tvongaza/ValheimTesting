@@ -80,7 +80,14 @@ public sealed class SshGameHost : ScriptedGameHost
     /// Forwards a local loopback port to the host's loopback-only ValheimCLI port (<c>ssh -N -L 127.0.0.1:local:127.0.0.1:host</c>
     /// with ExitOnForwardFailure). <paramref name="localPort"/> 0 picks a free port; a port already in use is refused before ssh
     /// starts. Ready means a local connection succeeded within <paramref name="readyTimeout"/>: ssh listens here. Whether the host's
-    /// port answers is the next check, made through the tunnel. Neither end ever listens on a non-loopback address.
+    /// port answers is the next check, made through the tunnel. Neither end ever listens on a non-loopback address: ssh would also
+    /// open the LocalForward, RemoteForward and DynamicForward entries an ssh config gives this host (ClearAllForwardings would
+    /// clear the tunnel's own forward too), so a host whose effective config (<c>ssh -G</c>) has any is refused.
+    /// <para>
+    /// The free-port check and ssh's own bind are separate steps: another process can take the port in between. ssh then fails
+    /// to bind and exits (ExitOnForwardFailure), which fails the tunnel, but a readiness probe made before ssh has exited could
+    /// reach that other listener. Pass a <paramref name="localPort"/> reserved for tests on a shared machine.
+    /// </para>
     /// </summary>
     public override async Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default)
     {
@@ -88,6 +95,7 @@ public sealed class SshGameHost : ScriptedGameHost
         if (localPort != 0) GameHostPorts.Check(localPort, nameof(localPort));
         WaitText.RequireTimeout(readyTimeout);
         int port = localPort == 0 ? GameHostPorts.FreeLoopbackPort() : GameHostPorts.RequireFreeLoopbackPort(localPort);
+        await RefuseConfiguredForwardsAsync(readyTimeout, cancellation).ConfigureAwait(false);
         var process = Launcher.Start(_ssh, SshArguments(forward: true, ["-N", "-n", "-T", "-L", ForwardSpec(port, hostPort)], null));
         try
         {
@@ -100,6 +108,24 @@ public sealed class SshGameHost : ScriptedGameHost
             throw;
         }
     }
+
+    // ssh -G prints the configuration ssh would use for this destination, forwards from the user's and the system's config included.
+    private async Task RefuseConfiguredForwardsAsync(TimeSpan timeout, CancellationToken cancellation)
+    {
+        var exit = await Launcher.RunAsync(new ProcessCall(_ssh, SshArguments(forward: true, ["-G"], null), [], null, null, null, timeout), cancellation).ConfigureAwait(false);
+        if (exit.End != ProcessEnd.Exited || exit.ExitCode != 0)
+            throw new InvalidOperationException($"Could not read the ssh configuration for {Destination} ({(exit.End == ProcessEnd.Exited ? "exit " + exit.ExitCode : exit.End.ToString())}): {exit.Stderr.Trim()}");
+        var forwards = ConfiguredForwards(exit.Stdout);
+        if (forwards.Count != 0)
+            throw new InvalidOperationException($"The ssh configuration for {Destination} adds forwards that a tunnel would also open: {string.Join("; ", forwards)}. " +
+                "Use a Host entry or alias without LocalForward, RemoteForward or DynamicForward for tests.");
+    }
+
+    internal static IReadOnlyList<string> ConfiguredForwards(string sshG) =>
+        sshG.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => line.StartsWith("localforward ", StringComparison.OrdinalIgnoreCase) || line.StartsWith("remoteforward ", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("dynamicforward ", StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
     internal static string ForwardSpec(int localPort, int hostPort) =>
         "127.0.0.1:" + localPort.ToString(CultureInfo.InvariantCulture) + ":127.0.0.1:" + hostPort.ToString(CultureInfo.InvariantCulture);
@@ -130,7 +156,7 @@ public sealed class SshGameHost : ScriptedGameHost
         ? shell.Executable + " -c '" + HostScripts.BashWrapper + "'"
         : shell.Executable + " " + string.Join(' ', WrapperArguments(shell));
 
-    private static string CheckDestination(string destination)
+    internal static string CheckDestination(string destination)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destination);
         if (destination.StartsWith('-') || destination.Any(ch => char.IsWhiteSpace(ch) || char.IsControl(ch)))
@@ -141,7 +167,7 @@ public sealed class SshGameHost : ScriptedGameHost
         return destination;
     }
 
-    private static string CheckOption(string option)
+    internal static string CheckOption(string option)
     {
         int equals = option?.IndexOf('=') ?? -1;
         if (option == null || equals <= 0 || !OptionName.IsMatch(option[..equals]) || option.Any(char.IsControl))

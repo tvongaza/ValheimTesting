@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Offline binding check: reads a built mod with Mono.Cecil and resolves every game type and member it references in the
+    game assemblies it is given. Loads nothing into the process, so it runs from any test project or CI step. The
+    command-line front end is the Valheim.Testing.Bindings.Tool package.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <Version>0.1.0-preview.1</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Offline check that a built mod's references into assembly_valheim and other game assemblies still bind: reports each missing type, field or method with the mod method that uses it, and members no longer accessible separately. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
+    <PackageId>Valheim.Testing.Bindings</PackageId><PackageProjectUrl>https://github.com/tvongaza/ValheimTesting</PackageProjectUrl><RepositoryUrl>https://github.com/tvongaza/ValheimTesting.git</RepositoryUrl><RepositoryType>git</RepositoryType><PackageTags>valheim;modding;testing;bepinex;cecil;ci</PackageTags>
+  </PropertyGroup>
+  <ItemGroup><PackageReference Include="Mono.Cecil" Version="[0.11.6]" /></ItemGroup>
+  <ItemGroup><None Include="../../LICENSE" Pack="true" PackagePath="" /><None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" /><None Include="../../docs/packages/Valheim.Testing.Bindings.md" Pack="true" PackagePath="README.md" /></ItemGroup>
+</Project>
