@@ -257,13 +257,13 @@ public partial class Object
     private void DestroyNow()
     {
         if (Destroyed) return;
-        OnDestroying();
+        UnityDestroying();
         Destroyed = true;
         OnDestroyed();
     }
 
     // Runs while the object is still alive, as Unity's OnDisable and OnDestroy messages do (UnityComponentDoubles.cs).
-    private protected virtual void OnDestroying() { }
+    private protected virtual void UnityDestroying() { }
     private protected virtual void OnDestroyed() { }
 
     private protected void ThrowIfDestroyed()

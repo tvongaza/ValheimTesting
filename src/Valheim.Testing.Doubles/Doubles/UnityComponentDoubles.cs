@@ -39,7 +39,7 @@ namespace UnityEngine
         /// The components attached with <c>AddComponent</c> or made by <c>Instantiate</c>: what <see cref="FindObjectsByType{T}(FindObjectsSortMode)"/>
         /// searches and <see cref="RunFrame"/> drives. <c>ValheimWorldScope.WithScene</c> gives a test its own.
         /// </summary>
-        internal static List<Component> s_components = new();
+        internal static List<Component> s_unityComponents = new();
 
         /// <summary>
         /// Every live component of type <typeparamref name="T"/> on an object active in its hierarchy (or also inactive
@@ -49,9 +49,9 @@ namespace UnityEngine
         public static T[] FindObjectsByType<T>(FindObjectsSortMode sortMode) where T : Object => FindObjectsByType<T>(FindObjectsInactive.Exclude, sortMode);
         public static T[] FindObjectsByType<T>(FindObjectsInactive findObjectsInactive, FindObjectsSortMode sortMode) where T : Object
         {
-            s_components.RemoveAll(c => c.Destroyed);
+            s_unityComponents.RemoveAll(c => c.Destroyed);
             var found = new List<T>();
-            foreach (var component in s_components)
+            foreach (var component in s_unityComponents)
                 if (component is T match && component.m_gameObject is { Destroyed: false } owner &&
                     (findObjectsInactive == FindObjectsInactive.Include || owner.activeInHierarchy))
                     found.Add(match);
@@ -84,13 +84,13 @@ namespace UnityEngine
             if (!(deltaTime >= 0f) || float.IsInfinity(deltaTime)) throw new ArgumentOutOfRangeException(nameof(deltaTime));
             Time.deltaTime = deltaTime; Time.time += deltaTime; Time.realtimeSinceStartup += deltaTime; Time.frameCount++;
             var behaviours = new List<MonoBehaviour>();
-            foreach (var component in s_components.ToArray()) if (component is MonoBehaviour behaviour && !behaviour.Destroyed) behaviours.Add(behaviour);
+            foreach (var component in s_unityComponents.ToArray()) if (component is MonoBehaviour behaviour && !behaviour.Destroyed) behaviours.Add(behaviour);
             foreach (var behaviour in behaviours)
-                if (behaviour.IsRunning && !behaviour.m_started) { behaviour.m_started = true; behaviour.RunStart(); }
-            foreach (var behaviour in behaviours) if (behaviour.IsRunning) behaviour.SendMessageNow("Update");
-            foreach (var behaviour in behaviours) if (behaviour.IsAlive) { behaviour.ResumeCoroutines(endOfFrame: false); behaviour.RunDueInvokes(); }
-            foreach (var behaviour in behaviours) if (behaviour.IsRunning) behaviour.SendMessageNow("LateUpdate");
-            foreach (var behaviour in behaviours) if (behaviour.IsAlive) behaviour.ResumeCoroutines(endOfFrame: true);
+                if (behaviour.UnityRunning && !behaviour.m_unityStarted) { behaviour.m_unityStarted = true; behaviour.UnityRunStart(); }
+            foreach (var behaviour in behaviours) if (behaviour.UnityRunning) behaviour.UnitySendMessage("Update");
+            foreach (var behaviour in behaviours) if (behaviour.UnityAlive) { behaviour.UnityResumeCoroutines(endOfFrame: false); behaviour.UnityRunDueInvokes(); }
+            foreach (var behaviour in behaviours) if (behaviour.UnityRunning) behaviour.UnitySendMessage("LateUpdate");
+            foreach (var behaviour in behaviours) if (behaviour.UnityAlive) behaviour.UnityResumeCoroutines(endOfFrame: true);
             EndOfFrame();
         }
 
@@ -102,14 +102,14 @@ namespace UnityEngine
         public static T Instantiate<T>(T original, global::Transform parent, bool instantiateInWorldSpace) where T : Object => (T)CloneObject(original, parent, instantiateInWorldSpace);
         public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation, global::Transform parent)
         {
-            s_pendingParent = parent; s_pendingWorldStays = true;
+            s_unityPendingParent = parent; s_unityPendingWorldStays = true;
             try { return original.Clone(position, rotation); }
-            finally { s_pendingParent = null; }
+            finally { s_unityPendingParent = null; }
         }
 
-        [ThreadStatic] internal static global::Transform? s_pendingParent;
-        [ThreadStatic] internal static bool s_pendingWorldStays;
-        [ThreadStatic] internal static Dictionary<Object, Object>? s_lastCloneMap;
+        [ThreadStatic] internal static global::Transform? s_unityPendingParent;
+        [ThreadStatic] internal static bool s_unityPendingWorldStays;
+        [ThreadStatic] internal static Dictionary<Object, Object>? s_unityLastCloneMap;
 
         private static Object CloneObject(Object original, global::Transform? parent, bool worldStays)
         {
@@ -117,15 +117,15 @@ namespace UnityEngine
             original.ThrowIfDestroyed();
             if (original is GameObject go)
             {
-                s_pendingParent = parent; s_pendingWorldStays = worldStays;
+                s_unityPendingParent = parent; s_unityPendingWorldStays = worldStays;
                 try { return go.Clone(go.Position, go.Rotation); }
-                finally { s_pendingParent = null; }
+                finally { s_unityPendingParent = null; }
             }
             if (original is Component component)
             {
                 var owner = component.m_gameObject ?? throw new ArgumentException("The component is on no GameObject; Unity copies a component's whole object.", nameof(original));
                 Instantiate(owner, parent!, worldStays);
-                return s_lastCloneMap![component];
+                return s_unityLastCloneMap![component];
             }
             return original.CopyForInstantiate();
         }
@@ -146,19 +146,19 @@ namespace UnityEngine
 
     public partial class Behaviour
     {
-        internal bool m_enabled = true;
+        internal bool m_behaviourEnabled = true;
         /// <summary>
         /// Switches the behaviour on or off. On a MonoBehaviour that has woken, on an object active in its hierarchy, this
         /// sends OnEnable or OnDisable at once, as Unity does.
         /// </summary>
         public bool enabled
         {
-            get => m_enabled;
-            set { if (m_enabled == value) return; m_enabled = value; EnabledChanged(); }
+            get => m_behaviourEnabled;
+            set { if (m_behaviourEnabled == value) return; m_behaviourEnabled = value; UnityEnabledChanged(); }
         }
         /// <summary>Enabled and on an object active in its hierarchy.</summary>
-        public bool isActiveAndEnabled => m_enabled && m_gameObject is { Destroyed: false } owner && owner.activeInHierarchy;
-        private protected virtual void EnabledChanged() { }
+        public bool isActiveAndEnabled => m_behaviourEnabled && m_gameObject is { Destroyed: false } owner && owner.activeInHierarchy;
+        private protected virtual void UnityEnabledChanged() { }
     }
 
     /// <summary>
@@ -171,45 +171,45 @@ namespace UnityEngine
     /// </summary>
     public partial class MonoBehaviour
     {
-        internal bool m_awoken, m_started, m_enableSent;
+        internal bool m_unityAwoken, m_unityStarted, m_unityEnableSent;
         private readonly List<Coroutine> m_coroutines = new();
         private readonly List<ScheduledInvoke> m_invokes = new();
 
-        internal bool IsAlive => !Destroyed && m_awoken && m_gameObject is { Destroyed: false } owner && owner.activeInHierarchy;
-        internal bool IsRunning => IsAlive && m_enabled;
+        internal bool UnityAlive => !Destroyed && m_unityAwoken && m_gameObject is { Destroyed: false } owner && owner.activeInHierarchy;
+        internal bool UnityRunning => UnityAlive && m_behaviourEnabled;
 
-        internal void BecameActive()
+        internal void UnityBecameActive()
         {
             if (Destroyed) return;
-            if (!m_awoken) { m_awoken = true; SendMessageNow("Awake"); if (Destroyed) return; }
-            if (m_enabled && !m_enableSent) { m_enableSent = true; SendMessageNow("OnEnable"); }
+            if (!m_unityAwoken) { m_unityAwoken = true; UnitySendMessage("Awake"); if (Destroyed) return; }
+            if (m_behaviourEnabled && !m_unityEnableSent) { m_unityEnableSent = true; UnitySendMessage("OnEnable"); }
         }
-        internal void BecameInactive()
+        internal void UnityBecameInactive()
         {
             m_coroutines.Clear(); // Unity stops a deactivated object's coroutines for good
-            if (m_enableSent) { m_enableSent = false; SendMessageNow("OnDisable"); }
+            if (m_unityEnableSent) { m_unityEnableSent = false; UnitySendMessage("OnDisable"); }
         }
-        private protected override void EnabledChanged()
+        private protected override void UnityEnabledChanged()
         {
-            if (!m_awoken || Destroyed || m_gameObject is not { } owner || !owner.activeInHierarchy) return;
-            if (m_enabled && !m_enableSent) { m_enableSent = true; SendMessageNow("OnEnable"); }
-            else if (!m_enabled && m_enableSent) { m_enableSent = false; SendMessageNow("OnDisable"); }
+            if (!m_unityAwoken || Destroyed || m_gameObject is not { } owner || !owner.activeInHierarchy) return;
+            if (m_behaviourEnabled && !m_unityEnableSent) { m_unityEnableSent = true; UnitySendMessage("OnEnable"); }
+            else if (!m_behaviourEnabled && m_unityEnableSent) { m_unityEnableSent = false; UnitySendMessage("OnDisable"); }
         }
-        private protected override void OnDestroying()
+        private protected override void UnityDestroying()
         {
-            if (m_enableSent) { m_enableSent = false; SendMessageNow("OnDisable"); }
+            if (m_unityEnableSent) { m_unityEnableSent = false; UnitySendMessage("OnDisable"); }
             m_coroutines.Clear(); m_invokes.Clear();
-            if (m_awoken) SendMessageNow("OnDestroy");
+            if (m_unityAwoken) UnitySendMessage("OnDestroy");
         }
 
-        internal void RunStart()
+        internal void UnityRunStart()
         {
-            var start = FindMessage(GetType(), "Start");
+            var start = UnityFindMessage(GetType(), "Start");
             if (start == null) return;
             if (typeof(IEnumerator).IsAssignableFrom(start.ReturnType)) StartCoroutine((IEnumerator)Call(start)!);
             else Call(start);
         }
-        internal void SendMessageNow(string name) { var method = FindMessage(GetType(), name); if (method != null) Call(method); }
+        internal void UnitySendMessage(string name) { var method = UnityFindMessage(GetType(), name); if (method != null) Call(method); }
         private object? Call(MethodInfo method)
         {
             try { return method.Invoke(this, null); }
@@ -221,7 +221,7 @@ namespace UnityEngine
         }
 
         private static readonly Dictionary<(Type, string), MethodInfo?> s_messages = new();
-        internal static MethodInfo? FindMessage(Type type, string name)
+        internal static MethodInfo? UnityFindMessage(Type type, string name)
         {
             lock (s_messages)
             {
@@ -246,7 +246,7 @@ namespace UnityEngine
         {
             if (routine == null) throw new ArgumentNullException(nameof(routine));
             if (m_gameObject is null) throw new InvalidOperationException("A coroutine needs a behaviour on a GameObject: attach it with AddComponent.");
-            if (!IsAlive)
+            if (!UnityAlive)
             {
                 Debug.LogError($"Coroutine couldn't be started because the the game object '{m_gameObject.name}' is inactive!");
                 return null!;
@@ -262,8 +262,8 @@ namespace UnityEngine
             foreach (var coroutine in m_coroutines.ToArray()) if (coroutine.m_routine == routine) StopCoroutine(coroutine);
         }
         public void StopAllCoroutines() { foreach (var coroutine in m_coroutines.ToArray()) StopCoroutine(coroutine); }
-        internal void RemoveCoroutine(Coroutine coroutine) => m_coroutines.Remove(coroutine);
-        internal void ResumeCoroutines(bool endOfFrame)
+        internal void UnityRemoveCoroutine(Coroutine coroutine) => m_coroutines.Remove(coroutine);
+        internal void UnityResumeCoroutines(bool endOfFrame)
         {
             foreach (var coroutine in m_coroutines.ToArray())
                 if (!coroutine.m_done && m_coroutines.Contains(coroutine) && coroutine.IsDue(endOfFrame)) coroutine.Advance();
@@ -286,16 +286,16 @@ namespace UnityEngine
         public bool IsInvoking(string methodName) => m_invokes.Exists(i => i.Method == methodName);
         private void Schedule(string methodName, float time, float repeat)
         {
-            if (FindMessage(GetType(), methodName) == null) { Debug.LogError($"Trying to Invoke method: {GetType().Name}.{methodName} couldn't be called."); return; }
+            if (UnityFindMessage(GetType(), methodName) == null) { Debug.LogError($"Trying to Invoke method: {GetType().Name}.{methodName} couldn't be called."); return; }
             m_invokes.Add(new ScheduledInvoke { Method = methodName, Due = Time.time + time, Repeat = repeat });
         }
-        internal void RunDueInvokes()
+        internal void UnityRunDueInvokes()
         {
             foreach (var invoke in m_invokes.ToArray())
-                while (m_invokes.Contains(invoke) && invoke.Due <= Time.time && IsAlive)
+                while (m_invokes.Contains(invoke) && invoke.Due <= Time.time && UnityAlive)
                 {
                     if (invoke.Repeat > 0f) invoke.Due += invoke.Repeat; else m_invokes.Remove(invoke);
-                    SendMessageNow(invoke.Method);
+                    UnitySendMessage(invoke.Method);
                 }
         }
     }
@@ -349,7 +349,7 @@ namespace UnityEngine
             Finish();
         }
 
-        private void Finish() { m_done = true; m_owner.RemoveCoroutine(this); }
+        private void Finish() { m_done = true; m_owner.UnityRemoveCoroutine(this); }
     }
 
     /// <summary>Waits until <c>Time.time</c> has advanced by the given seconds.</summary>
@@ -427,7 +427,7 @@ namespace UnityEngine
         internal static void HierarchyActivityChanged(GameObject go, bool active)
         {
             foreach (var component in go.m_components.ToArray())
-                if (component is MonoBehaviour behaviour && !behaviour.Destroyed) { if (active) behaviour.BecameActive(); else behaviour.BecameInactive(); }
+                if (component is MonoBehaviour behaviour && !behaviour.Destroyed) { if (active) behaviour.UnityBecameActive(); else behaviour.UnityBecameInactive(); }
             if (go.m_transform is { } t)
                 foreach (var child in t.m_children.ToArray())
                     if (child.m_gameObject is { m_activeSelf: true } childObject && !childObject.Destroyed) HierarchyActivityChanged(childObject, active);
@@ -443,14 +443,14 @@ namespace UnityEngine
             var component = UnitySerialization.NewInstance(componentType) as Component
                 ?? throw new ArgumentException($"{componentType.Name} is not a component.", nameof(componentType));
             Attach(component);
-            if (component is MonoBehaviour behaviour && activeInHierarchy) behaviour.BecameActive();
+            if (component is MonoBehaviour behaviour && activeInHierarchy) behaviour.UnityBecameActive();
             return component;
         }
         internal void Attach(Component component)
         {
             component.m_gameObject = this;
             m_components.Add(component);
-            s_components.Add(component);
+            s_unityComponents.Add(component);
         }
 
         /// <summary>The transform, then the ZNetView and WearNTear, then added components in order: Unity lists the transform first.</summary>
@@ -511,7 +511,7 @@ namespace UnityEngine
 
         // Destroying an object disables its hierarchy (OnDisable), then destroys its behaviours (OnDestroy) and children
         // while they are still alive, and takes it out of its parent, as Unity does.
-        private protected override void OnDestroying()
+        private protected override void UnityDestroying()
         {
             if (activeInHierarchy) HierarchyActivityChanged(this, false);
             foreach (var component in m_components.ToArray()) DestroyImmediate(component);
@@ -531,10 +531,10 @@ namespace UnityEngine
             var pairs = new List<(Component Source, Component Copy)>();
             MapHierarchy(this, copy, map, pairs);
             foreach (var (source, target) in pairs) UnitySerialization.CopySerializedFields(source, target, map);
-            if (copy.View is { } view) s_components.Add(view);
-            if (copy.Wear is { } wear) s_components.Add(wear);
-            s_lastCloneMap = map;
-            if (s_pendingParent is { } parent) copy.OwnTransform.SetParent(parent, s_pendingWorldStays);
+            if (copy.View is { } view) s_unityComponents.Add(view);
+            if (copy.Wear is { } wear) s_unityComponents.Add(wear);
+            s_unityLastCloneMap = map;
+            if (s_unityPendingParent is { } parent) copy.OwnTransform.SetParent(parent, s_unityPendingWorldStays);
             if (copy.activeInHierarchy) HierarchyActivityChanged(copy, true);
         }
         private static void MapHierarchy(GameObject source, GameObject copy, Dictionary<Object, Object> map, List<(Component, Component)> pairs)
@@ -548,7 +548,7 @@ namespace UnityEngine
             {
                 if (component.Destroyed) continue;
                 var target = (Component)UnitySerialization.NewInstance(component.GetType());
-                if (component is Behaviour behaviour) ((Behaviour)target).m_enabled = behaviour.m_enabled;
+                if (component is Behaviour behaviour) ((Behaviour)target).m_behaviourEnabled = behaviour.m_behaviourEnabled;
                 copy.Attach(target);
                 map[component] = target;
                 pairs.Add((component, target));

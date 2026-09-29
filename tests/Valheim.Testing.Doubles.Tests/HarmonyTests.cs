@@ -23,7 +23,7 @@ internal static class SetterPatch { private static void Prefix() { } }
 internal sealed class Hidden
 {
     private int m_count = 3;
-    private static string s_label = "static";
+    internal static string s_label = "static";
     private string Name { get; set; } = "hidden";
     private Hidden? m_next;
     private int Add(int a, int b) => a + b + m_count;
@@ -95,6 +95,6 @@ public sealed class HarmonyTests
         Assert.Throws<System.Reflection.AmbiguousMatchException>(() => AccessTools.Method(typeof(Hidden), "Add"));
         Assert.NotNull(AccessTools.Method(typeof(Hidden), "Add", new[] { typeof(int) }));
         Assert.Equal(typeof(Hidden), AccessTools.TypeByName("Hidden"));
-        Assert.NotNull(AccessTools.Field(typeof(UnityEngine.MonoBehaviour), "m_enabled")); // found on a base type
+        Assert.NotNull(AccessTools.Field(typeof(UnityEngine.MonoBehaviour), "m_behaviourEnabled")); // found on a base type
     }
 }

@@ -166,7 +166,7 @@ namespace HarmonyLib
         {
             Type[] types;
             try { types = assembly.GetTypes(); }
-            catch (ReflectionTypeLoadException error) { types = error.Types.Where(t => t != null).ToArray()!; }
+            catch (ReflectionTypeLoadException error) { types = error.Types.OfType<Type>().ToArray(); }
             foreach (var type in types) Record(type);
         }
         // Records one patch class when it carries a HarmonyPatch attribute.
@@ -210,7 +210,7 @@ namespace HarmonyLib
         {
             var type = Type.GetType(name, false);
             if (type != null) return type;
-            var types = AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => { try { return a.GetTypes(); } catch (ReflectionTypeLoadException e) { return e.Types.Where(t => t != null).ToArray()!; } }).ToList();
+            var types = AppDomain.CurrentDomain.GetAssemblies().SelectMany(a => { try { return a.GetTypes(); } catch (ReflectionTypeLoadException e) { return e.Types.OfType<Type>().ToArray(); } }).ToList();
             return types.FirstOrDefault(t => t.FullName == name) ?? types.FirstOrDefault(t => t.Name == name);
         }
     }

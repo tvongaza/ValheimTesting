@@ -59,7 +59,7 @@ namespace Valheim.Testing.Doubles
     /// </summary>
     public sealed partial class ValheimWorldScope
     {
-        private readonly List<UnityEngine.Component> _components = UnityEngine.Object.s_components;
+        private readonly List<UnityEngine.Component> _components = UnityEngine.Object.s_unityComponents;
         private readonly ObjectDB? _objectDB = ObjectDB.m_instance;
         private readonly Action<ObjectDB>? _objectDBAwake = ObjectDB.AwakePostfix, _objectDBCopy = ObjectDB.CopyOtherDBPostfix;
         private readonly Action<ZNetScene>? _sceneAwake = ZNetScene.AwakePostfix;
@@ -85,7 +85,7 @@ namespace Valheim.Testing.Doubles
 
         partial void RestorePresetState()
         {
-            UnityEngine.Object.s_components = _components;
+            UnityEngine.Object.s_unityComponents = _components;
             ObjectDB.m_instance = _objectDB; ObjectDB.AwakePostfix = _objectDBAwake; ObjectDB.CopyOtherDBPostfix = _objectDBCopy;
             ZNetScene.AwakePostfix = _sceneAwake;
             Localization.Current = _localization; Localization.OnLanguageChange = _languageChange; ZInput.Current = _input;
@@ -136,7 +136,7 @@ namespace Valheim.Testing.Doubles
             ZNet.instance = null!; ZRoutedRpc.instance = null!;
             ZDOMan.instance = null; ZoneSystem.instance = null; ZNetScene.instance = null; WorldGenerator.instance = null;
             global::Heightmap.s_heightmaps = new List<global::Heightmap>(); _ownsHeightmaps = true;
-            UnityEngine.Object.s_components = new List<UnityEngine.Component>();
+            UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>();
             Player.m_localPlayer = null;
             Player.s_players = new List<Player>();
             PreviewPlayer = new Player();
