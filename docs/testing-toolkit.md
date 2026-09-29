@@ -243,6 +243,8 @@ The four-pack layout also passed join and confirmed-save paths. Optional Reflect
 
 The plan may also list `patchers` (every entry in the runtime's `BepInEx/patchers`, by name) and `logScan` (per-run severities for the log scan below, each with a reason).
 
+The plan may also list `patchers` (every entry in the runtime's `BepInEx/patchers`, by name) and `logScan` (per-run severities for the log scan below, each with a reason).
+
 The runner then:
 1. refuses an existing output directory, and checks the host before copying;
 2. copies and verifies the runtime and world, recording plan, runner and toolkit hashes, mode, platform and input hashes, refuses a runtime whose `BepInEx/patchers` holds anything the plan's `patchers` does not name (or lacks a named one), and refuses a copy whose game build, BepInEx core or patchers differ from `runtimePins` (the values found are recorded as `runtimeGameSha256`, `runtimeBepInExCoreSha256` and `runtimePatchersSha256`);
