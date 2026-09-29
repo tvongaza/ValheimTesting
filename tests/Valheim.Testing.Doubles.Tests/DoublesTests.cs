@@ -118,6 +118,39 @@ public sealed class DoublesTests : IDisposable
         Assert.Same(before, WorldGenerator.instance); Assert.Same(zdos, ZDOMan.instance);
         Assert.Null(Heightmap.Registered); Assert.False(ZNet.instance.Server); Assert.Null(BepInEx.Logging.ManualLogSource.Captured);
     }
+    [Fact] public void AScopeRestoresTheOriginalNetworkAfterAFailingTest()
+    {
+        var net = new ZNet { Server = true }; net.Peers.Add(3, new ZNetPeer()); var rpc = new ZRoutedRpc();
+        var (priorNet, priorRpc) = (ZNet.instance, ZRoutedRpc.instance);
+        ZNet.instance = net; ZRoutedRpc.instance = rpc;
+        try
+        {
+            Assert.Throws<InvalidOperationException>(FailInsideTheScope);
+            Assert.Same(net, ZNet.instance); Assert.Same(rpc, ZRoutedRpc.instance);
+            Assert.True(net.IsServer()); Assert.Equal(new[] { 3L }, net.Peers.Keys);
+        }
+        finally { ZNet.instance = priorNet; ZRoutedRpc.instance = priorRpc; }
+
+        void FailInsideTheScope()
+        {
+            using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithNetwork(server: false);
+            Assert.NotSame(net, ZNet.instance); Assert.NotSame(rpc, ZRoutedRpc.instance);
+            Assert.Empty(ZNet.instance.Peers); Assert.False(ZNet.instance.IsServer());
+            ZNet.instance.Peers.Add(7, new ZNetPeer());
+            throw new InvalidOperationException("test failed");
+        }
+    }
+    // The scope restores references, not contents: a peer added to the network it did not install stays.
+    [Fact] public void AScopeDoesNotUndoChangesInsideObjectsItDidNotInstall()
+    {
+        var peers = ZNet.instance.Peers.Count;
+        try
+        {
+            using (new Valheim.Testing.Doubles.ValheimWorldScope()) ZNet.instance.Peers.Add(99, new ZNetPeer());
+            Assert.Equal(peers + 1, ZNet.instance.Peers.Count);
+        }
+        finally { ZNet.instance.Peers.Remove(99); }
+    }
     [Fact] public void TerrainWorldMapsTheToolkitsBiomes()
     {
         var world = new Valheim.Testing.Doubles.TerrainWorld(new Valheim.Testing.PlaneTerrain(35f));
