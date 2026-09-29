@@ -205,8 +205,9 @@ public partial struct Quaternion
 /// Shim for UnityEngine.Object: instantiation, destruction and Unity's "fake null". As in Unity, a destroyed object
 /// is still a live C# reference but its overloaded <c>==</c>, <c>!=</c>, <c>Equals</c> and <c>bool</c> conversion say
 /// it is null; <c>is null</c>, <c>?.</c> and <c>??</c> do not use the overload and see a real reference. Engine members
-/// (<c>name</c>, <c>gameObject</c>, <c>GetComponent</c>) of a destroyed object throw <see cref="MissingReferenceException"/>;
-/// a component's own C# fields and methods keep working, as they do in Unity.
+/// (<c>name</c>, <c>gameObject</c>, <c>GetComponent</c>) of a destroyed object throw a <see cref="System.NullReferenceException"/>,
+/// as the game's player does (the modding wiki's Best-Practices page, "Do NOT use null operators on GameObject", shows
+/// the log); a component's own C# fields and methods keep working, as they do in Unity.
 /// <c>Destroy</c> is deferred as Unity's is: the object stays alive until the test ends the frame with
 /// <see cref="EndOfFrame"/>. <c>DestroyImmediate</c> destroys at once.
 /// </summary>
@@ -266,8 +267,8 @@ public partial class Object
     private protected void ThrowIfDestroyed()
     {
         if (Destroyed)
-            throw new MissingReferenceException(
-                $"The object of type '{GetType().Name}' has been destroyed but you are still trying to access it. " +
+            throw new System.NullReferenceException(
+                $"Object reference not set to an instance of an object: the {GetType().Name} '{NameHolder.m_name}' was destroyed. " +
                 "Check it with == null or its bool conversion; ?. and is null do not see a destroyed object.");
     }
 
@@ -288,7 +289,10 @@ public partial class Object
     public override int GetHashCode() => base.GetHashCode();
 }
 
-/// <summary>Shim for UnityEngine.MissingReferenceException: an engine member used on a destroyed object.</summary>
+/// <summary>
+/// Shim for UnityEngine.MissingReferenceException, so code that names it compiles. The doubles never throw it: the
+/// game's player throws a NullReferenceException for a destroyed object (see <see cref="Object"/>).
+/// </summary>
 public partial class MissingReferenceException : System.SystemException
 {
     public MissingReferenceException() { }
@@ -347,12 +351,12 @@ public partial class GameObject : Object
         return copy;
     }
 
-    // A destroyed object's components go with it, and it leaves the live scene.
+    // A destroyed object's components go with it. It stays in ZNetScene.Live, as in the game, where only ZNetScene
+    // removes an instance; a plain Destroy leaves a destroyed view there.
     private protected override void OnDestroyed()
     {
         DestroyImmediate(View);
         DestroyImmediate(Wear);
-        global::ZNetScene.instance?.Live.Remove(this);
     }
 
     /// <summary>The ZNetView or WearNTear on this object; null when it has none or it was destroyed. Throws once the object is destroyed.</summary>

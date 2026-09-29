@@ -56,12 +56,14 @@ public sealed class DoublesTests : IDisposable
         var theirs = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(2, 30, 2), UnityEngine.Quaternion.Euler(0, 0, 0));
         theirs.GetComponent<ZNetView>().GetZDO().SetOwner(99);
         Assert.Same(ours.View, ZNetScene.instance.FindInstance(ours.View!.GetZDO()));
+        var ourZdo = ours.View.GetZDO();
         ZNetScene.instance.Destroy(ours); ZNetScene.instance.Destroy(theirs);
-        Assert.Null(ZNetScene.instance.FindInstance(ours.View.GetZDO())); Assert.Empty(ZNetScene.instance.Live);
+        Assert.Null(ZNetScene.instance.FindInstance(ourZdo)); Assert.Empty(ZNetScene.instance.Live);
+        Assert.Null(ours.View.GetZDO()); Assert.False(ours.View.IsValid()); // the view let go of its ZDO, as the game's ResetZDO does
         Assert.False(ours == null); Assert.False(ours.Destroyed); // the object itself goes at the end of the frame
         Assert.Equal(2, UnityEngine.Object.EndOfFrame());
         Assert.True(ours.Destroyed); Assert.True(theirs.Destroyed);
-        Assert.Equal(new[] { ours.View.GetZDO() }, ZDOMan.instance!.DestroyQueue);
+        Assert.Equal(new[] { ourZdo }, ZDOMan.instance!.DestroyQueue);
         Assert.Null(ZNetScene.instance.GetPrefab("missing"));
         Assert.Null(prefab.GetComponent<ZNetView>());
     }
@@ -72,8 +74,9 @@ public sealed class DoublesTests : IDisposable
         UnityEngine.Object.DestroyImmediate(destroyed);
         Assert.True(destroyed == null); Assert.False(destroyed != null); Assert.True(destroyed!.Equals(null)); // the reference itself is not null
         Assert.False(destroyed is null); Assert.Same(destroyed, destroyed ?? live); // is null and ?? see the reference
-        Assert.Throws<UnityEngine.MissingReferenceException>(() => destroyed?.name);
-        Assert.Throws<UnityEngine.MissingReferenceException>(() => destroyed!.GetComponent<ZNetView>());
+        // The game's player throws a NullReferenceException here; the double's message names the destroyed object.
+        Assert.Contains("GameObject 'stone' was destroyed", Assert.Throws<NullReferenceException>(() => destroyed?.name).Message);
+        Assert.Contains("'stone' was destroyed", Assert.Throws<NullReferenceException>(() => destroyed!.GetComponent<ZNetView>()).Message);
         bool entered = false;
         if (destroyed) entered = true;
         Assert.False(entered);
@@ -96,6 +99,12 @@ public sealed class DoublesTests : IDisposable
         Assert.True(pole == null); Assert.Equal(0, UnityEngine.Object.EndOfFrame());
         UnityEngine.Object.Destroy(null); UnityEngine.Object.DestroyImmediate(null);
     }
+    [Fact] public void AScopeEndsTheFrameSoNoDestroyOutlivesTheTest()
+    {
+        var beam = new UnityEngine.GameObject("beam");
+        using (new Valheim.Testing.Doubles.ValheimWorldScope()) UnityEngine.Object.Destroy(beam);
+        Assert.True(beam.Destroyed); Assert.Equal(0, UnityEngine.Object.EndOfFrame());
+    }
     [Fact] public void ComponentsAreDestroyedWithTheirObjectAndKeepOnlyTheirOwnFields()
     {
         var prefab = ZNetScene.instance!.AddPrefab("wood_wall", health: 400f);
@@ -103,12 +112,15 @@ public sealed class DoublesTests : IDisposable
         var view = wall.GetComponent<ZNetView>(); var wear = wall.GetComponent<WearNTear>();
         Assert.Same(wall, view.gameObject); Assert.Equal("wood_wall", wear.name); Assert.Same(view, wear.GetComponent<ZNetView>());
         UnityEngine.Object.Destroy(wall);
-        Assert.Contains(wall, ZNetScene.instance.Live);
         UnityEngine.Object.EndOfFrame();
-        Assert.True(view == null); Assert.True(wear == null); Assert.Empty(ZNetScene.instance.Live);
+        Assert.True(view == null); Assert.True(wear == null);
         Assert.Equal(400f, wear!.m_health); Assert.NotNull(view!.GetZDO()); // the component's own C# members still answer, as in Unity
-        Assert.Throws<UnityEngine.MissingReferenceException>(() => view.gameObject);
-        Assert.Throws<UnityEngine.MissingReferenceException>(() => wear?.GetComponent<ZNetView>());
+        Assert.Contains("ZNetView 'wood_wall' was destroyed", Assert.Throws<NullReferenceException>(() => view.gameObject).Message);
+        Assert.Contains("WearNTear 'wood_wall' was destroyed", Assert.Throws<NullReferenceException>(() => wear?.GetComponent<ZNetView>()).Message);
+        // A plain Destroy does not touch the scene, as in the game: the destroyed view is still found, and only == null sees it.
+        Assert.Contains(wall, ZNetScene.instance.Live);
+        var found = ZNetScene.instance.FindInstance(view.GetZDO());
+        Assert.Same(view, found); Assert.True(found == null);
         // Destroying one component leaves the object; GetComponent then finds none.
         var door = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(4, 30, 4), UnityEngine.Quaternion.Euler(0, 0, 0));
         UnityEngine.Object.DestroyImmediate(door.GetComponent<WearNTear>());
@@ -150,7 +162,7 @@ public sealed class DoublesTests : IDisposable
         var pieces = new[] { kept, removed };
         Assert.Equal(3000f, PieceHealth.WithConditionalAccess(pieces)); Assert.Equal(3000f, PieceHealth.WithUnityNullCheck(pieces));
         UnityEngine.Object.Destroy(removed); UnityEngine.Object.EndOfFrame();
-        Assert.Throws<UnityEngine.MissingReferenceException>(() => PieceHealth.WithConditionalAccess(pieces));
+        Assert.Throws<NullReferenceException>(() => PieceHealth.WithConditionalAccess(pieces));
         Assert.Equal(1500f, PieceHealth.WithUnityNullCheck(pieces));
     }
     [Fact] public void RebuildUsesTheGeneratorThenTheModsHooksAndClampsCompilerDeltas()

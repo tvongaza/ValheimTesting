@@ -26,16 +26,19 @@ public partial class ZNetScene
         return prefab;
     }
     public UnityEngine.GameObject? GetPrefab(string name) => Prefabs.TryGetValue(name, out var prefab) ? prefab : null;
-    public ZNetView? FindInstance(ZDO zdo) => Live.FirstOrDefault(o => !o.Destroyed && o.View?.GetZDO() == zdo)?.View;
+    /// <summary>The live instance of the ZDO, as the game's: one destroyed with a plain Object.Destroy is still found (it equals null).</summary>
+    public ZNetView? FindInstance(ZDO zdo) => Live.FirstOrDefault(o => o.View?.GetZDO() == zdo)?.View;
     /// <summary>
-    /// As the game's: the object leaves the live scene at once, its ZDO is queued for destruction when this session
-    /// owns it, and the object itself is destroyed at the end of the frame (UnityEngine.Object.EndOfFrame).
+    /// As the game's: the view lets go of its ZDO (GetZDO() is null afterwards), the object leaves the live scene at
+    /// once, its ZDO is queued for destruction when this session owns it, and the object itself is destroyed at the end
+    /// of the frame (UnityEngine.Object.EndOfFrame).
     /// </summary>
     public void Destroy(UnityEngine.GameObject gameObject)
     {
         var view = gameObject.GetComponent<ZNetView>();
         if (view != null && view.GetZDO() is { } zdo)
         {
+            view.ResetZDO();
             Live.Remove(gameObject);
             if (zdo.IsOwner()) ZDOMan.instance!.DestroyZDO(zdo);
         }

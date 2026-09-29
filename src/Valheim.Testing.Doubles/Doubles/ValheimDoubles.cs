@@ -229,6 +229,8 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
     public bool HasOwner() => Zdo.HasOwner();
     public void ClaimOwnership() { if (!IsOwner()) Zdo.SetOwner(ZDOMan.instance?.m_sessionID ?? 1); }
     public ZDO GetZDO() => Zdo;
+    /// <summary>As the game's: the view lets go of its ZDO, so GetZDO() returns null and IsValid() false.</summary>
+    public void ResetZDO() => Zdo = null!;
 }
 
 /// <summary>Mirror of Valheim's ZDOID, as far as the road code prints it.</summary>
