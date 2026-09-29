@@ -1,5 +1,6 @@
 name: Publish packages
-# Builds Valheim.Testing, Valheim.Testing.Cli, Valheim.Testing.Game, Valheim.Testing.Doubles and Valheim.Testing.Adapter from this commit and publishes
+# Builds Valheim.Testing, Valheim.Testing.Cli, Valheim.Testing.Game, Valheim.Testing.Doubles, Valheim.Testing.Adapter, Valheim.Testing.Bindings
+# and Valheim.Testing.Bindings.Tool from this commit and publishes
 # them to NuGet.org with Trusted Publishing: no stored API key. GitHub issues a short-lived OIDC token,
 # NuGet.org exchanges it for a one-hour key, and only the `release` environment (which requires a
 # maintainer's approval) can request one. Versions already on NuGet.org are skipped, so a release that
@@ -27,7 +28,7 @@ jobs:
       - name: Pack release packages
         run: |
           mkdir -p release
-          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.Doubles Valheim.Testing.Adapter; do
+          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.Doubles Valheim.Testing.Adapter Valheim.Testing.Bindings Valheim.Testing.Bindings.Tool; do
             dotnet pack "src/$p/$p.csproj" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true
           done
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
@@ -45,6 +46,6 @@ jobs:
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.Doubles.*.nupkg release/Valheim.Testing.Adapter.*.nupkg; do
+          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.Doubles.*.nupkg release/Valheim.Testing.Adapter.*.nupkg release/Valheim.Testing.Bindings.[0-9]*.nupkg release/Valheim.Testing.Bindings.Tool.*.nupkg; do
             dotnet nuget push "$f" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
