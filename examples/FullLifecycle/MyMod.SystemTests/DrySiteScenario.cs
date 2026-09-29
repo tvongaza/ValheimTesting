@@ -54,7 +54,8 @@ public static class DrySiteScenario
 
     public static string Mark(Site site) => string.Create(CultureInfo.InvariantCulture, $"mymod_mark {site.X} {site.Z}");
 
-    private static void RequireReply(valheim_cli.Testing.CommandResult reply, string prefix)
+    /// <summary>Requires exactly one <c>OK:</c> or <c>REFUSED:</c> reply from the mod, and that it is the expected one.</summary>
+    public static void RequireReply(valheim_cli.Testing.CommandResult reply, string prefix)
     {
         if (reply.Output.Count(line => line.StartsWith("OK: ", StringComparison.Ordinal) || line.StartsWith("REFUSED: ", StringComparison.Ordinal)) != 1 ||
             !reply.Output.Any(line => line.StartsWith(prefix, StringComparison.Ordinal)))

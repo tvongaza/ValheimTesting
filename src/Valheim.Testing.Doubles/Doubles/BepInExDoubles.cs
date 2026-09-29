@@ -4,7 +4,7 @@
 // members your mod needs in your own files. Behaviour mirrors the game where mod code depends on it.
 #nullable enable
 // ReSharper disable InconsistentNaming
-// BepInEx logging (capturable) and the Harmony attribute mod sources carry.
+// BepInEx logging (capturable). Harmony's attributes and helpers are in HarmonyDoubles.cs, configuration in ConfigDoubles.cs.
 using System;
 
 namespace BepInEx.Logging
@@ -17,8 +17,18 @@ namespace BepInEx.Logging
         /// </summary>
         public static System.Collections.Generic.List<string>? Captured;
 
+        /// <summary>
+        /// Makes the next <see cref="LogInfo"/> throw, once: a test's way to prove that a failing report cannot decide
+        /// what the mod does. Cleared when it fires.
+        /// </summary>
+        public static bool ThrowOnNextInfo;
+
         public void LogDebug(object data) => Write("DEBUG", data);
-        public void LogInfo(object data) => Write("INFO ", data);
+        public void LogInfo(object data)
+        {
+            if (ThrowOnNextInfo) { ThrowOnNextInfo = false; throw new InvalidOperationException("injected log sink failure"); }
+            Write("INFO ", data);
+        }
         public void LogWarning(object data) => Write("WARN ", data);
         public void LogError(object data) => Write("ERROR", data);
 
@@ -31,8 +41,3 @@ namespace BepInEx.Logging
     }
 }
 
-namespace HarmonyLib
-{
-    [AttributeUsage(AttributeTargets.Class)]
-    public sealed partial class HarmonyPatch : Attribute { public HarmonyPatch(Type type, string method) { } }
-}

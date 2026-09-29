@@ -56,7 +56,7 @@ namespace Valheim.Testing.Doubles
         private readonly Jotunn.Managers.NetworkManager _jotunn = Jotunn.Managers.NetworkManager.Instance;
         private readonly System.Collections.Generic.Dictionary<string, Terminal.ConsoleCommand> _commands = Terminal.commands;
         private readonly Player? _localPlayer = Player.m_localPlayer;
-        private readonly bool _server = ZNet.instance.Server;
+        private readonly bool _server = ZNet.instance?.Server ?? false;
         private readonly float _time = UnityEngine.Time.realtimeSinceStartup;
 
         public ValheimWorldScope WithWorld(WorldGenerator world) { WorldGenerator.instance = world; return this; }
@@ -64,8 +64,8 @@ namespace Valheim.Testing.Doubles
         /// <summary>A new, empty ZDOMan (this session's id is 1).</summary>
         public ValheimWorldScope WithZdos() { ZDOMan.instance = new ZDOMan(); return this; }
         public ValheimWorldScope WithZoneSystem() { ZoneSystem.instance = new ZoneSystem(); return this; }
-        /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>).</summary>
-        public ValheimWorldScope WithScene() { ZNetScene.instance = new ZNetScene(); return this; }
+        /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>), and no Unity components yet for FindObjectsByType and RunFrame.</summary>
+        public ValheimWorldScope WithScene() { ZNetScene.instance = new ZNetScene(); UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>(); return this; }
         /// <summary>A new <c>ZNet</c> with no peers, as the server or a client, a new <c>ZRoutedRpc</c> and a new Jotunn <c>NetworkManager</c>.</summary>
         public ValheimWorldScope WithNetwork(bool server = true)
         {
@@ -102,10 +102,15 @@ namespace Valheim.Testing.Doubles
         public List<string> CaptureLog() => BepInEx.Logging.ManualLogSource.Captured = new List<string>();
         public void Dispose()
         {
+            UnityEngine.Object.EndOfFrame(); // pending destroys belong to this test's frame
+            RestorePresetState();
             WorldGenerator.instance = _world; ZDOMan.instance = _zdos; ZoneSystem.instance = _zones; ZNetScene.instance = _scene;
             global::Heightmap.s_heightmaps = _heightmaps; BepInEx.Logging.ManualLogSource.Captured = _captured;
             Terminal.commands = _commands; Player.m_localPlayer = _localPlayer;
-            ZNet.instance = _net; ZRoutedRpc.instance = _rpc; Jotunn.Managers.NetworkManager.Instance = _jotunn; _net.Server = _server; UnityEngine.Time.realtimeSinceStartup = _time;
+            ZNet.instance = _net; ZRoutedRpc.instance = _rpc; Jotunn.Managers.NetworkManager.Instance = _jotunn; if (_net != null) _net.Server = _server; UnityEngine.Time.realtimeSinceStartup = _time;
+            RestoreTerrainModifiers();
         }
+        /// <summary>Puts back what the role presets, registries, config and Unity doubles changed (WorldScopePresets.cs).</summary>
+        partial void RestorePresetState();
     }
 }

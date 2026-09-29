@@ -209,41 +209,50 @@ public partial class Heightmap
     }
 }
 
-/// <summary>Shim for UnityEngine.Transform: only the position is read.</summary>
+/// <summary>Shim for UnityEngine.Transform. Its position and hierarchy are in UnityComponentDoubles.cs.</summary>
 public partial class Transform
 {
-    public UnityEngine.Vector3 position;
 }
 
-/// <summary>Shim for ZNetView: one ZDO behind it, ours unless a test says otherwise.</summary>
-public partial class ZNetView
+/// <summary>
+/// Shim for ZNetView: one ZDO behind it, ours unless a test says otherwise. Its RPCs are in NetworkDoubles.cs. Its
+/// <c>gameObject</c> is null for a view a test builds around a bare ZDO.
+/// </summary>
+public partial class ZNetView : UnityEngine.MonoBehaviour
 {
     public ZDO Zdo;
-    /// <summary>The object this view sits on (SceneShims); null for a view a test builds around a bare ZDO.</summary>
-    public UnityEngine.GameObject gameObject = null!;
     /// <summary>True between StartGhostInit and FinishGhostInit: new objects get ZDOs but join no live scene.</summary>
     public static bool GhostInit { get; private set; }
     public static void StartGhostInit() => GhostInit = true;
     public static void FinishGhostInit() => GhostInit = false;
-    public ZNetView(ZDO zdo) { Zdo = zdo; }
+    public ZNetView(ZDO zdo) { Zdo = zdo; if (zdo != null) zdo.m_view = this; }
     public bool IsValid() => Zdo != null;
     public bool IsOwner() => Zdo.IsOwner();
     public bool HasOwner() => Zdo.HasOwner();
     public void ClaimOwnership() { if (!IsOwner()) Zdo.SetOwner(ZDOMan.instance?.m_sessionID ?? 1); }
     public ZDO GetZDO() => Zdo;
+    /// <summary>As the game's: the view lets go of its ZDO, so GetZDO() returns null and IsValid() false.</summary>
+    public void ResetZDO() => Zdo = null!;
 }
 
-/// <summary>Mirror of Valheim's ZDOID, as far as the road code prints it.</summary>
+/// <summary>
+/// Mirror of Valheim's ZDOID: the creating session's id and the object's number (a uint in the game, which is how a
+/// package carries it). The doubles' ZDOs number themselves and leave the session id 0.
+/// </summary>
 public partial struct ZDOID : System.IEquatable<ZDOID>
 {
+    public long UserID;
     public long ID;
+    public ZDOID(long userID, uint id) { UserID = userID; ID = id; }
     /// <summary>No object; what a peer's character id is before it spawns.</summary>
     public static ZDOID None => default;
-    public bool IsNone() => ID == 0;
+    public bool IsNone() => UserID == 0 && ID == 0;
     public override string ToString() => ID.ToString();
-    public bool Equals(ZDOID other) => ID == other.ID;
+    public bool Equals(ZDOID other) => UserID == other.UserID && ID == other.ID;
     public override bool Equals(object? obj) => obj is ZDOID other && Equals(other);
     public override int GetHashCode() => ID.GetHashCode();
+    public static bool operator ==(ZDOID a, ZDOID b) => a.Equals(b);
+    public static bool operator !=(ZDOID a, ZDOID b) => !a.Equals(b);
 }
 
 /// <summary>
@@ -503,6 +512,7 @@ public partial class ZoneSystem
     {
         public ZoneLocation m_location;
         public UnityEngine.Vector3 m_position;
+        public bool m_placed; // spawned in its zone; generation registers a location unplaced
     }
 
     public System.Collections.Generic.List<LocationInstance> Locations = new();

@@ -10,6 +10,8 @@ namespace MyMod.SystemTests;
 public sealed class LifecyclePlan : ServerRunPlan
 {
     public const string SessionTokenVariable = "MYMOD_TEST_SESSION_TOKEN";
+    /// <summary>The full scenario (<see cref="DrySiteScenario"/>) and its server half alone (<see cref="DrySiteServerScenario"/>).</summary>
+    public const string LifecycleScenario = "dry-site-lifecycle", ServerScenario = "dry-site-server";
     public const string ModPlugin = "example.mymod";
     public const string AdapterPlugin = "example.mymod.testadapter";
     // The mod's rule inputs (see ModWithTests' DrySiteRule): the sea at 30 m, 1.5 m of clearance.
@@ -19,9 +21,9 @@ public sealed class LifecyclePlan : ServerRunPlan
     public Site DrySite { get; set; } = new();
     /// <summary>A site whose generator ground is below 31.5 m: the mod must refuse it.</summary>
     public Site WetSite { get; set; } = new();
-    /// <summary>Dry ground a few metres from the dry site, where the player stands to look at the marker.</summary>
+    /// <summary>Dry ground a few metres from the dry site, where the player stands to look at the marker. Unused by the server scenario.</summary>
     public Site Arrival { get; set; } = new();
-    /// <summary>The client that joins and looks; required for <c>run</c>.</summary>
+    /// <summary>The client that joins and looks; required for <c>run</c> of the lifecycle scenario, refused by the server scenario.</summary>
     public ClientRunPlan? Client { get; set; }
     /// <summary>Optional human checkpoint; never part of pass or fail.</summary>
     public ReviewSettings Review { get; set; } = new();
@@ -29,15 +31,24 @@ public sealed class LifecyclePlan : ServerRunPlan
     public static LifecyclePlan ReadValidated(string path)
     {
         var plan = Read<LifecyclePlan>(path);
+        // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
+        if (!plan.Pinned || plan.Client is { Pinned: false }) throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
         plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
-        plan.RequireScenario("dry-site-lifecycle");
-        plan.DrySite.Validate("dry site", requireGround: true); plan.WetSite.Validate("wet site", requireGround: true); plan.Arrival.Validate("arrival point", requireGround: true);
+        plan.RequireScenario(LifecycleScenario, ServerScenario);
+        plan.DrySite.Validate("dry site", requireGround: true); plan.WetSite.Validate("wet site", requireGround: true);
         // The plan must agree with itself before any game starts: a "dry" site declared under the rule's threshold would
         // make a correct mod fail, and the reverse would let a broken one pass.
         if (plan.DrySite.Ground < WaterLevel + Clearance) throw new ArgumentException($"The dry site's declared ground {plan.DrySite.Ground} m is below {WaterLevel + Clearance} m.");
         if (plan.WetSite.Ground >= WaterLevel + Clearance) throw new ArgumentException($"The wet site's declared ground {plan.WetSite.Ground} m is not below {WaterLevel + Clearance} m.");
         if (MathF.Abs(plan.DrySite.X - plan.WetSite.X) < 50 && MathF.Abs(plan.DrySite.Z - plan.WetSite.Z) < 50)
             throw new ArgumentException("Keep the sites at least 50 m apart so one site's marker can never be counted at the other.");
+        if (plan.ServerOnly)
+        {
+            // Nothing looks from a client here: a client or review section would suggest a check this scenario never makes.
+            if (plan.Client != null || plan.Review.Enabled) throw new ArgumentException($"The {ServerScenario} scenario has no client and no review; remove those sections or use {LifecycleScenario}.");
+            return plan;
+        }
+        plan.Arrival.Validate("arrival point", requireGround: true);
         float fromMarker = MathF.Sqrt(MathF.Pow(plan.Arrival.X - plan.DrySite.X, 2) + MathF.Pow(plan.Arrival.Z - plan.DrySite.Z, 2));
         if (fromMarker is < 3 or > 20) throw new ArgumentException("Put the arrival point 3 to 20 m from the dry site: beside the marker, not on it.");
         if (plan.Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("The arrival point must be dry ground; a swimming player is not supported.");
@@ -46,6 +57,7 @@ public sealed class LifecyclePlan : ServerRunPlan
         return plan;
     }
     public string WorldUid => Pins["worlduid"];
+    public bool ServerOnly => Scenario == ServerScenario;
 }
 
 public sealed class Site
