@@ -215,30 +215,144 @@ public partial struct Quaternion
     }
 }
 
-/// <summary>Shim for UnityEngine.Object: instantiation and destruction only.</summary>
+/// <summary>
+/// Shim for UnityEngine.Object: instantiation, destruction and Unity's "fake null". As in Unity, a destroyed object
+/// is still a live C# reference but its overloaded <c>==</c>, <c>!=</c>, <c>Equals</c> and <c>bool</c> conversion say
+/// it is null; <c>is null</c>, <c>?.</c> and <c>??</c> do not use the overload and see a real reference. Engine members
+/// (<c>name</c>, <c>gameObject</c>, <c>GetComponent</c>) of a destroyed object throw a <see cref="System.NullReferenceException"/>,
+/// as the game's player does (the modding wiki's Best-Practices page, "Do NOT use null operators on GameObject", shows
+/// the log); a component's own C# fields and methods keep working, as they do in Unity.
+/// <c>Destroy</c> is deferred as Unity's is: the object stays alive until the test ends the frame with
+/// <see cref="EndOfFrame"/>. <c>DestroyImmediate</c> destroys at once.
+/// </summary>
 public partial class Object
 {
+    private static readonly System.Collections.Generic.List<Object> s_pendingDestroy = new();
+    private string m_name = "";
+
+    /// <summary>True once destroyed (after <see cref="EndOfFrame"/> or <see cref="DestroyImmediate"/>). Never throws.</summary>
+    public bool Destroyed { get; private set; }
+
+    /// <summary>The object's name; a component's is its GameObject's. Throws once destroyed.</summary>
+    public string name
+    {
+        get { ThrowIfDestroyed(); return NameHolder.m_name; }
+        set { ThrowIfDestroyed(); NameHolder.m_name = value; }
+    }
+    private Object NameHolder => this is Component { m_gameObject: { } owner } ? owner : this;
+
     public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation) => original.Clone(position, rotation);
-    public static void Destroy(Object target) { if (target is GameObject gameObject) gameObject.MarkDestroyed(); }
+
+    /// <summary>Queues the object; it is destroyed when the test calls <see cref="EndOfFrame"/>, as Unity destroys at the end of the frame.</summary>
+    public static void Destroy(Object? obj)
+    {
+        if (obj is null || obj.Destroyed || s_pendingDestroy.Contains(obj)) return;
+        s_pendingDestroy.Add(obj);
+    }
+
+    /// <summary>Destroys the object now, as Unity's does. Destroying a GameObject destroys its components.</summary>
+    public static void DestroyImmediate(Object? obj, bool allowDestroyingAssets = false)
+    {
+        if (obj is null) return;
+        s_pendingDestroy.Remove(obj);
+        obj.DestroyNow();
+    }
+
+    /// <summary>Destroys everything <see cref="Destroy"/> queued, as the end of Unity's frame does; returns how many went.</summary>
+    public static int EndOfFrame()
+    {
+        var due = s_pendingDestroy.ToArray();
+        s_pendingDestroy.Clear();
+        int destroyed = 0;
+        foreach (var obj in due)
+            if (!obj.Destroyed) { obj.DestroyNow(); destroyed++; }
+        return destroyed;
+    }
+
+    private void DestroyNow()
+    {
+        if (Destroyed) return;
+        Destroyed = true;
+        OnDestroyed();
+    }
+
+    private protected virtual void OnDestroyed() { }
+
+    private protected void ThrowIfDestroyed()
+    {
+        if (Destroyed)
+            throw new System.NullReferenceException(
+                $"Object reference not set to an instance of an object: the {GetType().Name} '{NameHolder.m_name}' was destroyed. " +
+                "Check it with == null or its bool conversion; ?. and is null do not see a destroyed object.");
+    }
+
+    // Unity's comparison: two references are equal when they are the same object; a null reference equals a destroyed one.
+    public static bool operator ==(Object? x, Object? y)
+    {
+        if (x is null) return y is null || y.Destroyed;
+        if (y is null) return x.Destroyed;
+        return ReferenceEquals(x, y);
+    }
+    public static bool operator !=(Object? x, Object? y) => !(x == y);
+
+    /// <summary>False for null and for a destroyed object, as Unity's <c>if (obj)</c>.</summary>
+    public static implicit operator bool(Object? exists) => !(exists == null);
+
+    public override bool Equals(object? other) => other is null ? Destroyed : other is Object obj && ReferenceEquals(this, obj);
+
+    public override int GetHashCode() => base.GetHashCode();
 }
+
+/// <summary>
+/// Shim for UnityEngine.MissingReferenceException, so code that names it compiles. The doubles never throw it: the
+/// game's player throws a NullReferenceException for a destroyed object (see <see cref="Object"/>).
+/// </summary>
+public partial class MissingReferenceException : System.SystemException
+{
+    public MissingReferenceException() { }
+    public MissingReferenceException(string message) : base(message) { }
+}
+
+/// <summary>Shim for UnityEngine.Component: sits on a GameObject and is destroyed with it.</summary>
+public partial class Component : Object
+{
+    internal GameObject? m_gameObject;
+
+    /// <summary>The object this component sits on; null for one a test builds on its own. Throws once destroyed.</summary>
+    public GameObject gameObject
+    {
+        get { ThrowIfDestroyed(); return m_gameObject!; }
+        set => m_gameObject = value;
+    }
+
+    public T GetComponent<T>() where T : class
+    {
+        ThrowIfDestroyed();
+        return m_gameObject is { } owner ? owner.GetComponent<T>() : null!;
+    }
+}
+
+/// <summary>Shim for UnityEngine.Behaviour.</summary>
+public partial class Behaviour : Component { }
+
+/// <summary>Shim for UnityEngine.MonoBehaviour: the base of the game's components (ZNetView, WearNTear).</summary>
+public partial class MonoBehaviour : Behaviour { }
 
 /// <summary>Shim for a prefab or scene object: optionally networked (a ZNetView) and damageable (a WearNTear).</summary>
 public partial class GameObject : Object
 {
-    public readonly string name;
     public Vector3 Position;
     public Quaternion Rotation;
     public bool Networked;
     public float? Health;
     public ZNetView? View;
     public WearNTear? Wear;
-    public bool Destroyed { get; private set; }
     public GameObject(string name) => this.name = name;
 
     internal GameObject Clone(Vector3 position, Quaternion rotation)
     {
         var copy = new GameObject(name) { Position = position, Rotation = rotation, Networked = Networked, Health = Health };
-        if (Health is float health) copy.Wear = new WearNTear { m_health = health };
+        if (Health is float health) copy.Wear = new WearNTear { m_health = health, gameObject = copy };
         if (Networked)
         {
             // As ZNetView.Awake does: a new object gets a new ZDO of its prefab, owned by this session.
@@ -250,13 +364,24 @@ public partial class GameObject : Object
         }
         return copy;
     }
-    internal void MarkDestroyed()
+
+    // A destroyed object's components go with it. It stays in ZNetScene.Live, as in the game, where only ZNetScene
+    // removes an instance; a plain Destroy leaves a destroyed view there.
+    private protected override void OnDestroyed()
     {
-        Destroyed = true;
-        global::ZNetScene.instance?.Live.Remove(this);
+        DestroyImmediate(View);
+        DestroyImmediate(Wear);
     }
-    public T GetComponent<T>() where T : class =>
-        typeof(T) == typeof(ZNetView) ? (View as T)! : typeof(T) == typeof(WearNTear) ? (Wear as T)! : null!;
+
+    /// <summary>The ZNetView or WearNTear on this object; null when it has none or it was destroyed. Throws once the object is destroyed.</summary>
+    public T GetComponent<T>() where T : class
+    {
+        ThrowIfDestroyed();
+        Component? found = null;
+        if (typeof(T) == typeof(ZNetView)) found = View;
+        else if (typeof(T) == typeof(WearNTear)) found = Wear;
+        return (found is { Destroyed: false } ? found as T : null)!;
+    }
 }
 
 /// <summary>Shim for UnityEngine.Time: the clock mod code reads; tests set it.</summary>

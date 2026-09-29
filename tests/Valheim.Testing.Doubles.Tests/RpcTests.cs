@@ -321,10 +321,12 @@ public sealed class RpcTests
         Assert.Equal(new[] { "Failed to find rpc method " + "RPC_Unknown".GetStableHashCode() }, log);
         view.Register("RPC_Open", s => { }); view.Unregister("RPC_Open"); view.InvokeRPC(ZNetView.Everybody, "RPC_Open");
         Assert.Equal(2, log.Count);
+        var id = view.GetZDO().m_uid;
         ZNetScene.instance.Destroy(chest);
-        view.InvokeRPC(ZNetView.Everybody, "RPC_Open");  // destroyed: no live object
+        Assert.Throws<NullReferenceException>(() => view.InvokeRPC(ZNetView.Everybody, "RPC_Open")); // the view let go of its ZDO, as the game's
+        ZRoutedRpc.instance.InvokeRoutedRPC(ZNetView.Everybody, id, "RPC_Open");  // destroyed: no live object
         ZDOMan.instance!.ProcessDestroyed();
-        view.InvokeRPC(ZNetView.Everybody, "RPC_Open");  // and then no ZDO either
+        ZRoutedRpc.instance.InvokeRoutedRPC(ZNetView.Everybody, id, "RPC_Open");  // and then no ZDO either
         Assert.Equal(2, log.Count);
         Assert.Equal(new[] { "not registered on the object", "not registered on the object", "no live object", "no such ZDO" }, ZRoutedRpc.instance.Dropped.Select(d => d.Reason));
     }

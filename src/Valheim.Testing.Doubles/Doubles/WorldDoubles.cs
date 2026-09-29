@@ -102,6 +102,7 @@ namespace Valheim.Testing.Doubles
         public List<string> CaptureLog() => BepInEx.Logging.ManualLogSource.Captured = new List<string>();
         public void Dispose()
         {
+            UnityEngine.Object.EndOfFrame(); // pending destroys belong to this test's frame
             WorldGenerator.instance = _world; ZDOMan.instance = _zdos; ZoneSystem.instance = _zones; ZNetScene.instance = _scene;
             global::Heightmap.s_heightmaps = _heightmaps; BepInEx.Logging.ManualLogSource.Captured = _captured;
             Terminal.commands = _commands; Player.m_localPlayer = _localPlayer;

@@ -251,15 +251,16 @@ Ctrl+C and SIGTERM cancel the run. Options name the session capability and token
 
 For a complete package-consuming project that links real mod source and runs five tests, start with [ModWithTests](../examples/ModWithTests/README.md). The reference below describes the supported model and its limits.
 
-`Valheim.Testing.Doubles` lets a unit-test project compile a mod's pure-logic source files (linked with `<Compile Include="../YourMod/Src/....cs" />`) without Unity, Valheim or BepInEx. It is a source package: its files compile into your test project and stand in for the game's types under their real names (`UnityEngine.Vector3`, the global `ZDO`, `ZDOMan`, `ZNetView`, `ZNetScene`, `Heightmap`, `TerrainComp`, `ZoneSystem`, `WorldGenerator`, `ZNet`, `ZNetPeer`, `ZRoutedRpc`, `ZPackage`, `ISerializableParameter`, `ZLog`, `Terminal` and its console commands, `Player.m_localPlayer`, `BepInEx.Logging.ManualLogSource`, Jotunn's `CustomRPC`). So the test project must not also reference the game's assemblies. It needs C# 10 and works on net48 and modern .NET. Reference it with `PrivateAssets="all"` (it is a development dependency).
+`Valheim.Testing.Doubles` lets a unit-test project compile a mod's pure-logic source files (linked with `<Compile Include="../YourMod/Src/....cs" />`) without Unity, Valheim or BepInEx. It is a source package: its files compile into your test project and stand in for the game's types under their real names (`UnityEngine.Vector3`, `UnityEngine.Object` and `GameObject`, the global `ZDO`, `ZDOMan`, `ZNetView`, `ZNetScene`, `Heightmap`, `TerrainComp`, `ZoneSystem`, `WorldGenerator`, `ZNet`, `ZNetPeer`, `ZRoutedRpc`, `ZPackage`, `ISerializableParameter`, `ZLog`, `Terminal` and its console commands, `Player.m_localPlayer`, `BepInEx.Logging.ManualLogSource`, Jotunn's `CustomRPC`). So the test project must not also reference the game's assemblies. It needs C# 10 and works on net48 and modern .NET. Reference it with `PrivateAssets="all"` (it is a development dependency).
 
 Every type is `partial`: add the members your mod calls in your own files. Keep only mod-specific behaviour there. Two `Heightmap` hooks carry a mod's terrain logic into the rebuild: `ModBaseHeight` (for example a biome blend) and `ModTerrainPass` (the seam a Harmony prefix on the game's rebuild uses).
 
 The doubles copy the game where mod code depends on it, and their own tests check these points:
 - ZDO values are keyed by `GetStableHashCode` of their name, as in the game, so `Set("name", v)` and `Set("name".GetStableHashCode(), v)` are the same key for every value type (float, `Vector3`, `Quaternion`, int, bool, long, string, byte array). Each type has its own table; a bool is an int. The hash matches the game's for every string.
 - `ZDOMan.DestroyZDO` is queued, so a destroyed ZDO stays visible to `FindObjects` until `ProcessDestroyed`.
+- A destroyed `UnityEngine.Object` compares equal to null, as in Unity (see [Destroyed objects](#destroyed-objects)).
 - A networked prefab instantiated during ghost initialisation leaves its ZDO and joins no live scene.
-- `ZNetScene.Destroy` queues only ZDOs this session owns, and a compiler saves only when owned.
+- `ZNetScene.Destroy` resets the view's ZDO (`GetZDO()` is null afterwards), removes the object from the live scene at once and queues only ZDOs this session owns; a compiler saves only when owned.
 - Rebuilt heights are clamped to the game's ±8 m.
 - Heightmaps are loaded per zone and found by position: `Heightmap.FindHeightmap(point)` returns the loaded zone that holds the point (edges included) or null, `GetAllHeightmaps()` lists every loaded zone, and `TerrainComp.FindTerrainCompiler(pos)` returns that zone's compiler. A write aimed at the wrong zone, or at a zone that is not loaded, therefore misses as it would in the game.
 - Zone ids narrow to `short`.
@@ -287,6 +288,27 @@ A save and restart is `ZDOMan.instance.RoundTripThroughSave()` (the world) or `z
 - `Unchanged(before, compiler)`: nothing changed at all.
 - `SeamAgrees(west, east)`: two loaded neighbours agree on their shared vertices, rendered height and paint (rebuild both first). A zone written without its neighbour shows up here.
 
+### Destroyed objects
+
+`UnityEngine.Object` has Unity's overloaded `==`, `!=`, `Equals` and `bool` conversion: a destroyed object is equal to null and `if (obj)` is false. `is null`, `?.` and `??` skip the overload and see a live reference, as in Unity. Engine members of a destroyed object (`name`, `gameObject`, `GetComponent`) throw a `NullReferenceException`, as the game's player does (the log under [Do NOT use null operators on GameObject](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices#do-not-use-null-operators-on-gameobject) on the modding wiki shows `GameObject.GetComponent` throwing it). The double's message names the destroyed object; `UnityEngine.MissingReferenceException` exists only so code that names it compiles. A component's own fields and methods (`WearNTear.m_health`, `ZNetView.GetZDO()`) still answer, as they do in Unity. Live objects and real null references compare as before, and objects stay distinct dictionary keys and list entries after they are destroyed.
+
+`Object.Destroy` is deferred like Unity's end-of-frame destruction: the object stays alive until the test calls `UnityEngine.Object.EndOfFrame()` (it returns how many objects went). `DestroyImmediate` destroys at once. Destroying a `GameObject` destroys its `ZNetView` and `WearNTear`; destroying only a component makes `GetComponent` return null for it. A plain `Object.Destroy` does not touch the live scene, as in the game, where only `ZNetScene` removes its instances (the doubles model its `Destroy`): after a plain `Object.Destroy` the destroyed view stays in `ZNetScene.Live` and `FindInstance` still returns it (it equals null), the invalid object the wiki's [ZNetScene.RemoveObjects](https://github.com/Valheim-Modding/Wiki/wiki/Client-Troubleshooting#znetsceneremoveobjects) error comes from. Pending destroys are process-wide: `ValheimWorldScope` ends the frame when disposed; without a scope, call `EndOfFrame()` in the test or its `Dispose` so none carry into the next test.
+
+This catches the `?.` mistake the modding wiki warns about. Say a mod's `PieceHealth.Total(pieces)` adds up `piece?.GetComponent<WearNTear>()?.m_health ?? 0f`. This test then fails with a `NullReferenceException`; once the mod checks `if (piece == null) continue;` before `GetComponent`, it passes:
+
+```csharp
+[Fact] public void DestroyedPiecesAreSkipped()
+{
+    using var world = new ValheimWorldScope().WithZdos().WithScene();
+    var prefab = ZNetScene.instance!.AddPrefab("stone_wall", health: 1500f);
+    var kept = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(1, 30, 1), UnityEngine.Quaternion.Euler(0, 0, 0));
+    var removed = UnityEngine.Object.Instantiate(prefab, new UnityEngine.Vector3(2, 30, 2), UnityEngine.Quaternion.Euler(0, 0, 0));
+    UnityEngine.Object.Destroy(removed);
+    UnityEngine.Object.EndOfFrame();
+    Assert.Equal(1500f, PieceHealth.Total(new[] { kept, removed }));
+}
+```
+
 `WorldGenerator` is virtual, so tests plug in synthetic worlds; `TerrainWorld` puts any `Valheim.Testing` terrain behind it.
 
 Setup, in the unit-test project (not the mod project):
@@ -301,7 +323,7 @@ Setup, in the unit-test project (not the mod project):
 
 The doubles are process-wide statics, as the game's singletons are, so add `[assembly: CollectionBehavior(DisableTestParallelization = true)]` once in the test project.
 
-`ValheimWorldScope` gives each test its own world. It records which objects `WorldGenerator.instance`, `ZDOMan.instance`, `ZoneSystem.instance`, `ZNetScene.instance`, `ZNet.instance`, `ZRoutedRpc.instance`, Jotunn's `NetworkManager.Instance`, the loaded heightmaps, the log capture, `Terminal.commands` and `Player.m_localPlayer` refer to, plus the server flag and the clock, and puts them back on dispose, also when the test throws. Builders install fresh objects: `WithWorld`/`WithTerrain`, `WithZdos`, `WithZoneSystem`, `WithScene`, `WithNetwork(server)` (a `ZNet` with no peers, a new `ZRoutedRpc` and a new Jotunn `NetworkManager`), `WithCommands` (an empty console-command table), `WithLocalPlayer(position)` (none by default, as on a dedicated server), `AsServer`, `RegisterHeightmap` (zones add up; loading a zone again replaces it), `UnloadHeightmap` and `CaptureLog`.
+`ValheimWorldScope` gives each test its own world. It records which objects `WorldGenerator.instance`, `ZDOMan.instance`, `ZoneSystem.instance`, `ZNetScene.instance`, `ZNet.instance`, `ZRoutedRpc.instance`, Jotunn's `NetworkManager.Instance`, the loaded heightmaps, the log capture, `Terminal.commands` and `Player.m_localPlayer` refer to, plus the server flag and the clock, and puts them back on dispose, also when the test throws. Disposing also ends the frame (`UnityEngine.Object.EndOfFrame()`), so an object the test destroyed is gone before the next test. Builders install fresh objects: `WithWorld`/`WithTerrain`, `WithZdos`, `WithZoneSystem`, `WithScene`, `WithNetwork(server)` (a `ZNet` with no peers, a new `ZRoutedRpc` and a new Jotunn `NetworkManager`), `WithCommands` (an empty console-command table), `WithLocalPlayer(position)` (none by default, as on a dedicated server), `AsServer`, `RegisterHeightmap` (zones add up; loading a zone again replaces it), `UnloadHeightmap` and `CaptureLog`.
 
 ```csharp
 using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(30f)).WithZdos().WithNetwork(server: true);
@@ -309,7 +331,7 @@ using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(30f)).Wit
 
 It restores references, not contents. Nothing is deep-copied, so changing an object the scope did not install (adding a peer to the `ZNet` that was already there) outlives the test; install a fresh one with a builder instead. A mod's own statics are not the scope's: reset them in the test.
 
-Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity objects have no components, physics or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: peers connect only through linked socket doubles, and RPCs follow the delivery and routing rules above without real timing, loss or reordering. Test what the game does natively with `Valheim.Testing.Game` against a real server.
+Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity objects carry only the `ZNetView` and `WearNTear` components and have no physics or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: peers connect only through linked socket doubles, and RPCs follow the delivery and routing rules above without real timing, loss or reordering. Test what the game does natively with `Valheim.Testing.Game` against a real server.
 
 ### Global keys, terrain modifier order and location placement
 
