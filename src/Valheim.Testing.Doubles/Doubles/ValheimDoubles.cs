@@ -218,6 +218,9 @@ public partial class ZNetView
 public partial struct ZDOID : System.IEquatable<ZDOID>
 {
     public long ID;
+    /// <summary>No object; what a peer's character id is before it spawns.</summary>
+    public static ZDOID None => default;
+    public bool IsNone() => ID == 0;
     public override string ToString() => ID.ToString();
     public bool Equals(ZDOID other) => ID == other.ID;
     public override bool Equals(object? obj) => obj is ZDOID other && Equals(other);
@@ -287,6 +290,7 @@ public partial class ZDOMan
         get { var byId = new System.Collections.Generic.Dictionary<ZDOID, ZDO>(); foreach (var zdo in Zdos) byId[zdo.m_uid] = zdo; return byId; }
     }
     public static long GetSessionID() => instance?.m_sessionID ?? 0;
+    public ZDO? GetZDO(ZDOID id) => id.IsNone() ? null : Zdos.Find(zdo => zdo.m_uid.Equals(id));
     public void DestroyZDO(ZDO zdo) { if (!DestroyQueue.Contains(zdo)) DestroyQueue.Add(zdo); }
     /// <summary>Removes the queued ZDOs, as the game's next update does; returns how many went.</summary>
     public int ProcessDestroyed()

@@ -151,6 +151,78 @@ public sealed class DoublesTests : IDisposable
         }
         finally { ZNet.instance.Peers.Remove(99); }
     }
+    [Fact] public void ACommandRegistersByLowerCaseNameAndRunsWithItsArguments()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithCommands();
+        Terminal.ConsoleEventArgs? seen = null;
+        new Terminal.ConsoleCommand("Mod_Mark", "Adds a mark.", args => { seen = args; args.Context.AddString("marked " + args.ArgsAll); }, isCheat: true);
+        var console = new Terminal();
+        console.TryRunCommand("mod_mark add  10 -2.5");
+        Assert.Equal(new[] { "mod_mark", "add", "10", "-2.5" }, seen!.Args);
+        Assert.Equal("add  10 -2.5", seen.ArgsAll); Assert.Equal(10, seen.TryParameterInt(2)); Assert.Equal(-2.5f, seen.TryParameterFloat(3));
+        Assert.Same(console, seen.Context); Assert.Equal(new[] { "marked add  10 -2.5" }, console.Output);
+        Assert.True(Terminal.commands["mod_mark"].IsCheat);
+    }
+    [Fact] public void AnUnknownCommandOrAFailedFailableIsPrinted()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithCommands();
+        new Terminal.ConsoleCommand("fails", "", (Terminal.ConsoleEventFailable)(_ => "no world"));
+        new Terminal.ConsoleCommand("works", "", (Terminal.ConsoleEventFailable)(_ => true));
+        var console = new Terminal();
+        console.TryRunCommand("nothing"); console.TryRunCommand("nothing", silentFail: true); console.TryRunCommand("fails"); console.TryRunCommand("works");
+        Assert.Equal(new[] { "Unknown command: nothing", "Error executing command: no world" }, console.Output);
+    }
+    [Fact] public void AScopeGivesItsOwnCommandTableAndLocalPlayerAndRestoresThem()
+    {
+        var commands = Terminal.commands; var player = Player.m_localPlayer;
+        using (var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithCommands())
+        {
+            var local = scope.WithLocalPlayer(new UnityEngine.Vector3(1, 2, 3));
+            new Terminal.ConsoleCommand("scoped", "", _ => { });
+            Assert.Same(local, Player.m_localPlayer); Assert.Equal(3f, Player.m_localPlayer!.transform.position.z);
+            Assert.True(Terminal.commands.ContainsKey("scoped")); Assert.NotSame(commands, Terminal.commands);
+        }
+        Assert.Same(commands, Terminal.commands); Assert.Same(player, Player.m_localPlayer); Assert.False(Terminal.commands.ContainsKey("scoped"));
+    }
+    [Fact] public void APeersCharacterIsFoundByItsZdoId()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithNetwork().WithZdos();
+        var character = ZDOMan.instance!.CreateNewZDO(new UnityEngine.Vector3(5, 0, 7), 1);
+        ZNet.instance.Peers.Add(12, new ZNetPeer { m_characterID = character.m_uid });
+        ZNet.instance.Peers.Add(13, new ZNetPeer());
+        var peers = ZNet.instance.GetPeers();
+        Assert.Equal(new[] { 12L, 13L }, peers.Select(p => p.m_uid));
+        Assert.Same(character, ZDOMan.instance.GetZDO(peers[0].m_characterID));
+        Assert.True(peers[1].m_characterID.IsNone()); Assert.Null(ZDOMan.instance.GetZDO(ZDOID.None));
+    }
+    [Fact] public void RoutedRpcsAreRecordedAndDeliveredToTheirHandlers()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithNetwork();
+        var got = new List<(long, int, string)>();
+        ZRoutedRpc.instance.Register<int, string>("Mod_Ping", (sender, n, text) => got.Add((sender, n, text)));
+        ZRoutedRpc.instance.Register("Mod_Fail", _ => throw new InvalidOperationException("handler failed"));
+        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, "Mod_Ping", 3, "hi");
+        ZRoutedRpc.instance.InvokeRoutedRPC("Mod_Ping", 4, "server");
+        Assert.Equal(new[] { (0L, "Mod_Ping"), (42L, "Mod_Ping") }, ZRoutedRpc.instance.Invoked.Select(x => (x.Target, x.Method)));
+        ZRoutedRpc.instance.Deliver(7, "Mod_Ping", 5, "back");
+        Assert.Equal(new[] { (7L, 5, "back") }, got);
+        Assert.Equal("handler failed", Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.Deliver(7, "Mod_Fail")).Message);
+        Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.Deliver(7, "Mod_Unknown"));
+    }
+    [Fact] public void JotunnRpcsAreKeptByNameAndTheScopeGivesAFreshManager()
+    {
+        var manager = Jotunn.Managers.NetworkManager.Instance;
+        using (new Valheim.Testing.Doubles.ValheimWorldScope().WithNetwork())
+        {
+            var a = Jotunn.Managers.NetworkManager.Instance.AddRPC("A", (_, _) => null!, (_, _) => null!);
+            var b = Jotunn.Managers.NetworkManager.Instance.AddRPC("B", (_, _) => null!, (_, _) => null!);
+            Assert.Same(a, Jotunn.Managers.NetworkManager.Instance.Rpcs["A"]); Assert.Same(b, Jotunn.Managers.NetworkManager.Instance.Rpc);
+            a.SendPackage(new List<ZNetPeer> { new() { m_uid = 5 }, new() { m_uid = 6 } }, new ZPackage());
+            Assert.Equal(new[] { 5L, 6L }, a.Sent.Select(s => s.Peer)); Assert.Empty(b.Sent);
+            Assert.NotSame(manager, Jotunn.Managers.NetworkManager.Instance);
+        }
+        Assert.Same(manager, Jotunn.Managers.NetworkManager.Instance);
+    }
     [Fact] public void TerrainWorldMapsTheToolkitsBiomes()
     {
         var world = new Valheim.Testing.Doubles.TerrainWorld(new Valheim.Testing.PlaneTerrain(35f));
