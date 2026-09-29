@@ -26,6 +26,10 @@ on:
         type: choice
         options: [none, plugin-pin, bepinex-hash]
         default: none
+      watch_only:
+        description: 'Act like the four-hourly watch: run the checks only if this build id has not been checked (on this branch or the default branch)'
+        type: boolean
+        default: false
       tracking_issue:
         description: 'On failure: dry-run prints what it would post; open posts it (default branch only, never with a negative control)'
         type: choice
@@ -88,13 +92,15 @@ jobs:
           SCHEDULE: ${{ github.event.schedule }}
           BUILD_ID: ${{ steps.query.outputs.build-id }}
           SEEN: ${{ steps.seen.outputs.cache-hit }}
+          WATCH_ONLY: ${{ inputs.watch_only }}
         run: |
-          if [ "$EVENT" = schedule ] && [ "$SCHEDULE" = "$WATCH_CRON" ]; then
+          checked="build ${BUILD_ID:-unknown} checked before: ${SEEN:-false}"
+          if { [ "$EVENT" = schedule ] && [ "$SCHEDULE" = "$WATCH_CRON" ]; } || [ "$WATCH_ONLY" = true ]; then
             if [ -z "$BUILD_ID" ]; then run=false; reason="watch: the public build id is unknown"
-            elif [ "$SEEN" = true ]; then run=false; reason="watch: build $BUILD_ID was checked already"
-            else run=true; reason="watch: build $BUILD_ID has not been checked"; fi
+            elif [ "$SEEN" = true ]; then run=false; reason="watch: $checked"
+            else run=true; reason="watch: $checked"; fi
           else
-            run=true; reason="$EVENT: always checks"
+            run=true; reason="$EVENT always checks; $checked"
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "Run the checks: $run ($reason)" | tee -a "$GITHUB_STEP_SUMMARY"
