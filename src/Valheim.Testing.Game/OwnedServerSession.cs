@@ -83,7 +83,9 @@ public sealed class OwnedServerSession : IDisposable
         if (parts.Length != 2 || parts.Any(p => p.Length == 0 || p.Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch != '.' && ch != '-' && ch != '_')))
             throw new ArgumentException("Use one namespaced session capability, without arguments.");
         _sessionCapability = sessionCapability; _extension = parts[0];
-        _cancellation = cancellation; _launch = launch; _connect = connect; _saveRoot = Path.GetFullPath(saveRoot); _expectations = StrictExpectations.Normalize(expectations);
+        _cancellation = cancellation; _launch = launch; _connect = connect; _saveRoot = Path.GetFullPath(saveRoot);
+        // EnvironmentPinning.None is an explicitly unpinned run's (ServerRunPlan.ExpectCommand); the actor warns when it takes effect.
+        _expectations = expectations == EnvironmentPinning.None ? expectations : StrictExpectations.Normalize(expectations);
         _startup = startup; _command = command; _poll = poll ?? TimeSpan.FromMilliseconds(500);
         if (startup <= TimeSpan.Zero || command <= TimeSpan.Zero || _poll < TimeSpan.Zero) throw new ArgumentException("Invalid session deadlines.");
     }
@@ -339,11 +341,20 @@ public sealed class RecordingTransport : IGameTransport
 {
     private readonly IGameTransport _inner;
     private readonly StreamWriter _writer;
-    public RecordingTransport(IGameTransport inner, string file)
+    public RecordingTransport(IGameTransport inner, string file) : this(inner, file, null) { }
+    /// <summary>
+    /// With <paramref name="environment"/> (for example <see cref="EnvironmentPinning.NotPinned"/>), the record's first line
+    /// is <c>{"utc":...,"environment":...}</c>, before any command.
+    /// </summary>
+    public RecordingTransport(IGameTransport inner, string file, string? environment)
     {
         _inner = inner;
-        try { _writer = new StreamWriter(new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.Read)) { AutoFlush = true }; }
-        catch { inner.Dispose(); throw; }
+        try
+        {
+            _writer = new StreamWriter(new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.Read)) { AutoFlush = true };
+            if (environment != null) _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, environment }));
+        }
+        catch { _writer?.Dispose(); inner.Dispose(); throw; }
     }
     public CommandResult Execute(string command, TimeSpan timeout)
     {

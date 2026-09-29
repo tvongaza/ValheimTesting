@@ -13,13 +13,27 @@ public sealed class WorldFixture : IDisposable
     public static WorldFixture Copy(string source, string outputParent, IReadOnlyDictionary<string, string> expectedHashes)
     {
         if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
+        return CopyFixture(source, outputParent, expectedHashes);
+    }
+    /// <summary>
+    /// Copies a fixture that has no manifest, for an explicitly unpinned run only: every file's SHA256 is recorded in
+    /// <see cref="SourceHashes"/> and <c>fixture-provenance.json</c> and the copy is verified against it, but nothing says
+    /// the source is the one intended. Prefer <see cref="Copy"/>.
+    /// </summary>
+    public static WorldFixture CopyAsFound(string source, string outputParent) => CopyFixture(source, outputParent, null);
+    private static WorldFixture CopyFixture(string source, string outputParent, IReadOnlyDictionary<string, string>? expectedHashes)
+    {
         source = Path.GetFullPath(source); outputParent = Path.GetFullPath(outputParent);
         var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (outputParent.Equals(source, pathComparison) || outputParent.StartsWith(source + Path.DirectorySeparatorChar, pathComparison)) throw new ArgumentException("Output must be outside source.");
         var directories = new List<string>();
         var actual = Hashes(source, directories);
-        Check.SameIdentities(actual.Keys, expectedHashes.Keys);
-        foreach (var item in actual) if (!string.Equals(item.Value, expectedHashes[item.Key], StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Fixture hash mismatch: " + item.Key);
+        if (expectedHashes != null)
+        {
+            Check.SameIdentities(actual.Keys, expectedHashes.Keys);
+            foreach (var item in actual) if (!string.Equals(item.Value, expectedHashes[item.Key], StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Fixture hash mismatch: " + item.Key);
+        }
+        else if (actual.Count == 0) throw new InvalidOperationException("Fixture source has no files: " + source);
         string target = Path.Combine(outputParent, "valheim-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(target);
         var fixture = new WorldFixture(target, actual);
         try
