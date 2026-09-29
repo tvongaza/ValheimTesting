@@ -24,6 +24,16 @@ Use the [package availability table](getting-started.md#package-versions-and-fee
 
 **Contributing to the framework itself:** clone it and run its bootstrap and full validation as described in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally). That workflow builds the exact ValheimCLI dependency and all examples; it is not a prerequisite for every consumer.
 
+## Run your tests in GitHub Actions
+
+If your mod has no CI yet, copy the example's [workflow](../examples/ModWithTests/.github/workflows/tests.yml) to `.github/workflows/tests.yml` in your repository and point it at your test project. It runs on every push and pull request on a hosted Ubuntu runner: check out, install the .NET 10 SDK, then `dotnet test` the one test project, with read-only repository permissions and no secrets. This repository's CI runs the same commands on a copy of the example outside its checkout, so the template is exercised against the published packages.
+
+- **Build only the test project.** Your plugin project references Valheim, Unity and BepInEx assemblies that a hosted runner does not have. Do not commit game or publicized assemblies to make it build, and do not upload them as secrets or artifacts: they are not yours to redistribute. A test project that links your sources against `Valheim.Testing.Doubles` needs none of them. If your solution includes the plugin, pass the test project (or a solution containing only test projects) to `dotnet test`, not the solution.
+- **Pin exact package versions** as the example does, so a new toolkit preview cannot change a passing build. Update the pin deliberately in its own change.
+- **.NET Framework test legs:** a test project that also targets `net48` runs that leg natively on `windows-latest`; on Linux or macOS it needs Mono. Add a `strategy.matrix` over runner images only for targets you actually ship tests for.
+- **Native checks stay off hosted runners.** Anything that launches Valheim or a server needs a game install, a Steam login and a machine you own. Run those checks where you run the game. A self-hosted runner with game access must never run workflows from untrusted pull requests.
+- **Keep the job's evidence.** A failed test fails the job with the test output in its log. To keep result files, add `--logger trx --results-directory TestResults` and upload that directory with `actions/upload-artifact`.
+
 ## Add one native check only when needed
 
 For a mod that writes terrain on the server, a useful next check is: “the client without my mod sees the declared ground and paint, including after a save/restart.” For another kind of mod, replace this with one observable behavior at its actual game boundary.
