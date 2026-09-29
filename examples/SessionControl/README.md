@@ -21,11 +21,11 @@ For a larger scenario:
 var session = new SessionControl(actor);
 session.Join("localhost:2456", "Tester", "TEST_PASSWORD"); // issued exactly once
 actor.VerifyEnvironment(destinationPins);                  // mandatory after ANY transition attempt
-session.WaitForWorld(expectedWorldUid, TimeSpan.FromSeconds(120));
+session.WaitForWorld(expectedWorldUid, TimeSpan.FromSeconds(120)); // then protects the joined player, read back
 // Check your mod's own readiness capability next.
 ```
 
-Readiness here means native world/player objects are available without a load error. It does not mean a mod has finished generation, terrain is loaded at a remote site, or the road is usable. Joining waits for a connected, available local player; leaving waits for the menu. A stale error from a previous network instance is not the new join's result. Session transitions invalidate `GameActor`'s environment verification even when the reply is lost, because the game may still have acted. Never retry a mutation merely because its reply timed out.
+Once the world is ready, `WaitForWorld` protects the local player by default (`PlayerPlacement.Protect`: god, ghost and debug mode, read back; fly stays off) and fails if the game does not confirm it; pass `protectPlayer: false` to skip it. A dedicated server has no local player to protect. Readiness here means native world/player objects are available without a load error. It does not mean a mod has finished generation, terrain is loaded at a remote site, or the road is usable. Joining waits for a connected, available local player; leaving waits for the menu. A stale error from a previous network instance is not the new join's result. Session transitions invalidate `GameActor`'s environment verification even when the reply is lost, because the game may still have acted. Never retry a mutation merely because its reply timed out.
 
 Server save waits for any earlier save, checks vanilla refusal reasons, issues one save, and confirms that its thread ended and the save number advanced in the same world. A successful client logout is not proof that the remote server saved. Existing owned-process lifecycle (`OwnedServerSession`) remains separate and must prove process identity before restart/stop.
 

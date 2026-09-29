@@ -42,6 +42,32 @@ public sealed class DrySiteScenarioTests : IDisposable
         Assert.Contains(report.Steps, s => s.Name == "after-restart: the client sees the marker at the dry site" && s.Passed);
     }
 
+    [Fact] public void EveryJoinProtectsThePlayerBeforeArrivalWithoutAnExplicitStep()
+    {
+        var report = Run(_world.Plan());
+        Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
+        var commands = _world.ClientTransport!.Commands.ToList();
+        Assert.Equal(2, commands.Count(c => c == "cli_set_player_safety true")); // Once per round, never repeated.
+        // Each round: join, then protection, then the arrival's intro skip.
+        int join = commands.FindIndex(c => c.StartsWith("cli_extension valheim.session/join", StringComparison.Ordinal));
+        int protect = commands.IndexOf("cli_set_player_safety true");
+        int arrive = commands.FindIndex(c => c.StartsWith("cli_skip_intro", StringComparison.Ordinal));
+        Assert.True(join < protect && protect < arrive, $"join {join}, protection {protect}, arrival {arrive}");
+        Assert.DoesNotContain(commands, c => c.StartsWith("cli_fly", StringComparison.Ordinal));
+    }
+
+    [Fact] public void AnUnconfirmedProtectionFailsTheJoinAndThePlayerIsNeverMoved()
+    {
+        _world.ConfirmProtection = false;
+        var report = Run(_world.Plan());
+        Assert.Equal("first: join the owned server with the disposable character, protected", Failed(report).First());
+        Assert.Contains("ghost=False", report.Steps.First(s => !s.Passed).Error);
+        Assert.Equal(1, _world.ClientTransport!.Count("cli_set_player_safety")); // Not retried or toggled.
+        Assert.Equal(0, _world.ClientTransport!.Count("cli_skip_intro"));
+        Assert.All(_world.Servers, server => Assert.Equal(0, server.Count("cli_teleport_peer")));
+        Assert.Equal(1, _process!.Stops);
+    }
+
     [Fact] public void AMarkWhoseReplyIsLostFailsAndIsNotRetried()
     {
         _world.LoseMarkReply = true;
@@ -109,7 +135,7 @@ public sealed class DrySiteScenarioTests : IDisposable
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
         var names = report.Steps.Select(s => s.Name).ToList();
         Assert.True(names.IndexOf("launch the owned client to its menu, plugins pinned") < names.IndexOf("first: the server accepts game connections"));
-        Assert.True(names.IndexOf("first: the server accepts game connections") < names.IndexOf("first: join the owned server with the disposable character"));
+        Assert.True(names.IndexOf("first: the server accepts game connections") < names.IndexOf("first: join the owned server with the disposable character, protected"));
         Assert.True(_world.SessionReadings > 3);
     }
 

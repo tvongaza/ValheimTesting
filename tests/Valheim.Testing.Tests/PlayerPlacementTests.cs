@@ -5,8 +5,8 @@ using Xunit;
 public class PlayerPlacementTests
 {
     private static readonly HeightExpectation Point = new(100, -40, 42.5f);
-    private static object Standing(float y = 42.5f, bool grounded = true, float speed = 0) =>
-        new { source = "local-player-support", complete = true, x = 100f, y, z = -40f, speed, grounded, flying = false, attached = false, dead = false, teleporting = false, units = "metres" };
+    private static object Standing(float y = 42.5f, bool grounded = true, float speed = 0, bool flying = false) =>
+        new { source = "local-player-support", complete = true, x = 100f, y, z = -40f, speed, grounded, flying, attached = false, dead = false, teleporting = false, units = "metres" };
     private static object Loading() => new { source = "local-player-support", complete = false };
     private static ScriptedTransport NoIntro() =>
         new ScriptedTransport().OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0.6,33.7,2.8 ms=4"));
@@ -200,5 +200,65 @@ public class PlayerPlacementTests
         Assert.Equal(2, error.Readings.Count);
         reads = 10;
         Assert.Equal(3, PlayerPlacement.RequireSupported(client, Point, interval: TimeSpan.Zero).Count);
+    }
+
+    // The flying reading is the settled standing one with only "flying" changed.
+    [Fact] public void SupportIsRefusedWhileFlyIsOnNotReportedAsUnsupported()
+    {
+        int reads = 0;
+        using var client = NoIntro().Extension("valheim.world", "player-support", _ => ++reads == 2 ? Standing(flying: true) : Standing()).Actor();
+        // Exactly InvalidOperationException: a SupportException would claim the ground was measured and failed.
+        var error = Assert.Throws<InvalidOperationException>(() => PlayerPlacement.RequireSupported(client, Point, interval: TimeSpan.Zero));
+        Assert.Contains("flying", error.Message);
+        Assert.Equal(2, reads); // Refused at the flying reading; nothing more was measured.
+        reads = 10;
+        Assert.Equal(3, PlayerPlacement.RequireSupported(client, Point, interval: TimeSpan.Zero).Count); // Control: the same readings without fly pass.
+    }
+    [Fact] public void ArrivalRefusesAFlyingPlayerAndNeverTeleports()
+    {
+        var serverTransport = new ScriptedTransport()
+            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
+            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
+        using var server = serverTransport.Actor();
+        using var client = NoIntro().Extension("valheim.world", "player-support", _ => Standing(flying: true)).Actor();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var error = Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), settleFor: TimeSpan.Zero));
+        Assert.Contains("flying", error.Message);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), "refused at once, not after the arrival timeout");
+        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+    }
+    [Fact] public void ArrivalRefusesAPlayerWhoStartsFlyingAfterTheTeleport()
+    {
+        bool teleported = false;
+        var serverTransport = new ScriptedTransport()
+            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
+            .OnPrefix("cli_teleport_peer ", _ => { teleported = true; return ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"); });
+        using var server = serverTransport.Actor();
+        using var client = NoIntro().Extension("valheim.world", "player-support", _ => Standing(flying: teleported)).Actor();
+        Assert.Contains("flying", Assert.Throws<InvalidOperationException>(() =>
+            PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), settleFor: TimeSpan.Zero)).Message);
+        Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
+    }
+
+    [Theory]
+    [InlineData(true, "cli_fly on", "OK: fly=True changed=True")]
+    [InlineData(true, "cli_fly on", "OK: fly=True changed=False")]
+    [InlineData(false, "cli_fly off", "OK: fly=False changed=True")]
+    public void FlyIsSetAndReadBack(bool on, string command, string reply)
+    {
+        var transport = new ScriptedTransport().On(command, _ => ScriptedTransport.Ok(reply));
+        using var client = transport.Actor();
+        PlayerPlacement.SetFly(client, on);
+        Assert.Equal(1, transport.Count("cli_fly"));
+    }
+    [Theory]
+    [InlineData(true, "cli_fly on", "OK: fly=False changed=False")]
+    [InlineData(false, "cli_fly off", "OK: fly=True changed=False")]
+    [InlineData(true, "cli_fly on", "ERROR: No local player found")]
+    [InlineData(true, "cli_fly on", "Usage: cli_fly [on|off|toggle]")]
+    public void AnUnconfirmedFlyChangeFails(bool on, string command, string reply)
+    {
+        using var client = new ScriptedTransport().On(command, _ => ScriptedTransport.Ok(reply)).Actor();
+        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.SetFly(client, on));
     }
 }
