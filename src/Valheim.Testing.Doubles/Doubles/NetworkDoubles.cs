@@ -240,7 +240,7 @@ public sealed partial class ZRoutedRpc
 
     /// <summary>
     /// Writes the arguments as the game does. The game skips an argument of any other type without an error, so its
-    /// handler reads the wrong bytes; here that throws, naming the argument. (HitData is not doubled.)
+    /// handler reads the wrong bytes; here that throws, naming the argument.
     /// </summary>
     internal static void SerializeArguments(string method, object[] args, ZPackage pkg, List<Type> types)
     {
@@ -262,6 +262,7 @@ public sealed partial class ZRoutedRpc
                 case UnityEngine.Vector3 v: pkg.Write(v); type = typeof(UnityEngine.Vector3); break;
                 case UnityEngine.Quaternion v: pkg.Write(v); type = typeof(UnityEngine.Quaternion); break;
                 case ZDOID v: pkg.Write(v); type = typeof(ZDOID); break;
+                case HitData v: var hitInto = pkg; v.Serialize(ref hitInto); type = typeof(HitData); break;
                 case ISerializableParameter v: var into = pkg; v.Serialize(ref into); type = v.GetType(); break;
                 default:
                     throw new ArgumentException($"RPC '{method}': argument {i + 1} is {(arg == null ? "null" : Name(arg.GetType()))}. " +
@@ -275,7 +276,7 @@ public sealed partial class ZRoutedRpc
     internal static bool IsReadable(Type type) =>
         type == typeof(int) || type == typeof(uint) || type == typeof(long) || type == typeof(float) || type == typeof(double) ||
         type == typeof(bool) || type == typeof(string) || type == typeof(ZPackage) || type == typeof(List<string>) ||
-        type == typeof(UnityEngine.Vector3) || type == typeof(UnityEngine.Quaternion) || type == typeof(ZDOID) ||
+        type == typeof(UnityEngine.Vector3) || type == typeof(UnityEngine.Quaternion) || type == typeof(ZDOID) || type == typeof(HitData) ||
         typeof(ISerializableParameter).IsAssignableFrom(type);
 
     internal static object ReadArgument(ZPackage pkg, Type type)
@@ -297,6 +298,7 @@ public sealed partial class ZRoutedRpc
         if (type == typeof(UnityEngine.Vector3)) return pkg.ReadVector3();
         if (type == typeof(UnityEngine.Quaternion)) return pkg.ReadQuaternion();
         if (type == typeof(ZDOID)) return pkg.ReadZDOID();
+        if (type == typeof(HitData)) { var hit = new HitData(); hit.Deserialize(ref pkg); return hit; }
         var value = (ISerializableParameter)Activator.CreateInstance(type)!;
         value.Deserialize(ref pkg);
         return value;
