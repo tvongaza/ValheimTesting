@@ -270,6 +270,22 @@ public sealed class DoublesTests : IDisposable
         east.RebuildTerrain();
         Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, east);
     }
+    [Fact] public void TerrainChecksRefuseComparisonsThatCouldPassByAccident()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithTerrain(new Valheim.Testing.PlaneTerrain(30f)).WithZdos();
+        var west = scope.RegisterHeightmap(new Vector2s(0, 0)); var east = scope.RegisterHeightmap(new Vector2s(1, 0));
+        var diagonal = scope.RegisterHeightmap(new Vector2s(1, 1)); var small = scope.RegisterHeightmap(new Vector2s(0, 1), width: 32);
+        foreach (var hm in new[] { west, east, diagonal, small }) hm.RebuildTerrain();
+        var snapshot = Valheim.Testing.Doubles.TerrainSnapshot.Of(west.m_terrainComp!);
+        Assert.Throws<ArgumentException>(() => snapshot.ChangesIn(east.m_terrainComp!));         // another zone
+        Assert.Throws<ArgumentException>(() => Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, west));
+        Assert.Throws<ArgumentException>(() => Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, diagonal)); // a corner only
+        Assert.Throws<ArgumentException>(() => Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, small));    // different grids
+        Assert.Throws<ArgumentOutOfRangeException>(() => Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, east, float.NaN));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, east, -1f));
+        west.LastRenderedHeights![64] = float.NaN;                                                 // a shared vertex
+        Assert.Contains("not finite", Assert.Throws<Valheim.Testing.Doubles.TerrainAssertException>(() => Valheim.Testing.Doubles.TerrainAssert.SeamAgrees(west, east)).Message);
+    }
     [Fact] public void TerrainWorldMapsTheToolkitsBiomes()
     {
         var world = new Valheim.Testing.Doubles.TerrainWorld(new Valheim.Testing.PlaneTerrain(35f));
