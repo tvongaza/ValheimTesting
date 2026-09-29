@@ -7,10 +7,7 @@ var report=new ScenarioReport("client-surface-check");string output=Path.GetFull
 try
 {
     if(Path.Exists(output))throw new IOException("Use a new output directory.");
-    var plan=JsonSerializer.Deserialize<Plan>(File.ReadAllText(args[3]),new JsonSerializerOptions{PropertyNameCaseInsensitive=true,UnmappedMemberHandling=JsonUnmappedMemberHandling.Disallow})??throw new ArgumentException("Empty plan.");
-    TerrainProbe.Validate("loaded-ground",plan.ExpectedFrom,plan.Samples,plan.Tolerance);
-    TerrainProbe.Validate("loaded-ground",plan.ExpectedFrom,new[]{plan.Support},.3f);
-    if(plan.Samples.Any(s=>s.X!=MathF.Round(s.X)||s.Z!=MathF.Round(s.Z)))throw new ArgumentException("Surface samples must be grid vertices.");
+    var plan=SurfacePlan.Read(args[3]);
     if(!PlanExpectations.TryLoad(args[2],true,out var pins,out var error))throw new ArgumentException(error);
     Directory.CreateDirectory(output);owns=true;
     report.Provenance["planSha256"]=WorldFixture.Hash(args[3]);report.Provenance["pinsSha256"]=WorldFixture.Hash(args[2]);
@@ -21,6 +18,9 @@ try
         File.WriteAllText(Path.Combine(output,"surfaces.json"),JsonSerializer.Serialize(readings,new JsonSerializerOptions{WriteIndented=true}));
         if(readings.Any(r=>!r.Passed))throw new InvalidOperationException("Heightmap or collider mismatch; see every residual.");
     });
+    // Without a declared dry support point, grounding is not checked; the report says so rather than passing it.
+    report.Provenance["grounding"]=plan.Support==null?"not checked: the plan declares no support point":"checked";
+    if(plan.Support is not { } support){report.Write(output);owns=false;return report.Passed?0:1;}
     var cap=actor.RequireCapability("valheim.world/player-support");
     var states=new List<JsonElement>();
     report.Step("three stationary grounded observations",()=>{
@@ -28,17 +28,10 @@ try
             if(i>0)Thread.Sleep(500);
             var state=actor.Observe(cap);states.Add(state.Data);
             File.WriteAllText(Path.Combine(output,"support.json"),JsonSerializer.Serialize(states,new JsonSerializerOptions{WriteIndented=true}));
-            if(!SurfaceProbe.Supported(state,plan.Support))throw new InvalidOperationException("Player is not settled on the declared ground; observer does not move the player.");
+            if(!SurfaceProbe.Supported(state,support))throw new InvalidOperationException("Player is not settled on the declared ground; observer does not move the player.");
         }
     });
 }
 catch(Exception e){try{report.Step("client check failed",()=>throw new InvalidOperationException(e.Message,e));}catch{}Console.Error.WriteLine(e.Message);}
 finally{if(owns)report.Write(output);}
 return report.Passed?0:1;
-public sealed class Plan
-{
-    public string ExpectedFrom{get;set;}="";
-    public float Tolerance{get;set;}=.05f;
-    public List<HeightExpectation> Samples{get;set;}=[];
-    public HeightExpectation Support{get;set;}=new(float.NaN,float.NaN,float.NaN);
-}
