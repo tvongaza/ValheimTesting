@@ -219,6 +219,7 @@ public sealed partial class ZRoutedRpc
     public void Register<T, U, V, B>(string name, RoutedMethod<T, U, V, B>.Method handler) => Add(name, handler);
     public void Register<T, U, V, B, K>(string name, RoutedMethod<T, U, V, B, K>.Method handler) => Add(name, handler);
     public void Register<T, U, V, B, K, M>(string name, RoutedMethod<T, U, V, B, K, M>.Method handler) => Add(name, handler);
+    /// <summary>Whether a handler is registered under the name. Not a game method: for tests only.</summary>
     public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
     private void Add(string name, Delegate handler) => AddHandler(m_functions, name, handler, "ZRoutedRpc");
 
@@ -304,7 +305,9 @@ public sealed partial class ZRoutedRpc
     /// <summary>
     /// Runs a handler as the game does: its parameters after the sender are read from the package by their own types.
     /// Where the game would misread (a parameter of another type than the argument sent, or more parameters than
-    /// arguments) or pass nothing (a type it cannot read), this throws and names the parameter. Arguments beyond the
+    /// arguments) or pass nothing (a type it cannot read), this throws and names the parameter. The type check is exact,
+    /// so it also refuses reinterpretations the game gets away with (an int read as a uint, a subclass sent to a
+    /// base-class parameter): refused, not misread. Arguments beyond the
     /// handler's parameters are ignored, as in the game. A handler's exception is rethrown as it was thrown.
     /// </summary>
     internal static void Call(Delegate handler, RoutedRPCData data, string context)
@@ -351,6 +354,7 @@ public partial class ZNetView
     public void Register<T, U, V, B, K>(string name, RoutedMethod<T, U, V, B, K>.Method f) => Add(name, f);
     public void Register<T, U, V, B, K, M>(string name, RoutedMethod<T, U, V, B, K, M>.Method f) => Add(name, f);
     public void Unregister(string name) => m_functions.Remove(name.GetStableHashCode());
+    /// <summary>Whether this object registered a handler under the name. Not a game method: for tests only.</summary>
     public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
     private void Add(string name, Delegate handler) => ZRoutedRpc.AddHandler(m_functions, name, handler, "ZNetView");
 
@@ -404,7 +408,7 @@ public partial class ZLog
 /// The game's package: one stream written and read at the same position, with the game's byte encoding for every
 /// Write/Read pair (little-endian numbers, strings with a 7-bit length prefix and UTF-8, a byte array or package with an
 /// int length). Write, then <see cref="SetPos"/>(0) to read back. Compressed packages round-trip, but their bytes come
-/// from the runtime's gzip, not the game's.
+/// from the runtime's gzip at its default level, not the game's gzip at its Fastest level, so they differ.
 /// </summary>
 public sealed partial class ZPackage
 {
