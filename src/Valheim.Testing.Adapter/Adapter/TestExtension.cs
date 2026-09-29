@@ -5,7 +5,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using UnityEngine;
 using valheimCLI;
 using valheimCLI.Extensions;
@@ -34,13 +33,14 @@ namespace Valheim.Testing.Adapter
         {
             if (string.IsNullOrEmpty(tokenVariable)) throw new ArgumentException("Name the session token variable.", nameof(tokenVariable));
             float deadline = Time.realtimeSinceStartup + ApiWaitSeconds;
-            while (valheimCLIPlugin.Instance == null || valheimCLIPlugin.Instance.Extensions == null)
+            while (valheimCLIPlugin.Instance == null || valheimCLIPlugin.Instance!.Extensions == null)
             {
                 if (Time.realtimeSinceStartup > deadline) { logError("ValheimCLI's extension API did not become ready; " + id + " disabled."); yield break; }
                 yield return null;
             }
             var session = new ExtensionCommand("session", "Read owned test process and save-root identity", context => Session(context, tokenVariable, modReady), readOnly: true);
-            registered(valheimCLIPlugin.Instance.Extensions.Register(id, version, 1, new[] { session }.Concat(commands).ToArray()));
+            // The loop above ended because both are set.
+            registered(valheimCLIPlugin.Instance!.Extensions!.Register(id, version, 1, new[] { session }.Concat(commands).ToArray()));
         }
 
         private static IEnumerator Session(ExtensionContext context, string tokenVariable, Func<bool> modReady)
@@ -66,16 +66,12 @@ namespace Valheim.Testing.Adapter
         /// Whether this server has opened its game socket (<c>ZNet.OpenServer</c>, logged as "Opened Steam server" or "Opened
         /// PlayFab server"), so a client can join. The field is private in the shipped game; a missing field fails loudly.
         /// </summary>
-        public static bool AcceptingConnections() => ZNet.instance != null &&
-            (typeof(ZNet).GetField("m_hostSocket", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                ?? throw new MissingFieldException("ZNet.m_hostSocket")).GetValue(ZNet.instance) != null;
+        public static bool AcceptingConnections() => ZNet.instance != null && Members.Field<object?>(ZNet.instance, "m_hostSocket") != null;
 
         /// <summary>
         /// The raw devcommands flag that ValheimCLI's extension gate reads. <c>IsCheatsEnabled</c> is not it: another mod can
         /// make that true on a dedicated server without enabling mutating extensions.
         /// </summary>
-        public static bool DevcommandsFlag() => global::Console.instance != null &&
-            (bool)(typeof(Terminal).GetField("m_cheat", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                ?? throw new MissingFieldException("Terminal.m_cheat")).GetValue(null);
+        public static bool DevcommandsFlag() => global::Console.instance != null && Members.StaticField<bool>(typeof(Terminal), "m_cheat");
     }
 }

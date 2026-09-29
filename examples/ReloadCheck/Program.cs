@@ -38,23 +38,13 @@ try
     }
     var originalBuild = Run("cli_build").Output.ToArray();
     Run("cli_extensions");
-    JsonElement? Probe()
+    // A registration announces itself nowhere else: re-read the listing (read-only) every half second.
+    var poll = TimeSpan.FromMilliseconds(500);
+    async Task<ExtensionInstance> AwaitRevision(string revision, string? replacing)
     {
-        using var doc = GameActor.ParseLine(Run("cli_extensions"), "EXTENSIONS ");
-        foreach (var item in doc.RootElement.GetProperty("extensions").EnumerateArray())
-            if (item.GetProperty("id").GetString() == "example.probe" && !item.GetProperty("closing").GetBoolean()) return item.Clone();
-        return null;
-    }
-    async Task<JsonElement> AwaitRevision(string revision)
-    {
-        var timer = Stopwatch.StartNew();
-        while (timer.Elapsed < TimeSpan.FromSeconds(45))
-        {
-            var probe = Probe();
-            if (probe is { } found && found.GetProperty("version").GetString() == revision) return found;
-            await Task.Delay(500);
-        }
-        throw new TimeoutException("Probe revision did not register: " + revision);
+        var found = await ExtensionReload.WaitForReplacement(control, "example.probe", revision, replacing, TimeSpan.FromSeconds(45), poll);
+        evidence.Add(new { registered = found });
+        return found;
     }
     JsonElement Hello()
     {
@@ -65,8 +55,7 @@ try
     {
         control.InvalidateEnvironment();
         ownsProbe = true;
-        File.Copy(source, deployed + ".incoming", true);
-        File.Move(deployed + ".incoming", deployed, true);
+        ExtensionReload.Install(source, deployed);
         evidence.Add(new { installed = Path.GetFileName(source), sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(deployed))) });
     }
     void Require(bool condition, string description)
@@ -76,8 +65,8 @@ try
     }
     Install(args[1]);
     await control.WaitForEnvironment(pinsA, TimeSpan.FromSeconds(45));
-    var first = await AwaitRevision("0.1.0");
-    string firstInstance = first.GetProperty("instance").GetString()!;
+    var first = await AwaitRevision("0.1.0", null);
+    string firstInstance = first.Instance;
     var helloA = Hello();
     Require(helloA.GetProperty("instance").GetString() == firstInstance && helloA.GetProperty("data").GetProperty("leases").GetInt32() == 1, "A owns exactly one live resource");
     Run("cli_extension example.probe/removed");
@@ -92,8 +81,8 @@ try
     }
     Install(args[2]);
     await control.WaitForEnvironment(pinsB, TimeSpan.FromSeconds(45));
-    var second = await AwaitRevision("0.2.0");
-    Require(second.GetProperty("instance").GetString() != firstInstance, "B has a fresh registration identity");
+    var second = await AwaitRevision("0.2.0", firstInstance);
+    Require(second.Instance != firstInstance, "B has a fresh registration identity");
     var cancelled = await pending.WaitAsync(TimeSpan.FromSeconds(20));
     evidence.Add(new { cancelled.Ok, cancelled.ErrorCode, cancelled.Output });
     using (var doc = GameActor.ParseLine(cancelled, "EXTENSION_RESULT "))
@@ -110,12 +99,7 @@ try
     control.InvalidateEnvironment();
     File.Delete(deployed);
     await control.WaitForEnvironment(baselinePins, TimeSpan.FromSeconds(45));
-    var removalTimer = Stopwatch.StartNew();
-    while (Probe() != null)
-    {
-        if (removalTimer.Elapsed > TimeSpan.FromSeconds(30)) throw new TimeoutException("Deleted probe remains registered");
-        await Task.Delay(500);
-    }
+    await ExtensionReload.WaitForRemoval(control, "example.probe", TimeSpan.FromSeconds(30), poll);
     Require(Run("cli_build").Output.SequenceEqual(originalBuild), "CLI still answers after complete extension removal");
     passed = true;
     Console.WriteLine("PASS: A -> B reload, active cancellation, resource cleanup, removed command, stable core and connection, final unregister.");
