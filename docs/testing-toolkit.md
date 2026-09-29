@@ -209,6 +209,24 @@ The native paint extension has now been exercised on Valheim 1.0.16: sixteen sav
 
 The four-pack layout also passed join and confirmed-save paths. Optional Reflection was removed and reloaded in a loaded dedicated world over the same connection; only its owner identity changed. This establishes lifecycle behavior, not reclamation of loaded assemblies. Native checks exposed a missing Mono verification build setting in the packs, which is corrected in ValheimCLI #40.
 
+## Pinned server runner
+
+`PinnedServerRun.MainAsync` is the lifecycle of a mod's owned dedicated-server test runner, so the mod's `Program.cs` supplies only its plan fields, modes and scenarios. Usage is `<runner> validate|run|<prepare modes> <plan.json> <new-output-directory>`. A plan derives from `ServerRunPlan`, which is read strictly (unknown fields refused), and `ValidateServerPlan` applies the rules every pinned plan follows:
+- pinned sources, and port and time bounds;
+- a known executable;
+- no runner-owned token or Doorstop variable in the environment;
+- `-batchmode -nographics` and exactly one `-savedir {world}`;
+- strict pins, with `worlduid` and an exact MD5 for every plugin.
+
+The runner then:
+1. refuses an existing output directory, and checks the host before copying;
+2. copies and verifies the runtime and world, recording plan, runner and toolkit hashes, mode, platform and input hashes;
+3. stops there for `validate`;
+4. otherwise checks the CLI port and starts the owned session on the copies, with per-boot logs, recorded commands and `DedicatedStartupEvents`, then enables devcommands through the session capability and runs the scenario;
+5. always stops only the owned server, writes `result.json` and `junit.xml`, and prints PASS (only for `run`), VALIDATED or PREPARED, or FAIL.
+
+Ctrl+C and SIGTERM cancel the run. Options name the session capability and token variable, gate modes against the plan (`CheckMode`) and add provenance.
+
 ## Test fakes
 
 `Valheim.Testing.Game.Fakes` tests scenario and session code without a game:
