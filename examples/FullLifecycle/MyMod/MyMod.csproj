@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The example mod: a BepInEx plugin. Its decision is ModWithTests' DrySiteRule, compiled from that same file. -->
+  <Import Project="../game-references.props" />
+  <PropertyGroup><AssemblyName>MyMod</AssemblyName><Version>0.1.0</Version></PropertyGroup>
+  <ItemGroup><Compile Include="../../ModWithTests/MyMod/DrySiteRule.cs" Link="DrySiteRule.cs" /></ItemGroup>
+</Project>

@@ -1,0 +1,28 @@
+{
+  "scenario": "dry-site-lifecycle",
+  "runtime": { "source": "C:\\vt-fixtures\\server-runtime", "sha256": { "valheim_server.exe": "<sha256 of every file, from WorldFixture.Manifest>" } },
+  "world": { "source": "C:\\vt-fixtures\\world", "sha256": { "worlds_local/Fixture.db": "<sha256>", "worlds_local/Fixture.fwl": "<sha256>", "adminlist.txt": "<sha256>" } },
+  "arguments": ["-batchmode", "-nographics", "-name", "MyModTest", "-port", "2456", "-world", "Fixture", "-password", "<fixture password>", "-savedir", "{world}", "-public", "0"],
+  "environment": {},
+  "pins": {
+    "worlduid": "<the fixture world's UID>",
+    "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",
+    "example.mymod": "<md5 of MyMod.dll>",
+    "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+  },
+  "port": 5577,
+  "drySite": { "x": 120, "z": -380, "ground": 45.2 },
+  "wetSite": { "x": 900, "z": 150, "ground": 18.4 },
+  "arrival": { "x": 125, "z": -380, "ground": 45.0 },
+  "client": {
+    "mode": "owned",
+    "install": "C:\\vt-fixtures\\client",
+    "launchArguments": ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"],
+    "port": 5556,
+    "pins": { "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>", "example.mymod": "absent" },
+    "join": "127.0.0.1:2456",
+    "character": "mymodtester",
+    "passwordVariable": "MYMOD_TEST_PASSWORD"
+  },
+  "review": { "enabled": false, "seconds": 600 }
+}

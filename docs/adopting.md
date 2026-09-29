@@ -36,6 +36,8 @@ If your mod has no CI yet, copy the example's [workflow](../examples/ModWithTest
 
 ## Add one native check only when needed
 
+[FullLifecycle](../examples/FullLifecycle/README.md) shows the whole path on one small feature: the unit test, integration tests of the scenario against scripted replies, and a native run with an owned server and an owned or attached client through save, restart and rejoin, plus an optional human look. Copy its layout; the steps below explain the choices.
+
 For a mod that writes terrain on the server, a useful next check is: “the client without my mod sees the declared ground and paint, including after a save/restart.” For another kind of mod, replace this with one observable behavior at its actual game boundary.
 
 1. **Define the expectation in your mod repository.** Choose a small disposable fixture and expected values independently of the observer. Use the sample plan schema in [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md) or [PaintCheck](../examples/PaintCheck/README.md); sample coordinates are illustrative, not universal game sites.
