@@ -209,10 +209,9 @@ public partial class Heightmap
     }
 }
 
-/// <summary>Shim for UnityEngine.Transform: only the position is read.</summary>
+/// <summary>Shim for UnityEngine.Transform. Its position and hierarchy are in UnityComponentDoubles.cs.</summary>
 public partial class Transform
 {
-    public UnityEngine.Vector3 position;
 }
 
 /// <summary>
