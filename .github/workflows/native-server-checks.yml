@@ -16,6 +16,9 @@ on:
   schedule:
     - cron: '23 3 * * *'   # Nightly: always runs the checks.
     - cron: '53 */4 * * *' # Watch: runs the checks only for a build id not checked yet. Keep in step with WATCH_CRON below.
+  # TEMPORARY while the PR is open: registers the workflow so it can run before it is on the default branch. Remove before merge.
+  pull_request:
+    paths: ['.github/workflows/native-server-checks.yml', '.github/scripts/**', 'examples/FullLifecycle/**']
   workflow_dispatch:
     inputs:
       negative_control:
