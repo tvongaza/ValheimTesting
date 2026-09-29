@@ -194,19 +194,34 @@ public static partial class Mathf
     }
 }
 
-/// <summary>Shim for UnityEngine.Quaternion: the Euler angles the bridge code builds it from.</summary>
+/// <summary>
+/// Shim for UnityEngine.Quaternion: its components, which a package carries, and the Euler angles the bridge code builds
+/// it from. <see cref="Euler"/> sets both, in Unity's rotation order (z, then x, then y); a quaternion read back from a
+/// package has its components only.
+/// </summary>
 public partial struct Quaternion
 {
+    public float x, y, z, w;
     public float EulerX, EulerY, EulerZ;
-    public static Quaternion Euler(float x, float y, float z) => new() { EulerX = x, EulerY = y, EulerZ = z };
+    public Quaternion(float x, float y, float z, float w) { this.x = x; this.y = y; this.z = z; this.w = w; EulerX = EulerY = EulerZ = 0f; }
+    public static Quaternion identity => new(0f, 0f, 0f, 1f);
+    public static Quaternion Euler(float x, float y, float z)
+    {
+        double hx = x * System.Math.PI / 360.0, hy = y * System.Math.PI / 360.0, hz = z * System.Math.PI / 360.0;
+        double cx = System.Math.Cos(hx), sx = System.Math.Sin(hx), cy = System.Math.Cos(hy), sy = System.Math.Sin(hy), cz = System.Math.Cos(hz), sz = System.Math.Sin(hz);
+        return new Quaternion(
+            (float)(sx * cy * cz + cx * sy * sz), (float)(cx * sy * cz - sx * cy * sz),
+            (float)(cx * cy * sz - sx * sy * cz), (float)(cx * cy * cz + sx * sy * sz)) { EulerX = x, EulerY = y, EulerZ = z };
+    }
 }
 
 /// <summary>
 /// Shim for UnityEngine.Object: instantiation, destruction and Unity's "fake null". As in Unity, a destroyed object
 /// is still a live C# reference but its overloaded <c>==</c>, <c>!=</c>, <c>Equals</c> and <c>bool</c> conversion say
 /// it is null; <c>is null</c>, <c>?.</c> and <c>??</c> do not use the overload and see a real reference. Engine members
-/// (<c>name</c>, <c>gameObject</c>, <c>GetComponent</c>) of a destroyed object throw <see cref="MissingReferenceException"/>;
-/// a component's own C# fields and methods keep working, as they do in Unity.
+/// (<c>name</c>, <c>gameObject</c>, <c>GetComponent</c>) of a destroyed object throw a <see cref="System.NullReferenceException"/>,
+/// as the game's player does (the modding wiki's Best-Practices page, "Do NOT use null operators on GameObject", shows
+/// the log); a component's own C# fields and methods keep working, as they do in Unity.
 /// <c>Destroy</c> is deferred as Unity's is: the object stays alive until the test ends the frame with
 /// <see cref="EndOfFrame"/>. <c>DestroyImmediate</c> destroys at once.
 /// </summary>
@@ -269,8 +284,8 @@ public partial class Object
     private protected void ThrowIfDestroyed()
     {
         if (Destroyed)
-            throw new MissingReferenceException(
-                $"The object of type '{GetType().Name}' has been destroyed but you are still trying to access it. " +
+            throw new System.NullReferenceException(
+                $"Object reference not set to an instance of an object: the {GetType().Name} '{NameHolder.m_name}' was destroyed. " +
                 "Check it with == null or its bool conversion; ?. and is null do not see a destroyed object.");
     }
 
@@ -291,7 +306,10 @@ public partial class Object
     public override int GetHashCode() => base.GetHashCode();
 }
 
-/// <summary>Shim for UnityEngine.MissingReferenceException: an engine member used on a destroyed object.</summary>
+/// <summary>
+/// Shim for UnityEngine.MissingReferenceException, so code that names it compiles. The doubles never throw it: the
+/// game's player throws a NullReferenceException for a destroyed object (see <see cref="Object"/>).
+/// </summary>
 public partial class MissingReferenceException : System.SystemException
 {
     public MissingReferenceException() { }
@@ -352,12 +370,12 @@ public partial class GameObject : Object
         return copy;
     }
 
-    // A destroyed object's components go with it, and it leaves the live scene.
+    // A destroyed object's components go with it. It stays in ZNetScene.Live, as in the game, where only ZNetScene
+    // removes an instance; a plain Destroy leaves a destroyed view there.
     private protected override void OnDestroyed()
     {
         DestroyImmediate(View);
         DestroyImmediate(Wear);
-        global::ZNetScene.instance?.Live.Remove(this);
     }
 }
 

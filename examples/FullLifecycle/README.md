@@ -50,6 +50,21 @@ The runner prints `PASS` or `FAIL` and exits 0 only on a pass. Every run writes 
 3. **A client install** with BepInEx and ValheimCLI (core and the Standard pack) only: the mod is pinned `absent`, because the claim is that a client without it sees the marker. Its ValheimCLI port differs from the server's, and its ValheimCLI settings include `AllowOnServerClients = true`: Valheim 1.0 refuses a joined client's cheat commands whatever the server's admin list says, and this ValheimCLI opt-in is what lets its test commands (protection, object listing) run there. It needs an existing, disposable local character; never use a Steam Cloud character.
 4. **The plan**: start from [sample-plan.json](MyMod.SystemTests/sample-plan.json) and replace every path, hash and coordinate.
 
+## The server half alone
+
+With `"scenario": "dry-site-server"` the runner runs only the server steps: no marker before, the mod marks the dry site and refuses the wet one (each asked once), the saved objects show it, confirmed save, restart of only the owned server, the marker is still there and the wet site still empty. The plan has no `client`, `review` or `arrival` section; a client section is refused, because nothing here looks from a client. The result says only that the mod and its adapter load on that server and the marker persists; it says nothing about what a client sees.
+
+Nobody needs to prepare a fixture for it by hand:
+
+```sh
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- prepare-server <server-runtime> <new-output-directory>
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- run <that-directory>/plan.json <another-new-output-directory>
+```
+
+`prepare-server` takes a server runtime with BepInEx, ValheimCLI (core, Standard, WorldTools; `[Server] Port = 5577`), the mod and the adapter and nothing else in `BepInEx/plugins`. It pins the runtime by hash and those five plugins by MD5, starts one owned server on a copy (the game creates a new world; this boot accepts any world, the plugins stay strictly pinned), reads the world uid and picks the sites from the world generator's heights through ValheimCLI's `valheim.world/terrain-grid`, never from the mod: the dry site at least 3 m above the rule's 31.5 m, the wet one at least 3 m below, the closest such samples to the world's centre, 50 m apart. It confirms a save, stops its server and writes `plan.json`. It prints `PREPARED`, never `PASS`: preparing is not the test. The plan holds a generated throwaway server password; share the reports, not the plan.
+
+The repository's [scheduled server checks](../../docker/linux-server/README.md#scheduled-checks-in-ci) run exactly these two commands in the Linux server image every night.
+
 ## Owned or attached client
 
 - **`owned`**: the runner launches the client from `client.install` and stops that process, and only that process, when the scenario ends, whether it passed or failed. It refuses before launching if something already listens on the client's CLI port, if no Steam client is running, or if the join password variable is missing from its own environment (the client inherits it). The runner must run **in the desktop session where Steam is running and signed in**, with a display: a client started from a service, a scheduled task without a desktop, or a plain SSH session cannot open a window or reach Steam.

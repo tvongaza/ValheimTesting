@@ -6,7 +6,11 @@
 // ReSharper disable InconsistentNaming
 // Valheim types. WorldGenerator is virtual so tests plug in synthetic worlds.
 
-/// <summary>Mirror of Valheim's string.GetStableHashCode extension (Utils).</summary>
+/// <summary>
+/// Mirror of Valheim's string.GetStableHashCode extension (Utils), the same result as the game's for every string:
+/// two djb2-style accumulators over alternate UTF-16 code units, stopping at the end or at a '\0'. ZDO values,
+/// prefabs and ZDOVars are keyed by it.
+/// </summary>
 public static partial class StringExtensionMethods
 {
     public static int GetStableHashCode(this string str)
@@ -210,7 +214,10 @@ public partial class Transform
 {
 }
 
-/// <summary>Shim for ZNetView: one ZDO behind it, ours unless a test says otherwise. Its <c>gameObject</c> is null for a view a test builds around a bare ZDO.</summary>
+/// <summary>
+/// Shim for ZNetView: one ZDO behind it, ours unless a test says otherwise. Its RPCs are in NetworkDoubles.cs. Its
+/// <c>gameObject</c> is null for a view a test builds around a bare ZDO.
+/// </summary>
 public partial class ZNetView : UnityEngine.MonoBehaviour
 {
     public ZDO Zdo;
@@ -218,30 +225,39 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
     public static bool GhostInit { get; private set; }
     public static void StartGhostInit() => GhostInit = true;
     public static void FinishGhostInit() => GhostInit = false;
-    public ZNetView(ZDO zdo) { Zdo = zdo; }
+    public ZNetView(ZDO zdo) { Zdo = zdo; if (zdo != null) zdo.m_view = this; }
     public bool IsValid() => Zdo != null;
     public bool IsOwner() => Zdo.IsOwner();
     public bool HasOwner() => Zdo.HasOwner();
     public void ClaimOwnership() { if (!IsOwner()) Zdo.SetOwner(ZDOMan.instance?.m_sessionID ?? 1); }
     public ZDO GetZDO() => Zdo;
-}
-
-/// <summary>Mirror of Valheim's ZDOID, as far as the road code prints it.</summary>
-public partial struct ZDOID : System.IEquatable<ZDOID>
-{
-    public long ID;
-    /// <summary>No object; what a peer's character id is before it spawns.</summary>
-    public static ZDOID None => default;
-    public bool IsNone() => ID == 0;
-    public override string ToString() => ID.ToString();
-    public bool Equals(ZDOID other) => ID == other.ID;
-    public override bool Equals(object? obj) => obj is ZDOID other && Equals(other);
-    public override int GetHashCode() => ID.GetHashCode();
+    /// <summary>As the game's: the view lets go of its ZDO, so GetZDO() returns null and IsValid() false.</summary>
+    public void ResetZDO() => Zdo = null!;
 }
 
 /// <summary>
-/// Shim for a Valheim ZDO: the typed key/value bag the road code stores its
-/// network and per-zone markers in. Only the members the mod calls.
+/// Mirror of Valheim's ZDOID: the creating session's id and the object's number (a uint in the game, which is how a
+/// package carries it). The doubles' ZDOs number themselves and leave the session id 0.
+/// </summary>
+public partial struct ZDOID : System.IEquatable<ZDOID>
+{
+    public long UserID;
+    public long ID;
+    public ZDOID(long userID, uint id) { UserID = userID; ID = id; }
+    /// <summary>No object; what a peer's character id is before it spawns.</summary>
+    public static ZDOID None => default;
+    public bool IsNone() => UserID == 0 && ID == 0;
+    public override string ToString() => ID.ToString();
+    public bool Equals(ZDOID other) => UserID == other.UserID && ID == other.ID;
+    public override bool Equals(object? obj) => obj is ZDOID other && Equals(other);
+    public override int GetHashCode() => ID.GetHashCode();
+    public static bool operator ==(ZDOID a, ZDOID b) => a.Equals(b);
+    public static bool operator !=(ZDOID a, ZDOID b) => !a.Equals(b);
+}
+
+/// <summary>
+/// Shim for a Valheim ZDO: a networked object's identity, owner and position, and its typed values
+/// (ZdoDoubles.cs), which are keyed by name hash as the game keys them.
 /// </summary>
 public partial class ZDO
 {
@@ -252,11 +268,6 @@ public partial class ZDO
     private int m_prefab;
     private long m_owner;
     private UnityEngine.Vector3 m_position;
-    private readonly System.Collections.Generic.Dictionary<int, int> m_ints = new();
-    private readonly System.Collections.Generic.Dictionary<int, long> m_longs = new();
-    private readonly System.Collections.Generic.Dictionary<int, byte[]> m_byteArrays = new();
-    private readonly System.Collections.Generic.Dictionary<int, string> m_strings = new();
-    private readonly System.Collections.Generic.Dictionary<string, float> m_namedFloats = new();
 
     public ZDO(UnityEngine.Vector3 position, int prefab)
     {
@@ -274,18 +285,7 @@ public partial class ZDO
     public UnityEngine.Vector3 GetPosition() => m_position;
     public Vector2s GetSector() => ZoneSystem.GetZone(m_position);
     public void SetPosition(UnityEngine.Vector3 position) => m_position = position;
-
-    public void Set(int hash, int value) => m_ints[hash] = value;
-    public int GetInt(int hash, int defaultValue = 0) => m_ints.TryGetValue(hash, out int v) ? v : defaultValue;
-    public void Set(int hash, long value) => m_longs[hash] = value;
-    public long GetLong(int hash, long defaultValue = 0L) => m_longs.TryGetValue(hash, out long v) ? v : defaultValue;
-    public void Set(int hash, byte[] value) => m_byteArrays[hash] = value;
-    public byte[]? GetByteArray(int hash, byte[]? defaultValue = null) =>
-        m_byteArrays.TryGetValue(hash, out var v) ? v : defaultValue;
-    public void Set(int hash, string value) => m_strings[hash] = value;
-    public string GetString(int hash, string defaultValue = "") => m_strings.TryGetValue(hash, out var v) ? v : defaultValue;
-    public void Set(string name, float value) => m_namedFloats[name] = value;
-    public float GetFloat(string name, float defaultValue = 0f) => m_namedFloats.TryGetValue(name, out float v) ? v : defaultValue;
+    // The typed values, keyed by hash, and what a save and reload keep of them: ZdoDoubles.cs.
 }
 
 /// <summary>Shim for ZDOMan: the world's ZDOs as a list. Tests create one per world.</summary>
@@ -512,6 +512,7 @@ public partial class ZoneSystem
     {
         public ZoneLocation m_location;
         public UnityEngine.Vector3 m_position;
+        public bool m_placed; // spawned in its zone; generation registers a location unplaced
     }
 
     public System.Collections.Generic.List<LocationInstance> Locations = new();

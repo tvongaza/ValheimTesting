@@ -471,10 +471,10 @@ public partial class Container : MonoBehaviour
         m_nview = GetComponent<ZNetView>();
         if (m_nview!.GetZDO() is not { } zdo) return;
         m_inventory = new Inventory(m_name, null, m_width, m_height);
-        bool filled = zdo.GetInt(ZDOVars.s_addedDefaultItems) != 0;
+        bool filled = zdo.GetBool(ZDOVars.s_addedDefaultItems);
         if (filled || !m_nview.IsOwner()) return;
         m_defaultItems.GetDropListItems().ForEach(item => m_inventory.AddItem(item));
-        zdo.Set(ZDOVars.s_addedDefaultItems, 1);
+        zdo.Set(ZDOVars.s_addedDefaultItems, true);
     }
     public Inventory GetInventory() => m_inventory!;
 }
@@ -511,11 +511,11 @@ public partial class Pickable : MonoBehaviour
     {
         m_nview = GetComponent<ZNetView>();
         if (m_nview!.GetZDO() is not { } zdo) return;
-        m_picked = zdo.GetInt(ZDOVars.s_picked, m_defaultPicked ? 1 : 0) != 0;
-        if (m_enabled != 2) { if (m_nview.IsOwner()) zdo.Set(ZDOVars.s_enabled, m_enabled == 1 ? 1 : 0); }
-        else m_enabled = zdo.GetInt(ZDOVars.s_enabled, 1) != 0 ? 1 : 0;
+        m_picked = zdo.GetBool(ZDOVars.s_picked, m_defaultPicked);
+        if (m_enabled != 2) { if (m_nview.IsOwner()) zdo.Set(ZDOVars.s_enabled, m_enabled == 1); }
+        else m_enabled = zdo.GetBool(ZDOVars.s_enabled, true) ? 1 : 0;
         ShowPart(!m_picked && m_enabled == 1);
-        bool leftOverFromAPick = !KeepsObjectWhenPicked && zdo.GetInt(ZDOVars.s_picked) != 0;
+        bool leftOverFromAPick = !KeepsObjectWhenPicked && zdo.GetBool(ZDOVars.s_picked);
         if (leftOverFromAPick) { m_nview.ClaimOwnership(); ZNetScene.instance!.Destroy(gameObject); }
     }
     private void ShowPart(bool show) { if (m_hideWhenPicked) m_hideWhenPicked!.SetActive(show); }
@@ -528,7 +528,7 @@ public partial class Pickable : MonoBehaviour
         m_picked = picked;
         ShowPart(!picked);
         if (!m_nview || !m_nview!.IsOwner()) return;
-        if (KeepsObjectWhenPicked) m_nview.GetZDO().Set(ZDOVars.s_picked, picked ? 1 : 0);
+        if (KeepsObjectWhenPicked) m_nview.GetZDO().Set(ZDOVars.s_picked, picked);
         else if (picked) ZNetScene.instance!.Destroy(gameObject);
     }
     public bool GetPicked() => m_picked;
@@ -537,7 +537,7 @@ public partial class Pickable : MonoBehaviour
     public void SetEnabled(int value)
     {
         m_enabled = value;
-        if (m_nview && m_nview!.IsOwner() && m_nview.GetZDO() != null) m_nview.GetZDO().Set(ZDOVars.s_enabled, enabled ? 1 : 0);
+        if (m_nview && m_nview!.IsOwner() && m_nview.GetZDO() != null) m_nview.GetZDO().Set(ZDOVars.s_enabled, enabled);
     }
     /// <summary>True while the hidden part is showing, otherwise when unpicked and enabled.</summary>
     public bool CanBePicked() => (m_hideWhenPicked && m_hideWhenPicked!.activeInHierarchy) || (!m_picked && m_enabled == 1);

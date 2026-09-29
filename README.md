@@ -4,7 +4,7 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 
 > Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
 
-Bringing your own mod? Start with [the adoption guide](docs/adopting.md) and [a complete first mod test](examples/ModWithTests/README.md). Use [package setup](docs/getting-started.md) and the [example index](examples/README.md) for the next layer. Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually.
+Bringing your own mod? Start with [the adoption guide](docs/adopting.md) and [a complete first mod test](examples/ModWithTests/README.md). Use [package setup](docs/getting-started.md) and the [example index](examples/README.md) for the next layer. Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually. Before a native run, read the [runtime hygiene and evidence checklist](docs/runtime-hygiene.md).
 
 ## Contribute
 
@@ -18,10 +18,12 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 
 | Package | Purpose | Runtime |
 |---|---|---|
-| `Valheim.Testing` | Composable terrain, multi-zone height/paint fixtures and exact recorded-input replay; no ValheimCLI dependency | netstandard2.0 |
+| `Valheim.Testing` | Composable terrain, multi-zone height/paint fixtures, exact recorded-input replay, grid dumps, terrain rendering and parity checks; no ValheimCLI dependency | netstandard2.0 |
 | `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net10.0 |
 | `Valheim.Testing.Cli` | ValheimCLI's client transport and YAML runner, packaged unchanged from pinned ValheimCLI source (MIT, warp) | net10.0 |
 | `Valheim.Testing.Doubles` | Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, compiled into your test project; every type is partial | source (C# 10) |
+| `Valheim.Testing.Bindings` | Offline check that a built mod's references into the game assemblies still bind (Mono.Cecil); missing members fail, access changes are reported separately | netstandard2.0 |
+| `Valheim.Testing.Bindings.Tool` | The same check as the `valheim-bindings` .NET tool, for a mod's CI before any native run | net10.0 |
 
 The dependency goes **ValheimTesting → ValheimCLI**, never the reverse. Game-side extension API and observers stay in ValheimCLI. Roads and MWL own their optional adapters and scenarios. No test package belongs in an ordinary player's plugin folder.
 
@@ -41,23 +43,23 @@ dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.6`, `Valheim.Testing.Game` `0.1.0-preview.11` (net10.0) or `Valheim.Testing.Doubles` `0.1.0-preview.4`; the transport is `Valheim.Testing.Cli` `0.1.0-preview.5`. All restore from NuGet.org. Use the local feed only to try a build that is not yet published.
+`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.6`, `Valheim.Testing.Game` `0.1.0-preview.12` (net10.0) or `Valheim.Testing.Doubles` `0.1.0-preview.4`, and compile `Valheim.Testing.Adapter` `0.1.0-preview.1` into a game-side test adapter; the transport is `Valheim.Testing.Cli` `0.1.0-preview.5`. All restore from NuGet.org. Use the local feed only to try a build that is not yet published.
 
 ## Platforms
 
 | Host | Toolkit and tests | Game client (`ClientLaunch`, driven by ValheimCLI) | Dedicated server (native) | Server in a container | Remote server host |
 |---|---|---|---|---|---|
-| Windows | Yes; CI | Yes, `valheim.exe` | Yes, `valheim_server.exe` | Linux image; not tested on Windows | Coming next (SSH, host profiles) |
-| Linux | Yes; CI | Yes, `valheim.x86_64`; needs a display ([docker/linux-client](docker/linux-client/README.md) on an NVIDIA GPU host) | Yes, `valheim_server.x86_64` | Yes, [docker/linux-server](docker/linux-server/README.md); verified | Coming next (SSH, host profiles) |
-| macOS | Yes; CI | Yes, `Valheim.app`; x86_64 under Rosetta; native arm64 needs a universal Doorstop | **No**: there is no macOS dedicated server | Experimental: x86-64 emulation on Apple Silicon | Recommended; coming next (SSH, host profiles) |
+| Windows | Yes; CI | Yes, `valheim.exe` | Yes, `valheim_server.exe` | Linux image; not tested on Windows | SSH game host and environment profile (preview 13); no native remote run yet |
+| Linux | Yes; CI | Yes, `valheim.x86_64`; needs a display ([docker/linux-client](docker/linux-client/README.md) on an NVIDIA GPU host) | Yes, `valheim_server.x86_64` | Yes, [docker/linux-server](docker/linux-server/README.md); verified | SSH game host and environment profile (preview 13); no native remote run yet |
+| macOS | Yes; CI | Yes, `Valheim.app`; x86_64 under Rosetta; native arm64 needs a universal Doorstop | **No**: there is no macOS dedicated server | Experimental: x86-64 emulation on Apple Silicon | Recommended: SSH game host and environment profile (preview 13); no native remote run yet |
 
 The toolkit needs only the .NET 10 SDK on every host, and CI runs bootstrap and validation on all three. `ClientLaunch` builds a BepInEx game-client launch (Doorstop loader checks and variables, `-console`, `SteamAppId`) from a client install on its own OS, and `ServerLaunch` does the same for a dedicated server; each refuses the other's install and names the right one. `ClientLaunch` only builds the launch: a client needs an interactive desktop session with a display and a running Steam client, so starting it there is left to a host adapter (see [the toolkit notes](docs/testing-toolkit.md#game-client-launch-preview-11)). On a Mac, run the tests and a Mac client locally and put the dedicated server on a Windows or Linux machine; `ServerLaunch` refuses to launch a server on a macOS host, and refuses a `Valheim.app` client passed as a server runtime, with that guidance.
 
 ## Linux and containers
 
-Owned dedicated-server checks can run on Linux as well as Windows. `ServerLaunch` detects a copied server runtime's platform from its executable (`valheim_server.exe` or `valheim_server.x86_64`) and builds the direct launch that `DirectServerProcess` and `OwnedServerSession` own, including BepInEx's Doorstop variables on Linux. It is new in `Valheim.Testing.Game` `0.1.0-preview.11`. [docker/linux-server](docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10, and the manual [Linux workflow](.github/workflows/native-linux.yml) boots it once with [LinuxServerSmoke](examples/LinuxServerSmoke/README.md). The image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026 (server build 25527701); on Apple Silicon the image runs only under emulation and remains experimental.
+Owned dedicated-server checks can run on Linux as well as Windows. `ServerLaunch` detects a copied server runtime's platform from its executable (`valheim_server.exe` or `valheim_server.x86_64`) and builds the direct launch that `DirectServerProcess` and `OwnedServerSession` own, including BepInEx's Doorstop variables on Linux. It is new in `Valheim.Testing.Game` `0.1.0-preview.11`. [docker/linux-server](docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10, and the manual [Linux workflow](.github/workflows/native-linux.yml) boots it once with [LinuxServerSmoke](examples/LinuxServerSmoke/README.md). The [scheduled server checks](docker/linux-server/README.md#scheduled-checks-in-ci) run that smoke and the [FullLifecycle](examples/FullLifecycle/README.md#the-server-half-alone) example's server half every night and after each new public server build, and keep one tracking issue open while they fail. The image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026 (server build 25527701); on Apple Silicon the image runs only under emulation and remains experimental.
 
-Linux game clients can run on a remote NVIDIA GPU host using the [client container](docker/linux-client/README.md), which supplies a display and Steam setup but no game files. General remote-host provisioning/orchestration over SSH is not supplied by the library; the operator still manages the host and account.
+Linux game clients can run on a remote NVIDIA GPU host using the [client container](docker/linux-client/README.md), which supplies a display and Steam setup but no game files. `Valheim.Testing.Game` `0.1.0-preview.13` adds an [environment profile and game hosts](docs/testing-toolkit.md#game-hosts-and-environment-profiles-preview-13) (local, SSH, container): run scripts, take a host lock, ship a revision, follow a log, fetch evidence and reach a loopback-only ValheimCLI through an SSH tunnel. The launch and session classes do not use them yet, and provisioning the host and its account stays with the operator.
 
 Server images contain Valheim's game files. Build them locally or in the CI job that uses them; never push, upload or publish an image, layer or server directory.
 
