@@ -11,7 +11,7 @@ namespace Valheim.Testing.Game;
 /// <item>waits until the server accepts game connections (only now, so the steps before overlap a first boot's late socket);</item>
 /// <item>joins with the plan's disposable character (devcommands first, exactly once), verifies the client's world pins and
 /// waits for the world;</item>
-/// <item>protects the player and, with an <see cref="Arrival"/>, has it arrive there (<c>{round}-arrival.json</c>);</item>
+/// <item>joins, which protects the player once the world is ready (<see cref="SessionControl.WaitForWorld"/>), and, with an <see cref="Arrival"/>, has it arrive there (<c>{round}-arrival.json</c>);</item>
 /// <item>runs the mod's measurement, which adds its own steps and evidence through <see cref="ClientRound"/>;</item>
 /// <item>between rounds: a confirmed world save, the client leaves to its menu, only the owned server restarts, and the
 /// optional after-restart check runs; after the last round the client leaves.</item>
@@ -95,13 +95,13 @@ public sealed class ClientRounds
     {
         var session = new SessionControl(round.Client);
         round.Step("the server accepts game connections", () => WaitUntilJoinable(round.Server));
-        round.Step("join the owned server with the disposable character", () =>
+        round.Step("join the owned server with the disposable character, protected", () =>
         {
             session.Join(Client.Join, Client.Character, Client.PasswordVariable); // Turns devcommands on first. Exactly once; a lost reply is an unknown outcome.
             round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
+            // Protects the player once the world is ready (god, ghost, debug mode, read back); fly stays off.
             session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
         });
-        round.Step("protect the player", () => PlayerPlacement.Protect(round.Client));
         if (Arrival is { } point)
             round.Step(ArriveStep, () => round.Write("arrival",
                 PlayerPlacement.Arrive(round.Server, round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor)));
