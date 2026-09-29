@@ -165,6 +165,10 @@ public class SessionTests
     [InlineData("ERROR: EnvMan is not ready")]
     [InlineData("[Info   :MyMod] Loaded type table (TypeLoader 2)")]
     [InlineData("[Warning:MyMod] CLI core is not ready yet, retrying")]
+    [InlineData("[Info   :MyMod] Soft dependency OtherMod not found (MissingMethodException); skipping its integration")]
+    [InlineData("[Debug  :MyMod] Probed optional type OtherMod.Api: TypeLoadException handled")]
+    [InlineData("[Message:MyMod] MissingFieldException is handled for old configs")]
+    [InlineData("  ---> System.TypeLoadException: inner exception of a handled error")]
     public void OrdinaryLinesAreNotStartupFailures(string line) => Assert.DoesNotContain(StartupEvents.StartupFailures, failure => failure.IsMatch(line));
     private const string CleanBoot = "[Message:   BepInEx] BepInEx 5.4.23.2 - valheim_server\n[Info   :   BepInEx] Loading [valheimCLI 1.1.0]\n[Info   :   BepInEx] Loading [My Mod 1.0.0]\n";
     [Theory] [MemberData(nameof(RuntimeLoadFailureLines))]
@@ -203,6 +207,16 @@ public class SessionTests
         using var started = Session(ready, Generous, new StartupEvents { CliLog = clean.Path, Failures = StartupEvents.StartupFailures });
         started.Start();
         Assert.Equal(new[] { "launch1", "probe1", "pins1" }, ready.Events);
+    }
+    // Negative control: a mod's handled soft-dependency message at info level does not abort startup.
+    [Fact] public void AnInfoLineMentioningALoadExceptionDoesNotEndStartup()
+    {
+        using var log = new TempLog();
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = _ => log.Append(CleanBoot +
+            "[Info   :MyMod] Soft dependency OtherMod not found (MissingMethodException); skipping its integration\n" + Listening) };
+        using var session = Session(fake, Generous, new StartupEvents { CliLog = log.Path, Failures = StartupEvents.StartupFailures });
+        session.Start();
+        Assert.Equal(new[] { "launch1", "probe1", "pins1" }, fake.Events);
     }
     [Fact] public void AnExitBeforeBepInExWroteItsLogPointsAtPlayerLogAndSecuritySoftware()
     {

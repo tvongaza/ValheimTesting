@@ -100,6 +100,20 @@ public sealed class LogScanTests : IDisposable
         Assert.Equal(0, Count(elsewhere, "nre-remove-objects").Count); Assert.Equal(2, Count(elsewhere, LogScanner.UnknownError).Count);
         Assert.False(elsewhere.Failed);
     }
+    // HarmonyX skips a legacy instance UnpatchAll() when DisallowLegacyGlobalUnpatchAll is set: nothing was removed.
+    [Fact] public void ASkippedLegacyUnpatchAllIsNotAGlobalUnpatch()
+    {
+        var scan = LogScanner.Scan(Write(Boot + "[Warning:  HarmonyX] Legacy UnpatchAll has been called AND DisallowLegacyGlobalUnpatchAll=true. Skipping execution of UnpatchAll\n" + Tail));
+        Assert.Equal(0, Count(scan, "harmony-unpatch-all").Count); Assert.Equal(1, Count(scan, LogScanner.UnknownWarning).Count);
+        Assert.False(scan.Failed);
+    }
+    [Fact] public void AShaderMissingItsPlatformIsCounted()
+    {
+        var scan = LogScanner.Scan(Write("Desired shader compiler platform 15 is not available in shader blob\n" +
+            "ERROR: Shader Unlit/Color shader is not supported on this GPU (none of subshaders/fallbacks are suitable)\n", "Player.log", required: false));
+        var count = Count(scan, "shader-unsupported");
+        Assert.Equal(2, count.Count); Assert.Equal(1, count.FirstLine); Assert.Equal(LogSeverity.Warning, count.Severity);
+    }
     [Fact] public void OrdinaryLinesMentioningTheWordsAreNotProblems()
     {
         var scan = LogScanner.Scan(Write(Boot +

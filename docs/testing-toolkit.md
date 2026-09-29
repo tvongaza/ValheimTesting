@@ -81,7 +81,7 @@ await log.WaitAsync(StartupEvents.CliListening, TimeSpan.FromMinutes(5), [LogWai
 
 `OwnedServerSession` waits on these when given `Events = new StartupEvents { CliLog = ..., Failures = StartupEvents.StartupFailures, States = () => StateWait.Connect(host, port) }`: no connection before this boot's `Command server listening` line, then the world-loaded push, then the session probe. The process exit is always watched: a server that exits during startup fails it at once with its exit code and the last log line. When that boot wrote nothing to its BepInEx log, the failure says so and points at Unity's player log (`Player.log` or the `-logFile` file) and at security software, a known cause of a game stopped before BepInEx starts. `StartupFailures` ends startup at once on:
 - BepInEx's own "Could not load [" and "Error loading [" lines (`BepInExPluginLoadFailures`), so a pinned runtime with a missing dependency fails at once instead of at the readiness deadline;
-- a `TypeLoadException`, `MissingMethodException` or `MissingFieldException` anywhere in a line, for example a leftover preloader patcher's `Could not load type of field 'ZDO:...'`, and ValheimCLI's packs logging `CLI core 1.1 is not ready.` (`RuntimeLoadFailures`).
+- a `TypeLoadException`, `MissingMethodException` or `MissingFieldException` in a BepInEx warning, error or fatal line, or in an exception line that starts with its name (`System.TypeLoadException: Could not load type of field 'ZDO:...'`, as a leftover preloader patcher causes), and ValheimCLI's packs logging `CLI core 1.1 is not ready.` (`RuntimeLoadFailures`). An info or debug line that only mentions one of these exceptions, such as a mod's handled soft dependency, does not end startup.
 
 A log failure carries the matched line and the five lines read before it (`WaitFailedException.Context`, also in its message). `DedicatedStartupEvents` and owned `ClientSession` launches use `StartupFailures`. Only the adapter's own readiness, which has no event, is re-probed at the poll interval. The startup deadline bounds every step, including a connection or command that blocks: each races the process exit and the time left, a connection that completes after startup gave up is closed, and the final pin verification gets only the time left (at most the command timeout). Without `Events`, connecting keeps its bounded retries. `GameActor.WaitForEnvironment` takes an event too, for example `(left, token) => log.WaitAsync(loadLine, left, cancellation: token)`: it rechecks the pins when the reload's line appears, not every 200 ms.
 
@@ -250,15 +250,17 @@ Many mod failures only log a warning, or appear long after startup. After the pr
 
 | Pattern | Matches | Default |
 |---|---|---|
-| `harmony-unpatch-all` | HarmonyX "UnpatchAll has been called": a mod removed every mod's patches | failure |
+| `harmony-unpatch-all` | HarmonyX "UnpatchAll has been called - This will remove ALL HARMONY PATCHES": a mod removed every mod's patches (not the skipped "Legacy UnpatchAll has been called AND DisallowLegacyGlobalUnpatchAll=true") | failure |
 | `harmony-undefined-target` | HarmonyX "Undefined target method for patch method": the patched method does not exist | failure |
 | `accesstools-not-found` | HarmonyX `AccessTools.*: Could not find ...` (mods also probe optional members this way) | warning |
 | `missing-method`, `missing-field`, `type-load` | `MissingMethodException`, `MissingFieldException`, `TypeLoadException` | failure |
 | `nre-remove-objects` | a `NullReferenceException` whose stack trace (up to a blank line or the next BepInEx header) has `ZNetScene.RemoveObjects` | failure |
 | `rpc-method-missing` | the game's "Failed to find rpc method" for a per-object RPC without a handler | warning |
-| `missing-script` | Unity's "The referenced script ... is missing" (asset bundle scripts not loaded) | warning |
-| `shader-unsupported` | Unity's "not supported on this GPU" and "Shader Unsupported" (magenta bundles on Vulkan or OpenGL clients) | warning |
+| `missing-script` | Unity's own "The referenced script ... is missing" warning (asset bundle scripts not loaded) | warning |
+| `shader-unsupported` | Unity's "Desired shader compiler platform N is not available in shader blob", "not supported on this GPU" and "Shader Unsupported" (magenta bundles on Vulkan or OpenGL clients; wording as in the Valheim-Modding wiki's [Valheim-Unity-Project-Guide](https://github.com/Valheim-Modding/Wiki/wiki/Valheim-Unity-Project-Guide)) | warning |
 | `unknown-warning`, `unknown-error` | BepInEx warning, or error and fatal, lines (with their continuation lines) that match no pattern above | warning |
+
+Owned processes are killed at teardown (`Process.Kill`), not asked to quit, so the scan sees only what was logged during the run. Anything logged while the game shuts down, such as a mod calling UnpatchAll when the game closes (the usual case for that warning), is never written and cannot be counted.
 
 A plan's `"logScan": { "rpc-method-missing": { "severity": "Failure", "reason": "..." } }` changes a severity for that run; the reason is required and recorded beside the count. An absent log has no counts (absent is not zero). A missing required BepInEx log fails the scan: when the game never created it, the message points at the Unity log and at security software; otherwise its process was not stopped by its session, which copies the logs when it stops. Counts are per file, and the same Unity message may appear in both the BepInEx log and `Player.log`. `Player.log` has no levels, so only the named patterns count there. Which lines a clean vanilla or headless run logs, and so which counts to expect, has not been measured on a native run yet.
 

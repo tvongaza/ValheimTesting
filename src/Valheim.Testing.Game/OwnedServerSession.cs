@@ -31,13 +31,16 @@ public sealed class StartupEvents
         [new(@"^\[(?:Warning|Error|Fatal) *: *BepInEx\] (?:Could not load|Error loading) \[", RegexOptions.CultureInvariant)];
     /// <summary>
     /// Lines that mean the runtime's assemblies do not fit the game: a <c>TypeLoadException</c>, <c>MissingMethodException</c>
-    /// or <c>MissingFieldException</c> anywhere in a line (a leftover preloader patcher or a mod built for another game
-    /// version), and ValheimCLI's packs reporting that its core never became ready ("CLI core 1.1 is not ready."). Before
-    /// ValheimCLI listens, all of them mean the run cannot work, so startup should end at once instead of at its deadline.
+    /// or <c>MissingFieldException</c> (a leftover preloader patcher or a mod built for another game version) in a BepInEx
+    /// warning, error or fatal line, or an exception line that starts with its name as Unity and .NET write it
+    /// (<c>System.TypeLoadException: ...</c>); and ValheimCLI's packs reporting that its core never became ready ("CLI core
+    /// 1.1 is not ready."). An info or debug line that only mentions an exception (a mod's handled soft dependency) does not
+    /// count. Before ValheimCLI listens, all of them mean the run cannot work, so startup should end at once instead of at its deadline.
     /// </summary>
     public static readonly IReadOnlyList<Regex> RuntimeLoadFailures =
     [
-        new(@"\b(?:TypeLoadException|MissingMethodException|MissingFieldException)\b", RegexOptions.CultureInvariant),
+        new(@"^\[(?:Warning|Error|Fatal) *:[^\]]*\].*\b(?:TypeLoadException|MissingMethodException|MissingFieldException)\b", RegexOptions.CultureInvariant),
+        new(@"^(?:System\.)?(?:TypeLoadException|MissingMethodException|MissingFieldException): ", RegexOptions.CultureInvariant),
         new(@"^\[(?:Error|Fatal) *:[^\]]*\] CLI core \S+ is not ready\.", RegexOptions.CultureInvariant),
     ];
     /// <summary><see cref="BepInExPluginLoadFailures"/> and <see cref="RuntimeLoadFailures"/>: what the owned server and client startups fail on.</summary>
