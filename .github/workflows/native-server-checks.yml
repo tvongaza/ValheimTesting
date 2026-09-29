@@ -1,0 +1,278 @@
+name: Scheduled native server checks
+# Nightly, and within about four hours of a new public dedicated-server build: builds the private image in
+# docker/linux-server on the runner (anonymous SteamCMD, pinned BepInExPack), then in fresh containers of it runs
+# LinuxServerSmoke and the FullLifecycle example's server half (the dry-site-server scenario: ValheimCLI and the example
+# mod built against this server's assemblies, a new world, mark, refuse, confirmed save, restart). It reports the
+# server's Steam build id and uploads logs and reports only. On a failed scheduled run it opens or updates one tracking
+# issue. What it cannot cover: no game client and no Steam login, so nothing about joining, what a client sees, crossplay
+# or the Windows server.
+#
+# No game files leave the runner: the image is never pushed, saved, cached or uploaded, and the artifact holds only
+# .json/.jsonl/.xml/.log files (checked before upload). The only cache is the last checked build id, a text file. No
+# secrets. The token is read-only except in the tracking-issue job, which alone gets issues: write and runs only for
+# a scheduled run, or a manual run on the default branch that asks for it. Every other failing run prints the issue it
+# would post (dry run) with a read-only token.
+on:
+  schedule:
+    - cron: '23 3 * * *'   # Nightly: always runs the checks.
+    - cron: '53 */4 * * *' # Watch: runs the checks only for a build id not checked yet. Keep in step with WATCH_CRON below.
+  workflow_dispatch:
+    inputs:
+      negative_control:
+        description: 'Negative control, expected to FAIL: plugin-pin pins a wrong MD5 for the mod; bepinex-hash builds the image with a wrong BepInExPack hash'
+        type: choice
+        options: [none, plugin-pin, bepinex-hash]
+        default: none
+      tracking_issue:
+        description: 'On failure: dry-run prints what it would post; open posts it (default branch only, never with a negative control)'
+        type: choice
+        options: [dry-run, open]
+        default: dry-run
+permissions:
+  contents: read
+concurrency:
+  group: native-server-checks-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  WATCH_CRON: '53 */4 * * *'
+  IMAGE: valheimtesting-linux-server:scheduled
+jobs:
+  build-id:
+    name: public server build id
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      build-id: ${{ steps.query.outputs.build-id }}
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      # app_info_print reads the app's metadata only; nothing of the game is downloaded.
+      - name: Ask Steam (anonymous) for the public branch's build id
+        id: query
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends lib32gcc-s1 > /dev/null
+          steamcmd="$RUNNER_TEMP/steamcmd"
+          mkdir -p "$steamcmd"
+          curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar -xz -C "$steamcmd"
+          id=""
+          # SteamCMD updates itself on its first run and may quit before the commands; retry as the image build does.
+          for attempt in 1 2 3; do
+            "$steamcmd/steamcmd.sh" +login anonymous +app_info_update 1 +app_info_print 896660 +quit > "$RUNNER_TEMP/app-info.txt" 2>&1 || true
+            id=$(awk '/"branches"/ { branches = 1 } branches && /"public"/ { public = 1 }
+                      public && match($0, /"buildid"[ \t]+"[0-9]+"/) { s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); print s; exit }' "$RUNNER_TEMP/app-info.txt")
+            [ -n "$id" ] && break
+          done
+          if [ -z "$id" ]; then
+            tail -n 30 "$RUNNER_TEMP/app-info.txt"
+            echo "::warning::Could not read the public build id; a nightly run still checks, a watch run skips."
+            exit 1
+          fi
+          echo "build-id=$id" >> "$GITHUB_OUTPUT"
+          echo "Public dedicated-server build: $id" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Was this build checked already?
+        id: seen
+        if: steps.query.outputs.build-id != ''
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/server-build-checked
+          key: native-server-build-${{ steps.query.outputs.build-id }}
+          lookup-only: true
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          BUILD_ID: ${{ steps.query.outputs.build-id }}
+          SEEN: ${{ steps.seen.outputs.cache-hit }}
+        run: |
+          if [ "$EVENT" = schedule ] && [ "$SCHEDULE" = "$WATCH_CRON" ]; then
+            if [ -z "$BUILD_ID" ]; then run=false; reason="watch: the public build id is unknown"
+            elif [ "$SEEN" = true ]; then run=false; reason="watch: build $BUILD_ID was checked already"
+            else run=true; reason="watch: build $BUILD_ID has not been checked"; fi
+          else
+            run=true; reason="$EVENT: always checks"
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Run the checks: $run ($reason)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  checks:
+    name: server checks
+    needs: build-id
+    if: needs.build-id.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    outputs:
+      build-id: ${{ steps.image.outputs.build-id }}
+      summary: ${{ steps.collect.outputs.summary }}
+    env:
+      NEGATIVE_CONTROL: ${{ inputs.negative_control || 'none' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build the private image (never pushed, saved, cached or uploaded)
+        timeout-minutes: 30
+        run: |
+          args=()
+          if [ "$NEGATIVE_CONTROL" = bepinex-hash ]; then
+            echo "NEGATIVE CONTROL: a wrong BepInExPack SHA-256; this build must fail."
+            args+=(--build-arg BEPINEX_PACK_SHA256=0000000000000000000000000000000000000000000000000000000000000000)
+          fi
+          docker build --pull --no-cache "${args[@]}" -t "$IMAGE" docker/linux-server
+      - name: Report the server build id
+        id: image
+        run: |
+          id=$(docker run --rm "$IMAGE" cat /opt/valheim/server-buildid.txt)
+          echo "build-id=$id" >> "$GITHUB_OUTPUT"
+          echo "## Dedicated server build $id" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: LinuxServerSmoke
+        id: smoke
+        continue-on-error: true
+        timeout-minutes: 20
+        run: docker run --init --name smoke -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh smoke
+      - name: Example mod, server half (dry-site-server)
+        id: example
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          CONTROL: ${{ (inputs.negative_control == 'plugin-pin') && 'plugin-pin' || 'none' }}
+        run: docker run --init --name example -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh example "$CONTROL"
+      - name: Collect logs and reports only
+        id: collect
+        if: always()
+        env:
+          BUILD: ${{ steps.image.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          EXAMPLE: ${{ steps.example.outcome }}
+          BUILD_ID: ${{ steps.image.outputs.build-id }}
+        run: |
+          mkdir -p evidence
+          for check in smoke example; do
+            docker cp "$check:/home/valheim/evidence/$check" "evidence/$check" 2> /dev/null || echo "No evidence from the $check container."
+          done
+          # Only reports and logs may leave the runner: refuse any other file, and anything large.
+          unexpected=$(find evidence -type f ! \( -name '*.json' -o -name '*.jsonl' -o -name '*.xml' -o -name '*.log' -o -name '*.absent' -o -name server-buildid.txt \))
+          large=$(find evidence -type f -size +20M)
+          if [ -n "$unexpected$large" ]; then
+            echo "::error::Refusing to upload: $unexpected $large"
+            rm -rf evidence
+            exit 1
+          fi
+          report() { # <label> <result.json>
+            if [ -f "$2" ]; then
+              jq -r --arg label "$1" '"- \($label): " + (if .Passed then "PASS" else "FAIL" end) + " (\(.Steps | length) steps)"
+                + ([.Steps[] | select(.Passed | not) | "\n  - failed step: \(.Name): \(.Error | gsub("[\r\n]+"; " ") | .[0:500])"] | join(""))' "$2"
+            else
+              echo "- $1: no report (see the step's log)"
+            fi
+          }
+          {
+            echo "Dedicated server build: ${BUILD_ID:-unknown}. Steps: image $BUILD, smoke $SMOKE, example $EXAMPLE; negative control: $NEGATIVE_CONTROL."
+            echo
+            report "LinuxServerSmoke" evidence/smoke/result.json
+            report "Example preparation (new world, sites from the generator)" evidence/example/prepare/result.json
+            report "Example run (dry-site-server)" evidence/example/run/result.json
+          } > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo
+            echo "<details><summary>Uploaded files ($(du -sh evidence | cut -f1))</summary>"
+            echo
+            echo '```'
+            (cd evidence && find . -type f -printf '%10s  %P\n' | sort -k2)
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+          delimiter="summary-$RANDOM$RANDOM"
+          { echo "summary<<$delimiter"; head -c 6000 summary.md; echo; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-server-checks
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Remember the checked build id
+        if: always() && steps.image.outputs.build-id != '' && env.NEGATIVE_CONTROL == 'none'
+        env:
+          BUILD_ID: ${{ steps.image.outputs.build-id }}
+        run: mkdir -p "$RUNNER_TEMP/server-build-checked" && echo "$BUILD_ID" > "$RUNNER_TEMP/server-build-checked/build-id.txt"
+      - uses: actions/cache/save@v6
+        if: always() && steps.image.outputs.build-id != '' && env.NEGATIVE_CONTROL == 'none'
+        with:
+          path: ${{ runner.temp }}/server-build-checked
+          key: native-server-build-${{ steps.image.outputs.build-id }}
+      - name: Result
+        if: always()
+        env:
+          SMOKE: ${{ steps.smoke.outcome }}
+          EXAMPLE: ${{ steps.example.outcome }}
+        run: |
+          if [ "$SMOKE" != success ] || [ "$EXAMPLE" != success ]; then
+            echo "::error::Server checks failed: smoke $SMOKE, example $EXAMPLE (negative control: $NEGATIVE_CONTROL)."
+            exit 1
+          fi
+      - name: Remove the containers
+        if: always()
+        run: docker rm -f smoke example > /dev/null 2>&1 || true
+
+  tracking-issue:
+    name: tracking issue
+    needs: checks
+    if: >-
+      always() && needs.checks.result == 'failure' &&
+      (github.event_name == 'schedule' ||
+       (inputs.tracking_issue == 'open' && inputs.negative_control == 'none' && github.ref_name == github.event.repository.default_branch))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: 'false'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          BUILD_ID: ${{ needs.checks.outputs.build-id }}
+          COMMIT: ${{ github.sha }}
+          SUMMARY: ${{ needs.checks.outputs.summary }}
+        run: |
+          printf '%s\n' "$SUMMARY" > "$RUNNER_TEMP/summary.md"
+          SUMMARY_FILE="$RUNNER_TEMP/summary.md" .github/scripts/tracking-issue.sh
+
+  tracking-issue-dry-run:
+    name: tracking issue (dry run)
+    needs: checks
+    if: >-
+      always() && needs.checks.result == 'failure' &&
+      !(github.event_name == 'schedule' ||
+        (inputs.tracking_issue == 'open' && inputs.negative_control == 'none' && github.ref_name == github.event.repository.default_branch))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Print what the tracking issue would receive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: 'true'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          BUILD_ID: ${{ needs.checks.outputs.build-id }}
+          COMMIT: ${{ github.sha }}
+          SUMMARY: ${{ needs.checks.outputs.summary }}
+        run: |
+          printf '%s\n' "$SUMMARY" > "$RUNNER_TEMP/summary.md"
+          SUMMARY_FILE="$RUNNER_TEMP/summary.md" .github/scripts/tracking-issue.sh | tee -a "$GITHUB_STEP_SUMMARY"
