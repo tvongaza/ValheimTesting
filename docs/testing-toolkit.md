@@ -447,6 +447,29 @@ A system test that looks from a client describes it with a `ClientRunPlan` secti
 
 Limits: an owned client must run in the desktop session where Steam is running and signed in; `ClientSession` can tell only that Steam runs, not that it is signed in, and never signs in. It does not quit the client gracefully: leave the world first (`SessionControl.Leave`) so the character is saved, then dispose. Valheim 1.0 refuses a joined client's cheat commands whatever the server's admin list says; ValheimCLI's client setting `AllowOnServerClients = true` is what lets its test commands run there.
 
+## Plan rules and client rounds (preview 13)
+
+Mod runners repeat two kinds of glue, which the toolkit now owns. The [FullLifecycle example](../examples/FullLifecycle/README.md) uses both.
+
+Plan rules on `ServerRunPlan` refuse a plan before anything is copied, with an `ArgumentException` that names the field and the fix:
+- `RequireScenario(known...)`: the plan's `scenario` is one the runner knows.
+- `RequireEnvironmentFlag(variable, purpose)`: an explicit fixture opt-in, set to exactly `1`. A missing variable, any other value (`true`, `1 `) and a key that differs only in case are refused.
+- `EnvironmentChoice(variable, choices...)`: an optional choice, returned as null when absent (the mod's default) or as exactly one of the choices. Any other value, and a second key that differs only in case, are refused.
+- `OnlyForScenario(settings, supplied, scenarios...)`: settings another scenario reads are refused rather than silently ignored.
+- `CheckModeScenario(mode, map)`, used by the runner through `PinnedServerRunOptions.ModeScenarios` (for example `["prepare-bridge"] = ["bridge-respawn"]`): a listed mode runs only its scenarios, and unlisted modes run every scenario. A map key that is not one of the runner's modes is refused at once.
+
+The toolkit's own tests cover the rules every pinned plan follows: output path, launch host, executable, pins, save root, Doorstop and token variables, and unknown fields. A mod's plan tests need only cover its own rules.
+
+`ClientRounds` runs a persistence scenario's client rounds over `ClientSession`, `SessionControl` and `PlayerPlacement`. The mod supplies the per-round measurement as a delegate, and its step names where it wants its own (`OpenStep`, `ArriveStep`). For each of `Rounds` (default `first`, `after-restart`), the helper:
+1. waits until the server accepts game connections;
+2. joins (devcommands first, exactly once), verifies the client's world pins and waits for the world;
+3. protects the player, then arrives at `Arrival` if one is given, writing `{round}-arrival.json`;
+4. runs the measurement, which records `{round}: ...` steps with `round.Step` and writes `{round}-{name}.json` with `round.Write`, refusing to overwrite existing evidence.
+
+Between rounds come a confirmed save, the client's leave and a restart of only the owned server. The optional `afterRestart` check runs next (for example "the server still has the marker"). The last round only leaves. Every step goes through the `ScenarioReport`. `clientRounds` and `clientRoundsCompleted` in its provenance record how far the run got. The first failure stops the rounds and is rethrown: nothing runs after a failed save, restart or measurement, and that round's evidence stays. The client is closed in every outcome: an owned client's process is stopped, and an attached client is detached and left running. A failed close fails a passing run, but never hides an earlier failure. `Run` returns the server's actor after the last restart.
+
+Limits: the helper orders and records the steps, and its integration tests use scripted transports and fake processes. The steps' native behaviour is that of the pieces it calls, which have their own native evidence. The helper itself has not been run against a game yet.
+
 ## Game-side adapter helpers (Valheim.Testing.Adapter, preview 1)
 
 A mod's owned server runs need a small test adapter plugin in the server runtime: `OwnedServerSession` proves it started that very server by reading a `session` capability (token, process ID, save root, dedicated, readiness). `Valheim.Testing.Adapter` is a source package compiled into that adapter, which references ValheimCLI and the game (so this repository builds none of it). `TestExtension.Register(id, version, tokenVariable, modReady, registered, logError, commands...)` waits for ValheimCLI's extension API, then registers the mod's extension with the `session` capability and any test commands of its own; The session reports complete when the world is up and `modReady` returns true, and reports `acceptingConnections` separately: a dedicated server opens its game socket only when world generation finishes, on a first boot about 17 s after the world has loaded, and a join before that times out. `OwnedServerSession.WaitUntilJoinable(server, capability, timeout)` waits for it; call it just before the first join so the wait overlaps other work (server-side steps, an owned client's launch) instead of lengthening startup. `TestExtension.DevcommandsFlag()` reads the raw devcommands flag that ValheimCLI's extension gate uses. The example's [adapter](../examples/FullLifecycle/MyMod.TestAdapter/Plugin.cs) is the whole pattern in a dozen lines.

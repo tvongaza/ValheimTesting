@@ -34,8 +34,7 @@ public sealed class LifecyclePlan : ServerRunPlan
         // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
         if (!plan.Pinned || plan.Client is { Pinned: false }) throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
         plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
-        if (plan.Scenario is not (LifecycleScenario or ServerScenario))
-            throw new ArgumentException($"This runner runs the {LifecycleScenario} scenario, or {ServerScenario} for its server half alone.");
+        plan.RequireScenario(LifecycleScenario, ServerScenario);
         plan.DrySite.Validate("dry site", requireGround: true); plan.WetSite.Validate("wet site", requireGround: true);
         // The plan must agree with itself before any game starts: a "dry" site declared under the rule's threshold would
         // make a correct mod fail, and the reverse would let a broken one pass.
