@@ -40,23 +40,41 @@ public static class PlayerPlacement
     }
 
     /// <summary>
-    /// Has the server teleport the only connected player to <paramref name="point"/> (a little above it, so the character
-    /// settles onto the ground) exactly once, then waits on the client until its player stands settled there
-    /// (<see cref="SurfaceProbe.Supported"/>). Returns the observation that established arrival. Times out without
-    /// retrying the teleport: a lost reply is an unknown outcome, not a failure to act.
+    /// Waits until the client's player has stood still somewhere for <paramref name="settleFor"/> (default 3 s): a first join
+    /// rides in on the Valkyrie, and the game refuses a teleport within 2 s of a spawn or of the previous teleport, silently
+    /// in both cases. Then has the server teleport the only connected player to <paramref name="point"/> (a little
+    /// above it, so the character settles onto the ground) exactly once, and waits on the client until its player stands
+    /// settled there (<see cref="SurfaceProbe.Supported"/>). Returns the observation that established arrival. The one
+    /// timeout covers both waits. Times out without retrying the teleport: a lost reply is an unknown outcome, not a
+    /// failure to act.
     /// </summary>
-    public static JsonElement Arrive(GameActor server, GameActor client, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation = default)
+    public static JsonElement Arrive(GameActor server, GameActor client, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation = default, TimeSpan? settleFor = null)
     {
+        var still = settleFor ?? TimeSpan.FromSeconds(3);
+        if (still < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(settleFor));
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
         TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
+        var support = client.RequireCapability("valheim.world/player-support");
+        var clock = Stopwatch.StartNew();
+        Observation? last = null;
+        // Settled anywhere, and for long enough: the game drops a teleport while the player is attached (the first-join
+        // Valkyrie), loading or already teleporting, and within 2 s of a spawn (its teleport cooldown).
+        TimeSpan? settledSince = null;
+        while (true)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            last = client.Observe(support);
+            if (!Settled(last)) settledSince = null;
+            else if ((settledSince ??= clock.Elapsed) + still <= clock.Elapsed) break;
+            if (clock.Elapsed >= timeout)
+                throw new TimeoutException($"The player never stood still before the teleport within {timeout.TotalSeconds:F0} s; last reading: {last.Data.GetRawText()}. Nothing was teleported.");
+            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
+        }
         int peer = OnlyPeer(server);
         string at = string.Join(" ", new[] { point.X, point.Height + .5f, point.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
         var reply = server.Execute($"cli_teleport_peer {peer} {at}");
         if (!reply.Output.Any(l => l.StartsWith("OK: asked peer", StringComparison.Ordinal)))
             throw new InvalidOperationException("The server did not accept the teleport: " + string.Join(" | ", reply.Output));
-        var support = client.RequireCapability("valheim.world/player-support");
-        var clock = Stopwatch.StartNew();
-        Observation? last = null;
         while (clock.Elapsed < timeout)
         {
             cancellation.ThrowIfCancellationRequested();
@@ -66,6 +84,14 @@ public static class PlayerPlacement
         }
         throw new TimeoutException($"The player did not settle at ({point.X}, {point.Height}, {point.Z}) within {timeout.TotalSeconds:F0} s; last reading: " +
             (last == null ? "none" : last.Data.GetRawText()) + ". The teleport was not repeated.");
+    }
+
+    private static bool Settled(Observation observation)
+    {
+        if (!observation.Complete) return false;
+        var d = observation.Data;
+        return d.GetProperty("grounded").GetBoolean() && !d.GetProperty("attached").GetBoolean() && !d.GetProperty("teleporting").GetBoolean() &&
+            !d.GetProperty("dead").GetBoolean() && d.GetProperty("speed").GetSingle() <= .15f;
     }
 
     /// <summary>
