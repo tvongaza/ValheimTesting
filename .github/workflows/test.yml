@@ -34,6 +34,13 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet --info
+      - name: Show the runner's sessions (temporary diagnostic)
+        if: runner.os == 'Windows'
+        run: |
+          "session of this step: " + [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+          "user: " + [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          tasklist /FI ("USERNAME eq " + [Security.Principal.WindowsIdentity]::GetCurrent().Name) /FI "SESSION ne 0" /FO CSV /NH | Select-Object -First 40
+          tasklist /FI "IMAGENAME eq explorer.exe" /V /FO CSV /NH
       - run: dotnet run scripts/bootstrap-cli.cs
       - run: dotnet run scripts/validate.cs
   mod-example:
@@ -59,7 +66,8 @@ jobs:
     name: game hosts (ssh to localhost, container)
     # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only
     # a key generated for this run (bash and pwsh sessions, a loopback port forward), and an Ubuntu container on the host
-    # network driven with docker exec. Both are removed at the end; the keys live in the runner's temporary directory.
+    # network driven with docker exec. Both are removed at the end; the keys live in the runner's temporary directory. An Xvfb
+    # display on :99 carries the interactive client checks (a stand-in Steam and game), locally and over the ssh.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -106,11 +114,21 @@ jobs:
             -o StrictHostKeyChecking=yes -p 2222 "$(id -un)@127.0.0.1" 'echo "ssh to localhost works; pwsh: $(command -v pwsh)"'
       - name: Start a throwaway container on the host network
         run: docker run -d --rm --name vt-game-host --network host ubuntu:24.04 sleep 1800
+      - name: Start a virtual X display for the interactive client checks
+        run: |
+          set -euo pipefail
+          if ! command -v Xvfb > /dev/null; then sudo apt-get update -q && sudo apt-get install -y -q xvfb; fi
+          Xvfb :99 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/xvfb.pid"
+          for _ in $(seq 1 100); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
+          [ -S /tmp/.X11-unix/X99 ] || { cat "$RUNNER_TEMP/xvfb.log"; exit 1; }
+          echo "VALHEIM_TESTING_DISPLAY=:99" >> "$GITHUB_ENV"
       - run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release --filter Category=GameHosts
       - name: Stop the sshd and the container
         if: always()
         run: |
           docker rm -f vt-game-host || true
+          if [ -f "$RUNNER_TEMP/xvfb.pid" ]; then kill "$(cat "$RUNNER_TEMP/xvfb.pid")" || true; fi
           if [ -f "$RUNNER_TEMP/sshd/sshd.pid" ]; then sudo kill "$(cat "$RUNNER_TEMP/sshd/sshd.pid")" || true; fi
           cat "$RUNNER_TEMP/sshd/sshd.log" 2>/dev/null || true
           rm -rf "$RUNNER_TEMP/sshd"
