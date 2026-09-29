@@ -118,6 +118,20 @@ public class PlayerPlacementTests
         Assert.True(arrived.GetProperty("grounded").GetBoolean());
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
     }
+    // Without the intro skip, the Valkyrie ride may still be running: it is not reported as attached and its speed can read
+    // low, so a player that is not grounded is not teleported (the swimming case above needs the skip).
+    [Fact] public void WithoutTheIntroSkipAPlayerThatIsNotGroundedIsNotTeleported()
+    {
+        var serverTransport = new ScriptedTransport()
+            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,80.00,0.0 zone=0,0"))
+            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
+        var clientTransport = new ScriptedTransport().Extension("valheim.world", "player-support", _ =>
+            new { source = "local-player-support", complete = true, x = 0f, y = 80f, z = 0f, speed = .1f, grounded = false, flying = false, attached = false, dead = false, teleporting = false, units = "metres" });
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.Contains("Nothing was teleported", Assert.Throws<TimeoutException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(1), settleFor: TimeSpan.Zero, skipIntro: false)).Message);
+        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+        Assert.Equal(0, clientTransport.Count("cli_skip_intro"));
+    }
     [Fact] public void AFallingPlayerIsNotTeleported()
     {
         var serverTransport = new ScriptedTransport()
