@@ -1,0 +1,38 @@
+<Project>
+  <!--
+    Valheim.GameReferences.props (ValheimTesting tools/game-references, version 1)
+
+    References a local Valheim install's managed assemblies and BepInEx from a game-side project: the mod
+    itself or its test adapter. Never import it into a unit-test project that uses Valheim.Testing.Doubles:
+    the doubles define types with the same names, and that project must build without the game.
+
+    Import this file at the top of the project and Valheim.GameReferences.targets at the bottom (or from
+    Directory.Build.props and Directory.Build.targets). Set ValheimPath, or the VALHEIM_PATH environment
+    variable, to the game folder; everything else is found from it. See tools/game-references/README.md.
+
+    This file only declares which assemblies to reference, so a project can change the list after importing it:
+      <ValheimReference Include="UnityEngine.PhysicsModule" />        another DLL from the game's Managed folder
+      <ValheimReference Remove="assembly_utils" />                     one you do not use
+      <ValheimReference Update="assembly_valheim" File="publicized_assemblies/assembly_valheim_publicized.dll" />
+    File is relative to the Managed folder (ValheimReference) or to BepInEx/core (BepInExReference).
+    The paths are resolved, checked and added as references by the targets file, after the project is read.
+  -->
+  <PropertyGroup>
+    <ValheimGameReferencesPropsImported>true</ValheimGameReferencesPropsImported>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Name: the reference's assembly name. File (optional): its path relative to the folder, default <Name>.dll. -->
+    <ValheimReference Include="assembly_valheim" />
+    <ValheimReference Include="assembly_utils" />
+    <ValheimReference Include="UnityEngine" />
+    <ValheimReference Include="UnityEngine.CoreModule" />
+    <BepInExReference Include="BepInEx" />
+    <BepInExReference Include="0Harmony" />
+  </ItemGroup>
+
+  <!-- The targets file resolves every path; without it the references above would silently never be added. -->
+  <Target Name="RequireValheimGameReferencesTargets" BeforeTargets="ResolveAssemblyReferences"
+          Condition="'$(ValheimGameReferencesTargetsImported)' != 'true'">
+    <Error Text="$(MSBuildProjectFile) imports Valheim.GameReferences.props but not Valheim.GameReferences.targets. Import the targets file at the end of the project (or from Directory.Build.targets)." />
+  </Target>
+</Project>

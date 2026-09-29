@@ -6,21 +6,21 @@ using Xunit;
 // Moved from ValheimCLI (commit ee4cd23, Tests/RequestBroker.Tests/ExampleScripts.cs and RepoPaths.cs) on
 // 28 Sep 2026 with the scripts in tools/dev-loop. The repository root is now found by cli-dependency.json.
 
-/// <summary>A test that runs the bash scripts in tools/dev-loop with <c>#!/bin/sh</c> fakes; reported as skipped on Windows.</summary>
+/// <summary>A test that runs the bash scripts in tools/ with <c>#!/bin/sh</c> fakes; reported as skipped on Windows.</summary>
 public sealed class UnixFactAttribute : FactAttribute
 {
     public UnixFactAttribute()
     {
-        if (OperatingSystem.IsWindows()) Skip = "Exercises the bash dev-loop scripts; runs on macOS/Linux";
+        if (OperatingSystem.IsWindows()) Skip = "Exercises the bash scripts in tools/; runs on macOS/Linux";
     }
 }
 
-/// <summary>A test that runs the PowerShell scripts in tools/dev-loop with <c>.cmd</c> fakes; reported as skipped off Windows.</summary>
+/// <summary>A test that runs the PowerShell scripts in tools/ with <c>.cmd</c> fakes; reported as skipped off Windows.</summary>
 public sealed class WindowsFactAttribute : FactAttribute
 {
     public WindowsFactAttribute()
     {
-        if (!OperatingSystem.IsWindows()) Skip = "Exercises the PowerShell dev-loop scripts under Windows PowerShell; runs on Windows";
+        if (!OperatingSystem.IsWindows()) Skip = "Exercises the PowerShell scripts in tools/ under Windows PowerShell; runs on Windows";
     }
 }
 
@@ -31,10 +31,16 @@ internal sealed record ScriptRun(int ExitCode, string Stdout, string Stderr)
         Assert.True(expected == ExitCode, $"expected exit {expected}, got {ExitCode}\nstdout:\n{Stdout}\nstderr:\n{Stderr}");
 }
 
-/// <summary>Runs the real scripts in tools/dev-loop against inert fake tools in a temporary directory.</summary>
+/// <summary>Runs the real scripts in tools/dev-loop (or another tools/ folder) against inert fake tools in a temporary directory.</summary>
 internal sealed class DevLoopScripts : IDisposable
 {
-    public DevLoopScripts() => Root = Directory.CreateTempSubdirectory("dev-loop-scripts-").FullName;
+    private readonly string _tools;
+
+    public DevLoopScripts(string tools = "dev-loop")
+    {
+        _tools = tools;
+        Root = Directory.CreateTempSubdirectory(tools + "-scripts-").FullName;
+    }
 
     /// <summary>The temporary directory, removed on dispose.</summary>
     public string Root { get; }
@@ -78,8 +84,8 @@ internal sealed class DevLoopScripts : IDisposable
     }
 
     /// <summary>
-    /// Runs <c>bash tools/dev-loop/&lt;script&gt; args...</c>, or for a <c>.ps1</c> script
-    /// <c>powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/dev-loop/&lt;script&gt; args...</c>, with this
+    /// Runs <c>bash tools/&lt;folder&gt;/&lt;script&gt; args...</c>, or for a <c>.ps1</c> script
+    /// <c>powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/&lt;folder&gt;/&lt;script&gt; args...</c>, with this
     /// process's environment plus <paramref name="environment"/>, where a null value removes the variable.
     /// </summary>
     public async Task<ScriptRun> Run(string script, IEnumerable<string> args, IReadOnlyDictionary<string, string?> environment)
@@ -99,7 +105,7 @@ internal sealed class DevLoopScripts : IDisposable
             // A PowerShell 7 module path (dotnet test started from pwsh) makes Windows PowerShell load 7's modules.
             start.Environment.Remove("PSModulePath");
         }
-        start.ArgumentList.Add(ScriptPath(script));
+        start.ArgumentList.Add(Path.Combine(RepositoryRoot(), "tools", _tools, script));
         foreach (string arg in args) start.ArgumentList.Add(arg);
         foreach ((string name, string? value) in environment)
         {
@@ -118,15 +124,15 @@ internal sealed class DevLoopScripts : IDisposable
         catch (OperationCanceledException)
         {
             process.Kill(entireProcessTree: true);
-            throw new TimeoutException($"tools/dev-loop/{script} did not finish within 60 s");
+            throw new TimeoutException($"tools/{_tools}/{script} did not finish within 60 s");
         }
         return new ScriptRun(process.ExitCode, await stdout, await stderr);
     }
 
-    /// <summary>The script in this repository's tools/dev-loop, found from the test binaries so tests read the source tree on any OS.</summary>
-    public static string ScriptPath(string script) => Path.Combine(RepositoryRoot(), "tools", "dev-loop", script);
-
-    /// <summary>The repository root: the nearest directory above the test binaries that holds cli-dependency.json, as scripts/*.cs find it.</summary>
+    /// <summary>
+    /// The repository root, found from the test binaries so tests read the source tree on any OS: the nearest
+    /// directory above them that holds cli-dependency.json, as scripts/*.cs find it.
+    /// </summary>
     public static string RepositoryRoot()
     {
         for (DirectoryInfo? dir = new(AppContext.BaseDirectory); dir != null; dir = dir.Parent)

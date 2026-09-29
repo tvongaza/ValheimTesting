@@ -11,25 +11,26 @@ public sealed record LogLine(string Text, Match Match, TimeSpan Elapsed);
 // may not exist yet. Only complete lines match: a line still being written waits for its newline. A file that is
 // truncated or replaced (shorter than the offset, or different bytes at its start or just before the offset) is
 // read again from its beginning; a replacement byte-identical at both places is indistinguishable. Lines read but
-// not yet matched stay queued for the next wait. One wait at a time.
+// not yet matched stay queued for the next wait. One wait at a time. A failure line is reported with the few lines
+// examined just before it, which usually hold the exception or the plugin that caused it.
 public sealed class LogWait : IDisposable
 {
     // FileSystemWatcher can miss events: network and container-mounted filesystems often raise none, and an
     // overflowing buffer drops them. A wait therefore also re-reads the file at this low frequency. It only bounds
     // how late a missed event is noticed; the watcher wakes a wait as soon as the file changes.
     public static readonly TimeSpan DefaultSafetyInterval = TimeSpan.FromSeconds(2);
-    private const int Fingerprint = 256, Chunk = 64 * 1024;
+    private const int Fingerprint = 256, Chunk = 64 * 1024, ContextLines = 5;
     private readonly object _sync = new();
     // Never disposed: a watcher callback already in flight may still release it after Dispose.
     private readonly SemaphoreSlim _changed = new(0, 1);
     private readonly FileSystemWatcher? _watcher;
-    private readonly Queue<string> _lines = new();
+    private readonly Queue<string> _lines = new(), _recent = new();
     private readonly MemoryStream _partial = new();
     private readonly TimeSpan _safety = DefaultSafetyInterval;
     private byte[] _head = [], _tail = [];
     private long _offset;
     private int _waiting;
-    private bool _disposed;
+    private bool _disposed, _output;
     private string? _last;
     public string LogPath { get; }
     public long Offset { get { lock (_sync) return _offset; } }
@@ -66,7 +67,8 @@ public sealed class LogWait : IDisposable
 
     /// <summary>
     /// Waits for a complete line matching <paramref name="success"/>. A line matching any of <paramref name="failures"/>
-    /// (checked first) ends the wait at once with <see cref="WaitFailedException"/>; expiry throws <see cref="WaitTimeoutException"/>.
+    /// (checked first) ends the wait at once with <see cref="WaitFailedException"/>, which carries that line and the lines
+    /// just before it; expiry throws <see cref="WaitTimeoutException"/>.
     /// </summary>
     public async Task<LogLine> WaitAsync(Regex success, TimeSpan timeout, IReadOnlyList<Regex>? failures = null, CancellationToken cancellation = default)
     {
@@ -87,9 +89,11 @@ public sealed class LogWait : IDisposable
                     while (_lines.TryDequeue(out string? line))
                     {
                         foreach (var failure in failures ?? [])
-                            if (failure.IsMatch(line)) throw new WaitFailedException(target, $"a line matched failure /{failure}/", clock.Elapsed, line);
+                            if (failure.IsMatch(line)) throw new WaitFailedException(target, $"a line matched failure /{failure}/", clock.Elapsed, line, _recent.ToArray());
                         var match = success.Match(line);
                         if (match.Success) return new LogLine(line, match, clock.Elapsed);
+                        _recent.Enqueue(line);
+                        if (_recent.Count > ContextLines) _recent.Dequeue();
                     }
                 }
                 var remaining = timeout - clock.Elapsed;
@@ -114,6 +118,20 @@ public sealed class LogWait : IDisposable
         {
             if (!_disposed) ReadNew();
             return _partial.Length == 0 ? _last : Decode(_partial) + " [incomplete line]";
+        }
+    }
+
+    /// <summary>
+    /// Reads what was appended (as <see cref="Refresh"/> does) and returns whether anything was written to the file after
+    /// this wait opened it; a replaced file counts. False means this log's writer wrote nothing, for example a game that
+    /// exited before BepInEx started.
+    /// </summary>
+    public bool HasOutput()
+    {
+        lock (_sync)
+        {
+            if (!_disposed) ReadNew();
+            return _output;
         }
     }
 
@@ -149,12 +167,13 @@ public sealed class LogWait : IDisposable
                 }
                 _partial.Write(buffer, start, read - start);
                 _offset += read;
+                _output = true;
             }
             Remember(stream);
         }
     }
     private static string Decode(MemoryStream bytes) => Encoding.UTF8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length).TrimEnd('\r').TrimStart('﻿');
-    private void StartOver() { _offset = 0; _partial.SetLength(0); _head = []; _tail = []; }
+    private void StartOver() { _offset = 0; _partial.SetLength(0); _head = []; _tail = []; _recent.Clear(); }
     private bool Unchanged(FileStream stream) => stream.Length >= _offset &&
         ReadAt(stream, 0, _head.Length).AsSpan().SequenceEqual(_head) && ReadAt(stream, _offset - _tail.Length, _tail.Length).AsSpan().SequenceEqual(_tail);
     private void Remember(FileStream stream)

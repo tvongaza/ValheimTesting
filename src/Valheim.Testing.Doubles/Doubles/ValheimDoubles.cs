@@ -209,18 +209,18 @@ public partial class Heightmap
     }
 }
 
-/// <summary>Shim for UnityEngine.Transform: only the position is read.</summary>
+/// <summary>Shim for UnityEngine.Transform. Its position and hierarchy are in UnityComponentDoubles.cs.</summary>
 public partial class Transform
 {
-    public UnityEngine.Vector3 position;
 }
 
-/// <summary>Shim for ZNetView: one ZDO behind it, ours unless a test says otherwise. Its RPCs are in NetworkDoubles.cs.</summary>
-public partial class ZNetView
+/// <summary>
+/// Shim for ZNetView: one ZDO behind it, ours unless a test says otherwise. Its RPCs are in NetworkDoubles.cs. Its
+/// <c>gameObject</c> is null for a view a test builds around a bare ZDO.
+/// </summary>
+public partial class ZNetView : UnityEngine.MonoBehaviour
 {
     public ZDO Zdo;
-    /// <summary>The object this view sits on (SceneShims); null for a view a test builds around a bare ZDO.</summary>
-    public UnityEngine.GameObject gameObject = null!;
     /// <summary>True between StartGhostInit and FinishGhostInit: new objects get ZDOs but join no live scene.</summary>
     public static bool GhostInit { get; private set; }
     public static void StartGhostInit() => GhostInit = true;
@@ -231,6 +231,8 @@ public partial class ZNetView
     public bool HasOwner() => Zdo.HasOwner();
     public void ClaimOwnership() { if (!IsOwner()) Zdo.SetOwner(ZDOMan.instance?.m_sessionID ?? 1); }
     public ZDO GetZDO() => Zdo;
+    /// <summary>As the game's: the view lets go of its ZDO, so GetZDO() returns null and IsValid() false.</summary>
+    public void ResetZDO() => Zdo = null!;
 }
 
 /// <summary>

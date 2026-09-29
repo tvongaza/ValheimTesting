@@ -129,3 +129,103 @@ jobs:
           if [ -f "$RUNNER_TEMP/sshd/sshd.pid" ]; then sudo kill "$(cat "$RUNNER_TEMP/sshd/sshd.pid")" || true; fi
           cat "$RUNNER_TEMP/sshd/sshd.log" 2>/dev/null || true
           rm -rf "$RUNNER_TEMP/sshd"
+  test-runners:
+    name: test runners (${{ matrix.os }})
+    # tools/test-runners for real: a copy of ModWithTests that also targets net48 (the two changes its README
+    # describes), run with Mono on Linux and macOS and on .NET Framework on Windows. Negative control: an added
+    # test that fails only on .NET Framework must make the script exit 1, while the net10.0 leg alone still passes, and
+    # a filter that selects no test must fail the net48 leg.
+    # Packages restore from NuGet.org, as in a mod.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      # Hosted Linux and macOS images carry no Mono.
+      - name: Install Mono
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends mono-complete
+          mono --version
+      - name: Install Mono
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          brew install mono
+          mono --version
+      - name: Copy ModWithTests and target net48 too
+        shell: bash
+        run: |
+          cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
+          project="$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj"
+          sed -i.orig \
+            -e 's#<TargetFramework>net10.0</TargetFramework>#<TargetFrameworks>net48;net10.0</TargetFrameworks>#' \
+            -e 's#<PackageReference Include="xunit" Version="2.8.1" />#&<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />#' \
+            "$project"
+          grep -q '<TargetFrameworks>net48;net10.0</TargetFrameworks>' "$project"
+          grep -q 'Include="xunit.runner.console"' "$project"
+          rm "$project.orig"
+      - name: Both frameworks pass (bash)
+        if: runner.os != 'Windows'
+        working-directory: ${{ runner.temp }}/mod
+        run: bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" MyMod.Tests/MyMod.Tests.csproj
+      - name: Both frameworks pass (Windows PowerShell)
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}/mod
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\tools\test-runners\run-tests.ps1" MyMod.Tests\MyMod.Tests.csproj
+      - name: Add a test that fails only on .NET Framework
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/mod/MyMod.Tests/Net48OnlyFailure.cs" <<'CS'
+          using Xunit;
+
+          public class Net48OnlyFailure
+          {
+              [Fact]
+              public void FailsOnlyOnNetFramework()
+              {
+          #if NETFRAMEWORK
+                  Assert.Fail("negative control: this test fails only on .NET Framework");
+          #endif
+              }
+          }
+          CS
+      - name: Negative control (bash)
+        if: runner.os != 'Windows'
+        working-directory: ${{ runner.temp }}/mod
+        run: |
+          status=0
+          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" MyMod.Tests/MyMod.Tests.csproj || status=$?
+          if [ "$status" != 1 ]; then echo "::error::a net48-only failure must make run-tests.sh exit 1; it exited $status"; exit 1; fi
+          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" --framework net10.0 MyMod.Tests/MyMod.Tests.csproj
+          # A filter that selects no test must not pass the net48 leg.
+          status=0
+          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" --framework net48 --filter FullyQualifiedName~NoSuchTest MyMod.Tests/MyMod.Tests.csproj || status=$?
+          if [ "$status" != 1 ]; then echo "::error::a net48 leg that ran no tests must make run-tests.sh exit 1; it exited $status"; exit 1; fi
+      - name: Negative control (Windows PowerShell)
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}/mod
+        run: |
+          $script = "$env:GITHUB_WORKSPACE\tools\test-runners\run-tests.ps1"
+          powershell -NoProfile -ExecutionPolicy Bypass -File $script MyMod.Tests\MyMod.Tests.csproj
+          if ($LASTEXITCODE -ne 1) { Write-Output "::error::a net48-only failure must make run-tests.ps1 exit 1; it exited $LASTEXITCODE"; exit 1 }
+          powershell -NoProfile -ExecutionPolicy Bypass -File $script --framework net10.0 MyMod.Tests\MyMod.Tests.csproj
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # A filter that selects no test must not pass the net48 leg.
+          powershell -NoProfile -ExecutionPolicy Bypass -File $script --framework net48 --filter FullyQualifiedName~NoSuchTest MyMod.Tests\MyMod.Tests.csproj
+          if ($LASTEXITCODE -ne 1) { Write-Output "::error::a net48 leg that ran no tests must make run-tests.ps1 exit 1; it exited $LASTEXITCODE"; exit 1 }
+          exit 0

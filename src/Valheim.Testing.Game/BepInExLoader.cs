@@ -28,6 +28,36 @@ internal static class BepInExLoader
         RequireFile(root, WindowsProxy, "BepInEx's Doorstop loader is missing from the " + kind);
         RequireConfig(root, kind);
     }
+    internal static readonly string Patchers = Path.Combine("BepInEx", "patchers");
+    /// <summary>
+    /// Refuses a runtime whose <c>BepInEx/patchers</c> holds an entry (file or directory) that <paramref name="named"/> does
+    /// not list, or lacks one it lists. Preloader patchers rewrite game assemblies before any plugin loads, so one left behind
+    /// by a removed mod breaks the whole run (a <c>TypeLoadException</c> on a game type); a clean runtime has none unless the
+    /// plan says so. Names compare case-insensitively on Windows.
+    /// </summary>
+    internal static void RequirePatchers(string root, IReadOnlyCollection<string> named, string kind)
+    {
+        CheckPatcherNames(named);
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        string directory = Path.Combine(root, Patchers);
+        var present = Directory.Exists(directory) ? Directory.EnumerateFileSystemEntries(directory).Select(Path.GetFileName).OfType<string>().ToList() : new List<string>();
+        var unnamed = present.Where(entry => !named.Contains(entry, comparer)).Order(StringComparer.Ordinal).ToList();
+        if (unnamed.Count != 0)
+            throw new InvalidOperationException($"The {kind}'s {Patchers} holds {string.Join(", ", unnamed)}, which the plan's patchers do not name. " +
+                "A clean runtime is BepInEx core and your plugins with an empty patchers directory: remove what a removed mod left behind, or name each patcher the run needs.");
+        var missing = named.Where(entry => !present.Contains(entry, comparer)).ToList();
+        if (missing.Count != 0)
+            throw new InvalidOperationException($"The plan names patchers the {kind}'s {Patchers} does not hold: {string.Join(", ", missing)}.");
+    }
+    /// <summary>Plan patcher entries are single names in BepInEx/patchers, each listed once.</summary>
+    internal static void CheckPatcherNames(IReadOnlyCollection<string> named)
+    {
+        if (named == null) throw new ArgumentException("Patchers must be a list of names, empty for a clean runtime.");
+        foreach (string? name in named)
+            if (string.IsNullOrWhiteSpace(name) || name is "." or ".." || name.IndexOfAny(['/', '\\']) >= 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                throw new ArgumentException($"Patchers are entry names directly in {Patchers}, not paths: \"{name}\".");
+        if (named.Distinct(StringComparer.OrdinalIgnoreCase).Count() != named.Count) throw new ArgumentException("Name each patcher once.");
+    }
     internal static void RequireFile(string root, string relative, string message)
     {
         if (!File.Exists(Path.Combine(root, relative))) throw new FileNotFoundException(message + ": " + relative, Path.Combine(root, relative));

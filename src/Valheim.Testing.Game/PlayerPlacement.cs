@@ -16,7 +16,9 @@ public static class PlayerPlacement
 {
     /// <summary>
     /// Turns on god, ghost and debug modes for the local player (<c>cli_set_player_safety true</c>) and requires the game
-    /// to read all three back. Debug flying stays off, so support observations remain meaningful.
+    /// to read all three back. The command sets the modes rather than toggling them, so running it again changes nothing;
+    /// it is issued once and an unconfirmed reply fails. Debug flying stays off, so support observations remain
+    /// meaningful. <see cref="SessionControl.WaitForWorld"/> calls this by default once the world is ready.
     /// </summary>
     public static void Protect(GameActor client)
     {
@@ -24,6 +26,20 @@ public static class PlayerPlacement
         string line = reply.Output.LastOrDefault(l => l.Contains("playerSafety", StringComparison.Ordinal)) ?? "";
         if (!line.StartsWith("OK: playerSafety enabled=True god=True ghost=True debugMode=True", StringComparison.Ordinal))
             throw new InvalidOperationException("Player protection was not confirmed: " + (line.Length > 0 ? line : string.Join(" | ", reply.Output)));
+    }
+
+    /// <summary>
+    /// Turns the local player's debug fly on or off (<c>cli_fly on|off</c>, which sets rather than toggles) and requires
+    /// the game to read the requested state back. Fly is for review and visual steps only, such as looking at a site from
+    /// above: a flying player is never supported, so <see cref="Arrive"/> and <see cref="RequireSupported"/> refuse while
+    /// it is on. Turn it off before measuring again.
+    /// </summary>
+    public static void SetFly(GameActor client, bool on)
+    {
+        var reply = client.Execute(on ? "cli_fly on" : "cli_fly off");
+        string line = reply.Output.LastOrDefault(l => l.StartsWith("OK: fly=", StringComparison.Ordinal)) ?? "";
+        if (!line.StartsWith(on ? "OK: fly=True " : "OK: fly=False ", StringComparison.Ordinal))
+            throw new InvalidOperationException($"Fly {(on ? "on" : "off")} was not confirmed: " + (line.Length > 0 ? line : string.Join(" | ", reply.Output)));
     }
 
     /// <summary>
@@ -72,7 +88,8 @@ public static class PlayerPlacement
     /// swimming player as readily as a standing one. With <paramref name="skipIntro"/> false the intro may still be running
     /// (the ride is not reported as attached, and its speed can read low), so the player must also be grounded. Then has the server teleport the only connected player to <paramref name="point"/> (a little
     /// above it, so the character settles onto the ground) exactly once, and waits on the client until its player stands
-    /// settled there (<see cref="SurfaceProbe.Supported"/>). Returns the observation that established arrival. The one
+    /// settled there (<see cref="SurfaceProbe.Supported"/>). Returns the observation that established arrival. Refuses at
+    /// once, before or after the teleport, if a reading shows the player flying (see <see cref="SetFly"/>). The one
     /// timeout covers the intro and both waits. Times out without retrying the teleport: a lost reply is an unknown outcome, not a
     /// failure to act.
     /// </summary>
@@ -94,6 +111,7 @@ public static class PlayerPlacement
         {
             cancellation.ThrowIfCancellationRequested();
             last = client.Observe(support);
+            RefuseFlying(last);
             if (!ReadyToTeleport(last, requireGrounded: !skipIntro)) stillSince = null;
             else if ((stillSince ??= clock.Elapsed) + still <= clock.Elapsed) break;
             if (clock.Elapsed >= timeout)
@@ -109,11 +127,19 @@ public static class PlayerPlacement
         {
             cancellation.ThrowIfCancellationRequested();
             last = client.Observe(support);
+            RefuseFlying(last);
             if (last.Complete && SurfaceProbe.Supported(last, point)) return last.Data.Clone();
             cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
         }
         throw new TimeoutException($"The player did not settle at ({point.X}, {point.Height}, {point.Z}) within {timeout.TotalSeconds:F0} s; last reading: " +
             (last == null ? "none" : last.Data.GetRawText()) + ". The teleport was not repeated.");
+    }
+
+    /// <summary>A flying player is never supported: measuring support or grounding while fly is on is refused, not failed.</summary>
+    private static void RefuseFlying(Observation observation)
+    {
+        if (observation.Complete && observation.Data.TryGetProperty("flying", out var flying) && flying.ValueKind == JsonValueKind.True)
+            throw new InvalidOperationException("The player is flying, so support cannot be measured. Fly is for review and visual steps only; turn it off first (SetFly(client, false)).");
     }
 
     // Grounded is not required when the intro was skipped: the game's teleport refuses only a player that is already
@@ -130,6 +156,8 @@ public static class PlayerPlacement
     /// <summary>
     /// <paramref name="readings"/> client observations <paramref name="interval"/> apart (default three, half a second),
     /// each of which must show the player settled on <paramref name="point"/>: stationary support, not walking usability.
+    /// A reading that shows the player flying refuses the check (an <see cref="InvalidOperationException"/>, not a
+    /// <see cref="SupportException"/>): support cannot be measured while fly is on.
     /// </summary>
     public static IReadOnlyList<JsonElement> RequireSupported(GameActor client, HeightExpectation point, int readings = 3, TimeSpan? interval = null)
     {
@@ -141,6 +169,7 @@ public static class PlayerPlacement
         {
             if (i > 0) Thread.Sleep(wait);
             var state = client.Observe(support);
+            RefuseFlying(state);
             states.Add(state.Data.Clone());
             if (!SurfaceProbe.Supported(state, point))
                 throw new SupportException($"Reading {i + 1} of {readings} does not show the player settled on the declared ground: {state.Data.GetRawText()}", states);

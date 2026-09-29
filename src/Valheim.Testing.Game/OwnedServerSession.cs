@@ -29,6 +29,22 @@ public sealed class StartupEvents
     /// </summary>
     public static readonly IReadOnlyList<Regex> BepInExPluginLoadFailures =
         [new(@"^\[(?:Warning|Error|Fatal) *: *BepInEx\] (?:Could not load|Error loading) \[", RegexOptions.CultureInvariant)];
+    /// <summary>
+    /// Lines that mean the runtime's assemblies do not fit the game: a <c>TypeLoadException</c>, <c>MissingMethodException</c>
+    /// or <c>MissingFieldException</c> (a leftover preloader patcher or a mod built for another game version) in a BepInEx
+    /// warning, error or fatal line, or an exception line that starts with its name as Unity and .NET write it
+    /// (<c>System.TypeLoadException: ...</c>); and ValheimCLI's packs reporting that its core never became ready ("CLI core
+    /// 1.1 is not ready."). An info or debug line that only mentions an exception (a mod's handled soft dependency) does not
+    /// count. Before ValheimCLI listens, all of them mean the run cannot work, so startup should end at once instead of at its deadline.
+    /// </summary>
+    public static readonly IReadOnlyList<Regex> RuntimeLoadFailures =
+    [
+        new(@"^\[(?:Warning|Error|Fatal) *:[^\]]*\].*\b(?:TypeLoadException|MissingMethodException|MissingFieldException)\b", RegexOptions.CultureInvariant),
+        new(@"^(?:System\.)?(?:TypeLoadException|MissingMethodException|MissingFieldException): ", RegexOptions.CultureInvariant),
+        new(@"^\[(?:Error|Fatal) *:[^\]]*\] CLI core \S+ is not ready\.", RegexOptions.CultureInvariant),
+    ];
+    /// <summary><see cref="BepInExPluginLoadFailures"/> and <see cref="RuntimeLoadFailures"/>: what the owned server and client startups fail on.</summary>
+    public static readonly IReadOnlyList<Regex> StartupFailures = [.. BepInExPluginLoadFailures, .. RuntimeLoadFailures];
     /// <summary>The log ValheimCLI writes to, normally the runtime's BepInEx/LogOutput.log. No connection is tried before <see cref="Listening"/> appears in it.</summary>
     public string? CliLog { get; init; }
     public Regex Listening { get; init; } = CliListening;
@@ -41,6 +57,11 @@ public sealed class StartupEvents
     public Func<StateWait>? States { get; init; }
     public IReadOnlyList<string> ReadyStates { get; init; } = StateWait.WorldLoaded;
     public IReadOnlyList<string> FailureStates { get; init; } = [];
+
+    // A process that exits before BepInEx writes its log never ran BepInEx: the reason is in Unity's own log.
+    internal static string NoBepInExLog(string bepInExLog, string? playerLog) =>
+        $" before BepInEx wrote {bepInExLog}. Read the Unity player log ({playerLog ?? "Player.log, or the file passed with -logFile"}) for the reason;" +
+        " security software that blocks or quarantines the game or BepInEx's Doorstop loader is a known cause";
 }
 
 public sealed class OwnedServerSession : IDisposable
@@ -62,7 +83,9 @@ public sealed class OwnedServerSession : IDisposable
         if (parts.Length != 2 || parts.Any(p => p.Length == 0 || p.Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch != '.' && ch != '-' && ch != '_')))
             throw new ArgumentException("Use one namespaced session capability, without arguments.");
         _sessionCapability = sessionCapability; _extension = parts[0];
-        _cancellation = cancellation; _launch = launch; _connect = connect; _saveRoot = Path.GetFullPath(saveRoot); _expectations = StrictExpectations.Normalize(expectations);
+        _cancellation = cancellation; _launch = launch; _connect = connect; _saveRoot = Path.GetFullPath(saveRoot);
+        // EnvironmentPinning.None is an explicitly unpinned run's (ServerRunPlan.ExpectCommand); the actor warns when it takes effect.
+        _expectations = expectations == EnvironmentPinning.None ? expectations : StrictExpectations.Normalize(expectations);
         _startup = startup; _command = command; _poll = poll ?? TimeSpan.FromMilliseconds(500);
         if (startup <= TimeSpan.Zero || command <= TimeSpan.Zero || _poll < TimeSpan.Zero) throw new ArgumentException("Invalid session deadlines.");
     }
@@ -92,7 +115,8 @@ public sealed class OwnedServerSession : IDisposable
             var left = _startup - clock.Elapsed;
             return left > TimeSpan.Zero ? left : throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, log?.Refresh());
         }
-        async Task<Exception> Exited(string stage) => new WaitFailedException(stage, "owned server exited with code " + await exited.ConfigureAwait(false),
+        async Task<Exception> Exited(string stage) => new WaitFailedException(stage, "owned server exited with code " + await exited.ConfigureAwait(false) +
+            (log != null && !log.HasOutput() ? StartupEvents.NoBepInExLog(log.LogPath, null) : ""),
             clock.Elapsed, log == null ? "no startup log configured" : log.Refresh());
         async Task UntilExit(string stage, Func<TimeSpan, CancellationToken, Task> wait)
         {
@@ -317,11 +341,20 @@ public sealed class RecordingTransport : IGameTransport
 {
     private readonly IGameTransport _inner;
     private readonly StreamWriter _writer;
-    public RecordingTransport(IGameTransport inner, string file)
+    public RecordingTransport(IGameTransport inner, string file) : this(inner, file, null) { }
+    /// <summary>
+    /// With <paramref name="environment"/> (for example <see cref="EnvironmentPinning.NotPinned"/>), the record's first line
+    /// is <c>{"utc":...,"environment":...}</c>, before any command.
+    /// </summary>
+    public RecordingTransport(IGameTransport inner, string file, string? environment)
     {
         _inner = inner;
-        try { _writer = new StreamWriter(new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.Read)) { AutoFlush = true }; }
-        catch { inner.Dispose(); throw; }
+        try
+        {
+            _writer = new StreamWriter(new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.Read)) { AutoFlush = true };
+            if (environment != null) _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, environment }));
+        }
+        catch { _writer?.Dispose(); inner.Dispose(); throw; }
     }
     public CommandResult Execute(string command, TimeSpan timeout)
     {

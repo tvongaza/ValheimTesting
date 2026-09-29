@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Compile check for the Valheim.Testing.Adapter source package, which a mod compiles into its game-side test adapter
+    against the game, BepInEx and ValheimCLI; none of those is in this repository or its CI. This builds the package's
+    sources as a consumer does (net48, C# 10, nullable, warnings as errors) against:
+      - HarmonyX 2.9.0, the HarmonyLib that BepInEx 5.4.23 ships, as the real package;
+      - ReferenceStubs.cs: declarations of only the Unity, game, BepInEx and ValheimCLI members the sources use, with the
+        signatures of Valheim 1.0.16 and the pinned ValheimCLI (cli-dependency.json).
+    It proves the sources compile and call those signatures. It does not prove the game still has them, and cannot check
+    the private members the sources look up by reflection at run time. Nothing here is packed or run.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors><IsPackable>false</IsPackable>
+    <!-- Package advisories are not the adapter source's warnings; they must not fail this check. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/Valheim.Testing.Adapter/Adapter/*.cs" LinkBase="Adapter" />
+    <Compile Include="ReferenceStubs.cs" />
+    <!-- .NET Framework reference assemblies, so net48 builds on any OS without a targeting pack. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="HarmonyX" Version="[2.9.0]" />
+  </ItemGroup>
+</Project>
