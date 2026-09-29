@@ -1,0 +1,33 @@
+// Valheim.Testing.Doubles: compile-time stand-ins for the Unity, Valheim, BepInEx and Jotunn types a mod's
+// pure-logic sources use, so those sources compile and run in an ordinary test project without the game.
+// Source package: these files are compiled into the consuming test project. Every type is partial; add the
+// members your mod needs in your own files. Behaviour mirrors the game where mod code depends on it.
+#nullable enable
+// ReSharper disable InconsistentNaming
+// Jotunn's custom RPCs, recording what was sent.
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+
+namespace Jotunn.Entities
+{
+    public sealed partial class CustomRPC
+    {
+        public readonly List<(long Peer, ZPackage Package)> Sent = new();
+        public Jotunn.Managers.NetworkManager.CoroutineHandler Server = null!, Client = null!;
+        public void Initiate() { }
+        public void SendPackage(long peer, ZPackage package) => Sent.Add((peer, package));
+    }
+}
+namespace Jotunn.Managers
+{
+    public sealed partial class NetworkManager
+    {
+        public delegate IEnumerator CoroutineHandler(long sender, ZPackage package);
+        public static NetworkManager Instance = new();
+        public Jotunn.Entities.CustomRPC Rpc = null!;
+        public Jotunn.Entities.CustomRPC AddRPC(string name, CoroutineHandler server, CoroutineHandler client)
+            => Rpc = new Jotunn.Entities.CustomRPC { Server = server, Client = client };
+    }
+}

@@ -21,6 +21,7 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 | `Valheim.Testing` | Composable terrain, multi-zone height/paint fixtures and exact recorded-input replay; no ValheimCLI dependency | netstandard2.0 |
 | `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net10.0 |
 | `Valheim.Testing.Cli` | ValheimCLI's client transport and YAML runner, packaged unchanged from pinned ValheimCLI source (MIT, warp) | net10.0 |
+| `Valheim.Testing.Doubles` | Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, compiled into your test project; every type is partial | source (C# 10) |
 
 The dependency goes **ValheimTesting → ValheimCLI**, never the reverse. Game-side extension API and observers stay in ValheimCLI. Roads and MWL own their optional adapters and scenarios. No test package belongs in an ordinary player's plugin folder.
 
@@ -38,7 +39,7 @@ dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.cs` runs the local library tests, builds all external examples and packs the two libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.5` or `Valheim.Testing.Game` `0.1.0-preview.11` (net10.0); both restore from NuGet.org. The transport stays at `Valheim.Testing.Cli` `0.1.0-preview.5`. Use the local feed only to try a build that is not yet published.
+`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.5` or `Valheim.Testing.Game` `0.1.0-preview.11` (net10.0); both restore from NuGet.org. The transport stays at `Valheim.Testing.Cli` `0.1.0-preview.5`. Use the local feed only to try a build that is not yet published.
 
 ## Platforms
 

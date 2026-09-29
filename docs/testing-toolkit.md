@@ -19,6 +19,7 @@ A successful fake transport run is an orchestration test, not an in-game pass. A
 | `Valheim.Testing.Cli` | net10.0, the same client and YAML runner used by the executable, packaged from ValheimCLI's `Valheim.Cli.Testing` project (source in `CLI/Testing`) at a pinned commit |
 | `Valheim.Testing` | netstandard2.0, synthetic plane/island/ridge/river and exact captured-sample replay; works with net48/Mono and modern .NET |
 | `Valheim.Testing.Game` | net10.0, named actors, typed observations, event waits (log line, process exit, game state) with bounded fallbacks, fixture copies, comparisons and JSON/JUnit reports |
+| `Valheim.Testing.Doubles` | source package, compiled into the consumer: partial doubles of the Unity, Valheim, BepInEx and Jotunn types mod logic uses (see [Game doubles](#game-doubles)) |
 | Roads pilot | Separate Roads checkout: test-only world adapter, game observation plugin and system scenarios |
 
 The toolkit lives in this repository and consumes the ValheimCLI transport as a pinned NuGet package, `Valheim.Testing.Cli`, built from ValheimCLI source. The upstream ValheimCLI PR should include the client-library split and extension API, not demand ownership of Roads tests. No Unity/game DLL is a toolkit dependency. In-game adapters must not load the external (net10.0) test-side packages.
@@ -207,6 +208,23 @@ Current local layers: 94 shared-library tests, 802 ValheimCLI tests, 62 Roads sc
 The native paint extension has now been exercised on Valheim 1.0.16: sixteen saved RGBA texels across two zones, paved core plus untouched painted verge, alpha preserved, before and after save/server restart/rejoin on a ValheimCLI-only client. The same plan failed exactly eight samples when deliberately given the unchanged pre-road expectation. Height, collider and stationary support checks passed alongside paint. The [follow-up campaign](native-validation-20260927.md) adds native dirt/fading-edge coverage. Rendered appearance and human walking remain follow-ups.
 
 The four-pack layout also passed join and confirmed-save paths. Optional Reflection was removed and reloaded in a loaded dedicated world over the same connection; only its owner identity changed. This establishes lifecycle behavior, not reclamation of loaded assemblies. Native checks exposed a missing Mono verification build setting in the packs, which is corrected in ValheimCLI #40.
+
+## Game doubles
+
+`Valheim.Testing.Doubles` lets a unit-test project compile a mod's pure-logic source files (linked with `<Compile Include="../YourMod/Src/....cs" />`) without Unity, Valheim or BepInEx. It is a source package: its files compile into your test project and stand in for the game's types under their real names (`UnityEngine.Vector3`, the global `ZDO`, `ZDOMan`, `ZNetView`, `ZNetScene`, `Heightmap`, `TerrainComp`, `ZoneSystem`, `WorldGenerator`, `ZNet`, `ZRoutedRpc`, `ZPackage`, `BepInEx.Logging.ManualLogSource`, Jotunn's `CustomRPC`). So the test project must not also reference the game's assemblies. It needs C# 10 and works on net48 and modern .NET. Reference it with `PrivateAssets="all"` (it is a development dependency).
+
+Every type is `partial`: add the members your mod calls in your own files. Keep only mod-specific behaviour there. Two `Heightmap` hooks carry a mod's terrain logic into the rebuild: `ModBaseHeight` (for example a biome blend) and `ModTerrainPass` (the seam a Harmony prefix on the game's rebuild uses).
+
+The doubles copy the game where mod code depends on it, and their own tests check these points:
+- `ZDOMan.DestroyZDO` is queued, so a destroyed ZDO stays visible to `FindObjects` until `ProcessDestroyed`.
+- A networked prefab instantiated during ghost initialisation leaves its ZDO and joins no live scene.
+- `ZNetScene.Destroy` queues only ZDOs this session owns, and a compiler saves only when owned.
+- Rebuilt heights are clamped to the game's ±8 m.
+- Zone ids narrow to `short`.
+- Valheim 1.0's locations-generated flag is set from a save without raising the event.
+- A routed RPC over Steam's 512 KiB limit fails.
+
+`WorldGenerator` is virtual, so tests plug in synthetic worlds; `Valheim.Testing`'s terrain works well behind it.
 
 ## Linux dedicated server (preview 11)
 

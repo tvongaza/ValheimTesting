@@ -3,21 +3,22 @@
 //   dotnet run scripts/validate.cs
 //
 // Runs the library tests, builds every example, executes the two no-game
-// examples and packs both libraries into the local feed.
+// examples and packs the libraries into the local feed.
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 string root = FindRoot();
 
 Run("dotnet", "test", "tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "-c", "Release", "-m:1");
+Run("dotnet", "test", "tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj", "-c", "Release", "-m:1");
 foreach (string project in Directory.GetFiles(Path.Combine(root, "examples"), "*.csproj", SearchOption.AllDirectories)
              .Where(p => Path.GetDirectoryName(Path.GetDirectoryName(p)) == Path.Combine(root, "examples"))
              .OrderBy(p => p, StringComparer.Ordinal))
     Run("dotnet", "build", project, "-c", "Release", "-m:1");
 Run("dotnet", "run", "--project", "examples/NoGameTerrain", "-c", "Release", "--no-build");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
-foreach (string name in new[] { "Valheim.Testing", "Valheim.Testing.Game" })
-    Run("dotnet", "pack", $"src/{name}/{name}.csproj", "-c", "Release", "--no-restore", "-m:1", "-o", Path.Combine(root, ".packages"));
+foreach (string name in new[] { "Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Doubles" })
+    Run("dotnet", "pack", $"src/{name}/{name}.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
 Console.WriteLine("Local validation passed.");
 return 0;
 

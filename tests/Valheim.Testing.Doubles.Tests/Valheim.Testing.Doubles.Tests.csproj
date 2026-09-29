@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Compiles the doubles as a consumer does (the package's contentFiles), then tests their game-faithful behaviour. -->
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup><Compile Include="../../src/Valheim.Testing.Doubles/Doubles/*.cs" Link="Doubles/%(Filename)%(Extension)" /></ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
+  </ItemGroup>
+</Project>

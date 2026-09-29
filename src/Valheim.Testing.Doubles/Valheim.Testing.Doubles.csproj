@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Source package: Doubles/*.cs are compiled INTO the consuming test project (contentFiles, build action Compile),
+    where they stand in for the game's types while the mod's own sources compile against them. This project only
+    checks that they compile; nothing of its build output is packed. A development dependency, so it never flows
+    to packages that reference the consumer.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <IncludeBuildOutput>false</IncludeBuildOutput><DevelopmentDependency>true</DevelopmentDependency>
+    <!-- NU5128: a source package has no lib/ folder by design. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <Version>0.1.0-preview.1</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, so those sources compile and run in an ordinary test project without the game. Every type is partial; mods add the members they need. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
+    <PackageId>Valheim.Testing.Doubles</PackageId><PackageProjectUrl>https://github.com/tvongaza/ValheimTesting</PackageProjectUrl><RepositoryUrl>https://github.com/tvongaza/ValheimTesting.git</RepositoryUrl><RepositoryType>git</RepositoryType><PackageTags>valheim;modding;testing;bepinex;doubles;xunit</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="Doubles/*.cs" Pack="true" PackagePath="contentFiles/cs/any/ValheimTestingDoubles/" BuildAction="Compile" CopyToOutput="false" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="" /><None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" /><None Include="../../README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+</Project>
