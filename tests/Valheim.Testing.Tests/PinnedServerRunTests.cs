@@ -15,25 +15,29 @@ public sealed class PinnedServerRunTests : IDisposable
     private string Output => Path.Combine(_root, "out");
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
 
-    private string WritePlan(bool linux, string[]? patchers = null, Dictionary<string, object>? logScan = null)
+    // runtimePins: the pins to write (default: the runtime's own). Unpinned: pinning "none", no pins and no fixture manifests.
+    private string WritePlan(bool linux, string[]? patchers = null, Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false)
     {
         Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
         string server = Path.Combine(Runtime, linux ? ServerLaunch.LinuxExecutable : ServerLaunch.WindowsExecutable);
         File.WriteAllText(server, "server");
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
+        FakeInstalls.Server(Runtime);
         File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "world");
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
-        var plan = new
+        var plan = new Dictionary<string, object>
         {
-            scenario = "smoke",
-            runtime = new { source = Runtime, sha256 = WorldFixture.Manifest(Runtime) },
-            world = new { source = World, sha256 = WorldFixture.Manifest(World) },
-            arguments = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
-            pins = new Dictionary<string, string> { ["worlduid"] = "1" },
-            port = port < 1024 ? 5577 : port,
-            patchers = patchers ?? [],
-            logScan = logScan ?? [],
+            ["scenario"] = "smoke",
+            ["runtime"] = new { source = Runtime, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(Runtime) },
+            ["world"] = new { source = World, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(World) },
+            ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
+            ["pins"] = unpinned ? new Dictionary<string, string>() : new Dictionary<string, string> { ["worlduid"] = "1" },
+            ["port"] = port < 1024 ? 5577 : port,
+            ["patchers"] = patchers ?? [],
+            ["logScan"] = logScan ?? [],
         };
+        if (unpinned) plan["pinning"] = "none";
+        else plan["runtimePins"] = runtimePins ?? InstallPins.Of(Runtime);
         string path = Path.Combine(_root, "plan.json");
         File.WriteAllText(path, JsonSerializer.Serialize(plan));
         return path;
@@ -58,9 +62,11 @@ public sealed class PinnedServerRunTests : IDisposable
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
         Assert.Equal(new[] { "copy and verify pinned runtime", "copy and verify pinned world", "copied runtime has the plan's server executable",
-                "copied runtime's BepInEx patchers are the plan's", "prepared only; no game launched" },
+                "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers", "prepared only; no game launched" },
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
         Assert.Equal("validate", result.GetProperty("Provenance").GetProperty("mode").GetString());
+        Assert.Equal(InstallPins.Of(Runtime).Game, result.GetProperty("Provenance").GetProperty("runtimeGameSha256").GetString());
+        Assert.Equal("strict", result.GetProperty("Pinning").GetString());
         Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json"))); Assert.True(File.Exists(Path.Combine(Output, "junit.xml")));
     }
     [Fact] public async Task ExistingEvidenceIsNeverOverwrittenAndBadUsageIsRefused()
@@ -195,6 +201,7 @@ public sealed class PinnedServerRunTests : IDisposable
             Runtime = new() { Source = Path.GetTempPath(), Sha256 = new() { ["a"] = new string('a', 64) } },
             World = new() { Source = Path.GetTempPath(), Sha256 = new() { ["b"] = new string('b', 64) } },
             Arguments = ["-batchmode", "-nographics", "-savedir", "{world}"], Pins = new() { ["worlduid"] = "1", ["my.mod"] = new string('1', 32) },
+            RuntimePins = new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) },
         };
         plan.ValidateServerPlan(["my.mod"], "TOKEN");
         Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan(["other.mod"], "TOKEN"));

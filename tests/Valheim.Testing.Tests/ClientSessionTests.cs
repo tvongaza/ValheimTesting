@@ -11,6 +11,7 @@ public sealed class ClientSessionTests : IDisposable
     {
         Mode = mode, Install = mode == "owned" ? Path.GetFullPath("client-install") : "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
         Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), ["my.mod"] = "absent" },
+        InstallPins = mode == "owned" ? new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) } : null,
     };
 
     private sealed class Process(int? exitCode = null) : IServerProcess

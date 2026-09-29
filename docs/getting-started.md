@@ -109,7 +109,7 @@ warpalicious.ProceduralRoads=absent
 warpalicious.More_World_Locations_AIO=absent
 ```
 
-This is an illustrative **client** file, not usable pins. Include every additional loaded plugin, such as ScriptEngine or other packs. On the server use the real mod/adapter hashes instead of `absent`. SHA-256 input manifests and plugin MD5 expectation pins serve different purposes; do not substitute one for the other. See [ValheimCLI expectations](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/README.md#know-what-you-are-testing).
+This is an illustrative **client** file, not usable pins. Include every additional loaded plugin, such as ScriptEngine or other packs. On the server use the real mod/adapter hashes instead of `absent`. SHA-256 input manifests and plugin MD5 expectation pins serve different purposes; do not substitute one for the other. `cli_expect` cannot see the game build or BepInEx itself; the pinned runner pins those on disk (`runtimePins`, a client's `installPins`), and `"pinning": "none"` is its explicit, reported opt-out: see [Pins and the opt-out](testing-toolkit.md#pins-and-the-opt-out). See [ValheimCLI expectations](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/README.md#know-what-you-are-testing).
 
 Wait for the world and required zone to be loaded (on events where they exist, see [Waiting](testing-toolkit.md#waiting)), arrange arrival/protection separately, and verify the client's actual position. A responsive ValheimCLI is not proof that world loading has finished. Missing maps or incomplete observations are failures, not zero-height or black-paint measurements.
 

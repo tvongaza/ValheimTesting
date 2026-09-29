@@ -39,7 +39,7 @@ public sealed class ClientSession : IDisposable
         if (plan.Owned) throw new ArgumentException("This plan's client is owned: launch it instead.");
         transport ??= new CliTransport(plan.Host, plan.Port);
         GameActor actor;
-        try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output))); }
+        try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
         catch { transport.Dispose(); throw; }
         try { actor.VerifyEnvironment(plan.MenuExpectations); return new ClientSession(actor, null); }
         catch { actor.Dispose(); throw; }
@@ -51,8 +51,9 @@ public sealed class ClientSession : IDisposable
     /// push. Every wait races the process exit, which ends startup at once with its exit code. Refuses before launching
     /// when something already listens on the client's CLI port (a command could reach a client this session does not own),
     /// when no Steam client is running here, when the plan's password variable is not set in this process (the client
-    /// inherits it), or when the install's <c>BepInEx/patchers</c> holds anything the plan's <see cref="ClientRunPlan.Patchers"/>
-    /// does not name. A failed startup stops the process it started. The process's output goes to
+    /// inherits it), when the install's <c>BepInEx/patchers</c> holds anything the plan's <see cref="ClientRunPlan.Patchers"/>
+    /// does not name, or when its game build, BepInEx core or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>.
+    /// A failed startup stops the process it started. The process's output goes to
     /// <c>client-boot.stdout.log</c>/<c>.stderr.log</c>, and its BepInEx log and Unity's Player.log are copied beside them
     /// (<c>client-boot.game-0.log</c>, <c>client-boot.game-1.log</c>) when it stops; <see cref="Logs"/> lists them.
     /// </summary>
@@ -60,6 +61,7 @@ public sealed class ClientSession : IDisposable
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
         BepInExLoader.RequirePatchers(plan.Install, plan.Patchers, "client install");
+        plan.CheckInstallPins();
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
         try { reservation.Start(); }
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }
@@ -125,7 +127,7 @@ public sealed class ClientSession : IDisposable
         GameActor? actor = null;
         try
         {
-            File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(new { pid = process.Id, startedUtc = DateTime.UtcNow, install = plan.Install }));
+            File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["install"] = plan.Install }, plan.Pinned)));
             using (var abandon = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             {
                 var exited = process.WaitForExitAsync(abandon.Token);
@@ -140,7 +142,7 @@ public sealed class ClientSession : IDisposable
                 waiting.GetAwaiter().GetResult(); // A readiness failure (a plugin-load error, a closed state connection) ends startup.
             }
             var transport = connect();
-            try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output))); }
+            try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
             catch { transport.Dispose(); throw; }
             actor.VerifyEnvironment(plan.MenuExpectations);
             return new ClientSession(actor, process, logs);
