@@ -221,8 +221,8 @@ internal static class LeaseChecks
     public static Task ACrashedHoldersLeaseExpires(IGameHost host, string parent) => GameHostChecks.WithRootAsync(host, parent, async root =>
     {
         var pool = Pool(root, 1);
-        // The holder "crashes": it never renews or releases.
-        var crashed = await pool.AcquireAsync(host, "run-crashed", GameHostChecks.Generous, leaseTime: TimeSpan.FromSeconds(2));
+        // The holder "crashes": it never renews or releases. Its lease outlasts a shell's start-up (pwsh over ssh takes seconds).
+        var crashed = await pool.AcquireAsync(host, "run-crashed", GameHostChecks.Generous, leaseTime: TimeSpan.FromSeconds(10));
         var refused = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => pool.AcquireAsync(host, "run-next", GameHostChecks.Generous));
         Assert.Equal("run-crashed", Assert.Single(refused.Accounts).Holder);
         // The lease host's clock counts whole seconds; the wait is for time itself.

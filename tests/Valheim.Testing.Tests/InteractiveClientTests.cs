@@ -588,7 +588,7 @@ public class SecretHandOffTests
 {
     [Fact] public async Task ASecretIsOneBase64TokenOnItsOwnLine()
     {
-        var fake = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0));
+        var fake = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0)).Exits(0, "", FakeLauncher.Report(0));
         var host = new LocalGameHost("here", HostShell.Bash, fake);
         await Assert.ThrowsAsync<ArgumentException>(() => host.RunWithSecretsAsync("true", null, ["not base64 \n"], TimeSpan.FromSeconds(10)));
         Assert.Empty(fake.Calls);
