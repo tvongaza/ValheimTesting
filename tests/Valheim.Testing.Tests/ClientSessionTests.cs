@@ -81,10 +81,45 @@ public sealed class ClientSessionTests : IDisposable
         Assert.False(started);
     }
 
+    [Fact] public void AnExitBeforeBepInExWroteItsLogSaysWhereToLook()
+    {
+        var error = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => new Process(exitCode: 1), () => new ScriptedTransport(),
+            (_, _) => Task.CompletedTask, default, () => " before BepInEx wrote its log", null));
+        Assert.Contains("exited with code 1 before BepInEx wrote its log", error.Reason);
+        var plain = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => new Process(exitCode: 1), () => new ScriptedTransport(),
+            (_, _) => Task.CompletedTask, default, () => null, null));
+        Assert.EndsWith("exited with code 1", plain.Reason);
+    }
+
+    [Fact] public void AnOwnedClientListsTheLogsItKeeps()
+    {
+        RunLog[] logs = [new("client BepInEx log", Path.Combine(_output, "client-boot.game-0.log"), Required: true), new("client Player.log", Path.Combine(_output, "client-boot.game-1.log"))];
+        using var session = ClientSession.Launch(Plan(), _output, () => new Process(), () => new ScriptedTransport(), (_, _) => Task.CompletedTask, default, null, logs);
+        Assert.Equal(logs, session.Logs);
+    }
+
+    [Theory]
+    [InlineData(ClientPlatform.Windows, "AppData", "LocalLow", "IronGate", "Valheim", "Player.log")]
+    [InlineData(ClientPlatform.Linux, ".config", "unity3d", "IronGate", "Valheim", "Player.log")]
+    [InlineData(ClientPlatform.MacOS, "Library", "Logs", "IronGate", "Valheim", "Player.log")]
+    public void UnityWritesTheClientsPlayerLogUnderTheUsersProfile(ClientPlatform platform, params string[] under) =>
+        Assert.Equal(Path.Combine(new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) }.Concat(under).ToArray()), ClientSession.PlayerLog(platform));
+
+    [Fact] public void ALeftoverPatcherInTheInstallRefusesTheLaunch()
+    {
+        string install = Path.Combine(_output, "install");
+        Directory.CreateDirectory(Path.Combine(install, "BepInEx", "patchers"));
+        File.WriteAllText(Path.Combine(install, "BepInEx", "patchers", "RemovedMod.Preloader.dll"), "patcher");
+        var plan = Plan(); plan.Install = install;
+        var error = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _output));
+        Assert.Contains("RemovedMod.Preloader.dll", error.Message);
+        Assert.False(File.Exists(Path.Combine(_output, "client-process.json")));
+    }
+
     [Fact] public void AnAttachedClientIsPinnedAndNeverStopped()
     {
         var transport = new ScriptedTransport();
-        using (var session = ClientSession.Attach(Plan("attach"), _output, transport)) { Assert.False(session.Owned); Assert.Null(session.ProcessId); }
+        using (var session = ClientSession.Attach(Plan("attach"), _output, transport)) { Assert.False(session.Owned); Assert.Null(session.ProcessId); Assert.Empty(session.Logs); }
         Assert.True(transport.Disposed);
         Assert.Throws<ArgumentException>(() => ClientSession.Attach(Plan(), _output, new ScriptedTransport()));
         var refused = new ScriptedTransport { PinsHold = false };
@@ -106,6 +141,8 @@ public sealed class ClientSessionTests : IDisposable
     [InlineData("loose-pin", "exact MD5 or absent")]
     [InlineData("spaced-character", "single tokens")]
     [InlineData("join-seconds", "timeouts")]
+    [InlineData("attach-with-patchers", "leave out install")]
+    [InlineData("patcher-path", "not paths")]
     public void PlanRulesRefuseBeforeAnythingStarts(string defect, string message)
     {
         var plan = Plan();
@@ -121,6 +158,8 @@ public sealed class ClientSessionTests : IDisposable
             case "loose-pin": plan.Pins["other.mod"] = "any"; break;
             case "spaced-character": plan.Character = "Test Er"; break;
             case "join-seconds": plan.JoinSeconds = 5; break;
+            case "attach-with-patchers": plan.Mode = "attach"; plan.Install = ""; plan.Patchers = ["HookGenPatcher"]; break;
+            case "patcher-path": plan.Patchers = ["../HookGenPatcher"]; break;
         }
         Assert.Contains(message, Assert.Throws<ArgumentException>(() => plan.Validate("my.mod")).Message);
     }
