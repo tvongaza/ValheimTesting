@@ -34,7 +34,7 @@ namespace Valheim.Testing.Doubles
     /// <summary>
     /// The game's process-wide singletons for one test. Created, it records which objects the singletons refer to
     /// (<c>WorldGenerator</c>, <c>ZDOMan</c>, <c>ZoneSystem</c>, <c>ZNetScene</c>, <c>ZNet</c>, <c>ZRoutedRpc</c>, Jotunn's <c>NetworkManager</c>, the
-    /// registered heightmap, the log capture, the console commands and the local player) plus the server flag and the clock; disposed, it puts those references
+    /// loaded heightmaps, the log capture, the console commands and the local player) plus the server flag and the clock; disposed, it puts those references
     /// and values back. It restores references, not contents: nothing is deep-copied, so a test that mutates an object it
     /// did not install (adds a peer to the existing <c>ZNet</c>, a ZDO to the existing <c>ZDOMan</c>) leaves that change
     /// behind. Use the builder methods to install fresh, isolated objects instead (<see cref="WithZdos"/>,
@@ -48,7 +48,8 @@ namespace Valheim.Testing.Doubles
         private readonly ZDOMan? _zdos = ZDOMan.instance;
         private readonly ZoneSystem? _zones = ZoneSystem.instance;
         private readonly ZNetScene? _scene = ZNetScene.instance;
-        private readonly Heightmap? _heightmap = Heightmap.Registered;
+        private readonly System.Collections.Generic.List<Heightmap> _heightmaps = Heightmap.s_heightmaps;
+        private bool _ownsHeightmaps;
         private readonly List<string>? _captured = BepInEx.Logging.ManualLogSource.Captured;
         private readonly ZNet _net = ZNet.instance;
         private readonly ZRoutedRpc _rpc = ZRoutedRpc.instance;
@@ -77,14 +78,32 @@ namespace Valheim.Testing.Doubles
         public Player WithLocalPlayer(UnityEngine.Vector3 position) { var player = new Player(); player.transform.position = position; return Player.m_localPlayer = player; }
         /// <summary>Sets the server flag on the current <c>ZNet</c> (restored on dispose).</summary>
         public ValheimWorldScope AsServer(bool server = true) { ZNet.instance.Server = server; return this; }
-        /// <summary>Registers a zone heightmap (with a compiler unless <paramref name="withCompiler"/> is false) and returns it.</summary>
-        public global::Heightmap RegisterHeightmap(Vector2s zone, int width = 64, bool withCompiler = true) => global::Heightmap.Registered = global::Heightmap.CreateForZone(zone, width, withCompiler);
+        /// <summary>
+        /// Loads a zone heightmap (with a compiler unless <paramref name="withCompiler"/> is false) and returns it. Zones
+        /// add up, so a test can load neighbours one after another; loading a zone again replaces its heightmap, as an
+        /// unload and reload would.
+        /// </summary>
+        public global::Heightmap RegisterHeightmap(Vector2s zone, int width = 64, bool withCompiler = true)
+        {
+            if (!_ownsHeightmaps) { global::Heightmap.s_heightmaps = new(global::Heightmap.s_heightmaps); _ownsHeightmaps = true; }
+            var hm = global::Heightmap.CreateForZone(zone, width, withCompiler);
+            UnloadHeightmap(zone);
+            global::Heightmap.s_heightmaps.Add(hm);
+            return hm;
+        }
+        /// <summary>Unloads the zone's heightmap, as the game does when the zone leaves the active area.</summary>
+        public void UnloadHeightmap(Vector2s zone)
+        {
+            if (!_ownsHeightmaps) { global::Heightmap.s_heightmaps = new(global::Heightmap.s_heightmaps); _ownsHeightmaps = true; }
+            var centre = ZoneSystem.GetZonePos(zone);
+            global::Heightmap.s_heightmaps.RemoveAll(h => h.transform.position.x == centre.x && h.transform.position.z == centre.z);
+        }
         /// <summary>Captures every log line the mod writes for the rest of the scope.</summary>
         public List<string> CaptureLog() => BepInEx.Logging.ManualLogSource.Captured = new List<string>();
         public void Dispose()
         {
             WorldGenerator.instance = _world; ZDOMan.instance = _zdos; ZoneSystem.instance = _zones; ZNetScene.instance = _scene;
-            global::Heightmap.Registered = _heightmap; BepInEx.Logging.ManualLogSource.Captured = _captured;
+            global::Heightmap.s_heightmaps = _heightmaps; BepInEx.Logging.ManualLogSource.Captured = _captured;
             Terminal.commands = _commands; Player.m_localPlayer = _localPlayer;
             ZNet.instance = _net; ZRoutedRpc.instance = _rpc; Jotunn.Managers.NetworkManager.Instance = _jotunn; _net.Server = _server; UnityEngine.Time.realtimeSinceStartup = _time;
         }

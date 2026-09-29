@@ -245,10 +245,16 @@ The doubles copy the game where mod code depends on it, and their own tests chec
 - A networked prefab instantiated during ghost initialisation leaves its ZDO and joins no live scene.
 - `ZNetScene.Destroy` queues only ZDOs this session owns, and a compiler saves only when owned.
 - Rebuilt heights are clamped to the game's ±8 m.
+- Heightmaps are loaded per zone and found by position: `Heightmap.FindHeightmap(point)` returns the loaded zone that holds the point (edges included) or null, `GetAllHeightmaps()` lists every loaded zone, and `TerrainComp.FindTerrainCompiler(pos)` returns that zone's compiler. A write aimed at the wrong zone, or at a zone that is not loaded, therefore misses as it would in the game.
 - Zone ids narrow to `short`.
 - Valheim 1.0's locations-generated flag is set from a save without raising the event.
 - A routed RPC over Steam's 512 KiB limit fails. `ZRoutedRpc.Invoked` records every call with its target, and `ZRoutedRpc.Deliver(sender, method, args)` runs a registered handler as if a peer's call arrived. Jotunn RPCs are kept by name in `NetworkManager.Instance.Rpcs` and record what they send.
 - Constructing a `Terminal.ConsoleCommand` registers it under its lower-case name. `Terminal.TryRunCommand` runs it with that terminal as `args.Context` and prints an unknown command or a failed failable action; `Terminal.Output` holds what was printed. Cheat, server-only and admin gating is not modelled; the mod's own checks still run.
+
+`TerrainSnapshot.Of(compiler)` copies a zone compiler's level and smooth deltas, paint mask and both modified flags; `TerrainAssert` compares the compiler with it afterwards:
+- `OnlyChangedWithin(before, compiler, (x, z) => ...)`: every change lies inside the footprint you declare, and the rest of the zone, flags included, is exactly as it was. It also fails when nothing changed, since then it proves nothing.
+- `Unchanged(before, compiler)`: nothing changed at all.
+- `SeamAgrees(west, east)`: two loaded neighbours agree on their shared vertices, rendered height and paint (rebuild both first). A zone written without its neighbour shows up here.
 
 `WorldGenerator` is virtual, so tests plug in synthetic worlds; `TerrainWorld` puts any `Valheim.Testing` terrain behind it.
 
@@ -257,14 +263,14 @@ Setup, in the unit-test project (not the mod project):
 ```xml
 <PropertyGroup><LangVersion>10</LangVersion></PropertyGroup> <!-- or newer; net48 test legs default to C# 7.3 -->
 <ItemGroup>
-  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.3]" PrivateAssets="all" />
+  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.4]" PrivateAssets="all" />
   <Compile Include="../MyMod/Src/RoadMath.cs" /> <!-- the mod's pure-logic sources -->
 </ItemGroup>
 ```
 
 The doubles are process-wide statics, as the game's singletons are, so add `[assembly: CollectionBehavior(DisableTestParallelization = true)]` once in the test project.
 
-`ValheimWorldScope` gives each test its own world. It records which objects `WorldGenerator.instance`, `ZDOMan.instance`, `ZoneSystem.instance`, `ZNetScene.instance`, `ZNet.instance`, `ZRoutedRpc.instance`, Jotunn's `NetworkManager.Instance`, `Heightmap.Registered`, the log capture, `Terminal.commands` and `Player.m_localPlayer` refer to, plus the server flag and the clock, and puts them back on dispose, also when the test throws. Builders install fresh objects: `WithWorld`/`WithTerrain`, `WithZdos`, `WithZoneSystem`, `WithScene`, `WithNetwork(server)` (a `ZNet` with no peers, a new `ZRoutedRpc` and a new Jotunn `NetworkManager`), `WithCommands` (an empty console-command table), `WithLocalPlayer(position)` (none by default, as on a dedicated server), `AsServer`, `RegisterHeightmap` and `CaptureLog`.
+`ValheimWorldScope` gives each test its own world. It records which objects `WorldGenerator.instance`, `ZDOMan.instance`, `ZoneSystem.instance`, `ZNetScene.instance`, `ZNet.instance`, `ZRoutedRpc.instance`, Jotunn's `NetworkManager.Instance`, the loaded heightmaps, the log capture, `Terminal.commands` and `Player.m_localPlayer` refer to, plus the server flag and the clock, and puts them back on dispose, also when the test throws. Builders install fresh objects: `WithWorld`/`WithTerrain`, `WithZdos`, `WithZoneSystem`, `WithScene`, `WithNetwork(server)` (a `ZNet` with no peers, a new `ZRoutedRpc` and a new Jotunn `NetworkManager`), `WithCommands` (an empty console-command table), `WithLocalPlayer(position)` (none by default, as on a dedicated server), `AsServer`, `RegisterHeightmap` (zones add up; loading a zone again replaces it), `UnloadHeightmap` and `CaptureLog`.
 
 ```csharp
 using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(30f)).WithZdos().WithNetwork(server: true);
