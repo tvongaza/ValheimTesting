@@ -25,6 +25,9 @@ jobs:
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
+      # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
+      # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
+      VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -34,13 +37,6 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet --info
-      - name: Show the runner's sessions (temporary diagnostic)
-        if: runner.os == 'Windows'
-        run: |
-          "session of this step: " + [System.Diagnostics.Process]::GetCurrentProcess().SessionId
-          "user: " + [Security.Principal.WindowsIdentity]::GetCurrent().Name
-          tasklist /FI ("USERNAME eq " + [Security.Principal.WindowsIdentity]::GetCurrent().Name) /FI "SESSION ne 0" /FO CSV /NH | Select-Object -First 40
-          tasklist /FI "IMAGENAME eq explorer.exe" /V /FO CSV /NH
       - run: dotnet run scripts/bootstrap-cli.cs
       - run: dotnet run scripts/validate.cs
   mod-example:

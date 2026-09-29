@@ -479,7 +479,7 @@ public class InteractiveClientDisplayTests
             string launchDirectory = Path.Combine(root.Path, "launch-2");
             var client = await InteractiveClient.StartAsync(host, launch, launchDirectory, Generous, new LinuxDisplay(display));
             await WaitForFileAsync(argumentsFile);
-            Assert.Equal("+name\nit's $HOME\n", File.ReadAllText(argumentsFile));
+            Assert.Equal("-console\n+name\nit's $HOME\n", File.ReadAllText(argumentsFile));
             string environment = File.ReadAllText($"/proc/{client.Id}/environ").Replace('\0', '\n');
             Assert.Contains("\nDISPLAY=" + display + "\n", "\n" + environment);
             Assert.Contains("\nDOORSTOP_ENABLED=1\n", "\n" + environment);
