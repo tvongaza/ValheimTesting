@@ -233,7 +233,7 @@ The four-pack layout also passed join and confirmed-save paths. Optional Reflect
 
 ## Pinned server runner
 
-`PinnedServerRun.MainAsync` is the lifecycle of a mod's owned dedicated-server test runner, so the mod's `Program.cs` supplies only its plan fields, modes and scenarios. Usage is `<runner> validate|run|<prepare modes> <plan.json> <new-output-directory>`. A plan derives from `ServerRunPlan`, which is read strictly (unknown fields refused), and `ValidateServerPlan` applies the rules every pinned plan follows:
+`PinnedServerRun.MainAsync` is the lifecycle of a mod's owned dedicated-server test runner, so the mod's `Program.cs` supplies only its plan fields, modes and scenarios. Usage is `<runner> [--profile <environment.json>] validate|run|<prepare modes> <plan.json> <new-output-directory>`; with `--profile` the server runs on the profile's server host ([a server-only plan on a remote host](#a-server-only-plan-on-a-remote-host)). A plan derives from `ServerRunPlan`, which is read strictly (unknown fields refused), and `ValidateServerPlan` applies the rules every pinned plan follows:
 - pinned sources, and port and time bounds;
 - a known executable;
 - no runner-owned token or Doorstop variable in the environment;
@@ -250,7 +250,9 @@ The runner then:
 2. copies and verifies the runtime and world, recording plan, runner and toolkit hashes, mode, platform and input hashes, refuses a runtime whose `BepInEx/patchers` holds anything the plan's `patchers` does not name (or lacks a named one), and refuses a copy whose game build, BepInEx core or patchers differ from `runtimePins` (the values found are recorded as `runtimeGameSha256`, `runtimeBepInExCoreSha256` and `runtimePatchersSha256`);
 3. stops there for `validate`;
 4. otherwise checks the CLI port and starts the owned session on the copies, with per-boot logs, recorded commands and `DedicatedStartupEvents`, then enables devcommands through the session capability and runs the scenario;
-5. always stops only the owned server, scans every boot's logs and the scenario's `run.Logs` (a `scan run logs` step, see below), writes `result.json` and `junit.xml`, and prints PASS (only for `run`), VALIDATED or PREPARED, or FAIL.
+5. always stops only the owned server, scans every boot's logs and the scenario's `run.Logs` (a `scan run logs` step, see below), writes `result.json` and `junit.xml`, and prints PASS (only for `run`), VALIDATED or PREPARED, or FAIL. It exits 0 when every step passed, 1 on a failure and 2 on bad usage. A run whose only failures are host operations with an unknown outcome (a lost reply, a transport failure, an unproven lock; see [game hosts](#game-hosts-and-environment-profiles-preview-13)) prints UNKNOWN, records `outcome` in the provenance and exits 3: neither a pass nor a failure.
+
+`run.OpenClient(plan.Client)` opens the plan's client and adds its logs to `run.Logs`: `ClientSession.Open` on this machine, or, with a profile that names clients, an owned client started in its host's desktop session (below).
 
 A clean test runtime is BepInEx core plus your plugins, with an empty `patchers` folder. Preloader patchers rewrite game assemblies before any plugin loads, so one a removed mod left behind breaks the whole run with a `TypeLoadException` on a game type; name a patcher in the plan only when the run needs it (for example a hook generator a dependency requires).
 
@@ -621,7 +623,42 @@ Paths are literal: they arrive as quoted values, so spaces are fine, and they mu
 
 CI checks every host kind: unit tests with fake processes cover the commands each kind starts, transport failures, timeouts (unknown outcome) and lock contention; the same end-to-end checks (literal values and exit codes, a timeout, lock contention, shipping a revision and files, fetching them back, following a log from an offset) run through a real local bash, Windows PowerShell and pwsh on every CI OS, and the `game hosts` job runs them over a real ssh to a throwaway sshd on localhost (bash and pwsh sessions, the loopback tunnel, an unreachable port) and into a throwaway container on the host network.
 
-Limits: this is the host layer. `ServerLaunch`, `ClientLaunch`, `OwnedServerSession` and `ClientSession` still start and own processes on this machine; driving them on a remote host through a profile is a follow-up (a client can be started in a remote desktop session with `InteractiveClient`, below). A server-only native run on a Linux container host driven over SSH from another OS has **not** been done yet. An `ssh` client on Windows is the system OpenSSH client; Windows as an SSH *host* has been checked only through the local Windows PowerShell path in CI, not over a real SSH session.
+Limits: `ServerLaunch`, `ClientLaunch` and `ClientSession.Launch` start processes on this machine. `PinnedServerRun --profile` runs a dedicated server on a Linux host (below) and `InteractiveClient` starts a client in a remote desktop session. A server-only native run on a Linux container host driven over SSH from another OS has **not** been done yet. An `ssh` client on Windows is the system OpenSSH client; Windows as an SSH *host* has been checked only through the local Windows PowerShell path in CI, not over a real SSH session.
+
+### A server-only plan on a remote host
+
+`PinnedServerRun` takes an environment profile before the mode, so the same runner and plan run the dedicated server on another machine, for example from macOS, which has no server of its own:
+
+```sh
+dotnet run --project MyMod.SystemTests -- --profile ../my-machines.json validate plan.json <new-output-directory>
+dotnet run --project MyMod.SystemTests -- --profile ../my-machines.json run plan.json <new-output-directory>
+```
+
+```json
+{
+  "hosts": {
+    "server-box": { "kind": "ssh", "platform": "linux", "shell": "bash", "destination": "tester@server-box.example",
+                    "lock": "/var/tmp/valheim-testing/lock" }
+  },
+  "server": { "host": "server-box", "install": "/opt/valheim/test-runtime", "runtime": "/srv/valheim-testing/runs", "cliPort": 5577, "gamePort": 2456 }
+}
+```
+
+The server host is a Linux machine reached over SSH, a container (`kind: container`, `--network host` so the tunnel below is its own port), or this Linux machine (`local`), with a `bash` shell. A Windows server host is refused: run the runner on that machine without a profile. The profile's `cliPort` must be the plan's `port` (the runtime's ValheimCLI `[Server] Port`), and a `-port` in the plan's arguments must be its `gamePort`. With `--profile` the runner:
+
+1. takes the server host's lock (`HostLock`) for the whole run; another run's lock refuses this one before anything on the host is touched;
+2. copies `server.install` on the host into a new run directory, `<server.runtime>/run-<utc>-<id>/runtime`, and hashes every file there (links refused): the copy must be exactly the plan's `runtime` manifest. The plan's `runtime.source` is not read; the host's install is the runtime;
+3. copies and verifies the plan's world here as usual, ships that copy to `<run>/world` (a tar checked by SHA-256 on the host) and verifies every file there again;
+4. checks the host's copy as a local one is checked: the server executable and its execute bit, the `BepInEx/patchers` names, and `runtimePins` (computed on the host's hashes, recorded as `runtimeGameSha256` and the rest); `validate` stops here;
+5. refuses a CLI port something already listens on at the host, then opens the loopback tunnel to it (`OpenCliTunnelAsync`); ValheimCLI is reached only through it and never listens beyond the host's loopback;
+6. starts each boot with `HostServer.StartAsync` in `<run>/boot-N`: the plan's arguments and environment with `{runtime}` and `{world}` as the host's paths, the owned-session token in the server's environment, Doorstop and `SteamAppId` as `ServerLaunch` sets them, in its own session (`setsid`) under a small recorder that writes the process ID and later the exit code. An earlier boot's `BepInEx/LogOutput.log` moves into the boot directory first, so the startup waits for ValheimCLI's listening line in the host's log from offset 0 (`StartupEvents.CliListeningWait`), then the loaded-world push and the identity handshake (token, process ID, save root) through the tunnel;
+7. stops only the process it started, by process ID and start time (`HostServerProcess`), moves the boot's logs into its boot directory and fetches it to `boot-N/` here (`game-0.log` BepInEx, `game-1.log` Unity with `-logFile {runtime}/toolkit-unity.log`, `stdout.log`, `stderr.log`), fetches the world copy to `host-world/`, closes the tunnel and releases the lock. The run directory on the host is never deleted automatically.
+
+A pinned runtime manifest and `runtimePins` for a host install come from the host itself: `HostInstall.ListAsync(host, install, timeout)` returns every file's SHA-256 (`Files`, the manifest) and `HostInstall.Pins(listing)` the pins. A reply lost during the start or the stop leaves the outcome unknown (UNKNOWN, exit 3) and keeps the host's lock, because a server may still run there; remove `<lock>/owner` by hand once it has stopped. The host needs bash, coreutils (`base64`, `mkfifo`, `sha256sum`, `tail`), `find`, `setsid`, `tar` and `/proc`; the [Linux server image](../docker/linux-server/README.md) and Ubuntu have them.
+
+**Clients.** With profile clients, `run.OpenClient(plan.Client, "player")` (the name may be left out when the profile lists one) starts an owned client on that client's host through `InteractiveClient`: the install, CLI port and host come from the profile (the plan's `install` is not read), the install's patchers and `installPins` are checked on the host's hashes, the client host's lock is held until teardown, its earlier BepInEx log moves aside, ValheimCLI is reached through that host's tunnel, and disposing the session stops only that client and fetches its BepInEx log and `Player.log` to `client-N/`. A Linux client uses display `:0`. An attached client is unchanged.
+
+CI covers the runner against a fake host (the whole lifecycle with a restart, validate, a copy that differs on the host, another run's lock, a lost start reply and an unproven stop as UNKNOWN with the lock kept, a scenario failure beside an unknown teardown as FAIL, a tunnel that cannot open, a busy port, a profile that does not fit the plan, and a profile client), the launch, start, stop and listing replies with fakes, and the host scripts for real: install listings and pins through local bash, Windows PowerShell and pwsh, and, on Linux, locally, over ssh to localhost and in a container in the `game hosts` job, an install shipped, copied and verified on the host, a stand-in server (a script with the server's name) started, awaited in its log from offset 0 after an earlier boot's line, stopped by identity beside a bystander that survives, and its evidence fetched back with the arguments and environment it got. No Valheim server has run this way yet.
 
 ### Clients in a host's desktop session
 
