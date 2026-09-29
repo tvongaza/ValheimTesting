@@ -305,13 +305,15 @@ public sealed class DoublesTests : IDisposable
         var got = new List<(long, int, string)>();
         ZRoutedRpc.instance.Register<int, string>("Mod_Ping", (sender, n, text) => got.Add((sender, n, text)));
         ZRoutedRpc.instance.Register("Mod_Fail", _ => throw new InvalidOperationException("handler failed"));
+        // As in the game, a broadcast and a call to the server (this peer, session 1) run the local handler at once.
         ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, "Mod_Ping", 3, "hi");
         ZRoutedRpc.instance.InvokeRoutedRPC("Mod_Ping", 4, "server");
-        Assert.Equal(new[] { (0L, "Mod_Ping"), (42L, "Mod_Ping") }, ZRoutedRpc.instance.Invoked.Select(x => (x.Target, x.Method)));
+        Assert.Equal(new[] { (0L, "Mod_Ping"), (1L, "Mod_Ping") }, ZRoutedRpc.instance.Invoked.Select(x => (x.Target, x.Method)));
         ZRoutedRpc.instance.Deliver(7, "Mod_Ping", 5, "back");
-        Assert.Equal(new[] { (7L, 5, "back") }, got);
+        Assert.Equal(new[] { (1L, 3, "hi"), (1L, 4, "server"), (7L, 5, "back") }, got);
         Assert.Equal("handler failed", Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.Deliver(7, "Mod_Fail")).Message);
-        Assert.Throws<InvalidOperationException>(() => ZRoutedRpc.instance.Deliver(7, "Mod_Unknown"));
+        ZRoutedRpc.instance.Deliver(7, "Mod_Unknown"); // dropped without an error, as in the game
+        Assert.Equal("Mod_Unknown", Assert.Single(ZRoutedRpc.instance.Dropped).Method);
     }
     [Fact] public void JotunnRpcsAreKeptByNameAndTheScopeGivesAFreshManager()
     {
