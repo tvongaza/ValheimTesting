@@ -379,7 +379,7 @@ using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(30f)).Wit
 
 It restores references, not contents. Nothing is deep-copied, so changing an object the scope did not install (adding a peer to the `ZNet` that was already there) outlives the test; install a fresh one with a builder instead. A mod's own statics are not the scope's: reset them in the test.
 
-Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity objects carry only the `ZNetView` and `WearNTear` components and have no physics or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: peers connect only through linked socket doubles, and RPCs follow the delivery and routing rules above without real timing, loss or reordering. Test what the game does natively with `Valheim.Testing.Game` against a real server.
+Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity components, colliders and renderers carry the state described in [Components, lifecycle, registries, roles and config](#components-lifecycle-registries-roles-and-config-doubles-preview-5) below, with no physics simulation or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: peers connect only through linked socket doubles, and RPCs follow the delivery and routing rules above without real timing, loss or reordering. Test what the game does natively with `Valheim.Testing.Game` against a real server.
 
 ### Peer connections and the join handshake
 
