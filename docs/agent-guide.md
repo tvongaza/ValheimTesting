@@ -1,6 +1,6 @@
 # Agent workflow: Valheim unit and system tests
 
-This guide is for an AI agent working in a mod checkout or operating an explicitly authorized test fixture. Begin with [AGENTS.md](../AGENTS.md). Examples are actual runnable programs; their READMEs state required inputs, effects and output contracts.
+This guide is for an AI agent working in a mod checkout or operating an explicitly authorized test fixture. Begin with [AGENTS.md](../AGENTS.md). For first adoption in an unrelated mod, follow [Bring your mod](adopting.md); it separates consumer setup from framework development. Examples are actual runnable programs; their READMEs state required inputs, effects and output contracts.
 
 For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTING.md). It maps changes to the right repository and includes a synthetic-fixture recipe and PR checklist.
 
@@ -8,6 +8,7 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 
 | Task | Start here | What success does not prove |
 |---|---|---|
+| Test source that uses game types | [ModWithTests](../examples/ModWithTests/README.md), the complete source-linked xUnit example | Unmodeled game behavior or native physics |
 | Test a mod decision on declared terrain | [NoGameTerrain](../examples/NoGameTerrain/README.md), then call real mod code from its own tests | Native noise, physics or save encoding |
 | Test driver failure/cleanup behavior | [Library tests](../tests/Valheim.Testing.Tests), controlled transports | Runtime Harmony/RPC timing |
 | Read a game sample | [GameObserve](../examples/GameObserve/README.md) | That the sampled value is independently correct |
@@ -25,14 +26,14 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 
 1. Read the local repository's instructions and check branch/worktree status. Keep other agents' edits and active sessions intact.
 2. Check [package ownership and setup](getting-started.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`. ValheimCLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
-3. Bootstrap the exact ValheimCLI dependency, then run local validation:
+3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
 
    ```sh
    dotnet run scripts/bootstrap-cli.cs
    dotnet run scripts/validate.cs
    ```
 
-   This needs no game, Steam or test machine. For a mod checkout, restore its test project from the resulting `.packages` feed plus NuGet.org. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
+   This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
 4. If the task is satisfied by local tests, stop there. Otherwise prepare a bounded native test plan with explicit independent expectations and a negative control where useful. Do not invent a whole new runner for a check an example already performs.
 
 ## Before an authorized native run

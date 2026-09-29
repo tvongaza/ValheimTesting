@@ -1,27 +1,20 @@
 # Add testing to a mod
 
+For your first adoption, use [Bring your mod](adopting.md) and its complete [mod test example](../examples/ModWithTests/README.md).
+
 Start with the lowest test layer that answers the question. Existing xUnit tests do not need to be rewritten or moved to this repository. Test packages belong in test projects, not in a production mod or a player's plugins directory.
 
 ## 1. Get the packages (no Valheim needed)
 
-Use the .NET 10 SDK and Git; no other tooling is needed. From a fresh checkout:
+Use the .NET 10 SDK for the examples. Choose one setup path:
 
-```sh
-git clone https://github.com/tvongaza/ValheimTesting.git
-cd ValheimTesting
-dotnet run scripts/bootstrap-cli.cs
-dotnet run scripts/validate.cs
-```
+- **Consume released packages:** reference an exact published version in your mod's test project and restore from NuGet.org. No framework checkout, Git or ValheimCLI bootstrap is needed for pure tests.
+- **Try an unpublished pure helper or doubles build:** pack only `Valheim.Testing` and `Valheim.Testing.Doubles` into a local feed and add it as described in [package versions and feeds](#package-versions-and-feeds). No ValheimCLI dependency is built.
+- **Develop this framework or use unpublished Game APIs:** clone the framework, then follow [the contributor bootstrap and validation](../CONTRIBUTING.md#set-up-and-validate-locally). That path builds pinned ValheimCLI transport source and all examples without launching a game.
 
-The same commands work on Windows, Linux and macOS; CI runs them on all three. What each host can do:
+For supported hosts and runtime requirements, see the [platform table](../README.md#platforms). Native clients still need a display/Steam session (including in the Linux client container); native servers need a supported dedicated-server runtime.
 
-| Host | Toolkit and tests | Game client (`ClientLaunch`, driven by ValheimCLI) | Dedicated server (native) | Server in a container | Remote server host |
-|---|---|---|---|---|---|
-| Windows | Yes | Yes, `valheim.exe` | Yes | Linux image; not tested on Windows | Coming next (SSH, host profiles) |
-| Linux | Yes | Yes, `valheim.x86_64`; needs a display | Yes | Yes, verified | Coming next (SSH, host profiles) |
-| macOS | Yes | Yes, `Valheim.app`; x86_64 under Rosetta; native arm64 needs a universal Doorstop | **No**: there is no macOS dedicated server | Experimental (x86-64 emulation on Apple Silicon) | Recommended; coming next (SSH, host profiles) |
-
-Bootstrap fetches the exact ValheimCLI commit in [`cli-dependency.json`](../cli-dependency.json); it does not use whichever checkout happens to be nearby. Validation runs library tests, builds all examples, runs the no-game examples, and creates `.packages/`. No Unity, game files, Steam login or running server is needed.
+### Package versions and feeds
 
 The toolkit packages, all on NuGet.org:
 
@@ -61,7 +54,7 @@ The test projects are ordinary SDK-style xUnit projects, so IDE test runners dis
 | JetBrains Rider (Windows, macOS, Linux) | Unit Tests window | net48 test legs need Mono on macOS/Linux. |
 | VS Code with C# Dev Kit | Testing panel | Same .NET 10 SDK requirement. |
 
-Open the mod's **testing solution** rather than its main solution: `ProceduralRoads.Testing.slnx` or `MoreWorldLocations.Testing.slnx`. It contains the unit tests, the external runner and the runner's tests. Packages restore from NuGet.org automatically.
+Open your test project directly or add it to your own solution. A separate testing solution is optional: Roads and MWL use `ProceduralRoads.Testing.slnx` and `MoreWorldLocations.Testing.slnx` to group unit tests and external runners. You do not need those files in another mod. Published packages restore from NuGet.org; unpublished candidates need the local feed above.
 
 Two things the command line passes explicitly are set another way in an IDE:
 
@@ -72,11 +65,11 @@ External runners are console programs. To run one from the IDE, set its command-
 
 ## 2. Keep broad coverage in unit tests
 
-Use [`NoGameTerrain`](../examples/NoGameTerrain/README.md) first. Its executable checks hand-derived heights on a plane, replays captured inputs, and refuses a missing biome instead of inventing one.
+For a test of actual mod source, start with [`ModWithTests`](../examples/ModWithTests/README.md). For an introduction to independent terrain expectations, use [`NoGameTerrain`](../examples/NoGameTerrain/README.md). Its executable checks hand-derived heights on a plane, replays captured inputs, and refuses a missing biome instead of inventing one.
 
 In your own tests, feed these small terrain inputs into the real mod decisions. Keep expectations independent of the algorithm under test. A plane or replay is not a replacement for Valheim's generator, Unity physics, native save encoding or networking.
 
-Roads demonstrates gradual adoption: its [SyntheticWorld adapter](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.Tests/SyntheticWorld.cs) delegates to shared terrain while retaining the existing game doubles and xUnit assertions. Roads-specific tests remain in Roads. Sharing a helper does not require relocating the whole suite.
+Roads demonstrates gradual adoption: its [SyntheticWorld adapter](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.Tests/SyntheticWorld.cs) delegates to shared terrain while keeping mod-specific tests and xUnit assertions in the mod repository. Shared game types can come from `Valheim.Testing.Doubles`; keep mod-specific extensions local. Roads-specific tests remain in Roads. Sharing a helper does not require relocating the whole suite.
 
 ## 3. Test orchestration without a game
 
@@ -125,7 +118,7 @@ The [Roads scenario guide](https://github.com/tvongaza/ProceduralRoads/blob/revi
 
 The dedicated server also runs on Linux. Build the launch with `ServerLaunch.CreateStartInfo(runtime, arguments, environment)` (`Valheim.Testing.Game` `0.1.0-preview.11`) and pass it to `DirectServerProcess` as on Windows. It detects the platform from the runtime's executable, refuses a runtime with both or neither, and on Linux sets BepInEx's Doorstop variables and prepends to `LD_LIBRARY_PATH`/`LD_PRELOAD` without dropping existing entries. The [Linux image](../docker/linux-server/README.md) installs the free dedicated server with anonymous SteamCMD and BepInEx at build time; [LinuxServerSmoke](../examples/LinuxServerSmoke/README.md) is the smallest runner for it.
 
-What works: owned dedicated-server native checks on Linux, locally or in CI; the image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026. Not yet: a game client in the cloud or a container, and remote hosts over SSH. The image contains game files; keep it local or inside the CI job and never publish it.
+What works: owned dedicated-server native checks on Linux, locally or in CI; the image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026. The separate [Linux client container](../docker/linux-client/README.md) supports native clients on NVIDIA GPU hosts with a display and authenticated Steam session. General remote-host orchestration remains outside the library. The **server** image contains game files; keep it local or inside the CI job and never publish it. The published client base image contains no game files; do not publish it after installing the game.
 
 On macOS, run the toolkit, tests and a Mac game client locally, and put the dedicated server on a Windows or Linux machine. There is no macOS dedicated server: `ServerLaunch` throws `PlatformNotSupportedException` on a macOS host rather than executing a Linux or Windows binary, and also when given a `Valheim.app` client as the server runtime. `Detect` still works on a Mac, so a runtime can be checked before it is copied elsewhere. The Linux image builds on Apple Silicon with `--platform linux/amd64`, but only under emulation; see its [Apple Silicon notes](../docker/linux-server/README.md#apple-silicon-experimental) and treat it as experimental.
 
@@ -137,7 +130,7 @@ Most comparison examples take a new output directory and write `result.json`, `j
 
 Attachment examples never claim or restore the machine and do not own an existing game process. Owned session tools stop only processes they started; their disposable copies and reports remain for inspection. The operator owns machine/account coordination, backups, protection and restoration. Review reports for private account/world data before publishing.
 
-For composable slopes, cliffs and terraces plus independent per-zone height/paint state, use the [shared-world guide](shared-world.md). Keep game-type shims and writer assertions in your mod.
+For composable slopes, cliffs and terraces plus independent per-zone height/paint state, use the [shared-world guide](shared-world.md). Use the shared [game doubles, world scope and terrain assertions](testing-toolkit.md#game-doubles) where they model the behavior you need. Keep mod-specific extensions, expected results and scenario tests in your mod.
 
 ## Strict calls from tests
 

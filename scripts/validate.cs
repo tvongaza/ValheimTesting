@@ -3,24 +3,79 @@
 //   dotnet run scripts/validate.cs
 //
 // Runs the library tests, builds every example, executes the two no-game
-// examples and packs the libraries into the local feed.
+// examples, runs the package-consuming mod tests and packs the libraries into the local feed.
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Security;
+using System.Text.RegularExpressions;
 
 string root = FindRoot();
 
 Run("dotnet", "test", "tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "-c", "Release", "-m:1");
 Run("dotnet", "test", "tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj", "-c", "Release", "-m:1");
+// Pack the pure packages before the consumer example restores them. This exercises
+// the actual source-package layout rather than linking the doubles directory.
+foreach (string name in new[] { "Valheim.Testing", "Valheim.Testing.Doubles" })
+    Run("dotnet", "pack", $"src/{name}/{name}.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
+// Run the consumer example as a mod would: from a copy outside this checkout, pinned to this source's
+// Doubles version, restoring Valheim.Testing* only from the fresh local feed into a new package cache.
+// NuGet.org serves published packages of the same id and version, so without the mapping, the fresh
+// cache and the hash check below, a published or cached copy could pass for this source.
+string consumer = Path.Combine(Path.GetTempPath(), "valheim-mod-consumer-" + Guid.NewGuid().ToString("N"));
+try
+{
+    string doublesVersion = SourceVersion("Valheim.Testing.Doubles");
+    CopyDirectory(Path.Combine(root, "examples", "ModWithTests"), Path.Combine(consumer, "mod"));
+    string project = Path.Combine(consumer, "mod", "MyMod.Tests", "MyMod.Tests.csproj");
+    string pin = $"Include=\"Valheim.Testing.Doubles\" Version=\"[{doublesVersion}]\"";
+    string text = Regex.Replace(File.ReadAllText(project), @"Include=""Valheim\.Testing\.Doubles"" Version=""\[[^\]]+\]""", pin);
+    if (!text.Contains(pin)) throw new InvalidOperationException("ModWithTests no longer pins an exact Valheim.Testing.Doubles version.");
+    File.WriteAllText(project, text);
+    string feed = SecurityElement.Escape(Path.Combine(root, ".packages"));
+    File.WriteAllText(Path.Combine(consumer, "NuGet.Config"), $"""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources><clear/><add key="local-preview" value="{feed}"/><add key="nuget.org" value="https://api.nuget.org/v3/index.json"/></packageSources>
+          <packageSourceMapping>
+            <packageSource key="local-preview"><package pattern="Valheim.Testing*"/></packageSource>
+            <packageSource key="nuget.org"><package pattern="*"/></packageSource>
+          </packageSourceMapping>
+        </configuration>
+        """);
+    string cache = Path.Combine(consumer, "packages");
+    Run("dotnet", "test", project, "-c", "Release", "-m:1", "-p:RestorePackagesPath=" + cache);
+    string packed = Path.Combine(root, ".packages", $"Valheim.Testing.Doubles.{doublesVersion}.nupkg");
+    string restored = Path.Combine(cache, "valheim.testing.doubles", doublesVersion.ToLowerInvariant(), $"valheim.testing.doubles.{doublesVersion.ToLowerInvariant()}.nupkg");
+    if (!File.Exists(restored) || !File.ReadAllBytes(packed).AsSpan().SequenceEqual(File.ReadAllBytes(restored)))
+        throw new InvalidOperationException("ModWithTests did not restore the Valheim.Testing.Doubles package packed from this source.");
+}
+finally
+{
+    if (Directory.Exists(consumer)) Directory.Delete(consumer, recursive: true);
+}
 foreach (string project in Directory.GetFiles(Path.Combine(root, "examples"), "*.csproj", SearchOption.AllDirectories)
              .Where(p => Path.GetDirectoryName(Path.GetDirectoryName(p)) == Path.Combine(root, "examples"))
              .OrderBy(p => p, StringComparer.Ordinal))
     Run("dotnet", "build", project, "-c", "Release", "-m:1");
 Run("dotnet", "run", "--project", "examples/NoGameTerrain", "-c", "Release", "--no-build");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
-foreach (string name in new[] { "Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Doubles" })
-    Run("dotnet", "pack", $"src/{name}/{name}.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
+Run("dotnet", "pack", "src/Valheim.Testing.Game/Valheim.Testing.Game.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
 Console.WriteLine("Local validation passed.");
 return 0;
+
+string SourceVersion(string name) =>
+    Regex.Match(File.ReadAllText(Path.Combine(root, "src", name, name + ".csproj")), "<Version>([^<]+)</Version>") is { Success: true } m
+        ? m.Groups[1].Value
+        : throw new InvalidOperationException("No <Version> in " + name + ".csproj");
+
+// Copies an example's sources only; build output from an earlier in-place run stays behind.
+static void CopyDirectory(string from, string to)
+{
+    Directory.CreateDirectory(to);
+    foreach (string file in Directory.GetFiles(from)) File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
+    foreach (string dir in Directory.GetDirectories(from))
+        if (Path.GetFileName(dir) is not ("bin" or "obj")) CopyDirectory(dir, Path.Combine(to, Path.GetFileName(dir)));
+}
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
 
@@ -43,6 +98,6 @@ void Run(string file, params string[] arguments)
     if (process.ExitCode != 0)
     {
         Console.Error.WriteLine($"FAILED ({process.ExitCode}): {file} {string.Join(' ', arguments)}");
-        Environment.Exit(process.ExitCode);
+        throw new InvalidOperationException("Validation command failed with exit code " + process.ExitCode);
     }
 }

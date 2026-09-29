@@ -1,6 +1,6 @@
 # First example: no game required
 
-From the repository root, after [bootstrap](../../docs/getting-started.md#1-build-the-preview-packages-without-valheim):
+From the repository root, after [bootstrap](../../CONTRIBUTING.md#set-up-and-validate-locally):
 
 ```sh
 dotnet run --project examples/NoGameTerrain -c Release

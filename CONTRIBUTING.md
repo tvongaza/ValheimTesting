@@ -4,6 +4,8 @@ Contributions from mod developers and their coding agents are welcome. A useful 
 
 Use the [issues](https://github.com/tvongaza/ValheimTesting/issues) to describe a gap or propose a larger API change. Small, focused fixes can go straight to a [pull request](https://github.com/tvongaza/ValheimTesting/pulls) against `main`. Include the mod use case that motivated the change; a second consumer is useful evidence of reuse, not a prerequisite.
 
+Only adopting the library in your mod? Use [Bring your mod](docs/adopting.md) first. The bootstrap below is for framework contributions and unpublished Game APIs; it is not required to consume released pure packages.
+
 ## Choose the right repository
 
 | Contribution | Where it belongs | Examples to follow |

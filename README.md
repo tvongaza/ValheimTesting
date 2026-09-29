@@ -4,7 +4,7 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 
 > Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
 
-New to the framework? Follow [Add testing to a mod](docs/getting-started.md), then choose a runnable example from the [example index](examples/README.md). Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually.
+Bringing your own mod? Start with [the adoption guide](docs/adopting.md) and [a complete first mod test](examples/ModWithTests/README.md). Use [package setup](docs/getting-started.md) and the [example index](examples/README.md) for the next layer. Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually.
 
 ## Contribute
 
@@ -27,7 +27,9 @@ The dependency goes **ValheimTesting → ValheimCLI**, never the reverse. Game-s
 
 Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. All four packages are on NuGet.org: [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing), [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli), [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) and [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles). ValheimTesting publishes the transport as `Valheim.Testing.Cli` so it is clearly this toolkit's packaging, not an official ValheimCLI release; upstream's own project is `Valheim.Cli.Testing`. Bootstrap builds it from tracked source at the pinned commit into an ignored local feed; it does not compile or launch the game plugin.
 
-## Start without a game
+## Validate or develop the framework (no game)
+
+Consumers of published packages can restore directly from NuGet.org; see [the adoption guide](docs/adopting.md). The commands below validate this entire repository.
 
 Requires only the .NET 10 SDK and Git; the bootstrap and validation scripts are .NET file-based C# programs. The pure library targets netstandard2.0; the game library and examples target net10.0 and allow a newer runtime. The ValheimCLI transport package is built for net10.0 from the pinned ValheimCLI source, so .NET 10 is the only modern runtime needed.
 
@@ -55,7 +57,7 @@ The toolkit needs only the .NET 10 SDK on every host, and CI runs bootstrap and 
 
 Owned dedicated-server checks can run on Linux as well as Windows. `ServerLaunch` detects a copied server runtime's platform from its executable (`valheim_server.exe` or `valheim_server.x86_64`) and builds the direct launch that `DirectServerProcess` and `OwnedServerSession` own, including BepInEx's Doorstop variables on Linux. It is new in `Valheim.Testing.Game` `0.1.0-preview.11`. [docker/linux-server](docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10, and the manual [Linux workflow](.github/workflows/native-linux.yml) boots it once with [LinuxServerSmoke](examples/LinuxServerSmoke/README.md). The image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026 (server build 25527701); on Apple Silicon the image runs only under emulation and remains experimental.
 
-Not yet: game clients in the cloud or a container (client checks still need a desktop machine), and driving remote hosts over SSH, which is next.
+Linux game clients can run on a remote NVIDIA GPU host using the [client container](docker/linux-client/README.md), which supplies a display and Steam setup but no game files. General remote-host provisioning/orchestration over SSH is not supplied by the library; the operator still manages the host and account.
 
 Server images contain Valheim's game files. Build them locally or in the CI job that uses them; never push, upload or publish an image, layer or server directory.
 
@@ -72,7 +74,7 @@ Synthetic inputs are not Valheim's generator. Replaying captured inputs is not i
 
 Local validation covers synthetic inputs, observation contracts and lifecycle failure handling. Roads supplies the first native scenarios: a 100-sample declared terrain/collider calibration, followed by a persistent two-zone native fixture. On Valheim 1.0.16, a ValheimCLI-only client matched 15 height/collider samples and three stationary grounded observations before and after confirmed server save/restart/rejoin. The later paint arm matched all 16 paved-core/verge RGBA samples across the same lifecycle. An unchanged-paint negative expectation failed exactly the eight painted samples and passed the untouched eight.
 
-The paint fixture starts from explicit saved RGBA, preserves alpha and samples both sides of a zone seam. It does not establish arbitrary terrain, native dirt/fading-edge behavior, rendered appearance or human walking usability. MWL's full-mode payment/delivery/ownership gate remains pending. See [the detailed guide](docs/testing-toolkit.md), [source provenance](PROVENANCE.md), and examples.
+The paint fixture starts from explicit saved RGBA, preserves alpha and samples both sides of a zone seam. The [follow-up campaign](docs/native-validation-20260927.md) adds bounded dirt/fading-edge coverage. These fixtures do not establish arbitrary terrain, rendered appearance or human walking usability. Mod-specific acceptance status belongs in the mod's scenario report. See [the detailed guide](docs/testing-toolkit.md), [source provenance](PROVENANCE.md), and examples.
 
 Preview APIs may change. No release or upstream merge is implied by this repository.
 

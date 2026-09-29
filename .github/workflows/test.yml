@@ -1,7 +1,8 @@
 name: Local test layers
 # Bootstrap and local validation on every supported toolkit OS: library tests, example builds, the two
-# no-game examples and packing. Never launches Valheim or a server. The scripts are .NET file-based
-# programs, so the same commands run in each runner's default shell. No secrets are used.
+# no-game examples, package-consuming mod tests and packing. Never launches Valheim or a server. The scripts are .NET file-based
+# programs, so the same commands run in each runner's default shell. No secrets are used. The mod-example job runs
+# the ModWithTests workflow template's commands against the published packages.
 on: [push, pull_request]
 permissions:
   contents: read
@@ -29,3 +30,22 @@ jobs:
       - run: dotnet --info
       - run: dotnet run scripts/bootstrap-cli.cs
       - run: dotnet run scripts/validate.cs
+  mod-example:
+    name: mod example (published packages)
+    # Keep in step with examples/ModWithTests/.github/workflows/tests.yml. A copy outside the checkout leaves this
+    # repository's NuGet.Config and local feed out of play, so packages restore from NuGet.org only, as in a mod.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - run: cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
+      - run: dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
+        working-directory: ${{ runner.temp }}/mod
