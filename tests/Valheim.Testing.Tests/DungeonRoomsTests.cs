@@ -79,7 +79,7 @@ public class DungeonRoomsTests
         Assert.Contains($"room 1 ({StableHash.Of(Corridor)}): {Corridor} at (158, -64) reaches 2 m past zone (2, -1) [x 96..160, z -96..-32]", error.Message);
         // Without its size only the centre is checked, which cannot see it.
         Assert.Empty(DungeonRooms.OutsideZone(dungeon));
-        Assert.Contains("centre only", Assert.Single(DungeonRooms.OutsideZone(One(Dungeon(RoomData((Corridor, 161, -64, 0))))).Reason));
+        Assert.Contains("centre only", Assert.Single(DungeonRooms.OutsideZone(One(Dungeon(RoomData((Corridor, 161, -64, 0)))))).Reason);
     }
 
     [Fact] public void TheFootprintTurnsWithTheRoomsYaw()
