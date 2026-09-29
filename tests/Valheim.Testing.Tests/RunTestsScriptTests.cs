@@ -17,6 +17,8 @@ public sealed class RunTestsScriptTests : IDisposable
     [UnixFact] public Task NameFilterIsTranslated() => RunTestsCases.NameFilterIsTranslated(_fakes);
     [UnixFact] public Task TraitFilterIsTranslated() => RunTestsCases.TraitFilterIsTranslated(_fakes);
     [UnixFact] public Task UntranslatableFilterRunsNothing() => RunTestsCases.UntranslatableFilterRunsNothing(_fakes);
+    [UnixFact] public Task PropertyNamesIgnoreCase() => RunTestsCases.PropertyNamesIgnoreCase(_fakes);
+    [UnixFact] public Task NoTestsRanFails() => RunTestsCases.NoTestsRanFails(_fakes);
     [UnixFact] public Task ProjectWithoutNet48RunsNothing() => RunTestsCases.ProjectWithoutNet48RunsNothing(_fakes);
     [UnixFact] public Task NoConsoleRunner() => RunTestsCases.NoConsoleRunner(_fakes);
     [UnixFact] public Task ParallelOption() => RunTestsCases.ParallelOption(_fakes);
@@ -74,6 +76,8 @@ public sealed class RunTestsPowerShellTests : IDisposable
     [WindowsFact] public Task NameFilterIsTranslated() => RunTestsCases.NameFilterIsTranslated(_fakes);
     [WindowsFact] public Task TraitFilterIsTranslated() => RunTestsCases.TraitFilterIsTranslated(_fakes);
     [WindowsFact] public Task UntranslatableFilterRunsNothing() => RunTestsCases.UntranslatableFilterRunsNothing(_fakes);
+    [WindowsFact] public Task PropertyNamesIgnoreCase() => RunTestsCases.PropertyNamesIgnoreCase(_fakes);
+    [WindowsFact] public Task NoTestsRanFails() => RunTestsCases.NoTestsRanFails(_fakes);
     [WindowsFact] public Task ProjectWithoutNet48RunsNothing() => RunTestsCases.ProjectWithoutNet48RunsNothing(_fakes);
     [WindowsFact] public Task NoConsoleRunner() => RunTestsCases.NoConsoleRunner(_fakes);
     [WindowsFact] public Task ParallelOption() => RunTestsCases.ParallelOption(_fakes);
@@ -91,11 +95,12 @@ internal static class RunTestsCases
     {
         ScriptRun run = await fakes.Run("Fixture.Tests.csproj");
         run.AssertExit(0);
-        Assert.Equal(new[] { "net10.0: passed", "net48: passed" }, Summary(run));
+        Assert.Equal(new[] { "net10.0: passed", "net48: passed (5 tests)" }, Summary(run));
         Assert.Equal("dotnet [test] [Fixture.Tests.csproj] [-f] [net10.0] [-c] [Debug]", Assert.Single(fakes.Calls("dotnet [test]")));
         Assert.StartsWith("dotnet [build] [Fixture.Tests.csproj] [-f] [net48] [-c] [Debug]", Assert.Single(fakes.Calls("dotnet [build]")));
         string console = Assert.Single(fakes.ConsoleCalls());
-        Assert.Contains("[" + fakes.Dll + "] [-nologo]", console);
+        Assert.StartsWith("console [" + fakes.Dll + "] [-xml] [", console);
+        Assert.Contains("] [-nologo]", console);
         if (defaultParallel is null) Assert.DoesNotContain("[-parallel]", console);
         else Assert.EndsWith(defaultParallel, console);
     }
@@ -113,7 +118,7 @@ internal static class RunTestsCases
         fakes.Environment["FAKE_TEST_EXIT"] = "1";
         ScriptRun run = await fakes.Run("Fixture.Tests.csproj");
         run.AssertExit(1);
-        Assert.Equal(new[] { "net10.0: FAILED (tests, exit 1)", "net48: passed" }, Summary(run));
+        Assert.Equal(new[] { "net10.0: FAILED (tests, exit 1)", "net48: passed (5 tests)" }, Summary(run));
         Assert.Single(fakes.ConsoleCalls());
     }
 
@@ -145,13 +150,32 @@ internal static class RunTestsCases
     public static async Task UntranslatableFilterRunsNothing(RunTestsFakes fakes)
     {
         // The console runner ANDs a method and a trait option, so an OR of the two cannot be passed on.
-        foreach (string filter in new[] { "FullyQualifiedName~DrySite | Category=Slow", "FullyQualifiedName~DrySite&Category=Slow", "DisplayName~Dry" })
+        // DisplayName, Name and ClassName are test properties, not traits: as -trait they would select nothing.
+        foreach (string filter in new[] { "FullyQualifiedName~DrySite | Category=Slow", "FullyQualifiedName~DrySite&Category=Slow", "DisplayName~Dry",
+                     "DisplayName=Dry", "Name=Dry", "classname=DrySiteTests" })
         {
             ScriptRun run = await fakes.Run("--filter", filter, "Fixture.Tests.csproj");
             run.AssertExit(2);
             Assert.Contains("cannot express the filter", run.Stderr);
         }
         Assert.Empty(fakes.Calls());
+    }
+
+    public static async Task PropertyNamesIgnoreCase(RunTestsFakes fakes)
+    {
+        ScriptRun run = await fakes.Run("--filter", "fullyqualifiedname=DrySiteTests.Boundary | FULLYQUALIFIEDNAME~Wet", "Fixture.Tests.csproj");
+        run.AssertExit(0);
+        Assert.EndsWith("[-method] [DrySiteTests.Boundary] [-method] [*Wet*]", Assert.Single(fakes.ConsoleCalls()));
+    }
+
+    public static async Task NoTestsRanFails(RunTestsFakes fakes)
+    {
+        // A filter or discovery problem that selects nothing exits 0 from the console runner; the run must still fail.
+        fakes.Environment["FAKE_TOTAL"] = "0";
+        ScriptRun run = await fakes.Run("Fixture.Tests.csproj");
+        run.AssertExit(1);
+        Assert.Equal(new[] { "net10.0: passed", "net48: FAILED (no tests ran)" }, Summary(run));
+        Assert.Contains("ran no tests on net48", run.Stderr);
     }
 
     public static async Task ProjectWithoutNet48RunsNothing(RunTestsFakes fakes)
@@ -197,7 +221,8 @@ internal static class RunTestsCases
 
 /// <summary>
 /// Fake dotnet, mono (bash only) and xunit console tools for run-tests. Each call appends one line to calls.txt:
-/// the tool's name and each argument in brackets. <c>dotnet msbuild -getProperty:X</c> prints FAKE_X-style values.
+/// the tool's name and each argument in brackets. <c>dotnet msbuild -getProperty:X</c> prints FAKE_X-style values; the
+/// console runner writes an XML report of FAKE_TOTAL tests where <c>-xml</c> names it.
 /// </summary>
 internal sealed class RunTestsFakes : IDisposable
 {
@@ -236,6 +261,8 @@ internal sealed class RunTestsFakes : IDisposable
                 "exit 9\r\n");
             console = Scripts.WindowsTool("xunit-console",
                 "Add-Content -LiteralPath $env:CALLS -Value ('console' + (($args | ForEach-Object { ' [' + $_ + ']' }) -join ''))\r\n" +
+                "$x = [array]::IndexOf($args, '-xml')\r\n" +
+                "if ($x -ge 0) { Set-Content -LiteralPath $args[$x + 1] -Value ('<assemblies><assembly name=\"Fixture.Tests.dll\" total=\"' + $env:FAKE_TOTAL + '\" /></assemblies>') }\r\n" +
                 "exit [int]$env:FAKE_NET48_EXIT\r\n");
         }
         else
@@ -256,7 +283,12 @@ internal sealed class RunTestsFakes : IDisposable
                 "  build) exit \"$FAKE_BUILD_EXIT\" ;;\n" +
                 "esac\nexit 9\n");
             // Mono runs the console runner: its first argument is the runner.
-            Scripts.Tool("bin/mono", "#!/bin/sh\nline=mono\n" + record + "exit \"$FAKE_NET48_EXIT\"\n");
+            Scripts.Tool("bin/mono", "#!/bin/sh\nline=mono\n" + record +
+                "while [ $# -gt 0 ]; do\n" +
+                "  if [ \"$1\" = -xml ]; then printf '<assemblies><assembly name=\"Fixture.Tests.dll\" total=\"%s\" /></assemblies>\\n' \"$FAKE_TOTAL\" > \"$2\"; fi\n" +
+                "  shift\n" +
+                "done\n" +
+                "exit \"$FAKE_NET48_EXIT\"\n");
             console = Scripts.PathOf("console/xunit.console.exe");
             Scripts.Folder("console");
             File.WriteAllText(console, "stand-in");
@@ -276,6 +308,7 @@ internal sealed class RunTestsFakes : IDisposable
             ["FAKE_TEST_EXIT"] = "0",
             ["FAKE_BUILD_EXIT"] = "0",
             ["FAKE_NET48_EXIT"] = "0",
+            ["FAKE_TOTAL"] = "5",
         };
     }
 

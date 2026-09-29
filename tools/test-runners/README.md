@@ -43,7 +43,9 @@ net10.0: passed
 net48: FAILED (tests, exit 1)
 ```
 
-Exit codes: `0` every selected framework passed; `1` a build or test run failed; `2` usage, a filter the console runner cannot express, or a framework the project does not target (nothing runs); `3` a prerequisite is missing (Mono, or the console runner) and nothing failed. Environment: `MONO` names the Mono executable (default `mono`), `XUNIT_CONSOLE` a specific `xunit.console.exe`.
+The console runner writes an XML report, and a .NET Framework leg that ran no tests fails (`net48: FAILED (no tests ran)`) even though the runner exited 0: a filter that matches nothing, or tests the runner cannot discover, must not pass silently. A passing leg shows its count, `net48: passed (5 tests)`.
+
+Exit codes: `0` every selected framework passed; `1` a build or test run failed, or the console runner ran no tests; `2` usage, a filter the console runner cannot express, or a framework the project does not target (nothing runs); `3` a prerequisite is missing (Mono, or the console runner) and nothing failed. Environment: `MONO` names the Mono executable (default `mono`), `XUNIT_CONSOLE` a specific `xunit.console.exe`.
 
 ## What the project needs
 
@@ -63,7 +65,7 @@ Exit codes: `0` every selected framework passed; `1` a build or test run failed;
 | `FullyQualifiedName=Namespace.Class.Method` | `-method "Namespace.Class.Method"` |
 | `Trait=value` (any trait name, such as `Category=Slow`) | `-trait "Trait=value"` |
 
-Anything else (`&`, `!=`, parentheses, `DisplayName`, or a method term OR'd with a trait term) stops the script before it runs anything, with exit 2. Simplify the filter, or run `--framework net10.0` alone.
+Property names compare case-insensitively, as in `dotnet test`. Anything else stops the script before it runs anything, with exit 2: `&`, `!=`, parentheses, a method term OR'd with a trait term, and the test properties the console cannot select by (`DisplayName`, `Name`, `ClassName`, `TestCategory`, `Priority`, `Id`), which as a trait would match no test. Simplify the filter, or run `--framework net10.0` alone.
 
 ## Mono and parallel tests
 
@@ -77,4 +79,4 @@ Hosted runners have no Mono: install it in the job (`sudo apt-get install -y mon
 
 ## Tests
 
-`RunTestsScriptTests` (bash, on macOS and Linux) and `RunTestsPowerShellTests` (Windows PowerShell, on Windows) in `tests/Valheim.Testing.Tests` run the real scripts against fake `dotnet`, `mono` and console-runner tools that record their arguments: both frameworks passing, a failure on only one framework (a `net48`-only failure must fail the run), a failed build, filter translation and refusal, a project without `net48`, a missing console runner, missing Mono, the parallel option and passed-through arguments. `dotnet run scripts/validate.cs` runs them. The `test-runners` CI job runs the scripts for real, with Mono on Ubuntu and macOS and .NET Framework on Windows, on a copy of ModWithTests that targets both frameworks, and then with an added test that fails only on .NET Framework, which must make the script exit 1 while `--framework net10.0` still passes.
+`RunTestsScriptTests` (bash, on macOS and Linux) and `RunTestsPowerShellTests` (Windows PowerShell, on Windows) in `tests/Valheim.Testing.Tests` run the real scripts against fake `dotnet`, `mono` and console-runner tools that record their arguments: both frameworks passing, a failure on only one framework (a `net48`-only failure must fail the run), a `net48` leg that ran no tests, a failed build, filter translation (property names in any case) and refusal (including `DisplayName=`, `Name=` and `ClassName=`), a project without `net48`, a missing console runner, missing Mono, the parallel option and passed-through arguments. `dotnet run scripts/validate.cs` runs them. The `test-runners` CI job runs the scripts for real, with Mono on Ubuntu and macOS and .NET Framework on Windows, on a copy of ModWithTests that targets both frameworks, and then with an added test that fails only on .NET Framework, which must make the script exit 1 while `--framework net10.0` still passes, and with a filter that selects no test, which must fail the `net48` leg.

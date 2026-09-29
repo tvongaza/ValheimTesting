@@ -27,7 +27,7 @@ dotnet build MyMod/MyMod.csproj -p:ValheimPath="/path/to/Valheim"
 export VALHEIM_PATH="/path/to/Valheim"
 ```
 
-Without either, the Steam folder of the operating system is tried: `C:\Program Files (x86)\Steam\steamapps\common\Valheim` on Windows, `~/Library/Application Support/Steam/steamapps/common/Valheim` on macOS, `~/.steam/debian-installation/steamapps/common/Valheim` on Linux. [FullLifecycle](../../examples/FullLifecycle/README.md)'s mod and adapter import them from this folder.
+Without either, the Steam folder of the operating system is tried: `C:\Program Files (x86)\Steam\steamapps\common\Valheim` on Windows, `~/Library/Application Support/Steam/steamapps/common/Valheim` on macOS, `~/.steam/steam/steamapps/common/Valheim` on Linux (the link Steam keeps to its install, whichever way it was installed). [FullLifecycle](../../examples/FullLifecycle/README.md)'s mod and adapter import them from this folder.
 
 | Property | Default | Meaning |
 |---|---|---|
@@ -59,7 +59,7 @@ A DLL outside those two folders (Jötunn in `BepInEx/plugins`, say) is an ordina
 Before assembly references are resolved, every listed file is checked. The build stops with one error that says what was looked for, where, and which property to set:
 
 ```text
-error : Valheim is not installed at '/home/me/.steam/debian-installation/steamapps/common/Valheim' (the default Steam folder; neither ValheimPath nor VALHEIM_PATH is set). Set ValheimPath to the game folder, ...
+error : Valheim is not installed at '/home/me/.steam/steam/steamapps/common/Valheim' (the default Steam folder; neither ValheimPath nor VALHEIM_PATH is set). Set ValheimPath to the game folder, ...
 error : Game assemblies not found in '<game>/valheim_Data/Managed' (from ValheimPath): assembly_utils (<game>/valheim_Data/Managed/assembly_utils.dll). ...
 error : BepInEx assemblies not found in '<game>/BepInEx/core' (from ValheimPath): BepInEx (...), 0Harmony (...). Install BepInEx in the game folder, or set BepInExCore ...
 error : MyMod.TestAdapter.csproj sets UseValheimCli: pass -p:CliDll=<path> with the ValheimCLI core (valheimCLI.dll) installed in the test runtime. ...
@@ -75,4 +75,4 @@ On a hosted CI runner, a project that imports these files therefore fails at onc
 
 ## Tests
 
-`GameReferencesBuildTests` and `GameReferencesErrorTests` in `tests/Valheim.Testing.Tests` build small net48 projects that import these files against a fake game folder of generated stand-in assemblies (no game files): a Windows/Linux and a macOS layout, `VALHEIM_PATH`, added and removed references, a reference to another file (`File`), and `UseValheimCli`, each asserting that no game assembly is copied. Each missing piece (no game folder, a folder that is not the game, one missing assembly, no BepInEx, `UseValheimCli` without `CliDll` or with a wrong path, the props without the targets, game references together with the doubles) must fail with its error. `dotnet run scripts/validate.cs` runs them on every OS.
+`GameReferencesBuildTests` and `GameReferencesErrorTests` in `tests/Valheim.Testing.Tests` build small net48 projects that import these files against a fake game folder of generated stand-in assemblies (no game files): a Windows/Linux and a macOS layout, `VALHEIM_PATH`, the default Steam folder under `HOME` (macOS and Linux), added and removed references, a reference to another file (`File`), and `UseValheimCli`, each asserting that no game assembly is copied. Each missing piece (no game folder, nothing in the default Steam folder, a folder that is not the game, one missing assembly, no BepInEx, `UseValheimCli` without `CliDll` or with a wrong path, the props without the targets, game references together with the doubles) must fail with its error. `dotnet run scripts/validate.cs` runs them on every OS.

@@ -24,9 +24,10 @@
 # with one line per framework ends the output.
 #
 # Exit code: 0 every selected framework passed; 1 a build or a test run
-# failed; 2 usage, a filter the console runner cannot express, or a framework
-# the project does not target (nothing is run); 3 a prerequisite is missing
-# (Mono, or xunit.runner.console) and nothing failed.
+# failed, or the console runner ran no tests; 2 usage, a filter the console
+# runner cannot express, or a framework the project does not target (nothing
+# is run); 3 a prerequisite is missing (Mono, or xunit.runner.console) and
+# nothing failed.
 #
 # Environment:
 #   MONO           the Mono executable (default: mono on PATH)
@@ -78,8 +79,11 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) on_windows=1 ;; esac
 # console ORs options of one kind and ANDs different kinds, so only terms of
 # one kind joined by | translate exactly: FullyQualifiedName~text (or a bare
 # text, dotnet test's shorthand for it), FullyQualifiedName=name, and
-# Trait=value for any trait name.
+# Trait=value for any trait name. Test properties the console cannot select by
+# (DisplayName, Name, ClassName, ...) are refused: as a trait they would match
+# nothing. Property names compare case-insensitively, as dotnet test's do.
 xunit_filter=()
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 translate_filter() {
   local expr=$1 term key value kind='' this
   local terms=()
@@ -91,14 +95,16 @@ translate_filter() {
     [ -n "$term" ] || return 1
     if [[ "$term" == *'~'* ]]; then
       key=${term%%'~'*}; value=${term#*'~'}
-      [ "$key" = FullyQualifiedName ] || return 1
+      [ "$(lower "$key")" = fullyqualifiedname ] || return 1
       this=method; xunit_filter+=(-method "*$value*")
     elif [[ "$term" == *'='* ]]; then
       key=${term%%=*}; value=${term#*=}
       [ -n "$key" ] && [ -n "$value" ] || return 1
-      if [ "$key" = FullyQualifiedName ]; then this=method; xunit_filter+=(-method "$value")
-      else this=trait; xunit_filter+=(-trait "$key=$value")
-      fi
+      case "$(lower "$key")" in
+        fullyqualifiedname) this=method; xunit_filter+=(-method "$value") ;;
+        displayname|name|classname|testcategory|priority|id) return 1 ;;
+        *) this=trait; xunit_filter+=(-trait "$key=$value") ;;
+      esac
     else
       this=method; xunit_filter+=(-method "*$term*")
     fi
@@ -156,6 +162,9 @@ find_console() {
 }
 
 results=()
+reports=()
+cleanup() { [ ${#reports[@]} -eq 0 ] || rm -f "${reports[@]}"; }
+trap cleanup EXIT
 failed=0
 missing=0
 for tfm in "${frameworks[@]}"; do
@@ -186,14 +195,22 @@ for tfm in "${frameworks[@]}"; do
   fi
   mode=$parallel
   [ -n "$mode" ] || { [ "$on_windows" = 1 ] && mode=default || mode=none; }
-  run=("$console" "$dll" -nologo)
+  # The XML report counts the tests that ran: a filter or discovery problem
+  # that selects none must not pass.
+  report=$(mktemp "${TMPDIR:-/tmp}/run-tests-xunit.XXXXXX")
+  reports+=("$report")
+  run=("$console" "$dll" -xml "$report" -nologo)
   [ "$mode" = default ] || run+=(-parallel "$mode")
   run+=(${xunit_filter[@]+"${xunit_filter[@]}"})
   if [ "$on_windows" = 1 ]; then "${run[@]}" || status=$?
   else "$mono" "${run[@]}" || status=$?
   fi
-  if [ "$status" = 0 ]; then results+=("$tfm: passed")
-  else results+=("$tfm: FAILED (tests, exit $status)"); failed=1
+  if [ "$status" != 0 ]; then results+=("$tfm: FAILED (tests, exit $status)"); failed=1; continue; fi
+  total=$(grep -o '<assembly [^>]*' "$report" 2>/dev/null | grep -o ' total="[0-9]*"' | tr -dc '0-9\n' | awk '{ n += $1 } END { print n + 0 }') || true
+  if [ "$total" = 0 ]; then
+    echo "ERROR: the xunit console runner ran no tests on $tfm. Check the filter, and that the tests are public xunit tests." >&2
+    results+=("$tfm: FAILED (no tests ran)"); failed=1
+  else results+=("$tfm: passed ($total tests)")
   fi
 done
 

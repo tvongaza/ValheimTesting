@@ -41,6 +41,19 @@ public sealed class GameReferencesBuildTests : IDisposable
         run.AssertSucceeded();
     }
 
+    [UnixFact]
+    public async Task FindsTheSteamFolderUnderHome()
+    {
+        string home = _project.Folder("home");
+        (string steamGame, string managed) = GameReferencesProject.DefaultSteamGame();
+        _project.FakeGame("home/" + steamGame, managed);
+        _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies);
+
+        BuildRun run = await _project.Build(GameReferencesProject.WithHome(home));
+
+        run.AssertSucceeded();
+    }
+
     [Fact]
     public async Task AddsAndRemovesListedAssemblies()
     {
@@ -108,6 +121,18 @@ public sealed class GameReferencesErrorTests : IDisposable
         BuildRun run = await _project.Build(NoEnvironmentPath, "-p:ValheimPath=" + missing);
 
         run.AssertFailedWith("Valheim is not installed at '" + missing + "' (ValheimPath)");
+    }
+
+    [UnixFact]
+    public async Task NoGameInTheDefaultSteamFolder()
+    {
+        string home = _project.Folder("home");
+        _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies);
+
+        BuildRun run = await _project.Build(GameReferencesProject.WithHome(home));
+
+        string expected = Path.Combine(new[] { home }.Concat(GameReferencesProject.DefaultSteamGame().Game.Split('/')).ToArray());
+        run.AssertFailedWith("Valheim is not installed at '" + expected + "' (the default Steam folder; neither ValheimPath nor VALHEIM_PATH is set)");
     }
 
     [Fact]
@@ -225,6 +250,29 @@ internal sealed class GameReferencesProject : IDisposable
         string path = PathOf(relative);
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    /// <summary>Where the targets look without ValheimPath, relative to HOME on macOS and Linux, and its Managed folder.</summary>
+    public static (string Game, string Managed) DefaultSteamGame() => OperatingSystem.IsMacOS()
+        ? ("Library/Application Support/Steam/steamapps/common/Valheim", "Valheim.app/Contents/Resources/Data/Managed")
+        : (".steam/steam/steamapps/common/Valheim", "valheim_Data/Managed");
+
+    /// <summary>
+    /// An environment with HOME at <paramref name="home"/> and no VALHEIM_PATH. The package cache and the SDK's own
+    /// home stay where they were, so nothing is downloaded again.
+    /// </summary>
+    public static Dictionary<string, string?> WithHome(string home)
+    {
+        string realHome = Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return new Dictionary<string, string?>
+        {
+            ["HOME"] = home,
+            ["VALHEIM_PATH"] = null,
+            ["NUGET_PACKAGES"] = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 } packages
+                ? packages
+                : Path.Combine(realHome, ".nuget", "packages"),
+            ["DOTNET_CLI_HOME"] = Environment.GetEnvironmentVariable("DOTNET_CLI_HOME") is { Length: > 0 } cliHome ? cliHome : realHome,
+        };
     }
 
     /// <summary>A game folder with stand-ins for the default assemblies: <paramref name="managed"/> and BepInEx/core.</summary>

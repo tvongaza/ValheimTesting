@@ -6,7 +6,8 @@
     in the project, on the command line (-p:ValheimPath=...) or in the environment are read here:
 
       ValheimPath    the game folder (default: the VALHEIM_PATH environment variable, else the Steam folder for
-                     this OS). The one property most projects need.
+                     this OS; on Linux ~/.steam/steam, the link Steam keeps to its install). The one property most
+                     projects need.
       ValheimManaged the folder holding assembly_valheim.dll (default: found under ValheimPath: valheim_Data/Managed,
                      Valheim.app/Contents/Resources/Data/Managed or valheim_server_Data/Managed)
       BepInExCore    the folder holding BepInEx.dll (default: ValheimPath/BepInEx/core)
@@ -25,7 +26,7 @@
     <_ValheimPathFrom Condition="'$(ValheimPath)' == ''">the default Steam folder; neither ValheimPath nor VALHEIM_PATH is set</_ValheimPathFrom>
     <ValheimPath Condition="'$(ValheimPath)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">C:\Program Files (x86)\Steam\steamapps\common\Valheim</ValheimPath>
     <ValheimPath Condition="'$(ValheimPath)' == '' And $([MSBuild]::IsOSPlatform('OSX'))">$(HOME)/Library/Application Support/Steam/steamapps/common/Valheim</ValheimPath>
-    <ValheimPath Condition="'$(ValheimPath)' == ''">$(HOME)/.steam/debian-installation/steamapps/common/Valheim</ValheimPath>
+    <ValheimPath Condition="'$(ValheimPath)' == ''">$(HOME)/.steam/steam/steamapps/common/Valheim</ValheimPath>
 
     <_ValheimManagedFrom>ValheimManaged</_ValheimManagedFrom>
     <_ValheimManagedFrom Condition="'$(ValheimManaged)' == ''">ValheimPath</_ValheimManagedFrom>

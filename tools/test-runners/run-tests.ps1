@@ -28,9 +28,10 @@
 # with one line per framework ends the output.
 #
 # Exit code: 0 every selected framework passed; 1 a build or a test run
-# failed; 2 usage, a filter the console runner cannot express, or a framework
-# the project does not target (nothing is run); 3 a prerequisite is missing
-# (Mono, or xunit.runner.console) and nothing failed.
+# failed, or the console runner ran no tests; 2 usage, a filter the console
+# runner cannot express, or a framework the project does not target (nothing
+# is run); 3 a prerequisite is missing (Mono, or xunit.runner.console) and
+# nothing failed.
 #
 # Environment:
 #   MONO           the Mono executable off Windows (default: mono on PATH)
@@ -109,7 +110,9 @@ $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 # console ORs options of one kind and ANDs different kinds, so only terms of
 # one kind joined by | translate exactly: FullyQualifiedName~text (or a bare
 # text, dotnet test's shorthand for it), FullyQualifiedName=name, and
-# Trait=value for any trait name.
+# Trait=value for any trait name. Test properties the console cannot select by
+# (DisplayName, Name, ClassName, ...) are refused: as a trait they would match
+# nothing. Property names compare case-insensitively, as dotnet test's do.
 function Convert-Filter([string]$Expression) {
     if ($Expression -match '[&()!]') { return $null }
     $options = @()
@@ -120,13 +123,14 @@ function Convert-Filter([string]$Expression) {
         $tilde = $term.IndexOf('~')
         $equals = $term.IndexOf('=')
         if ($tilde -ge 0) {
-            if ($term.Substring(0, $tilde) -cne 'FullyQualifiedName') { return $null }
+            if ($term.Substring(0, $tilde) -ne 'FullyQualifiedName') { return $null }
             $termKind = 'method'; $options += @('-method', ('*' + $term.Substring($tilde + 1) + '*'))
         } elseif ($equals -ge 0) {
             $key = $term.Substring(0, $equals)
             $value = $term.Substring($equals + 1)
             if ($key -eq '' -or $value -eq '') { return $null }
-            if ($key -ceq 'FullyQualifiedName') { $termKind = 'method'; $options += @('-method', $value) }
+            if ($key -eq 'FullyQualifiedName') { $termKind = 'method'; $options += @('-method', $value) }
+            elseif ($key -in @('DisplayName', 'Name', 'ClassName', 'TestCategory', 'Priority', 'Id')) { return $null }
             else { $termKind = 'trait'; $options += @('-trait', ($key + '=' + $value)) }
         } else {
             $termKind = 'method'; $options += @('-method', ('*' + $term + '*'))
@@ -229,14 +233,26 @@ foreach ($tfm in $frameworks) {
     }
     $mode = $parallel
     if ($mode -eq '') { if ($onWindows) { $mode = 'default' } else { $mode = 'none' } }
-    $run = @($dll, '-nologo')
+    # The XML report counts the tests that ran: a filter or discovery problem
+    # that selects none must not pass.
+    $report = [IO.Path]::GetTempFileName()
+    $run = @($dll, '-xml', $report, '-nologo')
     if ($mode -ne 'default') { $run += @('-parallel', $mode) }
     $run += $xunitFilter
     if ($onWindows) { & $console @run }
     else { & $mono $console @run }
     $status = $LASTEXITCODE
-    if ($status -eq 0) { $results += "${tfm}: passed" }
-    else { $results += "${tfm}: FAILED (tests, exit $status)"; $failed = $true }
+    $total = 0
+    if (Test-Path -LiteralPath $report -PathType Leaf) {
+        foreach ($m in [regex]::Matches([IO.File]::ReadAllText($report), '<assembly\s[^>]*?\stotal="(\d+)"')) { $total += [int]$m.Groups[1].Value }
+        Remove-Item -LiteralPath $report -Force -ErrorAction SilentlyContinue
+    }
+    if ($status -ne 0) { $results += "${tfm}: FAILED (tests, exit $status)"; $failed = $true }
+    elseif ($total -eq 0) {
+        Write-Problem "ERROR: the xunit console runner ran no tests on $tfm. Check the filter, and that the tests are public xunit tests."
+        $results += "${tfm}: FAILED (no tests ran)"; $failed = $true
+    }
+    else { $results += "${tfm}: passed ($total tests)" }
 }
 
 Write-Output '== summary'

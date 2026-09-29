@@ -58,7 +58,8 @@ jobs:
     name: test runners (${{ matrix.os }})
     # tools/test-runners for real: a copy of ModWithTests that also targets net48 (the two changes its README
     # describes), run with Mono on Linux and macOS and on .NET Framework on Windows. Negative control: an added
-    # test that fails only on .NET Framework must make the script exit 1, while the net10.0 leg alone still passes.
+    # test that fails only on .NET Framework must make the script exit 1, while the net10.0 leg alone still passes, and
+    # a filter that selects no test must fail the net48 leg.
     # Packages restore from NuGet.org, as in a mod.
     strategy:
       fail-fast: false
@@ -136,6 +137,10 @@ jobs:
           bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" MyMod.Tests/MyMod.Tests.csproj || status=$?
           if [ "$status" != 1 ]; then echo "::error::a net48-only failure must make run-tests.sh exit 1; it exited $status"; exit 1; fi
           bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" --framework net10.0 MyMod.Tests/MyMod.Tests.csproj
+          # A filter that selects no test must not pass the net48 leg.
+          status=0
+          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" --framework net48 --filter FullyQualifiedName~NoSuchTest MyMod.Tests/MyMod.Tests.csproj || status=$?
+          if [ "$status" != 1 ]; then echo "::error::a net48 leg that ran no tests must make run-tests.sh exit 1; it exited $status"; exit 1; fi
       - name: Negative control (Windows PowerShell)
         if: runner.os == 'Windows'
         working-directory: ${{ runner.temp }}/mod
@@ -144,4 +149,8 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File $script MyMod.Tests\MyMod.Tests.csproj
           if ($LASTEXITCODE -ne 1) { Write-Output "::error::a net48-only failure must make run-tests.ps1 exit 1; it exited $LASTEXITCODE"; exit 1 }
           powershell -NoProfile -ExecutionPolicy Bypass -File $script --framework net10.0 MyMod.Tests\MyMod.Tests.csproj
-          exit $LASTEXITCODE
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # A filter that selects no test must not pass the net48 leg.
+          powershell -NoProfile -ExecutionPolicy Bypass -File $script --framework net48 --filter FullyQualifiedName~NoSuchTest MyMod.Tests\MyMod.Tests.csproj
+          if ($LASTEXITCODE -ne 1) { Write-Output "::error::a net48 leg that ran no tests must make run-tests.ps1 exit 1; it exited $LASTEXITCODE"; exit 1 }
+          exit 0
