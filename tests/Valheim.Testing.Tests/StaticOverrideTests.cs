@@ -76,6 +76,15 @@ public class StaticOverrideTests
         }
         finally { Settings.Locked = false; Settings.Guarded = 4; }
     }
+    [Fact] public void AChainThatThrowsPartWayRestoresWhatItHadAlreadySet()
+    {
+        string name = "VT_OVERRIDE_" + Guid.NewGuid().ToString("N");
+        // The using never completes, so nothing else would restore the first two values.
+        Assert.Throws<ArgumentException>(() => { using var plain = StaticOverride.Set(() => Settings.Meander, 0f).AndEnvironment(name, "1").And(() => Settings.Fixed, 2); });
+        Assert.Equal(3f, Settings.Meander); Assert.Null(Environment.GetEnvironmentVariable(name));
+        Assert.Throws<ArgumentException>(() => { using var plain = StaticOverride.Set(() => Settings.Enabled, false).AndEnvironment("A=B", "1"); });
+        Assert.True(Settings.Enabled);
+    }
     [Fact] public void OnlyWritableStaticMembersAreAccepted()
     {
         Assert.Throws<ArgumentException>(() => StaticOverride.Set(() => Settings.Computed, 1));

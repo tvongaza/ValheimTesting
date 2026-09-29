@@ -10,7 +10,8 @@ namespace Valheim.Testing;
 /// before, not a default the test assumes:
 /// <code>using var plain = StaticOverride.Set(() => MyMod.Meander, 0f).And(() => MyMod.Enabled, false).AndEnvironment("MYMOD_DEBUG", "1");</code>
 /// Dispose restores in reverse order, restores every entry even when one restore throws, and does nothing the second
-/// time. <see cref="Keep{T}"/> records a value without changing it, for statics the code under test changes itself.
+/// time. If a step of the chain throws (a readonly field, say), what the chain had already set is restored before the
+/// error reaches the caller, since its using statement never ran. <see cref="Keep{T}"/> records a value without changing it, for statics the code under test changes itself.
 /// Statics and environment variables are process-wide, so tests that override them must not run in parallel with
 /// tests that read them.
 /// </summary>
@@ -28,27 +29,37 @@ public sealed class StaticOverride : IDisposable
     /// <summary>Sets an environment variable (<see langword="null"/> removes it) until disposed.</summary>
     public static StaticOverride Environment(string name, string? value) => new StaticOverride().AndEnvironment(name, value);
 
-    public StaticOverride And<T>(Expression<Func<T>> member, T value)
+    public StaticOverride And<T>(Expression<Func<T>> member, T value) => Step(() =>
     {
         var (name, get, set) = Access(member);
         Record(name, get, set);
         set(value);
-        return this;
-    }
+    });
 
-    public StaticOverride AndKeep<T>(Expression<Func<T>> member)
+    public StaticOverride AndKeep<T>(Expression<Func<T>> member) => Step(() =>
     {
         var (name, get, set) = Access(member);
         Record(name, get, set);
-        return this;
-    }
+    });
 
-    public StaticOverride AndEnvironment(string name, string? value)
+    public StaticOverride AndEnvironment(string name, string? value) => Step(() =>
     {
         if (string.IsNullOrEmpty(name) || name.IndexOf('=') >= 0) throw new ArgumentException("An environment variable name is required, without '='.", nameof(name));
         Record("environment " + name, () => System.Environment.GetEnvironmentVariable(name), v => System.Environment.SetEnvironmentVariable(name, v));
         System.Environment.SetEnvironmentVariable(name, value);
-        return this;
+    });
+
+    // A chain that throws part-way never reaches the caller's using, so nothing would dispose it: put back what the
+    // chain has set so far before the error leaves.
+    private StaticOverride Step(Action step)
+    {
+        try { step(); return this; }
+        catch (Exception setup)
+        {
+            try { Dispose(); }
+            catch (Exception restore) { throw new AggregateException("StaticOverride setup failed, and restoring what it had already set failed too.", setup, restore); }
+            throw;
+        }
     }
 
     public void Dispose()
