@@ -130,11 +130,6 @@ public partial struct Color
     }
 }
 
-public static partial class Canvas
-{
-    public static void ForceUpdateCanvases() { }
-}
-
 public partial struct Vector2Int
 {
     public int x;
