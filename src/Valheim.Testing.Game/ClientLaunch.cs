@@ -28,16 +28,9 @@ public static class ClientLaunch
     // It execs the game in place, so the started PID is still the game's.
     public const string MacArchLauncher = "/usr/bin/arch";
     private static readonly string MacExecutable = Path.Combine("Contents", "MacOS", "Valheim");
-    private static readonly string Preloader = Path.Combine("BepInEx", "core", "BepInEx.Preloader.dll");
-    private static readonly string BepInExCore = Path.Combine("BepInEx", "core", "BepInEx.dll");
-    private const string WindowsDoorstop = "winhttp.dll";
-    private const string WindowsDoorstopConfig = "doorstop_config.ini";
-    private static readonly string LinuxDoorstop = Path.Combine("doorstop_libs", "libdoorstop_x64.so");
     // The pack's x64 library first (its supported route, under Rosetta on Apple Silicon), then the universal
     // libdoorstop.dylib of BepInEx's macOS build, the only one that can hold an arm64 slice.
     private static readonly string[] MacDoorstops = [Path.Combine("doorstop_libs", "libdoorstop_x64.dylib"), "libdoorstop.dylib"];
-    // Doorstop reads these; any other value would disable or redirect the loader and start a vanilla client.
-    private static readonly string[] LoaderVariables = ["DOORSTOP_ENABLED", "DOORSTOP_TARGET_ASSEMBLY", "DOORSTOP_DISABLE"];
 
     internal static ClientPlatform CurrentHost =>
         OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
@@ -87,7 +80,7 @@ public static class ClientLaunch
 
     /// <summary>
     /// Start info for one BepInEx game client. BepInEx's preloader and the platform's Doorstop loader must be present; on
-    /// Windows doorstop_config.ini must enable Doorstop and name an existing target. <c>-console</c> is added first unless
+    /// Windows doorstop_config.ini must enable Doorstop and target BepInEx's preloader. <c>-console</c> is added first unless
     /// <paramref name="console"/> is false or the caller passed it; other arguments follow unchanged. Caller environment is
     /// applied first and may not set Doorstop's variables or pass <c>--doorstop-*</c> arguments. SteamAppId defaults to the
     /// game's unless the caller sets it. Linux enables Doorstop and prepends doorstop_libs to LD_LIBRARY_PATH and the
@@ -106,26 +99,15 @@ public static class ClientLaunch
         var (platform, executable) = Resolve(install, host);
         if (platform != ClientPlatform.MacOS && architecture != ClientArchitecture.X64)
             throw new ArgumentException($"The {platform} client is x64 only; {architecture} exists for the macOS client alone.", nameof(architecture));
-        RequireFile(install, Preloader, "BepInEx is not installed in the install");
-        RequireFile(install, BepInExCore, "BepInEx is not installed in the install");
+        BepInExLoader.RequireCore(install, "install");
         string? macDoorstop = null;
-        if (platform == ClientPlatform.Windows)
-        {
-            RequireFile(install, WindowsDoorstop, "BepInEx's Doorstop loader is missing from the install");
-            RequireDoorstopConfig(install);
-        }
-        else if (platform == ClientPlatform.Linux) RequireFile(install, LinuxDoorstop, "BepInEx's Doorstop loader is missing from the install");
+        if (platform == ClientPlatform.Windows) BepInExLoader.RequireWindowsLoader(install, "install");
+        else if (platform == ClientPlatform.Linux) BepInExLoader.RequireFile(install, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the install");
         else macDoorstop = MacDoorstop(install, executable, architecture);
 
         environment ??= new Dictionary<string, string>();
         var names = host == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        foreach (string name in LoaderVariables)
-            if (environment.Keys.Any(key => names.Equals(key, name)))
-                throw new ArgumentException(name + " would disable or redirect BepInEx's loader; remove it from the caller environment.", nameof(environment));
-        var passed = arguments.Select(argument => argument ?? throw new ArgumentException("Null launch argument.", nameof(arguments))).ToList();
-        string? doorstopArgument = passed.FirstOrDefault(argument => argument.StartsWith("--doorstop-", StringComparison.OrdinalIgnoreCase));
-        if (doorstopArgument != null)
-            throw new ArgumentException(doorstopArgument + " would override BepInEx's loader; ClientLaunch configures Doorstop itself.", nameof(arguments));
+        var passed = BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(ClientLaunch));
         if (console && !passed.Contains(ConsoleArgument, StringComparer.OrdinalIgnoreCase)) passed.Insert(0, ConsoleArgument);
         // Search lists split on ':' (LD_LIBRARY_PATH also on ';'), so such a path cannot be represented. Checked only
         // where the launch can run; a Windows machine builds these launches only when a test injects the host.
@@ -134,26 +116,25 @@ public static class ClientLaunch
             throw new ArgumentException($"A {platform} install path cannot contain ':'" + (platform == ClientPlatform.Linux ? " or ';'." : "."), nameof(installDirectory));
 
         var start = new ProcessStartInfo(executable) { WorkingDirectory = install, UseShellExecute = false };
-        foreach (var entry in environment) start.Environment[entry.Key] = entry.Value;
-        // Inherited values would reach the game too; only the ones set below may.
-        foreach (string name in LoaderVariables) start.Environment.Remove(name);
+        // Inherited Doorstop values would reach the game too; only the ones set below may.
+        BepInExLoader.ApplyEnvironment(start, environment);
         if (!environment.Keys.Any(key => names.Equals(key, "SteamAppId"))) start.Environment["SteamAppId"] = GameSteamAppId;
         if (platform != ClientPlatform.Windows)
         {
             start.Environment["DOORSTOP_ENABLED"] = "1";
-            start.Environment["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(install, Preloader);
+            start.Environment["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(install, BepInExLoader.Preloader);
         }
         if (platform == ClientPlatform.Linux)
         {
             // Same effective order as the pack's script: doorstop_libs, then the existing value.
-            start.Environment["LD_LIBRARY_PATH"] = Prepend(start.Environment, "LD_LIBRARY_PATH", Path.Combine(install, "doorstop_libs"));
-            start.Environment["LD_PRELOAD"] = Prepend(start.Environment, "LD_PRELOAD", "libdoorstop_x64.so");
+            start.Environment["LD_LIBRARY_PATH"] = BepInExLoader.Prepend(start.Environment, "LD_LIBRARY_PATH", Path.Combine(install, "doorstop_libs"));
+            start.Environment["LD_PRELOAD"] = BepInExLoader.Prepend(start.Environment, "LD_PRELOAD", "libdoorstop_x64.so");
         }
         else if (platform == ClientPlatform.MacOS)
         {
             // Named by full path, so the script's DYLD_LIBRARY_PATH entry is not needed. An explicit slice, because a
             // universal game otherwise starts as the parent's architecture, which the library may lack.
-            start.Environment["DYLD_INSERT_LIBRARIES"] = Prepend(start.Environment, "DYLD_INSERT_LIBRARIES", macDoorstop!);
+            start.Environment["DYLD_INSERT_LIBRARIES"] = BepInExLoader.Prepend(start.Environment, "DYLD_INSERT_LIBRARIES", macDoorstop!);
             start.FileName = MacArchLauncher;
             start.ArgumentList.Add(architecture == ClientArchitecture.Arm64 ? "-arm64" : "-x86_64");
             foreach (string name in start.Environment.Keys.Where(key => key.StartsWith("DYLD_", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList())
@@ -189,47 +170,6 @@ public static class ClientLaunch
                 throw new InvalidOperationException($"{executable} is not executable; restore its mode (chmod u+x) in the install.");
         }
         return (platform, executable);
-    }
-
-    // Doorstop 4 reads [General] enabled and target_assembly; Doorstop 3 read [UnityDoorstop] enabled and targetAssembly.
-    // BepInExPack_Valheim installs have been seen with Doorstop 4's winhttp.dll and the Doorstop 3 file, so both are read.
-    // Either section may enable the loader, none may disable it (a value other than true reads as false), and every
-    // stated target must exist: with the proxy present but a disabled or redirected configuration, the client would
-    // start without BepInEx.
-    private static readonly (string Section, string Target)[] DoorstopSections = [("General", "target_assembly"), ("UnityDoorstop", "targetAssembly")];
-    private static void RequireDoorstopConfig(string install)
-    {
-        string path = Path.Combine(install, WindowsDoorstopConfig);
-        if (!File.Exists(path)) throw new FileNotFoundException("BepInEx's Doorstop configuration is missing from the install: " + WindowsDoorstopConfig, path);
-        string? section = null;
-        var enabled = new List<(string Section, string Value)>();
-        var targets = new List<(string Section, string Value)>();
-        foreach (string raw in File.ReadLines(path))
-        {
-            string line = raw.Trim();
-            if (line.Length == 0 || line[0] is '#' or ';') continue;
-            if (line[0] == '[') { section = line.Trim('[', ']').Trim(); continue; }
-            int equals = line.IndexOf('=');
-            var known = DoorstopSections.FirstOrDefault(entry => string.Equals(entry.Section, section, StringComparison.OrdinalIgnoreCase));
-            if (equals < 0 || known.Section == null) continue;
-            string key = line[..equals].Trim(), value = line[(equals + 1)..].Trim();
-            if (key.Equals("enabled", StringComparison.OrdinalIgnoreCase)) enabled.Add((known.Section, value));
-            else if (key.Equals(known.Target, StringComparison.OrdinalIgnoreCase)) targets.Add((known.Section, value));
-        }
-        var disabled = enabled.FirstOrDefault(entry => !string.Equals(entry.Value, "true", StringComparison.OrdinalIgnoreCase));
-        if (enabled.Count == 0 || disabled.Section != null)
-            throw new InvalidOperationException($"{WindowsDoorstopConfig} does not enable Doorstop (" +
-                (disabled.Section != null ? $"[{disabled.Section}] enabled = {disabled.Value}" : "no [General] or [UnityDoorstop] enabled") +
-                "); set enabled = true, or the client starts without BepInEx.");
-        var stated = targets.Where(entry => entry.Value.Length != 0).ToList();
-        if (stated.Count == 0)
-            throw new InvalidOperationException($"{WindowsDoorstopConfig} names no [General] target_assembly or [UnityDoorstop] targetAssembly; set it to {Preloader}.");
-        foreach (var (targetSection, target) in stated)
-        {
-            string targetPath = Path.GetFullPath(Path.Combine(install, target.Replace('\\', Path.DirectorySeparatorChar)));
-            if (!File.Exists(targetPath))
-                throw new FileNotFoundException($"{WindowsDoorstopConfig} [{targetSection}] target {target} does not exist in the install.", targetPath);
-        }
     }
 
     // The first Doorstop library with the requested slice. dyld cannot insert a library into a process of another architecture.
@@ -291,15 +231,5 @@ public static class ClientLaunch
         string install = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDirectory));
         if (!Directory.Exists(install)) throw new DirectoryNotFoundException("Client install directory does not exist: " + install);
         return install;
-    }
-    private static void RequireFile(string install, string relative, string message)
-    {
-        if (!File.Exists(Path.Combine(install, relative))) throw new FileNotFoundException(message + ": " + relative, Path.Combine(install, relative));
-    }
-    // Keep every existing entry; an empty value adds no empty element (which would mean the working directory).
-    private static string Prepend(IDictionary<string, string?> environment, string name, params string[] entries)
-    {
-        environment.TryGetValue(name, out string? existing);
-        return string.IsNullOrEmpty(existing) ? string.Join(':', entries) : string.Join(':', entries) + ":" + existing;
     }
 }

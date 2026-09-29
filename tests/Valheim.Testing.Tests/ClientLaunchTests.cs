@@ -154,19 +154,29 @@ public class ClientLaunchTests
         var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows));
         Assert.Contains("doorstop_config.ini", error.Message);
     }
-    [Fact] public void WindowsDoorstop3TargetMustExist()
+    // An existing DLL is not enough: Doorstop would load it instead of BepInEx.
+    [Fact] public void WindowsDoorstop3TargetMustBeBepInExsPreloader()
     {
-        using var install = Install.Windows();
+        using var install = Install.Windows(); install.Add("BepInEx/core/Other.Preloader.dll");
         install.Add("doorstop_config.ini", "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\Other.Preloader.dll\n");
-        var error = Assert.Throws<FileNotFoundException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows));
+        var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows));
         Assert.Contains("Other.Preloader.dll", error.Message);
     }
-    [Fact] public void WindowsDoorstopTargetMustExist()
+    [Fact] public void WindowsDoorstopTargetMustBeBepInExsPreloader()
     {
-        using var install = Install.Windows();
+        using var install = Install.Windows(); install.Add("BepInEx/core/Other.Preloader.dll");
         install.Add("doorstop_config.ini", DoorstopConfig("enabled = true", "target_assembly=BepInEx\\core\\Other.Preloader.dll"));
-        var error = Assert.Throws<FileNotFoundException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows));
+        var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows));
         Assert.Contains("Other.Preloader.dll", error.Message);
+    }
+    // Set in this process, as a parent shell would: only the loader values ClientLaunch sets itself may reach the game.
+    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)]
+    public void InheritedLoaderVariablesNeverReachTheClient(ClientPlatform platform)
+    {
+        using var install = Install.For(platform);
+        Environment.SetEnvironmentVariable("DOORSTOP_DISABLE", "1");
+        try { Assert.False(ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, platform).Environment.ContainsKey("DOORSTOP_DISABLE")); }
+        finally { Environment.SetEnvironmentVariable("DOORSTOP_DISABLE", null); }
     }
 
     [Fact] public void LinuxLaunchEnablesDoorstopAndPrependsToCallerLibraryPaths()

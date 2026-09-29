@@ -51,7 +51,7 @@ var start = ServerLaunch.CreateStartInfo(runtime,
 var process = new DirectServerProcess(start, logPrefix, Path.Combine(runtime, "BepInEx", "LogOutput.log"), unityLog);
 ```
 
-`ServerLaunch` detects Linux from `valheim_server.x86_64`, requires its execute bit and the BepInEx preloader and Doorstop library, and sets `DOORSTOP_ENABLED`, `DOORSTOP_TARGET_ASSEMBLY`, `LD_LIBRARY_PATH` (prepended), `LD_PRELOAD` (prepended) and `SteamAppId`. It starts the server executable directly, not the pack's shell script, so the session's PID check still holds.
+`ServerLaunch` detects Linux from `valheim_server.x86_64`, requires its execute bit and BepInEx's preloader, core and Doorstop library, refuses caller Doorstop variables and `--doorstop-*` arguments, and sets `DOORSTOP_ENABLED`, `DOORSTOP_TARGET_ASSEMBLY`, `LD_LIBRARY_PATH` (prepended), `LD_PRELOAD` (prepended) and `SteamAppId`. It starts the server executable directly, not the pack's shell script, so the session's PID check still holds.
 
 ## Apple Silicon (experimental)
 
