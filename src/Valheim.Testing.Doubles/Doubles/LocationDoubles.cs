@@ -128,10 +128,4 @@ public partial class ZoneSystem
             return Placement.Accepted;
         }
     }
-
-    public partial struct LocationInstance
-    {
-        /// <summary>Whether the location has been spawned in its zone; generation registers it unplaced.</summary>
-        public bool m_placed;
-    }
 }
