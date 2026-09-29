@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Build the private image (never pushed)
@@ -34,7 +34,7 @@ jobs:
           docker cp smoke:/opt/valheim/server-buildid.txt smoke-out/ || true
           # Logs and reports only; the generated world stays behind.
           rm -rf smoke-out/savedir
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: linux-server-smoke

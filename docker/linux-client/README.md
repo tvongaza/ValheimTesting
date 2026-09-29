@@ -26,7 +26,7 @@ It contains no credentials and no game files, so this repository's workflow publ
 
 ## Host requirements
 
-- **A Linux VM (or machine) you control, with an NVIDIA GPU and its driver**, Docker, and the NVIDIA container toolkit. Tested on VMs with a Quadro P4000 and an RTX 2060 SUPER (drivers 535.x); Vulkan and OpenGL both work.
+- **A Linux VM (or machine) you control, with an NVIDIA GPU and its driver**, Docker, and the NVIDIA container toolkit. Tested on VMs with a Quadro P4000 and an RTX 2060 SUPER (drivers 535.x); Vulkan and OpenGL both work. If you have no such machine, rented GPU VMs are enough: we tested on cheap [Vast.ai](https://vast.ai) spot VM instances, which cost a few cents an hour at the time. Choose a VM instance type rather than a plain Docker instance (see the next point); prices and offers change, and a spot instance can be taken back mid-run.
 - **Relaxed container security options.** Steam needs unprivileged user namespaces, and its sandbox mounts `/proc`, which Docker's default seccomp and AppArmor profiles and masked paths block. Plain container hosts that do not let you set these (typical rented "Docker instances") cannot run the Steam client; use a VM there.
 - **Host stability during a run.** A systemd reload on the host (for example from unattended upgrades) makes containers that received the GPU through `--gpus` lose it (`Failed to initialize NVML: Unknown Error`; the game then fails in GLX setup). `host/vm-bootstrap.sh` stops unattended upgrades, switches Docker to the `cgroupfs` cgroup driver and passes every `/dev/nvidia*` device explicitly.
 

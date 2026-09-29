@@ -114,6 +114,12 @@ Keep unrelated cleanup and speculative features out of the diff. A few logical c
 
 Never include game/Unity assemblies, decompiled game source, private saves, credentials, personal identifiers or unsanitized captures/logs. Prefer hand-authored small fixtures. For contributed datasets, explain their provenance and permission to distribute them. Preserve existing attribution and add notices when importing third-party code. Contributions are made under this repository's [MIT license](LICENSE); do not replace the project's copyright with a mod dependency's owner.
 
+## Release packages (maintainers)
+
+1. In a normal PR, bump `<Version>` only in the packages whose contents changed. Never reuse a version that is on NuGet.org: `release.yml` pushes with `--skip-duplicate`, so a reused version is silently skipped, and consumers' caches keep the first copy they saw.
+2. After merging, start **Publish packages** (`release.yml`) on `main`. It validates, packs and pushes with Trusted Publishing once a maintainer approves the `release` environment. Check the exact package URLs rather than waiting for the search index.
+3. Then, in a follow-up PR, update everything that names a published version: the package table in [getting started](docs/getting-started.md#package-versions-and-feeds), the README's version line and the [ModWithTests](examples/ModWithTests/README.md) pin and README. Validation always tests the source versions, and the `mod-example` CI job only tests the example's pin as published, so neither notices a stale pin.
+
 ## Notes for coding agents
 
 Read [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md) first. Use an isolated branch/worktree if another agent is active. Before editing, identify the real consumer, the shared contract and the smallest useful test layer. Reuse the existing helpers and examples instead of creating another runner or fake game universe.
