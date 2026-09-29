@@ -254,6 +254,7 @@ For a complete package-consuming project that links real mod source and runs fiv
 Every type is `partial`: add the members your mod calls in your own files. Keep only mod-specific behaviour there. Two `Heightmap` hooks carry a mod's terrain logic into the rebuild: `ModBaseHeight` (for example a biome blend) and `ModTerrainPass` (the seam a Harmony prefix on the game's rebuild uses).
 
 The doubles copy the game where mod code depends on it, and their own tests check these points:
+- ZDO values are keyed by `GetStableHashCode` of their name, as in the game, so `Set("name", v)` and `Set("name".GetStableHashCode(), v)` are the same key for every value type (float, `Vector3`, `Quaternion`, int, bool, long, string, byte array). Each type has its own table; a bool is an int. The hash matches the game's for every string.
 - `ZDOMan.DestroyZDO` is queued, so a destroyed ZDO stays visible to `FindObjects` until `ProcessDestroyed`.
 - A networked prefab instantiated during ghost initialisation leaves its ZDO and joins no live scene.
 - `ZNetScene.Destroy` queues only ZDOs this session owns, and a compiler saves only when owned.
@@ -263,6 +264,12 @@ The doubles copy the game where mod code depends on it, and their own tests chec
 - Valheim 1.0's locations-generated flag is set from a save without raising the event.
 - A routed RPC over Steam's 512 KiB limit fails. `ZRoutedRpc.Invoked` records every call with its target, and `ZRoutedRpc.Deliver(sender, method, args)` runs a registered handler as if a peer's call arrived. Jotunn RPCs are kept by name in `NetworkManager.Instance.Rpcs` and record what they send.
 - Constructing a `Terminal.ConsoleCommand` registers it under its lower-case name. `Terminal.TryRunCommand` runs it with that terminal as `args.Context` and prints an unknown command or a failed failable action; `Terminal.Output` holds what was printed. Cheat, server-only and admin gating is not modelled; the mod's own checks still run.
+
+A save and restart is `ZDOMan.instance.RoundTripThroughSave()` (the world) or `zdo.RoundTripThroughSave()` (one persistent ZDO), modelled on Valheim 1.0.16:
+- Only persistent ZDOs are saved. Each comes back with no owner and a new id, so a stored `ZDOID` no longer finds it.
+- Values under a session-only hash are not saved. That is the game's list (physics and AI state such as `support`, `vel`, `InUse`: a `WearNTear` support value is recomputed after a restart) plus every hash registered with `zdo.AddSessionHash(hash)`, which a reload forgets. `ZDOMan.SessionOnlyHashes` holds the current set.
+- Loading a 1.0 save strips nothing else: an empty string, an empty byte array or an identity rotation survives. Older descriptions of a load-time strip describe the upgrade of an old world. `RoundTripThroughSave(ZDO.SavedWorld.BeforeChunkedSave)` models the first 1.0.16 load of a world an older game saved (the ZDO's values stand for that save): it removes the game's named legacy keys (for example `support`, `burnt0`..`burnt10`, `room<n>_seed`, `<n>_crafterName`). `SavedWorld.BeforeNewSaveFormat` also drops empty strings, empty byte arrays and identity rotations, and renames the old spawn keys. The upgrade's other conversions and its unnamed legacy hashes are not modelled.
+- The game's animator sync stores animator parameters in the ZDO under `Animator.StringToHash(name) + 438569` (ints for bools and ints, floats for floats) and registers each as session-only, so they never reach the save. The doubles have no `Animator`; a mod that reads animation state from a ZDO passes the hash it computed.
 
 `TerrainSnapshot.Of(compiler)` copies a zone compiler's level and smooth deltas, paint mask and both modified flags; `TerrainAssert` compares the compiler with it afterwards:
 - `OnlyChangedWithin(before, compiler, (x, z) => ...)`: every change lies inside the footprint you declare, and the rest of the zone, flags included, is exactly as it was. It also fails when nothing changed, since then it proves nothing.
