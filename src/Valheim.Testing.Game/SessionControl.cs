@@ -35,9 +35,16 @@ public sealed class SessionControl(GameActor actor)
     /// Waits until <paramref name="worldUid"/> is loaded and ready, polling the read-only session state. Then, unless
     /// <paramref name="protectPlayer"/> is false, protects the game's local player (<see cref="PlayerPlacement.Protect"/>:
     /// god, ghost and debug modes, read back), so a fall, the water or a mob between the join and the check cannot cost
-    /// the character. A protection the game does not confirm fails the wait; it is issued once and never toggled. A
-    /// dedicated server has no local player, so there is nothing to protect. Debug fly stays off. Pass false when the
-    /// check needs a vulnerable player or an operator manages these modes.
+    /// the character. A protection the game does not confirm fails the wait; it is issued once and never toggled. Debug
+    /// fly stays off. A dedicated server has no local player and is left alone. A game hosting its own world reports
+    /// ready before its player spawns, so the wait goes on, within the same timeout, until that player exists.
+    /// <para>
+    /// Protection changes gameplay, as the game does in 1.0.16: monsters neither notice nor target a player in ghost
+    /// mode, an egg hatches only near a player who is not, and a creature hit by a player in god or ghost mode is marked
+    /// cheated, which marks the items it drops. Pass false for combat, aggro, taming, hatching or loot checks, when a
+    /// check needs a vulnerable player, or when an operator manages these modes; call <see cref="PlayerPlacement.Protect"/>
+    /// yourself for the steps that should be protected.
+    /// </para>
     /// </summary>
     public SessionState WaitForWorld(string worldUid, TimeSpan timeout, CancellationToken cancellation = default, bool protectPlayer = true)
     {
@@ -45,19 +52,24 @@ public sealed class SessionControl(GameActor actor)
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
         var capability = actor.RequireCapability("valheim.session/state");
         var timer = Stopwatch.StartNew();
+        bool lastReady = false;
         while (timer.Elapsed < timeout)
         {
             cancellation.ThrowIfCancellationRequested();
             var state = Read(capability);
+            lastReady = state.WorldReady;
             if (state.LoadError) throw new InvalidOperationException("The game reports a world load error.");
             if (state.WorldPresent && state.WorldUid != worldUid) throw new InvalidOperationException("A different world is loaded.");
             if (state.WorldReady)
             {
-                if (protectPlayer && state.LocalPlayer) PlayerPlacement.Protect(actor);
-                return state;
+                if (!protectPlayer || state.Dedicated) return state;
+                if (state.LocalPlayer) { PlayerPlacement.Protect(actor); return state; }
+                // A hosting game: its world is ready before its own player spawns. Wait for the player.
             }
             cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (timeout - timer.Elapsed).TotalMilliseconds))));
         }
+        if (lastReady)
+            throw new TimeoutException("The world is ready but its local player did not spawn, so it was not protected; no action was retried. Pass protectPlayer: false to wait for the world alone.");
         throw new TimeoutException("World readiness was not established; no action was retried.");
     }
 

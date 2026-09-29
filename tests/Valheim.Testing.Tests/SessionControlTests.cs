@@ -158,6 +158,47 @@ public class SessionControlTests
         Assert.False(new SessionControl(actor).WaitForWorld("7", TimeSpan.FromSeconds(10)).LocalPlayer);
         Assert.Equal(0, transport.Count("cli_set_player_safety"));
     }
+    // A game hosting world 7 (a listen server): the world is ready before its own player spawns.
+    private static ScriptedTransport Host(int readingsWithoutPlayer, string? safetyReply)
+    {
+        int readings = 0;
+        var transport = new ScriptedTransport().Extension("valheim.session", "state", _ =>
+        {
+            bool player = ++readings > readingsWithoutPlayer;
+            return new
+            {
+                source = "session-state", complete = true, phase = "world-present", worldUid = "7", worldPresent = true, worldReady = true, server = true, dedicated = false,
+                localPlayer = player, playerReady = player, saving = false, loadError = false, connectionStatus = "None",
+            };
+        });
+        if (safetyReply != null) transport.On("cli_set_player_safety true", _ => ScriptedTransport.Ok(safetyReply));
+        return transport;
+    }
+    [Fact] public void AHostingGameIsProtectedOnceItsPlayerSpawns()
+    {
+        var transport = Host(readingsWithoutPlayer: 2, Protected);
+        using var actor = transport.Actor("host", "cli_expect worlduid=7");
+        Assert.True(new SessionControl(actor).WaitForWorld("7", TimeSpan.FromSeconds(10)).LocalPlayer);
+        var commands = transport.Commands.ToList();
+        Assert.Equal(3, transport.Count("cli_extension valheim.session/state"));
+        Assert.Equal(1, transport.Count("cli_set_player_safety"));
+        Assert.True(commands.IndexOf("cli_set_player_safety true") > commands.FindLastIndex(c => c == "cli_extension valheim.session/state"));
+    }
+    [Fact] public void AHostWhosePlayerNeverSpawnsTimesOutUnprotectedWithAClearReason()
+    {
+        var transport = Host(readingsWithoutPlayer: int.MaxValue, safetyReply: null); // Unscripted: a protection command would throw.
+        using var actor = transport.Actor("host", "cli_expect worlduid=7");
+        var error = Assert.Throws<TimeoutException>(() => new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(300)));
+        Assert.Contains("local player did not spawn", error.Message);
+        Assert.Equal(0, transport.Count("cli_set_player_safety"));
+    }
+    [Fact] public void AHostThatOptsOutReturnsAsSoonAsTheWorldIsReady()
+    {
+        var transport = Host(readingsWithoutPlayer: int.MaxValue, safetyReply: null);
+        using var actor = transport.Actor("host", "cli_expect worlduid=7");
+        Assert.False(new SessionControl(actor).WaitForWorld("7", TimeSpan.FromSeconds(10), protectPlayer: false).LocalPlayer);
+        Assert.Equal(1, transport.Count("cli_extension valheim.session/state"));
+    }
     [Fact] public void LeaveIsExplicitAndRequiresNewPinsAfterwards()
     {
         var fake = new Fake(); using var actor = fake.Actor(); new SessionControl(actor).Leave();
