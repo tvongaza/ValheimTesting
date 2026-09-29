@@ -34,6 +34,23 @@ If your mod has no CI yet, copy the example's [workflow](../examples/ModWithTest
 - **Native checks stay off hosted runners.** Anything that launches Valheim or a server needs a game install, a Steam login and a machine you own. Run those checks where you run the game. A self-hosted runner with game access must never run workflows from untrusted pull requests.
 - **Keep the job's evidence.** A failed test fails the job with the test output in its log. To keep result files, add `--logger trx --results-directory TestResults` and upload that directory with `actions/upload-artifact`.
 
+### A layout that builds on hosted CI
+
+A hosted runner has no game, so split what needs it from what does not:
+
+```text
+MyMod/                         the plugin: imports Valheim.GameReferences.props/.targets; builds only with a game install
+MyMod.TestAdapter/             optional, game-side: the same imports plus UseValheimCli=true
+MyMod.Tests/                   unit tests: <Compile Include="../MyMod/..." Link=...> of pure-logic sources,
+                               Valheim.Testing.Doubles, no game references, no ProjectReference to MyMod
+build/Valheim.GameReferences.props, build/Valheim.GameReferences.targets
+.github/workflows/tests.yml    builds and tests MyMod.Tests only
+```
+
+- **The tests never reference the plugin project.** A `ProjectReference` to `MyMod` would build it, and with it the game references. Link the source files instead, as [ModWithTests](../examples/ModWithTests/README.md) does, and keep game-bound code (Harmony patches, `Awake`) out of the linked files.
+- **The game-side projects fail fast and clearly.** With [tools/game-references](../tools/game-references/README.md), `MyMod` and the adapter locate the game from one property, `ValheimPath` (or `VALHEIM_PATH`), and anywhere without a game they stop with an error naming the folder and the missing assembly rather than a list of unresolved types. The targets also refuse a project that mixes game references with the doubles.
+- **CI names the test project, not the solution.** `dotnet test MyMod.Tests/MyMod.Tests.csproj`, or a solution filter holding only test projects.
+
 ## Add one native check only when needed
 
 [FullLifecycle](../examples/FullLifecycle/README.md) shows the whole path on one small feature: the unit test, integration tests of the scenario against scripted replies, and a native run with an owned server and an owned or attached client through save, restart and rejoin, plus an optional human look. Copy its layout; the steps below explain the choices.

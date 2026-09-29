@@ -11,7 +11,7 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 | Native system | [MyMod.SystemTests](MyMod.SystemTests/) with [MyMod](MyMod/) and [MyMod.TestAdapter](MyMod.TestAdapter/) | A disposable server copy and a real client: join, strict pins, protect and place the player, exercise the feature, measure, confirmed save, restart, rejoin, measure again, stop what it started, report | A game install, Steam, a machine you may use |
 | Human review | `review` in the plan | An optional look by a person, recorded beside the automated result and never part of it | A person |
 
-`dotnet run scripts/validate.cs` runs the integration tests and builds the runner on every platform. The mod and the adapter compile against your game install, so they build only where you have one.
+`dotnet run scripts/validate.cs` runs the integration tests and builds the runner on every platform. The mod and the adapter compile against your game install, so they build only where you have one. They take its references from [tools/game-references](../../tools/game-references/README.md): set `ValheimPath` (or `VALHEIM_PATH`) to the game folder, and a missing install, BepInEx or ValheimCLI core stops the build with an error naming it.
 
 ## What belongs to the mod, and what to the toolkit
 
@@ -33,8 +33,8 @@ dotnet test examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj -c Release
 dotnet test examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj -c Release
 
 # Game-side projects, against your install and the ValheimCLI core in the test runtime:
-dotnet build examples/FullLifecycle/MyMod/MyMod.csproj -c Release -p:ValheimManaged="<install>/valheim_Data/Managed" -p:BepInExCore="<install>/BepInEx/core"
-dotnet build examples/FullLifecycle/MyMod.TestAdapter/MyMod.TestAdapter.csproj -c Release -p:ValheimManaged="<install>/valheim_Data/Managed" -p:BepInExCore="<install>/BepInEx/core" -p:CliDll="<runtime>/BepInEx/plugins/valheimCLI.dll"
+dotnet build examples/FullLifecycle/MyMod/MyMod.csproj -c Release -p:ValheimPath="<install>"
+dotnet build examples/FullLifecycle/MyMod.TestAdapter/MyMod.TestAdapter.csproj -c Release -p:ValheimPath="<install>" -p:CliDll="<runtime>/BepInEx/plugins/valheimCLI.dll"
 
 # The native system test: check the plan and copy the fixtures without launching anything, then run.
 dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- validate plan.json <new-output-directory>
