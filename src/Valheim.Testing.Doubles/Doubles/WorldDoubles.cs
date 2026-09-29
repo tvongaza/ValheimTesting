@@ -107,6 +107,7 @@ namespace Valheim.Testing.Doubles
             global::Heightmap.s_heightmaps = _heightmaps; BepInEx.Logging.ManualLogSource.Captured = _captured;
             Terminal.commands = _commands; Player.m_localPlayer = _localPlayer;
             ZNet.instance = _net; ZRoutedRpc.instance = _rpc; Jotunn.Managers.NetworkManager.Instance = _jotunn; if (_net != null) _net.Server = _server; UnityEngine.Time.realtimeSinceStartup = _time;
+            RestoreTerrainModifiers();
         }
         /// <summary>Puts back what the role presets, registries, config and Unity doubles changed (WorldScopePresets.cs).</summary>
         partial void RestorePresetState();
