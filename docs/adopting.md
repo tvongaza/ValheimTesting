@@ -31,12 +31,15 @@ If your mod has no CI yet, copy the example's [workflow](../examples/ModWithTest
 - **Build only the test project.** Your plugin project references Valheim, Unity and BepInEx assemblies that a hosted runner does not have. Do not commit game or publicized assemblies to make it build, and do not upload them as secrets or artifacts: they are not yours to redistribute. A test project that links your sources against `Valheim.Testing.Doubles` needs none of them. If your solution includes the plugin, pass the test project (or a solution containing only test projects) to `dotnet test`, not the solution.
 - **Pin exact package versions** as the example does, so a new toolkit preview cannot change a passing build. Update the pin deliberately in its own change.
 - **.NET Framework test legs:** a test project that also targets `net48` runs that leg natively on `windows-latest`; on Linux or macOS it needs Mono. Add a `strategy.matrix` over runner images only for targets you actually ship tests for.
+- **Check game references where the plugin builds.** A job that builds your plugin has the game's assemblies, so it can also run the [offline binding check](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1), which fails on a field or method a game update removed, renamed or changed, before any native run.
 - **Native checks stay off hosted runners.** Anything that launches Valheim or a server needs a game install, a Steam login and a machine you own. Run those checks where you run the game. A self-hosted runner with game access must never run workflows from untrusted pull requests.
 - **Keep the job's evidence.** A failed test fails the job with the test output in its log. To keep result files, add `--logger trx --results-directory TestResults` and upload that directory with `actions/upload-artifact`.
 
 ## Add one native check only when needed
 
 [FullLifecycle](../examples/FullLifecycle/README.md) shows the whole path on one small feature: the unit test, integration tests of the scenario against scripted replies, and a native run with an owned server and an owned or attached client through save, restart and rejoin, plus an optional human look. Copy its layout; the steps below explain the choices.
+
+Before the first native run, go through the [runtime hygiene checklist](runtime-hygiene.md): a clean runtime, load order, test characters, join and teleport timing, and what counts as evidence.
 
 For a mod that writes terrain on the server, a useful next check is: “the client without my mod sees the declared ground and paint, including after a save/restart.” For another kind of mod, replace this with one observable behavior at its actual game boundary.
 
@@ -56,5 +59,6 @@ Client arrival/protection remains required even if your first check is read-only
 - **A package will not restore?** Check published versus local-feed status and the exact version. Do not substitute a different preview silently.
 - **A game type conflicts or is missing?** Do not mix source doubles with game assemblies. Link a smaller production helper, or add the required modeled member deliberately.
 - **Can I run tests concurrently?** Pure immutable inputs can be independent; tests using game singletons or static overrides must be serialized.
+- **A native run hangs, or passes with a clean log but proves nothing?** Check the [runtime hygiene checklist](runtime-hygiene.md). Link it from your mod's docs instead of copying it.
 - **Does a passing synthetic test prove the mod works in Valheim?** It proves the tested decision on declared inputs. Native observations, save/replication and human usability have their own evidence.
 - **What do I report?** The production behavior tested, exact package/build versions, checks actually run, failed/incomplete evidence and what remains untested. Do not publish credentials, game binaries or private saves.

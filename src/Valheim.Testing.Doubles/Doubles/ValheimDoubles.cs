@@ -503,6 +503,7 @@ public partial class ZoneSystem
     {
         public ZoneLocation m_location;
         public UnityEngine.Vector3 m_position;
+        public bool m_placed; // spawned in its zone; generation registers a location unplaced
     }
 
     public System.Collections.Generic.List<LocationInstance> Locations = new();
