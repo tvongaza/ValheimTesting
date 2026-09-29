@@ -143,14 +143,14 @@ public sealed class LogoutCycleTests : IDisposable
         Assert.Contains("mymod.level is \"0\", was \"3\"", error.Message);
     }
 
-    [Fact] public void AWriteTheRunnerSeesLateIsWaitedFor()
+    [Fact] public async Task AWriteTheRunnerSeesLateIsWaitedFor()
     {
         var (fake, _, client) = Joined();
         fake.WriteLate = true;
         var result = Cycle().Run(client, Plan(), WorldUid);
         Assert.True(result.WriteSeen >= TimeSpan.FromMilliseconds(300), result.WriteSeen.ToString());
         Assert.NotEqual(result.FileBefore.Sha256, result.FileAfter.Sha256);
-        fake.LateWrite!.Wait();
+        await fake.LateWrite!;
     }
 
     [Fact] public void ACloudCharacterIsRefusedBeforeTheLeave()
