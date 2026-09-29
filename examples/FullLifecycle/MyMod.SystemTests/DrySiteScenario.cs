@@ -65,13 +65,13 @@ public static class DrySiteScenario
             var session = new SessionControl(Actor);
             // Only now: the server's socket may open late on a first boot, and the steps before this overlap that wait.
             Report.Step($"{round}: the server accepts game connections", () => WaitUntilJoinable(server));
-            Report.Step($"{round}: join the owned server with the disposable character", () =>
+            Report.Step($"{round}: join the owned server with the disposable character, protected", () =>
             {
                 session.Join(Client.Join, Client.Character, Client.PasswordVariable); // Turns devcommands on first. Exactly once.
                 Actor.VerifyEnvironment(Client.WorldExpectations(Plan.WorldUid));
+                // Protects the player once the world is ready (god, ghost, debug mode, read back); fly stays off.
                 session.WaitForWorld(Plan.WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
             });
-            Report.Step($"{round}: protect the player", () => PlayerPlacement.Protect(Actor));
             var stand = new HeightExpectation(Plan.Arrival.X, Plan.Arrival.Z, Plan.Arrival.Ground);
             Report.Step($"{round}: arrive beside the marker", () =>
                 Write($"{round}-arrival.json", PlayerPlacement.Arrive(server, Actor, stand, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor)));
@@ -87,7 +87,8 @@ public static class DrySiteScenario
 
     public static string Mark(Site site) => string.Create(CultureInfo.InvariantCulture, $"mymod_mark {site.X} {site.Z}");
 
-    private static void RequireReply(valheim_cli.Testing.CommandResult reply, string prefix)
+    /// <summary>Requires exactly one <c>OK:</c> or <c>REFUSED:</c> reply from the mod, and that it is the expected one.</summary>
+    public static void RequireReply(valheim_cli.Testing.CommandResult reply, string prefix)
     {
         if (reply.Output.Count(line => line.StartsWith("OK: ", StringComparison.Ordinal) || line.StartsWith("REFUSED: ", StringComparison.Ordinal)) != 1 ||
             !reply.Output.Any(line => line.StartsWith(prefix, StringComparison.Ordinal)))

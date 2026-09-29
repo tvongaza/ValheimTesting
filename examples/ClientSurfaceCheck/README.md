@@ -34,12 +34,12 @@ mesh collider**, rather than an arbitrary floor/rock hit. Support is three
 observations, half a second apart: within 2 m horizontally and 0.3 m vertically,
 grounded, speed <=0.15 m/s, alive, not flying/attached/teleporting. These practical
 tolerances test stationary support, not walking usability. God/ghost protection
-is compatible with this check; flying is not.
+is compatible with this check; a flying reading refuses it (not a support failure).
 
 JSON/JUnit, every surface residual, support observations and the command transcript
 are written to a new directory. Wrong expectations are retained with a failed
 result. Run the same plan again after a confirmed save, server restart and rejoin
 for persistence evidence; compare world/build pins in both runs.
 
-Package-only usage follows [TerrainCheck](../TerrainCheck/README.md): set `ToolkitPackageVersion=0.1.0-preview.11` and restore from NuGet.org. The example has
+Package-only usage follows [TerrainCheck](../TerrainCheck/README.md): set `ToolkitPackageVersion=0.1.0-preview.12` and restore from NuGet.org. The example has
 no game or mod binary dependencies.

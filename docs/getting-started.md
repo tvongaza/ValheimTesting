@@ -21,9 +21,9 @@ The toolkit packages, all on NuGet.org:
 | Package | Exact version | Use |
 |---|---|---|
 | `Valheim.Testing` | `0.1.0-preview.6` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
-| `Valheim.Testing.Game` | `0.1.0-preview.11` | External game observations, owned sessions, comparisons and reports |
+| `Valheim.Testing.Game` | `0.1.0-preview.12` | External game observations, owned sessions, comparisons and reports |
 | `Valheim.Testing.Cli` | `0.1.0-preview.5` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
-| `Valheim.Testing.Adapter` | `0.1.0-preview.1` (not yet published; build it from this repository) | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
+| `Valheim.Testing.Adapter` | `0.1.0-preview.1` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
 | `Valheim.Testing.Doubles` | `0.1.0-preview.4` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
 
 Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
@@ -40,7 +40,9 @@ Pin only the package your test project needs:
 <!-- Pure test project; not the production mod project. -->
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.6]" />
 <!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.11]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.12]" />
+<!-- A game-side test adapter plugin compiles the adapter source: -->
+<PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.1]" PrivateAssets="all" />
 ```
 
 Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools and examples target net10.0. Keep the game-side plugin's existing target framework.
