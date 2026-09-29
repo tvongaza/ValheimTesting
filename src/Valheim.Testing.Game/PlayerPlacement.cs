@@ -81,9 +81,12 @@ public static class PlayerPlacement
 
     /// <summary>
     /// Unless <paramref name="skipIntro"/> is false, first ends a first-join intro (<see cref="SkipIntro"/>), which is a
-    /// no-op for a character that has spawned before. Then waits until the client's player has stood still somewhere for
-    /// <paramref name="settleFor"/> (default 3 s): a first join rides in on the Valkyrie, and the game refuses a teleport
-    /// within 2 s of a spawn or of the previous teleport, silently in both cases. Then has the server teleport the only connected player to <paramref name="point"/> (a little
+    /// no-op for a character that has spawned before. Then waits until the client's player has held still somewhere for
+    /// <paramref name="settleFor"/> (default 3 s): the game refuses a teleport within 2 s of a spawn or of the previous
+    /// teleport, silently, and the Valkyrie of a first-join intro overwrites the player's position every frame. Still, not
+    /// grounded: a character that logged out where this world copy has water spawns swimming, and the game teleports a
+    /// swimming player as readily as a standing one. With <paramref name="skipIntro"/> false the intro may still be running
+    /// (the ride is not reported as attached, and its speed can read low), so the player must also be grounded. Then has the server teleport the only connected player to <paramref name="point"/> (a little
     /// above it, so the character settles onto the ground) exactly once, and waits on the client until its player stands
     /// settled there (<see cref="SurfaceProbe.Supported"/>). Returns the observation that established arrival. Refuses at
     /// once, before or after the teleport, if a reading shows the player flying (see <see cref="SetFly"/>). The one
@@ -101,16 +104,16 @@ public static class PlayerPlacement
         // The intro gets at most a minute of the budget, and never less than the command's one-second minimum.
         if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
         Observation? last = null;
-        // Settled anywhere, and for long enough: the game drops a teleport while the player is attached (the first-join
-        // Valkyrie), loading or already teleporting, and within 2 s of a spawn (its teleport cooldown).
-        TimeSpan? settledSince = null;
+        // Still anywhere, and for long enough: the game drops a teleport while the player is already teleporting and within
+        // 2 s of a spawn or teleport (its cooldown); an attached player (a chair, a ship) or an unfinished observation waits too.
+        TimeSpan? stillSince = null;
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
             last = client.Observe(support);
             RefuseFlying(last);
-            if (!Settled(last)) settledSince = null;
-            else if ((settledSince ??= clock.Elapsed) + still <= clock.Elapsed) break;
+            if (!ReadyToTeleport(last, requireGrounded: !skipIntro)) stillSince = null;
+            else if ((stillSince ??= clock.Elapsed) + still <= clock.Elapsed) break;
             if (clock.Elapsed >= timeout)
                 throw new TimeoutException($"The player never stood still before the teleport within {timeout.TotalSeconds:F0} s; last reading: {last.Data.GetRawText()}. Nothing was teleported.");
             cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
@@ -139,11 +142,14 @@ public static class PlayerPlacement
             throw new InvalidOperationException("The player is flying, so support cannot be measured. Fly is for review and visual steps only; turn it off first (SetFly(client, false)).");
     }
 
-    private static bool Settled(Observation observation)
+    // Grounded is not required when the intro was skipped: the game's teleport refuses only a player that is already
+    // teleporting or within its cooldown, and a swimming player (grounded false, bobbing at a few centimetres a second) is
+    // teleported like a standing one. With the intro possibly running, grounded is what shows the ride is over.
+    private static bool ReadyToTeleport(Observation observation, bool requireGrounded)
     {
         if (!observation.Complete) return false;
         var d = observation.Data;
-        return d.GetProperty("grounded").GetBoolean() && !d.GetProperty("attached").GetBoolean() && !d.GetProperty("teleporting").GetBoolean() &&
+        return (!requireGrounded || d.GetProperty("grounded").GetBoolean()) && !d.GetProperty("attached").GetBoolean() && !d.GetProperty("teleporting").GetBoolean() &&
             !d.GetProperty("dead").GetBoolean() && d.GetProperty("speed").GetSingle() <= .15f;
     }
 
