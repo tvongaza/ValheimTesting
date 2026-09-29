@@ -1,6 +1,6 @@
 # Session capabilities
 
-This example attaches to an existing ValheimCLI connection with the Standard pack. It does not own or launch the game process. `state` is read-only; `join`, `leave` and `save` are explicit mutations. They preserve ValheimCLI's permissions, including devcommands and client restrictions; the example does not enable those permissions itself.
+This example attaches to an existing ValheimCLI connection with the Standard pack. It does not own or launch the game process. `state` is read-only; `join`, `leave` and `save` are explicit mutations. They preserve ValheimCLI's client restrictions. ValheimCLI refuses the join until devcommands is on, so `Join` turns the client's devcommands on first and requires the game's reply to confirm it; pass `enableDevcommands: false` when the operator manages that flag and the join should be refused instead. Leave and save do not change it.
 
 ```sh
 # Read facts on an already pinned disposable server:
