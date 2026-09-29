@@ -204,13 +204,13 @@ public sealed class ClientRoundsTests : IDisposable
     [Fact] public void ThreeRoundsNameEachSaveAndRestartByTheRoundTheyLeadTo()
     {
         var report = new ScenarioReport("rounds");
-        Rounds(report, Plan(), names: ["before", "restarted", "again"]).Run(Server(), Open(Plan()), Measure());
+        Rounds(report, Plan(), names: ["one", "two", "three"]).Run(Server(), Open(Plan()), Measure());
         Assert.True(report.Passed);
         Assert.Equal(2, _restarts);
-        Assert.Equal(new[] { "confirmed world save before restarted", "restart only the owned server before restarted", "confirmed world save before again", "restart only the owned server before again" },
-            report.Steps.Select(s => s.Name).Where(n => n.StartsWith("confirmed", StringComparison.Ordinal) || n.StartsWith("restart", StringComparison.Ordinal)));
+        Assert.Equal(new[] { "confirmed world save before two", "restart only the owned server before two", "confirmed world save before three", "restart only the owned server before three" },
+            report.Steps.Select(s => s.Name).Where(n => !n.Contains(": ", StringComparison.Ordinal) && n.Contains(" before ", StringComparison.Ordinal)));
         Assert.Equal(report.Steps.Count, report.Steps.Select(s => s.Name).Distinct().Count());
-        Assert.Equal("before,restarted,again", report.Provenance["clientRoundsCompleted"]);
+        Assert.Equal("one,two,three", report.Provenance["clientRoundsCompleted"]);
     }
 
     [Fact] public void OneRoundWithoutAnArrivalLeavesThePlayerWhereItJoinedAndNeverRestarts()
