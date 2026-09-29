@@ -78,21 +78,22 @@ public class PlayerPlacementTests
     // went out within the game's 2 s post-spawn cooldown and was dropped. Standing still must last before the teleport.
     [Fact] public void ThePlayerMustStandStillForAWhileBeforeTheTeleport()
     {
-        int reads = 0, teleportAt = -1;
+        // Timed, not counted: polls can take longer than their 250 ms on a loaded machine, but the teleport can never
+        // come sooner than settleFor after the first still reading.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        TimeSpan? firstStill = null, teleported = null;
         var serverTransport = new ScriptedTransport()
             .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => { teleportAt = reads; return ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"); });
+            .OnPrefix("cli_teleport_peer ", _ => { teleported = clock.Elapsed; return ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"); });
         var clientTransport = new ScriptedTransport().Extension("valheim.world", "player-support", _ =>
         {
-            reads++;
-            return teleportAt < 0
-                ? new { source = "local-player-support", complete = true, x = 0.6f, y = 33.7f, z = 2.8f, speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres" }
-                : Standing();
+            if (teleported != null) return Standing();
+            firstStill ??= clock.Elapsed;
+            return new { source = "local-player-support", complete = true, x = 0.6f, y = 33.7f, z = 2.8f, speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres" };
         });
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), settleFor: TimeSpan.FromSeconds(1));
-        // Readings are 250 ms apart: a second of standing still needs at least four more after the first.
-        Assert.True(teleportAt >= 5, $"teleported after only {teleportAt} readings");
+        Assert.True(teleported - firstStill >= TimeSpan.FromSeconds(1), $"teleported {(teleported - firstStill)?.TotalMilliseconds:F0} ms after the player first stood still");
     }
     [Fact] public void APlayerThatNeverStandsStillIsNotTeleported()
     {
