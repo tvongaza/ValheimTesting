@@ -25,7 +25,7 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 
 The dependency goes **ValheimTesting → ValheimCLI**, never the reverse. Game-side extension API and observers stay in ValheimCLI. Roads and MWL own their optional adapters and scenarios. No test package belongs in an ordinary player's plugin folder.
 
-Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. Three packages are on NuGet.org: [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing), [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) and [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game). `Valheim.Testing.Doubles` is not published yet. ValheimTesting publishes the transport as `Valheim.Testing.Cli` so it is clearly this toolkit's packaging, not an official ValheimCLI release; upstream's own project is `Valheim.Cli.Testing`. Bootstrap builds it from tracked source at the pinned commit into an ignored local feed; it does not compile or launch the game plugin.
+Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. All four packages are on NuGet.org: [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing), [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli), [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) and [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles). ValheimTesting publishes the transport as `Valheim.Testing.Cli` so it is clearly this toolkit's packaging, not an official ValheimCLI release; upstream's own project is `Valheim.Cli.Testing`. Bootstrap builds it from tracked source at the pinned commit into an ignored local feed; it does not compile or launch the game plugin.
 
 ## Start without a game
 
@@ -39,7 +39,7 @@ dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Published on NuGet.org: `Valheim.Testing` `0.1.0-preview.5`, `Valheim.Testing.Game` `0.1.0-preview.10` (net10.0) and `Valheim.Testing.Cli` `0.1.0-preview.4`. This branch builds the next candidates, `Valheim.Testing` `0.1.0-preview.6`, `Valheim.Testing.Game` `0.1.0-preview.11`, `Valheim.Testing.Cli` `0.1.0-preview.5` and `Valheim.Testing.Doubles` `0.1.0-preview.4`; they restore only from the local `.packages` feed until they are published.
+`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.6`, `Valheim.Testing.Game` `0.1.0-preview.11` (net10.0) or `Valheim.Testing.Doubles` `0.1.0-preview.4`; the transport is `Valheim.Testing.Cli` `0.1.0-preview.5`. All restore from NuGet.org. Use the local feed only to try a build that is not yet published.
 
 ## Platforms
 
@@ -53,7 +53,7 @@ The toolkit needs only the .NET 10 SDK on every host, and CI runs bootstrap and 
 
 ## Linux and containers
 
-Owned dedicated-server checks can run on Linux as well as Windows. `ServerLaunch` detects a copied server runtime's platform from its executable (`valheim_server.exe` or `valheim_server.x86_64`) and builds the direct launch that `DirectServerProcess` and `OwnedServerSession` own, including BepInEx's Doorstop variables on Linux. It is new in `Valheim.Testing.Game` `0.1.0-preview.11`; use the local feed until that version is published. [docker/linux-server](docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10, and the manual [Linux workflow](.github/workflows/native-linux.yml) boots it once with [LinuxServerSmoke](examples/LinuxServerSmoke/README.md). The image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026 (server build 25527701); on Apple Silicon the image runs only under emulation and remains experimental.
+Owned dedicated-server checks can run on Linux as well as Windows. `ServerLaunch` detects a copied server runtime's platform from its executable (`valheim_server.exe` or `valheim_server.x86_64`) and builds the direct launch that `DirectServerProcess` and `OwnedServerSession` own, including BepInEx's Doorstop variables on Linux. It is new in `Valheim.Testing.Game` `0.1.0-preview.11`. [docker/linux-server](docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10, and the manual [Linux workflow](.github/workflows/native-linux.yml) boots it once with [LinuxServerSmoke](examples/LinuxServerSmoke/README.md). The image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026 (server build 25527701); on Apple Silicon the image runs only under emulation and remains experimental.
 
 Not yet: game clients in the cloud or a container (client checks still need a desktop machine), and driving remote hosts over SSH, which is next.
 
