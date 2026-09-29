@@ -200,14 +200,17 @@ or observe its effect independently; do not treat transport completion as a
 successful mutation. This campaign used an authorized server peer teleport and
 client-owned arrival/support observations, without granting client admin rights.
 
-`PlayerPlacement` (preview 11; intro skipping preview 12) packages that procedure for any mod's client check:
+`PlayerPlacement` (preview 11; intro skipping preview 12; protection by default and fly preview 13) packages that procedure for any mod's client check:
 
 - `SkipIntro(client, timeout)` ends a new character's first-spawn intro (the Valkyrie ride) as the menu's Skip does, or stops it before it starts, and waits for the player to respawn on the ground (`cli_skip_intro`, not a cheat command). It returns whether an intro was running; for a character that has spawned before it changes nothing.
-- `Protect(client)` turns on god, ghost and debug modes (`cli_set_player_safety true`) and requires the game to read all three back; debug flying stays off.
+- `Protect(client)` turns on god, ghost and debug modes (`cli_set_player_safety true`, which sets them rather than toggling) and requires the game to read all three back; it is issued once, and an unconfirmed reply fails. Debug flying stays off. `SessionControl.WaitForWorld` calls it by default (see below), so a joined player is protected without asking.
+- `SetFly(client, on)` turns debug fly on or off (`cli_fly on|off`) and requires the game to read the state back. Fly is for review and visual steps only: a flying player is never supported, so `Arrive` and `RequireSupported` refuse (an `InvalidOperationException`, not a `SupportException`) as soon as a reading shows the player flying. Turn it off before measuring again.
 - `Arrive(server, client, point, timeout)` first skips the intro (pass `skipIntro: false` to leave it), because the game silently drops a teleport during the Valkyrie ride and within 2 s of a spawn; it then waits for the player to stand still for 3 s, finds the server's only connected player with a character (none or several is refused), asks the server once to teleport it just above the point with the game's own teleport, and waits until the client's own observations show the player settled there. A teleport reply is never taken as arrival, and a timeout does not repeat the teleport.
 - `RequireSupported(client, point)` takes three readings half a second apart, each of which must show the player grounded and stationary on the declared ground; a `SupportException` carries every reading.
 
 `SessionControl.Join` (preview 12) turns the client's devcommands on before joining, because ValheimCLI refuses the join (a mutating extension command) until it is on; `EnableDevcommands()` does the same on its own. Both read the game's reply and toggle again if that turned it off.
+
+`SessionControl.WaitForWorld` (preview 13) protects the local player once the world is ready (`PlayerPlacement.Protect`), so a test that forgets to cannot lose its character to a fall, the water or a mob before it arrives, a failure that would look like a mod bug. A protection the game does not read back fails the wait. A dedicated server has no local player and is left alone. `WaitForWorld(..., protectPlayer: false)` skips it, for a check that needs a vulnerable player or an operator who manages these modes. On a joined client the command needs ValheimCLI's `AllowOnServerClients` setting, like the join.
 
 Declare the support point on dry ground: a player standing in water is not grounded at the ground's height, so the check fails, which is correct but tells you nothing about the road. `examples/ClientSurfaceCheck` uses `RequireSupported`.
 

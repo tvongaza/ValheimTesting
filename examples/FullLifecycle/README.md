@@ -8,7 +8,7 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 |---|---|---|---|
 | Unit / synthetic | [ModWithTests/MyMod.Tests](../ModWithTests/README.md) | The real decision on declared terrain, with game doubles | .NET 10 SDK |
 | Controlled integration | [MyMod.IntegrationTests](MyMod.IntegrationTests/) | The real scenario and client lifecycle code against scripted game replies: startup failure, incomplete observations, lost replies, save failure, cleanup | .NET 10 SDK |
-| Native system | [MyMod.SystemTests](MyMod.SystemTests/) with [MyMod](MyMod/) and [MyMod.TestAdapter](MyMod.TestAdapter/) | A disposable server copy and a real client: join, strict pins, protect and place the player, exercise the feature, measure, confirmed save, restart, rejoin, measure again, stop what it started, report | A game install, Steam, a machine you may use |
+| Native system | [MyMod.SystemTests](MyMod.SystemTests/) with [MyMod](MyMod/) and [MyMod.TestAdapter](MyMod.TestAdapter/) | A disposable server copy and a real client: join, strict pins, protect (by default) and place the player, exercise the feature, measure, confirmed save, restart, rejoin, measure again, stop what it started, report | A game install, Steam, a machine you may use |
 | Human review | `review` in the plan | An optional look by a person, recorded beside the automated result and never part of it | A person |
 
 `dotnet run scripts/validate.cs` runs the integration tests and builds the runner on every platform. The mod and the adapter compile against your game install, so they build only where you have one.
@@ -19,9 +19,11 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 |---|---|
 | The feature and its command (`MyMod/Plugin.cs`) | The owned server lifecycle: copies, startup events, identity handshake, restart, teardown, report (`PinnedServerRun`, `OwnedServerSession`) |
 | The plan fields and their rules (`LifecyclePlan.cs`): which site is dry, which is wet, where the player stands | The client section and its rules (`ClientRunPlan`), and owned or attached clients (`ClientSession`) |
-| The expectations and the scenario (`DrySiteScenario.cs`): one marker here, none there, still there after a restart | Session steps (`SessionControl`: devcommands, join, leave, readiness), player placement (`PlayerPlacement`: intro, protection, arrival), strict pins (`GameActor`) |
+| The expectations and the scenario (`DrySiteScenario.cs`): one marker here, none there, still there after a restart | Session steps (`SessionControl`: devcommands, join, leave, readiness, protection once the world is ready), player placement (`PlayerPlacement`: intro, arrival, support), strict pins (`GameActor`) |
 | A test adapter serving the owned-session identity (`MyMod.TestAdapter`) | The adapter's registration and identity capability ([Valheim.Testing.Adapter](../../src/Valheim.Testing.Adapter/Adapter/TestExtension.cs), compiled into the adapter) |
 | Integration tests of its scenario | The scripted fakes they use (`ScriptedTransport`) |
+
+The scenario never calls `PlayerPlacement.Protect` itself: `SessionControl.WaitForWorld` protects the joined player (god, ghost and debug mode, read back) as soon as the world is ready, so the join step fails if the game does not confirm it, and the player is never moved unprotected. Fly stays off; the arrival and marker checks measure a player standing on the ground.
 
 Observations use ValheimCLI's generic commands (`cli_zdos_at` on the server, `cli_prefabs_at` on the client). A mod that needs a test-only action or observation adds it to its adapter as another extension command.
 
