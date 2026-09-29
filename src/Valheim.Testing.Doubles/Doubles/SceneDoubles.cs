@@ -5,12 +5,13 @@
 #nullable enable
 // ReSharper disable InconsistentNaming
 // Scene doubles: prefabs, the live networked objects, and object destruction. An instantiated networked prefab
-// creates its ZDO; ZDO destruction is QUEUED until the test calls ZDOMan.ProcessDestroyed, as the game's is.
+// creates its ZDO; ZDO destruction is QUEUED until the test calls ZDOMan.ProcessDestroyed, as the game's is, and
+// object destruction until UnityEngine.Object.EndOfFrame, as Unity's is.
 using System.Collections.Generic;
 using System.Linq;
 
 /// <summary>Shim for WearNTear: the prefab's full health.</summary>
-public partial class WearNTear { public float m_health; }
+public partial class WearNTear : UnityEngine.MonoBehaviour { public float m_health; }
 
 /// <summary>Shim for ZNetScene: registered prefabs and the live networked objects.</summary>
 public partial class ZNetScene
@@ -26,10 +27,18 @@ public partial class ZNetScene
     }
     public UnityEngine.GameObject? GetPrefab(string name) => Prefabs.TryGetValue(name, out var prefab) ? prefab : null;
     public ZNetView? FindInstance(ZDO zdo) => Live.FirstOrDefault(o => !o.Destroyed && o.View?.GetZDO() == zdo)?.View;
-    /// <summary>As the game's: the object goes, and its ZDO is queued for destruction when this session owns it.</summary>
+    /// <summary>
+    /// As the game's: the object leaves the live scene at once, its ZDO is queued for destruction when this session
+    /// owns it, and the object itself is destroyed at the end of the frame (UnityEngine.Object.EndOfFrame).
+    /// </summary>
     public void Destroy(UnityEngine.GameObject gameObject)
     {
+        var view = gameObject.GetComponent<ZNetView>();
+        if (view != null && view.GetZDO() is { } zdo)
+        {
+            Live.Remove(gameObject);
+            if (zdo.IsOwner()) ZDOMan.instance!.DestroyZDO(zdo);
+        }
         UnityEngine.Object.Destroy(gameObject);
-        if (gameObject.View?.GetZDO() is { } zdo && zdo.IsOwner()) ZDOMan.instance!.DestroyZDO(zdo);
     }
 }

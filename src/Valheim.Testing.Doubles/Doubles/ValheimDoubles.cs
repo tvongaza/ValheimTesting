@@ -211,12 +211,10 @@ public partial class Transform
     public UnityEngine.Vector3 position;
 }
 
-/// <summary>Shim for ZNetView: one ZDO behind it, ours unless a test says otherwise.</summary>
-public partial class ZNetView
+/// <summary>Shim for ZNetView: one ZDO behind it, ours unless a test says otherwise. Its <c>gameObject</c> is null for a view a test builds around a bare ZDO.</summary>
+public partial class ZNetView : UnityEngine.MonoBehaviour
 {
     public ZDO Zdo;
-    /// <summary>The object this view sits on (SceneShims); null for a view a test builds around a bare ZDO.</summary>
-    public UnityEngine.GameObject gameObject = null!;
     /// <summary>True between StartGhostInit and FinishGhostInit: new objects get ZDOs but join no live scene.</summary>
     public static bool GhostInit { get; private set; }
     public static void StartGhostInit() => GhostInit = true;
