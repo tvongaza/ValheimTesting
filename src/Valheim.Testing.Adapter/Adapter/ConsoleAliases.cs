@@ -39,7 +39,7 @@ namespace Valheim.Testing.Adapter
                 if (!commands.Contains(command)) throw new ArgumentException(registration.Id + " has no command " + command + ".", nameof(aliases));
             }
             if (aliases.Select(a => a.Alias.ToLowerInvariant()).Distinct().Count() != aliases.Length) throw new ArgumentException("An alias is named twice.", nameof(aliases));
-            // The game's command table (private in the shipped game). Registration records which entries it added and
+            // The game's command table (protected static in the shipped game). Registration records which entries it added and
             // rolls back, restoring any replaced command, if a name was taken.
             var table = Members.StaticField<Dictionary<string, Terminal.ConsoleCommand>>(typeof(Terminal), "commands");
             var owned = OwnedCommandSet<Terminal.ConsoleCommand>.Register(table, () =>

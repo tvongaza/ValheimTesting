@@ -29,14 +29,20 @@ namespace Valheim.Testing.Adapter
         public static T StaticField<T>(Type type, string name) => Read<T>(FindField(type, name, Static), null);
 
         /// <summary>
-        /// The method <paramref name="name"/> declared on <paramref name="type"/> (or a base type) with exactly these parameter
-        /// types. Overloads never match by name alone.
+        /// The method <paramref name="name"/> declared on <paramref name="type"/> or, nearest first, a base type (private ones
+        /// included) with exactly these parameter types. Overloads never match by name alone, and a parameter the arguments
+        /// would only widen to (a <c>short</c> for an <c>int</c>) does not match.
         /// </summary>
         public static MethodInfo Method(Type type, string name, params Type[] parameters)
         {
             if (type == null) throw new ArgumentNullException(nameof(type));
-            return type.GetMethod(name, Instance | Static, null, parameters, null)
-                ?? throw new MissingMethodException(type.FullName, name + "(" + string.Join(", ", parameters.Select(p => p.Name)) + ")");
+            if (parameters == null) throw new ArgumentNullException(nameof(parameters));
+            // Compared by hand rather than through a binder: the default binder accepts widening conversions, and a type's
+            // own lookup does not return a base type's private methods.
+            for (Type? current = type; current != null; current = current.BaseType)
+                foreach (var method in current.GetMethods(Instance | Static | BindingFlags.DeclaredOnly))
+                    if (method.Name == name && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(parameters)) return method;
+            throw new MissingMethodException(type.FullName, name + "(" + string.Join(", ", parameters.Select(p => p.Name)) + ")");
         }
 
         /// <summary>Invokes <paramref name="method"/> and rethrows what it threw, not reflection's wrapper.</summary>

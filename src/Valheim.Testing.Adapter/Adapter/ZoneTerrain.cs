@@ -14,7 +14,7 @@ namespace Valheim.Testing.Adapter
     /// terrain builder, a zone's terrain with a saved terrain compiler outside the normal zone loading, height samples from
     /// the heightmap and from its collider, saving a compiler, destroying a saved object and a capped census of a zone's
     /// saved objects. Each piece checks the conditions under which the game would silently do nothing and throws instead.
-    /// Behaviour matches Valheim 1.0.16. Gate fixture commands with <see cref="FixtureGate"/>.
+    /// Written against the Valheim 1.0.16 decompile; not yet run in game. Gate fixture commands with <see cref="FixtureGate"/>.
     /// </summary>
     public static class ZoneTerrain
     {

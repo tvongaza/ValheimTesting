@@ -7,7 +7,11 @@ using Xunit;
 // fixture gate. The game-side helpers are only compiled in CI (tests/Valheim.Testing.Adapter.CompileCheck).
 public class AdapterHelperTests
 {
-    private class Base { private int m_hidden = 7; private static bool s_flag = true; public int Hidden => m_hidden; public static bool Flag => s_flag; }
+    private class Base
+    {
+        private int m_hidden = 7; private static bool s_flag = true; public int Hidden => m_hidden; public static bool Flag => s_flag;
+        private string BaseOnly(bool value) => "base " + value;
+    }
     private sealed class Derived : Base
     {
         private string? m_name = "zone";
@@ -15,6 +19,7 @@ public class AdapterHelperTests
         private int? m_maybe;
         private void Save(bool paintOnly) => Saved = paintOnly;
         private void Save(int count) => throw new InvalidOperationException("the wrong overload ran");
+        private void Widen(int value) { }
         private static void Boom() => throw new FormatException("from the game");
         public bool? Saved;
         public void Touch() { m_socket = null; m_maybe = null; }
@@ -45,6 +50,11 @@ public class AdapterHelperTests
         Assert.True(value.Saved);
         Assert.Throws<MissingMethodException>(() => Members.Method(typeof(Derived), "Save", typeof(float)));
         Assert.Throws<MissingMethodException>(() => Members.Method(typeof(Derived), "Save"));
+        // Negative control: a binder would pick Widen(int) for a short argument; an exact lookup must not.
+        Assert.Throws<MissingMethodException>(() => Members.Method(typeof(Derived), "Widen", typeof(short)));
+        Assert.NotNull(Members.Method(typeof(Derived), "Widen", typeof(int)));
+        // A base type's private method, which the derived type's own lookup never returns.
+        Assert.Equal("base True", Members.Call(Members.Method(typeof(Derived), "BaseOnly", typeof(bool)), value, true));
         var error = Assert.Throws<FormatException>(() => Members.Call(Members.Method(typeof(Derived), "Boom"), null));
         Assert.Equal("from the game", error.Message);
     }
