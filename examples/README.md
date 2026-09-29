@@ -1,9 +1,10 @@
 # Choose an example
 
-Start with the [getting-started guide](../docs/getting-started.md) to build the local package feed. Run commands from the repository root. All examples are built by `dotnet run scripts/validate.cs`; validation executes only NoGameTerrain and SharedWorld and never starts Valheim.
+Bringing an existing mod? Start with [ModWithTests](ModWithTests/README.md), then the [adoption guide](../docs/adopting.md). Use [getting started](../docs/getting-started.md) for package availability and feeds. Run commands from the repository root. All examples are built by `dotnet run scripts/validate.cs`; validation executes NoGameTerrain, SharedWorld and the five ModWithTests cases and never starts Valheim.
 
 | Example | Question it answers | Game effects |
 |---|---|---|
+| [ModWithTests](ModWithTests/README.md) | How do I test my actual mod source with shared game doubles? | None; no game or ValheimCLI needed |
 | [NoGameTerrain](NoGameTerrain/README.md) | How do independent expectations and exact replay work? | None; no game needed |
 | [SharedWorld](SharedWorld/README.md) | How do composed terrain, zone seams and isolated snapshots work? | None; no game needed |
 | [SessionControl](SessionControl/README.md) | How do I inspect readiness and explicitly join, leave or confirm a save? | Explicit session/save mutations; no process ownership |

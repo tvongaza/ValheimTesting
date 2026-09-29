@@ -1,6 +1,6 @@
 name: Local test layers
 # Bootstrap and local validation on every supported toolkit OS: library tests, example builds, the two
-# no-game examples and packing. Never launches Valheim or a server. The scripts are .NET file-based
+# no-game examples, package-consuming mod tests and packing. Never launches Valheim or a server. The scripts are .NET file-based
 # programs, so the same commands run in each runner's default shell. No secrets are used.
 on: [push, pull_request]
 permissions:

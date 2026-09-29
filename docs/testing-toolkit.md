@@ -211,7 +211,7 @@ Declare the support point on dry ground: a player standing in water is not groun
 
 ## Published-library validation update
 
-Current local layers: 94 shared-library tests, 802 ValheimCLI tests, 62 Roads scenario tests and 35 MWL adapter/scenario tests. Roads retains 774 production-source unit tests on .NET 10 and Mono. The Roads unit world delegates to the shared synthetic terrain model; Roads-specific doubles, assertions and scenarios remain in Roads. Normal mod builds do not depend on the test libraries.
+Roads exercises real production sources against the shared terrain model and source doubles, with mod-specific extensions and scenario assertions kept in Roads. The [consumer quickstart](../examples/ModWithTests/README.md) shows that arrangement on a smaller mod. Current suite counts belong in the relevant CI/run report; normal mod builds do not depend on the test libraries.
 
 The native paint extension has now been exercised on Valheim 1.0.16: sixteen saved RGBA texels across two zones, paved core plus untouched painted verge, alpha preserved, before and after save/server restart/rejoin on a ValheimCLI-only client. The same plan failed exactly eight samples when deliberately given the unchanged pre-road expectation. Height, collider and stationary support checks passed alongside paint. The [follow-up campaign](native-validation-20260927.md) adds native dirt/fading-edge coverage. Rendered appearance and human walking remain follow-ups.
 
@@ -243,6 +243,8 @@ Ctrl+C and SIGTERM cancel the run. Options name the session capability and token
 - `TempRuntime` is a runtime directory whose BepInEx log a test appends to or rewrites, as each boot does.
 
 ## Game doubles
+
+For a complete package-consuming project that links real mod source and runs five tests, start with [ModWithTests](../examples/ModWithTests/README.md). The reference below describes the supported model and its limits.
 
 `Valheim.Testing.Doubles` lets a unit-test project compile a mod's pure-logic source files (linked with `<Compile Include="../YourMod/Src/....cs" />`) without Unity, Valheim or BepInEx. It is a source package: its files compile into your test project and stand in for the game's types under their real names (`UnityEngine.Vector3`, the global `ZDO`, `ZDOMan`, `ZNetView`, `ZNetScene`, `Heightmap`, `TerrainComp`, `ZoneSystem`, `WorldGenerator`, `ZNet`, `ZNetPeer`, `ZRoutedRpc`, `ZPackage`, `Terminal` and its console commands, `Player.m_localPlayer`, `BepInEx.Logging.ManualLogSource`, Jotunn's `CustomRPC`). So the test project must not also reference the game's assemblies. It needs C# 10 and works on net48 and modern .NET. Reference it with `PrivateAssets="all"` (it is a development dependency).
 

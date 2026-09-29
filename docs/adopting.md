@@ -1,0 +1,48 @@
+# Bring your mod to ValheimTesting
+
+Start in **your mod's repository** with one behavior you want to protect. You do not need to migrate your suite, install a test plugin, or operate a game server to get a first useful test.
+
+## Choose your first layer
+
+| Your mod needs to test… | Use | First example | What still needs the game |
+|---|---|---|---|
+| A decision over heights, slopes, biomes or declared zone state | `Valheim.Testing` | [SharedWorld](../examples/SharedWorld/README.md) | Real generator output, physics and save encoding |
+| Production code that calls supported Unity/Valheim types | `Valheim.Testing.Doubles` in a source-linked test project | [ModWithTests](../examples/ModWithTests/README.md): five runnable xUnit cases | Unmodelled game methods, Harmony timing, actual replication |
+| Retry, refusal, readiness or cleanup in a scenario driver | `Valheim.Testing.Game.Fakes` | [Test fakes](testing-toolkit.md#test-fakes) | The real process/game lifecycle |
+| Loaded height, collision or paint reaching a client | `Valheim.Testing.Game` plus ValheimCLI in the game | [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md), [PaintCheck](../examples/PaintCheck/README.md) | This is a bounded native check; appearance remains a human judgement |
+| Save, restart and rejoin under owned process control | `PinnedServerRun`, `SessionControl` | [Runner contract](testing-toolkit.md#pinned-server-runner), [SessionControl](../examples/SessionControl/README.md) | Disposable runtime/world and a client when replication matters |
+
+The doubles also model selected ZDO, RPC, console and ownership behavior; they are not limited to terrain mods. Read their [supported behavior and limits](testing-toolkit.md#game-doubles) before relying on a member. A field or stub is not an emulation of the game.
+
+## Get to a first passing test
+
+**Code already independent of Unity:** add an exact released `Valheim.Testing` package reference to your existing test project. Published versions restore from NuGet.org; no framework clone or ValheimCLI bootstrap is required. Pass an `ITerrain` or your existing adapter into the real production method.
+
+**Code that uses game types:** follow [ModWithTests](../examples/ModWithTests/README.md). It includes the complete project file, linked mod source, isolated world setup, independent assertions, run commands and expected output. Its packages restore from NuGet.org; no framework checkout or ValheimCLI is needed.
+
+Use the [package availability table](getting-started.md#package-versions-and-feeds) for released versus source-only preview versions. Do not infer availability from a version in a PR. Keep test dependencies out of the shipped mod.
+
+**Contributing to the framework itself:** clone it and run its bootstrap and full validation as described in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally). That workflow builds the exact ValheimCLI dependency and all examples; it is not a prerequisite for every consumer.
+
+## Add one native check only when needed
+
+For a mod that writes terrain on the server, a useful next check is: “the client without my mod sees the declared ground and paint, including after a save/restart.” For another kind of mod, replace this with one observable behavior at its actual game boundary.
+
+1. **Define the expectation in your mod repository.** Choose a small disposable fixture and expected values independently of the observer. Use the sample plan schema in [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md) or [PaintCheck](../examples/PaintCheck/README.md); sample coordinates are illustrative, not universal game sites.
+2. **Prepare the game explicitly.** Install the matching ValheimCLI core and required packs. Install your mod on the server; pin it absent on a client only if server-only compatibility is the claim. A normal client/server mod must instead be installed and pinned on both. Coordinate machine and Steam account ownership before launching anything.
+3. **Run an existing observer first.** Pin the actual world UID and plugin hashes, require loaded zones and a verified safe client position, and follow the example's exact command and output contract. Use `--expect-strict` or `GameActor` strict checks. A connected socket is not readiness or a successful action.
+4. **Move a repeatable scenario into your mod's runner.** Reuse `PinnedServerRun` for owned server copy/start/stop/report handling and `SessionControl` for one-shot save/join/leave. Launch helpers are [documented separately](testing-toolkit.md#linux-dedicated-server-preview-11). Roads is a larger [consumer example](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md), not a prerequisite or template to copy wholesale.
+5. **Add a game-side adapter only if needed.** Existing ValheimCLI capabilities can already read terrain and session state. A mod-specific action or observation belongs in that mod's optional adapter; reusable observations belong in ValheimCLI. Use the [capability authoring guide](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md).
+6. **Test the lifecycle you claim.** Confirm the server save completes; leave, restart only the owned server, rejoin, reverify pins and repeat the original expectation plan. Retain logs and per-attempt results. Never retry a mutation simply because its reply was lost.
+
+Client arrival/protection remains required even if your first check is read-only. [`PlayerPlacement`](testing-toolkit.md#native-terrain-replicated-to-a-valheimcli-only-client-preview-3) (Game preview.11) protects a joined player, arranges its arrival and requires stationary support. Check the toolkit reference for your installed preview before relying on any other helper. Human walking and visual quality remain separate from stationary support checks.
+
+## Quick answers for an agent
+
+- **Where do my tests go?** In the mod repo. Shared fixtures and generic helpers go here; the game-side API goes in ValheimCLI.
+- **What should I read first?** This page, then the chosen example. Use [agent-guide.md](agent-guide.md) for strict pins, observation/mutation contracts and handoff rules.
+- **A package will not restore?** Check published versus local-feed status and the exact version. Do not substitute a different preview silently.
+- **A game type conflicts or is missing?** Do not mix source doubles with game assemblies. Link a smaller production helper, or add the required modeled member deliberately.
+- **Can I run tests concurrently?** Pure immutable inputs can be independent; tests using game singletons or static overrides must be serialized.
+- **Does a passing synthetic test prove the mod works in Valheim?** It proves the tested decision on declared inputs. Native observations, save/replication and human usability have their own evidence.
+- **What do I report?** The production behavior tested, exact package/build versions, checks actually run, failed/incomplete evidence and what remains untested. Do not publish credentials, game binaries or private saves.
