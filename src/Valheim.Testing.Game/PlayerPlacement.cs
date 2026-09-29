@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using valheim_cli.Testing;
 
 namespace Valheim.Testing.Game;
 
@@ -26,6 +27,29 @@ public static class PlayerPlacement
     }
 
     /// <summary>
+    /// Ends a new character's first-spawn intro (the Valkyrie ride) as the menu's Skip button does, or stops it before it
+    /// starts, and waits until the player has respawned on the ground (<c>cli_skip_intro</c>, not a cheat command).
+    /// Returns whether an intro was running; a character that has spawned before returns false and nothing changes.
+    /// The game records the skipped intro in the character, as it does after a normal first spawn.
+    /// </summary>
+    public static bool SkipIntro(GameActor client, TimeSpan timeout)
+    {
+        if (timeout < TimeSpan.FromSeconds(1) || timeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(timeout));
+        var previous = client.CommandTimeout;
+        CommandResult reply;
+        try
+        {
+            client.CommandTimeout = timeout + TimeSpan.FromSeconds(10);
+            reply = client.Execute("cli_skip_intro " + timeout.TotalSeconds.ToString("R", CultureInfo.InvariantCulture));
+        }
+        finally { client.CommandTimeout = previous; }
+        string line = reply.Output.LastOrDefault(l => l.StartsWith("OK: skipped=", StringComparison.Ordinal) || l.StartsWith("ERROR:", StringComparison.Ordinal)) ?? "";
+        if (line.StartsWith("OK: skipped=True", StringComparison.Ordinal)) return true;
+        if (line.StartsWith("OK: skipped=False", StringComparison.Ordinal)) return false;
+        throw new InvalidOperationException("The intro was not confirmed skipped: " + (line.Length > 0 ? line : string.Join(" | ", reply.Output)));
+    }
+
+    /// <summary>
     /// The server's only connected peer that has a character, as <c>cli_peers</c> numbers it. Refuses none or several:
     /// with more than one player the test cannot tell which one it would move.
     /// </summary>
@@ -40,15 +64,16 @@ public static class PlayerPlacement
     }
 
     /// <summary>
-    /// Waits until the client's player has stood still somewhere for <paramref name="settleFor"/> (default 3 s): a first join
-    /// rides in on the Valkyrie, and the game refuses a teleport within 2 s of a spawn or of the previous teleport, silently
-    /// in both cases. Then has the server teleport the only connected player to <paramref name="point"/> (a little
+    /// Unless <paramref name="skipIntro"/> is false, first ends a first-join intro (<see cref="SkipIntro"/>), which is a
+    /// no-op for a character that has spawned before. Then waits until the client's player has stood still somewhere for
+    /// <paramref name="settleFor"/> (default 3 s): a first join rides in on the Valkyrie, and the game refuses a teleport
+    /// within 2 s of a spawn or of the previous teleport, silently in both cases. Then has the server teleport the only connected player to <paramref name="point"/> (a little
     /// above it, so the character settles onto the ground) exactly once, and waits on the client until its player stands
     /// settled there (<see cref="SurfaceProbe.Supported"/>). Returns the observation that established arrival. The one
-    /// timeout covers both waits. Times out without retrying the teleport: a lost reply is an unknown outcome, not a
+    /// timeout covers the intro and both waits. Times out without retrying the teleport: a lost reply is an unknown outcome, not a
     /// failure to act.
     /// </summary>
-    public static JsonElement Arrive(GameActor server, GameActor client, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation = default, TimeSpan? settleFor = null)
+    public static JsonElement Arrive(GameActor server, GameActor client, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation = default, TimeSpan? settleFor = null, bool skipIntro = true)
     {
         var still = settleFor ?? TimeSpan.FromSeconds(3);
         if (still < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(settleFor));
@@ -56,6 +81,8 @@ public static class PlayerPlacement
         TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
         var support = client.RequireCapability("valheim.world/player-support");
         var clock = Stopwatch.StartNew();
+        // The intro gets at most a minute of the budget, and never less than the command's one-second minimum.
+        if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
         Observation? last = null;
         // Settled anywhere, and for long enough: the game drops a teleport while the player is attached (the first-join
         // Valkyrie), loading or already teleporting, and within 2 s of a spawn (its teleport cooldown).

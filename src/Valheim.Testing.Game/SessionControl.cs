@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
@@ -48,9 +49,32 @@ public sealed class SessionControl(GameActor actor)
         throw new TimeoutException("World readiness was not established; no action was retried.");
     }
 
-    // Credentials stay in the game host's environment, never in command text or transcripts.
-    public void Join(string address, string character, string? passwordEnvironmentVariable = null)
+    /// <summary>
+    /// Turns the attached game's devcommands on and requires the game's reply to say so. The console command toggles and
+    /// reports the resulting state, so a reply of off is toggled once more. ValheimCLI refuses mutating extension
+    /// commands, the session join among them, until devcommands is on, and a fresh game starts with it off. It is the
+    /// game's local flag: on a client joined to a server, cheats also need that server's admin list.
+    /// </summary>
+    public void EnableDevcommands()
     {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            string reply = string.Join(" ", actor.Execute("devcommands").Output);
+            if (Regex.IsMatch(reply, @"Dev ?commands:\s*True", RegexOptions.IgnoreCase)) return;
+            if (!Regex.IsMatch(reply, @"Dev ?commands:\s*False", RegexOptions.IgnoreCase))
+                throw new InvalidOperationException("Unrecognised devcommands reply: " + reply);
+        }
+        throw new InvalidOperationException("Devcommands stayed off after two toggles.");
+    }
+
+    /// <summary>
+    /// Joins a server. Turns devcommands on first unless <paramref name="enableDevcommands"/> is false, because the
+    /// join is refused without it; pass false when an operator manages that flag and the join should fail instead.
+    /// Credentials stay in the game host's environment, never in command text or transcripts.
+    /// </summary>
+    public void Join(string address, string character, string? passwordEnvironmentVariable = null, bool enableDevcommands = true)
+    {
+        if (enableDevcommands) EnableDevcommands();
         var args = passwordEnvironmentVariable == null ? new[] { address, character } : new[] { address, character, passwordEnvironmentVariable };
         Transition("join", args);
     }
