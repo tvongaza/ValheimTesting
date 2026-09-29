@@ -23,6 +23,7 @@ The toolkit packages, all on NuGet.org:
 | `Valheim.Testing` | `0.1.0-preview.6` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
 | `Valheim.Testing.Game` | `0.1.0-preview.11` | External game observations, owned sessions, comparisons and reports |
 | `Valheim.Testing.Cli` | `0.1.0-preview.5` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
+| `Valheim.Testing.Adapter` | `0.1.0-preview.1` (not yet published; build it from this repository) | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
 | `Valheim.Testing.Doubles` | `0.1.0-preview.4` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
 
 Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:

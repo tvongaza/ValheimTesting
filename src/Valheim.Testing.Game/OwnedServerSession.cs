@@ -221,6 +221,32 @@ public sealed class OwnedServerSession : IDisposable
     }
     private static bool PathsEqual(string a, string b) => string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    /// <summary>
+    /// Waits until an owned dedicated server accepts game connections, as its adapter's <paramref name="sessionCapability"/>
+    /// reports in <c>acceptingConnections</c> (Valheim.Testing.Adapter). The game opens its socket when world generation
+    /// finishes, which on a first boot comes well after the world has loaded, so a join before it times out. Call it just
+    /// before the first join rather than at startup, so the wait overlaps other work. The game offers no event for it: the
+    /// read-only observation is repeated every 250 ms until the timeout, which reports the last reading.
+    /// </summary>
+    public static void WaitUntilJoinable(GameActor server, string sessionCapability, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        var capability = server.RequireCapability(sessionCapability);
+        var clock = Stopwatch.StartNew();
+        string last = "none";
+        while (true)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            var reading = server.Observe(capability);
+            last = reading.Data.GetRawText();
+            if (!reading.Data.TryGetProperty("acceptingConnections", out var accepting) || accepting.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new InvalidOperationException("The session capability does not report acceptingConnections; update the adapter to Valheim.Testing.Adapter's TestExtension.");
+            if (accepting.GetBoolean()) return;
+            if (clock.Elapsed >= timeout) throw new WaitTimeoutException("server accepting game connections", clock.Elapsed, last);
+            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
+        }
+    }
+
     public GameActor Restart()
     {
         Stop(); // A failure here must never launch the next process.
@@ -243,7 +269,7 @@ public sealed class OwnedServerSession : IDisposable
     public void Dispose() => Stop();
 }
 
-// Starts one direct executable; launch scripts must exec/wait, never detach a child.
+// Starts one direct executable (an owned server, or an owned client through ClientSession); launch scripts must exec/wait, never detach a child.
 // The PID handshake refuses a daemonized server. No process-name discovery/kill.
 public sealed class DirectServerProcess : IServerProcess
 {
@@ -257,7 +283,7 @@ public sealed class DirectServerProcess : IServerProcess
     {
         _logPrefix = logPrefix; _gameLogs = gameLogs;
         start.UseShellExecute = false; start.RedirectStandardOutput = true; start.RedirectStandardError = true;
-        _process = Process.Start(start) ?? throw new IOException("Could not start owned server.");
+        _process = Process.Start(start) ?? throw new IOException("Could not start the owned process.");
         _stdout = Capture(_process.StandardOutput, logPrefix + ".stdout.log");
         _stderr = Capture(_process.StandardError, logPrefix + ".stderr.log");
     }
@@ -274,7 +300,7 @@ public sealed class DirectServerProcess : IServerProcess
     public void Stop(TimeSpan timeout)
     {
         if (!_process.HasExited) _process.Kill(entireProcessTree: true);
-        if (!_process.WaitForExit((int)timeout.TotalMilliseconds)) throw new TimeoutException("Owned server did not stop.");
+        if (!_process.WaitForExit((int)timeout.TotalMilliseconds)) throw new TimeoutException("The owned process did not stop.");
         if (!Task.WaitAll([_stdout, _stderr], timeout)) throw new TimeoutException("Process log capture did not finish.");
         for (int i = 0; i < _gameLogs.Length; i++)
         {

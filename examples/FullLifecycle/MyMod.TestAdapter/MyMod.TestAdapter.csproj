@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The mod's game-side test adapter: installed only in test runtimes, next to the mod and ValheimCLI. It compiles the
+    toolkit's adapter source (the Valheim.Testing.Adapter package; linked from this repository here) against the exact
+    ValheimCLI core installed in the test runtime.
+  -->
+  <Import Project="../game-references.props" />
+  <PropertyGroup><AssemblyName>MyMod.TestAdapter</AssemblyName><Version>0.1.0</Version></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/Valheim.Testing.Adapter/Adapter/*.cs" LinkBase="ValheimTestingAdapter" />
+    <Reference Include="valheimCLI"><HintPath>$(CliDll)</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="RequireCliDll" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(CliDll)' == '' Or !Exists('$(CliDll)')" Text="Pass -p:CliDll= with the ValheimCLI core (valheimCLI.dll) installed in the test runtime." />
+  </Target>
+</Project>
