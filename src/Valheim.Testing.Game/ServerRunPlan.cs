@@ -37,6 +37,16 @@ public class ServerRunPlan
     public int Port { get; set; } = 5577;
     public int StartupSeconds { get; set; } = 300;
     public int CommandSeconds { get; set; } = 30;
+    /// <summary>
+    /// Every entry the runtime's <c>BepInEx/patchers</c> holds, by name. A clean runtime is BepInEx core and your plugins
+    /// with an empty patchers directory; the runner refuses one holding anything not named here.
+    /// </summary>
+    public string[] Patchers { get; set; } = [];
+    /// <summary>
+    /// This run's severities for the teardown log scan's patterns (<see cref="LogScanner.Names"/>), each with a written
+    /// reason, for example <c>"rpc-method-missing": { "severity": "Failure", "reason": "..." }</c>.
+    /// </summary>
+    public Dictionary<string, LogClassification> LogScan { get; set; } = [];
 
     public static T Read<T>(string path) where T : ServerRunPlan =>
         JsonSerializer.Deserialize<T>(File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow })
@@ -46,11 +56,13 @@ public class ServerRunPlan
     /// The rules every pinned dedicated-server plan follows: pinned sources, port and time bounds, a known executable,
     /// no runner-owned session token or Doorstop variable in the environment, <c>-batchmode -nographics</c> and exactly
     /// one <c>-savedir {world}</c>, and strict pins with <c>worlduid</c>, an exact MD5 for each of
-    /// <paramref name="requiredPlugins"/> and for every other listed plugin, and no <c>worldfiles</c>.
+    /// <paramref name="requiredPlugins"/> and for every other listed plugin, and no <c>worldfiles</c>. Patcher names are
+    /// single entries and each log scan classification names a known pattern with a reason.
     /// </summary>
     public void ValidateServerPlan(IEnumerable<string> requiredPlugins, string sessionTokenVariable)
     {
         Runtime.Validate(); World.Validate();
+        CheckPatchersAndLogScan();
         if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120)
             throw new ArgumentException("Invalid port or time budget.");
         if (!string.IsNullOrEmpty(Executable) && Executable != ServerLaunch.WindowsExecutable && Executable != ServerLaunch.LinuxExecutable)
@@ -87,6 +99,14 @@ public class ServerRunPlan
         if ((platform == ServerPlatform.Windows) != windowsHost)
             throw new PlatformNotSupportedException($"A {platform} dedicated-server runtime must run on a {platform} host; use validate here, or run on a matching host or container.");
     }
+    /// <summary>The plan's patcher names and log scan classifications are well formed (the runner checks them for every plan).</summary>
+    public void CheckPatchersAndLogScan()
+    {
+        BepInExLoader.CheckPatcherNames(Patchers);
+        LogScanner.CheckClassifications(LogScan);
+    }
+    /// <summary>Refuses a runtime whose <c>BepInEx/patchers</c> holds an entry <see cref="Patchers"/> does not name, or lacks one it names.</summary>
+    public void CheckRuntimePatchers(string runtime) => BepInExLoader.RequirePatchers(runtime, Patchers, "runtime");
     public void CheckOutput(string output)
     {
         output = Path.GetFullPath(output);
@@ -102,13 +122,14 @@ public class ServerRunPlan
     public string Expand(string value, string runtime, string world) => value.Replace("{runtime}", runtime).Replace("{world}", world).Replace("{port}", Port.ToString(CultureInfo.InvariantCulture));
     /// <summary>
     /// What an owned dedicated server's startup waits on: ValheimCLI's listening line in this boot's BepInEx log (a
-    /// previous boot's lines never count; a BepInEx plugin-load failure ends startup at once), then the loaded-world push
+    /// previous boot's lines never count; a plugin-load failure, a type-load or missing-member exception, or ValheimCLI's
+    /// "core is not ready" ends startup at once: <see cref="StartupEvents.StartupFailures"/>), then the loaded-world push
     /// on a loopback connection of its own. A world state is not mod readiness: the session observation decides that.
     /// </summary>
     public StartupEvents DedicatedStartupEvents(string runtime) => new()
     {
         CliLog = Path.Combine(runtime, "BepInEx", "LogOutput.log"),
-        Failures = Game.StartupEvents.BepInExPluginLoadFailures,
+        Failures = Game.StartupEvents.StartupFailures,
         States = () => StateWait.Connect("127.0.0.1", Port),
         ReadyStates = [StateWait.InWorldNoPlayer],
     };

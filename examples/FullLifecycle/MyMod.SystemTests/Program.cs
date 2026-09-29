@@ -30,7 +30,12 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
             DrySiteServerScenario.Run(run.Plan, run.Server, run.Session.Restart, run.Report);
             return Task.CompletedTask;
         }
-        DrySiteScenario.Run(run.Plan, run.Server, run.Session.Restart, () => ClientSession.Open(run.Plan.Client!, run.Output, run.Cancellation),
+        DrySiteScenario.Run(run.Plan, run.Server, run.Session.Restart, () =>
+            {
+                var client = ClientSession.Open(run.Plan.Client!, run.Output, run.Cancellation);
+                run.Logs.AddRange(client.Logs); // Scanned with the server's at teardown, after the scenario stops the client.
+                return client;
+            },
             server => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation),
             run.Report, run.Output, run.Cancellation);
         return Task.CompletedTask;

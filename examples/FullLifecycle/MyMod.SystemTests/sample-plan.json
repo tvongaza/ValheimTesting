@@ -2,8 +2,9 @@
   "scenario": "dry-site-lifecycle",
   "runtime": { "source": "C:\\vt-fixtures\\server-runtime", "sha256": { "valheim_server.exe": "<sha256 of every file, from WorldFixture.Manifest>" } },
   "world": { "source": "C:\\vt-fixtures\\world", "sha256": { "worlds_local/Fixture.db": "<sha256>", "worlds_local/Fixture.fwl": "<sha256>", "adminlist.txt": "<sha256>" } },
-  "arguments": ["-batchmode", "-nographics", "-name", "MyModTest", "-port", "2456", "-world", "Fixture", "-password", "<fixture password>", "-savedir", "{world}", "-public", "0"],
+  "arguments": ["-batchmode", "-nographics", "-name", "MyModTest", "-port", "2456", "-world", "Fixture", "-password", "<fixture password>", "-savedir", "{world}", "-public", "0", "-logFile", "{runtime}/toolkit-unity.log"],
   "environment": {},
+  "patchers": [],
   "pins": {
     "worlduid": "<the fixture world's UID>",
     "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",

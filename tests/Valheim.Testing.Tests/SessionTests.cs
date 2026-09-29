@@ -138,6 +138,104 @@ public class SessionTests
     [InlineData("[Error  :ProceduralRoads] Could not load [bridge piece] prefab")]
     [InlineData("[Info   :valheimCLI] Command server listening on 127.0.0.1:5577")]
     public void OrdinaryLinesAreNotPluginLoadFailures(string line) => Assert.DoesNotContain(StartupEvents.BepInExPluginLoadFailures, failure => failure.IsMatch(line));
+    // A runtime whose assemblies do not fit the game: the exceptions as the game and BepInEx log them, and the line each of
+    // ValheimCLI's packs logs when its core never became ready (Packs/*Pack.cs at the pinned ValheimCLI commit).
+    public static TheoryData<string> RuntimeLoadFailureLines => new()
+    {
+        "[Error  : Unity Log] System.TypeLoadException: Could not load type of field 'ZDO:m_extra' (12) due to: Could not resolve type with token 01000042",
+        "System.TypeLoadException: Could not load type of field 'ZDO:m_extra' (12) due to: Could not resolve type with token 01000042",
+        "[Error  :   BepInEx] Error loading [Old Mod 1.0.0] : System.MissingMethodException: Method not found: void ZNet.OldMethod()",
+        "[Error  : Unity Log] MissingFieldException: Field not found: int ZoneSystem.m_oldField",
+        "[Error  :CLI Standard Commands] CLI core 1.1 is not ready.",
+        "[Error  :CLI World Tools] CLI core 1.2 is not ready.",
+    };
+    [Theory] [MemberData(nameof(RuntimeLoadFailureLines))]
+    public void RuntimeLoadFailuresAreStartupFailures(string line)
+    {
+        Assert.Contains(StartupEvents.RuntimeLoadFailures, failure => failure.IsMatch(line));
+        Assert.Contains(StartupEvents.StartupFailures, failure => failure.IsMatch(line));
+    }
+    [Fact] public void StartupFailuresKeepThePluginLoadFailures() =>
+        Assert.All(StartupEvents.BepInExPluginLoadFailures, failure => Assert.Contains(failure, StartupEvents.StartupFailures));
+    [Theory]
+    [InlineData("[Info   :   BepInEx] Loading [valheimCLI 1.1.0]")]
+    [InlineData("[Message:   BepInEx] Chainloader startup complete")]
+    [InlineData("[Info   :CLI Standard Commands] Standard commands ready; owner=3f2a")]
+    [InlineData("[Info   :valheimCLI] Command server listening on 127.0.0.1:5577")]
+    [InlineData("ERROR: EnvMan is not ready")]
+    [InlineData("[Info   :MyMod] Loaded type table (TypeLoader 2)")]
+    [InlineData("[Warning:MyMod] CLI core is not ready yet, retrying")]
+    [InlineData("[Info   :MyMod] Soft dependency OtherMod not found (MissingMethodException); skipping its integration")]
+    [InlineData("[Debug  :MyMod] Probed optional type OtherMod.Api: TypeLoadException handled")]
+    [InlineData("[Message:MyMod] MissingFieldException is handled for old configs")]
+    [InlineData("  ---> System.TypeLoadException: inner exception of a handled error")]
+    public void OrdinaryLinesAreNotStartupFailures(string line) => Assert.DoesNotContain(StartupEvents.StartupFailures, failure => failure.IsMatch(line));
+    private const string CleanBoot = "[Message:   BepInEx] BepInEx 5.4.23.2 - valheim_server\n[Info   :   BepInEx] Loading [valheimCLI 1.1.0]\n[Info   :   BepInEx] Loading [My Mod 1.0.0]\n";
+    [Theory] [MemberData(nameof(RuntimeLoadFailureLines))]
+    public void EachRuntimeLoadFailureEndsStartupAtOnceWithTheLineAndTheLinesBeforeIt(string line)
+    {
+        using var log = new TempLog();
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = _ => log.Append(CleanBoot + line + "\n") };
+        using var session = Session(fake, Generous, new StartupEvents { CliLog = log.Path, Failures = StartupEvents.StartupFailures });
+        var error = Assert.Throws<WaitFailedException>(() => session.Start());
+        Assert.Equal(line, error.LastSeen); Assert.Contains(line, error.Message);
+        Assert.Equal(CleanBoot.TrimEnd('\n').Split('\n'), error.Context);
+        Assert.Contains("[Info   :   BepInEx] Loading [My Mod 1.0.0]", error.Message);
+        Assert.True(error.Elapsed < TimeSpan.FromSeconds(30)); Assert.Equal(0, fake.Connects);
+    }
+    [Fact] public void OnlyTheLastFewLinesAreKeptBeforeAFailure()
+    {
+        using var log = new TempLog();
+        string lines = string.Concat(Enumerable.Range(1, 20).Select(n => $"[Info   :   BepInEx] line {n}\n"));
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = _ => log.Append(lines + "System.TypeLoadException: bad\n") };
+        using var session = Session(fake, Generous, new StartupEvents { CliLog = log.Path, Failures = StartupEvents.StartupFailures });
+        var error = Assert.Throws<WaitFailedException>(() => session.Start());
+        Assert.Equal(Enumerable.Range(16, 5).Select(n => $"[Info   :   BepInEx] line {n}"), error.Context);
+    }
+    // Negative control: a clean boot with the same failure list still waits for the listening line, and passes with it.
+    [Fact] public void ACleanLogStillWaitsForTheListeningLine()
+    {
+        using var log = new TempLog();
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = _ => log.Append(CleanBoot + "[Message:   BepInEx] Chainloader startup complete\n") };
+        using (var session = Session(fake, TimeSpan.FromMilliseconds(500), new StartupEvents { CliLog = log.Path, Failures = StartupEvents.StartupFailures }))
+        {
+            var error = Assert.Throws<WaitTimeoutException>(() => session.Start());
+            Assert.Contains("listening", error.Target); Assert.Equal(0, fake.Connects);
+        }
+        using var clean = new TempLog();
+        var ready = new FakeOwnedServer("roads.testing") { OnLaunch = _ => clean.Append(CleanBoot + Listening) };
+        using var started = Session(ready, Generous, new StartupEvents { CliLog = clean.Path, Failures = StartupEvents.StartupFailures });
+        started.Start();
+        Assert.Equal(new[] { "launch1", "probe1", "pins1" }, ready.Events);
+    }
+    // Negative control: a mod's handled soft-dependency message at info level does not abort startup.
+    [Fact] public void AnInfoLineMentioningALoadExceptionDoesNotEndStartup()
+    {
+        using var log = new TempLog();
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = _ => log.Append(CleanBoot +
+            "[Info   :MyMod] Soft dependency OtherMod not found (MissingMethodException); skipping its integration\n" + Listening) };
+        using var session = Session(fake, Generous, new StartupEvents { CliLog = log.Path, Failures = StartupEvents.StartupFailures });
+        session.Start();
+        Assert.Equal(new[] { "launch1", "probe1", "pins1" }, fake.Events);
+    }
+    [Fact] public void AnExitBeforeBepInExWroteItsLogPointsAtPlayerLogAndSecuritySoftware()
+    {
+        using var log = new TempLog();
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = process => process.Exit(1) };
+        using var session = Session(fake, Generous, new StartupEvents { CliLog = log.Path });
+        var error = Assert.Throws<WaitFailedException>(() => session.Start());
+        Assert.Contains("code 1 before BepInEx wrote " + log.Path, error.Reason);
+        Assert.Contains("Player.log", error.Reason); Assert.Contains("security software", error.Reason);
+    }
+    [Fact] public void ARestartedBootThatWritesNoLogIsNotHiddenByThePreviousBootsLog()
+    {
+        using var runtime = new TempRuntime();
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = process => { if (process.Id == 1) runtime.Replace("boot 1\n" + Listening); else process.Exit(2); } };
+        using var session = Session(fake, Generous, DedicatedLogEvents(runtime));
+        session.Start();
+        var error = Assert.Throws<WaitFailedException>(() => session.Restart());
+        Assert.Contains("code 2 before BepInEx wrote", error.Reason); Assert.Contains("security software", error.Reason);
+    }
     [Fact] public void NoConnectionIsTriedBeforeThisBootAnnouncesItsListener()
     {
         using var log = new TempLog(); log.Append("previous boot\n" + Listening);
@@ -168,6 +266,7 @@ public class SessionTests
         using var session = Session(fake, Generous, new StartupEvents { CliLog = log.Path });
         var error = Assert.Throws<WaitFailedException>(() => session.Start());
         Assert.Contains("code 3", error.Reason); Assert.Equal("Fatal: port in use", error.LastSeen);
+        Assert.DoesNotContain("security software", error.Reason); // BepInEx did write this boot's log.
         Assert.True(error.Elapsed < Generous); Assert.Equal(0, fake.Connects);
     }
     [Fact] public async Task StartupWaitsForTheWorldStateBeforeProbing()

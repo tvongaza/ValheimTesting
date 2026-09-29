@@ -44,6 +44,11 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
     public required CancellationToken Cancellation { get; init; }
     public OwnedServerSession Session { get; internal set; } = null!;
     public GameActor Server { get; internal set; } = null!;
+    /// <summary>
+    /// The logs the teardown scan reads: each owned server boot's are added as it launches; add an owned client's
+    /// <see cref="ClientSession.Logs"/> here. They are scanned after the scenario, once the processes have stopped.
+    /// </summary>
+    public List<RunLog> Logs { get; } = [];
 }
 
 /// <summary>
@@ -57,8 +62,10 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// <item><c>validate</c> stops there. Otherwise: checks the CLI port is free, starts the owned session on the copies with
 /// per-boot logs (<c>boot-N.*</c>) and recorded commands (<c>connection-N.jsonl</c>), waits on the dedicated startup
 /// events, enables devcommands and runs the scenario.</item>
-/// <item>Always stops only the owned server, records its PIDs, writes <c>result.json</c> and <c>junit.xml</c>, and prints
-/// PASS (only for <c>run</c>), VALIDATED or PREPARED, or FAIL. Ctrl+C and SIGTERM cancel the run.</item>
+/// <item>Always stops only the owned server, records its PIDs, scans every boot's logs and the scenario's
+/// <see cref="PinnedServerRunContext{TPlan}.Logs"/> (<see cref="ScenarioReport.ScanLogs"/>, with the plan's
+/// <see cref="ServerRunPlan.LogScan"/>), writes <c>result.json</c> and <c>junit.xml</c>, and prints PASS (only for
+/// <c>run</c>), VALIDATED or PREPARED, or FAIL. Ctrl+C and SIGTERM cancel the run.</item>
 /// </list>
 /// Returns the process exit code: 0 when every step passed, 1 on failure, 2 on bad usage.
 /// </summary>
@@ -79,12 +86,13 @@ public static class PinnedServerRun
         using var sigterm = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => { context.Cancel = true; cancellation.Cancel(); });
         var report = new ScenarioReport(options.Name);
         OwnedServerSession? session = null;
+        PinnedServerRunContext<TPlan>? launched = null;
         string output = Path.GetFullPath(args[2]);
         bool ownOutput = false;
         try
         {
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
-            var plan = options.ReadPlan(args[1]); plan.CheckOutput(output);
+            var plan = options.ReadPlan(args[1]); plan.CheckOutput(output); plan.CheckPatchersAndLogScan();
             // The runtime's contents decide its platform; checked on the pinned source so a wrong host fails before copying.
             var platform = ServerLaunch.Detect(plan.Runtime.Source); plan.CheckExecutable(platform);
             if (mode != "validate")
@@ -114,6 +122,7 @@ public static class PinnedServerRun
                 plan.CheckExecutable(ServerLaunch.Detect(runtime.DirectoryPath));
                 if (mode != "validate") ServerLaunch.RequireExecutable(runtime.DirectoryPath);
             });
+            report.Step("copied runtime's BepInEx patchers are the plan's", () => plan.CheckRuntimePatchers(runtime.DirectoryPath));
             if (mode == "validate") report.Step("prepared only; no game launched", () => { });
             else await Launch(plan, runtime.DirectoryPath, world.DirectoryPath).ConfigureAwait(false);
         }
@@ -130,6 +139,8 @@ public static class PinnedServerRun
                 try { report.Step("stop only owned server", session.Dispose); } catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
                 report.Provenance["ownedPids"] = string.Join(",", session.StartedProcesses);
             }
+            // After the stop, which keeps each boot's logs; a client's were kept when the scenario closed it.
+            if (launched != null && launched.Logs.Count != 0) report.ScanLogs(launched.Logs, launched.Plan.LogScan);
             if (ownOutput) report.Write(output);
         }
         // Only `run` is an acceptance result: validate launches nothing, and preparing a fixture never passes a test.
@@ -154,6 +165,7 @@ public static class PinnedServerRun
                 Mode = mode, Plan = plan, Report = report, Output = output, RuntimeDirectory = runtimeDirectory,
                 WorldDirectory = worldDirectory, Cancellation = cancellation.Token,
             };
+            launched = context;
             session = context.Session = options.SessionOverride?.Invoke(context) ?? OwnedSession(context, options);
             report.Step("start and verify owned dedicated fixture", () => context.Server = session.Start());
             if (options.EnableDevcommands)
@@ -177,8 +189,14 @@ public static class PinnedServerRun
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, run.RuntimeDirectory, run.WorldDirectory));
             environment[options.SessionTokenVariable] = token;
             var start = ServerLaunch.CreateStartInfo(run.RuntimeDirectory, plan.Arguments.Select(argument => plan.Expand(argument, run.RuntimeDirectory, run.WorldDirectory)), environment);
-            var process = new DirectServerProcess(start, Path.Combine(run.Output, "boot-" + ++boot),
+            string prefix = Path.Combine(run.Output, "boot-" + ++boot);
+            var process = new DirectServerProcess(start, prefix,
                 Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log"), Path.Combine(run.RuntimeDirectory, "toolkit-unity.log"));
+            // What Stop keeps: BepInEx's log, Unity's log when the plan passes -logFile {runtime}/toolkit-unity.log, and the
+            // process output (Unity's log on Linux without -logFile).
+            run.Logs.Add(new RunLog($"boot-{boot} BepInEx log", prefix + ".game-0.log", Required: true));
+            run.Logs.Add(new RunLog($"boot-{boot} Unity log", prefix + ".game-1.log"));
+            run.Logs.Add(new RunLog($"boot-{boot} stdout", prefix + ".stdout.log"));
             try { File.WriteAllText(Path.Combine(run.Output, "boot-" + boot + ".process.json"), JsonSerializer.Serialize(new { pid = process.Id, startedUtc = DateTime.UtcNow, world = run.WorldDirectory })); }
             catch { process.Stop(TimeSpan.FromSeconds(15)); process.Dispose(); throw; }
             return process;

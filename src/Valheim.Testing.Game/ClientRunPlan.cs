@@ -30,6 +30,8 @@ public sealed class ClientRunPlan
     public int StartSeconds { get; set; } = 300;
     public int JoinSeconds { get; set; } = 180;
     public int ArrivalSeconds { get; set; } = 120;
+    /// <summary>Owned only: every entry the install's <c>BepInEx/patchers</c> holds, by name; the launch refuses any other.</summary>
+    public string[] Patchers { get; set; } = [];
 
     public bool Owned => Mode == "owned";
 
@@ -41,7 +43,8 @@ public sealed class ClientRunPlan
     {
         if (Mode is not ("owned" or "attach")) throw new ArgumentException("Client mode is owned or attach.");
         if (Owned && !Path.IsPathFullyQualified(Install)) throw new ArgumentException("An owned client needs the full path of its install.");
-        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0)) throw new ArgumentException("An attached client is launched by its operator; leave out install and launch arguments.");
+        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Patchers.Length != 0)) throw new ArgumentException("An attached client is launched by its operator; leave out install, launch arguments and patchers.");
+        BepInExLoader.CheckPatcherNames(Patchers);
         if (string.IsNullOrWhiteSpace(Host) || Port is < 1024 or > 65535) throw new ArgumentException("Give the client's ValheimCLI host and port.");
         if (Owned && Host is not ("127.0.0.1" or "localhost")) throw new ArgumentException("An owned client runs on this machine; its ValheimCLI host is 127.0.0.1.");
         foreach (string? token in new[] { Join, Character, PasswordVariable })
