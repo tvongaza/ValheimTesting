@@ -196,6 +196,32 @@ public class SessionTests
         Assert.Contains("code 5", error.Reason); Assert.Equal("Out of memory", error.LastSeen);
         Assert.DoesNotContain(fake.Events, x => x.StartsWith("probe"));
     }
+    // A restart composes the lifecycle with the log wait: BepInEx rewrites LogOutput.log from the start at every boot, and
+    // the dedicated-server events (the log half; the state push needs a live ValheimCLI) must follow each boot's own log.
+    [Fact] public void ARestartWaitsForTheNewBootsLogWhichBepInExRewrites()
+    {
+        using var runtime = new TempRuntime();
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = process => runtime.Replace($"[Message:   BepInEx] BepInEx 5.4.23 - boot {process.Id}\n{Listening}") };
+        using var session = Session(fake, Generous, DedicatedLogEvents(runtime));
+        session.Start(); session.Restart();
+        Assert.Equal(new[] { "launch1", "probe1", "pins1", "stop1", "dispose1", "launch2", "probe2", "pins2" }, fake.Events.Where(x => !x.StartsWith("disconnect")));
+        Assert.Equal(2, fake.Connects); Assert.NotEqual(fake.Tokens[0], fake.Tokens[1]);
+    }
+    [Fact] public void ARestartedBootIsNotReadyOnThePreviousBootsLine()
+    {
+        using var runtime = new TempRuntime();
+        // Boot two rewrites the log but has not announced its listener yet; boot one's line must not count for it.
+        var fake = new FakeOwnedServer("roads.testing") { OnLaunch = process => runtime.Replace(process.Id == 1 ? "boot 1\n" + Listening : "boot 2, still loading\n") };
+        using var session = Session(fake, TimeSpan.FromSeconds(2), DedicatedLogEvents(runtime));
+        session.Start();
+        Assert.Throws<WaitTimeoutException>(() => session.Restart());
+        Assert.Equal(1, fake.Connects); Assert.Equal(1, fake.Events.Count(x => x.StartsWith("pins")));
+    }
+    private static StartupEvents DedicatedLogEvents(TempRuntime runtime)
+    {
+        var events = new ServerRunPlan { Port = 5555 }.DedicatedStartupEvents(runtime.DirectoryPath);
+        return new StartupEvents { CliLog = events.CliLog, Listening = events.Listening, Failures = events.Failures };
+    }
     // The startup deadline bounds blocking calls too: the fakes below block until released, ignoring their timeouts.
     [Fact] public void AStalledConnectionCannotOutliveTheStartupDeadline()
     {

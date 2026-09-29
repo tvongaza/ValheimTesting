@@ -97,6 +97,23 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(1, code); Assert.Contains("stop1", server.Events);
         Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "runner failed" && s.GetProperty("Error").GetString() == "fixture refused");
     }
+    [Fact] public async Task AFailedTeardownFailsAPassingRunAndKeepsItsEvidence()
+    {
+        if (OperatingSystem.IsMacOS()) return;
+        string plan = WritePlan(linux: HostRunsLinux);
+        var server = new FakeOwnedServer("test.mod") { RefuseStop = true };
+        int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: server));
+        Assert.Equal(1, code); Assert.Contains("stop1", server.Events);
+        var result = Result();
+        Assert.False(result.GetProperty("Passed").GetBoolean());
+        var stop = Assert.Single(result.GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "stop only owned server");
+        Assert.False(stop.GetProperty("Passed").GetBoolean()); Assert.Equal("Fake server refused to stop.", stop.GetProperty("Error").GetString());
+        var junit = System.Xml.Linq.XDocument.Load(Path.Combine(Output, "junit.xml")).Root!;
+        Assert.Equal("1", junit.Attribute("failures")!.Value);
+        Assert.Contains(junit.Elements("testcase"), c => c.Attribute("name")!.Value == "stop only owned server" && c.Element("failure") != null);
+        Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json")));
+        server.RefuseStop = false;
+    }
     [Fact] public async Task AModeThePlanDoesNotAllowIsRefusedBeforeCopying()
     {
         string plan = WritePlan(linux: HostRunsLinux);
