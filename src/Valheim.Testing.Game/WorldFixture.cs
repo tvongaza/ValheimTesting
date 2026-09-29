@@ -17,7 +17,7 @@ public sealed class WorldFixture : IDisposable
         var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (outputParent.Equals(source, pathComparison) || outputParent.StartsWith(source + Path.DirectorySeparatorChar, pathComparison)) throw new ArgumentException("Output must be outside source.");
         var directories = new List<string>();
-        var actual = Files(source, directories).ToDictionary(p => Path.GetRelativePath(source, p), Hash, StringComparer.Ordinal);
+        var actual = Hashes(source, directories);
         Check.SameIdentities(actual.Keys, expectedHashes.Keys);
         foreach (var item in actual) if (!string.Equals(item.Value, expectedHashes[item.Key], StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Fixture hash mismatch: " + item.Key);
         string target = Path.Combine(outputParent, "valheim-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(target);
@@ -36,6 +36,21 @@ public sealed class WorldFixture : IDisposable
         }
         catch { fixture.Dispose(); throw; }
     }
+    /// <summary>
+    /// The SHA256 manifest of every file under <paramref name="source"/>, keyed by this platform's relative path: what a
+    /// pinned plan records and <see cref="Copy"/> verifies. Build it on the platform that will copy the fixture, from the
+    /// exact directory the plan names. Links are refused, as in <see cref="Copy"/>.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> Manifest(string source)
+    {
+        source = Path.GetFullPath(source);
+        if (!Directory.Exists(source)) throw new DirectoryNotFoundException("Fixture source does not exist: " + source);
+        var manifest = Hashes(source, []);
+        if (manifest.Count == 0) throw new InvalidOperationException("Fixture source has no files: " + source);
+        return manifest;
+    }
+    private static Dictionary<string, string> Hashes(string source, List<string> directories) =>
+        Files(source, directories).ToDictionary(p => Path.GetRelativePath(source, p), Hash, StringComparer.Ordinal);
     private static IEnumerable<string> Files(string directory, List<string> directories)
     {
         if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) throw new IOException("Fixture links are unsupported.");

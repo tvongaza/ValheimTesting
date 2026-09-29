@@ -64,6 +64,26 @@ public class ToolkitTests
         File.WriteAllText(Path.Combine(copy, "world.db"), "edited"); fixture.Dispose(); Assert.False(Directory.Exists(copy)); Assert.Equal("original", File.ReadAllText(file));
         using var kept = WorldFixture.Copy(dirs.Source, dirs.Output, hashes); kept.Preserve = true; kept.Dispose(); Assert.True(Directory.Exists(kept.DirectoryPath));
     }
+    [Fact] public void AManifestIsExactlyWhatCopyAccepts()
+    {
+        using var dirs = new Directories();
+        File.WriteAllText(Path.Combine(dirs.Source, "world.db"), "world");
+        Directory.CreateDirectory(Path.Combine(dirs.Source, "BepInEx", "plugins")); File.WriteAllText(Path.Combine(dirs.Source, "BepInEx", "plugins", "Mod.dll"), "mod");
+        var manifest = WorldFixture.Manifest(dirs.Source);
+        Assert.Equal(new[] { Path.Combine("BepInEx", "plugins", "Mod.dll"), "world.db" }, manifest.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(WorldFixture.Hash(Path.Combine(dirs.Source, "world.db")), manifest["world.db"]);
+        using var copy = WorldFixture.Copy(dirs.Source, dirs.Output, manifest);
+        Assert.Equal("mod", File.ReadAllText(Path.Combine(copy.DirectoryPath, "BepInEx", "plugins", "Mod.dll")));
+        // A file changed after the manifest was taken is refused, as for any pinned plan.
+        File.WriteAllText(Path.Combine(dirs.Source, "world.db"), "changed");
+        Assert.Throws<InvalidOperationException>(() => WorldFixture.Copy(dirs.Source, dirs.Output, manifest));
+    }
+    [Fact] public void AManifestNeedsAnExistingNonEmptySource()
+    {
+        using var dirs = new Directories();
+        Assert.Throws<InvalidOperationException>(() => WorldFixture.Manifest(dirs.Source));
+        Assert.Throws<DirectoryNotFoundException>(() => WorldFixture.Manifest(Path.Combine(dirs.Source, "missing")));
+    }
     [Fact] public void RuntimeCopyPreservesEmptyDirectories()
     {
         using var dirs = new Directories();

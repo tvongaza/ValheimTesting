@@ -23,6 +23,12 @@ public sealed class StartupEvents
 {
     /// <summary>ValheimCLI's line once its command server accepts connections.</summary>
     public static readonly Regex CliListening = new(@"Command server listening on \S+:\d+", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// BepInEx's chainloader lines for a plugin it did not load: a missing dependency, an incompatibility or an exception
+    /// while loading. In a pinned runtime any of them means the wrong environment, so pass them as <see cref="Failures"/>.
+    /// </summary>
+    public static readonly IReadOnlyList<Regex> BepInExPluginLoadFailures =
+        [new(@"^\[(?:Warning|Error|Fatal) *: *BepInEx\] (?:Could not load|Error loading) \[", RegexOptions.CultureInvariant)];
     /// <summary>The log ValheimCLI writes to, normally the runtime's BepInEx/LogOutput.log. No connection is tried before <see cref="Listening"/> appears in it.</summary>
     public string? CliLog { get; init; }
     public Regex Listening { get; init; } = CliListening;

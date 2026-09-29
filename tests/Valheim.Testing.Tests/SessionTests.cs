@@ -121,6 +121,19 @@ public class SessionTests
     }
     private const string Listening = "[Info   :valheimCLI] Command server listening on 127.0.0.1:5555\n";
     private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
+    // BepInEx 5's own chainloader messages, as its BepInEx.dll carries them.
+    [Theory]
+    [InlineData("[Error  :   BepInEx] Could not load [ProceduralRoads 1.9.0] because it has missing dependencies: com.jotunn.jotunn")]
+    [InlineData("[Error  :   BepInEx] Could not load [ProceduralRoads 1.9.0] because it is incompatible with: other.plugin")]
+    [InlineData("[Error  :   BepInEx] Error loading [ProceduralRoads 1.9.0] : Exception has been thrown by the target of an invocation.")]
+    [InlineData("[Warning:   BepInEx] Could not load [testing.adapter 1.0.0] because it has missing dependencies: valheimCLI.valheimCLI")]
+    public void BepInExPluginLoadFailuresMatch(string line) => Assert.Contains(StartupEvents.BepInExPluginLoadFailures, failure => failure.IsMatch(line));
+    [Theory]
+    [InlineData("[Info   :   BepInEx] Loading [ProceduralRoads 1.9.0]")]
+    [InlineData("[Warning:   BepInEx] Skipping [ProceduralRoads 1.8.0] because a newer version exists (ProceduralRoads 1.9.0)")]
+    [InlineData("[Error  :ProceduralRoads] Could not load [bridge piece] prefab")]
+    [InlineData("[Info   :valheimCLI] Command server listening on 127.0.0.1:5577")]
+    public void OrdinaryLinesAreNotPluginLoadFailures(string line) => Assert.DoesNotContain(StartupEvents.BepInExPluginLoadFailures, failure => failure.IsMatch(line));
     [Fact] public void NoConnectionIsTriedBeforeThisBootAnnouncesItsListener()
     {
         using var log = new TempLog(); log.Append("previous boot\n" + Listening);
