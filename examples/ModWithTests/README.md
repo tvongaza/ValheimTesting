@@ -10,7 +10,7 @@ The example pins the published `Valheim.Testing.Doubles` `0.1.0-preview.4`, whic
 dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
 ```
 
-Success is **5 passed, 0 failed**, exit 0. A failed assertion returns nonzero. Two checks keep the example honest: this repository's CI runs it from a copy outside the checkout against NuGet.org only, as a mod's workflow would, and the framework validation runs a copy pinned to the current source's Doubles version, restored from freshly packed packages rather than the doubles source directory.
+Inside a ValheimTesting checkout, the repository's `NuGet.Config` also offers the local `.packages` feed, which can hold a locally packed build of the same version; run from a copy outside the checkout to be sure you test the published package. Success is **5 passed, 0 failed**, exit 0. A failed assertion returns nonzero. Two checks keep the example honest: this repository's CI runs it from a copy outside the checkout against NuGet.org only, as a mod's workflow would, and the framework validation runs a copy pinned to the current source's Doubles version, restored from freshly packed packages rather than the doubles source directory.
 
 ## Understand the files
 
