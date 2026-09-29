@@ -315,6 +315,62 @@ It restores references, not contents. Nothing is deep-copied, so changing an obj
 
 Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity objects carry only the `ZNetView` and `WearNTear` components and have no physics or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: no peers connect, and routed RPCs are only checked for size. Test what the game does natively with `Valheim.Testing.Game` against a real server.
 
+### Components, lifecycle, registries, roles and config (Doubles preview 5)
+
+These doubles extend the model above; where they apply, they replace the limit that Unity objects carry only a `ZNetView` and a `WearNTear`. Unity members use Unity 6 names (`FindObjectsByType`, `Rigidbody.linearVelocity`, `LightType.Rectangle`, `AnimatorUpdateMode.Fixed`); the pre-6 names are absent on purpose, so code still using them fails to compile here as it would against the game.
+
+Unity objects:
+- `GameObject.AddComponent`, `GetComponent(s)` (by base type or interface), `GetComponent(s)InChildren`, `GetComponentInParent` and `TryGetComponent` work on any component. Without `includeInactive`, only objects active in their hierarchy count.
+- `transform` is a hierarchy: `SetParent` (keeping the world position by default), `parent`, `GetChild`, `Find("a/b")`, `root`, `localPosition` and `localScale`. A child's world position is its parent's plus the parent's scale times its local position. Parent rotation is not applied, and `rotation` is stored, not composed.
+- `SetActive` and `activeInHierarchy` work as in Unity.
+- MonoBehaviour messages are called by name, private or public, as Unity calls them. `Awake` runs when a component is added to an object active in its hierarchy, or when the object later becomes active; a prefab kept under an inactive parent therefore wakes only in its copies. Then come `OnEnable`, and `Start` before the first `Update`. `Update` and `LateUpdate` run once per frame, `OnDisable` on disable, deactivation or destruction, and `OnDestroy` while the object is still alive. `UnityEngine.Object.RunFrame(deltaTime)` runs one frame: it advances `Time.time` and `Time.frameCount`, resumes coroutines (`yield return null`, `WaitForSeconds`, `WaitForEndOfFrame`, nested routines, `WaitUntil`/`WaitWhile`), runs due `Invoke`/`InvokeRepeating` calls, then ends the frame. Unity logs an exception thrown by a message and carries on; here it reaches the test.
+- `Object.Instantiate` copies a GameObject with its components and children using Unity's rules for serialized fields. Public and `[SerializeField]` fields are copied; lists, arrays and `[Serializable]` classes are copied too, so each copy has its own; references into the copied hierarchy point at the copy. Other fields (dictionaries, delegates, private state) get the constructor's values. A copy keeps the prefab's name, where Unity appends "(Clone)"; `Utils.GetPrefabName` handles both.
+- `FindObjectsByType`, `FindFirstObjectByType` and `FindAnyObjectByType` search components added with `AddComponent` or made by `Instantiate`. `ValheimWorldScope.WithScene()` starts an empty set.
+- Behaviour, not only fields, for: colliders (`Box`, `Sphere`, `Capsule`, `Mesh`) with world `bounds` that are empty while the collider is off, `ClosestPoint` and `attachedRigidbody`; `Renderer.material`, which copies the shared material on first use as Unity does ("stone (Instance)"), and `MeshFilter.mesh` likewise; `Mesh` bounds recalculated when triangles are set, with out-of-range indices refused; `Animator` parameters, the same by name or by `Animator.StringToHash`; `Canvas.rootCanvas` and `ForceUpdateCanvases`; `Light` defaults. `UnityEngine.Random` uses Unity's ranges and is seeded with `Random.InitState`, but its sequence is not Unity's. `UnityEngine.Debug` writes to the log capture. Nothing is simulated or drawn.
+
+Valheim (as the game does in 1.0.16):
+- `ObjectDB` indexes `m_items` by name hash in `Awake` and `CopyOtherDB`. It uses a dictionary's `Add`, so a second item with the same name throws on the next `UpdateRegisters`; `FindDuplicateItems()` reports duplicates first. `ValheimWorldScope.WithObjectDB(items, recipes, effects)` declares the game's own content. `LoadMainMenuObjectDB()` runs the main menu's pass: `Awake` on an empty database, then `CopyOtherDB` takes the prefab's lists themselves, so a mod's additions stay in them for the next menu load. `LoadWorldObjectDB()` runs a world load's pass from the original content. `ObjectDB.AwakePostfix` and `CopyOtherDBPostfix` run where a Harmony postfix would. A registration without a guard ends up in the list twice at the second menu load; the tests show both the guarded and the unguarded case.
+- `ZNetScene.Awake` indexes `m_prefabs` and `m_nonNetViewPrefabs` in `m_namedPrefabs` by name hash. A duplicate throws, naming both prefabs; `FindDuplicateHashes()` reports duplicates first. `GetPrefab(name|hash)` and `HasPrefab` read the index, and `AddPrefab` registers at once.
+- Both registries can hold prefabs back (`MarkNotYetLoaded(names)`, then `FinishLoading()`). Until then, a lookup returns null, as an early lookup in the game does, and is recorded in `EarlyLookups`.
+- `Utils`, including its quirks: gzip `Compress`, ordinal `CustomStartsWith`, `FindChild`, `GetEnabledComponentsInChildren`, `IterateHierarchy`, and `RoundToInt`/`FloorToInt`, which are exact only within ±64000.
+- `HeightmapBuilder` with its build thread made explicit. `IsTerrainReady` queues a build and `BuildQueued()` builds it. `RequestTerrainSync` hands a ready build out and removes it, so the next question queues again. Heights blend the corner biomes and are smoothed for a distant LOD.
+- `DropTable`: chance, count, weights, `m_oneOfEach`, and a shared result list for `GetDropListItems`. Also `Inventory` stacking and slot order, `Container` default items added once and only by the owner, `Pickable` picked and enabled state in its ZDO, and `SpawnArea` weighted choice. The world level is 0 and the resource rate 1.
+- `Localization` translates `$word`, `$KEY_<binding>` (from `ZInput.SetBinding`) and `$1`. It keeps the game's 100-entry cache, which `AddWord` does not clear. `SetLanguage` drops added words. `PlatformPrefs` is in memory.
+
+Roles: `ValheimWorldScope` presets set the role flags mod code branches on and install a fresh world for it.
+- `AsDedicatedServer()`: server and dedicated, with no local player.
+- `AsHost(position)`: server, not dedicated, with a local player owned by this session.
+- `AsClient(position)`.
+- `AtMainMenu()`: no `ZNet`, `ZDOMan`, `ZNetScene` or world; a preview `Player` whose view has no ZDO, which `Player.GetAllPlayers()` lists as the game's does.
+- `AddRemotePlayer(peerId, position, name)` adds another peer's player; on a server it is also a connected peer.
+- `LoadPlugin<T>()` adds a `BaseUnityPlugin` as BepInEx's chainloader does, so its `Awake` runs.
+- The dedicated preset starts while plugins load: `PlatformPrefs` throws until `FinishStartup()`, and so does a first `Localization.instance`, which reads the saved language. "Plugin Awake is safe on a dedicated server" is therefore a unit test: a plugin that localizes in `Awake` fails there and works on a client.
+
+Config (BepInEx 5.4.23): `ConfigFile` with every `Bind` overload, `ConfigEntry<T>.Value`, `BoxedValue` and `SettingChanged`, `ConfigFile.SettingChanged`, `ConfigReloaded`, `Reload`, `Save`, `SaveOnConfigSet`, `TryGetEntry`, acceptable ranges and lists, and BepInEx's value text (escaped strings, invariant floats, enums by name, colours as RRGGBBAA). The files are on an in-memory disk. `FileText` (or `ConfigFile.WriteFile`) edits a file as a person would outside the game, and `Save` writes BepInEx's format, so a test can assert what gets written. `SettingChanged` fires once per real change and not for an equal value. As in BepInEx, binding with a non-default default already raises the file's `SettingChanged`. Values in the file for settings not bound yet are applied when bound. `ValheimWorldScope.WithConfigFiles()` gives a test an empty disk.
+
+The doubles do not model config sync. ServerSync and Jotunn push the server's values to clients over RPCs. Test the mod's decisions by setting the entry values a client would receive, and test the sync itself natively: read the entry on the server and on a client after a join and after an admin change. Such a check must wait by re-reading the value with a bound, the way `LogWait` re-reads its file, and never on a single `FileSystemWatcher` event: the watcher fires several times for one save, and on Linux and on mounted or container filesystems it can miss events entirely.
+
+Harmony: every `HarmonyPatch` constructor (argument types, `ArgumentType` variations, `MethodType`), `HarmonyPriority`, `HarmonyBefore` and `HarmonyAfter` record their target in `info`; `HarmonyMethod.Merge` combines a class's attributes. `new Harmony(id).PatchAll()` lists the patch classes it finds in `Patches` and patches nothing, so a test calls a prefix or postfix itself. `Traverse` and `AccessTools` reach members of any visibility on real objects, as Harmony's do.
+
+A `ModuleInitializerAttribute` polyfill lets a net48 test project use `[ModuleInitializer]`. Define `VALHEIM_TESTING_NO_POLYFILLS` if the project declares its own.
+
+#### A doubles assembly named assembly_valheim
+
+The doubles normally compile into the test assembly, so a type's assembly is the test assembly. Some mod code asks where a type comes from: it checks `type.Assembly.GetName().Name == "assembly_valheim"` to tell the game's components from other mods', or it resolves `Type.GetType("ZNetScene, assembly_valheim")`. For that code, put the doubles in their own class library named after the game's assembly, and give the test assembly access to its internals:
+
+```xml
+<!-- MyMod.Doubles/MyMod.Doubles.csproj -->
+<PropertyGroup><AssemblyName>assembly_valheim</AssemblyName><RootNamespace></RootNamespace><LangVersion>10</LangVersion></PropertyGroup>
+<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.5]" /></ItemGroup>
+```
+
+```csharp
+// MyMod.Doubles/AssemblyInfo.cs
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MyMod.Tests")]
+```
+
+The test project then references this project instead of the package. Partial additions to the doubles (a `Heightmap` hook, extra members) must live in the `assembly_valheim` project, because a partial type cannot span assemblies. A component the test assembly declares is then foreign, as another mod's would be.
+
 ## Static overrides (preview 6)
 
 Mods keep settings, switches and caches in statics. A test that changes one must put back the value it found, not the default it expects; a hard-coded reset silently changes every later test when the default moves. `StaticOverride` in `Valheim.Testing` does this for static fields, static properties (private setters included) and environment variables:

@@ -257,10 +257,13 @@ public partial class Object
     private void DestroyNow()
     {
         if (Destroyed) return;
+        OnDestroying();
         Destroyed = true;
         OnDestroyed();
     }
 
+    // Runs while the object is still alive, as Unity's OnDisable and OnDestroy messages do (UnityComponentDoubles.cs).
+    private protected virtual void OnDestroying() { }
     private protected virtual void OnDestroyed() { }
 
     private protected void ThrowIfDestroyed()
@@ -320,11 +323,12 @@ public partial class Behaviour : Component { }
 /// <summary>Shim for UnityEngine.MonoBehaviour: the base of the game's components (ZNetView, WearNTear).</summary>
 public partial class MonoBehaviour : Behaviour { }
 
-/// <summary>Shim for a prefab or scene object: optionally networked (a ZNetView) and damageable (a WearNTear).</summary>
+/// <summary>
+/// Shim for a prefab or scene object: optionally networked (a ZNetView) and damageable (a WearNTear). Its other
+/// components, transform hierarchy and activation are in UnityComponentDoubles.cs.
+/// </summary>
 public partial class GameObject : Object
 {
-    public Vector3 Position;
-    public Quaternion Rotation;
     public bool Networked;
     public float? Health;
     public ZNetView? View;
@@ -344,6 +348,7 @@ public partial class GameObject : Object
             copy.View = new ZNetView(zdo) { gameObject = copy };
             if (!ZNetView.GhostInit) global::ZNetScene.instance?.Live.Add(copy);
         }
+        CopyHierarchyInto(copy);
         return copy;
     }
 
@@ -353,16 +358,6 @@ public partial class GameObject : Object
         DestroyImmediate(View);
         DestroyImmediate(Wear);
         global::ZNetScene.instance?.Live.Remove(this);
-    }
-
-    /// <summary>The ZNetView or WearNTear on this object; null when it has none or it was destroyed. Throws once the object is destroyed.</summary>
-    public T GetComponent<T>() where T : class
-    {
-        ThrowIfDestroyed();
-        Component? found = null;
-        if (typeof(T) == typeof(ZNetView)) found = View;
-        else if (typeof(T) == typeof(WearNTear)) found = Wear;
-        return (found is { Destroyed: false } ? found as T : null)!;
     }
 }
 

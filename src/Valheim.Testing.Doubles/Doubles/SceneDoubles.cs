@@ -13,19 +13,23 @@ using System.Linq;
 /// <summary>Shim for WearNTear: the prefab's full health.</summary>
 public partial class WearNTear : UnityEngine.MonoBehaviour { public float m_health; }
 
-/// <summary>Shim for ZNetScene: registered prefabs and the live networked objects.</summary>
+/// <summary>Shim for ZNetScene: registered prefabs and the live networked objects. The registry by name hash is in RegistryDoubles.cs.</summary>
 public partial class ZNetScene
 {
     public static ZNetScene? instance;
+    /// <summary>The prefabs <see cref="AddPrefab"/> made, by name.</summary>
     public readonly Dictionary<string, UnityEngine.GameObject> Prefabs = new();
     public readonly List<UnityEngine.GameObject> Live = new();
+    /// <summary>A networked prefab with a WearNTear, registered at once (in <c>m_prefabs</c> and by name hash); a second one with the same name replaces the first.</summary>
     public UnityEngine.GameObject AddPrefab(string name, float health = 1000f)
     {
         var prefab = new UnityEngine.GameObject(name) { Networked = true, Health = health };
+        if (Prefabs.TryGetValue(name, out var replaced)) m_prefabs.Remove(replaced);
         Prefabs[name] = prefab;
+        m_prefabs.Add(prefab);
+        m_namedPrefabs[name.GetStableHashCode()] = prefab;
         return prefab;
     }
-    public UnityEngine.GameObject? GetPrefab(string name) => Prefabs.TryGetValue(name, out var prefab) ? prefab : null;
     public ZNetView? FindInstance(ZDO zdo) => Live.FirstOrDefault(o => !o.Destroyed && o.View?.GetZDO() == zdo)?.View;
     /// <summary>
     /// As the game's: the object leaves the live scene at once, its ZDO is queued for destruction when this session
