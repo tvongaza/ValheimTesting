@@ -194,11 +194,25 @@ public static partial class Mathf
     }
 }
 
-/// <summary>Shim for UnityEngine.Quaternion: the Euler angles the bridge code builds it from.</summary>
+/// <summary>
+/// Shim for UnityEngine.Quaternion: its components, which a package carries, and the Euler angles the bridge code builds
+/// it from. <see cref="Euler"/> sets both, in Unity's rotation order (z, then x, then y); a quaternion read back from a
+/// package has its components only.
+/// </summary>
 public partial struct Quaternion
 {
+    public float x, y, z, w;
     public float EulerX, EulerY, EulerZ;
-    public static Quaternion Euler(float x, float y, float z) => new() { EulerX = x, EulerY = y, EulerZ = z };
+    public Quaternion(float x, float y, float z, float w) { this.x = x; this.y = y; this.z = z; this.w = w; EulerX = EulerY = EulerZ = 0f; }
+    public static Quaternion identity => new(0f, 0f, 0f, 1f);
+    public static Quaternion Euler(float x, float y, float z)
+    {
+        double hx = x * System.Math.PI / 360.0, hy = y * System.Math.PI / 360.0, hz = z * System.Math.PI / 360.0;
+        double cx = System.Math.Cos(hx), sx = System.Math.Sin(hx), cy = System.Math.Cos(hy), sy = System.Math.Sin(hy), cz = System.Math.Cos(hz), sz = System.Math.Sin(hz);
+        return new Quaternion(
+            (float)(sx * cy * cz + cx * sy * sz), (float)(cx * sy * cz - sx * cy * sz),
+            (float)(cx * cy * sz - sx * sy * cz), (float)(cx * cy * cz + sx * sy * sz)) { EulerX = x, EulerY = y, EulerZ = z };
+    }
 }
 
 /// <summary>Shim for UnityEngine.Object: instantiation and destruction only.</summary>
