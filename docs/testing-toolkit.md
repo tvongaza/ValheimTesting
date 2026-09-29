@@ -300,6 +300,26 @@ It restores references, not contents. Nothing is deep-copied, so changing an obj
 
 Limits: the doubles model only the behaviour listed above and the members mod logic has needed so far. Anything else is a plain field or a no-op, not the game. Unity objects have no components, physics or rendering. Terrain is the rebuild and the compiler, not the game's mesh. Networking is in-process: no peers connect, and routed RPCs are only checked for size. Test what the game does natively with `Valheim.Testing.Game` against a real server.
 
+### Global keys, terrain modifier order and location placement
+
+These doubles model world state that Valheim 1.0.16 keeps and mods read or add to. Their tests derive the expected values by hand from the game's rules.
+
+Global keys (`ZoneSystem`):
+- `SetGlobalKey` and `RemoveGlobalKey` (by `GlobalKeys` member, `GlobalKeys` and a float value, or string) are routed calls to the server. On the server the change applies at once and the whole list is broadcast to `Everybody` as the `GlobalKeys` routed call. A client changes nothing locally: its call goes out through `ZRoutedRpc.instance`, and each broadcast replaces its whole list, so a key only the client added (with the game's private `GlobalKeyAdd`, public here) is gone. Deliver a broadcast to a client with `ZRoutedRpc.instance.Deliver(serverId, "GlobalKeys", keys)`.
+- The handlers exist only after `ZoneSystem.Start()`, which the game runs when the game scene starts, with `Game.Start`. The server registers `SetGlobalKey` and `RemoveGlobalKey`, a client `GlobalKeys`. A key set on the server before that is dropped without an error. `OnNewPeer(peer)` sends a new peer the whole list.
+- Keys are stored lower case as `name` or `name value`, split at the first space. Setting a name again replaces its value. `GetGlobalKey(name)` finds a key by name in any case, whatever its value; `GetGlobalKey(key, out float)` reads the value; `GetGlobalKeyExact(line)` needs the whole line. Any string is a key. Members of `GlobalKeys` before `NonServerOption` are world modifiers.
+- A save keeps the other keys (`SaveGlobalKeys`, `LoadGlobalKeys`). The server writes world modifiers into the world's starting keys (`WorldStartingGlobalKeys`, null when no world is loaded, as on a client), and `SetStartingGlobalKeys` reads them back after a restart.
+
+Terrain modifiers (`TerrainModifier`): `Awake()` puts a modifier in the live list and `OnDestroy()` takes it out, as when the object spawns and goes. `TerrainModifier.GetAllInstances()` returns the list in the order a heightmap applies it:
+1. Non-player before player (`m_playerModifiction`).
+2. Lower `m_sortOrder`.
+3. Earlier creation time. It is read at `Awake` from the ZDO's `terrainModifierTimeCreated` long, so it survives a save and restart. 1.0.16 writes that value only when it converts a world saved before its ZDO rework, so a modifier placed since reads 0 and sorts before a converted one.
+4. Smaller squared distance of the whole position from the origin, height included. At the same ground distance, a higher modifier comes later, so a sort by ground distance alone gets the order wrong.
+
+The list is sorted again only when a modifier joins or leaves. The game's sort is unstable; a full tie keeps joining order here. `Heightmap.ModifiersInApplyOrder()` lists the enabled modifiers that reach a zone (radius + 4 m, as `TerrainVSModifier`). The game applies the zone's terrain compiler after them. What a modifier does to the heights is not modelled. `ValheimWorldScope.WithTerrainModifiers()` starts a fresh live list, and the scope puts the previous one back.
+
+Locations (`ZoneSystem.ZoneLocation`) have the game's placement fields and defaults. `m_minAltitude` and `m_maxAltitude` are metres above the water level (y = 30), not absolute heights. `ZoneLocation.AltitudeAboveWater(y)` and `IsAltitudeAllowed(y)` evaluate them as the placement does (both ends allowed; 30 m is fixed, not read from `m_waterLevel`). A definition written with absolute heights passes on a flat world near 30 m and fails elsewhere. `SlopeRotationYaw(downhill)` is the yaw a slope-rotated location gets: local +Z faces downhill, rounded to 22.5 degrees. `CheckPlacement(x, z, world, terrainDelta)` returns the first rule a point fails: origin distance, biome (the default `None` matches no biome), altitude, distance from the centre, then terrain delta. It does not check the biome area, forest, similar locations, vegetation or zone occupancy. Nothing generates or places locations.
+
 ## Static overrides (preview 6)
 
 Mods keep settings, switches and caches in statics. A test that changes one must put back the value it found, not the default it expects; a hard-coded reset silently changes every later test when the default moves. `StaticOverride` in `Valheim.Testing` does this for static fields, static properties (private setters included) and environment variables:
