@@ -10,7 +10,13 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 
-public sealed partial class ZNetPeer { }
+/// <summary>A connected peer: its id and, once spawned, its character's ZDO.</summary>
+public sealed partial class ZNetPeer
+{
+    public long m_uid;
+    public ZDOID m_characterID;
+    public string m_playerName = "";
+}
 public sealed partial class ZNet
 {
     public static ZNet instance = new();
@@ -18,10 +24,18 @@ public sealed partial class ZNet
     public readonly Dictionary<long, ZNetPeer> Peers = new();
     public bool IsServer() => Server;
     public ZNetPeer? GetPeer(long id) => Peers.TryGetValue(id, out var p) ? p : null;
+    /// <summary>The connected peers. A peer's key in <see cref="Peers"/> is its id, so <c>m_uid</c> is set from it.</summary>
+    public List<ZNetPeer> GetPeers() { foreach (var peer in Peers) peer.Value.m_uid = peer.Key; return new List<ZNetPeer>(Peers.Values); }
     public void Start() { }
     public void Update() { }
 }
-public sealed partial class Player { public void OnSpawned() { } }
+/// <summary>The local player: set on a client or a host that has spawned, null on a dedicated server.</summary>
+public sealed partial class Player
+{
+    public static Player? m_localPlayer;
+    public Transform transform = new();
+    public void OnSpawned() { }
+}
 public sealed partial class ZRoutedRpc
 {
     public static ZRoutedRpc instance = new();
