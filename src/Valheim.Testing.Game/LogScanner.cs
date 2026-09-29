@@ -46,6 +46,9 @@ public sealed record LogFileScan(string Role, string Path, bool Present, string?
 /// first occurrence and has a default severity a run may change with a written reason. BepInEx warning and error lines
 /// that match no pattern are counted as <see cref="UnknownWarning"/> and <see cref="UnknownError"/>, never ignored. Unity's
 /// Player.log has no levels, so there only the known patterns count. The same Unity message may appear in both logs.
+/// Owned processes are killed at teardown (<see cref="System.Diagnostics.Process.Kill(bool)"/>), not closed, so nothing
+/// the game or a mod logs while shutting down is in the logs: the scan sees what was logged during the run, not, for
+/// example, an UnpatchAll a mod calls when the game quits.
 /// </summary>
 public static class LogScanner
 {
@@ -58,8 +61,9 @@ public static class LogScanner
     /// <summary>The known patterns and their default severities.</summary>
     public static IReadOnlyList<LogPattern> Patterns { get; } =
     [
-        // HarmonyX's warning when a mod calls UnpatchAll() without an id: every mod's patches are removed.
-        new("harmony-unpatch-all", LogSeverity.Failure, new(@"UnpatchAll has been called", Options)),
+        // HarmonyX's warning when a mod calls UnpatchAll() without an id: every mod's patches are removed. Not its
+        // "Legacy UnpatchAll has been called AND DisallowLegacyGlobalUnpatchAll=true. Skipping execution", which removes nothing.
+        new("harmony-unpatch-all", LogSeverity.Failure, new(@"UnpatchAll has been called - This will remove ALL", Options)),
         // HarmonyX's error for a patch class whose target method does not exist (renamed or removed by a game update).
         new("harmony-undefined-target", LogSeverity.Failure, new(@"Undefined target method for (?:reverse )?patch method", Options)),
         // HarmonyX's AccessTools lookups that found nothing. Mods also probe optional members this way, so a warning.
@@ -71,10 +75,11 @@ public static class LogScanner
         new("nre-remove-objects", LogSeverity.Failure, new(@"\bNullReferenceException\b", Options), new(@"\bZNetScene\.RemoveObjects\b", Options)),
         // The game's warning for a per-object RPC that no component registered (a mod missing on one side, or a typo).
         new("rpc-method-missing", LogSeverity.Warning, new(@"Failed to find rpc method", Options)),
-        // Unity: a prefab from an asset bundle references a script that is not loaded.
+        // Unity's own warning: a prefab from an asset bundle references a script that is not loaded.
         new("missing-script", LogSeverity.Warning, new(@"The referenced script\b.*\bis missing", Options)),
-        // Unity: a bundle's shader was not built for this graphics API (magenta objects on Vulkan or OpenGL clients).
-        new("shader-unsupported", LogSeverity.Warning, new(@"not supported on this GPU|Shader Unsupported\b", Options)),
+        // Unity: a bundle's shader was not built for this graphics API (magenta objects on Vulkan or OpenGL clients). The
+        // wording is as the Valheim-Modding wiki's Valheim-Unity-Project-Guide quotes it.
+        new("shader-unsupported", LogSeverity.Warning, new(@"not supported on this GPU|Shader Unsupported\b|Desired shader compiler platform \d+ is not available in shader blob", Options)),
     ];
 
     /// <summary>Every name a classification may use: the patterns, <see cref="UnknownWarning"/> and <see cref="UnknownError"/>.</summary>
