@@ -59,7 +59,8 @@ foreach (string project in Directory.GetFiles(Path.Combine(root, "examples"), "*
     Run("dotnet", "build", project, "-c", "Release", "-m:1");
 Run("dotnet", "run", "--project", "examples/NoGameTerrain", "-c", "Release", "--no-build");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
-Run("dotnet", "pack", "src/Valheim.Testing.Game/Valheim.Testing.Game.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
+foreach (string name in new[] { "Valheim.Testing.Game", "Valheim.Testing.Adapter" })
+    Run("dotnet", "pack", $"src/{name}/{name}.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
 Console.WriteLine("Local validation passed.");
 return 0;
 
