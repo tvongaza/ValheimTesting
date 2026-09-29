@@ -564,8 +564,8 @@ The toolkit's own tests cover the rules every pinned plan follows: output path, 
 
 `ClientRounds` runs a persistence scenario's client rounds over `ClientSession`, `SessionControl` and `PlayerPlacement`. The mod supplies the per-round measurement as a delegate, and its step names where it wants its own (`OpenStep`, `ArriveStep`). For each of `Rounds` (default `first`, `after-restart`), the helper:
 1. waits until the server accepts game connections;
-2. joins (devcommands first, exactly once), verifies the client's world pins and waits for the world;
-3. protects the player, then arrives at `Arrival` if one is given, writing `{round}-arrival.json`;
+2. joins (devcommands first, exactly once), verifies the client's world pins and waits for the world, which protects the player (`SessionControl.WaitForWorld`'s default);
+3. arrives at `Arrival` if one is given, writing `{round}-arrival.json`;
 4. runs the measurement, which records `{round}: ...` steps with `round.Step` and writes `{round}-{name}.json` with `round.Write`, refusing to overwrite existing evidence.
 
 Between rounds come a confirmed save, the client's leave and a restart of only the owned server. The optional `afterRestart` check runs next (for example "the server still has the marker"). The last round only leaves. Every step goes through the `ScenarioReport`. `clientRounds` and `clientRoundsCompleted` in its provenance record how far the run got. The first failure stops the rounds and is rethrown: nothing runs after a failed save, restart or measurement, and that round's evidence stays. The client is closed in every outcome: an owned client's process is stopped, and an attached client is detached and left running. A failed close fails a passing run, but never hides an earlier failure. `Run` returns the server's actor after the last restart.

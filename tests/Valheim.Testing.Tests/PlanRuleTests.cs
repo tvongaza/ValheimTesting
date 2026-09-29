@@ -14,6 +14,7 @@ public sealed class PlanRuleTests
         World = new() { Source = Path.GetTempPath(), Sha256 = new() { ["worlds_local/test.db"] = new('b', 64) } },
         Executable = "valheim_server.exe", Arguments = ["-batchmode", "-nographics", "-savedir", "{world}"],
         Pins = new() { ["worlduid"] = "123", ["my.mod"] = new('1', 32), ["valheimCLI.valheimCLI"] = new('2', 32) },
+        RuntimePins = new() { Game = new('c', 64), BepInExCore = new('d', 64), Patchers = new('e', 64) },
     };
     private static void Validate(ServerRunPlan plan) => plan.ValidateServerPlan(Required, Token);
     private static void Refused(ServerRunPlan plan) => Assert.Throws<ArgumentException>(() => Validate(plan));
@@ -108,11 +109,13 @@ public sealed class PlanRuleTests
             string runtime = Path.Combine(root, "runtime"), world = Path.Combine(root, "world"), output = Path.Combine(root, "out");
             Directory.CreateDirectory(runtime); Directory.CreateDirectory(world);
             File.WriteAllText(Path.Combine(runtime, ServerLaunch.LinuxExecutable), "server"); File.WriteAllText(Path.Combine(world, "Test.db"), "world");
+            FakeInstalls.Server(runtime); // Strict pins name the runtime's game build, BepInEx core and patchers.
             string path = Path.Combine(root, "plan.json");
             File.WriteAllText(path, JsonSerializer.Serialize(new
             {
                 scenario = "empty-save", runtime = new { source = runtime, sha256 = WorldFixture.Manifest(runtime) }, world = new { source = world, sha256 = WorldFixture.Manifest(world) },
                 arguments = new[] { "-batchmode", "-nographics", "-savedir", "{world}" }, pins = new Dictionary<string, string> { ["worlduid"] = "1" },
+                runtimePins = InstallPins.Of(runtime),
             }));
             PinnedServerRunOptions<ServerRunPlan> Options(Dictionary<string, string[]> map) => new()
             {
