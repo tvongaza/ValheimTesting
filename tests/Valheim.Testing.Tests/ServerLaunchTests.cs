@@ -99,15 +99,59 @@ public class ServerLaunchTests
         var start = ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { ["SteamAppId"] = "123" }, LinuxLaunchHost);
         Assert.Equal("123", start.Environment["SteamAppId"]);
     }
-    [Theory] [InlineData("DOORSTOP_ENABLED")] [InlineData("DOORSTOP_TARGET_ASSEMBLY")]
-    public void CallerCannotRedirectTheLinuxLoader(string name)
+    [Theory]
+    [InlineData("linux", "DOORSTOP_ENABLED")] [InlineData("linux", "DOORSTOP_TARGET_ASSEMBLY")] [InlineData("linux", "DOORSTOP_DISABLE")]
+    [InlineData("windows", "DOORSTOP_DISABLE")] [InlineData("windows", "doorstop_enabled")] [InlineData("windows", "DOORSTOP_TARGET_ASSEMBLY")]
+    public void CallerCannotDisableOrRedirectTheLoader(string platform, string name)
     {
-        using var runtime = Runtime.Linux();
-        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { [name] = "0" }, LinuxLaunchHost));
+        using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
+        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { [name] = "0" },
+            platform == "linux" ? LinuxLaunchHost : ServerHost.Windows));
+    }
+    [Theory] [InlineData("linux")] [InlineData("windows")]
+    public void DoorstopArgumentsAreRefused(string platform)
+    {
+        using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
+        var error = Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode", "--doorstop-enabled", "false"], null,
+            platform == "linux" ? LinuxLaunchHost : ServerHost.Windows));
+        Assert.Contains("--doorstop-enabled", error.Message);
+    }
+    // Set in this process, as a parent shell would: only the loader values ServerLaunch sets itself may reach the server.
+    [Theory] [InlineData("linux")] [InlineData("windows")]
+    public void InheritedLoaderVariablesNeverReachTheServer(string platform)
+    {
+        using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
+        Environment.SetEnvironmentVariable("DOORSTOP_DISABLE", "1");
+        try
+        {
+            var start = ServerLaunch.CreateStartInfo(runtime.Root, [], null, platform == "linux" ? LinuxLaunchHost : ServerHost.Windows);
+            Assert.False(start.Environment.ContainsKey("DOORSTOP_DISABLE"));
+            if (platform == "windows") Assert.DoesNotContain(start.Environment.Keys, key => key.StartsWith("DOORSTOP_", StringComparison.OrdinalIgnoreCase));
+            else Assert.Equal(Path.Combine(runtime.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        }
+        finally { Environment.SetEnvironmentVariable("DOORSTOP_DISABLE", null); }
     }
     [Theory]
-    [InlineData("linux", "BepInEx/core/BepInEx.Preloader.dll")] [InlineData("linux", "doorstop_libs/libdoorstop_x64.so")]
-    [InlineData("windows", "BepInEx/core/BepInEx.Preloader.dll")] [InlineData("windows", "winhttp.dll")]
+    [InlineData("[General]\nenabled = false\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n")]
+    [InlineData("[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\Other.Preloader.dll\n")]
+    public void WindowsDoorstopConfigMustEnableBepInExsPreloader(string config)
+    {
+        using var runtime = Runtime.Windows(); runtime.Add("BepInEx/core/Other.Preloader.dll");
+        File.WriteAllText(Path.Combine(runtime.Root, "doorstop_config.ini"), config);
+        var error = Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Windows));
+        Assert.Contains("doorstop_config.ini", error.Message);
+    }
+    // The station's dedicated-server install carries Doorstop 3's section and key names.
+    [Fact] public void WindowsDoorstop3ConfigIsAccepted()
+    {
+        using var runtime = Runtime.Windows();
+        File.WriteAllText(Path.Combine(runtime.Root, "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        Assert.EndsWith("valheim_server.exe", ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Windows).FileName);
+    }
+    [Theory]
+    [InlineData("linux", "BepInEx/core/BepInEx.Preloader.dll")] [InlineData("linux", "BepInEx/core/BepInEx.dll")] [InlineData("linux", "doorstop_libs/libdoorstop_x64.so")]
+    [InlineData("windows", "BepInEx/core/BepInEx.Preloader.dll")] [InlineData("windows", "BepInEx/core/BepInEx.dll")]
+    [InlineData("windows", "winhttp.dll")] [InlineData("windows", "doorstop_config.ini")]
     public void MissingBepInExLoaderIsRefusedRatherThanStartingVanilla(string platform, string missing)
     {
         using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
@@ -196,14 +240,15 @@ public class ServerLaunchTests
         public static Runtime Windows()
         {
             var runtime = new Runtime();
-            runtime.Add("valheim_server.exe"); runtime.Add("winhttp.dll"); runtime.Add("BepInEx/core/BepInEx.Preloader.dll");
+            runtime.Add("valheim_server.exe"); runtime.Add("winhttp.dll"); runtime.Add("BepInEx/core/BepInEx.Preloader.dll"); runtime.Add("BepInEx/core/BepInEx.dll");
+            File.WriteAllText(runtime.Add("doorstop_config.ini"), "[General]\nenabled = true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
             return runtime;
         }
         public static Runtime Linux(string name = "runtime", bool executable = true)
         {
             var runtime = new Runtime(name);
             string server = runtime.Add("valheim_server.x86_64");
-            runtime.Add("doorstop_libs/libdoorstop_x64.so"); runtime.Add("BepInEx/core/BepInEx.Preloader.dll");
+            runtime.Add("doorstop_libs/libdoorstop_x64.so"); runtime.Add("BepInEx/core/BepInEx.Preloader.dll"); runtime.Add("BepInEx/core/BepInEx.dll");
             if (!OperatingSystem.IsWindows())
                 File.SetUnixFileMode(server, executable ? File.GetUnixFileMode(server) | UnixFileMode.UserExecute : File.GetUnixFileMode(server) & ~UnixFileMode.UserExecute);
             return runtime;

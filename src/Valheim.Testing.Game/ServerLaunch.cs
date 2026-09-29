@@ -17,9 +17,6 @@ public static class ServerLaunch
     public const string WindowsExecutable = "valheim_server.exe";
     public const string LinuxExecutable = "valheim_server.x86_64";
     public const string DedicatedServerSteamAppId = "892970";
-    private static readonly string Preloader = Path.Combine("BepInEx", "core", "BepInEx.Preloader.dll");
-    private static readonly string LinuxDoorstop = Path.Combine("doorstop_libs", "libdoorstop_x64.so");
-    private const string WindowsDoorstop = "winhttp.dll";
     private const string MacClientBundle = "Valheim.app";
     private const string NoMacServer = "There is no macOS dedicated server; run the Linux server image in a container " +
         "(docker --platform linux/amd64, see docker/linux-server) or use a remote Windows/Linux host.";
@@ -52,11 +49,15 @@ public static class ServerLaunch
     internal static string RequireExecutable(string runtimeDirectory, ServerHost host) => Resolve(FullRuntime(runtimeDirectory), host).Executable;
 
     /// <summary>
-    /// Start info for one owned BepInEx dedicated server. Caller environment is applied first. On Linux, Doorstop is
-    /// enabled for BepInEx's preloader and the runtime's doorstop_libs/linux64 directories are prepended to any existing
-    /// LD_LIBRARY_PATH/LD_PRELOAD, which are kept. SteamAppId defaults to the dedicated server's unless the caller sets it.
-    /// A Windows host builds a Linux launch for inspection only. A macOS host refuses with <see cref="PlatformNotSupportedException"/>
-    /// rather than executing a Linux or Windows binary: use the Linux container or a remote Windows/Linux host.
+    /// Start info for one owned BepInEx dedicated server. BepInEx's preloader and core and the platform's Doorstop loader
+    /// must be present; on Windows doorstop_config.ini must enable Doorstop and target BepInEx's preloader. Caller
+    /// environment is applied first and may not set Doorstop's variables or pass <c>--doorstop-*</c> arguments; inherited
+    /// Doorstop variables are removed. On Linux, Doorstop is enabled for BepInEx's preloader and the runtime's
+    /// doorstop_libs/linux64 directories are prepended to any existing LD_LIBRARY_PATH/LD_PRELOAD, which are kept.
+    /// SteamAppId defaults to the dedicated server's unless the caller sets it.
+    /// Unlike <see cref="ClientLaunch"/>, a host may build another platform's launch: a Windows host builds a Linux launch
+    /// for inspection only. A macOS host refuses with <see cref="PlatformNotSupportedException"/> rather than executing a
+    /// Linux or Windows binary: use the Linux container or a remote Windows/Linux host.
     /// </summary>
     public static ProcessStartInfo CreateStartInfo(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null) =>
         CreateStartInfo(runtimeDirectory, arguments, environment, CurrentHost);
@@ -66,17 +67,17 @@ public static class ServerLaunch
         ArgumentNullException.ThrowIfNull(arguments);
         string runtime = FullRuntime(runtimeDirectory);
         var (platform, executable) = Resolve(runtime, host);
-        RequireFile(runtime, Preloader, "BepInEx is not installed in the runtime");
-        RequireFile(runtime, platform == ServerPlatform.Windows ? WindowsDoorstop : LinuxDoorstop, "BepInEx's Doorstop loader is missing from the runtime");
+        BepInExLoader.RequireCore(runtime, "runtime");
+        if (platform == ServerPlatform.Windows) BepInExLoader.RequireWindowsLoader(runtime, "runtime");
+        else BepInExLoader.RequireFile(runtime, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the runtime");
         environment ??= new Dictionary<string, string>();
         var names = host == ServerHost.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        foreach (string name in new[] { "DOORSTOP_ENABLED", "DOORSTOP_TARGET_ASSEMBLY" })
-            if (platform == ServerPlatform.Linux && environment.Keys.Any(key => names.Equals(key, name)))
-                throw new ArgumentException(name + " is set by ServerLaunch for BepInEx; remove it from the caller environment.", nameof(environment));
+        var passed = BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(ServerLaunch));
 
         var start = new ProcessStartInfo(executable) { WorkingDirectory = runtime, UseShellExecute = false };
-        foreach (string argument in arguments) start.ArgumentList.Add(argument ?? throw new ArgumentException("Null launch argument.", nameof(arguments)));
-        foreach (var entry in environment) start.Environment[entry.Key] = entry.Value;
+        foreach (string argument in passed) start.ArgumentList.Add(argument);
+        // Inherited Doorstop values would reach the server too; only the ones set below may.
+        BepInExLoader.ApplyEnvironment(start, environment);
         if (!environment.Keys.Any(key => names.Equals(key, "SteamAppId"))) start.Environment["SteamAppId"] = DedicatedServerSteamAppId;
         if (platform == ServerPlatform.Linux)
         {
@@ -85,10 +86,10 @@ public static class ServerLaunch
             if (host != ServerHost.Windows && runtime.IndexOfAny([':', ';']) >= 0)
                 throw new ArgumentException("A Linux runtime path cannot contain ':' or ';'.", nameof(runtimeDirectory));
             start.Environment["DOORSTOP_ENABLED"] = "1";
-            start.Environment["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(runtime, Preloader);
+            start.Environment["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(runtime, BepInExLoader.Preloader);
             // Same effective order as the pack's script: linux64, then doorstop_libs, then the existing value.
-            start.Environment["LD_LIBRARY_PATH"] = Prepend(start.Environment, "LD_LIBRARY_PATH", Path.Combine(runtime, "linux64"), Path.Combine(runtime, "doorstop_libs"));
-            start.Environment["LD_PRELOAD"] = Prepend(start.Environment, "LD_PRELOAD", "libdoorstop_x64.so");
+            start.Environment["LD_LIBRARY_PATH"] = BepInExLoader.Prepend(start.Environment, "LD_LIBRARY_PATH", Path.Combine(runtime, "linux64"), Path.Combine(runtime, "doorstop_libs"));
+            start.Environment["LD_PRELOAD"] = BepInExLoader.Prepend(start.Environment, "LD_PRELOAD", "libdoorstop_x64.so");
         }
         return start;
     }
@@ -120,15 +121,5 @@ public static class ServerLaunch
         string runtime = Path.TrimEndingDirectorySeparator(Path.GetFullPath(runtimeDirectory));
         if (!Directory.Exists(runtime)) throw new DirectoryNotFoundException("Server runtime directory does not exist: " + runtime);
         return runtime;
-    }
-    private static void RequireFile(string runtime, string relative, string message)
-    {
-        if (!File.Exists(Path.Combine(runtime, relative))) throw new FileNotFoundException(message + ": " + relative, Path.Combine(runtime, relative));
-    }
-    // Keep every existing entry; an empty value adds no empty element (which would mean the working directory).
-    private static string Prepend(IDictionary<string, string?> environment, string name, params string[] entries)
-    {
-        environment.TryGetValue(name, out string? existing);
-        return string.IsNullOrEmpty(existing) ? string.Join(':', entries) : string.Join(':', entries) + ":" + existing;
     }
 }
