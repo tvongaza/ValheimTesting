@@ -3,7 +3,8 @@
 //   dotnet run scripts/validate.cs
 //
 // Runs the library tests, builds every example, executes the two no-game
-// examples, runs the package-consuming mod tests and packs the libraries into the local feed.
+// examples, runs the package-consuming mod tests, packs the libraries into the local feed and runs the packed
+// binding-check tool.
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security;
@@ -13,6 +14,7 @@ string root = FindRoot();
 
 Run("dotnet", "test", "tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "-c", "Release", "-m:1");
 Run("dotnet", "test", "tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj", "-c", "Release", "-m:1");
+Run("dotnet", "test", "tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj", "-c", "Release", "-m:1");
 // Pack the pure packages before the consumer example restores them. This exercises
 // the actual source-package layout rather than linking the doubles directory.
 foreach (string name in new[] { "Valheim.Testing", "Valheim.Testing.Doubles" })
@@ -61,8 +63,29 @@ foreach (string project in Directory.GetFiles(Path.Combine(root, "examples"), "*
 Run("dotnet", "test", "examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj", "-c", "Release", "-m:1");
 Run("dotnet", "run", "--project", "examples/NoGameTerrain", "-c", "Release", "--no-build");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
-foreach (string name in new[] { "Valheim.Testing.Game", "Valheim.Testing.Adapter" })
+foreach (string name in new[] { "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool" })
     Run("dotnet", "pack", $"src/{name}/{name}.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
+// Install the packed binding-check tool as a mod's CI would, from the fresh local feed only, and let it check its own
+// library against the Mono.Cecil it ships with: a real assembly whose every Cecil reference must bind (exit 0).
+string tools = Path.Combine(Path.GetTempPath(), "valheim-bindings-tool-" + Guid.NewGuid().ToString("N"));
+try
+{
+    Directory.CreateDirectory(tools);
+    string config = Path.Combine(tools, "NuGet.Config");
+    File.WriteAllText(config, $"""
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration><packageSources><clear/><add key="local-preview" value="{SecurityElement.Escape(Path.Combine(root, ".packages"))}"/></packageSources></configuration>
+        """);
+    Run("dotnet", "tool", "install", "Valheim.Testing.Bindings.Tool", "--version", SourceVersion("Valheim.Testing.Bindings.Tool"),
+        "--tool-path", Path.Combine(tools, "bin"), "--configfile", config);
+    string built = Path.Combine(root, "src", "Valheim.Testing.Bindings.Tool", "bin", "Release", "net10.0");
+    Run(Path.Combine(tools, "bin", OperatingSystem.IsWindows() ? "valheim-bindings.exe" : "valheim-bindings"),
+        Path.Combine(built, "Valheim.Testing.Bindings.dll"), "--game-dir", built, "--only", "Mono.Cecil", "--require", "Mono.Cecil");
+}
+finally
+{
+    if (Directory.Exists(tools)) Directory.Delete(tools, recursive: true);
+}
 Console.WriteLine("Local validation passed.");
 return 0;
 
