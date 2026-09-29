@@ -1,0 +1,8 @@
+#!/bin/bash
+# vt-exec-game <pidfile> <dir> [NAME=VALUE]... <program> [args]...
+# Records its own PID, changes to <dir> and execs <program> with the given environment additions (via env), so the
+# PID is the program's. Variables such as Doorstop's LD_PRELOAD reach only the program: preloaded into this shell,
+# Doorstop's hooks break its file redirects (the PID file stayed empty).
+set -eu
+P="$1"; D="$2"; shift 2
+echo $$ > "$P"; cd "$D"; exec env "$@"

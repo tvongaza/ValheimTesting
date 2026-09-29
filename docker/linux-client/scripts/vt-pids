@@ -1,0 +1,19 @@
+#!/bin/bash
+# PIDs of live processes started as the program <name> (e.g. valheim.x86_64, valheim_server.x86_64, steam).
+# Matches the file name of argv[0] exactly, falling back to the kernel's process name: never a pattern over whole
+# command lines ("steam" would also match anything under /home/steam). argv[0] is what identifies a game: Unity
+# renames its main thread, so /proc/PID/comm stops matching soon after start. Skips zombies. Exit 1 when none.
+# A name is not an owner: to stop the client you launched, use vt-stop-game.
+set -uo pipefail
+N="${1:?usage: vt-pids <program-name>}"; C="${N:0:15}"; found=1
+for d in /proc/[0-9]*; do
+    # argv[0] ends at the first NUL, and read stops there (a pipe into head could fail on a long command line).
+    a0=; IFS= read -r -d '' a0 < "$d/cmdline" 2>/dev/null
+    if [ "${a0##*/}" = "$N" ] || [ "$(cat "$d/comm" 2>/dev/null)" = "$C" ]; then
+        # The state follows the name in /proc/PID/stat, and the name may contain spaces.
+        s=$(cat "$d/stat" 2>/dev/null) || continue; s=${s##*) }
+        [ "${s%% *}" = Z ] && continue
+        echo "${d#/proc/}"; found=0
+    fi
+done
+exit $found

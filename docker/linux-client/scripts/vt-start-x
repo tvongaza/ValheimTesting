@@ -1,0 +1,85 @@
+#!/bin/bash
+# Start headless Xorg :0 on the NVIDIA GPU (root). Idempotent; exit 0 when :0 answers.
+# - Extracts the X driver files matching the host driver: the container runtime mounts the GL/Vulkan userspace
+#   but not the X server module. Also installs NVIDIA's Vulkan manifests when the runtime did not.
+# - Fakes a connected 1920x1080 monitor (ConnectedMonitor DFP-0): Steam's UI refuses to open a window on a screen
+#   without an output ("Could not find display info"). Falls back to a screen without outputs if that does not start.
+set -euo pipefail
+if DISPLAY=:0 xdpyinfo >/dev/null 2>&1; then echo "vt-start-x: :0 already running"; exit 0; fi
+V=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | awk 'NR == 1 { gsub(/ /, ""); print }')
+BUS=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader | awk 'NR == 1 { gsub(/ /, ""); print }')
+KEEP=/usr/local/share/vt-nvidia/$V
+if [ ! -f /usr/lib/xorg/modules/drivers/nvidia_drv.so ] || [ "$(cat /var/lib/vt-nvidia-version 2>/dev/null)" != "$V" ]; then
+    wget -q -O /tmp/nv.run "https://us.download.nvidia.com/XFree86/Linux-x86_64/$V/NVIDIA-Linux-x86_64-$V.run"
+    rm -rf /tmp/nv && sh /tmp/nv.run --extract-only --target /tmp/nv >/dev/null
+    install -D -m644 /tmp/nv/nvidia_drv.so /usr/lib/xorg/modules/drivers/nvidia_drv.so
+    install -D -m644 "/tmp/nv/libglxserver_nvidia.so.$V" /usr/lib/xorg/modules/extensions/libglxserver_nvidia.so
+    mkdir -p "$KEEP" && cp /tmp/nv/nvidia_icd.json /tmp/nv/nvidia_layers.json "$KEEP/" 2>/dev/null || true
+    echo "$V" > /var/lib/vt-nvidia-version; rm -rf /tmp/nv /tmp/nv.run
+fi
+if [ ! -e /etc/vulkan/icd.d/nvidia_icd.json ] && [ ! -e /usr/share/vulkan/icd.d/nvidia_icd.json ] && [ -f "$KEEP/nvidia_icd.json" ]; then
+    install -D -m644 "$KEEP/nvidia_icd.json" /etc/vulkan/icd.d/nvidia_icd.json
+    [ -e /etc/vulkan/implicit_layer.d/nvidia_layers.json ] || install -D -m644 "$KEEP/nvidia_layers.json" /etc/vulkan/implicit_layer.d/nvidia_layers.json
+fi
+# nvidia-smi gives hex domain:bus:device.function; Xorg wants decimal PCI:bus:device:function.
+IFS=':.' read -r _ b d f <<<"$BUS"
+XBUS="PCI:$((16#$b)):$((16#$d)):$((16#$f))"
+write_conf() { # $1 = monitor | none
+    local device screen_extra monitor_section=""
+    if [ "$1" = monitor ]; then
+        monitor_section='Section "Monitor"
+    Identifier "mon"
+    HorizSync 5.0 - 1000.0
+    VertRefresh 5.0 - 1000.0
+    Modeline "1920x1080_60" 148.50 1920 2008 2052 2200 1080 1084 1089 1125 +hsync +vsync
+    Option "PreferredMode" "1920x1080_60"
+EndSection'
+        device='    Option "ConnectedMonitor" "DFP-0"
+    Option "ModeValidation" "NoMaxPClkCheck, NoEdidMaxPClkCheck, NoMaxSizeCheck, NoHorizSyncCheck, NoVertRefreshCheck, NoVirtualSizeCheck, NoTotalSizeCheck, NoDisplayPortBandwidthCheck, AllowNonEdidModes, NoEdidModes"'
+        screen_extra='    Monitor "mon"'
+    else
+        device='    Option "UseDisplayDevice" "None"'
+        screen_extra=''
+    fi
+    mkdir -p /etc/X11
+    cat > /etc/X11/xorg.conf <<XC
+Section "ServerFlags"
+    Option "AutoAddDevices" "false"
+    Option "AutoEnableDevices" "false"
+    Option "DontVTSwitch" "true"
+EndSection
+$monitor_section
+Section "Device"
+    Identifier "gpu"
+    Driver "nvidia"
+    BusID "$XBUS"
+    Option "AllowEmptyInitialConfiguration" "true"
+$device
+EndSection
+Section "Screen"
+    Identifier "screen"
+    Device "gpu"
+$screen_extra
+    DefaultDepth 24
+    SubSection "Display"
+        Depth 24
+        Virtual 1920 1080
+    EndSubSection
+EndSection
+XC
+}
+start_x() {
+    rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+    setsid Xorg :0 -config /etc/X11/xorg.conf -noreset -nolisten tcp -novtswitch -sharevts >/var/log/vt-xorg.out 2>&1 < /dev/null &
+    for _ in $(seq 1 100); do DISPLAY=:0 xdpyinfo >/dev/null 2>&1 && return 0; sleep 0.1; done
+    return 1
+}
+MODE=monitor; write_conf monitor
+if ! start_x; then
+    pkill -x Xorg || true; MODE=none; write_conf none
+    start_x || { echo "vt-start-x: Xorg did not answer within 10 s"; tail -20 /var/log/Xorg.0.log; exit 1; }
+fi
+chmod 1777 /tmp/.X11-unix; DISPLAY=:0 xhost +si:localuser:steam >/dev/null
+OUT=$(DISPLAY=:0 xrandr 2>/dev/null | grep -m1 ' connected' | cut -d' ' -f1 || true)
+echo "vt-start-x: :0 on NVIDIA $V ($(DISPLAY=:0 glxinfo -B | sed -n 's/.*renderer string: //p')), output: ${OUT:-none} ($MODE)"
+[ -n "$OUT" ] || echo "vt-start-x: warning: no connected output; Steam's UI will not open a window"
