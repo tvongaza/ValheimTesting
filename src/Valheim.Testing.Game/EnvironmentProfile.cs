@@ -58,7 +58,7 @@ public sealed class EnvironmentProfile
             value.Validate(role, host, errors);
         }
         if (Server != null && Hosts.TryGetValue(Server.Host ?? "", out var serverHost) && serverHost.Platform == "macos")
-            errors.Add($"The server's host '{Server.Host}' is macOS, which has no dedicated server; use a Linux container or a Windows or Linux host.");
+            errors.Add($"The server's host '{Server.Host}' is macOS: a remote macOS server host is not supported yet (a macOS server runs locally, without --profile); use a Linux container or a Windows or Linux host.");
         // One Valheim client per machine: Steam runs one copy of the game per signed-in session.
         foreach (var shared in Clients.GroupBy(client => client.Value.Host).Where(group => group.Count() > 1))
             errors.Add($"Clients {string.Join(", ", shared.Select(client => client.Key))} share host '{shared.Key}'; a host runs one game client.");

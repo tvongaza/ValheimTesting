@@ -40,7 +40,7 @@ public class ClientLaunchTests
         Directory.CreateDirectory(Path.Combine(install.Root, "valheim.exe"));
         Assert.Throws<FileNotFoundException>(() => ClientLaunch.Detect(install.Root)); // a directory is not the executable
     }
-    [Theory] [InlineData("valheim_server.exe")] [InlineData("valheim_server.x86_64")]
+    [Theory] [InlineData("valheim_server.exe")] [InlineData("valheim_server.x86_64")] [InlineData("valheim_server/Valheim")]
     public void DedicatedServerRuntimeIsRefusedWithAPointerToServerLaunch(string server)
     {
         using var install = new Install(); install.Add(server); install.Add("BepInEx/core/BepInEx.Preloader.dll");

@@ -52,7 +52,7 @@ public static class ClientLaunch
         if (mac) return ClientPlatform.MacOS;
         if (Path.GetExtension(install).Equals(".app", StringComparison.OrdinalIgnoreCase) || File.Exists(Path.Combine(install, MacExecutable)))
             throw new ArgumentException($"{install} is the {MacBundle} bundle itself; pass the directory that holds it and BepInEx.", nameof(installDirectory));
-        string? server = new[] { ServerLaunch.WindowsExecutable, ServerLaunch.LinuxExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(install, name)));
+        string? server = new[] { ServerLaunch.WindowsExecutable, ServerLaunch.LinuxExecutable, ServerLaunch.MacExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(install, name)));
         if (server != null)
             throw new InvalidOperationException($"{install} is a dedicated-server runtime ({server}), not a game client; launch it with ServerLaunch.");
         throw new FileNotFoundException($"Install contains none of {WindowsExecutable}, {LinuxExecutable} or {MacBundle}.", install);
@@ -173,7 +173,8 @@ public static class ClientLaunch
     }
 
     // The first Doorstop library with the requested slice. dyld cannot insert a library into a process of another architecture.
-    private static string MacDoorstop(string install, string executable, ClientArchitecture architecture)
+    // Shared with ServerLaunch for the macOS dedicated server, whose Doorstop library sits at the runtime's root the same way.
+    internal static string MacDoorstop(string install, string executable, ClientArchitecture architecture)
     {
         var game = MachOArchitectures(executable);
         if (!game.Contains(architecture))

@@ -126,6 +126,9 @@ public sealed class PinningTests : IDisposable
         string mac = Path.Combine(_root, "mac", "Valheim.app", "Contents", "Resources", "Data", "Managed");
         Directory.CreateDirectory(mac); File.WriteAllText(Path.Combine(mac, "assembly_valheim.dll"), "mac");
         Assert.Equal(Path.Combine(mac, "assembly_valheim.dll"), InstallPins.GameAssembly(Path.Combine(_root, "mac")));
+        string macServer = Path.Combine(_root, "mac-server", "valheim_server", "Data", "Managed");
+        Directory.CreateDirectory(macServer); File.WriteAllText(Path.Combine(macServer, "assembly_valheim.dll"), "mac server");
+        Assert.Equal(Path.Combine(macServer, "assembly_valheim.dll"), InstallPins.GameAssembly(Path.Combine(_root, "mac-server")));
         FakeInstalls.Server(Install);
         Assert.EndsWith(Path.Combine("valheim_server_Data", "Managed", "assembly_valheim.dll"), InstallPins.GameAssembly(Install));
         FakeInstalls.Client(Install); // Now two data folders: refused rather than guessed.
@@ -276,7 +279,7 @@ public sealed class PinningTests : IDisposable
     {
         string plan = WritePlan(pinning: "none", manifests: false);
         string output = Path.Combine(_root, "out");
-        // No dedicated server runs on macOS; validate still reads, copies and reports the unpinned plan there.
+        // This fake Windows or Linux runtime cannot run on macOS; validate still reads, copies and reports the unpinned plan there.
         string mode = OperatingSystem.IsMacOS() ? "validate" : "run";
         var server = new FakeOwnedServer("test.mod");
         int code = 0;

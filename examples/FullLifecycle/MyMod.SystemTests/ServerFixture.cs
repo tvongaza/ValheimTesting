@@ -80,9 +80,7 @@ public static class ServerFixture
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
             if (IsInside(output, runtime)) throw new ArgumentException("The output must be outside the runtime.");
             var platform = ServerLaunch.Detect(runtime);
-            if (OperatingSystem.IsMacOS())
-                throw new PlatformNotSupportedException("macOS has no dedicated server; prepare in the Linux server container or on a Windows or Linux host.");
-            ServerRunPlan.CheckLaunchHost(platform, OperatingSystem.IsWindows());
+            ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);
             report.Provenance["serverPlatform"] = platform.ToString();
             report.Provenance["steamBuildId"] = SteamBuildId(runtime);
             Directory.CreateDirectory(output); ownOutput = true;

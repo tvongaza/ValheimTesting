@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Valheim.Testing.Game;
 using Xunit;
 
@@ -6,6 +7,7 @@ public class ServerLaunchTests
     // A host that builds a Linux launch: Linux itself, or Windows for inspection only. macOS refuses (tested below).
     // Launch-content tests inject it so they run unchanged on every OS, including macOS CI.
     private static readonly ServerHost LinuxLaunchHost = OperatingSystem.IsWindows() ? ServerHost.Windows : ServerHost.Linux;
+    private const int X86_64 = 0x01000007, Arm64 = 0x0100000C;
 
     [Fact] public void CurrentHostFollowsTheOperatingSystem()
     {
@@ -176,7 +178,8 @@ public class ServerLaunchTests
     {
         using var runtime = new Runtime(name); runtime.Add(file);
         var error = Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.Detect(runtime.Root));
-        Assert.Contains("There is no macOS dedicated server", error.Message);
+        Assert.Contains("not a dedicated server", error.Message);
+        Assert.Contains("Steam app 896660", error.Message);
         Assert.Contains("ClientLaunch", error.Message);
         Assert.Contains("container", error.Message);
         Assert.Contains("remote Windows/Linux host", error.Message);
@@ -203,7 +206,7 @@ public class ServerLaunchTests
         // Detection reads the runtime's contents and still works on a Mac, e.g. to stage a copy for a container.
         Assert.Equal(platform == "linux" ? ServerPlatform.Linux : ServerPlatform.Windows, ServerLaunch.Detect(runtime.Root));
         var error = Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root, ServerHost.MacOS));
-        Assert.Contains("There is no macOS dedicated server", error.Message);
+        Assert.Contains("run the macOS dedicated server (Steam app 896660", error.Message);
         Assert.Contains("--platform linux/amd64", error.Message);
         Assert.Contains("remote Windows/Linux host", error.Message);
         Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode"], null, ServerHost.MacOS));
@@ -227,6 +230,98 @@ public class ServerLaunchTests
         Assert.Equal(runtime.Root, ServerLaunch.CreateStartInfo(runtime.Root, []).WorkingDirectory);
     }
 
+    // ---- the macOS dedicated server ----
+
+    [Fact] public void MacRuntimeIsDetectedFromItsExecutableAndDataFolder()
+    {
+        using var runtime = Runtime.Mac();
+        Assert.Equal(ServerPlatform.MacOS, ServerLaunch.Detect(runtime.Root));
+        Assert.Equal(Path.Combine(runtime.Root, "valheim_server", "Valheim"), ServerLaunch.RequireExecutable(runtime.Root, ServerHost.MacOS));
+        Assert.Equal(ServerPlatform.MacOS, ServerLaunch.Detect(runtime.Root)); // Detection reads contents on any host.
+    }
+    [Fact] public void MacExecutableWithoutItsDataFolderIsNotAServer()
+    {
+        using var runtime = new Runtime(); runtime.Add("valheim_server/Valheim", Fat(X86_64, Arm64));
+        Assert.Contains("valheim_server/Data", Assert.Throws<FileNotFoundException>(() => ServerLaunch.Detect(runtime.Root)).Message);
+    }
+    [Fact] public void MacRuntimeBesideAnotherServerIsRefused()
+    {
+        using var runtime = Runtime.Mac(); runtime.Add("valheim_server.x86_64");
+        Assert.Contains("more than one", Assert.Throws<InvalidOperationException>(() => ServerLaunch.Detect(runtime.Root)).Message);
+    }
+    [Theory] [InlineData("linux")] [InlineData("windows")]
+    public void OnlyAMacHostRunsTheMacServer(string hostName)
+    {
+        using var runtime = Runtime.Mac();
+        var host = hostName == "linux" ? ServerHost.Linux : ServerHost.Windows;
+        var error = Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root, host));
+        Assert.Contains("cannot run the MacOS dedicated server", error.Message);
+        Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode"], null, host, ClientArchitecture.Arm64));
+    }
+    [Fact] public void MacLaunchStartsTheNativeSliceWithDoorstopInsertedAndTheServersLibraryPath()
+    {
+        if (OperatingSystem.IsWindows()) return; // A Windows path cannot be a macOS runtime (it holds ':').
+        using var runtime = Runtime.Mac();
+        var start = ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode", "-nographics", "-savedir", "/saves with space"],
+            new Dictionary<string, string> { ["KEEP"] = "yes" }, ServerHost.MacOS, ClientArchitecture.Arm64);
+        string executable = Path.Combine(runtime.Root, "valheim_server", "Valheim");
+        Assert.Equal("/usr/bin/arch", start.FileName);
+        Assert.Equal(runtime.Root, start.WorkingDirectory);
+        Assert.Equal(new[] { "-arm64", "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(runtime.Root, "libdoorstop.dylib"),
+            "-e", "DYLD_LIBRARY_PATH=" + Path.Combine(runtime.Root, "valheim_server"), executable,
+            "-batchmode", "-nographics", "-savedir", "/saves with space" }, start.ArgumentList);
+        Assert.Equal("1", start.Environment["DOORSTOP_ENABLED"]);
+        Assert.Equal(Path.Combine(runtime.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        Assert.Equal("892970", start.Environment["SteamAppId"]);
+        Assert.Equal("yes", start.Environment["KEEP"]);
+        // The kernel strips DYLD_* from arch's environment, so they travel only as -e arguments. The library path is the
+        // server's own folder, not the root: with the root, Mono missed libmono-native.dylib.
+        Assert.DoesNotContain(start.Environment.Keys, key => key.StartsWith("DYLD_", StringComparison.Ordinal));
+        Assert.DoesNotContain("DYLD_LIBRARY_PATH=" + runtime.Root, start.ArgumentList);
+        var x64 = ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.MacOS, ClientArchitecture.X64);
+        Assert.Equal("-x86_64", x64.ArgumentList[0]);
+    }
+    [Fact] public void MacLaunchRefusesAServerOrDoorstopWithoutTheNativeSlice()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var intelOnly = Runtime.Mac(server: Thin(X86_64));
+        Assert.Contains("no arm64 slice", Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(intelOnly.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64)).Message);
+        using var stockDoorstop = Runtime.Mac(doorstop: Thin(X86_64));
+        var error = Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(stockDoorstop.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64));
+        Assert.Contains("universal libdoorstop.dylib", error.Message);
+        using var noDoorstop = Runtime.Mac(withDoorstop: false);
+        Assert.Throws<FileNotFoundException>(() => ServerLaunch.CreateStartInfo(noDoorstop.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64));
+    }
+    [Fact] public void MacServerNeedsItsExecuteBitAndAListablePath()
+    {
+        if (OperatingSystem.IsWindows()) return; // Unix modes and ':' in a directory name.
+        using var runtime = Runtime.Mac(executable: false);
+        Assert.Contains("chmod u+x", Assert.Throws<InvalidOperationException>(() => ServerLaunch.RequireExecutable(runtime.Root, ServerHost.MacOS)).Message);
+        using var colon = Runtime.Mac("server:copy");
+        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(colon.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64));
+    }
+    [Fact] public void LocalPlatformFollowsTheOperatingSystem()
+    {
+        var expected = OperatingSystem.IsWindows() ? ServerPlatform.Windows : OperatingSystem.IsMacOS() ? ServerPlatform.MacOS : ServerPlatform.Linux;
+        Assert.Equal(expected, ServerLaunch.LocalPlatform);
+    }
+
+    private static byte[] Thin(int cpu)
+    {
+        var image = new byte[32];
+        BinaryPrimitives.WriteUInt32LittleEndian(image, 0xFEEDFACF);
+        BinaryPrimitives.WriteInt32LittleEndian(image.AsSpan(4), cpu);
+        return image;
+    }
+    private static byte[] Fat(params int[] cpus)
+    {
+        var image = new byte[8 + cpus.Length * 20];
+        BinaryPrimitives.WriteUInt32BigEndian(image, 0xCAFEBABE);
+        BinaryPrimitives.WriteInt32BigEndian(image.AsSpan(4), cpus.Length);
+        for (int i = 0; i < cpus.Length; i++) BinaryPrimitives.WriteInt32BigEndian(image.AsSpan(8 + i * 20), cpus[i]);
+        return image;
+    }
+
     private sealed class Runtime : IDisposable
     {
         private readonly string _parent = Path.Combine(Path.GetTempPath(), "server-launch-" + Guid.NewGuid().ToString("N"));
@@ -236,6 +331,23 @@ public class ServerLaunchTests
         {
             string path = Path.Combine(Root, relative); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, "fake"); return path;
+        }
+        public string Add(string relative, byte[] content)
+        {
+            string path = Path.Combine(Root, relative); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, content); return path;
+        }
+        // The macOS server as SteamCMD installs it (valheim_server/Valheim + Data), with BepInEx and a universal Doorstop at the root.
+        public static Runtime Mac(string name = "runtime", byte[]? server = null, bool executable = true, byte[]? doorstop = null, bool withDoorstop = true)
+        {
+            var runtime = new Runtime(name);
+            string path = runtime.Add("valheim_server/Valheim", server ?? Fat(X86_64, Arm64));
+            runtime.Add("valheim_server/Data/Managed/assembly_valheim.dll"); runtime.Add("valheim_server/UnityPlayer.dylib");
+            runtime.Add("BepInEx/core/BepInEx.Preloader.dll"); runtime.Add("BepInEx/core/BepInEx.dll");
+            if (withDoorstop) runtime.Add("libdoorstop.dylib", doorstop ?? Fat(X86_64, Arm64));
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(path, executable ? File.GetUnixFileMode(path) | UnixFileMode.UserExecute : File.GetUnixFileMode(path) & ~UnixFileMode.UserExecute);
+            return runtime;
         }
         public static Runtime Windows()
         {

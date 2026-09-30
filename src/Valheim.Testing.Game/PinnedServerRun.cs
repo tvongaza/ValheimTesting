@@ -189,12 +189,7 @@ public static class PinnedServerRun
             {
                 // The runtime's contents decide its platform; checked on the pinned source so a wrong host fails before copying.
                 platform = ServerLaunch.Detect(plan.Runtime.Source); plan.CheckExecutable(platform);
-                if (mode != "validate")
-                {
-                    if (OperatingSystem.IsMacOS())
-                        throw new PlatformNotSupportedException("macOS has no dedicated server and cannot run the Windows or Linux one. Use validate here (it never launches a game), run in the Linux server container or on a Windows or Linux host, or run it on a Linux host with --profile.");
-                    ServerRunPlan.CheckLaunchHost(platform, OperatingSystem.IsWindows());
-                }
+                if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);
             }
             plan.CheckModeScenario(mode, options.ModeScenarios);
             options.CheckMode?.Invoke(mode, plan);
@@ -229,7 +224,7 @@ public static class PinnedServerRun
             }
             else
             {
-                // Hashes do not cover file modes: a launch also requires the copy's Linux execute bit.
+                // Hashes do not cover file modes: a launch also requires the copy's Linux or macOS execute bit.
                 report.Step("copied runtime has the plan's server executable", () =>
                 {
                     plan.CheckExecutable(ServerLaunch.Detect(runtime!.DirectoryPath));
