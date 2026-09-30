@@ -117,6 +117,36 @@ public sealed class CampaignPlanTests : IDisposable
         return JsonSerializer.Serialize(value);
     });
 
+    // A dry-site-server plan with the patch reload (#30): ScriptEngine pinned, two probe builds on disk.
+    private JsonObject PatchReloadPlan(bool control = false)
+    {
+        var plan = Plan(LifecyclePlan.ServerScenario);
+        plan.Remove("client");
+        plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
+        plan["wetSite"] = new JsonObject { ["x"] = 400, ["z"] = 300, ["ground"] = 22 };
+        plan["pins"]![PatchReloadSettings.ScriptEngine] = new string('b', 32);
+        string a = Path.Combine(_directory, "probe-a.dll"), b = Path.Combine(_directory, "probe-b.dll");
+        File.WriteAllText(a, "A"); File.WriteAllText(b, "B");
+        plan["patchReload"] = new JsonObject { ["revisionA"] = a, ["revisionB"] = b, ["expectOthersRemoved"] = control };
+        return plan;
+    }
+
+    [Fact] public void APatchReloadPlanIsReadAndRefusesWhatWouldMakeItProveNothing()
+    {
+        Assert.NotNull(Read(PatchReloadPlan()).PatchReload);
+        Assert.True(Read(PatchReloadPlan(control: true)).PatchReload!.ExpectOthersRemoved);
+        var plan = PatchReloadPlan(); plan["pins"]!.AsObject().Remove(PatchReloadSettings.ScriptEngine);
+        Refused(plan, "pin " + PatchReloadSettings.ScriptEngine);
+        plan = PatchReloadPlan(); plan["pins"]![PatchReloadScenario.Probe] = new string('f', 32);
+        Refused(plan, "Do not pin " + PatchReloadScenario.Probe);
+        plan = PatchReloadPlan(); plan["patchReload"]!["revisionB"] = plan["patchReload"]!["revisionA"]!.GetValue<string>();
+        Refused(plan, "the same build");
+        plan = PatchReloadPlan(); plan["patchReload"]!["revisionA"] = "probe-a.dll";
+        Refused(plan, "patchReload.revisionA is the full path");
+        plan = Plan(LifecyclePlan.SyncedConfigScenario); plan["patchReload"] = PatchReloadPlan()["patchReload"]!.DeepClone();
+        Refused(plan, "patchReload are for the dry-site-server scenario");
+    }
+
     [Fact] public void FieldsOfAnotherScenarioAreRefused()
     {
         var plan = Plan(LifecyclePlan.SyncedConfigScenario); plan["globalKey"] = "defeated_eikthyr";
