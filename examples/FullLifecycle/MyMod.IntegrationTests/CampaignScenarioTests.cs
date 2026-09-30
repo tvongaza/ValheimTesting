@@ -72,6 +72,15 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.True(Evidence("first-dungeon-rooms.json")); // Written before the check.
     }
 
+    [Fact] public void ADungeonThatNeverAppearsTimesOutNamingWhereToLook()
+    {
+        _world.NoDungeon = true; // The zone was never generated, or no dungeon stands at the declared position.
+        var report = Run(_world.Plan(LifecyclePlan.WorldScenario));
+        Assert.Equal("first: the dungeon's saved rooms lie in its location's zone", Failed(report).First());
+        Assert.Contains("cli_world_dump", report.Steps.First(s => !s.Passed).Error);
+        Assert.False(Evidence("first-zone-cycle.json")); // Nothing after the failure ran.
+    }
+
     [Fact] public void ACharacterThatIsNotSavedAtLogoutFailsTheRun()
     {
         _world.SuppressSave = true; // A broken save without a control run: the logout check must catch it.
@@ -135,6 +144,16 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.Equal(2, ClientCount("cli_extension valheim.session/leave")); // The first round's leave and the logout; nothing after it.
         Assert.Equal(2, ClientCount("cli_extension valheim.session/join")); // No rejoin after the failed logout.
         Assert.True(Step(report, "detach from the operator's client").Passed);
+    }
+
+    [Fact] public void AControlCheckThatFailsForAnotherReasonFailsTheRun()
+    {
+        _world.SuppressSave = true; _world.CloudCharacter = true; // The logout check refuses a cloud character before any logout.
+        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.SuppressedProfileSave));
+        Assert.Equal(new[] { "after-restart: control suppressed-profile-save: the logout rewrites the character file fails for the named reason" }, Failed(report));
+        Assert.Contains("not for its reason", report.Steps.Single(s => !s.Passed).Error);
+        Assert.Contains("not Local", report.Steps.Single(s => !s.Passed).Error);
+        Assert.False(report.Provenance.ContainsKey("controlFailure"));
     }
 
     [Fact] public void ASuppressedProfileSaveControlWhoseSaveHappensFailsTheRun()

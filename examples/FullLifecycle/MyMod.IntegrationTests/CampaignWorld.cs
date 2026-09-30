@@ -28,7 +28,7 @@ internal sealed class CampaignWorld : IDisposable
     public string ClientLog => Path.Combine(Root, "client-LogOutput.log");
 
     // What the client runs and how it behaves.
-    public bool ClientHasMod = true, SyncBroken, KeepFieldAcrossReload, SuppressSave, ClientSeesMarkers = true;
+    public bool ClientHasMod = true, SyncBroken, KeepFieldAcrossReload, SuppressSave, CloudCharacter, ClientSeesMarkers = true;
     // The server's installed control and fixture state.
     public bool ControlMissingTarget, ControlPatchApplied, ControlServerOnlyPrefab, OversizedRoom, NoDungeon, Crossplay, RefusalSucceeds;
     public string RefusalStatus = "ErrorVersion";
@@ -256,7 +256,7 @@ internal sealed class CampaignWorld : IDisposable
             .Extension("mymod.testing", "custom-data", args => !_joined ? new { source = "local-player-custom-data", complete = false } : (object)new
             {
                 source = "local-player-custom-data", complete = true, prefix = args.Count == 1 ? args[0] : null, character = "Tester", profileFile = "tester",
-                fileSource = "Local", profilePath = ProfileFile,
+                fileSource = CloudCharacter ? "Cloud" : "Local", profilePath = ProfileFile,
                 entries = _live.Where(e => args.Count == 0 || e.Key.StartsWith(args[0], StringComparison.Ordinal)).OrderBy(e => e.Key, StringComparer.Ordinal)
                     .Select(e => new { key = e.Key, value = e.Value }).ToArray(),
             })
