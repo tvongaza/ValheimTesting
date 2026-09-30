@@ -139,6 +139,56 @@ public sealed class LogScanTests : IDisposable
         Assert.Null(Count(scan, "type-load").Reason);
         Assert.True(scan.Failed); // Now because of the RPC warning.
     }
+    // What BepInEx's log on the Valheim 1.0.16 Windows dedicated server has of a [HarmonyPatch] on a method that does not
+    // exist (native, 30 Sep 2026: BepInEx 5.4.23.5, HarmonyX 2.9.0, the FullLifecycle MissingHarmonyTarget control): this one
+    // warning. PatchAll's "Undefined target method" exception went to Unity's log only.
+    private const string MissingTarget = "[Warning:  HarmonyX] AccessTools.DeclaredMethod: Could not find method for type Player and name MyModControlMethodThatDoesNotExist and parameters \n";
+    [Fact] public void AMissingHarmonyTargetFailsTheScanByDefault()
+    {
+        var scan = LogScanner.Scan(Write(Boot + MissingTarget + Tail));
+        Assert.True(scan.Failed);
+        var count = Count(scan, "accesstools-not-found");
+        Assert.Equal((LogSeverity.Failure, 1, 3), (count.Severity, count.Count, count.FirstLine));
+        Assert.Contains("MyModControlMethodThatDoesNotExist", count.First);
+    }
+    // PatchAll's exception, as the same run's Unity log (-logFile) had it: no level header, and it fails there too.
+    [Fact] public void PatchAllsErrorInTheUnityLogFailsTheScan()
+    {
+        var scan = LogScanner.Scan(Write("Loading world 'LifecycleFixture'\n" +
+            "ArgumentException: Undefined target method for patch method static void MyMod.Controls.MissingHarmonyTarget.Plugin+PatchMissingMethod::Postfix()\n" +
+            "  at HarmonyLib.PatchClassProcessor.PatchWithAttributes (System.Reflection.MethodBase& lastOriginal) [0x00000] in <c0ffee>:0\n", "toolkit-unity.log", required: false));
+        Assert.True(scan.Failed);
+        Assert.Equal((1, 2), (Count(scan, "harmony-undefined-target").Count, Count(scan, "harmony-undefined-target").FirstLine));
+    }
+    // A mod's deliberate lookup of an optional member is named, not the whole pattern: a missing patch target still fails.
+    [Fact] public void ExpectedLinesAreCountedApartAndOnlyTheyAreExcused()
+    {
+        var optional = "[Warning:  HarmonyX] AccessTools.Field: Could not find field for type ZNet and name m_optionalSetting\n";
+        var classifications = new Dictionary<string, LogClassification>
+        {
+            ["accesstools-not-found"] = new() { Expected = ["name m_optionalSetting"], Reason = "My Mod probes a field only newer game versions have." },
+        };
+        var probeOnly = LogScanner.Scan(Write(Boot + optional + Tail), classifications);
+        Assert.False(probeOnly.Failed);
+        var count = Count(probeOnly, "accesstools-not-found");
+        Assert.Equal((LogSeverity.Failure, 0, 1), (count.Severity, count.Count, count.Expected));
+        Assert.Null(count.First); Assert.Equal(optional.TrimEnd('\n'), count.FirstExpected);
+        Assert.Equal("My Mod probes a field only newer game versions have.", count.Reason);
+        Assert.Equal(0, Count(probeOnly, LogScanner.UnknownWarning).Count); // an expected line is still a known one
+        var both = LogScanner.Scan(Write(Boot + optional + MissingTarget + Tail), classifications);
+        Assert.True(both.Failed);
+        count = Count(both, "accesstools-not-found");
+        Assert.Equal((1, 1, 4), (count.Count, count.Expected, count.FirstLine));
+        Assert.Contains("MyModControlMethodThatDoesNotExist", count.First);
+    }
+    [Fact] public void AnUnknownLineCanBeNamedAsExpectedToo()
+    {
+        var scan = LogScanner.Scan(Write(Boot + "[Warning:  My Mod] QuitLog: quitting\n[Warning:  My Mod] Config value out of range\n" + Tail),
+            new Dictionary<string, LogClassification> { [LogScanner.UnknownWarning] = new() { Expected = ["QuitLog: "], Reason = "The quit probe logs this on purpose." } });
+        var count = Count(scan, LogScanner.UnknownWarning);
+        Assert.Equal((1, 1, 4), (count.Count, count.Expected, count.FirstLine));
+        Assert.Equal("[Warning:  My Mod] QuitLog: quitting", count.FirstExpected);
+    }
     [Theory]
     [InlineData("not-a-pattern", "Failure", "reason", "not a known pattern")]
     [InlineData("type-load", "Warning", " ", "written reason")]
@@ -148,6 +198,14 @@ public sealed class LogScanTests : IDisposable
         var classification = new LogClassification { Severity = severity == null ? null : Enum.Parse<LogSeverity>(severity), Reason = reason };
         var error = Assert.Throws<ArgumentException>(() => LogScanner.CheckClassifications(new Dictionary<string, LogClassification> { [name] = classification }));
         Assert.Contains(message, error.Message);
+    }
+    [Fact] public void ExpectedLinesNeedTextAndAReasonButNoSeverity()
+    {
+        LogScanner.CheckClassifications(new Dictionary<string, LogClassification> { ["accesstools-not-found"] = new() { Expected = ["m_optional"], Reason = "probe" } });
+        Assert.Contains("non-empty text", Assert.Throws<ArgumentException>(() => LogScanner.CheckClassifications(
+            new Dictionary<string, LogClassification> { ["accesstools-not-found"] = new() { Expected = [" "], Reason = "probe" } })).Message);
+        Assert.Contains("written reason", Assert.Throws<ArgumentException>(() => LogScanner.CheckClassifications(
+            new Dictionary<string, LogClassification> { ["accesstools-not-found"] = new() { Expected = ["m_optional"] } })).Message);
     }
 
     [Fact] public void AnAbsentLogHasNoCountsAndOnlyARequiredOneFails()
@@ -200,6 +258,11 @@ public sealed class LogScanTests : IDisposable
         plan.CheckPatchersAndLogScan();
         plan.LogScan["rpc-method-missing"].Reason = "";
         Assert.Throws<ArgumentException>(plan.CheckPatchersAndLogScan);
+        File.WriteAllText(path, """{ "logScan": { "accesstools-not-found": { "expected": ["name m_optional"], "reason": "A probe." } } }""");
+        plan = ServerRunPlan.Read<ServerRunPlan>(path);
+        Assert.Null(plan.LogScan["accesstools-not-found"].Severity);
+        Assert.Equal(new[] { "name m_optional" }, plan.LogScan["accesstools-not-found"].Expected);
+        plan.CheckPatchersAndLogScan();
         File.WriteAllText(path, """{ "logScan": { "rpc-method-missing": { "severity": "failure", "reason": "x", "extra": 1 } } }""");
         Assert.ThrowsAny<JsonException>(() => ServerRunPlan.Read<ServerRunPlan>(path));
     }
