@@ -133,6 +133,17 @@ public sealed class ClientRoundsTests : IDisposable
         foreach (string file in new[] { "first-arrival.json", "first-reading.json", "after-restart-arrival.json", "after-restart-reading.json" }) Assert.True(Wrote(file), file);
         Assert.True(JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "first-arrival.json"))).RootElement.GetProperty("grounded").GetBoolean());
         Assert.Equal("first,after-restart", report.Provenance["clientRoundsCompleted"]);
+        Assert.Equal("x64", report.Provenance["clientArchitecture"]);
+    }
+
+    [Theory] [InlineData("owned", "arm64", "arm64")] [InlineData("owned", "x64", "x64")] [InlineData("attach", "", "attached")]
+    public void TheReportRecordsTheClientsArchitecture(string mode, string architecture, string recorded)
+    {
+        var plan = Plan(mode); plan.Architecture = architecture;
+        var report = new ScenarioReport("rounds");
+        Rounds(report, plan, names: ["only"]).Run(Server(), Open(plan), Measure());
+        Assert.True(report.Passed, string.Join("; ", Failed(report)));
+        Assert.Equal(recorded, report.Provenance["clientArchitecture"]);
     }
 
     [Fact] public void StagedCharacterStartIsObservedWithoutAFirstTeleport()

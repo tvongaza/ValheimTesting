@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Reflection;
 
 namespace Valheim.Testing.Game;
 
@@ -7,8 +8,10 @@ namespace Valheim.Testing.Game;
 // Other Unix hosts behave as Linux. The host is injectable so every host's branches are tested on any OS.
 public enum ClientPlatform { Windows, Linux, MacOS }
 
-// Windows and Linux clients are x64 only. The macOS client is universal, so its slice is chosen at launch
-// and the Doorstop library inserted into it must contain the same one.
+// Windows and Linux clients are x64 only. The macOS client is universal, so its slice is chosen at launch and the Doorstop
+// library inserted into it must contain the same one. X64 runs under Rosetta on Apple Silicon, with BepInExPack_Valheim's own
+// loader and core: the compatibility path. Arm64 runs natively, with a Doorstop library that has an arm64 slice and a
+// BepInEx core whose MonoMod can hook on arm64. Both are modded paths; neither is chosen for the caller.
 public enum ClientArchitecture { X64, Arm64 }
 
 // Builds the direct launch of one BepInEx game client from its install directory: the client twin of ServerLaunch.
@@ -28,9 +31,13 @@ public static class ClientLaunch
     // It execs the game in place, so the started PID is still the game's.
     public const string MacArchLauncher = "/usr/bin/arch";
     private static readonly string MacExecutable = Path.Combine("Contents", "MacOS", "Valheim");
-    // The pack's x64 library first (its supported route, under Rosetta on Apple Silicon), then the universal
-    // libdoorstop.dylib of BepInEx's macOS build, the only one that can hold an arm64 slice.
+    // The pack's x64 library first (its route, under Rosetta on Apple Silicon), then libdoorstop.dylib at the install's
+    // root, where a native install puts UnityDoorstop 4.5 or later: universal or arm64-only, what matters is its arm64 slice.
     private static readonly string[] MacDoorstops = [Path.Combine("doorstop_libs", "libdoorstop_x64.dylib"), "libdoorstop.dylib"];
+    // Legacy MonoMod (before 25), which BepInExPack_Valheim's core uses, cannot apply detours on arm64: Apple Silicon keeps JIT
+    // pages writable or executable, never both. Its reorganised releases (25 and later) can, so a native core is built on them.
+    internal static readonly string MacNativeDetour = Path.Combine("BepInEx", "core", "MonoMod.RuntimeDetour.dll");
+    internal const int MacNativeDetourMajor = 25;
 
     internal static ClientPlatform CurrentHost =>
         OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
@@ -67,7 +74,8 @@ public static class ClientLaunch
 
     /// <summary>
     /// The architectures this install can be launched as, host aside: x64 for Windows and Linux; on macOS, the slices
-    /// both the game executable and one of its Doorstop libraries contain. Empty when no Doorstop library matches.
+    /// both the game executable and one of its Doorstop libraries contain, arm64 only when the BepInEx core also runs
+    /// natively (<c>CreateStartInfo</c> explains the rule). Empty when no Doorstop library matches.
     /// </summary>
     public static IReadOnlyList<ClientArchitecture> LaunchArchitectures(string installDirectory)
     {
@@ -75,7 +83,8 @@ public static class ClientLaunch
         if (Detect(install) != ClientPlatform.MacOS) return [ClientArchitecture.X64];
         var game = MachOArchitectures(Path.Combine(FindMacBundle(install)!, MacExecutable));
         var doorstops = MacDoorstops.Select(relative => Path.Combine(install, relative)).Where(File.Exists).SelectMany(MachOArchitectures).ToHashSet();
-        return Enum.GetValues<ClientArchitecture>().Where(architecture => game.Contains(architecture) && doorstops.Contains(architecture)).ToList();
+        return Enum.GetValues<ClientArchitecture>().Where(architecture => game.Contains(architecture) && doorstops.Contains(architecture)
+            && (architecture != ClientArchitecture.Arm64 || MacNativeCoreProblem(install) == null)).ToList();
     }
 
     /// <summary>
@@ -85,7 +94,11 @@ public static class ClientLaunch
     /// applied first and may not set Doorstop's variables or pass <c>--doorstop-*</c> arguments. SteamAppId defaults to the
     /// game's unless the caller sets it. Linux enables Doorstop and prepends doorstop_libs to LD_LIBRARY_PATH and the
     /// library to LD_PRELOAD. macOS enables Doorstop and starts the bundle through <c>/usr/bin/arch</c> as the requested
-    /// <paramref name="architecture"/>, inserting a Doorstop library that has that slice. The host must be the client's own OS.
+    /// <paramref name="architecture"/>, inserting a Doorstop library that has that slice; <c>arch</c> fails rather than run
+    /// another slice, so an arm64 request never falls back to Rosetta. X64, the default, is the Rosetta compatibility path on
+    /// Apple Silicon. Arm64 is the native path and also needs a BepInEx core whose <c>MonoMod.RuntimeDetour.dll</c> is version
+    /// 25 or later (legacy MonoMod cannot hook on arm64); an install without it is refused here, before anything starts.
+    /// Windows and Linux clients are x64 only. The host must be the client's own OS.
     /// </summary>
     public static ProcessStartInfo CreateStartInfo(string installDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null,
         ClientArchitecture architecture = ClientArchitecture.X64, bool console = true) =>
@@ -103,7 +116,11 @@ public static class ClientLaunch
         string? macDoorstop = null;
         if (platform == ClientPlatform.Windows) BepInExLoader.RequireWindowsLoader(install, "install");
         else if (platform == ClientPlatform.Linux) BepInExLoader.RequireFile(install, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the install");
-        else macDoorstop = MacDoorstop(install, executable, architecture);
+        else
+        {
+            macDoorstop = MacDoorstop(install, executable, architecture);
+            if (architecture == ClientArchitecture.Arm64 && MacNativeCoreProblem(install) is { } problem) throw new InvalidOperationException(problem);
+        }
 
         environment ??= new Dictionary<string, string>();
         var names = host == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -173,8 +190,9 @@ public static class ClientLaunch
     }
 
     // The first Doorstop library with the requested slice. dyld cannot insert a library into a process of another architecture.
-    // Shared with ServerLaunch for the macOS dedicated server, whose Doorstop library sits at the runtime's root the same way.
-    internal static string MacDoorstop(string install, string executable, ClientArchitecture architecture)
+    // Shared with ServerLaunch for the macOS dedicated server, whose Doorstop library sits at the runtime's root the same way;
+    // a server runs as the machine's own slice, so only a client (client true) is offered the x64 alternative.
+    internal static string MacDoorstop(string install, string executable, ClientArchitecture architecture, bool client = true)
     {
         var game = MachOArchitectures(executable);
         if (!game.Contains(architecture))
@@ -186,10 +204,29 @@ public static class ClientLaunch
         if (match != null) return match;
         string slices = string.Join("; ", found.Select(path => Path.GetRelativePath(install, path) + ": " + SliceList(MachOArchitectures(path))));
         string hint = architecture == ClientArchitecture.Arm64
-            ? "A native arm64 launch needs the universal libdoorstop.dylib of BepInEx's macOS build and a BepInEx core that runs natively; otherwise launch as X64 under Rosetta."
-            : "An x86_64 launch needs BepInExPack_Valheim's doorstop_libs/libdoorstop_x64.dylib or a universal libdoorstop.dylib, and Rosetta on Apple Silicon.";
+            ? "A native arm64 launch needs a libdoorstop.dylib with an arm64 slice (UnityDoorstop 4.5 or later, universal or arm64-only) at the root, " +
+              "and a BepInEx core that runs natively (MonoMod 25 or later)" + (client ? "; or request x64 to run under Rosetta." : ".")
+            : "An x86_64 launch needs BepInExPack_Valheim's doorstop_libs/libdoorstop_x64.dylib or a libdoorstop.dylib with an x86_64 slice, and Rosetta on Apple Silicon.";
         throw new InvalidOperationException($"No Doorstop library in the install has an {SliceName(architecture)} slice ({slices}). " + hint);
     }
+
+    // Why this install's BepInEx core cannot run natively on arm64, or null when it can. Only the managed version is read:
+    // no assembly is loaded. Whether every plugin's own hooks and native libraries work on arm64 is not something a file says.
+    internal static string? MacNativeCoreProblem(string install)
+    {
+        string path = Path.Combine(install, MacNativeDetour);
+        if (!File.Exists(path))
+            return $"A native arm64 launch needs a BepInEx core built on MonoMod {MacNativeDetourMajor} or later, and the install has no {MacNativeDetour}. Install a native core, or request x64 to run under Rosetta.";
+        Version? version;
+        try { version = AssemblyName.GetAssemblyName(path).Version; }
+        catch (Exception error) when (error is BadImageFormatException or FileLoadException) { version = null; }
+        if (version != null && version.Major >= MacNativeDetourMajor) return null;
+        return $"{MacNativeDetour} is {(version == null ? "not a .NET assembly" : "version " + version)}: MonoMod before {MacNativeDetourMajor} cannot apply Harmony hooks on arm64, " +
+            $"which is why BepInExPack_Valheim's core runs only under Rosetta. A native arm64 launch needs a BepInEx core rebuilt on MonoMod {MacNativeDetourMajor} or later; or request x64 to run under Rosetta.";
+    }
+
+    // The plan's name for an architecture (ClientRunPlan.Architecture, evidence files).
+    internal static string PlanName(ClientArchitecture architecture) => architecture == ClientArchitecture.Arm64 ? "arm64" : "x64";
 
     // The CPU slices of a thin 64-bit or universal (fat) Mach-O file. Any other file has none.
     internal static IReadOnlySet<ClientArchitecture> MachOArchitectures(string path)

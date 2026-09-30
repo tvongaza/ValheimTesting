@@ -589,4 +589,20 @@ public sealed class HostedServerRunTests : IDisposable
         Assert.Contains("release client host linux-gpu's lock", StepNames());
         Assert.Contains(Result().GetProperty("Logs").EnumerateArray(), log => log.GetProperty("Role").GetString() == "client-1 BepInEx log");
     }
+
+    [Fact] public async Task AnArm64ProfileClientIsRefusedBeforeItsHostIsLockedOrAnythingStarts()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        var (plan, profile) = Write(host, withClient: true);
+        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, Architecture = "arm64" };
+        Exception? refused = null;
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        {
+            refused = Record.Exception(() => run.OpenClient(client));
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport())));
+        Assert.Contains("architecture arm64 is for a macOS client launched in this runner's own session", Assert.IsType<ArgumentException>(refused).Message);
+        Assert.Empty(clientHost.Claims); Assert.Empty(clientHost.Runs); Assert.Empty(clientHost.Tunnels);
+    }
 }
