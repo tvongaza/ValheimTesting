@@ -160,7 +160,7 @@ example with hand-derived plane expectations and explicit unknown replay data.
 Neither a replay of its own capture nor a synthetic plane alone establishes
 Valheim terrain conversion or client physics. The declared server calibration and native-input client gate below now cover those specific boundaries.
 
-The package examples accept `-p:ToolkitPackageVersion=0.1.0-preview.6` instead of
+The package examples accept `-p:ToolkitPackageVersion=0.1.0-preview.13` instead of
 project references. Copy just an example directory outside this repository, add
 the built `.packages/` directory as a NuGet source alongside nuget.org (for
 YamlDotNet), restore and run/build with that property. No game, Unity, BepInEx or
@@ -376,7 +376,7 @@ Setup, in the unit-test project (not the mod project):
 ```xml
 <PropertyGroup><LangVersion>10</LangVersion></PropertyGroup> <!-- or newer; net48 test legs default to C# 7.3 -->
 <ItemGroup>
-  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.4]" PrivateAssets="all" />
+  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.5]" PrivateAssets="all" />
   <Compile Include="../MyMod/Src/RoadMath.cs" /> <!-- the mod's pure-logic sources -->
 </ItemGroup>
 ```

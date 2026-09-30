@@ -9,7 +9,7 @@
   <ItemGroup>
     <!-- No game assemblies or reference to the production plugin project. -->
     <Compile Include="../MyMod/DrySiteRule.cs" Link="Mod/DrySiteRule.cs" />
-    <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.4]" PrivateAssets="all" />
+    <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.5]" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
     <PackageReference Include="xunit" Version="2.8.1" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" PrivateAssets="all" />
