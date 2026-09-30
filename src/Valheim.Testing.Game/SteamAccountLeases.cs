@@ -340,12 +340,12 @@ public sealed class SteamAccountLease : IAsyncDisposable
 }
 
 // The lease store's fixed scripts. A lease on account A is the exclusive creation of A/claim-NNNNNNNNN (N one more than the
-// highest claim there), with its content complete from the start (a hard link or a no-replace move of a written file). Only
-// the holder, proven by its lease id, adds to its claim: claim-N.until-<epoch> to renew, claim-N.released to release. The
-// account is free when its highest claim is released or its latest expiry has passed by the lease host's clock. Nothing is
-// rewritten or removed in place except claims more than eight numbers old, and a claimer that finds a higher claim after its
-// own creation withdraws it. Variables: action (claim, renew, release, list), directory, pool, accounts (one per line),
-// owner, lease, seconds, account, number.
+// highest claim there), with its content complete from the start (a hard link of a written file, or its no-replace move on
+// Windows). Only the holder, proven by its lease id, adds to its claim: claim-N.until-<epoch> to renew, claim-N.released to
+// release. The account is free when its highest claim is released or its latest expiry has passed by the lease host's clock.
+// Nothing is rewritten or removed in place except claims more than eight numbers old, and a claimer that finds a higher claim
+// after its own creation withdraws it. Variables: action (claim, renew, release, list), directory, pool, accounts (one per
+// line), owner, lease, seconds, account, number.
 internal static class LeaseScripts
 {
     public static readonly string Bash = """
@@ -445,9 +445,13 @@ internal static class LeaseScripts
         esac
         """.ReplaceLineEndings("\n");
 
-    // [IO.File]::Move refuses an existing destination (a no-replace rename on Windows, a hard link on Unix), so it is the claim.
+    // On Windows the claim is [IO.File]::Move, a no-replace rename that refuses an existing destination. On Unix .NET's Move
+    // checks that the destination is absent and then renames, which replaces a claim another run created in between: both runs
+    // then held one account (four leases from three accounts in CI). There the claim is a hard link, as in bash, which link(2)
+    // refuses to make over an existing file. [Environment]::OSVersion, because Windows PowerShell 5.1 has no $IsWindows.
     public static readonly string PowerShell = """
         $utf8 = New-Object Text.UTF8Encoding $false
+        $vtUnix = [Environment]::OSVersion.Platform -eq [PlatformID]::Unix
         $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $root = Join-Path $directory $pool
         function Get-VtName([long]$n) { 'claim-' + $n.ToString('000000000', [Globalization.CultureInfo]::InvariantCulture) }
@@ -490,9 +494,16 @@ internal static class LeaseScripts
                 $ends = $now + [long]$seconds
                 [IO.File]::WriteAllText($t, $lease + "`n" + $ends + "`n" + $owner + "`n", $utf8)
                 $won = $false
-                try { [IO.File]::Move($t, $f); $won = $true }
-                catch { if (-not [IO.File]::Exists($f)) { throw } }
-                finally { if ([IO.File]::Exists($t)) { [IO.File]::Delete($t) } }
+                if ($vtUnix) {
+                    & ln -- $t $f 2> $null
+                    $won = $LASTEXITCODE -eq 0
+                    [IO.File]::Delete($t)
+                    if (-not $won -and -not [IO.File]::Exists($f)) { throw ('could not create ' + $f + '; the lease directory needs hard links') }
+                } else {
+                    try { [IO.File]::Move($t, $f); $won = $true }
+                    catch { if (-not [IO.File]::Exists($f)) { throw } }
+                    finally { if ([IO.File]::Exists($t)) { [IO.File]::Delete($t) } }
+                }
                 if (-not $won) { [void]$report.Append('taken ' + $account + "`n"); continue }
                 if ((Get-VtHighest $d) -ne $next) { [IO.File]::Delete($f); [void]$report.Append('taken ' + $account + "`n"); continue }
                 foreach ($old in [IO.Directory]::GetFiles($d, 'claim-*')) {
