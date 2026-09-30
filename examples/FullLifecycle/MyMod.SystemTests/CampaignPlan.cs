@@ -162,8 +162,18 @@ public sealed partial class LifecyclePlan
         // The control writes the pattern its check requires: the teardown scan must not fail the run on that very line.
         if (control.Name == ControlPlugins.ServerOnlyPrefab && LogScan.TryGetValue("missing-prefab-hash", out var missing) && missing.Severity == LogSeverity.Failure)
             throw new ArgumentException("A server-only-prefab run expects missing-prefab-hash in the client's log: do not classify it as a Failure there.");
-        if (control.Name == ControlPlugins.MissingHarmonyTarget && LogScan.TryGetValue("accesstools-not-found", out var notFound) && notFound.Severity == LogSeverity.Failure)
-            throw new ArgumentException("A missing-harmony-target run expects accesstools-not-found in the server's log: do not classify it as a Failure there.");
+        // Its lines fail the scan by default (BepInEx's lookup warning; PatchAll's error in Unity's log), which its own check
+        // requires; the teardown scan must count them apart, by name, while every other such line still fails.
+        if (control.Name == ControlPlugins.MissingHarmonyTarget)
+            foreach (var (pattern, text) in new[] { ("accesstools-not-found", ControlPlugins.MissingMethodName), ("harmony-undefined-target", ControlPlugins.MissingPatchClass) })
+            {
+                if (!LogScan.TryGetValue(pattern, out var named) || !named.Expected.Contains(text))
+                    throw new ArgumentException("A missing-harmony-target run names the control's lines as expected, so the teardown scan counts them apart instead of failing on them again: " +
+                        $"\"logScan\": {{ \"accesstools-not-found\": {{ \"expected\": [\"{ControlPlugins.MissingMethodName}\"], \"reason\": \"...\" }}, " +
+                        $"\"harmony-undefined-target\": {{ \"expected\": [\"{ControlPlugins.MissingPatchClass}\"], \"reason\": \"...\" }} }}.");
+                if (named.Severity == LogSeverity.Warning)
+                    throw new ArgumentException($"A missing-harmony-target run keeps {pattern} a failure: name the control's line as expected instead of making every such line a warning.");
+            }
     }
 
     /// <summary>The zones round a site that its marker can stand in.</summary>

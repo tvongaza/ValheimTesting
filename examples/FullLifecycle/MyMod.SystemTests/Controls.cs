@@ -19,8 +19,15 @@ public static class ControlPlugins
     /// <summary>The missing-harmony-target control's patch, on a method the game does not have.</summary>
     public const string MissingMethodName = "MyModControlMethodThatDoesNotExist";
     public static readonly DeclaredPatch MissingPatch = new("Player::" + MissingMethodName, "postfix");
+    /// <summary>The control's patch class, as HarmonyX's "Undefined target method" error names it in Unity's log.</summary>
+    public const string MissingPatchClass = "MissingHarmonyTarget.Plugin+PatchMissingMethod";
     /// <summary>The line the missing-harmony-target control logs once <c>PatchAll</c> has returned (so it did not throw).</summary>
     public const string PatchAllReturnedLine = "MissingHarmonyTarget: PatchAll returned";
+    /// <summary>
+    /// The missing-harmony-target control's second check (#26): the teardown log scan, with its default classifications, over
+    /// the server's live log. It must fail on HarmonyX's <c>accesstools-not-found</c> warning naming the control's method.
+    /// </summary>
+    public const string ScanCheck = "the server's log scan passes";
 
     public static readonly IReadOnlyList<ControlPlugin> All =
     [
@@ -42,19 +49,26 @@ public static class ControlPlugins
     /// that passes, or fails for another reason, fails the step: the check could not see the defect the control plants,
     /// or something else broke. The expected failure's message is recorded as <c>controlFailure</c>.
     /// </summary>
-    public static void ExpectFailure(ScenarioReport report, ControlPlugin control, Action check, string? stepPrefix = null)
+    public static void ExpectFailure(ScenarioReport report, ControlPlugin control, Action check, string? stepPrefix = null) =>
+        ExpectFailure(report, control, control.Check, control.Reason, "controlFailure", check, stepPrefix);
+
+    /// <summary>
+    /// As <see cref="ExpectFailure(ScenarioReport, ControlPlugin, Action, string?)"/>, for a control's further check with its
+    /// own name and reason; the expected failure's message is recorded under <paramref name="provenanceKey"/>.
+    /// </summary>
+    public static void ExpectFailure(ScenarioReport report, ControlPlugin control, string checkName, string reason, string provenanceKey, Action check, string? stepPrefix = null)
     {
-        report.Step($"{stepPrefix}control {control.Name}: {control.Check} fails for the named reason", () =>
+        report.Step($"{stepPrefix}control {control.Name}: {checkName} fails for the named reason", () =>
         {
             try { check(); }
             catch (Exception error) when (error is not OperationCanceledException)
             {
-                if (!error.Message.Contains(control.Reason, StringComparison.Ordinal))
-                    throw new InvalidOperationException($"The {control.Name} control's check failed, but not for its reason (\"{control.Reason}\"): {error.Message}", error);
-                report.Provenance["controlFailure"] = error.Message;
+                if (!error.Message.Contains(reason, StringComparison.Ordinal))
+                    throw new InvalidOperationException($"The {control.Name} control's check failed, but not for its reason (\"{reason}\"): {error.Message}", error);
+                report.Provenance[provenanceKey] = error.Message;
                 return;
             }
-            throw new InvalidOperationException($"The {control.Name} control is installed, yet \"{control.Check}\" passed: the check cannot see the defect the control plants.");
+            throw new InvalidOperationException($"The {control.Name} control is installed, yet \"{checkName}\" passed: the check cannot see the defect the control plants.");
         });
     }
 }

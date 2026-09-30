@@ -209,12 +209,18 @@ public sealed class CampaignPlanTests : IDisposable
         plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState;
         plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = md5; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
         Refused(plan, "exactly the control it names");
-        // A valid server-side control run: its HarmonyX line is a warning, so nothing needs reclassifying.
+        // A server-side control run must name its line as expected: it fails the teardown scan by default.
         plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["example.mymod.control.missingtarget"] = md5;
+        Refused(plan, "names the control's lines as expected");
+        plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["expected"] = new JsonArray("name OtherMethod"), ["reason"] = "the control plants it" } };
+        Refused(plan, "names the control's lines as expected");
+        plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["expected"] = new JsonArray(ControlPlugins.MissingMethodName), ["reason"] = "the control plants it" } };
+        Refused(plan, "names the control's lines as expected"); // PatchAll's error in Unity's log is not named yet
+        plan["logScan"]!["harmony-undefined-target"] = new JsonObject { ["expected"] = new JsonArray(ControlPlugins.MissingPatchClass), ["reason"] = "the control plants it" };
         Assert.Equal(ControlPlugins.MissingHarmonyTarget, Read(plan).Control!.Name);
-        // The same run with its expected warning reclassified as a failure would fail its own teardown scan: refused.
-        plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["severity"] = "Failure", ["reason"] = "no lookup may miss" } };
-        Refused(plan, "expects accesstools-not-found in the server's log");
+        // Making every lookup a warning would hide the rest: refused.
+        plan["logScan"]!["accesstools-not-found"]!["severity"] = "Warning";
+        Refused(plan, "keeps accesstools-not-found a failure");
         // A valid client-side control run.
         plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
         Assert.Equal(ControlPlugins.SuppressedProfileSave, Read(plan).Control!.Name);

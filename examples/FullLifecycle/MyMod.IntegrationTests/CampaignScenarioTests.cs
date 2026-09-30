@@ -95,8 +95,10 @@ public sealed class CampaignScenarioTests : IDisposable
         var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.True(report.Passed, Explain(report));
         Assert.True(Step(report, "control missing-harmony-target: the control's Harmony patch is applied fails for the named reason").Passed);
-        Assert.True(Step(report, "control missing-harmony-target: the server's log has HarmonyX's warning for the missing target").Passed);
+        Assert.True(Step(report, "control missing-harmony-target: the server's log scan passes fails for the named reason").Passed);
         Assert.Contains("not applied: postfix (any method) on Player::MyModControlMethodThatDoesNotExist", report.Provenance["controlFailure"]);
+        // The scan's defaults fail on HarmonyX's warning: the missing target is a failure, not a counted warning.
+        Assert.StartsWith("The log scan fails: accesstools-not-found x1, first at line 1: [Warning:  HarmonyX] AccessTools.DeclaredMethod", report.Provenance["controlScanFailure"]);
         Assert.Contains("Could not find method for type Player and name MyModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
         Assert.Equal("true", report.Provenance["controlPatchAllReturned"]);
         Assert.StartsWith("missing-harmony-target: failed its check as expected", report.Provenance["control"]);
@@ -108,20 +110,22 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AMissingHarmonyTargetControlFindsItsWarningBehindAnotherPluginsAndRecordsAPatchAllThatThrew()
     {
         // Another plugin's lookup warning comes first, and PatchAll threw (no line after it): the run still passes on the
-        // control's own warning, and says PatchAll did not return.
+        // control's own warning (the other lookup fails the scan too, as any unnamed lookup does), and says PatchAll did not return.
         _world.ControlMissingTarget = true; _world.OtherPluginLookupWarning = true; _world.ControlPatchAllThrew = true;
         var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.True(report.Passed, Explain(report));
         Assert.Contains("name MyModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
         Assert.Equal("false", report.Provenance["controlPatchAllReturned"]);
+        Assert.Contains("accesstools-not-found x2", report.Provenance["controlScanFailure"]);
     }
 
     [Fact] public void AMissingHarmonyTargetControlWithoutItsWarningFailsTheLogStep()
     {
-        // Only another plugin's lookup warning: the first accesstools-not-found line names something else.
+        // Only another plugin's lookup warning: the scan fails, but not on the control's line.
         _world.ControlMissingTarget = true; _world.OtherPluginLookupWarning = true; _world.ControlWarningMissing = true;
         var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
-        Assert.Equal(new[] { "control missing-harmony-target: the server's log has HarmonyX's warning for the missing target" }, Failed(report));
+        Assert.Equal(new[] { "control missing-harmony-target: the server's log scan passes fails for the named reason" }, Failed(report));
+        Assert.Contains("none of it is the control's line", report.Steps.Single(s => !s.Passed).Error);
         Assert.Equal("true", report.Provenance["controlPatchAllReturned"]);
     }
 
@@ -130,6 +134,15 @@ public sealed class CampaignScenarioTests : IDisposable
         _world.ControlMissingTarget = true; _world.ControlPatchApplied = true; // The census cannot see a defect that is not there.
         var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.Equal(new[] { "control missing-harmony-target: the control's Harmony patch is applied fails for the named reason" }, Failed(report));
+        Assert.Contains("passed: the check cannot see the defect", report.Steps.Single(s => !s.Passed).Error);
+    }
+
+    [Fact] public void AMissingHarmonyTargetControlWhoseWarningIsGoneFailsTheScanCheck()
+    {
+        // The census still misses the patch, but the log shows nothing: the scan passes, so it cannot see the defect.
+        _world.ControlMissingTarget = true; _world.ControlWarningMissing = true;
+        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
+        Assert.Equal(new[] { "control missing-harmony-target: the server's log scan passes fails for the named reason" }, Failed(report));
         Assert.Contains("passed: the check cannot see the defect", report.Steps.Single(s => !s.Passed).Error);
     }
 

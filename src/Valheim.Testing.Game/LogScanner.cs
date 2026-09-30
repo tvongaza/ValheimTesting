@@ -13,11 +13,20 @@ public enum LogSeverity { Failure, Warning }
 /// </summary>
 public sealed record LogPattern(string Name, LogSeverity Severity, Regex Line, Regex? Frame = null);
 
-/// <summary>A run's own classification of a known pattern, with the written reason it differs from the default.</summary>
+/// <summary>
+/// A run's own classification of a known pattern, with the written reason it differs from the default: another severity,
+/// named lines the run expects, or both.
+/// </summary>
 public sealed class LogClassification
 {
-    /// <summary>Required: <c>Failure</c> or <c>Warning</c>.</summary>
+    /// <summary><c>Failure</c> or <c>Warning</c>; absent keeps the pattern's default.</summary>
     public LogSeverity? Severity { get; set; }
+    /// <summary>
+    /// Texts that name lines this run expects, such as a lookup a mod makes on purpose: a line of the pattern containing
+    /// one of them (ordinal) is counted as <see cref="LogPatternCount.Expected"/> and never fails the scan. Every other
+    /// line of the pattern still counts, so naming the expected lines keeps the pattern's check for the rest.
+    /// </summary>
+    public List<string> Expected { get; set; } = [];
     public string Reason { get; set; } = "";
 }
 
@@ -27,8 +36,12 @@ public sealed class LogClassification
 /// </summary>
 public sealed record RunLog(string Role, string Path, bool Required = false);
 
-/// <summary>How often a pattern matched in one log and where first; <see cref="Reason"/> is set when the run reclassified it.</summary>
-public sealed record LogPatternCount(string Pattern, LogSeverity Severity, string? Reason, int Count, int? FirstLine, string? First);
+/// <summary>
+/// How often a pattern matched in one log and where first; <see cref="Reason"/> is set when the run reclassified it.
+/// Lines the run named as expected are counted apart in <see cref="Expected"/> (the first in <see cref="FirstExpected"/>)
+/// and never fail.
+/// </summary>
+public sealed record LogPatternCount(string Pattern, LogSeverity Severity, string? Reason, int Count, int? FirstLine, string? First, int Expected = 0, string? FirstExpected = null);
 
 /// <summary>
 /// One log's scan. An absent log has no counts (absent is not zero); <see cref="Problem"/> says why a required one is
@@ -66,8 +79,12 @@ public static class LogScanner
         new("harmony-unpatch-all", LogSeverity.Failure, new(@"UnpatchAll has been called - This will remove ALL", Options)),
         // HarmonyX's error for a patch class whose target method does not exist (renamed or removed by a game update).
         new("harmony-undefined-target", LogSeverity.Failure, new(@"Undefined target method for (?:reverse )?patch method", Options)),
-        // HarmonyX's AccessTools lookups that found nothing. Mods also probe optional members this way, so a warning.
-        new("accesstools-not-found", LogSeverity.Warning, new(@"AccessTools\.\w+: Could not find ", Options)),
+        // HarmonyX's AccessTools lookups that found nothing. On the Valheim 1.0.16 Windows dedicated server (BepInEx 5.4.23.5,
+        // HarmonyX 2.9.0) a [HarmonyPatch] on a method that no longer exists logs this warning in BepInEx's log; PatchAll then
+        // throws "Undefined target method", which only Unity's own log (-logFile) records. This warning is the missing
+        // target's trace in the one log every run keeps, so it fails. A mod that probes optional members this way names
+        // those lines as expected in its plan (LogClassification.Expected), which keeps the check for every other line.
+        new("accesstools-not-found", LogSeverity.Failure, new(@"AccessTools\.\w+: Could not find ", Options)),
         new("missing-method", LogSeverity.Failure, new(@"\bMissingMethodException\b", Options)),
         new("missing-field", LogSeverity.Failure, new(@"\bMissingFieldException\b", Options)),
         new("type-load", LogSeverity.Failure, new(@"\bTypeLoadException\b", Options)),
@@ -94,8 +111,12 @@ public static class LogScanner
         foreach (var entry in classifications ?? new Dictionary<string, LogClassification>())
         {
             if (!Names.Contains(entry.Key)) throw new ArgumentException($"Log scan: {entry.Key} is not a known pattern ({string.Join(", ", Names)}).");
-            if (entry.Value?.Severity is not { } severity || !Enum.IsDefined(severity) || string.IsNullOrWhiteSpace(entry.Value.Reason))
-                throw new ArgumentException($"Log scan: classify {entry.Key} as Failure or Warning with a written reason.");
+            var classification = entry.Value;
+            if (classification == null || (classification.Severity is { } severity && !Enum.IsDefined(severity)) || string.IsNullOrWhiteSpace(classification.Reason)
+                || (classification.Severity == null && (classification.Expected == null || classification.Expected.Count == 0)))
+                throw new ArgumentException($"Log scan: classify {entry.Key} as Failure or Warning, or name the lines it expects, with a written reason.");
+            if (classification.Expected != null && classification.Expected.Any(string.IsNullOrWhiteSpace))
+                throw new ArgumentException($"Log scan: an expected line of {entry.Key} is named by non-empty text.");
         }
     }
 
@@ -114,10 +135,15 @@ public static class LogScanner
         var names = Names;
         var counts = new int[names.Count];
         var first = new (int Line, string Text)?[names.Count];
+        var expectedCounts = new int[names.Count];
+        var firstExpected = new string?[names.Count];
+        var expected = names.Select(name => classifications != null && classifications.TryGetValue(name, out var chosen) ? chosen.Expected ?? [] : []).ToArray();
+        string Text(int line) => lines[line].Length > TextLimit ? lines[line][..TextLimit] + " [truncated]" : lines[line];
         void Hit(int index, int line)
         {
+            if (expected[index].Any(text => lines[line].Contains(text, StringComparison.Ordinal))) { expectedCounts[index]++; firstExpected[index] ??= Text(line); return; }
             counts[index]++;
-            first[index] ??= (line + 1, lines[line].Length > TextLimit ? lines[line][..TextLimit] + " [truncated]" : lines[line]);
+            first[index] ??= (line + 1, Text(line));
         }
         // The current BepInEx record: its header's level and line, and whether a known pattern matched in it.
         string? level = null; int headerLine = -1; bool known = false;
@@ -146,8 +172,8 @@ public static class LogScanner
         {
             var severity = n < Patterns.Count ? Patterns[n].Severity : LogSeverity.Warning;
             string? reason = null;
-            if (classifications != null && classifications.TryGetValue(names[n], out var chosen)) { severity = chosen.Severity!.Value; reason = chosen.Reason; }
-            result.Add(new(names[n], severity, reason, counts[n], first[n]?.Line, first[n]?.Text));
+            if (classifications != null && classifications.TryGetValue(names[n], out var chosen)) { severity = chosen.Severity ?? severity; reason = chosen.Reason; }
+            result.Add(new(names[n], severity, reason, counts[n], first[n]?.Line, first[n]?.Text, expectedCounts[n], firstExpected[n]));
         }
         return new(log.Role, log.Path, true, null, result);
     }

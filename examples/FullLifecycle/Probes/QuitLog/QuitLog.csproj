@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    A probe for the native campaign, never part of a normal runtime: a plugin that logs a warning while the game quits, so a run
+    can show that its teardown log scan reads what mods log at shutdown (issue #85). Unlike a control it plants no defect; pin
+    it like any plugin. It compiles against your game install like MyMod (-p:ValheimPath=), never in this repository or its CI.
+  -->
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>MyMod.Probe.QuitLog</AssemblyName><Version>0.1.0</Version>
+  </PropertyGroup>
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>
