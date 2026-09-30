@@ -42,7 +42,7 @@ public sealed record LogFileScan(string Role, string Path, bool Present, string?
 /// <summary>
 /// Scans a whole run's logs after its processes stopped, for problems that only warn or appear long after startup: a
 /// Harmony patch whose target is gone, a global unpatch, missing members after a game update, errors while objects unload,
-/// RPCs without a handler, missing scripts and shaders a GPU cannot run. Each known pattern is counted per log with its
+/// RPCs without a handler, objects whose prefab is not registered, missing scripts and shaders a GPU cannot run. Each known pattern is counted per log with its
 /// first occurrence and has a default severity a run may change with a written reason. BepInEx warning and error lines
 /// that match no pattern are counted as <see cref="UnknownWarning"/> and <see cref="UnknownError"/>, never ignored. Unity's
 /// Player.log has no levels, so there only the known patterns count. The same Unity message may appear in both logs.
@@ -75,6 +75,9 @@ public static class LogScanner
         new("nre-remove-objects", LogSeverity.Failure, new(@"\bNullReferenceException\b", Options), new(@"\bZNetScene\.RemoveObjects\b", Options)),
         // The game's warning for a per-object RPC that no component registered (a mod missing on one side, or a typo).
         new("rpc-method-missing", LogSeverity.Warning, new(@"Failed to find rpc method", Options)),
+        // The game's warning when a saved object's prefab hash is not registered here (a prefab only the server's mods add),
+        // logged again each time the scene tries to create the object; the object is simply not there on this side.
+        new("missing-prefab-hash", LogSeverity.Warning, new(@"Missing prefab hash: -?\d+", Options)),
         // Unity's own warning: a prefab from an asset bundle references a script that is not loaded.
         new("missing-script", LogSeverity.Warning, new(@"The referenced script\b.*\bis missing", Options)),
         // Unity: a bundle's shader was not built for this graphics API (magenta objects on Vulkan or OpenGL clients). The
