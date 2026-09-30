@@ -5,8 +5,10 @@ using Valheim.Testing.Game;
 // lifecycle: plan checks, fixture copies, provenance, the owned server and its startup events, teardown, the report and
 // the result banner. The mod supplies the plan fields, the session capability its test adapter serves, and the scenario.
 // prepare-server creates a fresh world and writes a dry-site-server plan for it (see ServerFixture); it runs before any
-// plan exists, so it is outside the pinned runner.
+// plan exists, so it is outside the pinned runner. A hosted run has no dedicated server to pin, so validate-host and host
+// have their own entry point (HostedRun).
 if (args.Length > 0 && args[0] == ServerFixture.Mode) return ServerFixture.Run(args);
+if (args.Length > 0 && args[0] is HostedRun.RunMode or HostedRun.ValidateMode) return HostedRun.Run(args);
 return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<LifecyclePlan>
 {
     Name = "mymod-system-test",
@@ -22,6 +24,7 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
     {
         provenance["clientMode"] = plan.Client?.Mode ?? "none";
         provenance["humanReview"] = plan.Review.Enabled ? "requested" : "not requested";
+        provenance["expectFailure"] = plan.ExpectFailure ?? "none";
     },
     Scenario = run =>
     {
@@ -30,14 +33,42 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
             DrySiteServerScenario.Run(run.Plan, run.Server, run.Session.Restart, run.Report);
             return Task.CompletedTask;
         }
-        DrySiteScenario.Run(run.Plan, run.Server, run.Session.Restart, () =>
+        Action<GameActor> joinable = server => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation);
+        if (run.Plan.Scenario == LifecyclePlan.LifecycleScenario)
+        {
+            DrySiteScenario.Run(run.Plan, run.Server, run.Session.Restart, () =>
+                {
+                    var client = ClientSession.Open(run.Plan.Client!, run.Output, run.Cancellation);
+                    run.Logs.AddRange(client.Logs); // Scanned with the server's at teardown, after the scenario stops the client.
+                    return client;
+                },
+                joinable, run.Report, run.Output, run.Cancellation);
+            return Task.CompletedTask;
+        }
+        // The native campaign's scenarios (CampaignScenarios). Their in-run log reads open files on this machine, so a run
+        // with --profile skips the server's; only the crossplay lobby is read on the server's host.
+        bool local = run.Profile == null;
+        CampaignScenarios.Run(new CampaignRun
+        {
+            Plan = run.Plan, Server = run.Server, RestartServer = run.Session.Restart, WaitUntilJoinable = joinable, Report = run.Report,
+            Output = run.Output, Cancellation = run.Cancellation,
+            OpenClient = (client, directory) =>
             {
-                var client = ClientSession.Open(run.Plan.Client!, run.Output, run.Cancellation);
-                run.Logs.AddRange(client.Logs); // Scanned with the server's at teardown, after the scenario stops the client.
-                return client;
+                if (directory == null) return run.OpenClient(client); // Its logs join the teardown scan.
+                // A second client in one run keeps its command record and logs apart from the first one's.
+                string own = Path.Combine(run.Output, directory);
+                Directory.CreateDirectory(own);
+                var session = ClientSession.Open(client, own, run.Cancellation);
+                run.Logs.AddRange(session.Logs);
+                return session;
             },
-            server => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation),
-            run.Report, run.Output, run.Cancellation);
+            ServerLog = () => local ? Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log") : null,
+            ClientLog = client => local && client.Owned ? Path.Combine(client.Install, "BepInEx", "LogOutput.log") : null,
+            // A crossplay server on another machine (--profile): its lobby line is awaited in the host's own log.
+            Lobby = server => local
+                ? CrossplayServer.WaitForLobby(server, CrossplayServer.BepInExLog(run.RuntimeDirectory), TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation)
+                : CrossplayServer.WaitForLobby(server, run.ServerHost!, CrossplayServer.HostBepInExLog(run.RuntimeDirectory), TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation),
+        });
         return Task.CompletedTask;
     },
 });

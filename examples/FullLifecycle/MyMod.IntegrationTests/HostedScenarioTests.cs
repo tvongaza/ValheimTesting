@@ -1,0 +1,162 @@
+using System.Globalization;
+using MyMod.SystemTests;
+using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
+using Xunit;
+
+namespace MyMod.IntegrationTests;
+
+/// <summary>
+/// The hosted scenario against a scripted host: one client that hosts the fixture world (placed in a temporary data
+/// directory), is its server and its client, runs MyMod's feature, and logs MyMod's greeting handler as a host would.
+/// Nothing here starts Valheim.
+/// </summary>
+public sealed class HostedScenarioTests : IDisposable
+{
+    private const string WorldUid = "4242", Name = "HostFixture";
+    private readonly string _root = Directory.CreateTempSubdirectory("mymod-hosted-").FullName;
+    private string Fixture => Path.Combine(_root, "fixture");
+    private string Save => Path.Combine(_root, "client-data");
+    private string Output => Path.Combine(_root, "out");
+    private string HostLog => Path.Combine(_root, "host-LogOutput.log");
+    private readonly List<(float X, float Z)> _markers = [], _saved = [];
+    private bool _hosting, _handlerLogs = true, _loseMarkers;
+    private string _greeting = "hello";
+    private int _readings, _saveNumber = 5, _greetings;
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    public HostedScenarioTests()
+    {
+        Directory.CreateDirectory(Fixture); Directory.CreateDirectory(Output); Directory.CreateDirectory(Path.Combine(Save, "worlds_local"));
+        File.WriteAllText(Path.Combine(Fixture, Name + ".fwl"), "fixture metadata");
+        File.WriteAllText(Path.Combine(Fixture, Name + ".db"), "fixture world");
+        File.WriteAllText(HostLog, "[Info   :   BepInEx] Chainloader startup complete\n");
+    }
+
+    private HostedPlan Plan() => new()
+    {
+        Scenario = HostedPlan.HostedScenarioName, DrySite = CampaignWorld.Dry, WetSite = CampaignWorld.Wet, NewGreeting = "goodbye",
+        Client = new()
+        {
+            Mode = "attach", Port = 5556, Character = "Tester", JoinSeconds = 2,
+            Pins = new() { ["valheimCLI.valheimCLI"] = CampaignWorld.Md5Cli, [LifecyclePlan.ModPlugin] = CampaignWorld.Md5Mod, [LifecyclePlan.AdapterPlugin] = CampaignWorld.Md5Adapter },
+            HostWorld = new() { World = new() { Source = Fixture, Sha256 = new(WorldFixture.Manifest(Fixture)) }, WorldUid = WorldUid, SaveDirectory = Save },
+        },
+    };
+
+    // The host: at its menu until it starts the world, then the world (one loading reading, then ready with its player).
+    private ScriptedTransport Host()
+    {
+        bool devcommands = false;
+        return new ScriptedTransport()
+            .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
+            .OnPrefix("cli_start_host_world ", command =>
+            {
+                _hosting = true; _readings = 0;
+                return ScriptedTransport.Ok($"OK: Starting hosted world '{command.Split(' ')[1]}' using character 'Tester' (tester, Local); open=true, public=False, crossplay=False, backend=Steamworks, passwordSet=False");
+            })
+            .Extension("valheim.session", "state", _ =>
+            {
+                bool present = _hosting && ++_readings > 1;
+                return new
+                {
+                    source = "session-state", complete = true, phase = present ? "world-present" : _hosting ? "loading" : "menu", worldUid = present ? WorldUid : null,
+                    worldPresent = present, worldReady = present, server = present, dedicated = false, localPlayer = present, playerReady = present,
+                    saving = false, loadError = false, connectionStatus = present ? "Connected" : "None",
+                };
+            })
+            .Extension("valheim.session", "save", _ =>
+            {
+                _saved.Clear(); _saved.AddRange(_markers);
+                return new { source = "session-save", complete = true, worldUid = WorldUid, saved = true, before = _saveNumber, after = ++_saveNumber, milliseconds = 10 };
+            }, readOnly: false)
+            .Extension("valheim.session", "leave", _ =>
+            {
+                _hosting = false;
+                _markers.Clear(); if (!_loseMarkers) _markers.AddRange(_saved); // Hosting again loads what was saved.
+                return new { source = "session-leave", complete = true, action = "leave" };
+            }, readOnly: false)
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
+            .Extension("mymod.testing", "harmony", _ => TestWorld.ModCensus())
+            .Extension("mymod.testing", "config", args => new
+            {
+                source = "bepinex-config", complete = true, guid = Uri.UnescapeDataString(args[0]), section = "Server", key = "Greeting", server = true,
+                installed = true, found = true, type = "System.String", value = _greeting, defaultValue = "hello",
+            })
+            .OnPrefix("mymod_mark ", command =>
+            {
+                var w = command.Split(' ');
+                float x = float.Parse(w[1], CultureInfo.InvariantCulture), z = float.Parse(w[2], CultureInfo.InvariantCulture);
+                if (x < 200) { _markers.Add((x, z)); return ScriptedTransport.Ok($"OK: marked {x} {z} ground=42.5"); }
+                return ScriptedTransport.Ok($"REFUSED: {x} {z} ground=22.0 below 31.5");
+            })
+            .OnPrefix("mymod_greeting ", command =>
+            {
+                _greetings++;
+                _greeting = command.Split(' ')[1];
+                // A broadcast runs its handler on the host itself, which logs it as the host.
+                if (_handlerLogs) File.AppendAllText(HostLog, $"[Info   :MyMod (ValheimTesting example)] Greeting \"{_greeting}\" received from 77 (host)\n");
+                return ScriptedTransport.Ok("OK: greeting " + _greeting);
+            })
+            .OnPrefix("cli_zdos_at ", command =>
+            {
+                var w = command.Split(' ');
+                float x = float.Parse(w[1], CultureInfo.InvariantCulture), z = float.Parse(w[2], CultureInfo.InvariantCulture);
+                var lines = _markers.Where(m => MathF.Abs(m.X - x) <= 8 && MathF.Abs(m.Z - z) <= 8).Select(m => string.Create(CultureInfo.InvariantCulture,
+                    $"ZDO {DrySiteScenario.Marker} id=1:2 pos={m.X:F3},42.250,{m.Z:F3} rot=0.00,0.00,0.00 quat=0,0,0,1 scale=- persistent=True owner=0")).ToList();
+                lines.Add(string.Create(CultureInfo.InvariantCulture, $"OK: ZDOS_AT {x:F1},{z:F1} r=8.0 zones=1 objects={lines.Count}"));
+                return ScriptedTransport.Ok([.. lines]);
+            });
+    }
+
+    private ScenarioReport Run(HostedPlan plan, string? hostLog)
+    {
+        var report = new ScenarioReport("mymod-hosted-test");
+        var host = Host();
+        try { HostedScenario.Run(plan, () => ClientSession.Attach(plan.Client, Output, host), report, Output, hostLog); }
+        catch (Exception) { Assert.False(report.Passed); }
+        return report;
+    }
+    private static string[] Failed(ScenarioReport report) => report.Steps.Where(s => !s.Passed).Select(s => s.Name).ToArray();
+
+    [Fact] public void TheModsFeatureRunsOnAHostAndItsBroadcastHandlerFiresThere()
+    {
+        var report = Run(Plan(), HostLog);
+        Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
+        Assert.Equal(new[]
+        {
+            "place the disposable fixture world in the client's local worlds", "attach to the operator's client at its menu, plugins pinned",
+            "first: host the fixture world with the disposable character, protected", "first: host: the mod's Harmony patches are applied",
+            "first: no marker at either site before the mod acts", "first: the mod marks the dry site", "first: the mod refuses the wet site",
+            "first: host: one marker at the dry site, none at the wet site",
+            "first: the mod's greeting broadcast runs its handler on the host, which is server and client at once",
+            "confirmed world save", "first: the host leaves to its menu",
+            "after-restart: restart the hosted world, protected", "after-restart: host: the marker is still at the dry site after the restart, none at the wet site",
+            "after-restart: the host leaves to its menu", "detach from the operator's client",
+            "move the hosted world from the client's local worlds into the evidence",
+        }, report.Steps.Select(s => s.Name));
+        Assert.Contains("(host)", report.Provenance["hostBroadcastLine"]);
+        Assert.Equal(2, _greetings); // Changed once for the check and set back once.
+        Assert.Equal("hello", _greeting);
+        Assert.Equal("host", report.Provenance["role"]);
+    }
+
+    [Fact] public void ABroadcastWhoseHandlerNeverRunsOnTheHostFailsAndTheGreetingIsSetBack()
+    {
+        _handlerLogs = false;
+        var report = Run(Plan(), HostLog);
+        Assert.Equal(new[] { "first: the mod's greeting broadcast runs its handler on the host, which is server and client at once" }, Failed(report));
+        Assert.Equal("hello", _greeting);
+        Assert.True(report.Steps.Single(s => s.Name == "detach from the operator's client").Passed);
+    }
+
+    [Fact] public void AMarkerTheHostDoesNotKeepFailsAfterTheRestart()
+    {
+        _loseMarkers = true;
+        var report = Run(Plan(), hostLog: null); // An attached host: its log is its operator's, so the broadcast is not observed.
+        Assert.Equal(new[] { "after-restart: host: the marker is still at the dry site after the restart, none at the wet site" }, Failed(report));
+        Assert.StartsWith("not observed", report.Provenance["hostBroadcast"]);
+        Assert.Equal(0, _greetings);
+    }
+}
