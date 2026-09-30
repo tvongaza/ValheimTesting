@@ -23,6 +23,8 @@ public static class ServerLaunch
     /// </summary>
     public const string MacExecutable = "valheim_server/Valheim";
     private const string MacData = "valheim_server/Data";
+    // The same two paths with this OS's separator, for full paths built from a runtime directory.
+    private static readonly string MacExecutablePath = Path.Combine("valheim_server", "Valheim"), MacDataPath = Path.Combine("valheim_server", "Data");
     public const string DedicatedServerSteamAppId = "892970";
     private const string MacClientBundle = "Valheim.app";
     private const string MacServerHint = "On a Mac, run the macOS dedicated server (Steam app 896660 installed on macOS, " + MacExecutable + "); " +
@@ -49,7 +51,7 @@ public static class ServerLaunch
     {
         string runtime = FullRuntime(runtimeDirectory);
         bool windows = File.Exists(Path.Combine(runtime, WindowsExecutable)), linux = File.Exists(Path.Combine(runtime, LinuxExecutable));
-        bool mac = File.Exists(Path.Combine(runtime, MacExecutable)) && Directory.Exists(Path.Combine(runtime, MacData));
+        bool mac = File.Exists(Path.Combine(runtime, MacExecutablePath)) && Directory.Exists(Path.Combine(runtime, MacDataPath));
         if ((windows ? 1 : 0) + (linux ? 1 : 0) + (mac ? 1 : 0) > 1)
             throw new InvalidOperationException($"Runtime contains more than one of {WindowsExecutable}, {LinuxExecutable} and {MacExecutable}; refusing to guess its platform.");
         if (windows) return ServerPlatform.Windows;
@@ -158,7 +160,7 @@ public static class ServerLaunch
     private static (ServerPlatform Platform, string Executable) Resolve(string runtime, ServerHost host)
     {
         var platform = Detect(runtime);
-        string executable = Path.Combine(runtime, platform switch { ServerPlatform.Windows => WindowsExecutable, ServerPlatform.Linux => LinuxExecutable, _ => MacExecutable });
+        string executable = Path.Combine(runtime, platform switch { ServerPlatform.Windows => WindowsExecutable, ServerPlatform.Linux => LinuxExecutable, _ => MacExecutablePath });
         // Refused before any file mode is read: exec of a Mach-O elsewhere, or of an ELF or PE binary on macOS, fails with an
         // opaque error. Windows and Linux hosts build each other's launch, as before (a Windows host a Linux one for inspection).
         var own = Platform(host);
