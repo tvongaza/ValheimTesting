@@ -26,9 +26,15 @@ public sealed partial class ZNetPeer
     /// <summary>As the game's: a peer is ready once it has its id.</summary>
     public bool IsReady() => Ready && m_uid != 0;
 }
-public sealed partial class ZNet
+/// <summary>ZNet is a MonoBehaviour, as in the game (mods start coroutines on it); built with <c>new</c>, it is on no object and gets no messages.</summary>
+public sealed partial class ZNet : UnityEngine.MonoBehaviour
 {
     public static ZNet instance = new();
+    /// <summary>Set when loading the world failed; the game then refuses to save over it.</summary>
+    public static bool m_loadError;
+    /// <summary>How many times <see cref="Save"/> ran: the game's world save is not modelled, its call is.</summary>
+    public int SaveCalls;
+    public void Save(bool sync, bool saveOtherPlayerProfiles = false, bool waitForNextFrame = false) => SaveCalls++;
     public bool Server;
     public readonly Dictionary<long, ZNetPeer> Peers = new();
     public bool IsServer() => Server;

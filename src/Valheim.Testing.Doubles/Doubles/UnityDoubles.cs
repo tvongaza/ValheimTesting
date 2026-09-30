@@ -128,6 +128,18 @@ public partial struct Color
             x.b + (y.b - x.b) * t,
             x.a + (y.a - x.a) * t);
     }
+
+    /// <summary>As Unity's: equal when the squared distance between the two (as 4-vectors) is under 1e-10.</summary>
+    public static bool operator ==(Color lhs, Color rhs)
+    {
+        float dr = lhs.r - rhs.r, dg = lhs.g - rhs.g, db = lhs.b - rhs.b, da = lhs.a - rhs.a;
+        return dr * dr + dg * dg + db * db + da * da < 9.99999944E-11f;
+    }
+    public static bool operator !=(Color lhs, Color rhs) => !(lhs == rhs);
+    /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>).</summary>
+    public override bool Equals(object? other) => other is Color c && r.Equals(c.r) && g.Equals(c.g) && b.Equals(c.b) && a.Equals(c.a);
+    public override int GetHashCode() => r.GetHashCode() ^ (g.GetHashCode() << 2) ^ (b.GetHashCode() >> 2) ^ (a.GetHashCode() >> 1);
+    public override string ToString() => $"RGBA({r:F3}, {g:F3}, {b:F3}, {a:F3})";
 }
 
 public partial struct Vector2Int
@@ -213,6 +225,52 @@ public partial struct Quaternion
             (float)(sx * cy * cz + cx * sy * sz), (float)(cx * sy * cz - sx * cy * sz),
             (float)(cx * cy * sz - sx * sy * cz), (float)(cx * cy * cz + sx * sy * sz)) { EulerX = x, EulerY = y, EulerZ = z };
     }
+    public static Quaternion Euler(Vector3 euler) => Euler(euler.x, euler.y, euler.z);
+
+    /// <summary>
+    /// The rotation as Euler angles in degrees, each in [0, 360), in Unity's convention (the inverse of <see cref="Euler(float, float, float)"/>:
+    /// z, then x, then y). At x = ±90 the split between y and z is not unique; Unity's own split may differ there.
+    /// </summary>
+    public Vector3 eulerAngles
+    {
+        get
+        {
+            double sinX = 2.0 * ((double)w * x - (double)y * z);
+            double ax = System.Math.Abs(sinX) >= 1.0 ? System.Math.PI / 2 * System.Math.Sign(sinX) : System.Math.Asin(sinX);
+            double ay = System.Math.Atan2(2.0 * ((double)w * y + (double)x * z), 1.0 - 2.0 * ((double)x * x + (double)y * y));
+            double az = System.Math.Atan2(2.0 * ((double)w * z + (double)x * y), 1.0 - 2.0 * ((double)x * x + (double)z * z));
+            return new Vector3(Degrees(ax), Degrees(ay), Degrees(az));
+        }
+        set => this = Euler(value);
+    }
+    private static float Degrees(double radians)
+    {
+        double degrees = radians * 180.0 / System.Math.PI % 360.0;
+        return (float)(degrees < 0 ? degrees + 360.0 : degrees);
+    }
+
+    /// <summary>Unity's composition: <paramref name="lhs"/> after <paramref name="rhs"/> (the Hamilton product).</summary>
+    public static Quaternion operator *(Quaternion lhs, Quaternion rhs) => new(
+        lhs.w * rhs.x + lhs.x * rhs.w + lhs.y * rhs.z - lhs.z * rhs.y,
+        lhs.w * rhs.y + lhs.y * rhs.w + lhs.z * rhs.x - lhs.x * rhs.z,
+        lhs.w * rhs.z + lhs.z * rhs.w + lhs.x * rhs.y - lhs.y * rhs.x,
+        lhs.w * rhs.w - lhs.x * rhs.x - lhs.y * rhs.y - lhs.z * rhs.z);
+
+    /// <summary>Rotates <paramref name="point"/> by <paramref name="rotation"/>.</summary>
+    public static Vector3 operator *(Quaternion rotation, Vector3 point)
+    {
+        // v + 2w(q x v) + 2 q x (q x v), for a unit quaternion q = (x, y, z, w).
+        float tx = 2f * (rotation.y * point.z - rotation.z * point.y);
+        float ty = 2f * (rotation.z * point.x - rotation.x * point.z);
+        float tz = 2f * (rotation.x * point.y - rotation.y * point.x);
+        return new Vector3(
+            point.x + rotation.w * tx + (rotation.y * tz - rotation.z * ty),
+            point.y + rotation.w * ty + (rotation.z * tx - rotation.x * tz),
+            point.z + rotation.w * tz + (rotation.x * ty - rotation.y * tx));
+    }
+
+    /// <summary>The inverse of a unit rotation (its conjugate).</summary>
+    public static Quaternion Inverse(Quaternion rotation) => new(-rotation.x, -rotation.y, -rotation.z, rotation.w);
 }
 
 /// <summary>

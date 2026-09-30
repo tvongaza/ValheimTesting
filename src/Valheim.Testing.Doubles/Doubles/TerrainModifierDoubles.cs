@@ -7,11 +7,13 @@
 // Terrain modifiers (the level/smooth/paint components on pieces and locations) and the order a heightmap applies
 // them in, as Valheim 1.0.16 does: non-player before player, then lower m_sortOrder, then earlier creation time
 // (read from the ZDO), then closer to the world origin (the full 3D position, height included). The list is sorted
-// only when a modifier joins or leaves it. What a modifier does to the heights is not modelled.
+// only when a modifier joins or leaves it. What a modifier does to the heights is not modelled. It is a MonoBehaviour, as in
+// the game: AddComponent, GetComponent and Utils.GetEnabledComponentsInChildren find it on an object, and its position is
+// its object's. Added to an active object it wakes (Awake) and joins the live list, as a spawned piece's does.
 using System.Collections.Generic;
 using System.Linq;
 
-public partial class TerrainModifier
+public partial class TerrainModifier : UnityEngine.MonoBehaviour
 {
     public enum PaintType { Dirt, Cultivate, Paved, Reset, ClearVegetation, DeepSnow }
 
@@ -31,10 +33,8 @@ public partial class TerrainModifier
     public PaintType m_paintType;
     public float m_paintRadius = 2f;
     public float m_paintStrength = 1f;
-    /// <summary>Unity's <c>Behaviour.enabled</c>: a disabled modifier is sorted but not applied.</summary>
-    public bool enabled = true;
-    public Transform transform = new();
-    /// <summary>The object's ZNetView; null for a modifier without one (its creation time is then 0).</summary>
+    // Unity's Behaviour.enabled: a disabled modifier is sorted but not applied.
+    /// <summary>The object's ZNetView, read in Awake as the game does when it is not set; null for a modifier without one (its creation time is then 0).</summary>
     public ZNetView? m_nview;
 
     private bool m_wasEnabled;
@@ -45,9 +45,15 @@ public partial class TerrainModifier
     internal static bool s_needsSorting;
 
     public TerrainModifier() { }
+    /// <summary>
+    /// A modifier on a new object of its own at <paramref name="position"/>, not yet awake: call <see cref="Awake"/> to spawn
+    /// it into the live list. A test convenience; <c>AddComponent&lt;TerrainModifier&gt;()</c> is the game's way.
+    /// </summary>
     public TerrainModifier(UnityEngine.Vector3 position, ZNetView? view = null)
     {
-        transform.position = position;
+        var owner = new UnityEngine.GameObject("TerrainModifier");
+        owner.transform.position = position;
+        owner.Attach(this);
         m_nview = view;
     }
 
@@ -57,6 +63,8 @@ public partial class TerrainModifier
     /// </summary>
     public void Awake()
     {
+        m_unityAwoken = true; // Called by a test or by Unity's message: either way it woke once.
+        if (m_nview == null && gameObject is { } owner) m_nview = owner.GetComponent<ZNetView>();
         s_instances.Add(this);
         s_needsSorting = true;
         m_wasEnabled = enabled;
