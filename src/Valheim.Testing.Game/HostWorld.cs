@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.ExceptionServices;
+using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
@@ -13,8 +14,9 @@ namespace Valheim.Testing.Game;
 public sealed class HostWorldPlan
 {
     /// <summary>
-    /// The fixture: one <c>&lt;name&gt;.fwl</c> at its root and the world's data beside it (<c>&lt;name&gt;.db</c>), every
-    /// entry named for the world. Pinned by SHA256 (<see cref="WorldFixture.Manifest"/>) unless the client plan's pinning is <c>none</c>.
+    /// The fixture, in either layout the game (1.0.16) loads: a chunked save as Valheim 1.0 writes it, one directory
+    /// <c>&lt;name&gt;/</c> at the root holding <c>_main.&lt;n&gt;.fwl2</c> and its chunks; or the older pair, one
+    /// <c>&lt;name&gt;.fwl</c> at the root with its data beside it (<c>&lt;name&gt;.db</c>). Every entry is named for the world. Pinned by SHA256 (<see cref="WorldFixture.Manifest"/>) unless the client plan's pinning is <c>none</c>.
     /// </summary>
     public PinnedDirectory World { get; set; } = new();
     /// <summary>
@@ -113,16 +115,20 @@ public sealed class HostedWorld : IDisposable
     }
 
     /// <summary>
-    /// The world's name from a fixture's relative paths: exactly one <c>.fwl</c> at the root, its stem at least 3
-    /// characters and a valid file name, and every other entry named for it (<c>&lt;name&gt;.*</c> or <c>&lt;name&gt;_*</c>).
+    /// The world's name from a fixture's relative paths, in either layout the game loads: a chunked save (exactly one
+    /// directory <c>&lt;name&gt;/</c> at the root with a <c>_main.&lt;n&gt;.fwl2</c> in it, as Valheim 1.0 writes worlds) or the
+    /// older pair (exactly one <c>&lt;name&gt;.fwl</c> at the root). The name is at least 3 characters and a valid file name,
+    /// and every other entry is named for it (<c>&lt;name&gt;.*</c>, <c>&lt;name&gt;_*</c> or inside <c>&lt;name&gt;/</c>).
     /// </summary>
     public static string NameOf(IEnumerable<string> relativePaths)
     {
         var paths = relativePaths.ToArray();
         var worlds = paths.Where(path => path.IndexOfAny(['/', '\\']) < 0 && path.EndsWith(".fwl", StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (worlds.Length != 1)
-            throw new ArgumentException($"A host fixture holds exactly one world: one <name>.fwl at its root, not {worlds.Length}.");
-        string name = worlds[0][..^".fwl".Length];
+        var chunked = paths.Where(path => path.Split('/', '\\') is [_, var file] && Regex.IsMatch(file, @"^_main\.\d+\.fwl2$", RegexOptions.CultureInvariant))
+            .Select(path => path.Split('/', '\\')[0]).Distinct(StringComparer.Ordinal).ToArray();
+        if (worlds.Length + chunked.Length != 1)
+            throw new ArgumentException($"A host fixture holds exactly one world: one <name>/ directory with _main.<n>.fwl2 (Valheim 1.0's chunked save) or one <name>.fwl at its root, not {worlds.Length + chunked.Length}.");
+        string name = chunked.Length == 1 ? chunked[0] : worlds[0][..^".fwl".Length];
         if (name.Length < 3 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) >= 0 || name.Any(char.IsWhiteSpace))
             throw new ArgumentException($"The fixture world's name \"{name}\" must be at least 3 characters, one token and a valid file name on every platform.");
         foreach (string path in paths)
@@ -130,7 +136,7 @@ public sealed class HostedWorld : IDisposable
             string first = path.Split('/', '\\')[0];
             if (!Named(first, name)) throw new ArgumentException($"The host fixture holds {path}, which is not named for its world {name}; keep only the world's files.");
         }
-        if (paths.Length < 2) throw new ArgumentException($"The host fixture holds only {worlds[0]}: add the world's data ({name}.db), or the game generates the world afresh.");
+        if (chunked.Length == 0 && paths.Length < 2) throw new ArgumentException($"The host fixture holds only {worlds[0]}: add the world's data ({name}.db), or the game generates the world afresh.");
         return name;
     }
 

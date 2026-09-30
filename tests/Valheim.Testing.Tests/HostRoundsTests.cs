@@ -243,6 +243,9 @@ public sealed class HostRoundsTests : IDisposable
     [Theory]
     [InlineData(new[] { "HostFixture.fwl", "HostFixture.db", "HostFixture.fwl.old", "HostFixture_backup_auto-1.db" }, "HostFixture")]
     [InlineData(new[] { "Abc.fwl", "Abc.db/chunk-0" }, "Abc")]
+    // Valheim 1.0 saves a world as a directory of chunks (the layout a 1.0.16 server wrote this fixture in).
+    [InlineData(new[] { "LifecycleFixture/_main.1.chunks", "LifecycleFixture/_main.1.db2", "LifecycleFixture/_main.1.fwl2", "LifecycleFixture/_main.1.ok" }, "LifecycleFixture")]
+    [InlineData(new[] { "Abc\\_main.12.fwl2", "Abc\\_main.12.db2" }, "Abc")]
     public void TheHostedWorldIsNamedByItsFixture(string[] files, string name) => Assert.Equal(name, HostedWorld.NameOf(files));
 
     public static TheoryData<string[]> NotOneNamedWorld => new()
@@ -254,6 +257,10 @@ public sealed class HostRoundsTests : IDisposable
         new[] { "Ab.fwl", "Ab.db" }, // Too short a name for the game.
         new[] { "My World.fwl", "My World.db" }, // Not one command token.
         new[] { "sub/HostFixture.fwl", "HostFixture.db" }, // The metadata is not at the root.
+        new[] { "HostFixture/_main.1.fwl2", "HostFixture.fwl", "HostFixture.db" }, // Two worlds: a chunked save and the older pair.
+        new[] { "A1c/_main.1.fwl2", "B2c/_main.1.fwl2" }, // Two chunked worlds.
+        new[] { "HostFixture/_main.1.fwl2", "readme.txt" }, // A file that is not the world's.
+        new[] { "HostFixture/deeper/_main.1.fwl2" }, // The chunked metadata is not directly in the world's directory.
     };
     [Theory] [MemberData(nameof(NotOneNamedWorld))]
     public void AFixtureThatIsNotOneNamedWorldIsRefused(string[] files) => Assert.Throws<ArgumentException>(() => HostedWorld.NameOf(files));
