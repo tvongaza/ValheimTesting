@@ -127,14 +127,16 @@ public sealed class InstallPins
     private static bool Same(string found, string pinned) => string.Equals(found, pinned, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The game's code assembly under <paramref name="root"/>: <c>*_Data/Managed/assembly_valheim.dll</c>, or in a macOS
-    /// bundle <c>*.app/Contents/Resources/Data/Managed/assembly_valheim.dll</c>. None or more than one is refused.
+    /// The game's code assembly under <paramref name="root"/>: <c>*_Data/Managed/assembly_valheim.dll</c>, in a macOS
+    /// bundle <c>*.app/Contents/Resources/Data/Managed/assembly_valheim.dll</c>, or in the macOS dedicated server
+    /// <c>valheim_server/Data/Managed/assembly_valheim.dll</c>. None or more than one is refused.
     /// </summary>
     public static string GameAssembly(string root)
     {
         root = Path.GetFullPath(root);
         var found = Directory.EnumerateDirectories(root, "*_Data").Select(data => Path.Combine(data, "Managed", GameAssemblyName))
             .Concat(Directory.EnumerateDirectories(root, "*.app").Select(bundle => Path.Combine(bundle, "Contents", "Resources", "Data", "Managed", GameAssemblyName)))
+            .Append(Path.Combine(root, "valheim_server", "Data", "Managed", GameAssemblyName))
             .Where(File.Exists).Order(StringComparer.Ordinal).ToList();
         if (found.Count == 1) return found[0];
         if (found.Count == 0) throw new FileNotFoundException($"No game assembly ({GameAssemblyName} in a *_Data/Managed folder) under {root}.", root);

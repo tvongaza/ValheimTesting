@@ -87,7 +87,7 @@ public sealed class PinnedServerRunTests : IDisposable
     }
     [Fact] public async Task RunStartsTheOwnedServerRunsTheScenarioAndStopsOnlyThatServer()
     {
-        if (OperatingSystem.IsMacOS()) return; // No dedicated server runs on macOS; validate is covered above.
+        if (OperatingSystem.IsMacOS()) return; // This fake runtime is Windows or Linux, which a Mac cannot run; validate is covered above.
         string plan = WritePlan(linux: HostRunsLinux);
         var server = new FakeOwnedServer("test.mod"); string? seen = null;
         int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(run => { seen = run.Mode + ":" + run.Server.GetType().Name; return Task.CompletedTask; }, server));

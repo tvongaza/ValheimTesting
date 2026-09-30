@@ -159,6 +159,8 @@ public sealed class PlanRuleTests
     [InlineData("", ServerPlatform.Windows, true)][InlineData("", ServerPlatform.Linux, true)]
     [InlineData("valheim_server.exe", ServerPlatform.Windows, true)][InlineData("valheim_server.x86_64", ServerPlatform.Linux, true)]
     [InlineData("valheim_server.exe", ServerPlatform.Linux, false)][InlineData("valheim_server.x86_64", ServerPlatform.Windows, false)]
+    [InlineData("valheim_server/Valheim", ServerPlatform.MacOS, true)][InlineData("valheim_server/Valheim", ServerPlatform.Linux, false)]
+    [InlineData("valheim_server.x86_64", ServerPlatform.MacOS, false)]
     public void AStatedExecutableMustMatchTheDetectedRuntime(string file, ServerPlatform platform, bool matches)
     {
         var plan = Valid(); plan.Executable = file;
@@ -171,6 +173,21 @@ public sealed class PlanRuleTests
     {
         if (allowed) ServerRunPlan.CheckLaunchHost(platform, windowsHost);
         else Assert.Throws<PlatformNotSupportedException>(() => ServerRunPlan.CheckLaunchHost(platform, windowsHost));
+    }
+    [Theory]
+    [InlineData(ServerPlatform.MacOS, ServerPlatform.MacOS, true)][InlineData(ServerPlatform.MacOS, ServerPlatform.Linux, false)]
+    [InlineData(ServerPlatform.Linux, ServerPlatform.MacOS, false)][InlineData(ServerPlatform.Windows, ServerPlatform.MacOS, false)]
+    [InlineData(ServerPlatform.Linux, ServerPlatform.Linux, true)]
+    public void AMacRuntimeRunsOnlyOnAMac(ServerPlatform platform, ServerPlatform host, bool allowed)
+    {
+        if (allowed) ServerRunPlan.CheckLaunchHost(platform, host);
+        else Assert.Contains("must run on a " + platform + " host", Assert.Throws<PlatformNotSupportedException>(() => ServerRunPlan.CheckLaunchHost(platform, host)).Message);
+    }
+    [Fact] public void TheMacExecutableIsAPlanExecutable()
+    {
+        Assert.Equal("valheim_server/Valheim", ServerRunPlan.ExecutableFor(ServerPlatform.MacOS));
+        var plan = Valid(); plan.Executable = "valheim_server/Valheim"; plan.ValidateServerPlan([], "TOKEN");
+        plan.Executable = "valheim_server/Other"; Refused(plan);
     }
     [Theory][InlineData("DOORSTOP_ENABLED")][InlineData("DOORSTOP_TARGET_ASSEMBLY")][InlineData("doorstop_enabled")][InlineData("DOORSTOP_MONO_DLL_SEARCH_PATH_OVERRIDE")]
     public void DoorstopVariablesBelongToTheLauncher(string name) { var plan = Valid(); plan.Environment[name] = "1"; Refused(plan); }

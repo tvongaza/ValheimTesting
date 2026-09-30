@@ -55,7 +55,7 @@ var process = new DirectServerProcess(start, logPrefix, Path.Combine(runtime, "B
 
 ## Apple Silicon (experimental)
 
-There is no macOS dedicated server, and `ServerLaunch` refuses to launch a server on a macOS host. On an Apple Silicon Mac, Docker runs arm64 Linux, so this image only runs under x86-64 emulation. This path is **experimental and unverified**: no pass has been recorded on a Mac. Inside the container `ServerLaunch` sees a Linux host, so runners work unchanged.
+A Mac can run the macOS dedicated server natively (see [getting started](../../docs/getting-started.md)); this image is for the Linux one, which `ServerLaunch` refuses to launch on a macOS host. On an Apple Silicon Mac, Docker runs arm64 Linux, so this image only runs under x86-64 emulation. This path is **experimental and unverified**: no pass has been recorded on a Mac. Inside the container `ServerLaunch` sees a Linux host, so runners work unchanged.
 
 ```sh
 docker build --platform linux/amd64 -t valheimtesting-linux-server:local docker/linux-server

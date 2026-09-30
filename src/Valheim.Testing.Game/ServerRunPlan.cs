@@ -90,8 +90,8 @@ public partial class ServerRunPlan
         CheckPatchersAndLogScan();
         if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > 1800)
             throw new ArgumentException("Invalid port or time budget.");
-        if (!string.IsNullOrEmpty(Executable) && Executable != ServerLaunch.WindowsExecutable && Executable != ServerLaunch.LinuxExecutable)
-            throw new ArgumentException($"Executable must be omitted, {ServerLaunch.WindowsExecutable} or {ServerLaunch.LinuxExecutable} at the copied runtime's root.");
+        if (!string.IsNullOrEmpty(Executable) && Executable != ServerLaunch.WindowsExecutable && Executable != ServerLaunch.LinuxExecutable && Executable != ServerLaunch.MacExecutable)
+            throw new ArgumentException($"Executable must be omitted, {ServerLaunch.WindowsExecutable}, {ServerLaunch.LinuxExecutable} or {ServerLaunch.MacExecutable} (relative to the copied runtime's root).");
         if (Environment.ContainsKey(sessionTokenVariable)) throw new ArgumentException("Session token is runner-owned.");
         var doorstop = Environment.Keys.FirstOrDefault(key => key.StartsWith("DOORSTOP_", StringComparison.OrdinalIgnoreCase));
         if (doorstop != null)
@@ -121,18 +121,30 @@ public partial class ServerRunPlan
             throw new ArgumentException("Pin the runtime's game build, BepInEx core and patchers in runtimePins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\".");
         RuntimePins.Validate("runtime");
     }
-    public static string ExecutableFor(ServerPlatform platform) => platform == ServerPlatform.Windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable;
+    public static string ExecutableFor(ServerPlatform platform) => platform switch
+    {
+        ServerPlatform.Windows => ServerLaunch.WindowsExecutable,
+        ServerPlatform.MacOS => ServerLaunch.MacExecutable,
+        _ => ServerLaunch.LinuxExecutable,
+    };
     /// <summary>The runtime decides the platform (<see cref="ServerLaunch.Detect"/>); a stated executable must agree with it.</summary>
     public void CheckExecutable(ServerPlatform platform)
     {
         if (!string.IsNullOrEmpty(Executable) && Executable != ExecutableFor(platform))
             throw new ArgumentException($"Plan executable {Executable} does not match the copied {platform} runtime, which contains {ExecutableFor(platform)}.");
     }
-    /// <summary>A launch needs a host that can execute the runtime's server; macOS runs neither.</summary>
-    public static void CheckLaunchHost(ServerPlatform platform, bool windowsHost)
+    /// <summary>A launch needs a host that can execute the runtime's server: a Windows host or not (then Linux).</summary>
+    public static void CheckLaunchHost(ServerPlatform platform, bool windowsHost) =>
+        CheckLaunchHost(platform, windowsHost ? ServerPlatform.Windows : ServerPlatform.Linux);
+    /// <summary>
+    /// A launch needs a host of the runtime's own platform: each dedicated server runs only on its own OS (see
+    /// <see cref="ServerLaunch.LocalPlatform"/> for this machine's).
+    /// </summary>
+    public static void CheckLaunchHost(ServerPlatform platform, ServerPlatform host)
     {
-        if ((platform == ServerPlatform.Windows) != windowsHost)
-            throw new PlatformNotSupportedException($"A {platform} dedicated-server runtime must run on a {platform} host; use validate here, or run on a matching host or container.");
+        if (platform != host)
+            throw new PlatformNotSupportedException($"A {platform} dedicated-server runtime must run on a {platform} host, not this {host} one; use validate here, " +
+                "or run on a matching host, the Linux server container, or a Linux host with --profile.");
     }
     /// <summary>The plan's patcher names and log scan classifications are well formed (the runner checks them for every plan).</summary>
     public void CheckPatchersAndLogScan()
