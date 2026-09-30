@@ -831,6 +831,7 @@ Game-side pieces that mods' test adapters kept copying, each checking the condit
 | `InstalledPlugin.Version(guid)`, `Command(name, guid)` | Whether a plugin is loaded, and a read-only capability reporting it. |
 | `KeyValueReply.Parse(line)`, `Single(lines, prefix)` | `key=value` fields of a console reply, `'quoted values'` included. A repeated key, an `ERROR:` line, no reply or two replies fail. |
 | `QuitLogFlush.Enable()`, `Quitting(signal)` | (preview 3) Makes the lines plugins log while the game quits reach BepInEx's disk log for the teardown [log scan](#log-scan-at-teardown): does nothing until the first quit signal (`Application.quitting`, the adapter's own `OnApplicationQuit` through `Quitting`, `AppDomain.ProcessExit`/`DomainUnload`), then flushes after every line. Not from `OnDestroy`: a script reload destroys a plugin without quitting. |
+| `ContentCensus.Command()` | (preview 3) A read-only `content-census <owner-guid> <prefix> ...` capability listing the items, recipes and network prefabs whose names start with a prefix, by the game's hash, with the owner plugin's build and the side that observed; see [Registered content census](#registered-content-census-adapter-preview-3-game-preview-15). |
 | `HarmonyCensus.Command()` | A read-only `harmony [owner]` capability listing every patched method with each patch's owner, kind, priority, index, before/after and patch method, from HarmonyX's own record. |
 | `ZonePresence.Command()` | A read-only client capability `zones <x,z> ...` reporting, for up to 64 zones, whether the terrain is loaded, the object instances standing there (all, and those not marked distant), and the saved objects of known prefabs without an instance; with the zone of the client's reference position and its synced simulation distance. For `ZoneCycle`, [below](#lifecycle-steps-leave-the-area-and-log-out). |
 | `PlayerCustomData.Command()` | A read-only client capability `custom-data [key-prefix]` listing the local player's `m_customData` entries with the profile's name, file name, save location (`Local` or `Cloud`) and path. For `LogoutCycle`. |
@@ -903,6 +904,61 @@ Four adapter commands and their runner-side readers. The adapter commands are wr
 Native run (Valheim 1.0.16 dedicated server and a joined client, [FullLifecycle's native campaign](../examples/FullLifecycle/README.md#native-campaign)): `defeated_eikthyr` set on the server was listed on the client and survived a world save and restart; a config entry changed on the server reached the client and survived a restart; a client without the mod resolved every prefab hash near the site, and a prefab registered only on the server was named by its hash (`1334784479`, `MyModControl_ServerOnly`); a `SunkenCrypt4`'s saved rooms (1.0 `roomData`) all lay in its location's zone, with an interior offset of about (0.63, 5001, 0.26).
 
 Not validated in game: an oversized room in a custom test dungeon failing the check, and a generator displaced from its location's zone; both are covered only by scripted replies.
+
+## Registered content census (Adapter preview 3, Game preview 15)
+
+A registration double (#21) shows that a mod calls ObjectDB or ZNetScene; only the running game shows what each process ended up with. An item can be missing on a client whose registration ran too early, a recipe can point at a crafting station or resource the game cannot find, and two names can share one hash. The content census (#91) asks each process for its registered items, recipes and network prefabs by stable identity and reconciles them with what the mod declares for each side. This preview covers ObjectDB items and recipes and ZNetScene prefabs; pieces and status effects are a later slice with the same format.
+
+**Declare the expectations** in a file the mod's system tests own, from the mod's design, never from a census (a census copied into its own expectations can only pass):
+
+```json
+{
+  "owner": "example.mymod",
+  "scope": ["MyMod_", "Recipe_MyMod_"],
+  "items":   [{ "name": "MyMod_SurveyStake", "sides": ["server", "client"] }],
+  "prefabs": [{ "name": "MyMod_SurveyStake", "sides": ["server", "client"] }],
+  "recipes": [{ "name": "Recipe_MyMod_SurveyStake", "sides": ["server", "client"],
+                "item": "MyMod_SurveyStake", "station": "piece_workbench", "resources": ["Wood"] }]
+}
+```
+
+`owner` is the plugin GUID whose build must be the pinned one on each side. `scope` lists the name prefixes that are the mod's own content: every expected name starts with one, the census lists only names in scope, and only those can be unexpected, so vanilla content never is. An entry names the prefab or recipe object (`name`, the identity; items and prefabs are also identified by the game's hash of it, `StableHash.Of`) and the `sides` that must have it. A recipe may declare the `item` it crafts, its crafting `station` (a prefab name, or `none` for crafting by hand) and its `resources` (item prefab names); a dependency left out is not checked. `pieces` and `statusEffects` are accepted in the same shape and always reported unsupported for now. Anything else (another key, a side other than `server` or `client`, a name twice, a name outside the scope, an empty list) is refused when the file is read. `ContentExpectations.Load(path)` reads it; the constructor takes the same in code.
+
+**Register the observation** in the test adapter on both sides: `ContentCensus.Command()` next to the others in `TestExtension.Register`. It is read-only and needs a loaded world.
+
+**Read and reconcile** each side through its own strictly pinned actor:
+
+```csharp
+var expectations = ContentExpectations.Load("content-expectations.json");
+var server = ContentCensus.Read(serverActor, "mymod.testing/content-census", expectations);
+var client = ContentCensus.Read(clientActor, "mymod.testing/content-census", expectations);
+var report = ContentCensus.Reconcile(expectations,
+    new SideObservation(CensusSide.Server, plan.Pins["example.mymod"], server),
+    new SideObservation(CensusSide.Client, plan.Client.Pins["example.mymod"], client));
+round.Write("content-census", new { server, client, report }); // evidence first
+report.RequirePassed();
+```
+
+`Read` throws for a census that is not ready (no world, the registries not populated yet, a client whose player has not spawned), for an empty registry, for a reply for another owner or scope and for any malformed reply: none of them is an empty census. `Reconcile` gives every expected entry a state per side, and every in-scope entry a side was not expected to have is unexpected:
+
+| State | Meaning |
+|---|---|
+| `present` | Registered once, and the game's own lookup by its hash (`ObjectDB.GetItemPrefab`, `ZNetScene.GetPrefab`) returns it; a recipe dependency the game resolves |
+| `missing` | Not registered on that side, not observed there, or listed but not found by the game's lookup (registered after the index was built) |
+| `unexpected` | In scope on that side but not declared for it, or a recipe resource that is not declared |
+| `duplicate` | Listed more than once, or its hash shared with another name (the game's indexes use `Dictionary.Add`, so one of them is not indexed), or two recipes of one name |
+| `unresolved` | A recipe's item, station or resource the game's lookup does not find, or not the declared one |
+| `unsupported` | A check the census cannot answer: a kind it does not observe yet, the dependencies of a recipe registered twice, a reference without a name. Never a pass |
+
+A side is refused, and its expected entries are missing, when no observation was supplied for it, when the observation reports being the other side, or when its owner plugin is not loaded or is another build than pinned (`stale build: ...`). The census reports the MD5 of the owner's file as ValheimCLI's strict pins hash it, and `Reconcile` takes the pinned MD5 or a prefix of at least 8 hex characters; the actor's strict pins still check every loaded plugin, and whether a file changed after it loaded, before each command. `Passed` holds only when every side with expectations was accepted and every entry is present. `Failures` lists every problem as `side: state kind name (why)`.
+
+**Which checks need a client.** Every process builds its own registries from its own plugins, so a server census says nothing about a client: a client expectation is satisfied only by that client's own census, and a server census handed in as the client's is refused. Declare `client` wherever players need the content: items and recipes for crafting and inventories, and the prefab wherever the object is created (an object whose prefab a process lacks is never created there, see [vanilla clients](#world-observations-global-keys-synced-config-vanilla-clients-dungeon-rooms-adapter-preview-2-game-preview-13)). A server-only entry declares `["server"]`, and the client then must not have it in scope. A client census is read only once the client has joined and its player has spawned, so content a mod registers after a server's config sync is included; content registered later than that is not.
+
+**When the adapter reads.** On demand, never at a registration hook. In Valheim 1.0.16 the world scene's `ObjectDB.Awake` indexes its items and `ZNetScene.Awake` its prefabs as the scene loads, and mods register in postfixes on those, so both have settled before a world loads; the main menu's own ObjectDB (`FejdStartup.SetupObjectDB`) is not the world's and is never read. A recipe's item and resources resolve when `ObjectDB.GetItemPrefab` returns a prefab of that name whose shared item name is the reference's (crafting adds the result by prefab name and counts resources by shared name); its station when `ZNetScene.GetPrefab` returns a prefab of that name with a crafting station of the same station name. Nothing else is looked up.
+
+[FullLifecycle](../examples/FullLifecycle/README.md#native-campaign)'s `content-census` scenario runs it on a server and a joined client in both rounds, with MyMod's item, prefab and recipe declared in `content-expectations.json`, and its `omitted-recipe` control (MyMod built with `-p:MyModOmit=recipe`) must fail on that recipe alone.
+
+Limits: the runner side is tested against scripted replies (hash collision, duplicates, a missing dependency, a missing, swapped or empty observation, a stale build, an unsupported check, the omitted-recipe control); the adapter observation compiles in CI against declared signatures and is written against the Valheim 1.0.16 decompile, but has not run in game yet. Ownership of an entry is not observable (ObjectDB and ZNetScene do not record which plugin added what), which is why the scope is by name prefix. Localization tokens, pieces and status effects are not checked yet.
 
 ## Offline binding check (Valheim.Testing.Bindings, preview 1)
 

@@ -9,7 +9,8 @@ namespace MyMod.TestAdapter;
 
 /// <summary>
 /// The example's test adapter. It serves the toolkit's owned-session identity (<c>mymod.testing/session</c>), the census of
-/// applied Harmony patches (<c>mymod.testing/harmony</c>), the toolkit's world observations and one global-key fixture
+/// applied Harmony patches (<c>mymod.testing/harmony</c>), the toolkit's world observations (the registered-content census
+/// among them) and one global-key fixture
 /// command, and one observation of the mod's own (<see cref="MarkerObservation"/>). The scenarios drive the mod through
 /// its own console commands. A mod that needs a test-only action or observation adds it here as another extension command.
 /// <para>
@@ -47,6 +48,7 @@ public sealed class Plugin : BaseUnityPlugin
         ConfigEntryCommand.Command(),                               // config <guid> <section> <key>: either side (#20)
         UnresolvedPrefabs.Command(),                                // unresolved-prefabs [radius]: a client without MyMod (#33)
         DungeonRooms.Command(),                                     // dungeon-rooms <x> <z> [radius]: server (#24)
+        ContentCensus.Command(),                                    // content-census <owner> <prefix> ...: either side (#91)
         MarkerObservation.Command());                               // markers <x> <z> [radius]: the mod's own
     private void OnApplicationQuit() => QuitLogFlush.Quitting("MyMod.TestAdapter OnApplicationQuit");
     private void OnDestroy() => _registration?.Dispose();
