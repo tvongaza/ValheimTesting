@@ -20,11 +20,13 @@ The toolkit packages, all on NuGet.org:
 
 | Package | Exact version | Use |
 |---|---|---|
-| `Valheim.Testing` | `0.1.0-preview.6` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
-| `Valheim.Testing.Game` | `0.1.0-preview.12` | External game observations, owned sessions, comparisons and reports |
+| `Valheim.Testing` | `0.1.0-preview.7` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
+| `Valheim.Testing.Game` | `0.1.0-preview.13` | External game observations, owned sessions, comparisons and reports |
 | `Valheim.Testing.Cli` | `0.1.0-preview.5` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
-| `Valheim.Testing.Adapter` | `0.1.0-preview.1` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
-| `Valheim.Testing.Doubles` | `0.1.0-preview.4` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
+| `Valheim.Testing.Adapter` | `0.1.0-preview.2` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
+| `Valheim.Testing.Doubles` | `0.1.0-preview.5` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
+| `Valheim.Testing.Bindings` | `0.1.0-preview.1` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member (see [the binding check](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1)) |
+| `Valheim.Testing.Bindings.Tool` | `0.1.0-preview.1` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
 
 Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
 
@@ -38,14 +40,25 @@ Pin only the package your test project needs:
 
 ```xml
 <!-- Pure test project; not the production mod project. -->
-<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.6]" />
+<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.7]" />
 <!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.12]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.13]" />
 <!-- A game-side test adapter plugin compiles the adapter source: -->
-<PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.1]" PrivateAssets="all" />
+<PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.2]" PrivateAssets="all" />
+<!-- A test that checks a built mod DLL against the game's assemblies in code: -->
+<PackageReference Include="Valheim.Testing.Bindings" Version="[0.1.0-preview.1]" />
 ```
 
 Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools and examples target net10.0. Keep the game-side plugin's existing target framework.
+
+The binding check needs no project reference in most mods. Install the tool in the CI job that builds the plugin and run it on the built DLL against the game's `Managed` directory ([CI step](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1)):
+
+```sh
+dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.1 --tool-path .tools
+.tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "path/to/valheim_Data/Managed"
+```
+
+Reference the `Valheim.Testing.Bindings` library only from a test that calls `BindingCheck.Check` itself, for example to assert on the report. Neither belongs in the production plugin project, and both need the game's assemblies, so neither runs in a CI job without them.
 
 ## Using Visual Studio, Rider or VS Code
 
@@ -121,7 +134,7 @@ The [Roads scenario guide](https://github.com/tvongaza/ProceduralRoads/blob/revi
 
 ### On Linux, macOS or in a container
 
-The dedicated server also runs on Linux. Build the launch with `ServerLaunch.CreateStartInfo(runtime, arguments, environment)` (`Valheim.Testing.Game` `0.1.0-preview.11`) and pass it to `DirectServerProcess` as on Windows. It detects the platform from the runtime's executable, refuses a runtime with both or neither, and on Linux sets BepInEx's Doorstop variables and prepends to `LD_LIBRARY_PATH`/`LD_PRELOAD` without dropping existing entries. The [Linux image](../docker/linux-server/README.md) installs the free dedicated server with anonymous SteamCMD and BepInEx at build time; [LinuxServerSmoke](../examples/LinuxServerSmoke/README.md) is the smallest runner for it.
+The dedicated server also runs on Linux. Build the launch with `ServerLaunch.CreateStartInfo(runtime, arguments, environment)` (Game preview.11 onward) and pass it to `DirectServerProcess` as on Windows. It detects the platform from the runtime's executable, refuses a runtime with both or neither, and on Linux sets BepInEx's Doorstop variables and prepends to `LD_LIBRARY_PATH`/`LD_PRELOAD` without dropping existing entries. The [Linux image](../docker/linux-server/README.md) installs the free dedicated server with anonymous SteamCMD and BepInEx at build time; [LinuxServerSmoke](../examples/LinuxServerSmoke/README.md) is the smallest runner for it.
 
 What works: owned dedicated-server native checks on Linux, locally or in CI; the image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026. The separate [Linux client container](../docker/linux-client/README.md) supports native clients on NVIDIA GPU hosts with a display and authenticated Steam session. General remote-host orchestration remains outside the library. The **server** image contains game files; keep it local or inside the CI job and never publish it. The published client base image contains no game files; do not publish it after installing the game.
 

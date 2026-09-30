@@ -9,7 +9,8 @@ name: Publish packages
 # A release is a `v<yyyy>.<mm>.<dd>` tag on a main commit (`.2`, `.3` for a later release the same day). The
 # packages are versioned independently, so the tag names the release, not a package version. After the push,
 # the github-release job creates the GitHub release for the tag: which package versions are new, those
-# packages and their checksums. A manual run on main publishes without a GitHub release.
+# packages and their checksums. A manual run on main publishes without a GitHub release. The consumer job then checks
+# the release as a mod author meets it: from NuGet.org only, once NuGet.org serves every version.
 on:
   workflow_dispatch:
   push:
@@ -97,6 +98,26 @@ jobs:
           for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.Doubles.*.nupkg release/Valheim.Testing.Adapter.*.nupkg release/Valheim.Testing.Bindings.[0-9]*.nupkg release/Valheim.Testing.Bindings.Tool.*.nupkg; do
             dotnet nuget push "$f" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
+  consumer:
+    name: consumer (NuGet.org only)
+    # NuGet.org validates a new version for several minutes before it serves it; the script waits up to 30 minutes and
+    # reports a version still missing then as pending, which fails the job. Rerun it later rather than calling the release checked.
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run scripts/release-consumer.cs -- consumer --wait-minutes 30
   github-release:
     needs: publish
     if: startsWith(github.ref, 'refs/tags/v')
