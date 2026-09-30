@@ -152,7 +152,13 @@ public class CharacterSavePositionTests
             Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(source, Path.Combine(link, "copy.fch"), 200, 1, 2, 3));
             Assert.False(File.Exists(Path.Combine(local, "copy.fch")));
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally
+        {
+            // Windows' recursive remover cannot traverse a junction here; remove the link itself first.
+            string link = Path.Combine(evidence, "link");
+            if (Directory.Exists(link)) Directory.Delete(link);
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
