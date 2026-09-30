@@ -261,7 +261,10 @@ public static class PinnedServerRun
                     {
                         report.Step("every boot quit cleanly and retired its crossplay lobby", () =>
                         {
-                            var logs = crossplayRun.Logs.Where(log => Regex.IsMatch(log.Role, @"^boot-\d+ BepInEx log$")).Select(log => log.Path).ToList();
+                            // Each boot's kept logs: BepInEx's, Unity's (-logFile) and the process output, wherever the game wrote its lines.
+                            var logs = crossplayRun.Logs.Select(log => (Match: Regex.Match(log.Role, @"^boot-(\d+) "), log.Path)).Where(log => log.Match.Success)
+                                .GroupBy(log => int.Parse(log.Match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).OrderBy(group => group.Key)
+                                .Select(group => (IReadOnlyList<string>)group.Select(log => log.Path).ToList()).ToList();
                             report.Provenance["crossplayLobbies"] = string.Join(" | ", CrossplayServer.RequireLobbiesRetired(session.Stops, logs));
                         });
                     }

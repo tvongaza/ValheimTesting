@@ -111,13 +111,17 @@ public class ProcessStopTests
     private const string Unregistered = "[Info   : Unity Log] Unregister PlayFab server \"World\" and leaving network \"N\"";
     private static ProcessStop Clean => new(StopOutcome.Clean, 0, TimeSpan.FromSeconds(8), "Ctrl+C");
 
-    [Fact] public void CleanStopsWithDeactivatedLobbiesPass()
+    private static IReadOnlyList<string> Logs(params string[] paths) => paths;
+
+    [Fact] public void CleanStopsThatRetiredTheirLobbiesPassAndSayWhetherPlayFabConfirmed()
     {
         using var dir = new TempDirectory();
+        // Boot 1's lines are in its Unity log only (as on the Windows server); boot 2's in its BepInEx log, with PlayFab's reply.
         var lines = CrossplayServer.RequireLobbiesRetired([Clean, Clean],
-            [Log(dir, "b1", Created1, Unregistered, "[Info   : Unity Log] Deactivated PlayFab lobby L1"), Log(dir, "b2", Created2, Unregistered, "[Info   : Unity Log] Deactivated PlayFab lobby L2")]);
-        Assert.Equal("boot-1: clean after 8.0 s (Ctrl+C, exit 0); lobbies created L1; deactivated L1", lines[0]);
-        Assert.Equal(2, lines.Count);
+            [Logs(Log(dir, "b1-bepinex", "[Info   :   BepInEx] Chainloader startup complete"), Log(dir, "b1-unity", Created1, Unregistered), Path.Combine(dir.Path, "b1-stdout-missing")),
+             Logs(Log(dir, "b2-bepinex", Created2, Unregistered, "[Info   : Unity Log] Deactivated PlayFab lobby L2"))]);
+        Assert.Equal("boot-1: clean after 8.0 s (Ctrl+C, exit 0); lobby L1; retired yes; PlayFab confirmation not logged", lines[0]);
+        Assert.Equal("boot-2: clean after 8.0 s (Ctrl+C, exit 0); lobby L2; retired yes; PlayFab confirmation logged", lines[1]);
     }
 
     [Fact] public void AKilledBootFailsTheCrossplayRunEvenWhenTheNextJoinWorked()
@@ -125,29 +129,36 @@ public class ProcessStopTests
         using var dir = new TempDirectory();
         var killed = new ProcessStop(StopOutcome.Killed, -1, TimeSpan.FromSeconds(120), "Ctrl+C; no exit within 120.0 s");
         var error = Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([killed, Clean],
-            [Log(dir, "b1", Created1), Log(dir, "b2", Created2, Unregistered, "[Info   : Unity Log] Deactivated PlayFab lobby L2")]));
+            [Logs(Log(dir, "b1", Created1)), Logs(Log(dir, "b2", Created2, Unregistered))]));
         Assert.Contains("boot-1 was killed after 120.0 s", error.Message);
         Assert.Contains("not a clean crossplay run", error.Message);
-        Assert.Contains("boot-1 created PlayFab lobby L1, but its log never says \"Deactivated PlayFab lobby L1\"", error.Message);
         Assert.DoesNotContain("boot-2", error.Message);
     }
 
-    [Fact] public void ACleanStopWhoseLobbyWasNeverConfirmedFails()
+    [Fact] public void ACleanStopThatNeverRetiredItsLobbyOrLogsWithoutALobbyFail()
     {
         using var dir = new TempDirectory();
-        var error = Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([Clean], [Log(dir, "b1", Created1, Unregistered)]));
-        Assert.Contains("the shutdown started retiring it", error.Message);
-        // A missing log, or a boot never stopped, cannot be read as retired either.
-        Assert.Contains("was not kept", Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([Clean], [Path.Combine(dir.Path, "missing")])).Message);
-        Assert.Contains("never stopped", Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([], [Log(dir, "b2", Created1)])).Message);
+        Assert.Contains("never retired it", Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([Clean], [Logs(Log(dir, "b1", Created1))])).Message);
+        // Logs without the game's lines cannot pass by showing nothing.
+        Assert.Contains("hold no \"Created PlayFab lobby\" line", Assert.Throws<InvalidOperationException>(() =>
+            CrossplayServer.RequireLobbiesRetired([Clean], [Logs(Log(dir, "b2", "[Info   :   BepInEx] Chainloader startup complete", Unregistered))])).Message);
+        Assert.Contains("no log was kept", Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([Clean], [Logs(Path.Combine(dir.Path, "missing"))])).Message);
+        Assert.Contains("never stopped", Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([], [Logs(Log(dir, "b3", Created1))])).Message);
     }
 
     [Fact] public void ABootThatExitedByItselfCountsOnlyWithTheGamesShutdown()
     {
         using var dir = new TempDirectory();
         var gone = new ProcessStop(StopOutcome.AlreadyExited, 0, TimeSpan.Zero, "not asked: it had exited");
-        Assert.Single(CrossplayServer.RequireLobbiesRetired([gone], [Log(dir, "b1", Created1, Unregistered, "Deactivated PlayFab lobby L1")]));
-        Assert.Contains("without the game's shutdown", Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([gone], [Log(dir, "b2")])).Message);
+        Assert.Single(CrossplayServer.RequireLobbiesRetired([gone], [Logs(Log(dir, "b1", Created1, Unregistered))]));
+        Assert.Contains("without the game's shutdown", Assert.Throws<InvalidOperationException>(() => CrossplayServer.RequireLobbiesRetired([gone], [Logs(Log(dir, "b2", Created1))])).Message);
+    }
+
+    [Fact] public void TheGamesLogIsTheLogFileArgument()
+    {
+        var plan = new ServerRunPlan { Arguments = ["-batchmode", "-logFile", "{runtime}/toolkit-unity.log"] };
+        Assert.Equal("/rt/toolkit-unity.log", plan.GameLogFile("/rt", "/w"));
+        Assert.Null(new ServerRunPlan { Arguments = ["-batchmode"] }.GameLogFile("/rt", "/w"));
     }
 
     private sealed class StopOnly : IServerProcess

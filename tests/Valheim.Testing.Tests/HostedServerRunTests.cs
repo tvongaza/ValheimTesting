@@ -377,7 +377,7 @@ public sealed class HostedServerRunTests : IDisposable
         var step = Step("every boot quit cleanly and retired its crossplay lobby");
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.Contains("boot-1 was killed", step.GetProperty("Error").GetString());
-        Assert.Contains("lobby-1", step.GetProperty("Error").GetString());
+        Assert.Contains("not a clean crossplay run", step.GetProperty("Error").GetString());
         Assert.StartsWith("boot-1 killed", Result().GetProperty("Provenance").GetProperty("serverStops").GetString());
         Assert.Equal("120", Assert.Single(host.Runs, run => run.Script == "stop").Variables["quit"]);
     }
@@ -390,7 +390,7 @@ public sealed class HostedServerRunTests : IDisposable
         Assert.True(Step("every boot quit cleanly and retired its crossplay lobby").GetProperty("Passed").GetBoolean());
         var provenance = Result().GetProperty("Provenance");
         Assert.StartsWith("boot-1 clean", provenance.GetProperty("serverStops").GetString());
-        Assert.Contains("lobbies created lobby-1; deactivated lobby-1", provenance.GetProperty("crossplayLobbies").GetString());
+        Assert.Contains("lobby lobby-1; retired yes; PlayFab confirmation logged", provenance.GetProperty("crossplayLobbies").GetString());
     }
 
     // The game reads its arguments lowercased: -Port names the game port, and one that differs from the profile's is refused.

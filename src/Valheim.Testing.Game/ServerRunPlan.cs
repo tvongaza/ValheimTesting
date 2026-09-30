@@ -163,6 +163,16 @@ public partial class ServerRunPlan
     /// <summary>The strict <c>cli_expect</c> command, or <see cref="EnvironmentPinning.None"/> for an unpinned plan (see <see cref="GameActor.VerifyEnvironment"/>).</summary>
     public string ExpectCommand => !Pinned ? EnvironmentPinning.None :
         Expectations.ExpectCommand(Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), new()), strict: true);
+    /// <summary>
+    /// The file the arguments' <c>-logFile</c> names, expanded (for example <c>{runtime}/toolkit-unity.log</c>), or null. The game
+    /// writes all its own lines there, lobby lines included; BepInEx's log carries them only when BepInEx copies Unity's log.
+    /// </summary>
+    public string? GameLogFile(string runtime, string world)
+    {
+        int at = Array.FindIndex(Arguments, argument => argument.Equals("-logFile", StringComparison.OrdinalIgnoreCase));
+        return at >= 0 && at + 1 < Arguments.Length ? Expand(Arguments[at + 1], runtime, world) : null;
+    }
+
     public string Expand(string value, string runtime, string world) => value.Replace("{runtime}", runtime).Replace("{world}", world).Replace("{port}", Port.ToString(CultureInfo.InvariantCulture));
     /// <summary>
     /// What an owned dedicated server's startup waits on: ValheimCLI's listening line in this boot's BepInEx log (a
