@@ -33,6 +33,9 @@ internal sealed class FakeServerHost : IGameHost
     public Dictionary<string, HostResult> Failures { get; } = [];
     public Exception? TunnelFailure { get; set; }
     public bool PortBusy { get; set; }
+    /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
+    public bool IgnoreQuit { get; set; }
+    private string? _runtime; // The host runtime of the last server start, whose log a clean stop appends to.
     public List<FakeForward> Tunnels { get; } = [];
     /// <summary>What the copy does to the runtime after copying, for example editing a file.</summary>
     public Action<string>? AfterCopy { get; set; }
@@ -88,8 +91,12 @@ internal sealed class FakeServerHost : IGameHost
                 string boot = Local(v["dir"]);
                 Directory.CreateDirectory(boot);
                 File.WriteAllText(Path.Combine(boot, "stdout.log"), "server stdout\n");
+                _runtime = v["runtime"];
                 string log = Path.Combine(Local(v["runtime"]), "BepInEx", "LogOutput.log");
                 File.WriteAllText(log, $"[Info   :   BepInEx] fake boot {process.Id}\n[Info   :valheimCLI] Command server listening on 127.0.0.1:5577\n");
+                // A crossplay server opens a lobby per boot, as the game logs it.
+                if (Spec(v["spec"]).Any(line => line.Kind == "arg" && line.Text == "-crossplay"))
+                    File.AppendAllText(log, $"[Info   : Unity Log] Created PlayFab lobby with ID \"lobby-{process.Id}\", ConnectionString \"c\" and owned by \"P\"\n");
                 string start = (9000 + process.Id).ToString();
                 lock (_sync) _processes[process.Id] = (start, ct => process.WaitForExitAsync(ct), () => process.Stop(TimeSpan.FromSeconds(1)));
                 return Ok($"VT-SERVER started {process.Id} {start}\n");
@@ -116,6 +123,16 @@ internal sealed class FakeServerHost : IGameHost
                 (string Start, Func<CancellationToken, Task<int>> Exit, Action Stop) process;
                 lock (_sync) if (!_processes.TryGetValue(int.Parse(v["game"]), out process) || process.Start != v["start"]) return Ok("VT-STOP gone\n");
                 process.Stop();
+                if (v.TryGetValue("quit", out string? quit) && quit != "0" && !IgnoreQuit)
+                {
+                    // The game quits by itself. A server's shutdown retires its boot's lobby, as 1.0.16 logs it; a client host has no server runtime.
+                    if (_runtime == null) return Ok("VT-STOP quit\n");
+                    string log = Path.Combine(Local(_runtime), "BepInEx", "LogOutput.log");
+                    string text = File.Exists(log) ? File.ReadAllText(log) : "";
+                    File.AppendAllText(log, "[Info   : Unity Log] Unregister PlayFab server \"MyModTest\" and leaving network \"n\"\n" +
+                        string.Concat(CrossplayServer.LobbyCreated.Matches(text).Select(m => $"[Info   : Unity Log] Deactivated PlayFab lobby {m.Groups["lobby"].Value}\n")));
+                    return Ok("VT-STOP quit\n");
+                }
                 return Ok("VT-STOP stopped\n");
             }
             case "keep":
@@ -349,6 +366,31 @@ public sealed class HostedServerRunTests : IDisposable
             .Where(line => line.Kind == "arg").Select(line => line.Text).ToList();
         if (crossplay) Assert.Equal("-crossplay", arguments.Last()); else Assert.DoesNotContain("-crossplay", arguments);
         Assert.Equal(crossplay ? "true" : "false", Result().GetProperty("Provenance").GetProperty("crossplay").GetString());
+    }
+
+    [Fact] public async Task ACrossplayRunWhoseServerHadToBeKilledFailsAndSaysWhy()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        host.IgnoreQuit = true;
+        var (plan, profile) = Write(host, crossplay: true);
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        var step = Step("every boot quit cleanly and retired its crossplay lobby");
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.Contains("boot-1 was killed", step.GetProperty("Error").GetString());
+        Assert.Contains("not a clean crossplay run", step.GetProperty("Error").GetString());
+        Assert.StartsWith("boot-1 killed", Result().GetProperty("Provenance").GetProperty("serverStops").GetString());
+        Assert.Equal("120", Assert.Single(host.Runs, run => run.Script == "stop").Variables["quit"]);
+    }
+
+    [Fact] public async Task ACleanCrossplayRunRecordsEachBootsRetiredLobby()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host, crossplay: true);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.True(Step("every boot quit cleanly and retired its crossplay lobby").GetProperty("Passed").GetBoolean());
+        var provenance = Result().GetProperty("Provenance");
+        Assert.StartsWith("boot-1 clean", provenance.GetProperty("serverStops").GetString());
+        Assert.Contains("lobby lobby-1; retired yes; PlayFab confirmation logged", provenance.GetProperty("crossplayLobbies").GetString());
     }
 
     // The game reads its arguments lowercased: -Port names the game port, and one that differs from the profile's is refused.

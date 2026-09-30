@@ -30,6 +30,8 @@ public sealed class FakeOwnedServer
     /// <summary>Whether the adapter reports its session complete (mod ready).</summary>
     public bool Ready { get; set; } = true;
     public bool RefuseStop { get; set; }
+    /// <summary>A clean stop's quit request is ignored, so the process is killed after the wait (<see cref="StopOutcome.Killed"/>).</summary>
+    public bool IgnoreQuit { get; set; }
     public bool RefusePins { get; set; }
     /// <summary>The session reports another PID than the launched process's.</summary>
     public bool ReportWrongPid { get; set; }
@@ -113,6 +115,19 @@ public sealed class FakeServerProcess : IServerProcess
     public void Exit(int code) => _exit.TrySetResult(code);
     public Task<int> WaitForExitAsync(CancellationToken cancellation) => _exit.Task.WaitAsync(cancellation);
     public void Stop(TimeSpan timeout) { _server.Record("stop" + Id); if (_server.RefuseStop) throw new TimeoutException("Fake server refused to stop."); Exit(-1); }
+    /// <summary>
+    /// Records <c>stop{Id}</c> as <see cref="Stop"/> does. Asked to quit, it exits with 0 (<see cref="StopOutcome.Clean"/>), unless
+    /// <see cref="FakeOwnedServer.IgnoreQuit"/>: then it is killed after <paramref name="quit"/> and exits with -1.
+    /// </summary>
+    public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
+    {
+        _server.Record("stop" + Id);
+        if (HasExited) return new(StopOutcome.AlreadyExited, _exit.Task.Result, TimeSpan.Zero, "not asked: it had exited");
+        if (_server.RefuseStop) throw new TimeoutException("Fake server refused to stop.");
+        if (_server.IgnoreQuit) { Exit(-1); return new(StopOutcome.Killed, -1, quit, "fake quit request; no exit within the wait"); }
+        Exit(0);
+        return new(StopOutcome.Clean, 0, TimeSpan.Zero, "fake quit request");
+    }
     public void Dispose() => _server.Record("dispose" + Id);
 }
 

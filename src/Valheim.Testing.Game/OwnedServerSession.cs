@@ -12,7 +12,20 @@ public interface IServerProcess : IDisposable
     bool HasExited { get; }
     /// <summary>Completes with the exit code when the process exits; startup fails as soon as it does.</summary>
     Task<int> WaitForExitAsync(CancellationToken cancellation);
+    /// <summary>Kills the process at once and waits up to <paramref name="timeout"/> for it to exit.</summary>
     void Stop(TimeSpan timeout);
+    /// <summary>
+    /// Asks the process to quit, waits up to <paramref name="quit"/> for it to exit, and kills it (<see cref="Stop"/> with
+    /// <paramref name="kill"/>) only if it has not. Returns how it ended. A process that cannot be asked is killed at once,
+    /// which this default does: implementations that can ask override it.
+    /// </summary>
+    ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
+    {
+        bool exited = HasExited;
+        var clock = Stopwatch.StartNew();
+        Stop(kill);
+        return new(exited ? StopOutcome.AlreadyExited : StopOutcome.Killed, null, clock.Elapsed, "this process cannot be asked to quit");
+    }
 }
 
 /// <summary>
@@ -81,6 +94,13 @@ public sealed class OwnedServerSession : IDisposable
     private IServerProcess? _process;
     private GameActor? _actor;
     public List<int> StartedProcesses { get; } = [];
+    /// <summary>
+    /// How long a stop or restart waits for the server to quit after asking it (its world save and shutdown) before it kills it.
+    /// Default two minutes.
+    /// </summary>
+    public TimeSpan QuitTimeout { get; init; } = TimeSpan.FromMinutes(2);
+    /// <summary>How each owned process ended, in launch order: one entry per stop, including restarts.</summary>
+    public List<ProcessStop> Stops { get; } = [];
     /// <summary>Events startup waits on; null keeps bounded connection retries. The process exit is watched either way.</summary>
     public StartupEvents? Events { get; init; }
     public OwnedServerSession(Func<string, IServerProcess> launch, Func<IGameTransport> connect,
@@ -294,7 +314,8 @@ public sealed class OwnedServerSession : IDisposable
             _actor = null;
             if (_process != null)
             {
-                _process.Stop(TimeSpan.FromSeconds(15));
+                // Asked to quit first, so the game saves and retires its lobby; killed only after QuitTimeout.
+                Stops.Add(_process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)));
                 if (!_process.HasExited) throw new InvalidOperationException("Owned process did not exit; restart refused.");
                 _process.Dispose(); _process = null;
             }
@@ -304,7 +325,8 @@ public sealed class OwnedServerSession : IDisposable
 }
 
 // Starts one direct executable (an owned server, or an owned client through ClientSession); launch scripts must exec/wait, never detach a child.
-// The PID handshake refuses a daemonized server. No process-name discovery/kill.
+// The PID handshake refuses a daemonized server. No process-name discovery/kill. A clean stop asks only this process to quit
+// (Quit); the kill fallback ends this process and its children.
 public sealed class DirectServerProcess : IServerProcess
 {
     private readonly Process _process;
@@ -313,6 +335,8 @@ public sealed class DirectServerProcess : IServerProcess
     private readonly string[] _gameLogs;
     public int Id => _process.Id;
     public bool HasExited => _process.HasExited;
+    /// <summary>How <see cref="StopCleanly"/> asks the process to quit: <see cref="QuitRequest.Interrupt"/> for a dedicated server (the default), <see cref="QuitRequest.CloseWindow"/> for a game client.</summary>
+    public QuitRequest Quit { get; init; } = QuitRequest.Interrupt;
     public DirectServerProcess(ProcessStartInfo start, string logPrefix, params string[] gameLogs)
     {
         _logPrefix = logPrefix; _gameLogs = gameLogs;
@@ -335,6 +359,37 @@ public sealed class DirectServerProcess : IServerProcess
     {
         if (!_process.HasExited) _process.Kill(entireProcessTree: true);
         if (!_process.WaitForExit((int)timeout.TotalMilliseconds)) throw new TimeoutException("The owned process did not stop.");
+        Keep(timeout);
+    }
+    /// <summary>
+    /// Asks the process to quit as <see cref="Quit"/> says and waits up to <paramref name="quit"/>; kills it only if it is
+    /// still running then (or could not be asked). Keeps the logs either way.
+    /// </summary>
+    public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
+    {
+        var clock = Stopwatch.StartNew();
+        if (_process.HasExited) { Keep(kill); return new(StopOutcome.AlreadyExited, _process.ExitCode, TimeSpan.Zero, "not asked: it had exited"); }
+        if (quit <= TimeSpan.Zero)
+        {
+            Stop(kill);
+            return new(StopOutcome.Killed, _process.ExitCode, clock.Elapsed, "not asked to quit");
+        }
+        var (sent, request) = ProcessQuit.Request(_process, Quit);
+        if (sent && _process.WaitForExit((int)quit.TotalMilliseconds))
+        {
+            _process.WaitForExit(); // Also completes the exit code.
+            Keep(kill);
+            return new(StopOutcome.Clean, _process.ExitCode, clock.Elapsed, request);
+        }
+        string why = sent ? $"{request}; no exit within {WaitText.Seconds(quit)}" : request;
+        if (!_process.HasExited) _process.Kill(entireProcessTree: true);
+        if (!_process.WaitForExit((int)kill.TotalMilliseconds)) throw new TimeoutException("The owned process did not stop after it was killed.");
+        Keep(kill);
+        return new(StopOutcome.Killed, _process.ExitCode, clock.Elapsed, why);
+    }
+    // The process output and the game's logs as they were when it stopped (the next boot overwrites the game's).
+    private void Keep(TimeSpan timeout)
+    {
         if (!Task.WaitAll([_stdout, _stderr], timeout)) throw new TimeoutException("Process log capture did not finish.");
         for (int i = 0; i < _gameLogs.Length; i++)
         {

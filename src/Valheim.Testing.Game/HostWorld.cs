@@ -328,6 +328,7 @@ public sealed class HostRounds
             if (session != null)
                 try { Report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); released |= session.Owned; }
                 catch (Exception error) { teardown = error; } // Recorded as its own failed step.
+                finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
             if (world != null)
             {
                 if (!released) Report.Provenance["hostWorldLeftInPlace"] = world.WorldsDirectory + " (" + world.Name + ")";

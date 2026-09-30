@@ -154,15 +154,16 @@ public static class HostServer
     }
 }
 
-/// <summary>What stopping a server on a host found.</summary>
-public enum HostServerStop { Stopped, AlreadyGone }
+/// <summary>What stopping a server on a host found: it was killed, had gone already, or quit by itself when asked (SIGINT).</summary>
+public enum HostServerStop { Stopped, AlreadyGone, Quit }
 
 /// <summary>
 /// A dedicated server <see cref="HostServer"/> started, identified by process ID and start time on its host. It is an
 /// <see cref="IServerProcess"/>, so an <see cref="OwnedServerSession"/> launches, checks and stops it like a local one. Stopping
-/// kills only that process, and only while its start time still matches (a process ID reused by another program is never
-/// touched), then keeps the boot's logs in its boot directory and, when an evidence directory was given, fetches that directory
-/// here. Disposing stops it if it was not stopped yet.
+/// touches only that process, and only while its start time still matches (a process ID reused by another program is never
+/// touched): a clean stop (<see cref="StopCleanly"/>) sends it SIGINT, on which the game saves, retires its PlayFab lobby and
+/// quits, and kills it only if it has not exited in time. Then it keeps the boot's logs in its boot directory and, when an
+/// evidence directory was given, fetches that directory here. Disposing kills it if it was not stopped yet.
 /// </summary>
 public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
 {
@@ -218,9 +219,16 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
     /// keeps the logs and fetches the evidence. Each part is done once; a call after a failure repeats only what is left, which
     /// the identity check makes safe. A process still there after the kill, or an unproven stop or fetch, throws.
     /// </summary>
-    public async Task<HostServerStop> StopAsync(TimeSpan timeout, CancellationToken cancellation = default)
+    public Task<HostServerStop> StopAsync(TimeSpan timeout, CancellationToken cancellation = default) => StopAsync(TimeSpan.Zero, timeout, cancellation);
+
+    /// <summary>
+    /// <see cref="StopAsync(TimeSpan, CancellationToken)"/>, but first sends the server SIGINT and gives it <paramref name="quit"/>
+    /// to save and exit by itself, which it reports as <see cref="HostServerStop.Quit"/>; only then is it killed.
+    /// </summary>
+    public async Task<HostServerStop> StopAsync(TimeSpan quit, TimeSpan timeout, CancellationToken cancellation = default)
     {
         WaitText.RequireTimeout(timeout);
+        if (quit < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(quit));
         await _stopping.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
@@ -228,10 +236,12 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
             if (!_killed)
             {
                 string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
-                var result = (await _host.RunAsync(InteractiveScripts.LinuxStop, Variables(("seconds", seconds)), timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false))
-                    .EnsureSuccess($"Stopping server process {Id} on {HostName}");
+                string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+                var result = (await _host.RunAsync(InteractiveScripts.LinuxStop, Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "INT")),
+                    quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping server process {Id} on {HostName}");
                 outcome = InteractiveClient.Line(result.Stdout, "VT-STOP ") switch
                 {
+                    "quit" => HostServerStop.Quit,
                     "stopped" => HostServerStop.Stopped,
                     "gone" => HostServerStop.AlreadyGone,
                     "running" => throw new InvalidOperationException($"Server process {Id} on {HostName} was still running {WaitText.Seconds(timeout)} after it was killed."),
@@ -252,8 +262,20 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
         finally { _stopping.Release(); }
     }
 
-    /// <summary>The <see cref="IServerProcess"/> stop: <see cref="StopAsync"/>, waited for.</summary>
+    /// <summary>The <see cref="IServerProcess"/> stop: <see cref="StopAsync(TimeSpan, CancellationToken)"/>, waited for.</summary>
     public void Stop(TimeSpan timeout) => StopAsync(timeout).GetAwaiter().GetResult();
+
+    /// <summary>The <see cref="IServerProcess"/> clean stop: <see cref="StopAsync(TimeSpan, TimeSpan, CancellationToken)"/>, waited for.</summary>
+    public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        return StopAsync(quit, kill).GetAwaiter().GetResult() switch
+        {
+            HostServerStop.Quit => new(StopOutcome.Clean, null, clock.Elapsed, "SIGINT"),
+            HostServerStop.Stopped => new(StopOutcome.Killed, null, clock.Elapsed, quit > TimeSpan.Zero ? $"SIGINT; no exit within {WaitText.Seconds(quit)}" : "not asked to quit"),
+            _ => new(StopOutcome.AlreadyExited, null, clock.Elapsed, "not asked: it had exited"),
+        };
+    }
 
     /// <summary>Stops the process unless it was stopped already; an unproven stop throws.</summary>
     public void Dispose()
@@ -268,10 +290,12 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
 
     public override string ToString() => $"server process {Id} (started {StartIdentity}) on {HostName}";
 
-    private Dictionary<string, string> Variables((string Name, string Value) extra) => new()
+    private Dictionary<string, string> Variables(params (string Name, string Value)[] extra)
     {
-        ["game"] = Id.ToString(CultureInfo.InvariantCulture), ["start"] = StartIdentity, ["dir"] = BootDirectory, [extra.Name] = extra.Value,
-    };
+        var variables = new Dictionary<string, string> { ["game"] = Id.ToString(CultureInfo.InvariantCulture), ["start"] = StartIdentity, ["dir"] = BootDirectory };
+        foreach (var (name, value) in extra) variables[name] = value;
+        return variables;
+    }
 }
 
 // The fixed scripts of a dedicated server on a Linux host. Values arrive as variables (ScriptedGameHost.Compose); each ends
@@ -315,11 +339,15 @@ internal static class HostServerScripts
                 arg) args+=("$text") ;;
             esac
         done <<< "$spec"
+        # A background job of a non-interactive shell starts with SIGINT ignored, and the clean stop sends SIGINT: env gives the
+        # server the default disposition back where it can (coreutils 8.31 and later).
+        signals=()
+        if env --default-signal=INT true 2> /dev/null; then signals=(--default-signal=INT); fi
         mkfifo -m 600 -- "$dir/started" || exit 3
         exec 3<> "$dir/started"
         cd -- "$runtime" || exit 3
         setsid bash -c 'f=$1; p=$2; x=$3; shift 3; exec 4<> "$f"; "$@" 4>&- & g=$!; printf "%s\n" "$g" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; printf "%s\n" "$g" >&4; exec 4>&-; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
-            vt-server "$dir/started" "$dir/pid" "$dir/exit" env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"} \
+            vt-server "$dir/started" "$dir/pid" "$dir/exit" env ${signals[@]+"${signals[@]}"} ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"} \
             > "$dir/stdout.log" 2> "$dir/stderr.log" < /dev/null 3<&- &
         game=
         read -r -t "$seconds" -u 3 game

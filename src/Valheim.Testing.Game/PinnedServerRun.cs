@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
@@ -251,6 +252,23 @@ public static class PinnedServerRun
                 try { report.Step("stop only owned server", session.Dispose); }
                 catch (Exception error) { stopped = false; Console.Error.WriteLine("Teardown: " + error.Message); Classify(error); }
                 report.Provenance["ownedPids"] = string.Join(",", session.StartedProcesses);
+                // How each boot ended, restarts included: asked to quit, then killed only after the plan's quitSeconds.
+                report.Provenance["serverStops"] = string.Join("; ", session.Stops.Select((stop, i) => $"boot-{i + 1} {stop}"));
+                foreach (var (stop, i) in session.Stops.Select((stop, i) => (stop, i)).Where(entry => entry.stop.Outcome == StopOutcome.Killed))
+                    Console.Error.WriteLine($"Warning: owned server boot-{i + 1} was {stop}; the game's shutdown (its world save at quit) did not run.");
+                if (stopped && launched is { Plan.Crossplay: true } crossplayRun)
+                    try
+                    {
+                        report.Step("every boot quit cleanly and retired its crossplay lobby", () =>
+                        {
+                            // Each boot's kept logs: BepInEx's, Unity's (-logFile) and the process output, wherever the game wrote its lines.
+                            var logs = crossplayRun.Logs.Select(log => (Match: Regex.Match(log.Role, @"^boot-(\d+) "), log.Path)).Where(log => log.Match.Success)
+                                .GroupBy(log => int.Parse(log.Match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).OrderBy(group => group.Key)
+                                .Select(group => (IReadOnlyList<string>)group.Select(log => log.Path).ToList()).ToList();
+                            report.Provenance["crossplayLobbies"] = string.Join(" | ", CrossplayServer.RequireLobbiesRetired(session.Stops, logs));
+                        });
+                    }
+                    catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); definite = true; } // Recorded as its failed step.
             }
             if (hosted != null)
                 foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped).ConfigureAwait(false)) Classify(failure);
@@ -326,6 +344,7 @@ public static class PinnedServerRun
         }, () => new RecordingTransport(new CliTransport("127.0.0.1", plan.Port), Path.Combine(run.Output, "connection-" + ++connection + ".jsonl"), plan.Pinned ? null : EnvironmentPinning.NotPinned),
             run.WorldDirectory, plan.ExpectCommand, options.SessionCapability,
             TimeSpan.FromSeconds(plan.StartupSeconds), TimeSpan.FromSeconds(plan.CommandSeconds), cancellation: run.Cancellation)
-        { Events = plan.DedicatedStartupEvents(run.RuntimeDirectory) };
+        {
+            QuitTimeout = TimeSpan.FromSeconds(plan.QuitSeconds), Events = plan.DedicatedStartupEvents(run.RuntimeDirectory) };
     }
 }

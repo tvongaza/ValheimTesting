@@ -25,6 +25,8 @@ internal static class HostServerChecks
             "mkdir -p BepInEx",
             "printf 'args=%s\\n' \"$*\"",
             "env | grep -E '^(VT_TEST_TOKEN|SteamAppId|DOORSTOP_ENABLED|DOORSTOP_TARGET_ASSEMBLY)=' | sort",
+            // A server that ignores the quit request, for the kill fallback; set before the listening line the check waits for.
+            "if [ -n \"${VT_IGNORE_INT:-}\" ]; then trap '' INT; fi",
             "printf '[Info   :valheimCLI] Command server listening on 127.0.0.1:5577 this boot\\n' >> BepInEx/LogOutput.log",
             "exec sleep 300", ""));
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
@@ -82,6 +84,24 @@ internal static class HostServerChecks
             Assert.Equal(137, await process.WaitForExitAsync(CancellationToken.None));
             Assert.Equal(HostServerStop.AlreadyGone, await process.StopAsync(TimeSpan.FromSeconds(15)));
             // The bystander is untouched.
+            Assert.True((await host.RunAsync("kill -0 \"$p\"", new Dictionary<string, string> { ["p"] = bystander }, Generous)).Succeeded, "The bystander was stopped.");
+
+            // A clean stop sends SIGINT and the stand-in exits by itself (130: ended by SIGINT, not killed); one that ignores
+            // SIGINT is killed once the wait is over (137). The bystander is untouched either way.
+            async Task<ProcessStop> StopAfterListening(HostServerLaunch boot, string name, TimeSpan quit)
+            {
+                var started = await HostServer.StartAsync(host, boot, root + "/run/" + name, Generous, ["BepInEx/LogOutput.log"], Path.Combine(evidence.Path, name));
+                (await host.WaitForLogAsync(runtime + "/BepInEx/LogOutput.log", 0, StartupEvents.CliListening, StartupEvents.StartupFailures, Generous)).EnsureMatched();
+                var stop = started.StopCleanly(quit, TimeSpan.FromSeconds(15));
+                Assert.True(started.HasExited);
+                return stop with { ExitCode = await started.WaitForExitAsync(CancellationToken.None) };
+            }
+            var clean = await StopAfterListening(launch, "boot-2", TimeSpan.FromSeconds(15));
+            Assert.Equal((StopOutcome.Clean, 130, "SIGINT"), (clean.Outcome, clean.ExitCode, clean.Request));
+            var ignoring = HostServerLaunch.Create(runtime, ["-batchmode"], new Dictionary<string, string> { ["VT_TEST_TOKEN"] = "token-456", ["VT_IGNORE_INT"] = "1" });
+            var killed = await StopAfterListening(ignoring, "boot-3", TimeSpan.FromSeconds(1));
+            Assert.Equal((StopOutcome.Killed, 137), (killed.Outcome, killed.ExitCode));
+            Assert.StartsWith("SIGINT; no exit within 1.0 s", killed.Request);
             Assert.True((await host.RunAsync("kill -0 \"$p\"", new Dictionary<string, string> { ["p"] = bystander }, Generous)).Succeeded, "The bystander was stopped.");
 
             // The evidence: this boot's log, the earlier one moved aside, an absent Unity log, and the server's output with the

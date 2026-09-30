@@ -108,6 +108,60 @@ public static class CrossplayServer
         return Lobby(identity, LobbyCreated.Match(result.EnsureMatched()), host.Name + ":" + serverLog);
     }
 
+    /// <summary>
+    /// The game's line when PlayFab confirms that a lobby is marked inactive (1.0.16, <c>ZPlayFabMatchmaking.DeleteLobby</c>):
+    /// <c>Deactivated PlayFab lobby &lt;lobby id&gt;</c>. It is logged from PlayFab's reply, which a dedicated server quitting
+    /// on Ctrl+C or SIGINT does not wait for: on the 1.0.16 Windows server the process ended about two seconds after the
+    /// request, before the reply, so the line is recorded when present but not required.
+    /// </summary>
+    public static readonly Regex LobbyDeactivated = new(@"Deactivated PlayFab lobby (?<lobby>\S+)", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// The game's line when its shutdown retires its lobby: it asks PlayFab to mark the lobby inactive and leaves the
+    /// network (<c>Unregister PlayFab server "&lt;name&gt;" and leaving network "..."</c>).
+    /// </summary>
+    public static readonly Regex ServerUnregistered = new(@"Unregister PlayFab server ""[^""]*"" and leaving network", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// After a crossplay run's owned server boots have stopped: requires that every boot quit cleanly
+    /// (<see cref="StopOutcome.Clean"/>, or had exited by itself through the game's shutdown), that its logs show the lobby it
+    /// created (<see cref="LobbyCreated"/>), and that its shutdown retired it (<see cref="ServerUnregistered"/>). A killed server
+    /// skips its shutdown, so its lobby stays active for hours and PlayFab can send later joins on the same address and port
+    /// to it: a run with one proves nothing about the next run's join and fails here. Logs without any lobby line fail too,
+    /// because they cannot show a retirement (pass the log the game writes to: the <c>-logFile</c> file, or BepInEx's log when
+    /// it copies Unity's lines). <paramref name="bootLogs"/> holds each boot's kept logs, in launch order as <paramref name="stops"/>;
+    /// a missing file is skipped. Returns one line per boot for the report, saying whether PlayFab's confirmation was logged.
+    /// Whether the lobby really stopped taking joins is shown by the next run's join on the same address and port.
+    /// </summary>
+    public static IReadOnlyList<string> RequireLobbiesRetired(IReadOnlyList<ProcessStop> stops, IReadOnlyList<IReadOnlyList<string>> bootLogs)
+    {
+        var lines = new List<string>();
+        var problems = new List<string>();
+        for (int i = 0; i < Math.Max(stops.Count, bootLogs.Count); i++)
+        {
+            string boot = "boot-" + (i + 1);
+            var stop = i < stops.Count ? stops[i] : null;
+            if (stop == null) { problems.Add($"{boot} was never stopped"); continue; }
+            var kept = i < bootLogs.Count ? bootLogs[i].Where(File.Exists).ToList() : [];
+            if (kept.Count == 0) { problems.Add($"{boot}: no log was kept, so its lobby's retirement cannot be read"); continue; }
+            string text = string.Join("\n", kept.Select(File.ReadAllText));
+            var created = LobbyCreated.Matches(text).Select(match => match.Groups["lobby"].Value).Distinct().ToList();
+            var confirmed = LobbyDeactivated.Matches(text).Select(match => match.Groups["lobby"].Value).ToHashSet();
+            bool unregistered = ServerUnregistered.IsMatch(text);
+            if (stop.Outcome == StopOutcome.Killed)
+                problems.Add($"{boot} was {stop}: a killed server's PlayFab lobby stays active and can take later joins on this address and port, so this run is not a clean crossplay run");
+            else if (stop.Outcome == StopOutcome.AlreadyExited && !unregistered)
+                problems.Add($"{boot} had exited before the stop without the game's shutdown (no \"Unregister PlayFab server\" line)");
+            if (created.Count == 0)
+                problems.Add($"{boot}'s logs ({string.Join(", ", kept.Select(Path.GetFileName))}) hold no \"Created PlayFab lobby\" line, so they cannot show its lobby retired; keep the log the game writes to");
+            else if (stop.Outcome != StopOutcome.Killed && !unregistered)
+                problems.Add($"{boot} created PlayFab lobby {string.Join(",", created)}, but its shutdown never retired it (no \"Unregister PlayFab server\" line)");
+            lines.Add($"{boot}: {stop}; lobby {(created.Count == 0 ? "none" : string.Join(",", created))}; retired {(unregistered ? "yes" : "no")}; " +
+                $"PlayFab confirmation {(created.Count != 0 && created.All(confirmed.Contains) ? "logged" : "not logged")}");
+        }
+        if (problems.Count != 0) throw new InvalidOperationException(string.Join("; ", problems) + ".");
+        return lines;
+    }
+
     /// <summary>A Linux host runtime's BepInEx log, as a path on that host.</summary>
     public static string HostBepInExLog(string hostRuntimeDirectory) => hostRuntimeDirectory.TrimEnd('/') + "/BepInEx/LogOutput.log";
 
