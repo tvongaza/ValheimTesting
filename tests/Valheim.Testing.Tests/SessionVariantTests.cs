@@ -158,10 +158,18 @@ public sealed class SessionVariantTests : IDisposable
 
     // A client at its menu, left with a stale ErrorVersion from an earlier refused join. Its crossplay join goes through
     // loadingReadings readings, then either connects into world 7 or returns to the menu with failWith.
-    private static ScriptedTransport CrossplayClient(string? connectReply = null, string? failWith = null, bool startInWorld = false, int loadingReadings = 2)
+    private static ScriptedTransport CrossplayClient(string? connectReply = null, string? failWith = null, bool startInWorld = false, int loadingReadings = 2, bool strictWorld = false)
     {
         bool devcommands = false, started = startInWorld; int readings = 0;
-        return new ScriptedTransport()
+        var transport = new ScriptedTransport();
+        // Like ValheimCLI's strict cli_expect: once the join has loaded world 7 (after loadingReadings readings; 0 = as it
+        // starts), pins that do not list it are refused, and pins for another world do not hold.
+        if (strictWorld) transport.OnPrefix("cli_expect", command =>
+            !started || readings < loadingReadings ? ScriptedTransport.Ok("OK: EXPECT")
+            : command.Contains("worlduid=7", StringComparison.Ordinal) ? ScriptedTransport.Ok("OK: EXPECT")
+            : command.Contains("worlduid=", StringComparison.Ordinal) ? Mismatch("MISMATCH worlduid: 7, expected 8")
+            : Mismatch(NotListed));
+        return transport
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
             .OnPrefix("cli_connect_playfab_user ", command =>
@@ -181,6 +189,38 @@ public sealed class SessionVariantTests : IDisposable
                 };
             })
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok(Protected));
+    }
+
+    private const string NotListed = "MISMATCH world: W (uid 7) is loaded but not listed (strict); add world=, worlduid= or world=any";
+    // ValheimCLI's refused cli_expect: the first output line is the message, the last the error summary.
+    private static CommandResult Mismatch(string message) => new()
+    {
+        Ok = false, ErrorCode = "expectation_mismatch", Message = message,
+        Output = [message, "ERROR: code=expectation_mismatch mismatches=1"],
+    };
+
+    // Native crossplay run: the join loaded the world between two reads, so the strict menu pins were refused. With
+    // loadingReadings 1 the refusal comes on a session-state read; with 0 on the menu pin check right after the join starts.
+    [Theory, InlineData(1), InlineData(0)]
+    public void ACrossplayJoinThatLoadsTheWorldBetweenReadsIsRepinnedToThatWorld(int loadingReadings)
+    {
+        var transport = CrossplayClient(strictWorld: true, loadingReadings: loadingReadings);
+        using var actor = transport.Actor("client", Menu);
+        var state = new SessionControl(actor).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10), worldExpectations: Menu + " worlduid=7");
+        Assert.True(state.PlayerReady);
+        var commands = transport.Commands.ToList();
+        string worldPins = StrictExpectations.Normalize(Menu + " worlduid=7"); // As the actor sends them.
+        Assert.Contains(worldPins, commands);
+        Assert.Equal(1, transport.Count("cli_connect_playfab_user"));
+        Assert.True(commands.IndexOf("cli_connect_playfab_user ENTITY42") < commands.IndexOf(worldPins));
+        // Without the world's pins the same join fails on the refused menu pins, as it did natively.
+        var without = CrossplayClient(strictWorld: true, loadingReadings: loadingReadings);
+        using var bare = without.Actor("client", Menu);
+        Assert.Contains("is loaded but not listed (strict)", Assert.ThrowsAny<Exception>(() => new SessionControl(bare).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10))).Message);
+        // Pins for another world than the one the join loaded are not taken over: that pin check fails.
+        var other = CrossplayClient(strictWorld: true, loadingReadings: loadingReadings);
+        using var wrong = other.Actor("client", Menu);
+        Assert.Contains("MISMATCH worlduid", Assert.ThrowsAny<Exception>(() => new SessionControl(wrong).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10), worldExpectations: Menu + " worlduid=8")).Message);
     }
 
     [Fact] public void ACrossplayJoinSelectsTheCharacterStartsOnceWithoutAPasswordAndWaitsForTheConnection()
@@ -275,6 +315,47 @@ public sealed class SessionVariantTests : IDisposable
         Assert.Equal("ENTITY42", CrossplayServer.WaitForLobby(same, log, TimeSpan.FromSeconds(5)).RemotePlayerId);
         using var other = Server(Identity.Replace("playFabId=unavailable", "playFabId=ENTITY7"));
         Assert.Throws<InvalidOperationException>(() => CrossplayServer.WaitForLobby(other, log, TimeSpan.FromSeconds(5)));
+    }
+
+    // A crossplay server on another machine: the lobby line is awaited on that host, in its own log, from the boot's start.
+    private sealed class LogHost(HostLogResult reply) : IGameHost
+    {
+        public List<(string Log, long Offset)> Waits { get; } = [];
+        public string Name => "linux-box";
+        public GameHostKind Kind => GameHostKind.Ssh;
+        public HostShell Shell => HostShell.Bash;
+        public Task<HostLogResult> WaitForLogAsync(string logPath, long fromOffset, System.Text.RegularExpressions.Regex success, IReadOnlyList<System.Text.RegularExpressions.Regex>? failures, TimeSpan timeout, CancellationToken cancellation = default)
+        {
+            Waits.Add((logPath, fromOffset));
+            return Task.FromResult(reply);
+        }
+        public Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<FetchedDirectory> FetchDirectoryAsync(string hostDirectory, string localDirectory, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<HostLock> AcquireLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<HostLockResult> CheckLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<HostLockResult> ReleaseLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<Shipment> ShipRevisionAsync(string repository, string revision, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<Shipment> ShipFilesAsync(string localDirectory, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<long> LogOffsetAsync(string logPath, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default) => throw new NotSupportedException();
+    }
+
+    [Fact] public void ARemoteServersLobbyIsReadFromItsHostsLog()
+    {
+        const string line = "[Info   : Unity Log] Created PlayFab lobby with ID \"LOBBY-9\", ConnectionString \"c\" and owned by \"ENTITY9\"";
+        var host = new LogHost(new HostLogResult(HostLogOutcome.Matched, "log", line, TimeSpan.FromSeconds(1), line));
+        using var server = Server(Identity);
+        string log = CrossplayServer.HostBepInExLog("/srv/runs/run-1/runtime/");
+        Assert.Equal("/srv/runs/run-1/runtime/BepInEx/LogOutput.log", log);
+        Assert.Equal(new CrossplayLobby("ENTITY9", "LOBBY-9"), CrossplayServer.WaitForLobby(server, host, log, TimeSpan.FromSeconds(5)));
+        Assert.Equal((log, 0L), Assert.Single(host.Waits)); // This boot's log, from its start.
+        // A failed login on the host, expiry, and a server without crossplay (refused before the host is asked).
+        Assert.Throws<WaitFailedException>(() => CrossplayServer.WaitForLobby(server, new LogHost(new HostLogResult(HostLogOutcome.FailureMatched, "log", "Failed to login server to PlayFab backend", TimeSpan.Zero, null)), log, TimeSpan.FromSeconds(5)));
+        Assert.Throws<WaitTimeoutException>(() => CrossplayServer.WaitForLobby(server, new LogHost(new HostLogResult(HostLogOutcome.TimedOut, "log", null, TimeSpan.FromSeconds(5), "Register PlayFab server")), log, TimeSpan.FromSeconds(5)));
+        var untouched = new LogHost(new HostLogResult(HostLogOutcome.Matched, "log", line, TimeSpan.Zero, line));
+        using var steam = Server(Identity.Replace("backend=PlayFab", "backend=Steamworks"));
+        Assert.Throws<InvalidOperationException>(() => CrossplayServer.WaitForLobby(steam, untouched, log, TimeSpan.FromSeconds(5)));
+        Assert.Empty(untouched.Waits);
     }
 
     [Fact] public void AServerWithoutCrossplayIsRefusedBeforeItsLogIsRead()
