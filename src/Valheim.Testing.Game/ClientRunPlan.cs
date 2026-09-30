@@ -22,7 +22,9 @@ public sealed class ClientRunPlan
     /// under Rosetta on Apple Silicon, BepInExPack_Valheim's own loader and core work as installed, so a plan means the same
     /// process on every Mac. <c>arm64</c> is the native path: the install needs a Doorstop library with an arm64 slice and a
     /// BepInEx core built on MonoMod 25 or later, and the launch refuses one without them rather than fall back to Rosetta.
-    /// Windows and Linux clients are x64 only, so <c>arm64</c> is refused for them. Recorded in <c>client-process.json</c>.
+    /// Windows and Linux clients are x64 only, so <c>arm64</c> is refused for them. <see cref="Validate"/> runs the launch's slice
+    /// and core check on a <c>Valheim.app</c> install on this machine, so a runner refuses such a plan before it starts anything.
+    /// Recorded in <c>client-process.json</c>.
     /// </summary>
     public string Architecture { get; set; } = "";
     public string Host { get; set; } = "127.0.0.1";
@@ -107,8 +109,16 @@ public sealed class ClientRunPlan
         var architecture = LaunchArchitecture;
         if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Patchers.Length != 0 || InstallPins != null || Architecture.Length != 0))
             throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, patchers and architecture.");
-        if (architecture == ClientArchitecture.Arm64 && InstallPlatform() is { } platform && platform != ClientPlatform.MacOS)
-            throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {platform} client is x64 only. Leave architecture out.");
+        var platform = Owned ? InstallPlatform() : null;
+        if (architecture == ClientArchitecture.Arm64 && platform is { } other && other != ClientPlatform.MacOS)
+            throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {other} client is x64 only. Leave architecture out.");
+        // The launch's own slice and core check on an install on this machine, so validate and run refuse it before a server starts.
+        if (platform == ClientPlatform.MacOS)
+            try { ClientLaunch.RequireMacArchitecture(Path.GetFullPath(Install), architecture); }
+            catch (Exception error) when (error is InvalidOperationException or IOException)
+            {
+                throw new ArgumentException($"The client install cannot launch as {ClientLaunch.PlanName(architecture)}: {error.Message}", error);
+            }
         BepInExLoader.CheckPatcherNames(Patchers);
         if (string.IsNullOrWhiteSpace(Host) || Port is < 1024 or > 65535) throw new ArgumentException("Give the client's ValheimCLI host and port.");
         if (Owned && Host is not ("127.0.0.1" or "localhost")) throw new ArgumentException("An owned client runs on this machine; its ValheimCLI host is 127.0.0.1.");

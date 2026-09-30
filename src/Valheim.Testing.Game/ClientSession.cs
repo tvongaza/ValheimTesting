@@ -47,6 +47,30 @@ public sealed class ClientSession : IDisposable
     public static ClientSession Open(ClientRunPlan plan, string output, CancellationToken cancellation = default) =>
         plan.Owned ? Launch(plan, output, cancellation) : Attach(plan, output);
 
+    /// <summary>
+    /// <see cref="Open(ClientRunPlan, string, CancellationToken)"/>, adding the logs the owned client keeps beside the evidence
+    /// (<see cref="Logs"/>) to <paramref name="logs"/> for the teardown scan: when the session opens, and also when its startup
+    /// fails after the process started, so a client that never reached its menu is still scanned and listed in the result.
+    /// </summary>
+    public static ClientSession Open(ClientRunPlan plan, string output, ICollection<RunLog> logs, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(logs);
+        ClientSession session;
+        try { session = Open(plan, output, cancellation); }
+        catch (Exception error)
+        {
+            foreach (var log in KeptLogs(error)) logs.Add(log);
+            throw;
+        }
+        foreach (var log in session.Logs) logs.Add(log);
+        return session;
+    }
+
+    // A failed owned startup carries the logs its stopped process kept, for Open's log list (and the profile client's path).
+    private const string KeptLogsKey = "Valheim.Testing.Game.ClientSession.KeptLogs";
+    /// <summary>The logs a failed owned startup kept beside the evidence (its process had started); empty for any other failure.</summary>
+    internal static IReadOnlyList<RunLog> KeptLogs(Exception error) => error.Data[KeptLogsKey] as IReadOnlyList<RunLog> ?? [];
+
     /// <summary>Connects to an operator's client and verifies its menu pins. The operator launched it and still owns it.</summary>
     public static ClientSession Attach(ClientRunPlan plan, string output, IGameTransport? transport = null)
     {
@@ -168,8 +192,10 @@ public sealed class ClientSession : IDisposable
             actor.VerifyEnvironment(plan.MenuExpectations);
             return new ClientSession(actor, process, logs, architecture);
         }
-        catch
+        catch (Exception error)
         {
+            // Stopping keeps the logs beside the evidence; the caller lists them for the scan even though no session opened.
+            if (logs is { Count: > 0 }) error.Data[KeptLogsKey] = logs;
             actor?.Dispose();
             try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
             throw;

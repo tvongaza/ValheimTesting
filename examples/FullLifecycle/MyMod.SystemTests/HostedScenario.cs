@@ -155,12 +155,8 @@ public static class HostedRun
             else
             {
                 string? hostLog = plan.Client.Owned ? Path.Combine(plan.Client.Install, "BepInEx", "LogOutput.log") : null;
-                HostedScenario.Run(plan, () =>
-                {
-                    var session = ClientSession.Open(plan.Client, output, cancellation.Token);
-                    logs.AddRange(session.Logs); // Kept when the rounds close the client; scanned below.
-                    return session;
-                }, report, output, hostLog, cancellation.Token);
+                // Kept when the rounds close the client, or when its startup fails; scanned below.
+                HostedScenario.Run(plan, () => ClientSession.Open(plan.Client, output, logs, cancellation.Token), report, output, hostLog, cancellation.Token);
             }
         }
         catch (Exception error)

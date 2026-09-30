@@ -102,6 +102,40 @@ public sealed class ClientSessionTests : IDisposable
         }
     }
 
+    // Validation runs the launch's own slice and core check on an install on this machine, so a runner's validate mode, and its
+    // run mode before it starts a server, refuse what the launch would.
+    [Fact] public void PlanValidationRefusesAMacInstallThePlansArchitectureCannotLaunch()
+    {
+        using var pack = ClientLaunchTests.Install.Mac();
+        var error = Assert.Throws<ArgumentException>(() => Owned(pack.Root, "arm64").Validate());
+        Assert.Contains("The client install cannot launch as arm64: No Doorstop library in the install has an arm64 slice", error.Message);
+        Owned(pack.Root).Validate(); // The pack's own route, x64, is fine.
+        using var legacy = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.LegacyDetour);
+        Assert.Contains("MonoMod before 25", Assert.Throws<ArgumentException>(() => Owned(legacy.Root, "arm64").Validate()).Message);
+        using var nativeOnly = ClientLaunchTests.Install.Mac(packDoorstop: false, arm64Doorstop: true, core: ClientLaunchTests.NativeDetour);
+        Owned(nativeOnly.Root, "arm64").Validate();
+        Assert.Contains("cannot launch as x64: No Doorstop library in the install has an x86_64 slice", Assert.Throws<ArgumentException>(() => Owned(nativeOnly.Root).Validate()).Message);
+        using var noGame = ClientLaunchTests.Install.Mac(core: ClientLaunchTests.NativeDetour);
+        File.Delete(noGame.Executable);
+        Assert.Contains("has no executable", Assert.Throws<ArgumentException>(() => Owned(noGame.Root).Validate()).Message);
+    }
+
+    // The process started, so its kept logs travel with the failure for the scan; a start that never happened keeps none.
+    [Fact] public void AFailedStartupCarriesTheLogsItKept()
+    {
+        RunLog[] logs = [new("client BepInEx log", Path.Combine(_output, "client-boot.game-0.log"), Required: true), new("client Player.log", Path.Combine(_output, "client-boot.game-1.log"))];
+        var failed = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => new Process(exitCode: 3), () => new ScriptedTransport(),
+            (_, _) => Task.CompletedTask, default, null, logs));
+        Assert.Equal(logs, ClientSession.KeptLogs(failed));
+        var refused = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(Plan(), _output, () => new Process(), () => new ScriptedTransport { PinsHold = false },
+            (_, _) => Task.CompletedTask, default, null, logs));
+        Assert.Equal(logs, ClientSession.KeptLogs(refused));
+        var neverStarted = Assert.Throws<IOException>(() => ClientSession.Launch(Plan(), _output, () => throw new IOException("no such file"), () => new ScriptedTransport(),
+            (_, _) => Task.CompletedTask, default, null, logs));
+        Assert.Empty(ClientSession.KeptLogs(neverStarted));
+        Assert.Empty(ClientSession.KeptLogs(new InvalidOperationException("unrelated")));
+    }
+
     [Fact] public void AnArm64PlanForAWindowsInstallPathIsRefusedFromAnyHost()
     {
         var error = Assert.Throws<ArgumentException>(() => Owned(@"C:\Games\Valheim-vt-" + Guid.NewGuid().ToString("N"), "arm64").Validate());

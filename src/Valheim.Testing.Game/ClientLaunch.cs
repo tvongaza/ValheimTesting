@@ -116,11 +116,7 @@ public static class ClientLaunch
         string? macDoorstop = null;
         if (platform == ClientPlatform.Windows) BepInExLoader.RequireWindowsLoader(install, "install");
         else if (platform == ClientPlatform.Linux) BepInExLoader.RequireFile(install, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the install");
-        else
-        {
-            macDoorstop = MacDoorstop(install, executable, architecture);
-            if (architecture == ClientArchitecture.Arm64 && MacNativeCoreProblem(install) is { } problem) throw new InvalidOperationException(problem);
-        }
+        else macDoorstop = RequireMacArchitecture(install, architecture);
 
         environment ??= new Dictionary<string, string>();
         var names = host == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -208,6 +204,18 @@ public static class ClientLaunch
               "and a BepInEx core that runs natively (MonoMod 25 or later)" + (client ? "; or request x64 to run under Rosetta." : ".")
             : "An x86_64 launch needs BepInExPack_Valheim's doorstop_libs/libdoorstop_x64.dylib or a libdoorstop.dylib with an x86_64 slice, and Rosetta on Apple Silicon.";
         throw new InvalidOperationException($"No Doorstop library in the install has an {SliceName(architecture)} slice ({slices}). " + hint);
+    }
+
+    // The launch's architecture check for a macOS install, shared with plan validation (ClientRunPlan.Validate) so a plan the
+    // launch would refuse is refused before a runner starts anything: the game's and a Doorstop library's slice, and for arm64
+    // a native core. Returns the Doorstop library to insert.
+    internal static string RequireMacArchitecture(string install, ClientArchitecture architecture)
+    {
+        string executable = Path.Combine(FindMacBundle(install) ?? throw new FileNotFoundException($"Install contains no {MacBundle}.", install), MacExecutable);
+        if (!File.Exists(executable)) throw new FileNotFoundException($"{MacBundle} has no executable: {MacExecutable}", executable);
+        string doorstop = MacDoorstop(install, executable, architecture);
+        if (architecture == ClientArchitecture.Arm64 && MacNativeCoreProblem(install) is { } problem) throw new InvalidOperationException(problem);
+        return doorstop;
     }
 
     // Why this install's BepInEx core cannot run natively on arm64, or null when it can. Only the managed version is read:
