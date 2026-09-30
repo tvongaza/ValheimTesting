@@ -6,9 +6,9 @@
 # PowerShell twin of dev-loop.sh, for Windows PowerShell 5.1 and PowerShell 7.
 # Keep the two in step: same steps, environment and exit codes. Run it with
 #
-#   powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj smoke-plan.yaml
+#   powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj tools\dev-loop\smoke-plan.yaml
 #
-# ValheimCLI's examples/smoke-plan.yaml is a plan to start from.
+# smoke-plan.yaml, next to this script, is a strict plan to start from.
 #
 #   1. dotnet build -c Release (stops on a failed build)
 #   2. with a plan: writes a temporary copy of VALHEIM_EXPECTATIONS whose pin

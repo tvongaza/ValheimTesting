@@ -9,22 +9,30 @@ Keep the ValheimCLI core in `BepInEx/plugins`. Enable ScriptEngine's `LoadOnStar
 ScriptEngine reloads every script when any DLL changes. Do not run this against a
 session whose scripts or game state belong to somebody else.
 
-Build the core and two revisions of the same example plugin. The probe embeds
-symbols because ScriptEngine expects symbols when loading an assembly. The
-outputs contain the probe only; do not copy a second ValheimCLI assembly into scripts.
+Build two revisions of the example probe in [`ReloadProbe/`](ReloadProbe/Plugin.cs), a ScriptEngine script that
+registers the `example.probe` extension. It compiles against your game install and the exact ValheimCLI core the game
+runs, through [`tools/game-references`](../../tools/game-references/README.md) (`-p:ValheimPath=`, or `VALHEIM_PATH`,
+and `-p:CliDll=`), never in this repository's CI. The probe embeds symbols because ScriptEngine expects symbols when
+loading an assembly. The outputs contain the probe only (no game or ValheimCLI assembly is copied); do not copy a
+second ValheimCLI assembly into scripts.
 
 ```sh
-# In the pinned CLI checkout (not this repository):
-dotnet build valheimCLI.csproj -c Release
-dotnet build examples/ReloadProbe/ReloadProbe.csproj -c Release -o artifacts/probe-a
-dotnet build examples/ReloadProbe/ReloadProbe.csproj -c Release -p:ProbeRevision=B -o artifacts/probe-b
-# Back in ValheimTesting; use absolute paths to the two built probe DLLs:
+# From this repository; CliDll is the valheimCLI.dll installed in the game's BepInEx/plugins.
+dotnet build examples/ReloadCheck/ReloadProbe/ReloadProbe.csproj -c Release -p:ValheimPath=/path/to/Valheim \
+  -p:CliDll=/path/to/Valheim/BepInEx/plugins/valheimCLI.dll -o artifacts/probe-a
+dotnet build examples/ReloadCheck/ReloadProbe/ReloadProbe.csproj -c Release -p:ValheimPath=/path/to/Valheim \
+  -p:CliDll=/path/to/Valheim/BepInEx/plugins/valheimCLI.dll -p:ProbeRevision=B -o artifacts/probe-b
 dotnet build examples/ReloadCheck/ReloadCheck.csproj -c Release
 
+# Use absolute paths to the two built probe DLLs:
 dotnet examples/ReloadCheck/bin/Release/net10.0/ReloadCheck.dll \
-  5555 artifacts/probe-a/ReloadProbe.dll artifacts/probe-b/ReloadProbe.dll \
+  5555 /absolute/artifacts/probe-a/ReloadProbe.dll /absolute/artifacts/probe-b/ReloadProbe.dll \
   /absolute/disposable-game/BepInEx/scripts /absolute/results/reload.json /private/menu-pins.txt
 ```
+
+The probe moved here from ValheimCLI (commit `d112140`, `examples/ReloadProbe`) on 30 September 2026. Its code is
+unchanged apart from a provenance comment; its project file now takes the game and core through `tools/game-references`
+instead of ValheimCLI's own build properties.
 
 Use the actual ValheimCLI port instead of `5555`. This example is local: DLL replacement
 must reach the same game as the loopback connection. Supply a strict pins file listing the installed core, ScriptEngine and all other loaded plugins (and an exact world UID if run in a world). The driver requires the probe absent initially, then pins its A/B MD5 from the supplied artifacts and requires absence again after removal. It never trusts a running-game snapshot to invent an expected hash.

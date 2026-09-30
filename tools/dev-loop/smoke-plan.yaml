@@ -1,0 +1,101 @@
+# A smoke test for any mod: does the game still reach a playable world with the
+# mod installed, and does the mod answer?
+#
+# Build, deploy and run it in one step with the dev-loop scripts next to it:
+#   VALHEIM_EXPECTATIONS=pins.txt tools/dev-loop/dev-loop.sh MyMod.csproj tools/dev-loop/smoke-plan.yaml
+#   (Windows PowerShell: $env:VALHEIM_EXPECTATIONS = 'pins.txt', then
+#    powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj tools\dev-loop\smoke-plan.yaml)
+#
+# Or run it against a game you deployed yourself:
+#   valheim-cli --expect-strict pins.txt --test tools/dev-loop/smoke-plan.yaml --launch
+#
+# Strict pins are part of the plan: game.expect names a pins file (relative to
+# this plan) and game.expectStrict is true, so a run without an --expect-strict
+# override still checks every loaded plugin before the first step. Copy the
+# plan next to your own pins file, or pass --expect-strict as above; dev-loop
+# always does, with the pin of the build it just deployed.
+#
+# It makes a throwaway local character and world (the names below), so it never
+# touches your real saves. Replace the "Your mod answers" step with one of your
+# own console commands and the text it prints; everything else is generic.
+# Override any variable from the command line: --var world=OtherWorld
+#
+# Moved from ValheimCLI (commit d112140, examples/smoke-plan.yaml) to
+# ValheimTesting on 30 Sep 2026. SmokePlanTests loads it with the transport's
+# own plan model and checks that it stays strict.
+
+name: Mod smoke test
+description: Reach a fresh local world with the mod loaded, check the player and one of the mod's commands, take a screenshot.
+
+game:
+  expect: pins.txt        # your reviewed plugin pins, next to the plan; --expect-strict overrides it
+  expectStrict: true
+  launch: false          # --launch starts Valheim first
+  launchTimeout: 300s
+  stopAfter: false       # --stop-after quits the game after a passing run
+
+settings:
+  timeout: 120s
+  stopOnFailure: true
+
+variables:
+  character: SmokeTest
+  world: SmokeTestWorld
+  mod_command: help      # replace with your mod's own console command
+  mod_answer: help       # and text its output must contain
+
+tests:
+  # Started in a world? This step fails after about 15 s (code=unreachable)
+  # instead of waiting out its timeout: log out first.
+  - name: Main menu
+    waitFor:
+      state: MainMenu
+      timeout: 300s
+      message: Waiting for Valheim to reach the main menu...
+
+  - name: Throwaway character
+    commands:
+      - cli_create_character ${character} --replace --local
+    expect:
+      output: 'contains "OK: Created and selected character"'
+
+  - name: Throwaway world
+    description: The next step's wait is the check; the game's own loading log can arrive in this reply.
+    commands:
+      - cli_start_local_world ${world}
+
+  - name: In the world
+    waitFor:
+      state: InWorld
+      timeout: 300s
+      stall: 120s        # the load's heartbeat shows progress; nothing changing for 2 minutes ends the step
+      message: Waiting for the world to load...
+
+  - name: The player exists
+    commands:
+      - cli_player_state
+    expect:
+      output: 'contains "OK: position="'
+
+  - name: Player safety on
+    description: God mode and ghost, so nothing in the world interrupts the run.
+    commands:
+      - cli_set_player_safety true
+    expect:
+      output: 'contains "enabled=True"'
+
+  - name: Your mod answers
+    commands:
+      - ${mod_command}
+    expect:
+      output: 'contains "${mod_answer}"'
+
+  - name: Screenshot
+    description: Written under the game's valheimCLI/screenshots folder; the reply names the file.
+    commands:
+      - cli_screenshot smoke
+    expect:
+      output: 'contains "OK: screenshot"'
+
+cleanup:
+  - cli_logout_save
