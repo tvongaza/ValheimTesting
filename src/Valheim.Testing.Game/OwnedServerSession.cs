@@ -369,6 +369,11 @@ public sealed class DirectServerProcess : IServerProcess
     {
         var clock = Stopwatch.StartNew();
         if (_process.HasExited) { Keep(kill); return new(StopOutcome.AlreadyExited, _process.ExitCode, TimeSpan.Zero, "not asked: it had exited"); }
+        if (quit <= TimeSpan.Zero)
+        {
+            Stop(kill);
+            return new(StopOutcome.Killed, _process.ExitCode, clock.Elapsed, "not asked to quit");
+        }
         var (sent, request) = ProcessQuit.Request(_process, Quit);
         if (sent && _process.WaitForExit((int)quit.TotalMilliseconds))
         {

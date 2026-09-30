@@ -66,6 +66,19 @@ public class ProcessStopTests
         finally { bystander.Kill(); bystander.WaitForExit(); }
     }
 
+    [Fact] public void ZeroQuitTimeoutKillsWithoutSendingAQuitRequest()
+    {
+        using var dir = new TempDirectory();
+        var start = OperatingSystem.IsWindows()
+            ? new ProcessStartInfo("ping", "-t 127.0.0.1") { CreateNoWindow = true }
+            : new ProcessStartInfo("/bin/sleep", "30");
+        using var owned = new DirectServerProcess(start, Path.Combine(dir.Path, "owned"));
+        var stop = owned.StopCleanly(TimeSpan.Zero, TimeSpan.FromSeconds(5));
+        Assert.Equal(StopOutcome.Killed, stop.Outcome);
+        Assert.Equal("not asked to quit", stop.Request);
+        Assert.True(owned.HasExited);
+    }
+
     [Fact] public void ALocalProcessIgnoringSigintIsKilledAfterTheWait()
     {
         if (OperatingSystem.IsWindows()) return;
