@@ -42,8 +42,11 @@ public sealed class SshGameHost : ScriptedGameHost
     private static readonly Regex OptionName = new("^[A-Za-z]+$", RegexOptions.CultureInvariant);
     // Always set first (ssh keeps the first value it reads for an option), so a caller's option cannot switch them off.
     private static readonly string[] FixedOptions = ["BatchMode", "ConnectTimeout", "ExitOnForwardFailure", "GatewayPorts", "ClearAllForwardings"];
-    // A caller never adds listeners or picks the port twice.
-    private static readonly string[] RefusedOptions = ["LocalForward", "RemoteForward", "DynamicForward", "Port"];
+    // A caller never adds listeners, picks the port twice or replaces the scripts the host runs.
+    private static readonly string[] RefusedOptions = ["LocalForward", "RemoteForward", "DynamicForward", "Port", "RemoteCommand"];
+    // ssh takes these values as the rest of the line, quotes included, and runs them with the user's shell: quoting would make
+    // the whole command one word (zsh: "no such file or directory: ssh -i ... -W %h:%p").
+    private static readonly string[] CommandOptions = ["ProxyCommand", "KnownHostsCommand", "LocalCommand"];
     private readonly string[] _options;
     private readonly string _ssh;
 
@@ -54,7 +57,8 @@ public sealed class SshGameHost : ScriptedGameHost
     /// contain spaces, quotes and backslashes (<c>User=Some Name</c>, <c>IdentityFile=C:\Users\Some Name\.ssh\key</c>). ssh reads a
     /// <c>-o</c> value like a config line, so such a value is passed as <c>Name="value"</c>, escaped the way ssh reads it. The value
     /// must not be empty or contain a control character such as a tab or a line break. The space-separated <c>Name value</c> form is
-    /// not accepted.
+    /// not accepted. A command (<c>ProxyCommand=ssh -W %h:%p jump</c>) is passed as written: ssh runs it with the user's shell.
+    /// RemoteCommand is refused.
     /// </param>
     /// <param name="connectTimeout">ssh's ConnectTimeout; 10 s by default.</param>
     /// <param name="sshExecutable">The OpenSSH client; <c>ssh</c> from PATH by default.</param>
@@ -187,7 +191,12 @@ public sealed class SshGameHost : ScriptedGameHost
         if (FixedOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
             throw new ArgumentException(name + " is set by SshGameHost and cannot be overridden.", nameof(option));
         if (RefusedOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
-            throw new ArgumentException(name + " is refused: " + (name.Equals("Port", StringComparison.OrdinalIgnoreCase) ? "pass the port setting instead." : "the host opens only its own loopback CLI tunnel."), nameof(option));
+            throw new ArgumentException(name + " is refused: " + name.ToLowerInvariant() switch
+            {
+                "port" => "pass the port setting instead.",
+                "remotecommand" => "the host runs its own scripts.",
+                _ => "the host opens only its own loopback CLI tunnel.",
+            }, nameof(option));
         return option;
     }
 
@@ -196,11 +205,13 @@ public sealed class SshGameHost : ScriptedGameHost
     /// OS): spaces separate words, single and double quotes group, a backslash escapes a quote, a backslash or (outside quotes) a space, and a word starting with <c>#</c> is a comment. A value that ssh would not read back unchanged is passed as
     /// <c>Name="value"</c>, with a backslash before each <c>"</c> and before each backslash that precedes a backslash, a quote or the
     /// closing quote. Any other value is passed unchanged. Older OpenSSH groups double quotes without escapes, so a value with spaces
-    /// that needs no escape (a Windows path with a space, for example) reads the same there.
+    /// that needs no escape (a Windows path with a space, for example) reads the same there. ProxyCommand, KnownHostsCommand and
+    /// LocalCommand are the exception: ssh takes their value as the rest of the line, quotes included, so it is passed unchanged.
     /// </summary>
     internal static string OptionArgument(string option)
     {
         int equals = option.IndexOf('=');
+        if (CommandOptions.Contains(option[..equals], StringComparer.OrdinalIgnoreCase)) return option;
         string value = option[(equals + 1)..];
         if (!value.StartsWith('#') && value.IndexOfAny([' ', '"', '\'']) < 0 && !value.Contains(@"\\", StringComparison.Ordinal)) return option;
         var quoted = new StringBuilder(option, 0, equals + 1, option.Length + 8).Append('"');

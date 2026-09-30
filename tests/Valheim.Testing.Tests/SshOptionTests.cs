@@ -14,6 +14,11 @@ public class SshOptionTests
     [InlineData("SetEnv=A=B")]
     [InlineData("ProxyJump=tester@jump.example:2200")]
     [InlineData("User=a#b")]
+    // ssh takes a command as the rest of the line, quotes included: quoted, the shell would look for one file named "ssh -i ...".
+    [InlineData("ProxyCommand=ssh -i /keys/test key -p 2200 -W %h:%p root@jump.example")]
+    [InlineData("proxycommand=ssh -W %h:%p \"jump host\"")]
+    [InlineData("KnownHostsCommand=/usr/local/bin/hosts %H")]
+    [InlineData("LocalCommand=echo connected to %n")]
     public void AValueSshReadsAsGivenIsPassedUnchanged(string option) => Assert.Equal(option, SshGameHost.OptionArgument(SshGameHost.CheckOption(option)));
 
     [Theory]
@@ -50,6 +55,7 @@ public class SshOptionTests
     [InlineData("IdentityFile=/keys/a\nb", "IdentityFile has a control character")]
     [InlineData("User Some=Name", "An ssh option is Name=value")]
     [InlineData("User Some Name", "An ssh option is Name=value")]
+    [InlineData("RemoteCommand=uptime", "RemoteCommand is refused: the host runs its own scripts")]
     public void AnOptionSshCannotCarryIsRefusedByName(string option, string expected)
     {
         var error = Assert.Throws<ArgumentException>(() => new SshGameHost("box", "box", HostShell.Bash, 0, [option], null, "ssh", new FakeLauncher()));
@@ -95,6 +101,27 @@ public class SshOptionIntegrationTests
         Assert.True(exit.End == ProcessEnd.Exited && exit.ExitCode == 0, $"ssh -G: {exit.End} {exit.ExitCode} {exit.Stderr}");
         string line = exit.Stdout.Split('\n').Select(text => text.TrimEnd('\r')).Single(text => text.StartsWith("identityagent ", StringComparison.Ordinal));
         Assert.Equal(value, line["identityagent ".Length..]);
+    }
+
+    // A command comes back as written; its words are the shell's to split, not ssh's.
+    [SshTheory]
+    [InlineData("ProxyCommand", "ssh -i /keys/test key -W %h:%p root@jump.example")]
+    [InlineData("KnownHostsCommand", "/usr/local/bin/hosts \"a b\" %H")]
+    public async Task SshReadsACommandBackAsWritten(string name, string command)
+    {
+        var host = new SshGameHost("ssh-g", Destination, HostShell.Bash, 0, [name + "=" + command]);
+        var exit = await SshG(host.SshArguments(forward: true, ["-G"], null));
+        Assert.True(exit.End == ProcessEnd.Exited && exit.ExitCode == 0, $"ssh -G: {exit.End} {exit.ExitCode} {exit.Stderr}");
+        string key = name.ToLowerInvariant() + " ";
+        Assert.Equal(command, exit.Stdout.Split('\n').Select(text => text.TrimEnd('\r')).Single(text => text.StartsWith(key, StringComparison.Ordinal))[key.Length..]);
+    }
+
+    [SshFact] public async Task NegativeControlSshKeepsTheQuotesOfAQuotedCommand()
+    {
+        // What SshGameHost passed before commands were exempt: ssh keeps the quotes, and the shell then runs one word.
+        var exit = await SshG(["-G", "-o", "ProxyCommand=\"ssh -W %h:%p jump\"", "--", Destination]);
+        Assert.True(exit.End == ProcessEnd.Exited && exit.ExitCode == 0, $"ssh -G: {exit.End} {exit.ExitCode} {exit.Stderr}");
+        Assert.Contains("proxycommand \"ssh -W %h:%p jump\"", exit.Stdout);
     }
 
     [SshTheory]

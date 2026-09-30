@@ -235,6 +235,11 @@ public sealed class SshTheoryAttribute : TheoryAttribute
 {
     public SshTheoryAttribute() { if (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_DESTINATION") is null or "") Skip = "Set VALHEIM_TESTING_SSH_DESTINATION to an ssh destination on this machine"; }
 }
+/// <summary>As <see cref="SshTheoryAttribute"/>, for a test without data.</summary>
+public sealed class SshFactAttribute : FactAttribute
+{
+    public SshFactAttribute() { if (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_DESTINATION") is null or "") Skip = "Set VALHEIM_TESTING_SSH_DESTINATION to an ssh destination on this machine"; }
+}
 /// <summary>Runs only where VALHEIM_TESTING_CONTAINER names a running Linux container on this machine's Docker daemon, started with --network host.</summary>
 public sealed class ContainerTheoryAttribute : TheoryAttribute
 {
