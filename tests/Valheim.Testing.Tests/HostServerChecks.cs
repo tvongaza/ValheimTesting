@@ -138,10 +138,10 @@ internal static class HostServerChecks
         string plugin = runtime + "/valheim_server_Data/Plugins";
         async Task Party(string script) => (await host.RunAsync("set -e; mkdir -p \"$plugins\"; " + script, new Dictionary<string, string> { ["plugins"] = plugin }, Generous))
             .EnsureSuccess("Writing a stand-in libparty.so");
-        await Party("cp \"$(command -v true)\" \"$plugins/libparty.so\"; ldd \"$plugins/libparty.so\" | grep -q 'libc\\.so\\.6 => '");
+        await Party("cp \"$(type -P true)\" \"$plugins/libparty.so\"; ldd \"$plugins/libparty.so\" | grep -q 'libc\\.so\\.6 => '");
         Assert.Equal("valheim_server_Data/Plugins/libparty.so", await CrossplayLibraries.RequireAsync(host, runtime, Generous));
 
-        await Party("LC_ALL=C sed 's/libc\\.so\\.6/libq.so.6/g' \"$(command -v true)\" > \"$plugins/libparty.so\"");
+        await Party("LC_ALL=C sed 's/libc\\.so\\.6/libq.so.6/g' \"$(type -P true)\" > \"$plugins/libparty.so\"");
         var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
         Assert.Contains("because libq.so.6 is missing", refused.Message);
         var start = await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-refused", Generous));
