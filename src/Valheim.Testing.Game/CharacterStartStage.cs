@@ -13,6 +13,8 @@ public sealed class CharacterStartPlan
     public string CharactersLocalDirectory { get; set; } = "";
     /// <summary>Steam's userdata directory, containing account-id/892970/remote/characters.</summary>
     public string SteamUserDataDirectory { get; set; } = "";
+    /// <summary>The <see cref="DisposableCharacterStore"/> that registers the prepared file's character.</summary>
+    public string CharacterStore { get; set; } = "";
 
     public void Validate(string character)
     {
@@ -30,6 +32,8 @@ public sealed class CharacterStartPlan
         if (!Path.IsPathFullyQualified(SteamUserDataDirectory) ||
             !string.Equals(Path.GetFileName(Path.TrimEndingDirectorySeparator(SteamUserDataDirectory)), "userdata", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("characterStart.steamUserDataDirectory must be Steam's full userdata path.");
+        if (!Path.IsPathFullyQualified(CharacterStore))
+            throw new ArgumentException("characterStart.characterStore must be the full path of the disposable character store that registers this character.");
     }
 }
 
@@ -56,6 +60,8 @@ internal sealed class CharacterStartStage : IDisposable
         string hash = Convert.ToHexString(SHA256.HashData(bytes));
         if (!hash.Equals(plan.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The prepared character changed since its SHA256 was pinned.");
+        if (!DisposableCharacterStore.Open(plan.CharacterStore).Registers(bytes))
+            throw new InvalidDataException("The prepared file is not a registered disposable character; register it in the character store first.");
         // AtWorld produces identical bytes only when this save already has the specified world's logout point, has
         // completed its first spawn, and has the exact expected coordinates. The independent client support check follows.
         if (!bytes.AsSpan().SequenceEqual(CharacterSavePosition.AtWorld(bytes, worldUid, arrival.X, arrival.Height, arrival.Z)))

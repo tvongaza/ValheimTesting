@@ -3,29 +3,57 @@ using Valheim.Testing.Game;
 
 namespace MyMod.SystemTests;
 
-/// <summary>Opt-in preparation only; never stages into the game or launches a client.</summary>
+/// <summary>
+/// Opt-in character preparation only; never stages into the game or launches a client. A character is registered once as
+/// disposable in a store outside the game's folders; only registered characters can be prepared.
+/// </summary>
 public static class CharacterFixture
 {
-    public const string Mode = "prepare-character";
+    public const string RegisterMode = "register-character";
+    public const string RefreshMode = "refresh-character";
+    public const string PrepareMode = "prepare-character";
+
+    public static bool Handles(string mode) => mode is RegisterMode or RefreshMode or PrepareMode;
 
     public static int Run(string[] args)
     {
-        if (args.Length != 7 || args[0] != Mode ||
-            !long.TryParse(args[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out long uid) ||
-            !float.TryParse(args[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float x) ||
-            !float.TryParse(args[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float y) ||
-            !float.TryParse(args[5], NumberStyles.Float, CultureInfo.InvariantCulture, out float z))
-        {
-            Console.Error.WriteLine("Usage: mymod-system-test prepare-character <local-character.fch> <world-uid> <x> <y> <z> <new-output-file.fch>");
-            return 2;
-        }
         try
         {
-            string sha256 = CharacterStartCopy.Prepare(args[1], args[6], uid, x, y, z);
-            Console.WriteLine($"PREPARED {args[6]} sha256={sha256} (copy only; not staged or joined)");
-            return 0;
+            switch (args)
+            {
+                case [RegisterMode, var store, var name, var local]:
+                {
+                    var characters = Directory.Exists(store) && File.Exists(Path.Combine(store, DisposableCharacterStore.ManifestFile))
+                        ? DisposableCharacterStore.Open(store) : DisposableCharacterStore.Create(store);
+                    var character = characters.Register(name, local);
+                    Console.WriteLine($"REGISTERED {character.Name} in {characters.Root} (copy only; the local original is unchanged)");
+                    return 0;
+                }
+                case [RefreshMode, var store, var name, var local]:
+                {
+                    var character = DisposableCharacterStore.Open(store).Refresh(name, local);
+                    Console.WriteLine($"REFRESHED {character.Name} sha256={character.Sha256}");
+                    return 0;
+                }
+                case [PrepareMode, var store, var name, var worldUid, var x, var y, var z, var output]
+                    when long.TryParse(worldUid, NumberStyles.Integer, CultureInfo.InvariantCulture, out long uid) &&
+                         float.TryParse(x, NumberStyles.Float, CultureInfo.InvariantCulture, out float px) &&
+                         float.TryParse(y, NumberStyles.Float, CultureInfo.InvariantCulture, out float py) &&
+                         float.TryParse(z, NumberStyles.Float, CultureInfo.InvariantCulture, out float pz):
+                {
+                    var character = DisposableCharacterStore.Open(store).Get(name);
+                    string sha256 = CharacterStartCopy.Prepare(character, output, uid, px, py, pz);
+                    Console.WriteLine($"PREPARED {output} sha256={sha256} (copy only; not staged or joined)");
+                    return 0;
+                }
+            }
+            Console.Error.WriteLine("Usage: mymod-system-test register-character <store-dir> <name> <characters_local/character.fch>");
+            Console.Error.WriteLine("       mymod-system-test refresh-character <store-dir> <name> <characters_local/character.fch>");
+            Console.Error.WriteLine("       mymod-system-test prepare-character <store-dir> <name> <world-uid> <x> <y> <z> <new-output-file.fch>");
+            return 2;
         }
-        catch (Exception error) when (error is ArgumentException or IOException or NotSupportedException or KeyNotFoundException or UnauthorizedAccessException)
+        catch (Exception error) when (error is ArgumentException or IOException or InvalidDataException or NotSupportedException or
+            KeyNotFoundException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine("Character preparation refused: " + error.Message);
             return 1;

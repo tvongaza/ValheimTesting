@@ -98,12 +98,14 @@ public class CharacterSavePositionTests
             string source = Path.Combine(local, "test.fch"), output = Path.Combine(evidence, "test.fch");
             byte[] original = Profile().File;
             File.WriteAllBytes(source, original);
-            string digest = CharacterStartCopy.Prepare(source, output, 200, 14, 50, -4);
+            var character = Register(root, source);
+            string digest = CharacterStartCopy.Prepare(character, output, 200, 14, 50, -4);
             Assert.Equal(original, File.ReadAllBytes(source));
+            Assert.Equal(original, File.ReadAllBytes(Path.Combine(root, "store", "tester.fch")));
             Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(output))).ToLowerInvariant(), digest);
             Assert.Equal(SHA512.HashData(Payload(File.ReadAllBytes(output))), File.ReadAllBytes(output)[^64..]);
             Assert.NotEqual(original, File.ReadAllBytes(output));
-            Assert.Throws<IOException>(() => CharacterStartCopy.Prepare(source, output, 200, 1, 2, 3));
+            Assert.Throws<IOException>(() => CharacterStartCopy.Prepare(character, output, 200, 1, 2, 3));
             Assert.Equal(14f, BitConverter.ToSingle(Payload(File.ReadAllBytes(output)), Profile().World200Flag + 1));
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -121,9 +123,15 @@ public class CharacterSavePositionTests
             string localFile = Path.Combine(local, "test.fch"), cloudFile = Path.Combine(cloud, "test.fch");
             File.WriteAllBytes(localFile, Profile().File);
             File.WriteAllBytes(cloudFile, Profile().File);
-            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(cloudFile, Path.Combine(root, "copy.fch"), 200, 1, 2, 3));
-            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(localFile, Path.Combine(local, "copy.fch"), 200, 1, 2, 3));
+            var store = DisposableCharacterStore.Create(Path.Combine(root, "store"));
+            Assert.Throws<ArgumentException>(() => store.Register("cloudy", cloudFile));
+            Assert.Empty(store.Names);
+            var character = store.Register("tester", localFile);
+            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(character, Path.Combine(local, "copy.fch"), 200, 1, 2, 3));
+            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(character, Path.Combine(cloud, "copy.fch"), 200, 1, 2, 3));
+            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(character, Path.Combine(store.Root, "copy.fch"), 200, 1, 2, 3));
             Assert.False(File.Exists(Path.Combine(local, "copy.fch")));
+            Assert.False(File.Exists(Path.Combine(store.Root, "copy.fch")));
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -138,6 +146,7 @@ public class CharacterSavePositionTests
         {
             string source = Path.Combine(local, "seed.fch");
             File.WriteAllBytes(source, Profile().File);
+            var character = Register(root, source);
             string link = Path.Combine(evidence, "link");
             if (OperatingSystem.IsWindows())
             {
@@ -149,7 +158,7 @@ public class CharacterSavePositionTests
                 Assert.Equal(0, junction.ExitCode);
             }
             else Directory.CreateSymbolicLink(link, local);
-            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(source, Path.Combine(link, "copy.fch"), 200, 1, 2, 3));
+            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(character, Path.Combine(link, "copy.fch"), 200, 1, 2, 3));
             Assert.False(File.Exists(Path.Combine(local, "copy.fch")));
         }
         finally
@@ -172,9 +181,9 @@ public class CharacterSavePositionTests
         {
             string original = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "fresh.fch");
             File.WriteAllBytes(original, Profile().File);
-            string hash = CharacterStartCopy.Prepare(original, prepared, 200, 10, 40, -20);
+            string hash = CharacterStartCopy.Prepare(Register(root, original), prepared, 200, 10, 40, -20);
             var plan = new CharacterStartPlan { PreparedFile = prepared, Sha256 = hash,
-                CharactersLocalDirectory = local, SteamUserDataDirectory = steam };
+                CharactersLocalDirectory = local, SteamUserDataDirectory = steam, CharacterStore = Path.Combine(root, "store") };
             var point = new HeightExpectation(10, -20, 40);
             using (var stage = CharacterStartStage.Install(plan, "fresh", 200, point))
             {
@@ -207,8 +216,8 @@ public class CharacterSavePositionTests
             string original = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "fresh.fch");
             File.WriteAllBytes(original, Profile().File);
             var plan = new CharacterStartPlan { PreparedFile = prepared,
-                Sha256 = CharacterStartCopy.Prepare(original, prepared, 200, 10, 40, -20),
-                CharactersLocalDirectory = local, SteamUserDataDirectory = steam };
+                Sha256 = CharacterStartCopy.Prepare(Register(root, original), prepared, 200, 10, 40, -20),
+                CharactersLocalDirectory = local, SteamUserDataDirectory = steam, CharacterStore = Path.Combine(root, "store") };
             var point = new HeightExpectation(10, -20, 40);
             foreach (var collision in new[] { Path.Combine(local, "FRESH.fch.old"),
                 Path.Combine(cloud, "fresh.fch"), Path.Combine(remote, "fresh.fch") })
@@ -223,10 +232,14 @@ public class CharacterSavePositionTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    // Registers a characters_local save as "tester" in a new store at <root>/store.
+    internal static DisposableCharacter Register(string root, string localCharacterFile) =>
+        DisposableCharacterStore.Create(Path.Combine(root, "store")).Register("tester", localCharacterFile);
+
     internal sealed record Fixture(byte[] File, int World100Flag, int World200Flag);
 
     // A hand-built 1.0.16 profile payload. No game save or decompiled source is checked in.
-    internal static Fixture Profile(int mapBytes = 0, long secondUid = 200, bool firstSpawn = false)
+    internal static Fixture Profile(int mapBytes = 0, long secondUid = 200, bool firstSpawn = false, long playerId = 5678)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -252,7 +265,7 @@ public class CharacterSavePositionTests
         writer.Write(2); // per-world records
         int first = World(writer, 100, mapBytes);
         int second = World(writer, secondUid, 0);
-        writer.Write("Test character"); writer.Write(5678L); writer.Write("seed");
+        writer.Write("Test character"); writer.Write(playerId); writer.Write("seed");
         writer.Write(false); // cheats
         writer.Write(1_700_000_000L); // creation date
         writer.Write(true); // player data present

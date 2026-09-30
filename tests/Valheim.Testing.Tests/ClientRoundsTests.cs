@@ -58,10 +58,11 @@ public sealed class ClientRoundsTests : IDisposable
         Directory.CreateDirectory(local); Directory.CreateDirectory(evidence); Directory.CreateDirectory(steam);
         string source = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "tester-copy.fch");
         File.WriteAllBytes(source, CharacterSavePositionTests.Profile(secondUid: 4242).File);
-        string hash = CharacterStartCopy.Prepare(source, prepared, 4242, Point.X, Point.Height, Point.Z);
+        string hash = CharacterStartCopy.Prepare(CharacterSavePositionTests.Register(_output, source), prepared, 4242, Point.X, Point.Height, Point.Z);
         plan.CharacterStart = new CharacterStartPlan
         {
             PreparedFile = prepared, Sha256 = hash, CharactersLocalDirectory = local, SteamUserDataDirectory = steam,
+            CharacterStore = Path.Combine(_output, "store"),
         };
         return plan;
     }
@@ -159,6 +160,17 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
         Assert.True(File.Exists(plan.CharacterStart.PreparedFile));
         Assert.Contains(report.Steps, step => step.Name == "remove only the staged character and its game-made backups" && step.Passed);
+    }
+
+    [Fact] public void AnUnregisteredPreparedCharacterIsRefusedBeforeTheClientOpens()
+    {
+        var plan = PreparedPlan();
+        plan.CharacterStart!.CharacterStore = DisposableCharacterStore.Create(Path.Combine(_output, "other-store")).Root;
+        var report = new ScenarioReport("rounds");
+        bool opened = false;
+        Assert.Throws<InvalidDataException>(() => Rounds(report, plan).Run(Server(), () => { opened = true; throw new IOException("must not open"); }, Measure()));
+        Assert.False(opened);
+        Assert.False(File.Exists(Path.Combine(plan.CharacterStart.CharactersLocalDirectory, "tester-copy.fch")));
     }
 
     [Fact] public void WrongStagedStartFailsRatherThanTeleportingOrMeasuring()
