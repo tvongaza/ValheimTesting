@@ -344,10 +344,12 @@ public class InteractiveClientShellTests
     /// <summary>
     /// The Windows start in this runner's session. With a desktop session (VALHEIM_TESTING_WINDOWS_DESKTOP=1 requires one) the
     /// task starts a stand-in game (a copy of ping named valheim.exe) next to a stand-in Steam, is removed, and stopping ends only
-    /// that process. Without one, the refusal is all that can be checked.
+    /// that process. Without one, the refusal is all that can be checked. On a machine where a real Steam client runs (a
+    /// developer's own PC) nothing is started: the start would succeed against that Steam and launch the stand-in for real.
     /// </summary>
     [OsFact("windows")] public async Task AWindowsClientStartsThroughATaskInTheRunnersDesktopSession()
     {
+        if (RealSteamRunning()) return;
         using var root = new TempDirectory();
         string system = Environment.SystemDirectory, ping = Path.Combine(system, "PING.EXE");
         string install = Path.Combine(root.Path, "Valheim");
@@ -400,6 +402,20 @@ public class InteractiveClientShellTests
             Environment.SetEnvironmentVariable(variable, null);
             foreach (var process in started) { try { process.Kill(); } catch (InvalidOperationException) { } process.Dispose(); }
         }
+    }
+
+    // A Steam client that is not one of this test's stand-ins (those live under the test's temporary directory).
+    private static bool RealSteamRunning()
+    {
+        string temp = Path.GetFullPath(Path.GetTempPath());
+        foreach (var process in Process.GetProcessesByName("steam"))
+            using (process)
+            {
+                string? path = null;
+                try { path = process.MainModule?.FileName; } catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+                if (path == null || !Path.GetFullPath(path).StartsWith(temp, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        return false;
     }
 
     private static string CopyPing(string ping, string directory, string name)

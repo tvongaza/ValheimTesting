@@ -42,7 +42,11 @@ namespace UnityEngine
         public Vector3(float x, float y, float z) { this.x = x; this.y = y; this.z = z; }
         public static Vector3 down => throw null;
     }
-    public struct Quaternion { public static Quaternion identity => throw null; }
+    public struct Quaternion
+    {
+        public static Quaternion identity => throw null;
+        public Vector3 eulerAngles => throw null;
+    }
     public struct Ray { public Ray(Vector3 origin, Vector3 direction) => throw null; }
     public struct RaycastHit { public Vector3 point => throw null; }
     public sealed class Time { public static float realtimeSinceStartup => throw null; }
@@ -50,13 +54,35 @@ namespace UnityEngine
 
 namespace BepInEx
 {
-    public abstract class BaseUnityPlugin : UnityEngine.MonoBehaviour { }
+    public abstract class BaseUnityPlugin : UnityEngine.MonoBehaviour { public Configuration.ConfigFile Config => throw null; }
     public class BepInPlugin : System.Attribute { public System.Version Version => throw null; }
     public class PluginInfo
     {
         public BepInPlugin Metadata => throw null;
         public BaseUnityPlugin Instance => throw null;
     }
+}
+
+namespace BepInEx.Configuration
+{
+    // The real ConfigFile is an IDictionary<ConfigDefinition, ConfigEntryBase>; the adapter only enumerates it.
+    public class ConfigFile : System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<ConfigDefinition, ConfigEntryBase>>
+    {
+        public System.Collections.Generic.IEnumerator<System.Collections.Generic.KeyValuePair<ConfigDefinition, ConfigEntryBase>> GetEnumerator() => throw null;
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => throw null;
+    }
+    public class ConfigDefinition
+    {
+        public string Section => throw null;
+        public string Key => throw null;
+    }
+    public abstract class ConfigEntryBase
+    {
+        public System.Type SettingType => throw null;
+        public object DefaultValue => throw null;
+        public string GetSerializedValue() => throw null;
+    }
+    public static class TomlTypeConverter { public static string ConvertToString(object value, System.Type valueType) => throw null; }
 }
 
 namespace BepInEx.Bootstrap
@@ -77,31 +103,92 @@ public class ZNet : UnityEngine.MonoBehaviour
     public static ZNet instance => throw null;
     public bool IsServer() => throw null;
     public bool IsDedicated() => throw null;
+    public UnityEngine.Vector3 GetReferencePosition() => throw null;
+    public SimulationDistance GetSyncedSimulationDistance() => throw null;
+}
+public struct SimulationDistance
+{
+    public SimulationDistance(int nearSimulationDistance, int farSimulationDistance, bool classic = false) => throw null;
+    public int NearSimulationDistance => throw null;
+    public int FarSimulationDistance => throw null;
+    public bool IsClassic => throw null;
+}
+public class DungeonGenerator : UnityEngine.MonoBehaviour
+{
+    public UnityEngine.Vector3 m_zoneSize;
+    public bool m_useCustomInteriorTransform;
 }
 public class ZoneSystem : UnityEngine.MonoBehaviour
 {
     public struct SectorIndex { public uint Sector; }
+    public class ZoneLocation { public string m_prefabName; }
+    public struct LocationInstance
+    {
+        public ZoneLocation m_location;
+        public UnityEngine.Vector3 m_position;
+    }
     public static ZoneSystem instance => throw null;
     public UnityEngine.GameObject m_zonePrefab;
+    public float m_zoneSize = 64f;
+    public System.Collections.Generic.Dictionary<Vector2s, LocationInstance> m_locationInstances;
     public static UnityEngine.Vector3 GetZonePos(Vector2s id) => throw null;
+    public static Vector2s GetZone(UnityEngine.Vector3 point) => throw null;
+    public bool IsZoneLoaded(Vector2s zoneID) => throw null;
+    public System.Collections.Generic.List<string> GetGlobalKeys() => throw null;
+    public void SetGlobalKey(string name) => throw null;
+    public void RemoveGlobalKey(string name) => throw null;
 }
+public class ZNetScene : UnityEngine.MonoBehaviour
+{
+    public static ZNetScene instance => throw null;
+    public bool HasPrefab(int hash) => throw null;
+    public UnityEngine.GameObject GetPrefab(int hash) => throw null;
+    public ZNetView FindInstance(ZDO zdo) => throw null;
+}
+public struct ZDOID { }
 public class ZDO
 {
+    public ZDOID m_uid;
     public bool IsOwner() => throw null;
     public int GetPrefab() => throw null;
+    public UnityEngine.Vector3 GetPosition() => throw null;
+    public int GetInt(string name, int defaultValue = 0) => throw null;
+    public bool GetInt(string name, out int value) => throw null;
+    public UnityEngine.Vector3 GetVec3(string name, UnityEngine.Vector3 defaultValue) => throw null;
+    public UnityEngine.Quaternion GetQuaternion(string name, UnityEngine.Quaternion defaultValue) => throw null;
+    public bool GetByteArray(string name, out byte[] value) => throw null;
 }
 public class ZDOMan
 {
     public static ZDOMan instance => throw null;
     public void DestroyZDO(ZDO zdo) => throw null;
+    public void FindSectorObjects(Vector2s sector, SimulationDistance simulationDistance, System.Collections.Generic.List<ZDO> sectorObjects, System.Collections.Generic.List<ZDO> distantSectorObjects = null) => throw null;
 }
 public class ZNetView : UnityEngine.MonoBehaviour
 {
+    public bool m_distant;
     public ZDO GetZDO() => throw null;
     public bool IsValid() => throw null;
     public bool IsOwner() => throw null;
     public static void StartGhostInit() => throw null;
     public static void FinishGhostInit() => throw null;
+}
+public class Player : UnityEngine.MonoBehaviour
+{
+    public static Player m_localPlayer;
+    public System.Collections.Generic.Dictionary<string, string> m_customData;
+}
+public class PlayerProfile
+{
+    public FileHelpers.FileSource m_fileSource;
+    public string GetName() => throw null;
+    public string GetFilename() => throw null;
+    public string GetPath() => throw null;
+}
+public class Game : UnityEngine.MonoBehaviour
+{
+    public static Game instance => throw null;
+    public PlayerProfile GetPlayerProfile() => throw null;
 }
 public class WorldGenerator { public static WorldGenerator instance => throw null; }
 public class HeightmapBuilder

@@ -35,6 +35,7 @@ public sealed class LogScanTests : IDisposable
             "ZNetScene.RemoveObjects (System.Collections.Generic.List`1[T] currentNearObjects, System.Collections.Generic.List`1[T] currentDistantObjects) (at <c0ffee>:0)\n" +
             "ZNetScene.Update () (at <c0ffee>:0)\n", 3 },
         { "rpc-method-missing", Boot + "[Warning: Unity Log] 09/29/2026 12:00:00: Failed to find rpc method 1234567890\n", 3 },
+        { "missing-prefab-hash", Boot + "[Warning: Unity Log] 09/29/2026 12:00:00: Missing prefab hash: -887680680\n", 3 },
         { "missing-script", Boot + "[Warning: Unity Log] The referenced script on this Behaviour (Game Object 'BrokenPiece') is missing!\n", 3 },
         { "shader-unsupported", Boot + "[Warning: Unity Log] WARNING: Shader Unsupported: 'Custom/Piece' - All subshaders removed\n", 3 },
         { LogScanner.UnknownWarning, Boot + "[Warning:  My Mod] Config value out of range; using 5\n", 3 },
