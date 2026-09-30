@@ -204,17 +204,19 @@ jobs:
           delimiter="summary-$RANDOM$RANDOM"
           { echo "summary<<$delimiter"; head -c 6000 summary.md; echo; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
+        id: upload
         if: always()
         with:
           name: native-server-checks
           path: evidence/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
-      # Only a build that passed is remembered: after a failure the four-hourly watch checks the same build again, until it
-      # passes or a new build appears. A negative control is never remembered.
+      # Only a build with successful checks and captured evidence is remembered: after a failure the four-hourly watch
+      # checks the same build again, until it passes or a new build appears. A negative control is never remembered.
       - name: Remember the checked build id
         if: >-
           always() && steps.build.outcome == 'success' && steps.smoke.outcome == 'success' && steps.example.outcome == 'success' &&
+          steps.collect.outcome == 'success' && steps.upload.outcome == 'success' &&
           steps.image.outputs.build-id != '' && env.NEGATIVE_CONTROL == 'none'
         env:
           BUILD_ID: ${{ steps.image.outputs.build-id }}
@@ -222,6 +224,7 @@ jobs:
       - uses: actions/cache/save@v6
         if: >-
           always() && steps.build.outcome == 'success' && steps.smoke.outcome == 'success' && steps.example.outcome == 'success' &&
+          steps.collect.outcome == 'success' && steps.upload.outcome == 'success' &&
           steps.image.outputs.build-id != '' && env.NEGATIVE_CONTROL == 'none'
         with:
           path: ${{ runner.temp }}/server-build-checked
