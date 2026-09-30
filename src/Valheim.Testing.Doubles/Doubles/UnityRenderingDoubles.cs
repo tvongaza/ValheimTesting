@@ -6,6 +6,9 @@
 // ReSharper disable InconsistentNaming
 // Unity components a mod inspects or switches: colliders and their bounds, rigidbodies, renderers with Unity's
 // material and mesh instancing, lights, animators and canvases. No physics, rendering or animation runs. Unity 6 names.
+// Their settings are properties, as in Unity, where they live in native code: a mod that reads a component's public fields
+// by reflection sees none here either. Each is backed by a private [SerializeField] field under Unity's serialized name,
+// so Instantiate still copies it.
 using System;
 using System.Collections.Generic;
 
@@ -62,8 +65,10 @@ namespace UnityEngine
     /// </summary>
     public partial class Collider : Component
     {
-        public bool enabled = true;
-        public bool isTrigger;
+        [SerializeField] private bool m_Enabled = true;
+        public bool enabled { get => m_Enabled; set => m_Enabled = value; }
+        [SerializeField] private bool m_IsTrigger;
+        public bool isTrigger { get => m_IsTrigger; set => m_IsTrigger = value; }
         public Rigidbody? attachedRigidbody => m_gameObject is { } owner ? owner.GetComponentInParent<Rigidbody>(true) : null;
         public Bounds bounds => enabled && m_gameObject is { Destroyed: false } owner && owner.activeInHierarchy ? ShapeBounds() : default;
         private protected virtual Bounds ShapeBounds() => new(transform.position, Vector3.zero);
@@ -73,15 +78,19 @@ namespace UnityEngine
 
     public partial class BoxCollider : Collider
     {
-        public Vector3 center;
-        public Vector3 size = new(1f, 1f, 1f);
+        [SerializeField] private Vector3 m_Center;
+        public Vector3 center { get => m_Center; set => m_Center = value; }
+        [SerializeField] private Vector3 m_Size = new(1f, 1f, 1f);
+        public Vector3 size { get => m_Size; set => m_Size = value; }
         private protected override Bounds ShapeBounds() => new(transform.TransformPoint(center), VectorMath.Abs(VectorMath.Scale(size, transform.lossyScale)));
     }
 
     public partial class SphereCollider : Collider
     {
-        public Vector3 center;
-        public float radius = 0.5f;
+        [SerializeField] private Vector3 m_Center;
+        public Vector3 center { get => m_Center; set => m_Center = value; }
+        [SerializeField] private float m_Radius = 0.5f;
+        public float radius { get => m_Radius; set => m_Radius = value; }
         internal float WorldRadius { get { var s = VectorMath.Abs(transform.lossyScale); return Math.Abs(radius) * Math.Max(s.x, Math.Max(s.y, s.z)); } }
         private protected override Bounds ShapeBounds() { float r = WorldRadius * 2f; return new(transform.TransformPoint(center), new Vector3(r, r, r)); }
         public override Vector3 ClosestPoint(Vector3 position)
@@ -94,11 +103,15 @@ namespace UnityEngine
 
     public partial class CapsuleCollider : Collider
     {
-        public Vector3 center;
-        public float radius = 0.5f;
-        public float height = 2f;
+        [SerializeField] private Vector3 m_Center;
+        public Vector3 center { get => m_Center; set => m_Center = value; }
+        [SerializeField] private float m_Radius = 0.5f;
+        public float radius { get => m_Radius; set => m_Radius = value; }
+        [SerializeField] private float m_Height = 2f;
+        public float height { get => m_Height; set => m_Height = value; }
         /// <summary>The axis the capsule runs along: 0 = x, 1 = y (the default), 2 = z.</summary>
-        public int direction = 1;
+        [SerializeField] private int m_Direction = 1;
+        public int direction { get => m_Direction; set => m_Direction = value; }
         private protected override Bounds ShapeBounds()
         {
             var s = VectorMath.Abs(transform.lossyScale);
@@ -112,8 +125,10 @@ namespace UnityEngine
 
     public partial class MeshCollider : Collider
     {
-        public bool convex;
-        public Mesh? sharedMesh;
+        [SerializeField] private bool m_Convex;
+        public bool convex { get => m_Convex; set => m_Convex = value; }
+        [SerializeField] private Mesh? m_Mesh;
+        public Mesh? sharedMesh { get => m_Mesh; set => m_Mesh = value; }
         private protected override Bounds ShapeBounds()
         {
             if (sharedMesh is null) return new(transform.position, Vector3.zero);
@@ -127,14 +142,22 @@ namespace UnityEngine
     /// <summary>A rigidbody's settings and velocities, under Unity 6's names (<c>linearVelocity</c>, <c>linearDamping</c>). Nothing moves it.</summary>
     public partial class Rigidbody : Component
     {
-        public Vector3 linearVelocity;
-        public Vector3 angularVelocity;
-        public float linearDamping;
-        public float angularDamping = 0.05f;
-        public float mass = 1f;
-        public bool isKinematic;
-        public bool useGravity = true;
-        public RigidbodyInterpolation interpolation;
+        [SerializeField] private Vector3 m_LinearVelocity;
+        public Vector3 linearVelocity { get => m_LinearVelocity; set => m_LinearVelocity = value; }
+        [SerializeField] private Vector3 m_AngularVelocity;
+        public Vector3 angularVelocity { get => m_AngularVelocity; set => m_AngularVelocity = value; }
+        [SerializeField] private float m_LinearDamping;
+        public float linearDamping { get => m_LinearDamping; set => m_LinearDamping = value; }
+        [SerializeField] private float m_AngularDamping = 0.05f;
+        public float angularDamping { get => m_AngularDamping; set => m_AngularDamping = value; }
+        [SerializeField] private float m_Mass = 1f;
+        public float mass { get => m_Mass; set => m_Mass = value; }
+        [SerializeField] private bool m_IsKinematic;
+        public bool isKinematic { get => m_IsKinematic; set => m_IsKinematic = value; }
+        [SerializeField] private bool m_UseGravity = true;
+        public bool useGravity { get => m_UseGravity; set => m_UseGravity = value; }
+        [SerializeField] private RigidbodyInterpolation m_Interpolate;
+        public RigidbodyInterpolation interpolation { get => m_Interpolate; set => m_Interpolate = value; }
         public Vector3 position { get => transform.position; set => transform.position = value; }
         public Quaternion rotation { get => transform.rotation; set => transform.rotation = value; }
         // The pre-Unity-6 names still compile in Unity 6, with an obsolete warning.
@@ -181,8 +204,10 @@ namespace UnityEngine
     /// </summary>
     public partial class Renderer : Component
     {
-        public bool enabled = true;
-        public Material[] sharedMaterials = new Material[0];
+        [SerializeField] private bool m_Enabled = true;
+        public bool enabled { get => m_Enabled; set => m_Enabled = value; }
+        [SerializeField] private Material[] m_Materials = new Material[0];
+        public Material[] sharedMaterials { get => m_Materials; set => m_Materials = value; }
         private readonly HashSet<Material> m_instances = new();
         public Material? sharedMaterial
         {
@@ -255,7 +280,8 @@ namespace UnityEngine
     /// <summary>The mesh an object draws. <see cref="mesh"/> copies a shared mesh on first read ("&lt;name&gt; Instance"), as Unity's does; <see cref="sharedMesh"/> never copies.</summary>
     public partial class MeshFilter : Component
     {
-        public Mesh? sharedMesh;
+        [SerializeField] private Mesh? m_Mesh;
+        public Mesh? sharedMesh { get => m_Mesh; set => m_Mesh = value; }
         private Mesh? m_instance;
         public Mesh mesh
         {
@@ -276,13 +302,20 @@ namespace UnityEngine
     /// <summary>A light's settings, with Unity's defaults. It lights nothing.</summary>
     public partial class Light : Behaviour
     {
-        public LightType type = LightType.Point;
-        public Color color = new(1f, 1f, 1f, 1f);
-        public float intensity = 1f;
-        public float range = 10f;
-        public float spotAngle = 30f;
-        public LightShadows shadows;
-        public float shadowStrength = 1f;
+        [SerializeField] private LightType m_Type = LightType.Point;
+        public LightType type { get => m_Type; set => m_Type = value; }
+        [SerializeField] private Color m_Color = new(1f, 1f, 1f, 1f);
+        public Color color { get => m_Color; set => m_Color = value; }
+        [SerializeField] private float m_Intensity = 1f;
+        public float intensity { get => m_Intensity; set => m_Intensity = value; }
+        [SerializeField] private float m_Range = 10f;
+        public float range { get => m_Range; set => m_Range = value; }
+        [SerializeField] private float m_SpotAngle = 30f;
+        public float spotAngle { get => m_SpotAngle; set => m_SpotAngle = value; }
+        [SerializeField] private LightShadows m_Shadows;
+        public LightShadows shadows { get => m_Shadows; set => m_Shadows = value; }
+        [SerializeField] private float m_ShadowStrength = 1f;
+        public float shadowStrength { get => m_ShadowStrength; set => m_ShadowStrength = value; }
     }
 
     /// <summary>Unity 6's animator update modes (AnimatePhysics is now Fixed; the old name remains, obsolete).</summary>
@@ -296,9 +329,12 @@ namespace UnityEngine
     public partial class Animator : Behaviour
     {
         private readonly Dictionary<int, object> m_parameters = new();
-        public float speed = 1f;
-        public AnimatorUpdateMode updateMode;
-        public bool keepAnimatorStateOnDisable;
+        [SerializeField] private float m_Speed = 1f;
+        public float speed { get => m_Speed; set => m_Speed = value; }
+        [SerializeField] private AnimatorUpdateMode m_UpdateMode;
+        public AnimatorUpdateMode updateMode { get => m_UpdateMode; set => m_UpdateMode = value; }
+        [SerializeField] private bool m_KeepAnimatorStateOnDisable;
+        public bool keepAnimatorStateOnDisable { get => m_KeepAnimatorStateOnDisable; set => m_KeepAnimatorStateOnDisable = value; }
 
         /// <summary>A CRC-32 of the name, the stable id Unity uses for a parameter or state (not checked against Unity's own values).</summary>
         public static int StringToHash(string name)
@@ -335,9 +371,12 @@ namespace UnityEngine
     /// <summary>A UI canvas: its settings and whether it is a root canvas (no canvas above it in the hierarchy). Nothing is drawn.</summary>
     public partial class Canvas : Behaviour
     {
-        public RenderMode renderMode;
-        public int sortingOrder;
-        public float scaleFactor = 1f;
+        [SerializeField] private RenderMode m_RenderMode;
+        public RenderMode renderMode { get => m_RenderMode; set => m_RenderMode = value; }
+        [SerializeField] private int m_SortingOrder;
+        public int sortingOrder { get => m_SortingOrder; set => m_SortingOrder = value; }
+        [SerializeField] private float m_ScaleFactor = 1f;
+        public float scaleFactor { get => m_ScaleFactor; set => m_ScaleFactor = value; }
         /// <summary>How many times <see cref="ForceUpdateCanvases"/> ran; a test can check a layout pass was requested.</summary>
         public static int ForceUpdateCount;
         public static void ForceUpdateCanvases() => ForceUpdateCount++;

@@ -124,7 +124,13 @@ public partial class Heightmap
     // with a TerrainComp whose arrays start zeroed, exactly like a fresh
     // _TerrainCompiler in the game.
     public static UnityEngine.Color m_paintMaskDirt = new(1f, 0f, 0f, 1f);
+    public static UnityEngine.Color m_paintMaskCultivated = new(0f, 1f, 0f, 1f);
     public static UnityEngine.Color m_paintMaskPaved = new(0f, 0f, 1f, 1f);
+    public static UnityEngine.Color m_paintMaskNothing = new(0f, 0f, 0f, 1f);
+    public static UnityEngine.Color m_paintMaskClearVegetation = new(0f, 0f, 0f, 0f);
+    public static UnityEngine.Color m_paintMaskDeepSnow = new(1f, 1f, 1f, 1f);
+    /// <summary>The generated build this heightmap was made from (the game's private field); null until a test sets one.</summary>
+    public HeightmapBuilder.HMBuildData? m_buildData;
     /// <summary>The loaded zone heightmaps, as the game's own list. <c>ValheimWorldScope.RegisterHeightmap</c> loads one per zone.</summary>
     public static System.Collections.Generic.List<Heightmap> s_heightmaps = new();
     /// <summary>The heightmap loaded last. Setting it leaves that one heightmap loaded (or none), as a single-zone test wants.</summary>
@@ -225,7 +231,13 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
     public static bool GhostInit { get; private set; }
     public static void StartGhostInit() => GhostInit = true;
     public static void FinishGhostInit() => GhostInit = false;
+    /// <summary>Whether the object's ZDO is saved with the world. The game's default is false; a prefab sets it.</summary>
+    public bool m_persistent;
+    /// <summary>Whether the object's authored scale is sent with its ZDO (the game's default is false).</summary>
+    public bool m_syncInitialScale;
     public ZNetView(ZDO zdo) { Zdo = zdo; if (zdo != null) zdo.m_view = this; }
+    /// <summary>A view with no ZDO yet, as <c>AddComponent&lt;ZNetView&gt;()</c> on a prefab makes one; a test gives it a ZDO with <see cref="Zdo"/>.</summary>
+    public ZNetView() { Zdo = null!; }
     public bool IsValid() => Zdo != null;
     public bool IsOwner() => Zdo.IsOwner();
     public bool HasOwner() => Zdo.HasOwner();
@@ -285,6 +297,10 @@ public partial class ZDO
     public UnityEngine.Vector3 GetPosition() => m_position;
     public Vector2s GetSector() => ZoneSystem.GetZone(m_position);
     public void SetPosition(UnityEngine.Vector3 position) => m_position = position;
+    // The game keeps the rotation as Euler angles (a Vector3), so a rotation comes back as the Euler of those angles.
+    private UnityEngine.Vector3 m_rotation;
+    public UnityEngine.Quaternion GetRotation() => UnityEngine.Quaternion.Euler(m_rotation);
+    public void SetRotation(UnityEngine.Quaternion rotation) => m_rotation = rotation.eulerAngles;
     // The typed values, keyed by hash, and what a save and reload keep of them: ZdoDoubles.cs.
 }
 
@@ -371,6 +387,11 @@ public partial class TerrainComp
     public bool[] m_modifiedHeight;
     public UnityEngine.Color[] m_paintMask;
     public bool[] m_modifiedPaint;
+    /// <summary>How many terrain operations were applied (the game counts each; saved with the terrain).</summary>
+    public int m_operations;
+    /// <summary>The last operation's point and radius, saved with the terrain.</summary>
+    public UnityEngine.Vector3 m_lastOpPoint;
+    public float m_lastOpRadius;
     public int SaveCount;
 
     /// <summary>The zone's live compiler: the one on the loaded heightmap whose zone holds the position, if it has one.</summary>
@@ -405,13 +426,82 @@ public partial class TerrainComp
         m_modifiedPaint = new bool[n];
     }
 
-    /// <summary>Like the game: only the owner's compiler saves, into the ZDO's TCData.</summary>
+    /// <summary>
+    /// Like the game (1.0.16): only the owner's compiler saves, into the ZDO's TCData, the bytes the game writes:
+    /// <c>Utils.Compress</c> of a ZPackage holding version 1, <see cref="m_operations"/>, <see cref="m_lastOpPoint"/>,
+    /// <see cref="m_lastOpRadius"/>, the vertex count and per vertex a modified flag (then its level and smooth deltas),
+    /// the texel count and per texel a modified flag (then its paint r, g, b, a). A peer that does not own the ZDO writes
+    /// nothing, which is how a test makes a save not happen (<c>GetZDO().SetOwner(other)</c>).
+    /// </summary>
     public void Save()
     {
         if (m_nview == null || !m_nview.IsValid() || !m_nview.IsOwner())
             return;
         SaveCount++;
-        m_nview.GetZDO().Set(ZDOVars.s_TCData, new byte[] { 1 });
+        var package = new ZPackage();
+        package.Write(1);
+        package.Write(m_operations);
+        package.Write(m_lastOpPoint);
+        package.Write(m_lastOpRadius);
+        package.Write(m_modifiedHeight.Length);
+        for (int i = 0; i < m_modifiedHeight.Length; i++)
+        {
+            package.Write(m_modifiedHeight[i]);
+            if (m_modifiedHeight[i]) { package.Write(m_levelDelta[i]); package.Write(m_smoothDelta[i]); }
+        }
+        package.Write(m_modifiedPaint.Length);
+        for (int i = 0; i < m_modifiedPaint.Length; i++)
+        {
+            package.Write(m_modifiedPaint[i]);
+            if (m_modifiedPaint[i]) { package.Write(m_paintMask[i].r); package.Write(m_paintMask[i].g); package.Write(m_paintMask[i].b); package.Write(m_paintMask[i].a); }
+        }
+        m_nview.GetZDO().Set(ZDOVars.s_TCData, Utils.Compress(package.GetArray()));
+    }
+
+    /// <summary>
+    /// As the game's Load (1.0.16): reads what <see cref="Save"/> wrote back into the arrays. False without TCData, or when
+    /// its vertex count is not this compiler's (the operation counter, point and radius are read before that check, as the
+    /// game reads them). An unmodified vertex's deltas become 0; an unmodified texel keeps its paint. A pre-1.0 paint grid of
+    /// width x width texels is spread onto the (width + 1)^2 grid with the game's own index mapping.
+    /// </summary>
+    public bool Load()
+    {
+        byte[]? data = m_nview?.GetZDO()?.GetByteArray(ZDOVars.s_TCData);
+        if (data == null) return false;
+        var package = new ZPackage(Utils.Decompress(data));
+        package.ReadInt();
+        m_operations = package.ReadInt();
+        m_lastOpPoint = package.ReadVector3();
+        m_lastOpRadius = package.ReadSingle();
+        int vertices = package.ReadInt();
+        if (vertices != m_modifiedHeight.Length) return false;
+        for (int i = 0; i < vertices; i++)
+        {
+            m_modifiedHeight[i] = package.ReadBool();
+            if (m_modifiedHeight[i]) { m_levelDelta[i] = package.ReadSingle(); m_smoothDelta[i] = package.ReadSingle(); }
+            else { m_levelDelta[i] = 0f; m_smoothDelta[i] = 0f; }
+        }
+        int texels = package.ReadInt();
+        for (int i = 0; i < texels; i++)
+        {
+            m_modifiedPaint[i] = package.ReadBool();
+            if (m_modifiedPaint[i]) m_paintMask[i] = new UnityEngine.Color(package.ReadSingle(), package.ReadSingle(), package.ReadSingle(), package.ReadSingle());
+        }
+        if (texels == m_width * m_width)
+        {
+            var paint = (UnityEngine.Color[])m_paintMask.Clone();
+            var modified = (bool[])m_modifiedPaint.Clone();
+            int side = m_width + 1;
+            for (int k = 0; k < m_paintMask.Length; k++)
+            {
+                int row = k / side, next = (k + 1) / side, from = k - row;
+                if (row == m_width) from -= m_width;
+                if (k > 0 && (k - row) % m_width == 0 && (k + 1 - next) % m_width == 0) from--;
+                m_paintMask[k] = paint[from];
+                m_modifiedPaint[k] = modified[from];
+            }
+        }
+        return true;
     }
 }
 
@@ -421,6 +511,8 @@ public static partial class ZDOVars
     public static readonly int s_TCData = "TCData".GetStableHashCode();
     /// <summary>The player who made an object; vanilla sets it on what a player builds.</summary>
     public static readonly int s_creator = "creator".GetStableHashCode();
+    /// <summary>The location a LocationProxy stands for, by prefab hash.</summary>
+    public static readonly int s_location = "location".GetStableHashCode();
 }
 
 /// <summary>
@@ -470,7 +562,7 @@ public partial class WorldGenerator
 /// Shim for Valheim's ZoneSystem exposing only the members the road code
 /// references. GetLocationList returns an empty list unless a test fills it.
 /// </summary>
-public partial class ZoneSystem
+public partial class ZoneSystem : UnityEngine.MonoBehaviour
 {
     public const float ZoneSize = 64f;
 
@@ -502,9 +594,21 @@ public partial class ZoneSystem
         public PrefabEntry m_prefab = new();
         public float m_exteriorRadius;
 
+        /// <summary>
+        /// The game's <c>SoftReference&lt;GameObject&gt;</c>: the asset's name and, once loaded, the asset. A test sets
+        /// <see cref="Asset"/> to the template the location loads; <see cref="Load"/> and <see cref="Release"/> count the
+        /// references taken and given back, as the game does.
+        /// </summary>
         public partial class PrefabEntry
         {
             public string Name = "";
+            public UnityEngine.GameObject? Asset { get; set; }
+            public bool IsValid => Name.Length != 0 || Asset != null;
+            public bool IsLoaded => Asset != null && References > 0;
+            /// <summary>Loads taken and not released.</summary>
+            public int References { get; private set; }
+            public void Load() => References++;
+            public void Release() { if (References > 0) References--; }
         }
     }
 
@@ -518,6 +622,25 @@ public partial class ZoneSystem
     public System.Collections.Generic.List<LocationInstance> Locations = new();
 
     public System.Collections.Generic.List<LocationInstance> GetLocationList() => Locations;
+
+    /// <summary>The placements the game has decided on, one per zone.</summary>
+    public System.Collections.Generic.Dictionary<Vector2s, LocationInstance> m_locationInstances = new();
+    /// <summary>The world's location list, which is what places buildings.</summary>
+    public System.Collections.Generic.List<ZoneLocation> m_locations = new();
+    /// <summary>The same list by prefab hash (private in the game), which is how a proxy finds its template.</summary>
+    public System.Collections.Generic.Dictionary<int, ZoneLocation> m_locationsByHash = new();
+
+    // The generation methods mods hook, with the game's 1.0.16 signatures (several are private there). Their bodies do
+    // nothing: what these doubles cannot establish is when Harmony runs a hook, which only an in-game check shows.
+    public void Awake() { }
+    public void Update() { }
+    public void GenerateLocationsIfNeeded() { }
+    public void SetupLocations() { }
+    public UnityEngine.GameObject? SpawnLocation(ZoneLocation location, int seed, UnityEngine.Vector3 pos, UnityEngine.Quaternion rot,
+        SpawnMode mode, System.Collections.Generic.List<UnityEngine.GameObject> spawnedGhostObjects, bool cheated = false) => null;
+    public bool SpawnZone(Vector2s zoneID, SpawnMode mode, out UnityEngine.GameObject? root) { root = null; return true; }
+    public void PlaceLocations(Vector2s zoneID, UnityEngine.Vector3 zoneCenterPos, Transform parent, Heightmap hmap,
+        System.Collections.Generic.List<ClearArea> clearAreas, SpawnMode mode, System.Collections.Generic.List<UnityEngine.GameObject> spawnedObjects) { }
 
     // ---- locations-generated, as Valheim 1.0 actually behaves ----
     //

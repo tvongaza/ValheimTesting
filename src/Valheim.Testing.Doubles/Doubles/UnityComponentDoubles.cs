@@ -719,7 +719,8 @@ namespace UnityEngine
 /// <summary>
 /// The transform hierarchy. The world position is the parent's plus the parent's scale times the local position; parent
 /// rotation is not applied (a child of a rotated parent sits where it would under an unrotated one), and
-/// <see cref="rotation"/> is stored, not composed. Re-parenting keeps the world position by default and sends
+/// <see cref="rotation"/> is stored, not composed: a new transform is unrotated (identity), and <see cref="localRotation"/>
+/// is derived from the parent's stored rotation. Re-parenting keeps the world position by default and sends
 /// OnEnable/OnDisable when it changes whether the object is active in its hierarchy, as Unity does.
 /// </summary>
 public partial class Transform : UnityEngine.Component, IEnumerable
@@ -735,7 +736,15 @@ public partial class Transform : UnityEngine.Component, IEnumerable
         set => m_localPosition = m_parent is null ? value : m_parent.InverseTransformPoint(value);
     }
     public UnityEngine.Vector3 localPosition { get => m_localPosition; set => m_localPosition = value; }
-    public UnityEngine.Quaternion rotation { get; set; }
+    public UnityEngine.Quaternion rotation { get; set; } = UnityEngine.Quaternion.identity;
+    /// <summary>The rotation relative to the parent's: the parent's undone, then this one's.</summary>
+    public UnityEngine.Quaternion localRotation
+    {
+        get => m_parent is { } up ? UnityEngine.Quaternion.Inverse(up.rotation) * rotation : rotation;
+        set => rotation = m_parent is { } up ? up.rotation * value : value;
+    }
+    /// <summary>The world rotation as Euler angles in degrees (<see cref="UnityEngine.Quaternion.eulerAngles"/>).</summary>
+    public UnityEngine.Vector3 eulerAngles { get => rotation.eulerAngles; set => rotation = UnityEngine.Quaternion.Euler(value); }
     public UnityEngine.Vector3 localScale { get => m_localScale; set => m_localScale = value; }
     public UnityEngine.Vector3 lossyScale => m_parent is null ? m_localScale : Scale(m_parent.lossyScale, m_localScale);
 
