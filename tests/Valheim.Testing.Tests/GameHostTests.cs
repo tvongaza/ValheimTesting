@@ -40,7 +40,7 @@ public class GameHostTests
         var host = new SshGameHost("box", "tester@box.example", HostShell.Bash, 2222, ["IdentityFile=/keys/test key"], TimeSpan.FromSeconds(5), "ssh", fake);
         await host.RunAsync("true", null, Timeout);
         var arguments = fake.Calls[0].Arguments;
-        Assert.Equal(new[] { "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "GatewayPorts=no", "-o", "ClearAllForwardings=yes", "-o", "IdentityFile=/keys/test key" }, arguments.Take(10));
+        Assert.Equal(new[] { "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "GatewayPorts=no", "-o", "ClearAllForwardings=yes", "-o", "IdentityFile=\"/keys/test key\"" }, arguments.Take(10));
         int end = arguments.ToList().IndexOf("--");
         Assert.Equal(new[] { "-p", "2222", "-a", "-x", "-T" }, arguments.Skip(end - 5).Take(5));
         Assert.Equal(new[] { "--", "tester@box.example", "bash -c '" + HostScripts.BashWrapper + "'" }, arguments.Skip(end));

@@ -65,6 +65,7 @@ jobs:
     # network driven with docker exec. Both are removed at the end; the keys live in the runner's temporary directory. An Xvfb
     # display on :99 carries the interactive client checks (a stand-in Steam and game), locally and over the ssh. The lease
     # contention checks open ten ssh sessions at once, beyond sshd's default MaxStartups of 10 unauthenticated connections.
+    # The client key and known_hosts sit in a directory with a space in its name, so every connection passes quoted ssh options.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -89,25 +90,28 @@ jobs:
           mkdir -p "$d"
           if [ ! -x /usr/sbin/sshd ]; then sudo apt-get update -q && sudo apt-get install -y -q openssh-server; fi
           ssh-keygen -q -t ed25519 -N '' -C vt-host -f "$d/host_key"
-          ssh-keygen -q -t ed25519 -N '' -C vt-client -f "$d/client_key"
-          cp "$d/client_key.pub" "$d/authorized_keys"
+          k="$RUNNER_TEMP/vt client key"
+          mkdir -p "$k"
+          ssh-keygen -q -t ed25519 -N '' -C vt-client -f "$k/client_key"
+          cp "$k/client_key.pub" "$d/authorized_keys"
           printf '%s\n' "Port 2222" "ListenAddress 127.0.0.1" "HostKey $d/host_key" "PidFile $d/sshd.pid" \
             "AuthorizedKeysFile $d/authorized_keys" "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
             "PubkeyAuthentication yes" "UsePAM yes" "StrictModes no" "AllowTcpForwarding local" "AllowAgentForwarding no" \
             "X11Forwarding no" "MaxStartups 100" > "$d/sshd_config"
           sudo mkdir -p /run/sshd
           sudo /usr/sbin/sshd -f "$d/sshd_config" -E "$d/sshd.log"
-          echo "[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$d/host_key.pub")" > "$d/known_hosts"
+          echo "[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$d/host_key.pub")" > "$k/known_hosts"
           echo "VALHEIM_TESTING_SSH_DESTINATION=$(id -un)@127.0.0.1" >> "$GITHUB_ENV"
           {
             echo "VALHEIM_TESTING_SSH_OPTIONS<<VT_OPTIONS"
-            echo "IdentityFile=$d/client_key"
+            echo "IdentityFile=$k/client_key"
             echo "IdentitiesOnly=yes"
-            echo "UserKnownHostsFile=$d/known_hosts"
+            echo "UserKnownHostsFile=$k/known_hosts"
             echo "StrictHostKeyChecking=yes"
             echo "VT_OPTIONS"
           } >> "$GITHUB_ENV"
-          ssh -o BatchMode=yes -o IdentityFile="$d/client_key" -o IdentitiesOnly=yes -o UserKnownHostsFile="$d/known_hosts" \
+          # ssh reads a -o value like a config line, so a path with a space is quoted inside the argument.
+          ssh -o BatchMode=yes -o "IdentityFile=\"$k/client_key\"" -o IdentitiesOnly=yes -o "UserKnownHostsFile=\"$k/known_hosts\"" \
             -o StrictHostKeyChecking=yes -p 2222 "$(id -un)@127.0.0.1" 'echo "ssh to localhost works; pwsh: $(command -v pwsh)"'
       - name: Start a throwaway container on the host network
         run: docker run -d --rm --name vt-game-host --network host ubuntu:24.04 sleep 1800
@@ -128,7 +132,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/xvfb.pid" ]; then kill "$(cat "$RUNNER_TEMP/xvfb.pid")" || true; fi
           if [ -f "$RUNNER_TEMP/sshd/sshd.pid" ]; then sudo kill "$(cat "$RUNNER_TEMP/sshd/sshd.pid")" || true; fi
           cat "$RUNNER_TEMP/sshd/sshd.log" 2>/dev/null || true
-          rm -rf "$RUNNER_TEMP/sshd"
+          rm -rf "$RUNNER_TEMP/sshd" "$RUNNER_TEMP/vt client key"
   test-runners:
     name: test runners (${{ matrix.os }})
     # tools/test-runners for real: a copy of ModWithTests that also targets net48 (the two changes its README
