@@ -164,15 +164,15 @@ Reload tests must provide a pins file and explicitly advance the changed plugin'
 
 ## Developer loop
 
-For the edit-build-test round of a mod on your own machine, [`tools/dev-loop`](../tools/dev-loop/README.md) has the scripts that moved here from ValheimCLI: `dev-loop` builds the mod, installs its DLL, launches Valheim and runs a test plan in strict mode with the mod's pin replaced by the md5 of the build it just deployed; `pin-mods` snapshots and checks a game's plugin pins; `log-summary.sh` counts the log's warnings and errors. Each comes as a bash script for macOS/Linux and a PowerShell twin for Windows (`log-summary` is folded into `dev-loop.ps1`).
+For the edit-build-test round of a mod on your own machine, [`tools/dev-loop`](../tools/dev-loop/README.md) has the scripts that moved here from ValheimCLI: `dev-loop` builds the mod, installs its DLL, launches Valheim and runs a test plan in strict mode with the mod's pin replaced by the md5 of the build it just deployed; `pin-mods` snapshots and checks a game's plugin pins; `log-summary.sh` counts the log's warnings and errors; `world-hash` proves which saved world a game loaded; `sample-value` records a value over time as CSV. Each comes as a bash script for macOS/Linux and a PowerShell twin for Windows (`log-summary` is folded into `dev-loop.ps1`).
 
 ```sh
-VALHEIM_CLI=/path/to/valheim-cli VALHEIM_EXPECTATIONS=pins.txt tools/dev-loop/dev-loop.sh MyMod.csproj smoke-plan.yaml
+VALHEIM_CLI=/path/to/valheim-cli VALHEIM_EXPECTATIONS=pins.txt tools/dev-loop/dev-loop.sh MyMod.csproj tools/dev-loop/smoke-plan.yaml
 ```
 
 ```powershell
 $env:VALHEIM_CLI = 'C:\path\to\valheim-cli.exe'; $env:VALHEIM_EXPECTATIONS = 'pins.txt'
-powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj smoke-plan.yaml
+powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj tools\dev-loop\smoke-plan.yaml
 ```
 
-The scripts drive the `valheim-cli` executable, which this repository does not build: take it from a [ValheimCLI](https://github.com/tvongaza/valheimCLI) release or build its `CLI` project, at or after the commit in [`cli-dependency.json`](../cli-dependency.json). ValheimCLI's `examples/smoke-plan.yaml` is a plan to start from. `dev-loop` deploys only to a stopped game; point it at a disposable install, world and character. The [tools README](../tools/dev-loop/README.md) lists the environment variables, exit codes and tests.
+The scripts drive the `valheim-cli` executable, which this repository does not build: take it from a [ValheimCLI](https://github.com/tvongaza/valheimCLI) release or build its `CLI` project, at or after the commit in [`cli-dependency.json`](../cli-dependency.json). [`tools/dev-loop/smoke-plan.yaml`](../tools/dev-loop/smoke-plan.yaml) is a strict plan to start from. `dev-loop` deploys only to a stopped game; point it at a disposable install, world and character. The [tools README](../tools/dev-loop/README.md) lists the environment variables, exit codes and tests.
