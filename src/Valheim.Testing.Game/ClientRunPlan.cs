@@ -63,6 +63,11 @@ public sealed class ClientRunPlan
 
     public bool Owned => Mode == "owned";
 
+    /// <summary>A full path on a Windows host (drive or UNC) or a POSIX host (rooted), whichever machine this runs on.</summary>
+    internal static bool IsFullPathOnAnyHost(string? path) =>
+        !string.IsNullOrWhiteSpace(path) && !path.Any(char.IsControl) &&
+        (System.Text.RegularExpressions.Regex.IsMatch(path, @"^([A-Za-z]:[\\/]|\\\\)") || path.StartsWith('/'));
+
     /// <summary>
     /// The rules every client section follows, plus <paramref name="absentPlugins"/>, which must be pinned <c>absent</c>
     /// when the claim is what a client without them sees (a server-only mod). An owned client pins its install
@@ -73,7 +78,9 @@ public sealed class ClientRunPlan
     {
         bool pinned = Pinned;
         if (Mode is not ("owned" or "attach")) throw new ArgumentException("Client mode is owned or attach.");
-        if (Owned && !Path.IsPathFullyQualified(Install)) throw new ArgumentException("An owned client needs the full path of its install.");
+        // The install is a path on the client's machine, which with an environment profile is not this one (a Windows
+        // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
+        if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
         if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Patchers.Length != 0 || InstallPins != null))
             throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments and patchers.");
         BepInExLoader.CheckPatcherNames(Patchers);

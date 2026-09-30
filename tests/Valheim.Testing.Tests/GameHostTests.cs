@@ -228,6 +228,19 @@ public class GameHostTests
         Assert.Equal("still booting", Assert.Throws<WaitTimeoutException>(() => expired.EnsureMatched()).LastSeen);
     }
 
+    // A log that ends in blank lines (as a server's often does) still reports the last line with text in a timeout.
+    [Theory, MemberData(nameof(Kinds))] public async Task ALogWaitTimeoutReportsTheLastLineWithText(string kind)
+    {
+        var fake = new FakeLauncher().Reply(call =>
+        {
+            foreach (string line in new[] { "booting", "Game server connected", "\r", "", "\uFEFF" }) call.Lines!(line);
+            return new ProcessExit(ProcessEnd.TimedOut, -1, "", "", TimeSpan.FromSeconds(3));
+        });
+        var expired = await Host(kind, fake).WaitForLogAsync("/srv/run/BepInEx/LogOutput.log", 0, new Regex("^never$"), null, Timeout);
+        Assert.Equal(HostLogOutcome.TimedOut, expired.Outcome); Assert.Equal("Game server connected", expired.LastLine);
+        Assert.Equal("Game server connected", Assert.Throws<WaitTimeoutException>(() => expired.EnsureMatched()).LastSeen);
+    }
+
     [Fact] public async Task AFollowerThatEndsBeforeAMatchReportsItsTransport()
     {
         var fake = new FakeLauncher().Exits(255, "", "Connection closed by remote host\n");

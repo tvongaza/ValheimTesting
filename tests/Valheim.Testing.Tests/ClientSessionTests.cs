@@ -29,6 +29,20 @@ public sealed class ClientSessionTests : IDisposable
         public void Dispose() => Disposals++;
     }
 
+    // With an environment profile the client runs on another machine: a Windows install is validated from macOS or Linux too.
+    [Theory]
+    [InlineData(@"C:\Program Files (x86)\Steam\steamapps\common\Valheim", true)]
+    [InlineData(@"\\fileserver\games\Valheim", true)]
+    [InlineData("/home/tester/.steam/steam/steamapps/common/Valheim", true)]
+    [InlineData("Valheim", false)]
+    [InlineData(@"steamapps\common\Valheim", false)]
+    [InlineData("", false)]
+    public void AnOwnedClientsInstallIsAFullPathInAnyHostsStyle(string install, bool accepted)
+    {
+        var plan = Plan(); plan.Install = install;
+        if (accepted) plan.Validate("my.mod"); else Assert.Throws<ArgumentException>(() => plan.Validate("my.mod"));
+    }
+
     [Fact] public void AnOwnedClientAtItsMenuIsPinnedAndDisposingStopsOnlyItsProcess()
     {
         var process = new Process(); var transport = new ScriptedTransport();
