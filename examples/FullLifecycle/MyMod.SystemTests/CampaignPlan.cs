@@ -56,6 +56,8 @@ public sealed partial class LifecyclePlan
         OnlyForScenario("newGreeting", NewGreeting != null, SyncedConfigScenario);
         OnlyForScenario("refusedClient and expectedRefusal", RefusedClient != null || ExpectedRefusal != null, RefusedJoinScenario);
         OnlyForScenario("crossplay", Crossplay, CrossplayScenario);
+        OnlyForScenario("patchReload", PatchReload != null, ServerScenario);
+        PatchReload?.Validate(this);
         CheckControls();
         if (!IsCampaign) return;
         if (Review.Enabled) throw new ArgumentException($"review is for the {LifecycleScenario} scenario; remove it from this plan.");
