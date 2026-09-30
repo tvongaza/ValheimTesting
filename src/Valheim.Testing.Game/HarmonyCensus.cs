@@ -23,8 +23,8 @@ public sealed record DeclaredPatch(string Target, string Kind, string? Patch = n
 
 /// <summary>
 /// The Harmony patches applied in the game, read from the adapter's census (<c>HarmonyCensus.Command()</c> in
-/// Valheim.Testing.Adapter). A missing patch target makes HarmonyX 2.9.0 throw out of <c>PatchAll</c>, which BepInEx logs
-/// as an error while the game carries on; the plugin's later patch classes and the rest of its <c>Awake</c> never run. A
+/// Valheim.Testing.Adapter). A patch whose target method is missing is skipped with one HarmonyX warning (observed in
+/// Valheim 1.0.16 with BepInEx 5.4.23.5 and HarmonyX 2.9.0); <c>PatchAll</c> does not throw and the plugin loads. A
 /// half-patched mod stays loaded and passes every test that does not ask; <see cref="Check"/> asks. The census is read-only and may be re-read.
 /// </summary>
 public sealed class HarmonyCensus

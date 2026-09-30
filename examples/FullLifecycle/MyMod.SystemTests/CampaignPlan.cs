@@ -160,9 +160,6 @@ public sealed partial class LifecyclePlan
         if (installed.Count != 1) throw new ArgumentException("A control run installs exactly the control it names; remove the others.");
         if (!control.OnServer && Installed(Pins, control.Guid)) throw new ArgumentException($"The {control.Name} control belongs on the client only.");
         // The control writes the pattern its check requires: the teardown scan must not fail the run on that very line.
-        if (control.Name == ControlPlugins.MissingHarmonyTarget &&
-            !(LogScan.TryGetValue("harmony-undefined-target", out var undefined) && undefined.Severity == LogSeverity.Warning))
-            throw new ArgumentException("A missing-harmony-target run classifies harmony-undefined-target as Warning in logScan, with a reason: the scenario requires that line in the server's log itself.");
         if (control.Name == ControlPlugins.ServerOnlyPrefab && LogScan.TryGetValue("missing-prefab-hash", out var missing) && missing.Severity == LogSeverity.Failure)
             throw new ArgumentException("A server-only-prefab run expects missing-prefab-hash in the client's log: do not classify it as a Failure there.");
     }

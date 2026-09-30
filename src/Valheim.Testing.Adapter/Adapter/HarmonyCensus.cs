@@ -12,10 +12,9 @@ using valheimCLI.Extensions;
 namespace Valheim.Testing.Adapter
 {
     /// <summary>
-    /// The Harmony patches applied in this process, by every owner. When a patch's target method is missing, HarmonyX 2.9.0
-    /// throws out of <c>PatchAll</c> ("Undefined target method"); BepInEx logs the error and the game carries on, but the
-    /// rest of that plugin's <c>Awake</c>, including its later patch classes, never runs. The mod is then half-patched
-    /// and still loaded, which no test notices unless it asks. Another mod can also patch the same method, or remove
+    /// The Harmony patches applied in this process, by every owner. A patch whose target method is missing is skipped with
+    /// one HarmonyX warning (observed in Valheim 1.0.16 with BepInEx 5.4.23.5 and HarmonyX 2.9.0); <c>PatchAll</c> does not
+    /// throw and the plugin loads. The mod is then half-patched and still loaded, which no test notices unless it asks. Another mod can also patch the same method, or remove
     /// patches it does not own. The census reads HarmonyX's own record (<c>Harmony.GetAllPatchedMethods</c> and
     /// <c>Harmony.GetPatchInfo</c>); the runner's <c>HarmonyCensus</c> in Valheim.Testing.Game compares it with the patches
     /// the mod declares. Reading it changes nothing. The census never unpatches anything; an adapter that patches

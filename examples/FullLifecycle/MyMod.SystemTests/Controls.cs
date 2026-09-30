@@ -17,7 +17,8 @@ public static class ControlPlugins
     /// <summary>The prefab only the server-only-prefab control registers.</summary>
     public const string ServerOnlyPrefabName = "MyModControl_ServerOnly";
     /// <summary>The missing-harmony-target control's patch, on a method the game does not have.</summary>
-    public static readonly DeclaredPatch MissingPatch = new("Player::MyModControlMethodThatDoesNotExist", "postfix");
+    public const string MissingMethodName = "MyModControlMethodThatDoesNotExist";
+    public static readonly DeclaredPatch MissingPatch = new("Player::" + MissingMethodName, "postfix");
 
     public static readonly IReadOnlyList<ControlPlugin> All =
     [

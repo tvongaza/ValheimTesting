@@ -5,10 +5,10 @@ namespace MyMod.Controls.MissingHarmonyTarget;
 
 /// <summary>
 /// Negative control for the Harmony census (#30) and the log scan (#26): a patch whose target method does not exist, as
-/// after a game update renamed it. HarmonyX refuses it ("Undefined target method for patch method") and <c>PatchAll</c>
-/// throws, so nothing of this plugin is patched, the error is in the log, and the plugin still counts as loaded. The
-/// lifecycle-world scenario, with <c>"expectFailure": "missing-harmony-target"</c>, requires the census to name the
-/// missing patch and the server's log scan to find the error. Test runtimes only.
+/// after a game update renamed it. In the game (1.0.16, BepInEx 5.4.23.5, HarmonyX 2.9.0) HarmonyX skips it with one
+/// warning (<c>AccessTools.DeclaredMethod: Could not find method ...</c>); <c>PatchAll</c> does not throw and the plugin
+/// loads. The lifecycle-world scenario, with <c>"expectFailure": "missing-harmony-target"</c>, requires the census to name
+/// the missing patch and that warning in the server's log. Test runtimes only.
 /// </summary>
 [BepInPlugin(Guid, "MyMod control: missing Harmony target (ValheimTesting example)", "0.1.0")]
 public sealed class Plugin : BaseUnityPlugin

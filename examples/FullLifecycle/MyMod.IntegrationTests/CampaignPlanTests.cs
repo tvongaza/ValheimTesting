@@ -209,10 +209,8 @@ public sealed class CampaignPlanTests : IDisposable
         plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState;
         plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = md5; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
         Refused(plan, "exactly the control it names");
-        // The missing-harmony-target run reclassifies its own log line, with a reason.
+        // A valid server-side control run: its HarmonyX line is a warning, so nothing needs reclassifying.
         plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["example.mymod.control.missingtarget"] = md5;
-        Refused(plan, "classifies harmony-undefined-target as Warning");
-        plan["logScan"] = new JsonObject { ["harmony-undefined-target"] = new JsonObject { ["severity"] = "Warning", ["reason"] = "The control plants it; the scenario requires it." } };
         Assert.Equal(ControlPlugins.MissingHarmonyTarget, Read(plan).Control!.Name);
         // A valid client-side control run.
         plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;

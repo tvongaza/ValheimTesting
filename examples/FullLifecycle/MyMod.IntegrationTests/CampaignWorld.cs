@@ -65,7 +65,8 @@ internal sealed class CampaignWorld : IDisposable
     {
         var lines = new List<string> { "[Info   :   BepInEx] Chainloader startup complete" };
         if (ControlMissingTarget && !ControlPatchApplied)
-            lines.Add("[Error  : Unity Log] HarmonyException: Patching exception in method null ---> System.ArgumentException: Undefined target method for patch method static System.Void MyMod.Controls.MissingHarmonyTarget.Plugin+PatchMissingMethod::Postfix()");
+            // As the game logs it (1.0.16, BepInEx 5.4.23.5, HarmonyX 2.9.0): one warning, and PatchAll carries on.
+            lines.Add("[Warning:  HarmonyX] AccessTools.DeclaredMethod: Could not find method for type Player and name MyModControlMethodThatDoesNotExist and parameters ");
         if (Crossplay) lines.Add($"[Info   : Unity Log] Created PlayFab lobby with ID \"L1\", ConnectionString \"c\" and owned by \"{PlayFabId}\"");
         File.WriteAllLines(ServerLog, lines);
     }

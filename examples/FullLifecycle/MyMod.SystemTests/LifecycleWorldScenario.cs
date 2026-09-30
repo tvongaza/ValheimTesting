@@ -169,19 +169,21 @@ public static class LifecycleWorldScenario
         foreach (var dungeon in dungeons) DungeonRooms.RequireWithinZone(dungeon);
     }
 
-    // The control's patch must be missing from the census, and its error must be in the server's own log (#26, #30).
+    // The control's patch must be missing from the census (#30), and HarmonyX's warning for it must be in the server's own log
+    // (#26). Natively (1.0.16, BepInEx 5.4.23.5, HarmonyX 2.9.0) a missing target is skipped with that one warning; PatchAll
+    // does not throw, so the census, not an error line, is what catches it.
     private static void MissingTarget(CampaignRun run, ControlPlugin control)
     {
         ControlPlugins.ExpectFailure(run.Report, control, () =>
             HarmonyCensus.Read(run.Server, Capabilities.Harmony, control.Guid).Check(control.Guid, [ControlPlugins.MissingPatch]).RequireApplied());
-        run.Report.Step("control missing-harmony-target: the server's log scan fails on harmony-undefined-target", () =>
+        run.Report.Step("control missing-harmony-target: the server's log has HarmonyX's warning for the missing target", () =>
         {
             string log = run.ServerLog() ?? throw new InvalidOperationException("This run cannot read the server's live log; run the control on the server's machine.");
             var scan = LogScanner.Scan(new RunLog("server BepInEx log (this boot, live)", log, Required: true));
             File.WriteAllText(Path.Combine(run.Output, "control-log-scan.json"), JsonSerializer.Serialize(scan, new JsonSerializerOptions { WriteIndented = true }));
-            var found = scan.Counts.SingleOrDefault(count => count.Pattern == "harmony-undefined-target");
-            if (scan.Problem != null || found is not { Count: > 0, Severity: LogSeverity.Failure })
-                throw new InvalidOperationException("The server's log scan does not fail on harmony-undefined-target: " + (scan.Problem ?? "no such line in " + log));
+            var found = scan.Counts.SingleOrDefault(count => count.Pattern == "accesstools-not-found");
+            if (scan.Problem != null || found is not { Count: > 0 } || found.First?.Contains(ControlPlugins.MissingMethodName, StringComparison.Ordinal) != true)
+                throw new InvalidOperationException($"The server's log has no HarmonyX warning naming {ControlPlugins.MissingMethodName}: " + (scan.Problem ?? "none in " + log));
             run.Report.Provenance["controlLogLine"] = found.First ?? "";
         });
     }

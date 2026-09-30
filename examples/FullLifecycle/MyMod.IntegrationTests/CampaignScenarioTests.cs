@@ -95,9 +95,9 @@ public sealed class CampaignScenarioTests : IDisposable
         var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.True(report.Passed, Explain(report));
         Assert.True(Step(report, "control missing-harmony-target: the control's Harmony patch is applied fails for the named reason").Passed);
-        Assert.True(Step(report, "control missing-harmony-target: the server's log scan fails on harmony-undefined-target").Passed);
+        Assert.True(Step(report, "control missing-harmony-target: the server's log has HarmonyX's warning for the missing target").Passed);
         Assert.Contains("not applied: postfix (any method) on Player::MyModControlMethodThatDoesNotExist", report.Provenance["controlFailure"]);
-        Assert.Contains("Undefined target method", report.Provenance["controlLogLine"]);
+        Assert.Contains("Could not find method for type Player and name MyModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
         Assert.StartsWith("missing-harmony-target: failed its check as expected", report.Provenance["control"]);
         Assert.True(Evidence("control-log-scan.json"));
         Assert.Equal(0, _world.MarkCommands); // The run ends at the control's checks.

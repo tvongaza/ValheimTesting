@@ -117,16 +117,12 @@ Five more scenarios, and a hosted run, take the toolkit's lifecycle steps and wo
 
 | Control ([Controls](Controls/)) | Install on | `expectFailure` in | Check that must fail, and the reason it must name |
 |---|---|---|---|
-| [MissingHarmonyTarget](Controls/MissingHarmonyTarget/Plugin.cs) (`example.mymod.control.missingtarget`) | server; add `logScan` `harmony-undefined-target` as `Warning` with a reason | lifecycle-world | #30 the census names its missing patch (`not applied: postfix (any method) on Player::MyModControlMethodThatDoesNotExist`) and #26 the server's live log scan fails on `harmony-undefined-target` |
+| [MissingHarmonyTarget](Controls/MissingHarmonyTarget/Plugin.cs) (`example.mymod.control.missingtarget`) | server | lifecycle-world | #30 the census names its missing patch (`not applied: postfix (any method) on Player::MyModControlMethodThatDoesNotExist`) and #26 the server's live log has HarmonyX's `accesstools-not-found` warning naming the method (natively, a missing target is skipped with that warning; nothing throws) |
 | [ServerOnlyPrefab](Controls/ServerOnlyPrefab/Plugin.cs) (`example.mymod.control.serveronlyprefab`) | server | vanilla-client | #33 the runner spawns its object beside the dry site (`mymodcontrol_spawn`), and the vanilla client's census names its hash and `MyModControl_ServerOnly` |
 | [FieldOnlyState](Controls/FieldOnlyState/Plugin.cs) (`example.mymod.control.fieldonlystate`) | client | lifecycle-world | #35 a value kept only in a component field on the marker `did not survive the zone reload`, while MyMod's saved label did |
 | [SuppressedProfileSave](Controls/SuppressedProfileSave/Plugin.cs) (`example.mymod.control.suppressedsave`) | client | lifecycle-world | #35 the logout check times out waiting for the character file `to be rewritten by the logout` |
 
-A control run is the scenario's own plan plus the control's pin (by MD5, on the side the table says) and `"expectFailure": "<name>"`. The MissingHarmonyTarget run also reclassifies the line it plants, so the teardown scan does not fail the run on it (the scenario requires it itself):
-
-```json
-"logScan": { "harmony-undefined-target": { "severity": "Warning", "reason": "The MissingHarmonyTarget control plants it; the scenario requires it in the server's log." } }
-```
+A control run is the scenario's own plan plus the control's pin (by MD5, on the side the table says) and `"expectFailure": "<name>"`.
 
 The integration tests ([CampaignScenarioTests](MyMod.IntegrationTests/CampaignScenarioTests.cs), [HostedScenarioTests](MyMod.IntegrationTests/HostedScenarioTests.cs), [CampaignPlanTests](MyMod.IntegrationTests/CampaignPlanTests.cs)) run every scenario, each control's expected failure, each control whose check would pass, and every plan refusal against scripted replies; they read the sample plans too.
 
