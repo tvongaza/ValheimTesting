@@ -19,6 +19,8 @@ public static class ControlPlugins
     /// <summary>The missing-harmony-target control's patch, on a method the game does not have.</summary>
     public const string MissingMethodName = "MyModControlMethodThatDoesNotExist";
     public static readonly DeclaredPatch MissingPatch = new("Player::" + MissingMethodName, "postfix");
+    /// <summary>The line the missing-harmony-target control logs once <c>PatchAll</c> has returned (so it did not throw).</summary>
+    public const string PatchAllReturnedLine = "MissingHarmonyTarget: PatchAll returned";
 
     public static readonly IReadOnlyList<ControlPlugin> All =
     [

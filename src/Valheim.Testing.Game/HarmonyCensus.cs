@@ -23,9 +23,10 @@ public sealed record DeclaredPatch(string Target, string Kind, string? Patch = n
 
 /// <summary>
 /// The Harmony patches applied in the game, read from the adapter's census (<c>HarmonyCensus.Command()</c> in
-/// Valheim.Testing.Adapter). A patch whose target method is missing is skipped with one HarmonyX warning (observed in
-/// Valheim 1.0.16 with BepInEx 5.4.23.5 and HarmonyX 2.9.0); <c>PatchAll</c> does not throw and the plugin loads. A
-/// half-patched mod stays loaded and passes every test that does not ask; <see cref="Check"/> asks. The census is read-only and may be re-read.
+/// Valheim.Testing.Adapter). On the Valheim 1.0.16 dedicated server (BepInEx 5.4.23.5, HarmonyX 2.9.0) a patch whose target
+/// method is missing showed up as one <c>accesstools-not-found</c> warning and no error line in the server's BepInEx log; the
+/// census, not the log scan, is what catches it. A half-patched mod stays loaded and passes every test that does not ask;
+/// <see cref="Check"/> asks. The census is read-only and may be re-read.
 /// </summary>
 public sealed class HarmonyCensus
 {

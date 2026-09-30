@@ -12,9 +12,10 @@ using valheimCLI.Extensions;
 namespace Valheim.Testing.Adapter
 {
     /// <summary>
-    /// The Harmony patches applied in this process, by every owner. A patch whose target method is missing is skipped with
-    /// one HarmonyX warning (observed in Valheim 1.0.16 with BepInEx 5.4.23.5 and HarmonyX 2.9.0); <c>PatchAll</c> does not
-    /// throw and the plugin loads. The mod is then half-patched and still loaded, which no test notices unless it asks. Another mod can also patch the same method, or remove
+    /// The Harmony patches applied in this process, by every owner. On the Valheim 1.0.16 dedicated server (BepInEx 5.4.23.5,
+    /// HarmonyX 2.9.0) a patch whose target method is missing showed up as one <c>AccessTools</c> "Could not find" warning and
+    /// no error line in the server's BepInEx log; the census, not the log scan, is what catches it. The mod is then
+    /// half-patched and still loaded, which no test notices unless it asks. Another mod can also patch the same method, or remove
     /// patches it does not own. The census reads HarmonyX's own record (<c>Harmony.GetAllPatchedMethods</c> and
     /// <c>Harmony.GetPatchInfo</c>); the runner's <c>HarmonyCensus</c> in Valheim.Testing.Game compares it with the patches
     /// the mod declares. Reading it changes nothing. The census never unpatches anything; an adapter that patches

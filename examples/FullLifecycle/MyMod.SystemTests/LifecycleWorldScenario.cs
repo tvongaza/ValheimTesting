@@ -170,8 +170,9 @@ public static class LifecycleWorldScenario
     }
 
     // The control's patch must be missing from the census (#30), and HarmonyX's warning for it must be in the server's own log
-    // (#26). Natively (1.0.16, BepInEx 5.4.23.5, HarmonyX 2.9.0) a missing target is skipped with that one warning; PatchAll
-    // does not throw, so the census, not an error line, is what catches it.
+    // (#26). On the 1.0.16 dedicated server (BepInEx 5.4.23.5, HarmonyX 2.9.0) the missing target showed up as one
+    // accesstools-not-found warning and no error line in the server's BepInEx log; the census, not the log scan, is what
+    // catches it. Whether PatchAll then returned or threw is recorded (controlPatchAllReturned), and fails nothing.
     private static void MissingTarget(CampaignRun run, ControlPlugin control)
     {
         ControlPlugins.ExpectFailure(run.Report, control, () =>
@@ -181,10 +182,25 @@ public static class LifecycleWorldScenario
             string log = run.ServerLog() ?? throw new InvalidOperationException("This run cannot read the server's live log; run the control on the server's machine.");
             var scan = LogScanner.Scan(new RunLog("server BepInEx log (this boot, live)", log, Required: true));
             File.WriteAllText(Path.Combine(run.Output, "control-log-scan.json"), JsonSerializer.Serialize(scan, new JsonSerializerOptions { WriteIndented = true }));
-            var found = scan.Counts.SingleOrDefault(count => count.Pattern == "accesstools-not-found");
-            if (scan.Problem != null || found is not { Count: > 0 } || found.First?.Contains(ControlPlugins.MissingMethodName, StringComparison.Ordinal) != true)
-                throw new InvalidOperationException($"The server's log has no HarmonyX warning naming {ControlPlugins.MissingMethodName}: " + (scan.Problem ?? "none in " + log));
-            run.Report.Provenance["controlLogLine"] = found.First ?? "";
+            if (scan.Problem != null) throw new InvalidOperationException("The server's log: " + scan.Problem);
+            // The scan keeps only each pattern's first line, and another plugin's lookup may come before the control's: read them all.
+            var lines = ReadLines(log);
+            var notFound = LogScanner.Patterns.Single(pattern => pattern.Name == "accesstools-not-found").Line;
+            string? warning = lines.FirstOrDefault(line => notFound.IsMatch(line) && line.Contains(ControlPlugins.MissingMethodName, StringComparison.Ordinal));
+            // The control logs a line right after PatchAll: present, PatchAll returned; absent, it threw. Recorded either way.
+            run.Report.Provenance["controlPatchAllReturned"] = lines.Any(line => line.Contains(ControlPlugins.PatchAllReturnedLine, StringComparison.Ordinal)) ? "true" : "false";
+            if (warning == null)
+                throw new InvalidOperationException($"The server's log has no HarmonyX warning naming {ControlPlugins.MissingMethodName} in {log}.");
+            run.Report.Provenance["controlLogLine"] = warning;
         });
+    }
+
+    // A live log the server is still writing.
+    private static List<string> ReadLines(string path)
+    {
+        using var reader = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        var lines = new List<string>();
+        for (string? line; (line = reader.ReadLine()) != null;) lines.Add(line);
+        return lines;
     }
 }

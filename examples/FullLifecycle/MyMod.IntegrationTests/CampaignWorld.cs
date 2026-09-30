@@ -30,7 +30,7 @@ internal sealed class CampaignWorld : IDisposable
     // What the client runs and how it behaves.
     public bool ClientHasMod = true, SyncBroken, KeepFieldAcrossReload, SuppressSave, CloudCharacter, ClientSeesMarkers = true;
     // The server's installed control and fixture state.
-    public bool ControlMissingTarget, ControlPatchApplied, ControlServerOnlyPrefab, OversizedRoom, NoDungeon, Crossplay, RefusalSucceeds;
+    public bool ControlMissingTarget, ControlPatchApplied, ControlPatchAllThrew, ControlWarningMissing, OtherPluginLookupWarning, ControlServerOnlyPrefab, OversizedRoom, NoDungeon, Crossplay, RefusalSucceeds;
     public string RefusalStatus = "ErrorVersion";
 
     private readonly List<(float X, float Z, string Label)> _markers = [], _savedMarkers = [];
@@ -63,10 +63,15 @@ internal sealed class CampaignWorld : IDisposable
     /// <summary>Call after setting the switches: the server's boot log, as the game and the controls write it.</summary>
     public void WriteServerLog()
     {
-        var lines = new List<string> { "[Info   :   BepInEx] Chainloader startup complete" };
-        if (ControlMissingTarget && !ControlPatchApplied)
-            // As the game logs it (1.0.16, BepInEx 5.4.23.5, HarmonyX 2.9.0): one warning, and PatchAll carries on.
+        var lines = new List<string>();
+        // Another plugin probing an optional member the same way, logged before the control's warning.
+        if (OtherPluginLookupWarning) lines.Add("[Warning:  HarmonyX] AccessTools.Field: Could not find field for type Terminal and name m_someOptionalField");
+        if (ControlMissingTarget && !ControlPatchApplied && !ControlWarningMissing)
+            // As the 1.0.16 dedicated server logged it (BepInEx 5.4.23.5, HarmonyX 2.9.0): one warning, no error line.
             lines.Add("[Warning:  HarmonyX] AccessTools.DeclaredMethod: Could not find method for type Player and name MyModControlMethodThatDoesNotExist and parameters ");
+        // The control's line after PatchAll, there only if PatchAll returned.
+        if (ControlMissingTarget && !ControlPatchAllThrew) lines.Add("[Info   :MyMod control: missing Harmony target (ValheimTesting example)] MissingHarmonyTarget: PatchAll returned");
+        lines.Add("[Info   :   BepInEx] Chainloader startup complete");
         if (Crossplay) lines.Add($"[Info   : Unity Log] Created PlayFab lobby with ID \"L1\", ConnectionString \"c\" and owned by \"{PlayFabId}\"");
         File.WriteAllLines(ServerLog, lines);
     }

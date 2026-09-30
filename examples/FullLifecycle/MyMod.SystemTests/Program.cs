@@ -46,7 +46,7 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
             return Task.CompletedTask;
         }
         // The native campaign's scenarios (CampaignScenarios). Their in-run log reads open files on this machine, so a run
-        // with --profile has none.
+        // with --profile skips the server's; only the crossplay lobby is read on the server's host.
         bool local = run.Profile == null;
         CampaignScenarios.Run(new CampaignRun
         {

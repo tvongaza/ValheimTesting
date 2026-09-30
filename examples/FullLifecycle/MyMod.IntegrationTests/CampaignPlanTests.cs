@@ -212,6 +212,9 @@ public sealed class CampaignPlanTests : IDisposable
         // A valid server-side control run: its HarmonyX line is a warning, so nothing needs reclassifying.
         plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["example.mymod.control.missingtarget"] = md5;
         Assert.Equal(ControlPlugins.MissingHarmonyTarget, Read(plan).Control!.Name);
+        // The same run with its expected warning reclassified as a failure would fail its own teardown scan: refused.
+        plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["severity"] = "Failure", ["reason"] = "no lookup may miss" } };
+        Refused(plan, "expects accesstools-not-found in the server's log");
         // A valid client-side control run.
         plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
         Assert.Equal(ControlPlugins.SuppressedProfileSave, Read(plan).Control!.Name);

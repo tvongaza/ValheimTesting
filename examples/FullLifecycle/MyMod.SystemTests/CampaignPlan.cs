@@ -162,6 +162,8 @@ public sealed partial class LifecyclePlan
         // The control writes the pattern its check requires: the teardown scan must not fail the run on that very line.
         if (control.Name == ControlPlugins.ServerOnlyPrefab && LogScan.TryGetValue("missing-prefab-hash", out var missing) && missing.Severity == LogSeverity.Failure)
             throw new ArgumentException("A server-only-prefab run expects missing-prefab-hash in the client's log: do not classify it as a Failure there.");
+        if (control.Name == ControlPlugins.MissingHarmonyTarget && LogScan.TryGetValue("accesstools-not-found", out var notFound) && notFound.Severity == LogSeverity.Failure)
+            throw new ArgumentException("A missing-harmony-target run expects accesstools-not-found in the server's log: do not classify it as a Failure there.");
     }
 
     /// <summary>The zones round a site that its marker can stand in.</summary>

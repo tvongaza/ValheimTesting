@@ -98,10 +98,31 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.True(Step(report, "control missing-harmony-target: the server's log has HarmonyX's warning for the missing target").Passed);
         Assert.Contains("not applied: postfix (any method) on Player::MyModControlMethodThatDoesNotExist", report.Provenance["controlFailure"]);
         Assert.Contains("Could not find method for type Player and name MyModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
+        Assert.Equal("true", report.Provenance["controlPatchAllReturned"]);
         Assert.StartsWith("missing-harmony-target: failed its check as expected", report.Provenance["control"]);
         Assert.True(Evidence("control-log-scan.json"));
         Assert.Equal(0, _world.MarkCommands); // The run ends at the control's checks.
         Assert.Empty(_world.Clients);
+    }
+
+    [Fact] public void AMissingHarmonyTargetControlFindsItsWarningBehindAnotherPluginsAndRecordsAPatchAllThatThrew()
+    {
+        // Another plugin's lookup warning comes first, and PatchAll threw (no line after it): the run still passes on the
+        // control's own warning, and says PatchAll did not return.
+        _world.ControlMissingTarget = true; _world.OtherPluginLookupWarning = true; _world.ControlPatchAllThrew = true;
+        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
+        Assert.True(report.Passed, Explain(report));
+        Assert.Contains("name MyModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
+        Assert.Equal("false", report.Provenance["controlPatchAllReturned"]);
+    }
+
+    [Fact] public void AMissingHarmonyTargetControlWithoutItsWarningFailsTheLogStep()
+    {
+        // Only another plugin's lookup warning: the first accesstools-not-found line names something else.
+        _world.ControlMissingTarget = true; _world.OtherPluginLookupWarning = true; _world.ControlWarningMissing = true;
+        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
+        Assert.Equal(new[] { "control missing-harmony-target: the server's log has HarmonyX's warning for the missing target" }, Failed(report));
+        Assert.Equal("true", report.Provenance["controlPatchAllReturned"]);
     }
 
     [Fact] public void AMissingHarmonyTargetControlWhosePatchAppliesFailsTheRun()
