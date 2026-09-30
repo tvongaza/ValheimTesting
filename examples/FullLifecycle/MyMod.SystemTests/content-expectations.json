@@ -1,0 +1,19 @@
+{
+  "owner": "example.mymod",
+  "scope": ["MyMod_", "Recipe_MyMod_"],
+  "items": [
+    { "name": "MyMod_SurveyStake", "sides": ["server", "client"] }
+  ],
+  "prefabs": [
+    { "name": "MyMod_SurveyStake", "sides": ["server", "client"] }
+  ],
+  "recipes": [
+    {
+      "name": "Recipe_MyMod_SurveyStake",
+      "sides": ["server", "client"],
+      "item": "MyMod_SurveyStake",
+      "station": "piece_workbench",
+      "resources": ["Wood"]
+    }
+  ]
+}

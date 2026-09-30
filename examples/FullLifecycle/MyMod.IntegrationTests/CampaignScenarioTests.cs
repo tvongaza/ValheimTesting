@@ -311,6 +311,87 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.Contains("ErrorDisconnected (4)", report.Steps.Single(s => !s.Passed).Error);
     }
 
+    // content-census
+
+    private const string CensusStep = ContentCensusScenario.Check;
+
+    [Fact] public void TheDeclaredContentIsRegisteredOnTheServerAndTheClientInBothRounds()
+    {
+        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario));
+        Assert.True(report.Passed, Explain(report));
+        foreach (string round in new[] { "first", "after-restart" })
+        {
+            Assert.True(Step(report, $"{round}: {CensusStep}").Passed);
+            Assert.True(Evidence($"{round}-content-census.json"));
+        }
+        // Each side's census through its own actor, once per round; the report records which side said what.
+        Assert.Equal(2, ServerCount("cli_extension mymod.testing/content-census"));
+        Assert.Equal(2, ClientCount("cli_extension mymod.testing/content-census"));
+        using var evidence = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(_world.Output, "first-content-census.json")));
+        Assert.Equal("server", evidence.RootElement.GetProperty("server").GetProperty("Side").GetString());
+        Assert.Equal("client", evidence.RootElement.GetProperty("client").GetProperty("Side").GetString());
+        Assert.Equal(12, evidence.RootElement.GetProperty("report").GetProperty("Entries").GetArrayLength());
+        Assert.Contains("recipe Recipe_MyMod_SurveyStake (server+client)", report.Provenance["contentExpectations"]);
+        Assert.Equal(1, _world.Restarts);
+        Assert.Equal(0, _world.MarkCommands);
+    }
+
+    [Fact] public void ARecipeMissingOnBothSidesFailsNamingOnlyIt()
+    {
+        _world.OmitRecipe = true; // The omit build without naming it as a control: an ordinary run must fail.
+        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario));
+        Assert.Equal(new[] { $"first: {CensusStep}" }, Failed(report));
+        string error = Step(report, $"first: {CensusStep}").Error;
+        Assert.Contains("2 problem(s): server: missing recipe Recipe_MyMod_SurveyStake (not registered in ObjectDB); client: missing recipe Recipe_MyMod_SurveyStake", error);
+        Assert.True(Evidence("first-content-census.json")); // Written before the check.
+        Assert.Equal(0, _world.Restarts);
+    }
+
+    [Fact] public void AClientWithoutTheModNeverBorrowsTheServersCensus()
+    {
+        // The plan pins the server's MyMod on the client, but the client that joined does not run it.
+        _world.ClientHasMod = false;
+        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario));
+        Assert.Equal(new[] { $"first: {CensusStep}" }, Failed(report));
+        Assert.Contains("client: example.mymod is not loaded on the client", Step(report, $"first: {CensusStep}").Error);
+
+        // A client whose census reports being the server is refused too.
+        using var world = new CampaignWorld { ClientCensusSaysServer = true };
+        var swapped = new ScenarioReport("mymod-system-test");
+        try { CampaignScenarios.Run(world.Run(world.Plan(LifecyclePlan.ContentCensusScenario), swapped)); } catch (Exception) { }
+        Assert.Contains("reports being the server", swapped.Steps.Single(s => s.Name == $"first: {CensusStep}").Error);
+    }
+
+    [Fact] public void AnOmittedRecipeControlRunPassesOnlyOnThatRecipe()
+    {
+        _world.OmitRecipe = true;
+        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe));
+        Assert.True(report.Passed, Explain(report));
+        Assert.True(Step(report, $"first: control omitted-recipe: {CensusStep} fails for the named reason").Passed);
+        Assert.StartsWith("the census fails only on the omitted recipe: server: missing recipe Recipe_MyMod_SurveyStake", report.Provenance["controlFailure"]);
+        Assert.StartsWith("omitted-recipe: failed its check as expected", report.Provenance["control"]);
+        Assert.True(Evidence("first-content-census.json"));
+        Assert.Equal(0, _world.Restarts); // The run ends at the control's check.
+    }
+
+    [Fact] public void AnOmittedRecipeControlWhoseRecipeIsThereFailsTheRun()
+    {
+        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe)); // The normal build pinned as the control.
+        Assert.Equal(new[] { $"first: control omitted-recipe: {CensusStep} fails for the named reason" }, Failed(report));
+        Assert.Contains("passed: the check cannot see the defect", report.Steps.Single(s => !s.Passed).Error);
+    }
+
+    [Fact] public void AnOmittedRecipeControlWithAnotherDefectFailsTheRun()
+    {
+        _world.OmitRecipe = true; _world.ExtraItem = true; // The recipe is missing, and something else is wrong too.
+        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe));
+        Assert.Equal(new[] { $"first: control omitted-recipe: {CensusStep} fails for the named reason" }, Failed(report));
+        string error = report.Steps.Single(s => !s.Passed).Error;
+        Assert.Contains("not for its reason", error);
+        Assert.Contains("unexpected item MyMod_Extra", error);
+        Assert.False(report.Provenance.ContainsKey("controlFailure"));
+    }
+
     // crossplay
 
     [Fact] public void TheLifecycleRunsOverACrossplayServersLobby()

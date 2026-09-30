@@ -19,7 +19,9 @@ public sealed partial class LifecyclePlan
     public const string RefusedJoinScenario = "refused-join";
     /// <summary>The dry-site lifecycle on a crossplay (PlayFab) server, joined through its lobby.</summary>
     public const string CrossplayScenario = "crossplay";
-    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario];
+    /// <summary>MyMod's registered items, recipes and prefabs on the server and a joined client (<see cref="ContentCensusScenario"/>).</summary>
+    public const string ContentCensusScenario = "content-census";
+    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario, ContentCensusScenario];
     /// <summary>The adapter's fixture commands (the global-key change) run only when the server starts with this set to 1.</summary>
     public const string FixturesVariable = "MYMOD_TEST_FIXTURES";
     private static readonly Regex Word = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
@@ -46,7 +48,7 @@ public sealed partial class LifecyclePlan
     public string? ExpectFailure { get; set; }
 
     [JsonIgnore] public bool MarksSites => Scenario is LifecycleScenario or ServerScenario or WorldScenario or VanillaClientScenario or CrossplayScenario;
-    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario;
+    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario or ContentCensusScenario;
     [JsonIgnore] public ControlPlugin? Control => ControlPlugins.Named(ExpectFailure);
     [JsonIgnore] public GameConnectionStatus RefusalStatus => ExpectedRefusal == null ? GameConnectionStatus.ErrorVersion : ConnectionStatusReading.ParseStatus(ExpectedRefusal);
 
@@ -80,6 +82,10 @@ public sealed partial class LifecyclePlan
             case VanillaClientScenario:
                 client.Validate(ModPlugin); // The claim is what a client without MyMod sees; it still needs the adapter.
                 RequirePin(client, AdapterPlugin, Pins[AdapterPlugin], "client", "the vanilla client reads its census through the server's adapter build");
+                break;
+            case ContentCensusScenario:
+                // The client's registries are its own: the census needs the server's MyMod build there too.
+                SameBuildsAs(client, "client");
                 break;
             case SyncedConfigScenario:
                 SameBuildsAs(client, "client");
@@ -154,8 +160,16 @@ public sealed partial class LifecyclePlan
                 throw new ArgumentException($"The control plugin {installed[0].Guid} is pinned: a control makes its check fail on purpose. Name it in expectFailure (\"{installed[0].Name}\") for a control run, or remove it.");
             return;
         }
-        var control = Control ?? throw new ArgumentException($"expectFailure names no control; use one of {string.Join(", ", ControlPlugins.All.Select(c => c.Name))}.");
+        var control = Control ?? throw new ArgumentException($"expectFailure names no control; use one of {string.Join(", ", ControlPlugins.Every.Select(c => c.Name))}.");
         if (Scenario != control.Scenario) throw new ArgumentException($"The {control.Name} control belongs to the {control.Scenario} scenario, not {Scenario}.");
+        if (control.Build)
+        {
+            // A defective build of a plugin, pinned where the normal build would be; no control plugin runs beside it.
+            if (installed.Count != 0) throw new ArgumentException($"A {control.Name} run is a build of {control.Guid}; remove the control plugin {installed[0].Guid}.");
+            if (!Pins.TryGetValue(control.Guid, out var build) || build.Length != 32 || !build.All(Uri.IsHexDigit))
+                throw new ArgumentException($"A {control.Name} run pins its build of {control.Guid} by MD5.");
+            return;
+        }
         var side = control.OnServer ? Pins : Client?.Pins;
         if (side == null || !side.TryGetValue(control.Guid, out var md5) || md5.Length != 32 || !md5.All(Uri.IsHexDigit))
             throw new ArgumentException($"A {control.Name} run installs that control on the {(control.OnServer ? "server" : "client")}: pin {control.Guid} there by its MD5.");

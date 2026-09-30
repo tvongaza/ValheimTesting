@@ -8,7 +8,8 @@ public static class Capabilities
 {
     public const string Harmony = "mymod.testing/harmony", Zones = "mymod.testing/zones", CustomData = "mymod.testing/custom-data",
         GlobalKeys = "mymod.testing/globalkeys", GlobalKeyChange = "mymod.testing/globalkey", Config = "mymod.testing/config",
-        UnresolvedPrefabs = "mymod.testing/unresolved-prefabs", DungeonRooms = "mymod.testing/dungeon-rooms", Markers = "mymod.testing/markers";
+        UnresolvedPrefabs = "mymod.testing/unresolved-prefabs", DungeonRooms = "mymod.testing/dungeon-rooms", Markers = "mymod.testing/markers",
+        ContentCensus = "mymod.testing/content-census";
     /// <summary>The field-only-state control's own commands (Controls/FieldOnlyState).</summary>
     public const string FieldStateSet = "mymodcontrol.fieldstate/set", FieldStateRead = "mymodcontrol.fieldstate/read";
 }
@@ -60,6 +61,7 @@ public static class CampaignScenarios
                 case LifecyclePlan.VanillaClientScenario: VanillaClientScenario.Run(run); break;
                 case LifecyclePlan.SyncedConfigScenario: SyncedConfigScenario.Run(run); break;
                 case LifecyclePlan.RefusedJoinScenario: RefusedJoinScenario.Run(run); break;
+                case LifecyclePlan.ContentCensusScenario: ContentCensusScenario.Run(run); break;
                 case LifecyclePlan.CrossplayScenario:
                     // The dry-site lifecycle, joined through each boot's crossplay lobby instead of the server's address.
                     DrySiteScenario.Run(plan, run.Server, run.RestartServer, () => run.OpenClient(plan.Client!, null), run.WaitUntilJoinable,

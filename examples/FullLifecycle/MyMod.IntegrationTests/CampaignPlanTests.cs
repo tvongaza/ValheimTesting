@@ -80,7 +80,7 @@ public sealed class CampaignPlanTests : IDisposable
 
     [Theory]
     [InlineData(LifecyclePlan.WorldScenario)] [InlineData(LifecyclePlan.VanillaClientScenario)] [InlineData(LifecyclePlan.SyncedConfigScenario)]
-    [InlineData(LifecyclePlan.RefusedJoinScenario)] [InlineData(LifecyclePlan.CrossplayScenario)]
+    [InlineData(LifecyclePlan.RefusedJoinScenario)] [InlineData(LifecyclePlan.CrossplayScenario)] [InlineData(LifecyclePlan.ContentCensusScenario)]
     public void EachScenariosValidPlanIsRead(string scenario) => Assert.Equal(scenario, Read(Plan(scenario)).Scenario);
 
     [Fact] public void TheSamplePlansAreValidPlans()
@@ -88,7 +88,7 @@ public sealed class CampaignPlanTests : IDisposable
         // The samples beside sample-plan.json have placeholders for hashes and paths; with those filled in, each reads.
         string samples = Path.Combine(AppContext.BaseDirectory, "samples");
         var files = Directory.GetFiles(samples, "sample-plan-*.json").Where(file => !file.EndsWith("-hosted.json", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(5, files.Length);
+        Assert.Equal(6, files.Length);
         foreach (string file in files)
         {
             var plan = JsonNode.Parse(Fill(File.ReadAllText(file)))!.AsObject();
@@ -257,6 +257,34 @@ public sealed class CampaignPlanTests : IDisposable
         // An explicit absence is not an install.
         plan = Plan(LifecyclePlan.WorldScenario); plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = "absent";
         Assert.Null(Read(plan).Control);
+    }
+
+    [Fact] public void TheContentCensusNeedsTheServersModOnTheClientAndItsControlIsABuild()
+    {
+        // The client's registries are its own: a client without MyMod, or with another build, cannot stand in.
+        var plan = Plan(LifecyclePlan.ContentCensusScenario); plan["client"]!["pins"]![LifecyclePlan.ModPlugin] = "absent";
+        Refused(plan, "the check needs the server's MyMod on the client");
+        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["client"]!["pins"]![LifecyclePlan.ModPlugin] = CampaignWorld.Md5Mismatched;
+        Refused(plan, "the check needs the server's MyMod on the client");
+        plan = Plan(LifecyclePlan.ContentCensusScenario); plan.Remove("client");
+        Refused(plan, "add the client section");
+        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
+        Refused(plan, "marks nothing");
+
+        // The omitted-recipe control is MyMod's own build, pinned where MyMod is; it belongs to this scenario alone and
+        // runs without any control plugin.
+        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
+        var control = Read(plan).Control!;
+        Assert.True(control.Build);
+        Assert.Equal(ControlPlugins.OmittedRecipe, control.Name);
+        plan = Plan(LifecyclePlan.SyncedConfigScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
+        Refused(plan, "belongs to the content-census scenario");
+        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]!["example.mymod.control.missingtarget"] = new string('5', 32);
+        Refused(plan, "remove the control plugin example.mymod.control.missingtarget");
+        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]![LifecyclePlan.ModPlugin] = "any";
+        Assert.ThrowsAny<ArgumentException>(() => Read(plan));
+        // A normal content-census plan names no control, although MyMod is pinned.
+        Assert.Null(Read(Plan(LifecyclePlan.ContentCensusScenario)).Control);
     }
 
     [Fact] public void TheTwoDrySiteScenariosAreUnchanged()

@@ -27,6 +27,7 @@ namespace UnityEngine
     }
     public class Behaviour : Component { }
     public class MonoBehaviour : Behaviour { }
+    public class ScriptableObject : Object { }
     public sealed class GameObject : Object
     {
         public Transform transform => throw null;
@@ -61,6 +62,7 @@ namespace BepInEx
     {
         public BepInPlugin Metadata => throw null;
         public BaseUnityPlugin Instance => throw null;
+        public string Location => throw null;
     }
 }
 
@@ -160,10 +162,48 @@ public class ZoneSystem : UnityEngine.MonoBehaviour
 public class ZNetScene : UnityEngine.MonoBehaviour
 {
     public static ZNetScene instance => throw null;
+    public System.Collections.Generic.List<UnityEngine.GameObject> m_prefabs;
+    public System.Collections.Generic.List<UnityEngine.GameObject> m_nonNetViewPrefabs;
     public bool HasPrefab(int hash) => throw null;
     public UnityEngine.GameObject GetPrefab(int hash) => throw null;
     public ZNetView FindInstance(ZDO zdo) => throw null;
 }
+public class ObjectDB : UnityEngine.MonoBehaviour
+{
+    public static ObjectDB instance => throw null;
+    public System.Collections.Generic.List<UnityEngine.GameObject> m_items;
+    public System.Collections.Generic.List<Recipe> m_recipes;
+    public UnityEngine.GameObject GetItemPrefab(string name) => throw null;
+    public UnityEngine.GameObject GetItemPrefab(int hash) => throw null;
+    public UnityEngine.GameObject GetItemPrefab(ItemDrop.ItemData.SharedData sharedData) => throw null;
+}
+public class Recipe : UnityEngine.ScriptableObject
+{
+    public ItemDrop m_item;
+    public int m_amount = 1;
+    public bool m_enabled = true;
+    public CraftingStation m_craftingStation;
+    public int m_minStationLevel = 1;
+    public Piece.Requirement[] m_resources;
+}
+public class ItemDrop : UnityEngine.MonoBehaviour
+{
+    public ItemData m_itemData;
+    public class ItemData
+    {
+        public SharedData m_shared;
+        public class SharedData { public string m_name; }
+    }
+}
+public class Piece : UnityEngine.MonoBehaviour
+{
+    public class Requirement
+    {
+        public ItemDrop m_resItem;
+        public int m_amount = 1;
+    }
+}
+public class CraftingStation : UnityEngine.MonoBehaviour { public string m_name = ""; }
 public struct ZDOID { }
 public class ZDO
 {

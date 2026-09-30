@@ -5,15 +5,18 @@ namespace MyMod.SystemTests;
 /// <summary>
 /// A negative-control plugin (examples/FullLifecycle/Controls): installed only for a run whose plan names it in
 /// <c>expectFailure</c>, on the server or the client, in one scenario. <see cref="Check"/> names the check it must make
-/// fail and <see cref="Reason"/> the text that failure must contain; any other outcome fails the run.
+/// fail and <see cref="Reason"/> the text that failure must contain; any other outcome fails the run. A
+/// <see cref="Build"/> control is not a plugin but a build of the plugin <see cref="Guid"/> names (MyMod built with a
+/// defect), pinned by its MD5 where the normal build would be: the plan cannot tell the two builds apart, so only the
+/// check's named failure shows which one ran.
 /// </summary>
-public sealed record ControlPlugin(string Name, string Guid, bool OnServer, string Scenario, string Check, string Reason);
+public sealed record ControlPlugin(string Name, string Guid, bool OnServer, string Scenario, string Check, string Reason, bool Build = false);
 
 /// <summary>The four controls, and how a scenario requires one to fail.</summary>
 public static class ControlPlugins
 {
     public const string MissingHarmonyTarget = "missing-harmony-target", ServerOnlyPrefab = "server-only-prefab",
-        FieldOnlyState = "field-only-state", SuppressedProfileSave = "suppressed-profile-save";
+        FieldOnlyState = "field-only-state", SuppressedProfileSave = "suppressed-profile-save", OmittedRecipe = "omitted-recipe";
     /// <summary>The prefab only the server-only-prefab control registers.</summary>
     public const string ServerOnlyPrefabName = "MyModControl_ServerOnly";
     /// <summary>The missing-harmony-target control's patch, on a method the game does not have.</summary>
@@ -41,7 +44,20 @@ public static class ControlPlugins
             "the logout rewrites the character file", "to be rewritten by the logout"),
     ];
 
-    public static ControlPlugin? Named(string? name) => name == null ? null : All.FirstOrDefault(control => control.Name == name);
+    /// <summary>
+    /// The build controls: <c>omitted-recipe</c> is MyMod built with <c>-p:MyModOmit=recipe</c> on the server and the
+    /// client, and the content census must fail on that recipe alone (#91).
+    /// </summary>
+    public static readonly IReadOnlyList<ControlPlugin> Builds =
+    [
+        new(OmittedRecipe, LifecyclePlan.ModPlugin, OnServer: true, LifecyclePlan.ContentCensusScenario,
+            ContentCensusScenario.Check, ContentCensusScenario.OnlyTheOmittedRecipe, Build: true),
+    ];
+
+    /// <summary>Every control, plugins and builds, by name.</summary>
+    public static IEnumerable<ControlPlugin> Every => All.Concat(Builds);
+
+    public static ControlPlugin? Named(string? name) => name == null ? null : Every.FirstOrDefault(control => control.Name == name);
 
     /// <summary>
     /// Runs the control's check as one step, <c>control {name}: {check} fails for the named reason</c>, which passes only
