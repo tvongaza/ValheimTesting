@@ -77,6 +77,15 @@ public class ZNet : UnityEngine.MonoBehaviour
     public static ZNet instance => throw null;
     public bool IsServer() => throw null;
     public bool IsDedicated() => throw null;
+    public UnityEngine.Vector3 GetReferencePosition() => throw null;
+    public SimulationDistance GetSyncedSimulationDistance() => throw null;
+}
+public struct SimulationDistance
+{
+    public SimulationDistance(int nearSimulationDistance, int farSimulationDistance, bool classic = false) => throw null;
+    public int NearSimulationDistance => throw null;
+    public int FarSimulationDistance => throw null;
+    public bool IsClassic => throw null;
 }
 public class ZoneSystem : UnityEngine.MonoBehaviour
 {
@@ -84,6 +93,14 @@ public class ZoneSystem : UnityEngine.MonoBehaviour
     public static ZoneSystem instance => throw null;
     public UnityEngine.GameObject m_zonePrefab;
     public static UnityEngine.Vector3 GetZonePos(Vector2s id) => throw null;
+    public static Vector2s GetZone(UnityEngine.Vector3 point) => throw null;
+    public bool IsZoneLoaded(Vector2s zoneID) => throw null;
+}
+public class ZNetScene : UnityEngine.MonoBehaviour
+{
+    public static ZNetScene instance => throw null;
+    public UnityEngine.GameObject GetPrefab(int hash) => throw null;
+    public ZNetView FindInstance(ZDO zdo) => throw null;
 }
 public class ZDO
 {
@@ -94,14 +111,33 @@ public class ZDOMan
 {
     public static ZDOMan instance => throw null;
     public void DestroyZDO(ZDO zdo) => throw null;
+    public void FindSectorObjects(Vector2s sector, SimulationDistance simulationDistance, System.Collections.Generic.List<ZDO> sectorObjects, System.Collections.Generic.List<ZDO> distantSectorObjects = null) => throw null;
 }
 public class ZNetView : UnityEngine.MonoBehaviour
 {
+    public bool m_distant;
     public ZDO GetZDO() => throw null;
     public bool IsValid() => throw null;
     public bool IsOwner() => throw null;
     public static void StartGhostInit() => throw null;
     public static void FinishGhostInit() => throw null;
+}
+public class Player : UnityEngine.MonoBehaviour
+{
+    public static Player m_localPlayer;
+    public System.Collections.Generic.Dictionary<string, string> m_customData;
+}
+public class PlayerProfile
+{
+    public FileHelpers.FileSource m_fileSource;
+    public string GetName() => throw null;
+    public string GetFilename() => throw null;
+    public string GetPath() => throw null;
+}
+public class Game : UnityEngine.MonoBehaviour
+{
+    public static Game instance => throw null;
+    public PlayerProfile GetPlayerProfile() => throw null;
 }
 public class WorldGenerator { public static WorldGenerator instance => throw null; }
 public class HeightmapBuilder
