@@ -151,7 +151,7 @@ public sealed class HostServerTests : IDisposable
     {
         Assert.Equal("valheim_server_Data/Plugins/libparty.so", CrossplayLibraries.Verdict("box",
             "VT-LDD 	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 0\n"));
-        Assert.Contains("has no valheim_server_Data/Plugins/libparty.so or valheim_Data/Plugins/libparty.so",
+        Assert.Contains("has no valheim_server_Data/Plugins/libparty.so",
             Assert.Throws<FileNotFoundException>(() => CrossplayLibraries.Verdict("box", "VT-PARTY absent\n")).Message);
         Assert.Contains("no ldd", Assert.Throws<PlatformNotSupportedException>(() => CrossplayLibraries.Verdict("box", "VT-PARTY noldd\n")).Message);
         Assert.Throws<PlatformNotSupportedException>(() => CrossplayLibraries.Verdict("box", "VT-PARTY unsupported Darwin\n"));

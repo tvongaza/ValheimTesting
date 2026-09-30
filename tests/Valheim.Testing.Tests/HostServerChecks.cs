@@ -135,6 +135,13 @@ internal static class HostServerChecks
         await Assert.ThrowsAsync<FileNotFoundException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
         await Assert.ThrowsAsync<FileNotFoundException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-absent", Generous));
 
+        // A client plugin in a mixed install must not stand in for the dedicated server's missing plugin.
+        string clientPlugin = runtime + "/valheim_Data/Plugins";
+        (await host.RunAsync("set -e; mkdir -p \"$plugins\"; cp \"$(type -P true)\" \"$plugins/libparty.so\"",
+            new Dictionary<string, string> { ["plugins"] = clientPlugin }, Generous)).EnsureSuccess("Writing a client-only libparty.so");
+        await Assert.ThrowsAsync<FileNotFoundException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-client-only", Generous));
+
         string plugin = runtime + "/valheim_server_Data/Plugins";
         async Task Party(string script) => (await host.RunAsync("set -e; mkdir -p \"$plugins\"; " + script, new Dictionary<string, string> { ["plugins"] = plugin }, Generous))
             .EnsureSuccess("Writing a stand-in libparty.so");

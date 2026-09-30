@@ -14,8 +14,8 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public static class CrossplayLibraries
 {
-    /// <summary>Where the game keeps the library, relative to the runtime: the dedicated server's, then the client's.</summary>
-    public static IReadOnlyList<string> PartyLibraries { get; } = ["valheim_server_Data/Plugins/libparty.so", "valheim_Data/Plugins/libparty.so"];
+    /// <summary>The dedicated server's library, relative to its runtime. A client plugin cannot satisfy a server preflight.</summary>
+    public static IReadOnlyList<string> PartyLibraries { get; } = ["valheim_server_Data/Plugins/libparty.so"];
 
     /// <summary>The Debian and Ubuntu package for each library <c>libparty.so</c> needs that a minimal install may lack.</summary>
     public static IReadOnlyDictionary<string, string> Packages { get; } = new Dictionary<string, string>(StringComparer.Ordinal)
