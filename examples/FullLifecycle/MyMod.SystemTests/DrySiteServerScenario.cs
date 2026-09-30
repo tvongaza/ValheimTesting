@@ -15,7 +15,8 @@ namespace MyMod.SystemTests;
 /// </summary>
 public static class DrySiteServerScenario
 {
-    public static void Run(LifecyclePlan plan, GameActor server, Func<GameActor> restartOwnedServer, ScenarioReport report)
+    /// <returns>The server after the restart.</returns>
+    public static GameActor Run(LifecyclePlan plan, GameActor server, Func<GameActor> restartOwnedServer, ScenarioReport report)
     {
         if (!plan.ServerOnly) throw new ArgumentException($"This scenario runs {LifecyclePlan.ServerScenario} plans.");
         report.Step("no marker at either site before the mod acts", () => RequireMarkers(server, plan, dry: 0));
@@ -25,6 +26,7 @@ public static class DrySiteServerScenario
         report.Step("confirmed world save", () => server.SaveConfirmed());
         report.Step("restart only the owned server", () => server = restartOwnedServer());
         report.Step("after restart: the server still has one marker at the dry site, none at the wet site", () => RequireMarkers(server, plan, dry: 1));
+        return server;
     }
 
     private static void RequireMarkers(GameActor server, LifecyclePlan plan, int dry)

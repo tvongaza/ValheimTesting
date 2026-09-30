@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    A probe for the native campaign, never part of a normal runtime: a ScriptEngine script (BepInEx/scripts) that patches the
+    method MyMod patches under its own Harmony ID, so a run can show that unloading an adapter leaves other owners' patches in
+    place (issue #30). -p:ProbeRevision=B builds the replacement, whose patch class has another name; -p:ProbeUnpatch=Other builds
+    the negative control, which also removes MyMod's patches when it is unloaded. It compiles against your game install like
+    MyMod (-p:ValheimPath=), never in this repository or its CI. The symbols are embedded: ScriptEngine expects them.
+  -->
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>MyMod.Probe.PatchReload</AssemblyName><Version>0.1.0</Version>
+    <ProbeRevision Condition="'$(ProbeRevision)' == ''">A</ProbeRevision>
+    <DefineConstants Condition="'$(ProbeRevision)' == 'B'">$(DefineConstants);PROBE_REVISION_B</DefineConstants>
+    <DefineConstants Condition="'$(ProbeUnpatch)' == 'Other'">$(DefineConstants);PROBE_UNPATCH_OTHER</DefineConstants>
+  </PropertyGroup>
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>

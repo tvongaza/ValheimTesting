@@ -31,7 +31,13 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
     {
         if (run.Plan.ServerOnly)
         {
-            DrySiteServerScenario.Run(run.Plan, run.Server, run.Session.Restart, run.Report);
+            var server = DrySiteServerScenario.Run(run.Plan, run.Server, run.Session.Restart, run.Report);
+            if (run.Plan.PatchReload != null)
+            {
+                // It writes into the runtime copy's scripts folder, which must be on this machine.
+                if (run.Profile != null) throw new ArgumentException("patchReload runs only with the server on this machine (no --profile).");
+                PatchReloadScenario.Run(run.Plan, server, run.RuntimeDirectory, run.Output, run.Report, run.Cancellation);
+            }
             return Task.CompletedTask;
         }
         Action<GameActor> joinable = server => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation);
