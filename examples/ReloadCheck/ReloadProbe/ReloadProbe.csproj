@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    ReloadCheck's probe, never part of a normal runtime: a ScriptEngine script (BepInEx/scripts) that registers the
+    example.probe extension with ValheimCLI. -p:ProbeRevision=B builds the replacement revision, which answers 0.2.0 and
+    drops the "removed" command. It compiles against your game install (-p:ValheimPath=) and the exact ValheimCLI core the
+    game runs (-p:CliDll=), never in this repository or its CI. The symbols are embedded: ScriptEngine expects them.
+  -->
+  <Import Project="../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>ReloadProbe</AssemblyName><Version>0.1.0</Version>
+    <UseValheimCli>true</UseValheimCli>
+    <DefineConstants Condition="'$(ProbeRevision)' == 'B'">$(DefineConstants);PROBE_B</DefineConstants>
+  </PropertyGroup>
+  <Import Project="../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>
