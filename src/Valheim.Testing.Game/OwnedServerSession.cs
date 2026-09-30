@@ -48,6 +48,13 @@ public sealed class StartupEvents
     /// <summary>The log ValheimCLI writes to, normally the runtime's BepInEx/LogOutput.log. No connection is tried before <see cref="Listening"/> appears in it.</summary>
     public string? CliLog { get; init; }
     public Regex Listening { get; init; } = CliListening;
+    /// <summary>
+    /// Waits for ValheimCLI's listening line somewhere <see cref="CliLog"/> cannot reach, such as a server host's log through
+    /// <see cref="IGameHost.WaitForLogAsync"/>; it gets the time left and a token cancelled when the process exits first, and
+    /// throws <see cref="WaitFailedException"/> or <see cref="WaitTimeoutException"/> as <see cref="HostLogResult.EnsureMatched"/>
+    /// does. Used only without <see cref="CliLog"/>; after it, as after the local line, a failed connection is a fault.
+    /// </summary>
+    public Func<TimeSpan, CancellationToken, Task>? CliListeningWait { get; init; }
     /// <summary>Lines in <see cref="CliLog"/> that end startup at once, for example a required plugin's load error.</summary>
     public IReadOnlyList<Regex> Failures { get; init; } = [];
     /// <summary>
@@ -115,9 +122,10 @@ public sealed class OwnedServerSession : IDisposable
             var left = _startup - clock.Elapsed;
             return left > TimeSpan.Zero ? left : throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, log?.Refresh());
         }
+        var hostWait = log == null ? events?.CliListeningWait : null;
         async Task<Exception> Exited(string stage) => new WaitFailedException(stage, "owned server exited with code " + await exited.ConfigureAwait(false) +
             (log != null && !log.HasOutput() ? StartupEvents.NoBepInExLog(log.LogPath, null) : ""),
-            clock.Elapsed, log == null ? "no startup log configured" : log.Refresh());
+            clock.Elapsed, log != null ? log.Refresh() : hostWait != null ? "the startup log is on the server's host" : "no startup log configured");
         async Task UntilExit(string stage, Func<TimeSpan, CancellationToken, Task> wait)
         {
             using var abandon = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
@@ -154,6 +162,8 @@ public sealed class OwnedServerSession : IDisposable
         {
             if (log != null)
                 await UntilExit("ValheimCLI listening", (left, ct) => log.WaitAsync(events!.Listening, left, events.Failures, ct)).ConfigureAwait(false);
+            else if (hostWait != null)
+                await UntilExit("ValheimCLI listening", hostWait).ConfigureAwait(false);
             if (events?.States is { } openStates)
             {
                 using var states = await Bounded("world loaded", openStates).ConfigureAwait(false);
@@ -212,7 +222,7 @@ public sealed class OwnedServerSession : IDisposable
                 catch (Exception error) when (error is IOException or System.Net.Sockets.SocketException)
                 {
                     // After the listening line a failed connection is a fault, not a startup race.
-                    if (log != null) throw new WaitFailedException(stage, "ValheimCLI announced its listener but the connection failed: " + error.Message, clock.Elapsed, log.Refresh());
+                    if (log != null || hostWait != null) throw new WaitFailedException(stage, "ValheimCLI announced its listener but the connection failed: " + error.Message, clock.Elapsed, log?.Refresh());
                     last = error is IOException ? "CLI transport unavailable" : "CLI socket unavailable";
                 }
                 finally { transport?.Dispose(); }

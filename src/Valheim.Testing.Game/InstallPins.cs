@@ -103,10 +103,19 @@ public sealed class InstallPins
     public InstallPins Check(string root, string kind)
     {
         Validate(kind);
-        var found = Of(root);
+        return Compare(Of(root), kind, Path.GetRelativePath(Path.GetFullPath(root), Path.GetDirectoryName(GameAssembly(root))!));
+    }
+
+    /// <summary>
+    /// <see cref="Check"/> for pins found elsewhere (an install on another host): refuses <paramref name="found"/> unless it is
+    /// these pins. <paramref name="gameFolder"/> names the Managed folder in the message. Returns <paramref name="found"/>.
+    /// </summary>
+    internal InstallPins Compare(InstallPins found, string kind, string gameFolder)
+    {
+        Validate(kind);
         var differences = new List<string>();
         if (!Same(found.Game, Game))
-            differences.Add($"the game build differs ({Path.GetRelativePath(Path.GetFullPath(root), Path.GetDirectoryName(GameAssembly(root))!)}/{GameAssemblies} is {found.Game}, pinned game {Game}): a game update or another branch");
+            differences.Add($"the game build differs ({gameFolder}/{GameAssemblies} is {found.Game}, pinned game {Game}): a game update or another branch");
         if (!Same(found.BepInExCore, BepInExCore))
             differences.Add($"BepInEx core differs ({CoreDirectory} is {found.BepInExCore}, pinned bepinexCore {BepInExCore}): another BepInEx or BepInExPack build");
         if (!Same(found.Patchers, Patchers))
@@ -155,13 +164,19 @@ public sealed class InstallPins
         return name == ".DS_Store" || name.StartsWith("._", StringComparison.Ordinal);
     }
 
-    private static string ListingHash(string directory, IEnumerable<string> files)
+    private static string ListingHash(string directory, IEnumerable<string> files) =>
+        ListingHash(files.Where(path => !IsMacMetadata(path))
+            .Select(path => (Relative: Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '/'), Sha256: (Func<string>)(() => WorldFixture.Hash(path)))));
+
+    /// <summary>The listing hash of files already hashed elsewhere: relative paths with <c>/</c> separators and their SHA256.</summary>
+    internal static string ListingHash(IEnumerable<(string Relative, string Sha256)> files) =>
+        ListingHash(files.Where(file => !IsMacMetadata(file.Relative)).Select(file => (file.Relative, (Func<string>)(() => file.Sha256))));
+
+    private static string ListingHash(IEnumerable<(string Relative, Func<string> Sha256)> files)
     {
         var listing = new StringBuilder();
-        foreach (var file in files.Where(path => !IsMacMetadata(path))
-            .Select(path => (Path: path, Relative: Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '/')))
-            .OrderBy(file => file.Relative, StringComparer.Ordinal))
-            listing.Append(WorldFixture.Hash(file.Path)).Append("  ").Append(file.Relative).Append('\n');
+        foreach (var file in files.OrderBy(file => file.Relative, StringComparer.Ordinal))
+            listing.Append(file.Sha256()).Append("  ").Append(file.Relative).Append('\n');
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(listing.ToString()))).ToLowerInvariant();
     }
 
