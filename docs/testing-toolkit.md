@@ -606,7 +606,7 @@ A client can host a world from its menu instead of joining a server. The host is
 
 | Field | Meaning |
 |---|---|
-| `world` | The fixture as a pinned directory: exactly one `<name>.fwl` at its root and the world's data beside it (`<name>.db`), every entry named for the world. The `.fwl` stem is the world's name, at least 3 characters and one token. |
+| `world` | The fixture as a pinned directory holding one world in either layout the game loads: Valheim 1.0's chunked save, one `<name>/` directory at its root with `_main.<n>.fwl2` and its chunks (what a 1.0 server or client writes), or the older pair, one `<name>.fwl` at its root with its data beside it (`<name>.db`). Every entry is named for the world; the name is at least 3 characters and one token. |
 | `worldUid` | The fixture world's exact UID. It is required even with `"pinning": "none"`, because the game silently creates a fresh world when the named one is missing. |
 | `crossplay` | Host a crossplay world. |
 | `saveDirectory` | The client's data directory, which holds `worlds_local`. Default: this user's for the client's platform: `AppData/LocalLow/IronGate/Valheim` on Windows, `Library/Application Support/IronGate/Valheim` on macOS, `.config/unity3d/IronGate/Valheim` on Linux. Set it when the client runs as another user. |
