@@ -72,6 +72,7 @@ public class GlobalKeyFixtureTests
     [Fact] public async Task TheWaitWakesOnTheChangeEventBeforeTheInterval()
     {
         var world = new World { ReadsUntilBroadcast = 1 };
+        world.ServerKeys.Add("defeated_eikthyr"); // The client's first read is stale, its second has the server's list.
         using var server = world.Server.Actor("server");
         using var client = world.Client.Actor("client");
         int events = 0;
