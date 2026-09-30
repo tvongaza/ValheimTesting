@@ -113,7 +113,7 @@ public sealed class HostProfile
     public string? Destination { get; set; }
     /// <summary>ssh: the port; 0 leaves it to the destination or the ssh config.</summary>
     public int Port { get; set; }
-    /// <summary>ssh: extra <c>-o</c> options as <c>Name=value</c>, the value taken literally (spaces, quotes and backslashes are passed quoted for ssh).</summary>
+    /// <summary>ssh: extra <c>-o</c> options as <c>Name=value</c>, the value taken literally (spaces, quotes and backslashes are passed quoted for ssh; a ProxyCommand, KnownHostsCommand or LocalCommand as written, since ssh runs it with the user's shell).</summary>
     public string[] SshOptions { get; set; } = [];
     public int ConnectSeconds { get; set; } = 10;
     /// <summary>ssh: the OpenSSH client executable.</summary>
