@@ -183,6 +183,33 @@ public sealed class SecondConsumerTests : IDisposable
         child.transform.localRotation = Quaternion.Euler(0f, 45f, 0f);
         Assert.Equal(135f, child.transform.eulerAngles.y, 3);
         Assert.Equal(45f, child.transform.localRotation.eulerAngles.y, 3);
+        parent.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
+        Assert.Equal(225f, child.transform.eulerAngles.y, 3);
+        Assert.Equal(45f, child.transform.localRotation.eulerAngles.y, 3);
+    }
+
+    [Fact] public void ReparentAndInstantiatePreserveTheRequestedRotationSpace()
+    {
+        var first = new GameObject("first"); first.transform.rotation = Quaternion.Euler(0f, 90f, 0f);
+        var second = new GameObject("second"); second.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
+        var child = new GameObject("child"); child.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
+        child.transform.SetParent(first.transform, true);
+        Assert.Equal(45f, child.transform.rotation.eulerAngles.y, 3); // worldPositionStays keeps world rotation too.
+        child.transform.localRotation = Quaternion.Euler(0f, 30f, 0f);
+        child.transform.SetParent(second.transform, false);
+        Assert.Equal(30f, child.transform.localRotation.eulerAngles.y, 3);
+        Assert.Equal(210f, child.transform.rotation.eulerAngles.y, 3);
+
+        var template = new GameObject("template"); template.transform.rotation = Quaternion.Euler(0f, 20f, 0f);
+        var part = new GameObject("part"); part.transform.SetParent(template.transform, false);
+        part.transform.localRotation = Quaternion.Euler(0f, 15f, 0f);
+        var placed = Object.Instantiate(template, new Vector3(0f, 40f, 0f), Quaternion.Euler(0f, 120f, 0f));
+        Assert.Equal(15f, placed.transform.GetChild(0).localRotation.eulerAngles.y, 3);
+        Assert.Equal(135f, placed.transform.GetChild(0).rotation.eulerAngles.y, 3);
+
+        var underSecond = Object.Instantiate(template, second.transform);
+        Assert.Equal(20f, underSecond.transform.localRotation.eulerAngles.y, 3);
+        Assert.Equal(200f, underSecond.transform.rotation.eulerAngles.y, 3);
     }
 
     [Fact] public void ColoursCompareAsUnitysDo()
