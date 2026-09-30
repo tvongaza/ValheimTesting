@@ -1,0 +1,51 @@
+{
+  "scenario": "hosted",
+  "client": {
+    "mode": "owned",
+    "install": "<full path of the client install>",
+    "launchArguments": [
+      "-screen-fullscreen",
+      "0",
+      "-screen-width",
+      "1280",
+      "-screen-height",
+      "720"
+    ],
+    "port": 5556,
+    "pins": {
+      "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
+      "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
+      "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
+      "example.mymod": "<md5 of MyMod.dll>",
+      "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+    },
+    "installPins": {
+      "game": "<InstallPins.Of(install).Game>",
+      "bepinexCore": "<InstallPins.Of(install).BepInExCore>",
+      "patchers": "<InstallPins.Of(install).Patchers>"
+    },
+    "character": "mymodtester",
+    "hostWorld": {
+      "world": {
+        "source": "<full path of the host fixture world folder>",
+        "sha256": {
+          "HostFixture.fwl": "<sha256>",
+          "HostFixture.db": "<sha256>"
+        }
+      },
+      "worldUid": "<the host fixture world's UID>",
+      "saveSeconds": 120
+    }
+  },
+  "drySite": {
+    "x": 120,
+    "z": -380,
+    "ground": 45.2
+  },
+  "wetSite": {
+    "x": 900,
+    "z": 150,
+    "ground": 18.4
+  },
+  "newGreeting": "goodbye"
+}

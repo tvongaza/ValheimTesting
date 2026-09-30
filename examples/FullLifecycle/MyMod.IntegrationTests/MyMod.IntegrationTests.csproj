@@ -3,6 +3,8 @@
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../MyMod.SystemTests/MyMod.SystemTests.csproj" />
+    <!-- The native campaign's sample plans, read by CampaignPlanTests with their placeholders filled in. -->
+    <None Include="../MyMod.SystemTests/sample-plan-*.json" LinkBase="samples" CopyToOutputDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" PrivateAssets="all" />
   </ItemGroup>
 </Project>

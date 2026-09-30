@@ -5,9 +5,10 @@ namespace MyMod.SystemTests;
 /// <summary>
 /// The example's plan: the toolkit's pinned server plan (runtime, world, launch, pins, port) plus what this mod's
 /// scenario needs. The expectations are declared here by whoever prepared the fixture, from the world's generator
-/// heights; the runner never derives them from the mod's own replies.
+/// heights; the runner never derives them from the mod's own replies. The native campaign's scenarios and controls add
+/// their fields and rules in CampaignPlan.cs.
 /// </summary>
-public sealed class LifecyclePlan : ServerRunPlan
+public sealed partial class LifecyclePlan : ServerRunPlan
 {
     public const string SessionTokenVariable = "MYMOD_TEST_SESSION_TOKEN";
     /// <summary>The full scenario (<see cref="DrySiteScenario"/>) and its server half alone (<see cref="DrySiteServerScenario"/>).</summary>
@@ -32,16 +33,13 @@ public sealed class LifecyclePlan : ServerRunPlan
     {
         var plan = Read<LifecyclePlan>(path);
         // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
-        if (!plan.Pinned || plan.Client is { Pinned: false }) throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
+        if (!plan.Pinned || plan.Client is { Pinned: false } || plan.RefusedClient is { Pinned: false })
+            throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
         plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
-        plan.RequireScenario(LifecycleScenario, ServerScenario);
-        plan.DrySite.Validate("dry site", requireGround: true); plan.WetSite.Validate("wet site", requireGround: true);
-        // The plan must agree with itself before any game starts: a "dry" site declared under the rule's threshold would
-        // make a correct mod fail, and the reverse would let a broken one pass.
-        if (plan.DrySite.Ground < WaterLevel + Clearance) throw new ArgumentException($"The dry site's declared ground {plan.DrySite.Ground} m is below {WaterLevel + Clearance} m.");
-        if (plan.WetSite.Ground >= WaterLevel + Clearance) throw new ArgumentException($"The wet site's declared ground {plan.WetSite.Ground} m is not below {WaterLevel + Clearance} m.");
-        if (MathF.Abs(plan.DrySite.X - plan.WetSite.X) < 50 && MathF.Abs(plan.DrySite.Z - plan.WetSite.Z) < 50)
-            throw new ArgumentException("Keep the sites at least 50 m apart so one site's marker can never be counted at the other.");
+        plan.RequireScenario(Scenarios);
+        plan.ValidateCampaign(); // The native campaign's scenarios and controls; the two dry-site scenarios pass through.
+        if (!plan.MarksSites) return plan;
+        CheckSites(plan.DrySite, plan.WetSite);
         if (plan.ServerOnly)
         {
             // Nothing looks from a client here: a client or review section would suggest a check this scenario never makes.
@@ -52,9 +50,22 @@ public sealed class LifecyclePlan : ServerRunPlan
         float fromMarker = MathF.Sqrt(MathF.Pow(plan.Arrival.X - plan.DrySite.X, 2) + MathF.Pow(plan.Arrival.Z - plan.DrySite.Z, 2));
         if (fromMarker is < 3 or > 20) throw new ArgumentException("Put the arrival point 3 to 20 m from the dry site: beside the marker, not on it.");
         if (plan.Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("The arrival point must be dry ground; a swimming player is not supported.");
-        plan.Client?.Validate(ModPlugin); // A server-only mod: the claim is what a client without it sees.
+        if (plan.Scenario == LifecycleScenario) plan.Client?.Validate(ModPlugin); // A server-only mod: the claim is what a client without it sees.
         plan.Review.Validate();
         return plan;
+    }
+
+    /// <summary>
+    /// The sites' own rules. The plan must agree with itself before any game starts: a "dry" site declared under the rule's
+    /// threshold would make a correct mod fail, and the reverse would let a broken one pass.
+    /// </summary>
+    public static void CheckSites(Site dry, Site wet)
+    {
+        dry.Validate("dry site", requireGround: true); wet.Validate("wet site", requireGround: true);
+        if (dry.Ground < WaterLevel + Clearance) throw new ArgumentException($"The dry site's declared ground {dry.Ground} m is below {WaterLevel + Clearance} m.");
+        if (wet.Ground >= WaterLevel + Clearance) throw new ArgumentException($"The wet site's declared ground {wet.Ground} m is not below {WaterLevel + Clearance} m.");
+        if (MathF.Abs(dry.X - wet.X) < 50 && MathF.Abs(dry.Z - wet.Z) < 50)
+            throw new ArgumentException("Keep the sites at least 50 m apart so one site's marker can never be counted at the other.");
     }
     public string WorldUid => Pins["worlduid"];
     public bool ServerOnly => Scenario == ServerScenario;

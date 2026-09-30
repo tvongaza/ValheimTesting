@@ -112,11 +112,15 @@ internal sealed class TestWorld
     }
 
     // The adapter's census, filtered to the mod: its postfix on the terminal's command setup (unless its target went
-    // missing, when HarmonyX applies nothing there) and another mod's prefix on the same method.
-    private object Census() => new
+    // missing, when HarmonyX applies nothing there) and another mod's prefix on the same method, and its handshake and
+    // greeting patches on ZNet.
+    private object Census() => ModCensus(PatchMissing);
+
+    /// <summary>The adapter's census of MyMod's patches as a server or client with MyMod reports it; none when <paramref name="missing"/>.</summary>
+    public static object ModCensus(bool missing = false) => new
     {
         source = "harmony-patches", complete = true, owner = LifecyclePlan.ModPlugin,
-        methods = PatchMissing ? Array.Empty<object>() : new object[]
+        methods = missing ? Array.Empty<object>() : new object[]
         {
             new
             {
@@ -124,11 +128,17 @@ internal sealed class TestWorld
                 patches = new[]
                 {
                     new { owner = "other.mod", kind = "prefix", priority = 400, index = 0, before = Array.Empty<string>(), after = Array.Empty<string>(), patch = "Other.Hooks::Prefix()" },
-                    new { owner = LifecyclePlan.ModPlugin, kind = "postfix", priority = 400, index = 0, before = Array.Empty<string>(), after = Array.Empty<string>(), patch = "MyMod.Plugin+RegisterCommands::Postfix()" },
+                    ModPatch("postfix", "MyMod.Plugin+RegisterCommands::Postfix()"),
                 },
             },
+            new { method = "ZNet::Awake()", patches = new[] { ModPatch("postfix", "MyMod.SyncedGreeting+RegisterRpc::Postfix(ZNet)") } },
+            new { method = "ZNet::OnNewConnection(ZNetPeer)", patches = new[] { ModPatch("prefix", "MyMod.VersionHandshake+SendVersion::Prefix(ZNet,ZNetPeer)") } },
+            new { method = "ZNet::RPC_PeerInfo(ZRpc,ZPackage)", patches = new[] { ModPatch("prefix", "MyMod.VersionHandshake+RefuseMismatched::Prefix(ZNet,ZRpc)") } },
         },
     };
+
+    private static object ModPatch(string kind, string patch) =>
+        new { owner = LifecyclePlan.ModPlugin, kind, priority = 400, index = 0, before = Array.Empty<string>(), after = Array.Empty<string>(), patch };
 
     private static bool Near((float X, float Z) marker, float x, float z) => MathF.Abs(marker.X - x) <= 8 && MathF.Abs(marker.Z - z) <= 8;
     private static (float X, float Z) Coordinates(string command, int first, int? second = null)

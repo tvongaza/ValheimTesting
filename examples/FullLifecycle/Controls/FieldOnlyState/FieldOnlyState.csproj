@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    A negative control for the native campaign, never part of a normal runtime: a value kept only in a component field on MyMod's marker (issue #35, zone cycle). Install it on the client of a lifecycle-world run whose plan says "expectFailure": "field-only-state". It compiles against ValheimCLI, like the adapter (-p:CliDll=).
+    It compiles against your game install like MyMod (-p:ValheimPath=), never in this repository or its CI.
+  -->
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>MyMod.Control.FieldOnlyState</AssemblyName><Version>0.1.0</Version>
+    <UseValheimCli>true</UseValheimCli>
+  </PropertyGroup>
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>

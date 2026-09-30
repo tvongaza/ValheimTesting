@@ -1,0 +1,188 @@
+using System.Globalization;
+using System.Text.Json;
+using Valheim.Testing.Game;
+
+namespace MyMod.SystemTests;
+
+/// <summary>
+/// <c>lifecycle-world</c>: the dry-site rounds on an owned server with a client that runs MyMod and its adapter, plus the
+/// lifecycle events beyond a restart and the world state a mod depends on.
+/// <list type="number">
+/// <item>Server: MyMod's patches applied (#30); no marker, the mod marks the dry site and refuses the wet one.</item>
+/// <item>First round, beside the marker: the client sees it with MyMod's saved label; a global key the fixture lacks is set
+/// on the server and the client lists the server's keys (#23); a vanilla dungeon's saved rooms lie in its location's zone
+/// (#24); the player leaves the area until the client unloads the site's zones and comes back, and the marker is there
+/// again with its label (#35 zone cycle).</item>
+/// <item>Confirmed save, restart of only the owned server: the server still has the marker.</item>
+/// <item>After the restart: the client sees the marker and still lists the key; MyMod writes this run's note on the
+/// player, the client logs out (the character file must be rewritten) and in again, and the note comes back (#35 logout).</item>
+/// </list>
+/// A control run (<c>expectFailure</c>) replaces one check by that check's expected failure and ends there:
+/// <c>missing-harmony-target</c> after the server census, <c>field-only-state</c> after the zone cycle,
+/// <c>suppressed-profile-save</c> at the logout.
+/// </summary>
+public static class LifecycleWorldScenario
+{
+    public const string NoteKey = "mymod.note";
+
+    public static void Run(CampaignRun run)
+    {
+        var plan = run.Plan; var report = run.Report; var client = plan.Client!; var control = plan.Control;
+        CampaignSteps.ModPatchesApplied(run.Server, report);
+        if (control?.Name == ControlPlugins.MissingHarmonyTarget)
+        {
+            MissingTarget(run, control);
+            throw new ControlConcluded(control);
+        }
+        CampaignSteps.MarkSites(plan, run.Server, report);
+
+        var timeout = TimeSpan.FromSeconds(client.ArrivalSeconds);
+        var zoneCycle = new ZoneCycle
+        {
+            Capability = Capabilities.Zones, Zones = LifecyclePlan.MarkerZones(plan.DrySite), Away = CampaignSteps.At(plan.Away!), Back = CampaignSteps.At(plan.Arrival),
+            StepTimeout = timeout, SettleFor = run.SettleFor, Interval = run.Interval,
+        };
+        var logout = new LogoutCycle
+        {
+            Capability = Capabilities.CustomData, KeyPrefix = "mymod.", Keys = [NoteKey], CharactersDirectory = plan.Logout!.CharactersDirectory,
+            WriteTimeout = TimeSpan.FromSeconds(plan.Logout.WriteSeconds), RereadInterval = run.Interval,
+        };
+        string key = plan.GlobalKey!;
+        new ClientRounds
+        {
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, WaitUntilJoinable = run.WaitUntilJoinable,
+            RestartServer = run.RestartServer, Arrival = CampaignSteps.At(plan.Arrival), ArriveStep = "arrive beside the marker",
+            SettleFor = run.SettleFor, Cancellation = run.Cancellation,
+        }.Run(run.Server, () => run.OpenClient(client, null),
+            measure: round =>
+            {
+                round.Step("the client sees the marker at the dry site", () => DrySiteScenario.RequireClientMarkers(round.Client, plan.DrySite, 1));
+                if (round.Index == 0) First(run, round, zoneCycle, key, timeout);
+                else AfterRestart(run, round, logout, key, timeout);
+            },
+            afterRestart: round => round.Step("the server still has one marker at the dry site, none at the wet site",
+                () => CampaignSteps.RequireMarkers(round.Server, plan, dry: 1)));
+    }
+
+    private static void First(CampaignRun run, ClientRound round, ZoneCycle zoneCycle, string key, TimeSpan timeout)
+    {
+        var plan = run.Plan; var control = plan.Control;
+        round.Step("the marker carries MyMod's saved label on the client", () => CampaignSteps.RequireLabelledMarker(round.Client, plan.DrySite));
+
+        // #23: a known progression state, set once on the server and seen on the client.
+        round.Step($"the fixture world does not have {key} yet", () =>
+        {
+            if (GlobalKeyFixture.Read(round.Server, Capabilities.GlobalKeys).Any(line => line == key || line.StartsWith(key + " ", StringComparison.Ordinal)))
+                throw new InvalidOperationException($"The fixture world already has {key}: setting it would prove nothing. Use a world without it, or another key.");
+        });
+        round.Step($"set {key} on the server; the client lists the server's keys", () =>
+        {
+            var keys = GlobalKeyFixture.Apply(round.Server, round.Client, Capabilities.GlobalKeyChange, Capabilities.GlobalKeys, [key], [], timeout, run.Interval,
+                cancellation: run.Cancellation).GetAwaiter().GetResult();
+            round.Write("global-keys", new { set = key, keys });
+        });
+
+        // #24: a vanilla dungeon near the player, generated by now or soon after.
+        round.Step("the dungeon's saved rooms lie in its location's zone", () => Dungeon(run, round, timeout));
+
+        // #35: leave the area and come back; the marker's saved label survives, and a field-only value would not.
+        string? fieldValue = null;
+        if (control?.Name == ControlPlugins.FieldOnlyState)
+            round.Step($"control {control.Name}: keep a value only in a component field on the marker", () =>
+            {
+                fieldValue = CampaignSteps.RunWord("field");
+                run.Report.Provenance["fieldOnlyValue"] = fieldValue;
+                var data = round.Client.Invoke(round.Client.RequireCapability(Capabilities.FieldStateSet),
+                    CampaignSteps.Number(plan.DrySite.X), CampaignSteps.Number(plan.DrySite.Z), fieldValue);
+                if (data.GetProperty("markers").GetInt32() != 1) throw new InvalidOperationException("The control found no single marker to keep its value on: " + data.GetRawText());
+            });
+        zoneCycle.Run(round, run.Cancellation);
+        round.Step("after the zone reload the client has the marker again, with its saved label", () => CampaignSteps.RequireLabelledMarker(round.Client, plan.DrySite));
+        if (control?.Name == ControlPlugins.FieldOnlyState)
+        {
+            ControlPlugins.ExpectFailure(run.Report, control, () =>
+            {
+                var data = round.Client.ObserveComplete(round.Client.RequireCapability(Capabilities.FieldStateRead), "field-only-state",
+                    CampaignSteps.Number(plan.DrySite.X), CampaignSteps.Number(plan.DrySite.Z)).Data;
+                round.Write("field-only-state", data);
+                var values = data.GetProperty("values").EnumerateArray().Select(v => v.ValueKind == JsonValueKind.String ? v.GetString() : null).ToArray();
+                if (values.Length != 1 || values[0] != fieldValue)
+                    throw new InvalidOperationException($"The field-only value on the marker did not survive the zone reload: it was \"{fieldValue}\", now [{string.Join(", ", values.Select(v => v ?? "none"))}].");
+            }, round.Name + ": ");
+            throw new ControlConcluded(control);
+        }
+    }
+
+    private static void AfterRestart(CampaignRun run, ClientRound round, LogoutCycle logout, string key, TimeSpan timeout)
+    {
+        var plan = run.Plan; var control = plan.Control;
+        round.Step($"the server kept {key} through the save and restart, and the client lists it", () =>
+        {
+            var keys = GlobalKeyFixture.WaitForClient(round.Server, round.Client, Capabilities.GlobalKeys, timeout, run.Interval, cancellation: run.Cancellation).GetAwaiter().GetResult();
+            if (!keys.Contains(key, StringComparer.Ordinal)) throw new InvalidOperationException($"The server lost {key} across the save and restart: [{string.Join(", ", keys)}].");
+        });
+
+        // #35: a value this run writes, so what comes back cannot be left from an earlier session.
+        string note = CampaignSteps.RunWord("note");
+        run.Report.Provenance["logoutNote"] = note;
+        round.Step("MyMod writes this run's note on the player's custom data", () =>
+        {
+            var reply = round.Client.Execute("mymod_note " + note);
+            if (!reply.Output.Contains("OK: note " + note)) throw new InvalidOperationException("MyMod did not confirm the note: " + string.Join(" | ", reply.Output));
+        });
+        if (control?.Name == ControlPlugins.SuppressedProfileSave)
+        {
+            // The steps of the cycle stay inside the one expected failure: the client is then at its menu, and the run ends.
+            ControlPlugins.ExpectFailure(run.Report, control, () => logout.Run(round.Client, plan.Client!, plan.WorldUid, run.Cancellation), round.Name + ": ");
+            throw new ControlConcluded(control);
+        }
+        var result = logout.Run(round, plan.Client!, plan.WorldUid, run.Cancellation);
+        round.Step("the note that came back is this run's", () =>
+        {
+            if (!result.After.Values.TryGetValue(NoteKey, out var back) || back != note)
+                throw new InvalidOperationException($"The character came back with {NoteKey}=\"{back}\", not this run's \"{note}\".");
+        });
+    }
+
+    // Waits for a dungeon generator near the declared location (the server creates it when it generates the zone, which
+    // the player's arrival nearby causes), then checks every one found.
+    private static void Dungeon(CampaignRun run, ClientRound round, TimeSpan timeout)
+    {
+        var site = run.Plan.Dungeon!;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        IReadOnlyList<SavedDungeon> dungeons;
+        while ((dungeons = DungeonRooms.Read(round.Server, Capabilities.DungeonRooms, site.X, site.Z, site.Radius)).Count == 0)
+        {
+            if (clock.Elapsed >= timeout)
+                throw new WaitTimeoutException($"a dungeon generator within {site.Radius} m of ({site.X}, {site.Z})", clock.Elapsed,
+                    "none: the server has not generated that zone, or no dungeon stands there (find one with cli_world_dump's locations)");
+            run.Cancellation.WaitHandle.WaitOne(run.Interval);
+            run.Cancellation.ThrowIfCancellationRequested();
+        }
+        round.Write("dungeon-rooms", dungeons.Select(d => new
+        {
+            d.Prefab, d.Uid, d.Format, d.X, d.Y, d.Z, d.ZoneX, d.ZoneZ, d.CustomInterior, d.Location, rooms = d.Rooms,
+            interiorOffset = d.InteriorOffset is { } offset ? new { x = offset.X, y = offset.Y, z = offset.Z } : null,
+        }).ToArray());
+        run.Report.Provenance["dungeonInteriorOffset"] = string.Join("; ", dungeons.Select(d => d.Prefab + " " +
+            (d.InteriorOffset is { } o ? string.Create(CultureInfo.InvariantCulture, $"({o.X:0.##}, {o.Y:0.##}, {o.Z:0.##})") : "no location")));
+        foreach (var dungeon in dungeons) DungeonRooms.RequireWithinZone(dungeon);
+    }
+
+    // The control's patch must be missing from the census, and its error must be in the server's own log (#26, #30).
+    private static void MissingTarget(CampaignRun run, ControlPlugin control)
+    {
+        ControlPlugins.ExpectFailure(run.Report, control, () =>
+            HarmonyCensus.Read(run.Server, Capabilities.Harmony, control.Guid).Check(control.Guid, [ControlPlugins.MissingPatch]).RequireApplied());
+        run.Report.Step("control missing-harmony-target: the server's log scan fails on harmony-undefined-target", () =>
+        {
+            string log = run.ServerLog() ?? throw new InvalidOperationException("This run cannot read the server's live log; run the control on the server's machine.");
+            var scan = LogScanner.Scan(new RunLog("server BepInEx log (this boot, live)", log, Required: true));
+            File.WriteAllText(Path.Combine(run.Output, "control-log-scan.json"), JsonSerializer.Serialize(scan, new JsonSerializerOptions { WriteIndented = true }));
+            var found = scan.Counts.SingleOrDefault(count => count.Pattern == "harmony-undefined-target");
+            if (scan.Problem != null || found is not { Count: > 0, Severity: LogSeverity.Failure })
+                throw new InvalidOperationException("The server's log scan does not fail on harmony-undefined-target: " + (scan.Problem ?? "no such line in " + log));
+            run.Report.Provenance["controlLogLine"] = found.First ?? "";
+        });
+    }
+}

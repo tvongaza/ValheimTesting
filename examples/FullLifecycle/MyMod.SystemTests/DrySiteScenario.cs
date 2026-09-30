@@ -27,10 +27,21 @@ public static class DrySiteScenario
     /// <summary>How far from a site a marker may stand and still count as that site's.</summary>
     public const float MarkerRadius = 1.5f;
     /// <summary>The Harmony patches the mod declares (its <c>[HarmonyPatch]</c> classes); each must be applied.</summary>
-    public static readonly DeclaredPatch[] Patches = [new("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix")];
+    public static readonly DeclaredPatch[] Patches =
+    [
+        new("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix"),
+        new("ZNet::OnNewConnection", "prefix", "MyMod.VersionHandshake+SendVersion::Prefix"),
+        new("ZNet::RPC_PeerInfo", "prefix", "MyMod.VersionHandshake+RefuseMismatched::Prefix"),
+        new("ZNet::Awake", "postfix", "MyMod.SyncedGreeting+RegisterRpc::Postfix"),
+    ];
 
+    /// <summary>
+    /// Runs the scenario. With <paramref name="lobby"/> the client joins each boot's crossplay lobby instead of the server's
+    /// address (the crossplay scenario: <see cref="ClientRounds.Lobby"/>).
+    /// </summary>
     public static void Run(LifecyclePlan plan, GameActor server, Func<GameActor> restartOwnedServer, Func<ClientSession> openClient,
-        Action<GameActor> waitUntilJoinable, ScenarioReport report, string output, CancellationToken cancellation = default, TimeSpan? settleFor = null)
+        Action<GameActor> waitUntilJoinable, ScenarioReport report, string output, CancellationToken cancellation = default, TimeSpan? settleFor = null,
+        Func<GameActor, CrossplayLobby>? lobby = null)
     {
         var client = plan.Client ?? throw new ArgumentException("The run mode needs the plan's client section.");
         report.Step("server: the mod's Harmony patches are applied", () =>
@@ -46,7 +57,7 @@ public static class DrySiteScenario
         {
             Client = client, WorldUid = plan.WorldUid, Report = report, Output = output, WaitUntilJoinable = waitUntilJoinable,
             RestartServer = restartOwnedServer, Arrival = new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
-            ArriveStep = "arrive beside the marker", SettleFor = settleFor, Cancellation = cancellation,
+            ArriveStep = "arrive beside the marker", SettleFor = settleFor, Cancellation = cancellation, Lobby = lobby,
         }.Run(server, openClient,
             measure: round =>
             {

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    A negative control for the native campaign, never part of a normal runtime: a prefab registered only where it is installed, and a command that spawns one near a site (issue #33). Install it on the server of a vanilla-client run whose plan says "expectFailure": "server-only-prefab".
+    It compiles against your game install like MyMod (-p:ValheimPath=), never in this repository or its CI.
+  -->
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>MyMod.Control.ServerOnlyPrefab</AssemblyName><Version>0.1.0</Version>
+  </PropertyGroup>
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>

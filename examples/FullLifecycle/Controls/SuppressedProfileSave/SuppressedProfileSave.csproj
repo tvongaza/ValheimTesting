@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    A negative control for the native campaign, never part of a normal runtime: the character file never written (issue #35, logout). Install it on the client of a lifecycle-world run whose plan says "expectFailure": "suppressed-profile-save"; use a disposable character.
+    It compiles against your game install like MyMod (-p:ValheimPath=), never in this repository or its CI.
+  -->
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>MyMod.Control.SuppressedProfileSave</AssemblyName><Version>0.1.0</Version>
+  </PropertyGroup>
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>

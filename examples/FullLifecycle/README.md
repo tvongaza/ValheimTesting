@@ -97,3 +97,63 @@ What the runner does not and cannot clean up:
 ## Human review
 
 With `"review": { "enabled": true, "seconds": 600 }`, after the automated checks of the second round the runner leaves the player beside the marker, prints `REVIEW:` with what to look at, and waits for you to write `review.json` in the output directory: `{"verdict":"pass","notes":"..."}`. The verdict is recorded in `result.json` as `humanReview`; it never adds a step, so the automated result cannot change because of it, and a missing verdict is recorded as such. Walking and appearance are for people to judge; the runner judges only what it measured.
+
+## Native campaign
+
+Five more scenarios, and a hosted run, take the toolkit's lifecycle steps and world observations through one native campaign: a real Windows dedicated server (owned by the runner, as above) and a real Windows client. Each plan runs one scenario; together they prove the native acceptance items of issues #20, #23, #24, #26, #30, #31, #32, #33, #34 and #35 that a game can prove. The dry-site feature is unchanged. What the campaign adds is small and kept apart:
+
+- **MyMod** gains a version handshake in the wiki's RPC-Version-Handshaking pattern ([VersionHandshake.cs](MyMod/VersionHandshake.cs); its net version is a build property, so `-p:MyModNetVersion=2` builds a mismatched MyMod), one server-synced config entry with its own routed-RPC sync ([SyncedGreeting.cs](MyMod/SyncedGreeting.cs), `[Server] Greeting`, changed on the server with `mymod_greeting <word>`), a custom-data key on the player (`mymod_note <word>` writes `mymod.note`) and a saved label on its marker (`mymod_label`). A client without MyMod still joins.
+- **MyMod.TestAdapter** registers the toolkit's adapter commands (`zones`, `custom-data`, `globalkeys`, `globalkey` behind the `MYMOD_TEST_FIXTURES` gate, `config`, `unresolved-prefabs`, `dungeon-rooms`, `harmony`) and one of the mod's own, `markers`. It depends on MyMod only softly and never on its types, so it also loads on a client without MyMod.
+- **[Controls](Controls/)**: four tiny plugins, each a deliberate defect for one check. They are never in a normal runtime: a plan that pins one is refused unless it names it in `expectFailure`, and then the run passes only if that check fails for the control's named reason (a control whose defect the check cannot see fails the run). The run ends after the expected failure.
+
+| Sample plan | Scenario | Server runs | Client runs | Proves |
+|---|---|---|---|---|
+| [lifecycle-world](MyMod.SystemTests/sample-plan-lifecycle-world.json) | `lifecycle-world` | MyMod, adapter; `environment.MYMOD_TEST_FIXTURES=1` | MyMod, adapter | #30 census of MyMod's patches; #23 a boss key set once on the server reaches the client and survives the save and restart; #24 a vanilla dungeon's saved rooms lie in its location's zone, and its interior offset; #35 the zone cycle (the client unloads the marker's zone and loads it again, the marker's saved label is back) and the logout cycle (the character file is rewritten, this run's `mymod.note` comes back) |
+| [vanilla-client](MyMod.SystemTests/sample-plan-vanilla-client.json) | `vanilla-client` | MyMod, adapter | adapter only, MyMod pinned `absent` | #33 a client without MyMod beside its objects resolves every prefab hash and logs no missing prefab, missing RPC handler or unload error, in both rounds |
+| [synced-config](MyMod.SystemTests/sample-plan-synced-config.json) | `synced-config` | MyMod, adapter | MyMod, adapter | #20 both sides hold the same greeting after the join; an admin change reaches the client within the wait (woken by MyMod's "received" line in the owned client's live log); after a restart the client gets the server's saved value again |
+| [refused-join](MyMod.SystemTests/sample-plan-refused-join.json) | `refused-join` | MyMod (net version 1), adapter | first `refusedClient`: MyMod built with `-p:MyModNetVersion=2`; then `client`: the server's MyMod and adapter | #34 the mismatched client is refused with `expectedRefusal` (default `ErrorVersion`, 3) read back at its menu, and the server then keeps a matching client |
+| [crossplay](MyMod.SystemTests/sample-plan-crossplay.json) | `crossplay` | MyMod, adapter; `"crossplay": true`, an explicit `-port`, no `-password` | MyMod `absent`, `"crossplay": true` | #32 the dry-site lifecycle joined through each boot's PlayFab lobby; the report records `crossplay` and `clientJoin` |
+| [hosted](MyMod.SystemTests/sample-plan-hosted.json) | `hosted` (its own mode) | none | MyMod, adapter, `hostWorld` | #31 MyMod's feature on a host (mark, refuse, saved objects, persistence across the host's restart) and MyMod's broadcast handler running in the host's own process |
+
+| Control ([Controls](Controls/)) | Install on | `expectFailure` in | Check that must fail, and the reason it must name |
+|---|---|---|---|
+| [MissingHarmonyTarget](Controls/MissingHarmonyTarget/Plugin.cs) (`example.mymod.control.missingtarget`) | server; add `logScan` `harmony-undefined-target` as `Warning` with a reason | lifecycle-world | #30 the census names its missing patch (`not applied: postfix (any method) on Player::MyModControlMethodThatDoesNotExist`) and #26 the server's live log scan fails on `harmony-undefined-target` |
+| [ServerOnlyPrefab](Controls/ServerOnlyPrefab/Plugin.cs) (`example.mymod.control.serveronlyprefab`) | server | vanilla-client | #33 the runner spawns its object beside the dry site (`mymodcontrol_spawn`), and the vanilla client's census names its hash and `MyModControl_ServerOnly` |
+| [FieldOnlyState](Controls/FieldOnlyState/Plugin.cs) (`example.mymod.control.fieldonlystate`) | client | lifecycle-world | #35 a value kept only in a component field on the marker `did not survive the zone reload`, while MyMod's saved label did |
+| [SuppressedProfileSave](Controls/SuppressedProfileSave/Plugin.cs) (`example.mymod.control.suppressedsave`) | client | lifecycle-world | #35 the logout check times out waiting for the character file `to be rewritten by the logout` |
+
+A control run is the scenario's own plan plus the control's pin (by MD5, on the side the table says) and `"expectFailure": "<name>"`. The MissingHarmonyTarget run also reclassifies the line it plants, so the teardown scan does not fail the run on it (the scenario requires it itself):
+
+```json
+"logScan": { "harmony-undefined-target": { "severity": "Warning", "reason": "The MissingHarmonyTarget control plants it; the scenario requires it in the server's log." } }
+```
+
+The integration tests ([CampaignScenarioTests](MyMod.IntegrationTests/CampaignScenarioTests.cs), [HostedScenarioTests](MyMod.IntegrationTests/HostedScenarioTests.cs), [CampaignPlanTests](MyMod.IntegrationTests/CampaignPlanTests.cs)) run every scenario, each control's expected failure, each control whose check would pass, and every plan refusal against scripted replies; they read the sample plans too.
+
+### Prepare the campaign
+
+1. **Builds.** Build MyMod twice: normally, and with `-p:MyModNetVersion=2` into another folder (`-o`), for the refused client. Build the adapter and the controls you run (FieldOnlyState needs `-p:CliDll=`, as the adapter does). Pin every DLL by MD5 in the plans.
+2. **The server runtime** as in [Prepare the native run](#prepare-the-native-run), with ValheimCLI's core, Standard and WorldTools packs, MyMod and the adapter; pin all five in `pins`. A control run adds the control plugin to `BepInEx/plugins` and to `pins`.
+3. **A fixture world** that has never been marked, with a vanilla dungeon near the sites: `dungeon` is a dungeon location's ground position within two zones (128 m in x or z) of the arrival point, so the server generates its rooms while the player stands there (the step waits up to the client's `arrivalSeconds`). To find one, turn devcommands on on a server with the fixture world and run ValheimCLI's `cli_world_dump`; its locations list names each location with its position. Pick a dungeon location, such as `Crypt2` to `Crypt4` or `TrollCave02` (Black Forest) or `SunkenCrypt4` (Swamp), with dry ground (at least 31.5 m) for the dry site and arrival point beside it, and wet ground elsewhere for the wet site. `away` is dry ground at least 5 zones (320 m in x or z) from the dry site, where the player goes so the client unloads the site (more if the client's simulation distance is larger than the default; the run reads it and refuses before moving). `globalKey` is a key the world does not have yet (`defeated_eikthyr` for a fresh world).
+4. **Client installs**, each with BepInEx and ValheimCLI's core, Standard and WorldTools packs (`AllowOnServerClients = true`), plus what the table says. One install can serve several plans if you change its plugins between runs; `refused-join` needs two installs, one per MyMod build, run one after the other. Pin each install's game build, BepInEx core and patchers in `installPins`.
+5. **A disposable local character** (`characters_local`, never Steam Cloud), existing and used only for tests; `logout.charactersDirectory` is that folder's full path. The logout scenario rewrites it, and the SuppressedProfileSave control keeps it from being saved at all.
+6. **Crossplay.** A separate fixture server, private (`-public 0`) and without `-password` (the crossplay join cannot send one), on a game port (`-port`) that no other server behind the same public IP uses: a crossplay lobby is keyed by public IP and port, and a second server on that port takes the first one's joins. Do not switch one fixture between Steam and crossplay.
+7. **Hosted.** A small fixture world for the host, one `<name>.fwl` and `<name>.db`, pinned in `hostWorld`; the runner places a copy in the client's `worlds_local` (refusing a name already there) and moves it into the evidence afterwards.
+
+Start each plan from its sample and replace every `<...>`: paths, SHA256 manifests (`WorldFixture.Manifest`), `InstallPins.Of`, MD5s and the world UID. Validate first; nothing launches:
+
+```sh
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- validate lifecycle-world.json <new-output-directory>
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- run lifecycle-world.json <new-output-directory>
+# The hosted scenario has no dedicated server; it has its own two modes.
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- validate-host hosted.json <new-output-directory>
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- host hosted.json <new-output-directory>
+```
+
+### Evidence
+
+Every run writes `result.json` and `junit.xml` with each step, as above. The scenarios add, per round: `{round}-arrival.json`; `first-global-keys.json`, `first-dungeon-rooms.json` (rooms, location, interior offset; also `dungeonInteriorOffset` in the provenance), `first-zone-cycle.json`, `after-restart-logout.json`; `{round}-vanilla-client-1.json`, `{round}-vanilla-client-logs.json`; `first-greeting-joined.json`, `first-greeting-changed.json`, `after-restart-greeting-after-restart.json`. `refused-join` keeps each client's command record and logs in `refused-client/` and `matching-client/`, and its provenance has `refusal`. A control run records `expectFailure`, `controlFailure` (the expected failure's message) and `control`; the MissingHarmonyTarget run writes `control-log-scan.json` and `controlLogLine`, the FieldOnlyState run `first-field-only-state.json`.
+
+### Limits
+
+The in-run log reads (the vanilla client's log scan, the synced-config wake-up, the MissingHarmonyTarget scan, the hosted broadcast line) read live files on the runner's machine: an attached client's are its operator's, so those parts are skipped and the provenance says so, and a run with `--profile` has none. Not covered: a second client joining a host (#31), an oversized room in a custom test dungeon (#24's negative control; the check is covered with scripted data), overlapping terrain edits across a restart (#24). The game-side projects (MyMod, the adapter and the controls) compile only against a game install, never in this repository's CI; the scenarios and plans are tested only against scripted replies until the campaign runs.
