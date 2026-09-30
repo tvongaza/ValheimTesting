@@ -257,11 +257,15 @@ public static class PinnedServerRun
                 foreach (var (stop, i) in session.Stops.Select((stop, i) => (stop, i)).Where(entry => entry.stop.Outcome == StopOutcome.Killed))
                     Console.Error.WriteLine($"Warning: owned server boot-{i + 1} was {stop}; the game's shutdown (its world save at quit) did not run.");
                 if (stopped && launched is { Plan.Crossplay: true } crossplayRun)
-                    report.Step("every boot quit cleanly and retired its crossplay lobby", () =>
+                    try
                     {
-                        var logs = crossplayRun.Logs.Where(log => Regex.IsMatch(log.Role, @"^boot-\d+ BepInEx log$")).Select(log => log.Path).ToList();
-                        report.Provenance["crossplayLobbies"] = string.Join(" | ", CrossplayServer.RequireLobbiesRetired(session.Stops, logs));
-                    });
+                        report.Step("every boot quit cleanly and retired its crossplay lobby", () =>
+                        {
+                            var logs = crossplayRun.Logs.Where(log => Regex.IsMatch(log.Role, @"^boot-\d+ BepInEx log$")).Select(log => log.Path).ToList();
+                            report.Provenance["crossplayLobbies"] = string.Join(" | ", CrossplayServer.RequireLobbiesRetired(session.Stops, logs));
+                        });
+                    }
+                    catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); definite = true; } // Recorded as its failed step.
             }
             if (hosted != null)
                 foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped).ConfigureAwait(false)) Classify(failure);

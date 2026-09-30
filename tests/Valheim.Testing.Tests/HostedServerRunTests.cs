@@ -125,8 +125,9 @@ internal sealed class FakeServerHost : IGameHost
                 process.Stop();
                 if (v.TryGetValue("quit", out string? quit) && quit != "0" && !IgnoreQuit)
                 {
-                    // The game's shutdown on SIGINT: it retires this boot's lobby, as 1.0.16 logs it.
-                    string log = Path.Combine(Local(_runtime!), "BepInEx", "LogOutput.log");
+                    // The game quits by itself. A server's shutdown retires its boot's lobby, as 1.0.16 logs it; a client host has no server runtime.
+                    if (_runtime == null) return Ok("VT-STOP quit\n");
+                    string log = Path.Combine(Local(_runtime), "BepInEx", "LogOutput.log");
                     string text = File.Exists(log) ? File.ReadAllText(log) : "";
                     File.AppendAllText(log, "[Info   : Unity Log] Unregister PlayFab server \"MyModTest\" and leaving network \"n\"\n" +
                         string.Concat(CrossplayServer.LobbyCreated.Matches(text).Select(m => $"[Info   : Unity Log] Deactivated PlayFab lobby {m.Groups["lobby"].Value}\n")));
