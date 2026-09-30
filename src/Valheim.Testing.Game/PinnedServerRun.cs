@@ -220,7 +220,11 @@ public static class PinnedServerRun
             if (hosted != null) report.Provenance["hostWorld"] = worldDirectory;
             File.WriteAllText(Path.Combine(output, "input-hashes.json"), JsonSerializer.Serialize(
                 EnvironmentPinning.Stamp(new() { ["runtime"] = hosted?.RuntimeHashes ?? runtime!.SourceHashes, ["world"] = world.SourceHashes }, pinned), new JsonSerializerOptions { WriteIndented = true }));
-            if (hosted != null) hosted.CheckRuntime(report, plan, pinned);
+            if (hosted != null)
+            {
+                hosted.CheckRuntime(report, plan, pinned);
+                await hosted.CheckCrossplayAsync(report, plan, cancellation.Token).ConfigureAwait(false);
+            }
             else
             {
                 // Hashes do not cover file modes: a launch also requires the copy's Linux execute bit.
@@ -233,6 +237,11 @@ public static class PinnedServerRun
                 // What the game cannot report in game: its build and the loader, pinned on disk before anything launches.
                 report.Step(pinned ? "copied runtime is the pinned game build, BepInEx core and patchers" : "record the unpinned runtime's game build, BepInEx core and patchers",
                     () => plan.CheckRuntimePins(runtime!.DirectoryPath).Record(report.Provenance, "runtime"));
+                // Only this machine's own loader can say whether a Linux runtime's libparty.so loads here.
+                if (plan.Crossplay && platform == ServerPlatform.Linux && OperatingSystem.IsLinux())
+                    await report.StepAsync("this machine can load crossplay's libraries", async () =>
+                        report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(new LocalGameHost("this machine", HostShell.Bash), runtime!.DirectoryPath,
+                            TimeSpan.FromMinutes(1), cancellation.Token).ConfigureAwait(false) + " loads on this machine").ConfigureAwait(false);
             }
             if (mode == "validate") report.Step("prepared only; no game launched", () => { });
             else await Launch(plan, runtimeDirectory, worldDirectory).ConfigureAwait(false);

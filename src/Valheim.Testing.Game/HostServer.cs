@@ -10,7 +10,8 @@ namespace Valheim.Testing.Game;
 /// preloader, the runtime's <c>linux64</c> and <c>doorstop_libs</c> are put in front of LD_LIBRARY_PATH and
 /// <c>libdoorstop_x64.so</c> in front of LD_PRELOAD (for the server only, never the shells that start it), and inherited
 /// Doorstop variables are removed. Doorstop variables and <c>--doorstop-*</c> arguments from the caller are refused. The
-/// runtime's files are checked on the host when the server starts (<see cref="RequiredFiles"/>).
+/// runtime's files are checked on the host when the server starts (<see cref="RequiredFiles"/>), and for a
+/// <see cref="Crossplay"/> launch that the game's PlayFab library loads there (<see cref="CrossplayLibraries"/>).
 /// </summary>
 public sealed class HostServerLaunch
 {
@@ -32,6 +33,8 @@ public sealed class HostServerLaunch
     public IReadOnlyDictionary<string, string> Prepended { get; }
     /// <summary>Inherited variables removed before the launch: Doorstop's, apart from the ones set here.</summary>
     public IReadOnlyList<string> Unset { get; } = ["DOORSTOP_DISABLE"];
+    /// <summary>True when the arguments hold <c>-crossplay</c> (in any case, as the game reads it): the start then refuses a host whose <c>libparty.so</c> cannot load.</summary>
+    public bool Crossplay => Arguments.Any(argument => argument.Equals("-crossplay", StringComparison.OrdinalIgnoreCase));
     /// <summary>Files, relative to <see cref="Runtime"/>, the host must have before anything starts.</summary>
     public IReadOnlyList<string> RequiredFiles { get; } =
         [ServerLaunch.LinuxExecutable, "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "doorstop_libs/libdoorstop_x64.so"];
@@ -128,6 +131,7 @@ public static class HostServer
         {
             ["runtime"] = launch.Runtime, ["exe"] = ServerLaunch.LinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
             ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
+            ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
         }, timeout, cancellation).ConfigureAwait(false);
         if (!result.Succeeded)
@@ -147,6 +151,10 @@ public static class HostServer
         {
             "unsupported" => (Exception)new PlatformNotSupportedException($"Cannot start the Linux dedicated server on {host.Name}: {detail}"),
             "missing" => new FileNotFoundException($"The runtime on {host.Name} is incomplete: {detail}. Nothing was started."),
+            // Verdict throws the check's own refusal (a missing library, no libparty.so, no ldd).
+            "libraries" => CrossplayLibraries.Verdict(host.Name, result.Stdout) == null
+                ? new HostOperationException($"Unexpected reply while checking crossplay's libraries on {host.Name}", result)
+                : new HostOperationException($"The crossplay library check on {host.Name} passed but the start refused it", result),
             "exists" => new InvalidOperationException($"{directory} already exists on {host.Name}; give each boot a new directory. Nothing was started."),
             "failed" => new InvalidOperationException($"The dedicated server did not start on {host.Name}: {detail}. Evidence is in {directory}."),
             _ => new HostOperationException($"Unexpected reply while starting the dedicated server on {host.Name}", result),
@@ -308,16 +316,23 @@ internal static class HostServerScripts
         started() { local s; s=$(cat "/proc/$1/stat" 2> /dev/null) || return 1; s=${s##*) }; set -- $s; [ "$1" != Z ] && echo "${20}"; }
         """;
 
-    // Variables: runtime, exe, files, dir, spec, logs, seconds. The recorder hands the server's PID back through a FIFO the
+    // Variables: runtime, exe, files, dir, spec, logs, seconds, crossplay, libraries. A crossplay launch first proves the game's
+    // libparty.so loads (CrossplayLibraryScripts), and otherwise replies with that check's lines and "libraries". The recorder hands the server's PID back through a FIFO the
     // script already holds open, so the start waits for that event (bounded by seconds) rather than looking for a file; the
     // FIFO is opened read-write at both ends, so neither side can block on a missing partner. The server's own descriptors
     // are only the logs and /dev/null. Nothing here is written to disk but the evidence files: arguments may hold a password.
-    public static readonly string Start = ("set -u\n" + Started + "\n" + """
+    public static readonly string Start = ("set -u\n" + Started + "\n" + CrossplayLibraryScripts.Body + "\n" + """
         if [ "$(uname -s)" != Linux ]; then echo "VT-SERVER unsupported this host runs $(uname -s); the Linux dedicated server needs a Linux host"; exit 0; fi
         while IFS= read -r f; do
             if [ -n "$f" ] && [ ! -f "$runtime/$f" ]; then echo "VT-SERVER missing $f"; exit 0; fi
         done <<< "$files"
         if [ ! -x "$runtime/$exe" ]; then echo "VT-SERVER missing $exe is not executable"; exit 0; fi
+        if [ -n "$crossplay" ]; then
+            party=$(vt_party_check)
+            if printf '%s\n' "$party" | grep -q -e ' => not found' || ! printf '%s\n' "$party" | grep -q -e '^VT-PARTY checked .* 0$'; then
+                printf '%s\n' "$party"; echo "VT-SERVER libraries"; exit 0
+            fi
+        fi
         if [ -e "$dir" ]; then echo "VT-SERVER exists"; exit 0; fi
         mkdir -p -- "$(dirname -- "$dir")" && mkdir -- "$dir" || exit 3
         i=0

@@ -121,6 +121,35 @@ internal static class HostServerChecks
         finally { await host.RunAsync("kill \"$p\" 2> /dev/null; true", new Dictionary<string, string> { ["p"] = bystander }, Generous); }
     });
 
+    // The host's own loader decides whether crossplay can start. libparty.so here is a copy of the host's `true` (ldd reads an
+    // executable as it reads a library): as it is, every dependency resolves; with libc.so.6 renamed in the copy to the
+    // same-length libq.so.6, ldd reports that as not found. A crossplay start refuses before anything runs, a missing
+    // libparty.so is refused as absent, and the same runtime without -crossplay is never checked.
+    public static Task ACrossplayStartNeedsLibpartyToLoadOnTheHost(IGameHost host, string parent) => GameHostChecks.WithRootAsync(host, parent, async root =>
+    {
+        using var source = new TempDirectory();
+        WriteInstall(source.Path);
+        string runtime = root + "/runtime";
+        await host.ShipFilesAsync(source.Path, runtime, Generous);
+        var crossplay = HostServerLaunch.Create(runtime, ["-batchmode", "-crossplay"]);
+        await Assert.ThrowsAsync<FileNotFoundException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-absent", Generous));
+
+        string plugin = runtime + "/valheim_server_Data/Plugins";
+        async Task Party(string script) => (await host.RunAsync("set -e; mkdir -p \"$plugins\"; " + script, new Dictionary<string, string> { ["plugins"] = plugin }, Generous))
+            .EnsureSuccess("Writing a stand-in libparty.so");
+        await Party("cp \"$(command -v true)\" \"$plugins/libparty.so\"; ldd \"$plugins/libparty.so\" | grep -q 'libc\\.so\\.6 => '");
+        Assert.Equal("valheim_server_Data/Plugins/libparty.so", await CrossplayLibraries.RequireAsync(host, runtime, Generous));
+
+        await Party("LC_ALL=C sed 's/libc\\.so\\.6/libq.so.6/g' \"$(command -v true)\" > \"$plugins/libparty.so\"");
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
+        Assert.Contains("because libq.so.6 is missing", refused.Message);
+        var start = await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-refused", Generous));
+        Assert.Contains("because libq.so.6 is missing", start.Message);
+        Assert.Contains("Nothing was started", start.Message);
+        Assert.False((await host.RunAsync("[ -e \"$d\" ]", new Dictionary<string, string> { ["d"] = root + "/boot-refused" }, Generous)).Succeeded, "A refused start created its boot directory.");
+    });
+
     public static async Task AListingMatchesTheLocalManifestAndPins(IGameHost host)
     {
         using var install = new TempDirectory();
@@ -149,6 +178,9 @@ public class LocalHostServerTests
     [Fact] public Task AServerRunsFromAVerifiedCopyAndStopsByIdentity() =>
         OperatingSystem.IsLinux() ? HostServerChecks.AServerRunsFromAVerifiedCopyAndStopsByIdentity(new LocalGameHost("local-bash", HostShell.Bash), Path.GetTempPath()) : Task.CompletedTask;
 
+    [Fact] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost() =>
+        OperatingSystem.IsLinux() ? HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(new LocalGameHost("local-bash", HostShell.Bash), Path.GetTempPath()) : Task.CompletedTask;
+
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public Task AListingMatchesTheLocalManifestAndPins(string shell) => HostServerChecks.AListingMatchesTheLocalManifestAndPins(new LocalGameHost("local-" + shell, HostShell.Parse(shell)));
 
@@ -176,6 +208,9 @@ public class SshHostServerIntegrationTests
 
     [SshTheory, MemberData(nameof(Shells))] public Task AServerRunsFromAVerifiedCopyAndStopsByIdentity(string shell) =>
         HostServerChecks.AServerRunsFromAVerifiedCopyAndStopsByIdentity(Host(shell), Path.GetTempPath());
+
+    [SshTheory, MemberData(nameof(Shells))] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost(string shell) =>
+        HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(Host(shell), Path.GetTempPath());
 }
 
 [Trait("Category", "GameHosts")]
@@ -185,4 +220,7 @@ public class ContainerHostServerIntegrationTests
 
     [ContainerTheory, MemberData(nameof(Shells))] public Task AServerRunsFromAVerifiedCopyAndStopsByIdentity(string shell) =>
         HostServerChecks.AServerRunsFromAVerifiedCopyAndStopsByIdentity(new ContainerGameHost("ctr", Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER")!, HostShell.Parse(shell)), "/tmp");
+
+    [ContainerTheory, MemberData(nameof(Shells))] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost(string shell) =>
+        HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(new ContainerGameHost("ctr", Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER")!, HostShell.Parse(shell)), "/tmp");
 }

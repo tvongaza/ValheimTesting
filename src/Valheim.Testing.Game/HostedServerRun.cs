@@ -98,6 +98,11 @@ internal sealed class HostedServerRun
         }).ConfigureAwait(false);
     }
 
+    /// <summary>For a crossplay plan: the runtime copy's <c>libparty.so</c> loads on the server host (<see cref="CrossplayLibraries"/>).</summary>
+    public Task CheckCrossplayAsync(ScenarioReport report, ServerRunPlan plan, CancellationToken cancellation) => !plan.Crossplay ? Task.CompletedTask :
+        report.StepAsync("the server host can load crossplay's libraries", async () =>
+            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, RuntimeDirectory, Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
+
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
     public Task ShipWorldAsync(ScenarioReport report, string localWorld, CancellationToken cancellation) =>
         report.StepAsync("ship and verify the world copy on the server host", async () =>
