@@ -10,7 +10,8 @@ namespace Valheim.Testing.Game;
 /// <list type="number">
 /// <item>waits until the server accepts game connections (only now, so the steps before overlap a first boot's late socket);</item>
 /// <item>joins with the plan's disposable character (devcommands first, exactly once), verifies the client's world pins and
-/// waits for the world;</item>
+/// waits for the world; a <see cref="ClientRunPlan.Crossplay"/> client first reads the server's lobby (<see cref="Lobby"/>)
+/// and joins it (<see cref="SessionControl.JoinCrossplay"/>);</item>
 /// <item>joins, which protects the player once the world is ready (<see cref="SessionControl.WaitForWorld"/>), and, with an <see cref="Arrival"/>, has it arrive there (<c>{round}-arrival.json</c>);</item>
 /// <item>runs the mod's measurement, which adds its own steps and evidence through <see cref="ClientRound"/>;</item>
 /// <item>between rounds: a confirmed world save, the client leaves to its menu, only the owned server restarts, and the
@@ -43,6 +44,12 @@ public sealed class ClientRounds
     public string? OpenStep { get; init; }
     /// <summary>The rounds' names, which prefix their steps and evidence files: letters, digits, <c>-</c> and <c>_</c>, all different.</summary>
     public IReadOnlyList<string> Rounds { get; init; } = ["first", "after-restart"];
+    /// <summary>
+    /// For a crossplay client (<see cref="ClientRunPlan.Crossplay"/>), required: the server's lobby, read before each
+    /// round's join because a restarted server opens a new one, for example
+    /// <c>server =&gt; CrossplayServer.WaitForLobby(server, CrossplayServer.BepInExLog(runtime), timeout)</c>.
+    /// </summary>
+    public Func<GameActor, CrossplayLobby>? Lobby { get; init; }
     /// <summary>How long the player must stand still before the arrival teleport (<see cref="PlayerPlacement.Arrive"/>); tests pass zero.</summary>
     public TimeSpan? SettleFor { get; init; }
     public CancellationToken Cancellation { get; init; }
@@ -57,6 +64,7 @@ public sealed class ClientRounds
     {
         Check();
         Report.Provenance["clientRounds"] = string.Join(",", Rounds);
+        Report.Provenance["clientJoin"] = Client.Crossplay ? "crossplay" : "address";
         var completed = new List<string>();
         ClientSession? session = null;
         bool passed = false;
@@ -95,7 +103,20 @@ public sealed class ClientRounds
     {
         var session = new SessionControl(round.Client);
         round.Step("the server accepts game connections", () => WaitUntilJoinable(round.Server));
-        round.Step("join the owned server with the disposable character, protected", () =>
+        if (Client.Crossplay)
+        {
+            CrossplayLobby? lobby = null;
+            round.Step("the server's crossplay lobby is open", () => lobby = Lobby!(round.Server));
+            round.Step("join the owned server's crossplay lobby with the disposable character, protected", () =>
+            {
+                // Devcommands first; the join command exactly once, then the connection is awaited on the session state.
+                session.JoinCrossplay(lobby!.RemotePlayerId, Client.Character, WorldUid, Client.MenuExpectations, TimeSpan.FromSeconds(Client.JoinSeconds), cancellation: Cancellation,
+                    worldExpectations: Client.WorldExpectations(WorldUid));
+                round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
+                session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
+            });
+        }
+        else round.Step("join the owned server with the disposable character, protected", () =>
         {
             session.Join(Client.Join, Client.Character, Client.PasswordVariable); // Turns devcommands on first. Exactly once; a lost reply is an unknown outcome.
             round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
@@ -108,17 +129,25 @@ public sealed class ClientRounds
     }
 
     // Two rounds have one save and one restart between them; with more, each names the round it leads to.
-    private string Between(string step, int round) => Rounds.Count == 2 ? step : $"{step} before {Rounds[round + 1]}";
+    private string Between(string step, int round) => Between(step, round, Rounds);
+    internal static string Between(string step, int round, IReadOnlyList<string> rounds) => rounds.Count == 2 ? step : $"{step} before {rounds[round + 1]}";
 
     private void Check()
     {
-        if (Rounds.Count == 0) throw new ArgumentException("Rounds: name at least one round.");
-        foreach (string? name in Rounds)
+        CheckRoundNames(Rounds);
+        if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
+        if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with HostRounds.");
+        if (Client.Crossplay && Lobby == null) throw new ArgumentException("Lobby: a crossplay client joins the server's PlayFab lobby; supply Lobby, for example with CrossplayServer.WaitForLobby.");
+    }
+
+    internal static void CheckRoundNames(IReadOnlyList<string> rounds)
+    {
+        if (rounds.Count == 0) throw new ArgumentException("Rounds: name at least one round.");
+        foreach (string? name in rounds)
             if (name == null || !RoundName.IsMatch(name))
                 throw new ArgumentException($"Rounds: \"{name}\" is not a round name; use letters, digits, - and _ (it names the round's steps and files).");
-        if (Rounds.GroupBy(name => name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1) is { } repeated)
+        if (rounds.GroupBy(name => name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1) is { } repeated)
             throw new ArgumentException($"Rounds: \"{repeated.Key}\" is named twice; give every round its own name, so no evidence is overwritten.");
-        if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
     }
 }
 
