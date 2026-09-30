@@ -17,7 +17,10 @@ namespace Valheim.Testing.Adapter
     /// and waits until a joined client lists the server's set.
     /// The game's own <c>setkey</c> console command is not used: in 1.0.16 it refuses a key that is not a world-modifier
     /// setting (a boss key, for example) unless the game already counts as cheated, and that check reads the world
-    /// modifiers menu. Written against the Valheim 1.0.16 decompile; not yet run in game.
+    /// modifiers menu. A world-modifier key (one the world-modifiers menu sets, such as <c>nomap</c>) set or removed
+    /// here is also written into, or removed from, the world's saved settings (its starting global keys), as the game
+    /// does for any change of such a key; other keys (boss keys, for example) are saved only in the world's own key
+    /// list. Written against the Valheim 1.0.16 decompile and run on a 1.0.16 server and client.
     /// </summary>
     public static class GlobalKeyCommands
     {

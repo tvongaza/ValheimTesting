@@ -181,7 +181,8 @@ public sealed class SessionControl(GameActor actor)
     /// A strict client refuses its menu pins as soon as the join loads the world between two reads ("loaded but not
     /// listed"); with <paramref name="worldExpectations"/> (the plugins and the server's world, as
     /// <see cref="ClientRunPlan.WorldExpectations"/> gives them) the client is then re-pinned to that world, once, and the wait
-    /// goes on; another world fails that pin check. Found in the native crossplay run: the join completes within a read.
+    /// goes on; another world fails that pin check. The same holds when the join loads the world before the menu pins are
+    /// first checked. Found in the native crossplay run: the join completes within a read.
     /// </summary>
     public SessionState JoinCrossplay(string remotePlayerId, string character, string worldUid, string menuExpectations, TimeSpan timeout,
         bool enableDevcommands = true, CancellationToken cancellation = default, string? worldExpectations = null)
@@ -205,17 +206,27 @@ public sealed class SessionControl(GameActor actor)
                 throw new InvalidOperationException("The crossplay join did not start: " + string.Join(" | ", started.Output));
         }
         finally { actor.InvalidateEnvironment(); } // A join that may have started can change the world.
-        actor.VerifyEnvironment(menuExpectations);
-        capability = actor.RequireCapability("valheim.session/state");
+        bool worldPinned = false;
+        try
+        {
+            actor.VerifyEnvironment(menuExpectations);
+            capability = actor.RequireCapability("valheim.session/state");
+        }
+        catch (Exception error) when (worldExpectations != null && LoadedButNotListed(error))
+        {
+            // The join loaded the world before the menu pins were checked.
+            actor.VerifyEnvironment(worldExpectations); // Throws for another world than the server's.
+            worldPinned = true;
+            capability = actor.RequireCapability("valheim.session/state");
+        }
         var clock = Stopwatch.StartNew();
         bool left = false;
-        bool worldPinned = false;
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
             SessionState state;
             try { state = Read(capability); }
-            catch (Exception error) when (!worldPinned && worldExpectations != null && error.Message.Contains("is loaded but not listed (strict)", StringComparison.Ordinal))
+            catch (Exception error) when (!worldPinned && worldExpectations != null && LoadedButNotListed(error))
             {
                 actor.VerifyEnvironment(worldExpectations); // Throws for another world than the server's.
                 worldPinned = true;
@@ -233,6 +244,9 @@ public sealed class SessionControl(GameActor actor)
             cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (timeout - clock.Elapsed).TotalMilliseconds))));
         }
     }
+
+    // ValheimCLI's strict cli_expect refusal once a world is loaded that the pins do not list.
+    private static bool LoadedButNotListed(Exception error) => error.Message.Contains("is loaded but not listed (strict)", StringComparison.Ordinal);
 
     public void Leave() => Transition("leave", []);
     private void Transition(string action, string[] arguments)

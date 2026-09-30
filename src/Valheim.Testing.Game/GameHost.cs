@@ -398,7 +398,7 @@ public abstract class ScriptedGameHost : IGameHost
             {
                 if (outcome != null) return true;
                 string current = text.TrimEnd('\r').TrimStart('﻿');
-                last = current;
+                if (current.Length != 0) last = current; // A blank line says nothing about where the log got to.
                 if (failures?.Any(failure => failure.IsMatch(current)) == true) outcome = HostLogOutcome.FailureMatched;
                 else if (success.IsMatch(current)) outcome = HostLogOutcome.Matched;
                 if (outcome != null) line = current;

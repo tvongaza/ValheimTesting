@@ -32,7 +32,7 @@ public sealed class ClientSessionTests : IDisposable
     // With an environment profile the client runs on another machine: a Windows install is validated from macOS or Linux too.
     [Theory]
     [InlineData(@"C:\Program Files (x86)\Steam\steamapps\common\Valheim", true)]
-    [InlineData(@"\\gaming-pc\games\Valheim", true)]
+    [InlineData(@"\\fileserver\games\Valheim", true)]
     [InlineData("/home/tester/.steam/steam/steamapps/common/Valheim", true)]
     [InlineData("Valheim", false)]
     [InlineData(@"steamapps\common\Valheim", false)]

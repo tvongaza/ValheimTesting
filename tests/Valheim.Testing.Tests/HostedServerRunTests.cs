@@ -222,7 +222,8 @@ public sealed class HostedServerRunTests : IDisposable
     private FakeOwnedServer NewServer() => new("test.mod", saveRoot: RunDirectory + "/world");
 
     // The host's install (the runtime the plan pins) and a local world; returns the plan and the profile.
-    private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false, bool unpinned = false)
+    private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false, bool unpinned = false,
+        bool crossplay = false, string portOption = "-port", string gamePort = "2456")
     {
         string install = host.Local(Install);
         Directory.CreateDirectory(install);
@@ -237,10 +238,11 @@ public sealed class HostedServerRunTests : IDisposable
             ["scenario"] = "smoke",
             ["runtime"] = new { source = install, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(install) },
             ["world"] = new { source = world, sha256 = WorldFixture.Manifest(world) },
-            ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}", "-port", "2456", "-logFile", "{runtime}/toolkit-unity.log" },
+            ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}", portOption, gamePort, "-logFile", "{runtime}/toolkit-unity.log" },
             ["pins"] = unpinned ? new Dictionary<string, string>() : new Dictionary<string, string> { ["worlduid"] = "1" },
             ["port"] = planPort,
         };
+        if (crossplay) plan["crossplay"] = true;
         if (unpinned) plan["pinning"] = "none"; else plan["runtimePins"] = InstallPins.Of(install);
         string planPath = Path.Combine(_root, "plan.json");
         File.WriteAllText(planPath, JsonSerializer.Serialize(plan));
@@ -332,6 +334,30 @@ public sealed class HostedServerRunTests : IDisposable
         Assert.Equal(InstallPins.Of(host.Local(Install)).Game, provenance.GetProperty("runtimeGameSha256").GetString());
         Assert.Equal("1,2", provenance.GetProperty("ownedPids").GetString());
         Assert.False(provenance.TryGetProperty("outcome", out _));
+    }
+
+    // The remote launch is the plan's launch arguments: a crossplay plan's server starts with -crossplay, any other without it.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ACrossplayPlansServerStartsOnTheHostWithCrossplay(bool crossplay)
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host, crossplay: crossplay);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        var arguments = FakeServerHost.Spec(Assert.Single(host.Runs, run => run.Script == "start").Variables["spec"])
+            .Where(line => line.Kind == "arg").Select(line => line.Text).ToList();
+        if (crossplay) Assert.Equal("-crossplay", arguments.Last()); else Assert.DoesNotContain("-crossplay", arguments);
+        Assert.Equal(crossplay ? "true" : "false", Result().GetProperty("Provenance").GetProperty("crossplay").GetString());
+    }
+
+    // The game reads its arguments lowercased: -Port names the game port, and one that differs from the profile's is refused.
+    [Fact] public async Task AGamePortInAnyCaseMustBeTheProfilesGamePort()
+    {
+        var host = NewHost();
+        var (plan, profile) = Write(host, portOption: "-Port", gamePort: "2457");
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, null)));
+        Assert.False(Directory.Exists(Output)); Assert.Empty(host.Runs);
     }
 
     [Fact] public async Task ValidateOnAHostCopiesAndVerifiesThereAndStartsNothing()

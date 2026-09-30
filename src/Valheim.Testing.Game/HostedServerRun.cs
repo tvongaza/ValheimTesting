@@ -66,7 +66,8 @@ internal sealed class HostedServerRun
                 "(over SSH, in a container or on this Linux machine); for a Windows server, run the runner on that machine without --profile.");
         if (role.CliPort != plan.Port)
             throw new ArgumentException($"The plan's ValheimCLI port {plan.Port} is not the profile server's cliPort {role.CliPort}; the runtime's [Server] Port must be both.");
-        int at = Array.IndexOf(plan.Arguments, "-port");
+        // The game reads its arguments lowercased, so -Port names the game port too.
+        int at = Array.FindIndex(plan.Arguments, argument => argument.Equals("-port", StringComparison.OrdinalIgnoreCase));
         if (at >= 0 && at + 1 < plan.Arguments.Length && int.TryParse(plan.Expand(plan.Arguments[at + 1], "", ""), NumberStyles.None, CultureInfo.InvariantCulture, out int gamePort) && gamePort != role.GamePort)
             throw new ArgumentException($"The plan's -port {gamePort} is not the profile server's gamePort {role.GamePort}.");
         seams ??= new HostedSeams();

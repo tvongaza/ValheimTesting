@@ -19,7 +19,7 @@ namespace Valheim.Testing.Adapter
     /// the game reads when <c>roomData</c> is absent and removes at its next save. The data is returned raw (the byte
     /// array as base64); the runner's <c>DungeonRooms</c> in Valheim.Testing.Game decodes it and checks that every room lies
     /// in the location's zone, where the game puts the interior environment. Reading changes nothing. Written against the
-    /// Valheim 1.0.16 decompile; not yet run in game.
+    /// Valheim 1.0.16 decompile and read a SunkenCrypt4's saved rooms on a 1.0.16 dedicated server.
     /// </summary>
     public static class DungeonRooms
     {
@@ -32,8 +32,9 @@ namespace Valheim.Testing.Adapter
         /// <summary>
         /// A read-only server extension command <paramref name="name"/>: <c>&lt;x&gt; &lt;z&gt; [radius]</c>, the dungeon
         /// generators whose saved position is within <c>radius</c> metres (default 64, at most <see cref="MaxRadius"/>)
-        /// horizontally of (x, z). A generator stands 5000 m or so above its location, so search around the location's
-        /// ground position. It replies <see cref="Observe"/>'s data.
+        /// horizontally of (x, z), with the location nearest (x, z). A generator stands 5000 m or so above its location,
+        /// so give the location's ground position. It replies <see cref="Observe"/>'s data. A dungeon has no saved
+        /// generator until its zone has been generated (a player came near), so an unvisited dungeon replies an empty list.
         /// </summary>
         public static ExtensionCommand Command(string name = "dungeon-rooms") =>
             new ExtensionCommand(name, "Read saved dungeon rooms near a position: <x> <z> [radius]", Run, readOnly: true, role: ExtensionRole.Server, needsWorld: true);
@@ -57,8 +58,12 @@ namespace Valheim.Testing.Adapter
         /// zoneZ, customInterior, format, roomData, rooms, legacyRooms: [{hash, x, y, z, rx, ry, rz}], location}]}</c>.
         /// <c>format</c> is <c>roomData</c> (1.0's byte array, in <c>roomData</c> as base64), <c>legacy</c> (the older fields,
         /// in <c>legacyRooms</c>, with <c>rooms</c> their count) or <c>none</c>. <c>location</c> is the location instance
-        /// the server keeps for the generator's zone (<c>{prefab, x, y, z, zoneX, zoneZ}</c>), or null when it keeps none
-        /// there. <c>customInterior</c> is the generator prefab's <c>m_useCustomInteriorTransform</c>.
+        /// nearest (x, z) among those the server keeps for the 3 x 3 zones around (x, z) (<c>{prefab, x, y, z, zoneX,
+        /// zoneZ}</c>), or null when it keeps none there; it is the same for every generator in one reply. The game keys a
+        /// location instance by the zone its position stands in, so the location is found from the queried ground position
+        /// and not from the generator's zone: a generator displaced into another zone then still pairs with its location,
+        /// and the runner's zone comparison can see the displacement. <c>customInterior</c> is the generator prefab's
+        /// <c>m_useCustomInteriorTransform</c>.
         /// </summary>
         public static Dictionary<string, object?> Observe(float x, float z, float radius)
         {
@@ -67,6 +72,7 @@ namespace Valheim.Testing.Adapter
             var system = ZoneSystem.instance ?? throw new InvalidOperationException("No ZoneSystem: load a world first.");
             Vector2s min = ZoneSystem.GetZone(new Vector3(x - radius, 0f, z - radius));
             Vector2s max = ZoneSystem.GetZone(new Vector3(x + radius, 0f, z + radius));
+            Dictionary<string, object?>? location = NearestLocation(system, x, z);
             var dungeons = new List<Dictionary<string, object?>>();
             int scanned = 0;
             for (int zx = min.x; zx <= max.x; zx++)
@@ -83,7 +89,7 @@ namespace Valheim.Testing.Adapter
                         if (prefab == null) continue;
                         DungeonGenerator generator = prefab.GetComponent<DungeonGenerator>();
                         if (generator == null) continue;
-                        dungeons.Add(Describe(system, zdo, prefab.name, generator, position));
+                        dungeons.Add(Describe(zdo, prefab.name, generator, position, location));
                     }
             return new Dictionary<string, object?>
             {
@@ -92,7 +98,7 @@ namespace Valheim.Testing.Adapter
             };
         }
 
-        private static Dictionary<string, object?> Describe(ZoneSystem system, ZDO zdo, string prefab, DungeonGenerator generator, Vector3 position)
+        private static Dictionary<string, object?> Describe(ZDO zdo, string prefab, DungeonGenerator generator, Vector3 position, Dictionary<string, object?>? location)
         {
             Vector2s zone = ZoneSystem.GetZone(position);
             string format = "none";
@@ -118,22 +124,36 @@ namespace Valheim.Testing.Adapter
                     });
                 }
             }
-            Dictionary<string, object?>? location = null;
-            if (system.m_locationInstances.TryGetValue(zone, out var instance))
-            {
-                Vector2s locationZone = ZoneSystem.GetZone(instance.m_position);
-                location = new Dictionary<string, object?>
-                {
-                    ["prefab"] = instance.m_location?.m_prefabName, ["x"] = instance.m_position.x, ["y"] = instance.m_position.y, ["z"] = instance.m_position.z,
-                    ["zoneX"] = (int)locationZone.x, ["zoneZ"] = (int)locationZone.y,
-                };
-            }
             return new Dictionary<string, object?>
             {
                 ["prefab"] = prefab, ["uid"] = zdo.m_uid.ToString(), ["x"] = position.x, ["y"] = position.y, ["z"] = position.z,
                 ["zoneX"] = (int)zone.x, ["zoneZ"] = (int)zone.y, ["customInterior"] = generator.m_useCustomInteriorTransform,
                 ["format"] = format, ["roomData"] = roomData, ["rooms"] = format == "legacy" ? rooms : (int?)null, ["legacyRooms"] = legacy.ToArray(),
                 ["location"] = location,
+            };
+        }
+
+        // The location instance nearest (x, z) horizontally in the 3 x 3 zones around it, or null. The game stores each
+        // instance under the zone its own position stands in (one per zone), so a caller's point near the location finds it
+        // in its own zone or a neighbour.
+        private static Dictionary<string, object?>? NearestLocation(ZoneSystem system, float x, float z)
+        {
+            Vector2s centre = ZoneSystem.GetZone(new Vector3(x, 0f, z));
+            ZoneSystem.LocationInstance nearest = default;
+            float best = float.MaxValue;
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dz = -1; dz <= 1; dz++)
+                {
+                    if (!system.m_locationInstances.TryGetValue(new Vector2s(centre.x + dx, centre.y + dz), out var instance)) continue;
+                    float ox = instance.m_position.x - x, oz = instance.m_position.z - z, distance = ox * ox + oz * oz;
+                    if (distance < best) { best = distance; nearest = instance; }
+                }
+            if (best == float.MaxValue) return null;
+            Vector2s zone = ZoneSystem.GetZone(nearest.m_position);
+            return new Dictionary<string, object?>
+            {
+                ["prefab"] = nearest.m_location?.m_prefabName, ["x"] = nearest.m_position.x, ["y"] = nearest.m_position.y, ["z"] = nearest.m_position.z,
+                ["zoneX"] = (int)zone.x, ["zoneZ"] = (int)zone.y,
             };
         }
     }
