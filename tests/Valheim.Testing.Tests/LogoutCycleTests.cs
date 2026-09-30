@@ -153,6 +153,17 @@ public sealed class LogoutCycleTests : IDisposable
         await fake.LateWrite!;
     }
 
+    // On Windows a watcher callback already in flight runs after the watcher is disposed. When the wait's semaphore was
+    // disposed with it, that late Release threw ObjectDisposedException on a thread-pool thread and ended the test host.
+    [Fact] public void AFileEventAfterTheWaitEndsIsHarmless()
+    {
+        var signal = new ChangeSignal(Characters);
+        signal.Dispose();
+        var late = new FileSystemEventArgs(WatcherChangeTypes.Changed, Characters, "tester.fch");
+        signal.Wake(null, late);
+        signal.Wake(null, late); // A second one while the first wake is still pending.
+    }
+
     [Fact] public void ACloudCharacterIsRefusedBeforeTheLeave()
     {
         var (fake, transport, client) = Joined();
