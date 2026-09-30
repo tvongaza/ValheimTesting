@@ -110,7 +110,8 @@ public sealed class ClientRounds
             round.Step("join the owned server's crossplay lobby with the disposable character, protected", () =>
             {
                 // Devcommands first; the join command exactly once, then the connection is awaited on the session state.
-                session.JoinCrossplay(lobby!.RemotePlayerId, Client.Character, WorldUid, Client.MenuExpectations, TimeSpan.FromSeconds(Client.JoinSeconds), cancellation: Cancellation);
+                session.JoinCrossplay(lobby!.RemotePlayerId, Client.Character, WorldUid, Client.MenuExpectations, TimeSpan.FromSeconds(Client.JoinSeconds), cancellation: Cancellation,
+                    worldExpectations: Client.WorldExpectations(WorldUid));
                 round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
                 session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
             });

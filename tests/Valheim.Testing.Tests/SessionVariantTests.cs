@@ -158,10 +158,15 @@ public sealed class SessionVariantTests : IDisposable
 
     // A client at its menu, left with a stale ErrorVersion from an earlier refused join. Its crossplay join goes through
     // loadingReadings readings, then either connects into world 7 or returns to the menu with failWith.
-    private static ScriptedTransport CrossplayClient(string? connectReply = null, string? failWith = null, bool startInWorld = false, int loadingReadings = 2)
+    private static ScriptedTransport CrossplayClient(string? connectReply = null, string? failWith = null, bool startInWorld = false, int loadingReadings = 2, bool strictWorld = false)
     {
         bool devcommands = false, started = startInWorld; int readings = 0;
-        return new ScriptedTransport()
+        var transport = new ScriptedTransport();
+        // Like ValheimCLI's strict cli_expect: once a world is loaded, pins that do not list it are refused.
+        if (strictWorld) transport.OnPrefix("cli_expect", command => started && readings >= loadingReadings && readings > 0 && !command.Contains("worlduid=", StringComparison.Ordinal)
+            ? ScriptedTransport.Failed("ERROR: code=command_failed message=MISMATCH world: W (uid 7) is loaded but not listed (strict); add world=, worlduid= or world=any")
+            : ScriptedTransport.Ok("OK: EXPECT"));
+        return transport
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
             .OnPrefix("cli_connect_playfab_user ", command =>
@@ -181,6 +186,20 @@ public sealed class SessionVariantTests : IDisposable
                 };
             })
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok(Protected));
+    }
+
+    // Native crossplay run: the join loaded the world between two reads, so the strict menu pins were refused.
+    [Fact] public void ACrossplayJoinThatLoadsTheWorldBetweenReadsIsRepinnedToThatWorld()
+    {
+        var transport = CrossplayClient(strictWorld: true, loadingReadings: 1);
+        using var actor = transport.Actor("client", Menu);
+        var state = new SessionControl(actor).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10), worldExpectations: Menu + " worlduid=7");
+        Assert.True(state.PlayerReady);
+        Assert.Contains(Menu + " worlduid=7", transport.Commands);
+        // Without the world's pins the same join fails on the refused menu pins, as it did natively.
+        var without = CrossplayClient(strictWorld: true, loadingReadings: 1);
+        using var bare = without.Actor("client", Menu);
+        Assert.Contains("is loaded but not listed (strict)", Assert.ThrowsAny<Exception>(() => new SessionControl(bare).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10))).Message);
     }
 
     [Fact] public void ACrossplayJoinSelectsTheCharacterStartsOnceWithoutAPasswordAndWaitsForTheConnection()

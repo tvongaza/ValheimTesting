@@ -178,9 +178,13 @@ public sealed class SessionControl(GameActor actor)
     /// only) and waits, reading the session state, until the client is connected in <paramref name="worldUid"/> with its
     /// player ready, as the session join does. Fails when the game reports a load error or another world, or returns to
     /// the menu with an error status after the join started. Then verify the world pins and <see cref="WaitForWorld"/>.
+    /// A strict client refuses its menu pins as soon as the join loads the world between two reads ("loaded but not
+    /// listed"); with <paramref name="worldExpectations"/> (the plugins and the server's world, as
+    /// <see cref="ClientRunPlan.WorldExpectations"/> gives them) the client is then re-pinned to that world, once, and the wait
+    /// goes on; another world fails that pin check. Found in the native crossplay run: the join completes within a read.
     /// </summary>
     public SessionState JoinCrossplay(string remotePlayerId, string character, string worldUid, string menuExpectations, TimeSpan timeout,
-        bool enableDevcommands = true, CancellationToken cancellation = default)
+        bool enableDevcommands = true, CancellationToken cancellation = default, string? worldExpectations = null)
     {
         ValidateWorldUid(worldUid);
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
@@ -205,10 +209,18 @@ public sealed class SessionControl(GameActor actor)
         capability = actor.RequireCapability("valheim.session/state");
         var clock = Stopwatch.StartNew();
         bool left = false;
+        bool worldPinned = false;
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
-            var state = Read(capability);
+            SessionState state;
+            try { state = Read(capability); }
+            catch (Exception error) when (!worldPinned && worldExpectations != null && error.Message.Contains("is loaded but not listed (strict)", StringComparison.Ordinal))
+            {
+                actor.VerifyEnvironment(worldExpectations); // Throws for another world than the server's.
+                worldPinned = true;
+                continue;
+            }
             if (state.LoadError) throw new InvalidOperationException("The game reports a world load error.");
             if (state.WorldPresent && state.WorldUid != worldUid) throw new InvalidOperationException("A different world is loaded.");
             if (state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected") return state;
