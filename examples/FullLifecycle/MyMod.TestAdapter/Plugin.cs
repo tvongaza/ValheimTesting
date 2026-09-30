@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using BepInEx;
 using BepInEx.Bootstrap;
@@ -25,7 +26,15 @@ public sealed class Plugin : BaseUnityPlugin
     public const string TokenVariable = "MYMOD_TEST_SESSION_TOKEN";
     /// <summary>Fixture commands (the global-key change) run only in a process started with this set to 1 (FixtureGate).</summary>
     public const string FixturesVariable = "MYMOD_TEST_FIXTURES";
+    /// <summary>Set to 1 to leave BepInEx's disk log as it is at quit: the negative control for QuitLogFlush (#99).</summary>
+    public const string NoQuitFlushVariable = "MYMOD_TEST_NO_QUIT_FLUSH";
     private ExtensionRegistration? _registration;
+
+    // Lines plugins log while the game quits reach the kept BepInEx log, for the teardown log scan (#99).
+    private void Awake()
+    {
+        if (Environment.GetEnvironmentVariable(NoQuitFlushVariable) != "1") QuitLogFlush.Enable();
+    }
 
     // The session is complete once the world is up and the mod itself is loaded.
     private IEnumerator Start() => TestExtension.Register("mymod.testing", "0.1.0", TokenVariable,
@@ -39,5 +48,6 @@ public sealed class Plugin : BaseUnityPlugin
         UnresolvedPrefabs.Command(),                                // unresolved-prefabs [radius]: a client without MyMod (#33)
         DungeonRooms.Command(),                                     // dungeon-rooms <x> <z> [radius]: server (#24)
         MarkerObservation.Command());                               // markers <x> <z> [radius]: the mod's own
+    private void OnApplicationQuit() => QuitLogFlush.Quitting("MyMod.TestAdapter OnApplicationQuit");
     private void OnDestroy() => _registration?.Dispose();
 }

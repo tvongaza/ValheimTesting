@@ -50,6 +50,7 @@ namespace UnityEngine
     public struct Ray { public Ray(Vector3 origin, Vector3 direction) => throw null; }
     public struct RaycastHit { public Vector3 point => throw null; }
     public sealed class Time { public static float realtimeSinceStartup => throw null; }
+    public sealed class Application { public static event System.Action quitting { add => throw null; remove => throw null; } }
 }
 
 namespace BepInEx
@@ -60,6 +61,24 @@ namespace BepInEx
     {
         public BepInPlugin Metadata => throw null;
         public BaseUnityPlugin Instance => throw null;
+    }
+}
+
+namespace BepInEx.Logging
+{
+    public interface ILogListener : System.IDisposable { void LogEvent(object sender, LogEventArgs eventArgs); }
+    public class LogEventArgs : System.EventArgs { }
+    public class DiskLogListener : ILogListener
+    {
+        public System.IO.TextWriter LogWriter { get => throw null; protected set => throw null; }
+        public void LogEvent(object sender, LogEventArgs eventArgs) => throw null;
+        public void Dispose() => throw null;
+    }
+    public class ManualLogSource { public void LogInfo(object data) => throw null; }
+    public static class Logger
+    {
+        public static System.Collections.Generic.ICollection<ILogListener> Listeners => throw null;
+        public static ManualLogSource CreateLogSource(string sourceName) => throw null;
     }
 }
 
