@@ -63,7 +63,7 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// <list type="number">
 /// <item>Refuses an existing output directory (evidence is never overwritten) and one inside a pinned source.</item>
 /// <item>Reads the plan, detects the runtime's platform and checks the host before copying anything.</item>
-/// <item>Records provenance: plan, runner and toolkit hashes, mode, platform, the copies and their input hashes.</item>
+/// <item>Records provenance: plan, runner and toolkit hashes, mode, platform, <c>crossplay</c>, the copies and their input hashes.</item>
 /// <item>Copies and verifies the pinned runtime and world (kept for inspection), checks the copy's executable, its
 /// patcher names, and its game build, BepInEx core and patchers against <see cref="ServerRunPlan.RuntimePins"/> (recorded
 /// as provenance).</item>
@@ -106,7 +106,7 @@ public static class PinnedServerRun
         try
         {
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
-            var plan = options.ReadPlan(args[1]); plan.CheckOutput(output); plan.CheckPatchersAndLogScan();
+            var plan = options.ReadPlan(args[1]); plan.CheckOutput(output); plan.CheckPatchersAndLogScan(); plan.CheckCrossplay();
             pinned = plan.Pinned;
             if (!pinned)
             {
@@ -131,6 +131,7 @@ public static class PinnedServerRun
             report.Provenance["toolkitSha256"] = WorldFixture.Hash(typeof(GameActor).Assembly.Location);
             report.Provenance["mode"] = mode;
             report.Provenance["serverPlatform"] = platform.ToString();
+            report.Provenance["crossplay"] = plan.Crossplay ? "true" : "false";
             // Never deleted automatically: a failed stop or partial save must stay inspectable.
             Directory.CreateDirectory(output); ownOutput = true;
             WorldFixture? runtime = null, world = null;
@@ -218,7 +219,7 @@ public static class PinnedServerRun
             // ServerLaunch adds SteamAppId and, for Linux, the Doorstop loader variables BepInEx needs; the working directory is the copied runtime.
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, run.RuntimeDirectory, run.WorldDirectory));
             environment[options.SessionTokenVariable] = token;
-            var start = ServerLaunch.CreateStartInfo(run.RuntimeDirectory, plan.Arguments.Select(argument => plan.Expand(argument, run.RuntimeDirectory, run.WorldDirectory)), environment);
+            var start = ServerLaunch.CreateStartInfo(run.RuntimeDirectory, plan.LaunchArguments(run.RuntimeDirectory, run.WorldDirectory), environment);
             string prefix = Path.Combine(run.Output, "boot-" + ++boot);
             var process = new DirectServerProcess(start, prefix,
                 Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log"), Path.Combine(run.RuntimeDirectory, "toolkit-unity.log"));

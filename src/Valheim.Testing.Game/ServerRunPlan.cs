@@ -74,7 +74,7 @@ public partial class ServerRunPlan
     /// one <c>-savedir {world}</c>, and strict pins with <c>worlduid</c>, an exact MD5 for each of
     /// <paramref name="requiredPlugins"/> and for every other listed plugin, no <c>worldfiles</c>, and
     /// <see cref="RuntimePins"/>. Patcher names are single entries and each log scan classification names a known pattern
-    /// with a reason. An explicitly unpinned plan (<see cref="Pinning"/> <c>none</c>) follows the same rules without the
+    /// with a reason. <c>-crossplay</c> comes only from <see cref="Crossplay"/> (<see cref="CheckCrossplay"/>). An explicitly unpinned plan (<see cref="Pinning"/> <c>none</c>) follows the same rules without the
     /// pins, which it must leave out, and may leave out the fixture hashes.
     /// </summary>
     public void ValidateServerPlan(IEnumerable<string> requiredPlugins, string sessionTokenVariable)
@@ -94,6 +94,7 @@ public partial class ServerRunPlan
         if (savedir < 0 || savedir + 1 >= Arguments.Length || Arguments[savedir + 1] != "{world}" || Arguments.Count(x => x == "-savedir") != 1 ||
             !Arguments.Contains("-batchmode") || !Arguments.Contains("-nographics"))
             throw new ArgumentException("Dedicated launch requires -batchmode -nographics and exactly one -savedir {world}.");
+        CheckCrossplay();
         if (!pinned)
         {
             if (Pins.Count != 0 || RuntimePins != null)

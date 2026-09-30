@@ -573,6 +573,68 @@ Between rounds come a confirmed save, the client's leave and a restart of only t
 
 Limits: the helper orders and records the steps, and its integration tests use scripted transports and fake processes. The steps' native behaviour is that of the pieces it calls, which have their own native evidence. The helper itself has not been run against a game yet.
 
+## Refused joins, crossplay and hosted worlds (preview 13)
+
+Three join variants beside the plain dedicated-server join. They use ValheimCLI commands that the pinned build already has. Their fakes-based tests are in [SessionVariantTests](../tests/Valheim.Testing.Tests/SessionVariantTests.cs), [CrossplayPlanTests](../tests/Valheim.Testing.Tests/CrossplayPlanTests.cs) and [HostRoundsTests](../tests/Valheim.Testing.Tests/HostRoundsTests.cs). None has run against a game yet.
+
+### Expect a refused join
+
+`SessionControl.JoinExpectingRefusal(address, character, expected, menuExpectations, timeout)` tests that a server refuses a client, for example a mod's version check refusing a mismatched client with `GameConnectionStatus.ErrorVersion` (3). It:
+1. turns devcommands on, as `Join` does, and issues `cli_extension valheim.session/join <host:port> <character> [password-variable]` once;
+2. requires ValheimCLI's structured failure with code `join_failed`, which it reports when the new connection ends in an error status;
+3. re-pins the client with `menuExpectations` (plugins only, such as `ClientRunPlan.MenuExpectations`) and reads `valheim.session/state` until the client is back at its menu (phase `menu`, no world);
+4. reads `cli_connection_status` once (`OK: connectionStatus=ErrorVersion, server=...`) and requires the expected status.
+
+It fails when the join succeeds (the client is then in the server's world: leave it before another join), when ValheimCLI reports any other code (`character_unavailable`, `transition_timeout`, `load_error`, ...), when the client does not return to its menu within `timeout`, and when the refusal has another status. Nothing is retried. It returns a `JoinRefusal` with the status, its number and the server string. The client is then at its menu, pinned, and the server's acceptance of a matching client is checked with a normal `Join`.
+
+`GameConnectionStatus` has the game's names and numbers (1.0.16): 3 `ErrorVersion`, 4 `ErrorDisconnected`, 5 `ErrorConnectFailed`, 6 `ErrorPassword`, 7 `ErrorAlreadyConnected`, 8 `ErrorBanned`, 9 `ErrorFull`, 10 `ErrorPlatformExcluded`, 11 `ErrorCrossplayPrivilege`, 12 `ErrorKicked`. As the game does in 1.0.16, a refused client keeps its status at the menu until its next join starts. `ConnectionStatusReading.Read(actor)` reads it at any time.
+
+Limits: the refusal's final status on a native client is not yet observed. The game can overwrite an error with `ErrorDisconnected` when the connection closes after it, so the expected status of a particular mod's refusal needs a native run.
+
+### Crossplay (PlayFab)
+
+- **Server:** `"crossplay": true` in a `ServerRunPlan` makes the runner launch the dedicated server with `-crossplay` (`LaunchArguments`) and record `crossplay` (`true` or `false`) in every report's provenance. `-crossplay` in `arguments` is refused in any case, for every plan the runner reads, so the report always says which backend ran.
+- **Port rule:** a crossplay lobby is keyed by the server's public IP and game port. Two crossplay servers behind one public IP must use different game ports, or the second takes the first one's joins. A crossplay plan therefore names exactly one `-port N` (1024 to 65535) rather than relying on the default 2456.
+- **Separate fixtures:** keep a crossplay fixture server separate from a Steam one rather than switching one server between modes. A client remembers each server's mode in its recent-server list.
+- **No password:** run the crossplay fixture server private without a password (`-public 0`, no `-password`). The client's join command, `cli_connect_playfab_user`, takes a password as command text, which would be recorded.
+- **Lobby:** clients join a crossplay server by its PlayFab id, not its address. `CrossplayServer.WaitForLobby(server, CrossplayServer.BepInExLog(runtime), timeout)` first reads `cli_multiplayer_identity` (`OK: steamId=..., playFabLoginState=..., playFabId=..., backend=PlayFab, gameState=..., connectionStatus=..., isServer=True, isOpenServer=True, server=...`) and refuses a server whose backend is not `PlayFab`. It then waits on the server log for the game's lobby line, `Created PlayFab lobby with ID "...", ConnectionString "..." and owned by "<id>"`, reading this boot's log from its start. A failed PlayFab login ends the wait at once. The owner id is what the client joins. The log is the source because the identity's `playFabId` can be `unavailable`; when it is present, it must equal the owner. BepInEx copies the game's log lines into its `LogOutput.log` by default; otherwise pass the Unity log that the plan's `-logFile` names.
+- **Client:** `"crossplay": true` in a `ClientRunPlan`, with no `join` and no `passwordVariable`. `SessionControl.JoinCrossplay(remotePlayerId, character, worldUid, menuExpectations, timeout)` joins from the idle menu. It turns devcommands on, then sends `cli_select_character <character>` (`OK: Selected character '...'`) and `cli_connect_playfab_user <id>` once (`OK: PlayFab user join started for <id> using ...`). That command only starts the join, so it re-pins with the menu pins and reads the session state until the client is connected in `worldUid` with its player ready. A load error, another world, or a return to the menu with an `Error...` status after the join started fails it. A status left from an earlier join does not count. Then verify the world pins and `WaitForWorld` as usual.
+- **Rounds:** `ClientRounds` with a crossplay client needs `Lobby` (for example `server => CrossplayServer.WaitForLobby(server, log, timeout)`). It reads the lobby before each round's join, because a restarted server opens a new one, and records `clientJoin` (`crossplay` or `address`).
+
+### Hosted (listen-server) worlds
+
+A client can host a world from its menu instead of joining a server. The host is the server of its world and also has a local player: its session state reads `server` true and `dedicated` false. A broadcast RPC therefore runs the server and client handlers in the same process. The `hostWorld` section of a `ClientRunPlan` describes the world:
+
+| Field | Meaning |
+|---|---|
+| `world` | The fixture as a pinned directory: exactly one `<name>.fwl` at its root and the world's data beside it (`<name>.db`), every entry named for the world. The `.fwl` stem is the world's name, at least 3 characters and one token. |
+| `worldUid` | The fixture world's exact UID. It is required even with `"pinning": "none"`, because the game silently creates a fresh world when the named one is missing. |
+| `crossplay` | Host a crossplay world. |
+| `saveDirectory` | The client's data directory, which holds `worlds_local`. Default: this user's for the client's platform: `AppData/LocalLow/IronGate/Valheim` on Windows, `Library/Application Support/IronGate/Valheim` on macOS, `.config/unity3d/IronGate/Valheim` on Linux. Set it when the client runs as another user. |
+| `saveSeconds` | The confirmed save's timeout, 1 to 600 (default 120). |
+
+`ClientRunPlan.Validate` refuses a hosting client with `join`, `passwordVariable` or the client-level `crossplay`, one whose ValheimCLI host is not this machine (the runner places the world in its data directory), a fixture that does not name one world, a missing or inexact `worldUid`, and, when pinned, a fixture without hashes. Unknown fields are refused as elsewhere.
+
+`HostedWorld.Place` copies and verifies the fixture into the output directory, as the server runner does, and keeps that copy. It then copies the fixture into the client's `worlds_local`. It refuses if anything named for the world is already there (`<name>`, `<name>.*`, `<name>_*`, in any case), so a user's world is never overwritten or used. `Collect` moves the world, with what the game wrote for it (saves, `.old` files, backups), into `host-world` in the output directory.
+
+`HostWorlds.Start(host, plan, worldName, timeout)` starts from the idle menu:
+1. turns devcommands on (ValheimCLI refuses its save and leave without them) and selects the plan's character (`cli_select_character`);
+2. sends `cli_start_host_world <name> --public false --crossplay true|false` once and requires the reply `OK: Starting hosted world '<name>' using <character>; open=true, public=False, crossplay=<True|False>, backend=<PlayFab|Steamworks>, passwordSet=False`;
+3. re-pins the client with its menu pins and waits for the plan's world UID to be ready (a fresh world has another UID and fails here);
+4. verifies the world pins, then waits for the host's player and protects it (`WaitForWorld`).
+
+`HostWorlds.Restart` leaves the world, which saves it, then starts it again: the host's restart. The host's world is not restarted as a separate process.
+
+`HostRounds` is the hosted twin of `ClientRounds`. It places the world, opens the client (owned or attached) and runs each round in turn, bounding each start by the client plan's `joinSeconds`:
+1. hosts the world, which is a restart from the second round on;
+2. runs the mod's measurement; `round.Server` and `round.Client` are the same host;
+3. between rounds, saves with a confirmed `valheim.session/save` on the host;
+4. the host leaves to its menu.
+
+The report's provenance records `role` = `host`, `hostWorld`, `hostCrossplay`, `hostRounds` and `hostRoundsCompleted`. The client is closed in every outcome, then the world is moved into the evidence (`hostWorldEvidence`). After a failure an attached client may still host the world, so its world is left in place and named in `hostWorldLeftInPlace`; remove it once that client has left it.
+
+Limits: a hosted world has no password and is never public, because the start command would carry a password as text. A second client joining the host is not provided yet. Host startup, the reply formats and the save and restart path are tested only with scripted transports.
+
 ## Game-side adapter helpers (Valheim.Testing.Adapter, preview 1)
 
 A mod's owned server runs need a small test adapter plugin in the server runtime: `OwnedServerSession` proves it started that very server by reading a `session` capability (token, process ID, save root, dedicated, readiness). `Valheim.Testing.Adapter` is a source package compiled into that adapter, which references ValheimCLI and the game (so this repository builds none of it). `TestExtension.Register(id, version, tokenVariable, modReady, registered, logError, commands...)` waits for ValheimCLI's extension API, then registers the mod's extension with the `session` capability and any test commands of its own; The session reports complete when the world is up and `modReady` returns true, and reports `acceptingConnections` separately: a dedicated server opens its game socket only when world generation finishes, on a first boot about 17 s after the world has loaded, and a join before that times out. `OwnedServerSession.WaitUntilJoinable(server, capability, timeout)` waits for it; call it just before the first join so the wait overlaps other work (server-side steps, an owned client's launch) instead of lengthening startup. `TestExtension.DevcommandsFlag()` reads the raw devcommands flag that ValheimCLI's extension gate uses. The example's [adapter](../examples/FullLifecycle/MyMod.TestAdapter/Plugin.cs) is the whole pattern in a dozen lines.
