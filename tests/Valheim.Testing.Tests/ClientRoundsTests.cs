@@ -24,6 +24,7 @@ public sealed class ClientRoundsTests : IDisposable
         bool devcommands = false, joined = false;
         _client = new ScriptedTransport()
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Test character' (tester-copy, Local)"))
             .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
             .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
             .Extension("valheim.session", "state", _ => new
@@ -46,6 +47,24 @@ public sealed class ClientRoundsTests : IDisposable
         Mode = mode, Install = mode == "owned" ? Path.GetFullPath("client-install") : "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
         Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), ["my.mod"] = "absent" },
     };
+
+    private ClientRunPlan PreparedPlan()
+    {
+        var plan = Plan();
+        plan.Character = "tester-copy";
+        plan.StartAtCharacterSave = true;
+        string local = Path.Combine(_output, "characters_local"), evidence = Path.Combine(_output, "evidence");
+        string steam = Path.Combine(_output, "userdata");
+        Directory.CreateDirectory(local); Directory.CreateDirectory(evidence); Directory.CreateDirectory(steam);
+        string source = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "tester-copy.fch");
+        File.WriteAllBytes(source, CharacterSavePositionTests.Profile(secondUid: 4242).File);
+        string hash = CharacterStartCopy.Prepare(source, prepared, 4242, Point.X, Point.Height, Point.Z);
+        plan.CharacterStart = new CharacterStartPlan
+        {
+            PreparedFile = prepared, Sha256 = hash, CharactersLocalDirectory = local, SteamUserDataDirectory = steam,
+        };
+        return plan;
+    }
 
     private GameActor Server()
     {
@@ -118,27 +137,42 @@ public sealed class ClientRoundsTests : IDisposable
 
     [Fact] public void StagedCharacterStartIsObservedWithoutAFirstTeleport()
     {
-        var plan = Plan();
-        plan.StartAtCharacterSave = true;
+        var plan = PreparedPlan();
         var report = new ScenarioReport("rounds");
         Rounds(report, plan).Run(Server(), Open(plan), Measure());
         Assert.True(report.Passed);
         Assert.Equal(new[] { 0, 1 }, _servers.Select(s => s.Count("cli_teleport_peer")));
+        Assert.Equal("characterSave", report.Provenance["clientStart"]);
+        Assert.Contains(report.Steps, step => step.Name == "stage the pinned disposable local character" && step.Passed);
+        Assert.Contains(report.Steps, step => step.Name == "remove only the staged character and its game-made backups" && step.Passed);
+        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
+        Assert.Equal(1, _client.Count("cli_select_character tester-copy"));
         Assert.True(Wrote("first-arrival.json"));
         Assert.True(Wrote("after-restart-arrival.json"));
+    }
+
+    [Fact] public void AFailedClientLaunchRemovesTheStagedCharacter()
+    {
+        var plan = PreparedPlan();
+        var report = new ScenarioReport("rounds");
+        Assert.Throws<IOException>(() => Rounds(report, plan).Run(Server(), () => throw new IOException("client did not start"), Measure()));
+        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
+        Assert.True(File.Exists(plan.CharacterStart.PreparedFile));
+        Assert.Contains(report.Steps, step => step.Name == "remove only the staged character and its game-made backups" && step.Passed);
     }
 
     [Fact] public void WrongStagedStartFailsRatherThanTeleportingOrMeasuring()
     {
         _atPoint = false;
-        var plan = Plan();
-        plan.StartAtCharacterSave = true;
-        plan.ArrivalSeconds = 1;
+        var plan = PreparedPlan();
+        plan.ArrivalSeconds = 10;
         var report = new ScenarioReport("rounds");
-        var error = Assert.Throws<TimeoutException>(() => Rounds(report, plan).Run(Server(), Open(plan), Measure()));
+        var error = Assert.Throws<InvalidOperationException>(() => Rounds(report, plan).Run(Server(), Open(plan), Measure()));
         Assert.Contains("No teleport was sent", error.Message);
-        Assert.Equal(new[] { "first: arrive at the measurement point" }, Failed(report));
+        Assert.Contains("settled away", error.Message);
+        Assert.Equal(new[] { "first: verify prepared character start at the measurement point" }, Failed(report));
         Assert.Equal(0, _servers.Sum(s => s.Count("cli_teleport_peer")));
+        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
         Assert.False(Wrote("first-reading.json"));
     }
 

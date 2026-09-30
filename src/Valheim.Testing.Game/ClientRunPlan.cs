@@ -44,6 +44,8 @@ public sealed class ClientRunPlan
     /// and zone-cycle movements still use <see cref="PlayerPlacement.Arrive"/>. A wrong or missing start fails the run.
     /// </summary>
     public bool StartAtCharacterSave { get; set; }
+    /// <summary>Required with <see cref="StartAtCharacterSave"/>: the prepared copy and the owned client's character folders.</summary>
+    public CharacterStartPlan? CharacterStart { get; set; }
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
     public string? PasswordVariable { get; set; }
     public int StartSeconds { get; set; } = 300;
@@ -100,8 +102,13 @@ public sealed class ClientRunPlan
             throw new ArgumentException("A crossplay client joins the server's PlayFab lobby, not an address, and the crossplay join command would carry a password as text: leave out join and passwordVariable, and run the crossplay fixture server private without a password.");
         foreach (string? token in new[] { HostWorld == null && !Crossplay ? Join : null, Character, PasswordVariable })
             if (token != null && (token.Length == 0 || token.Any(char.IsWhiteSpace))) throw new ArgumentException("Join address, character and password variable must be single tokens.");
-        if (StartAtCharacterSave && string.IsNullOrWhiteSpace(Character))
-            throw new ArgumentException("startAtCharacterSave needs the name of a staged disposable local character.");
+        if (StartAtCharacterSave && HostWorld != null)
+            throw new ArgumentException("startAtCharacterSave requires a client joining a dedicated server; hosted worlds have no arrival step.");
+        if (StartAtCharacterSave && (!Owned || CharacterStart == null))
+            throw new ArgumentException("startAtCharacterSave requires an owned client and characterStart staging details.");
+        if (!StartAtCharacterSave && CharacterStart != null)
+            throw new ArgumentException("characterStart is unused without startAtCharacterSave.");
+        CharacterStart?.Validate(Character);
         if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600) throw new ArgumentException("Client timeouts are out of range.");
         HostWorld?.Validate(pinned);
         if (!pinned)

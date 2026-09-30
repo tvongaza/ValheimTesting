@@ -37,13 +37,25 @@ world_uid=123456789
 arrival_x=125
 arrival_y=45
 arrival_z=-380
+fresh_name=mymod-test-001
 mkdir -p "$evidence"
 dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- \
   prepare-character "$source" "$world_uid" "$arrival_x" "$arrival_y" "$arrival_z" \
-  "$evidence/mymodtester.fch"
+  "$evidence/$fresh_name.fch"
 ```
 
-Replace those sample coordinates and UID with the pinned plan's values. The command validates the 1.0.16 save layout and hash, changes only the requested world's logout point, and refuses an existing output or a cloud-character source. It **does not install or launch** the copy. Stage that new file under its original character name in an isolated client save directory while the game is stopped (the Linux client image provides `vt-stage-character`; other hosts must use their own controlled staging), with the plan's `client.character` set to that same name. Set `client.startAtCharacterSave` to `true` in the plan. The first client round then waits for the client's own support reading at `arrival`, without a teleport or fallback; a wrong start fails the run. After the server restart the normal arrival step still teleports. Zone-cycle and other later movements still use teleports.
+Replace those sample coordinates and UID with the pinned plan's values. The command validates the 1.0.16 save layout and hash, changes only the requested world's logout point, and refuses an existing output or a cloud-character source. It **does not install or launch** the copy. Use a fresh filename; `client.character` is that filename without `.fch`, never the display name. For an **owned** client, set `client.startAtCharacterSave` to `true` and include:
+
+```json
+"characterStart": {
+  "preparedFile": "/absolute/evidence/mymod-test-001.fch",
+  "sha256": "<PREPARED output's SHA256>",
+  "charactersLocalDirectory": "/absolute/client-save/characters_local",
+  "steamUserDataDirectory": "/absolute/Steam/userdata"
+}
+```
+
+The runner checks the prepared bytes, world UID, exact arrival point and hash **before launch**, refuses a same-named local or Steam Cloud character, stages the copy, requires ValheimCLI to report `(<filename>, Local)` at selection, and removes only that copy and its game-made backups after stopping the owned client. This preview option requires a locally launched owned client; attached, hosted and remote-profile clients are refused until they have an equivalent owned staging boundary. The first round then checks the client's own support reading at `arrival`, without a teleport or fallback; a wrong start fails. Later rounds and zone-cycle movements still use teleports.
 
 This path is **not yet native-validated**. Keep the option off for acceptance runs until a joined client confirms the prepared save on two disposable copies of one world UID. Do not use a personal or Steam Cloud character, and do not treat a prepared file alone as arrival evidence.
 

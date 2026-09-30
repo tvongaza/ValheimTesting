@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using Valheim.Testing.Game;
 using Xunit;
 
@@ -68,6 +69,24 @@ public class CharacterSavePositionTests
     }
 
     [Fact]
+    public void ACharacterStillOnItsFirstSpawnCannotUseALogoutPoint()
+    {
+        var firstSpawn = Profile(firstSpawn: true);
+        Assert.Throws<InvalidDataException>(() => CharacterSavePosition.AtWorld(firstSpawn.File, 200, 1, 2, 3));
+    }
+
+    [Fact]
+    public void HostedAndAttachedPlansCannotClaimAPreparedCharacterStart()
+    {
+        var hosted = new ClientRunPlan { Mode = "attach", HostWorld = new HostWorldPlan(), Port = 5556,
+            Character = "fresh", StartAtCharacterSave = true, Pinning = "none" };
+        Assert.Contains("hosted worlds", Assert.Throws<ArgumentException>(() => hosted.Validate()).Message);
+        var attached = new ClientRunPlan { Mode = "attach", Join = "127.0.0.1:2456", Port = 5556,
+            Character = "fresh", StartAtCharacterSave = true, Pinning = "none" };
+        Assert.Contains("owned client", Assert.Throws<ArgumentException>(() => attached.Validate()).Message);
+    }
+
+    [Fact]
     public void PreparationWritesOnlyANewCopyOutsideTheCharacterDirectory()
     {
         string root = Path.Combine(Path.GetTempPath(), "vt-character-" + Guid.NewGuid().ToString("N"));
@@ -82,6 +101,7 @@ public class CharacterSavePositionTests
             string digest = CharacterStartCopy.Prepare(source, output, 200, 14, 50, -4);
             Assert.Equal(original, File.ReadAllBytes(source));
             Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(output))).ToLowerInvariant(), digest);
+            Assert.Equal(SHA512.HashData(Payload(File.ReadAllBytes(output))), File.ReadAllBytes(output)[^64..]);
             Assert.NotEqual(original, File.ReadAllBytes(output));
             Assert.Throws<IOException>(() => CharacterStartCopy.Prepare(source, output, 200, 1, 2, 3));
             Assert.Equal(14f, BitConverter.ToSingle(Payload(File.ReadAllBytes(output)), Profile().World200Flag + 1));
@@ -108,10 +128,99 @@ public class CharacterSavePositionTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
-    private sealed record Fixture(byte[] File, int World100Flag, int World200Flag);
+    [Fact]
+    public void ALinkedOutputCannotEscapeIntoTheLiveCharacterDirectory()
+    {
+        string root = Directory.CreateTempSubdirectory("vt-character-link-").FullName;
+        string local = Path.Combine(root, "characters_local"), evidence = Path.Combine(root, "evidence");
+        Directory.CreateDirectory(local); Directory.CreateDirectory(evidence);
+        try
+        {
+            string source = Path.Combine(local, "seed.fch");
+            File.WriteAllBytes(source, Profile().File);
+            string link = Path.Combine(evidence, "link");
+            if (OperatingSystem.IsWindows())
+            {
+                // A junction is the form that escaped the lexical guard on the station; creating one needs no
+                // Developer Mode symlink privilege on Windows.
+                using var junction = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{local}\"")
+                { UseShellExecute = false, CreateNoWindow = true });
+                junction!.WaitForExit();
+                Assert.Equal(0, junction.ExitCode);
+            }
+            else Directory.CreateSymbolicLink(link, local);
+            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(source, Path.Combine(link, "copy.fch"), 200, 1, 2, 3));
+            Assert.False(File.Exists(Path.Combine(local, "copy.fch")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void StagePinsThePreparedPointAndRemovesOnlyItsFreshCharacterFiles()
+    {
+        string root = Directory.CreateTempSubdirectory("vt-character-stage-").FullName;
+        string local = Path.Combine(root, "characters_local"), evidence = Path.Combine(root, "evidence");
+        string steam = Path.Combine(root, "userdata");
+        Directory.CreateDirectory(local); Directory.CreateDirectory(evidence); Directory.CreateDirectory(steam);
+        try
+        {
+            string original = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "fresh.fch");
+            File.WriteAllBytes(original, Profile().File);
+            string hash = CharacterStartCopy.Prepare(original, prepared, 200, 10, 40, -20);
+            var plan = new CharacterStartPlan { PreparedFile = prepared, Sha256 = hash,
+                CharactersLocalDirectory = local, SteamUserDataDirectory = steam };
+            var point = new HeightExpectation(10, -20, 40);
+            using (var stage = CharacterStartStage.Install(plan, "fresh", 200, point))
+            {
+                Assert.Equal(File.ReadAllBytes(prepared), File.ReadAllBytes(Path.Combine(local, "fresh.fch")));
+                File.WriteAllText(Path.Combine(local, "fresh.fch.old"), "game backup");
+                File.WriteAllText(Path.Combine(local, "fresh_backup_auto-1.fch"), "game backup");
+            }
+            Assert.True(File.Exists(original)); Assert.True(File.Exists(prepared));
+            Assert.False(File.Exists(Path.Combine(local, "fresh.fch")));
+            Assert.False(File.Exists(Path.Combine(local, "fresh.fch.old")));
+            Assert.False(File.Exists(Path.Combine(local, "fresh_backup_auto-1.fch")));
+            Assert.Throws<InvalidDataException>(() => CharacterStartStage.Install(plan, "fresh", 200, new HeightExpectation(11, -20, 40)));
+            plan.Sha256 = new string('0', 64);
+            Assert.Throws<InvalidDataException>(() => CharacterStartStage.Install(plan, "fresh", 200, point));
+            Assert.False(File.Exists(Path.Combine(local, "fresh.fch")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void StageRefusesLocalAndBothCloudNameCollisionsBeforeItWrites()
+    {
+        string root = Directory.CreateTempSubdirectory("vt-character-collision-").FullName;
+        string local = Path.Combine(root, "characters_local"), evidence = Path.Combine(root, "evidence");
+        string steam = Path.Combine(root, "userdata"), cloud = Path.Combine(root, "characters");
+        string remote = Path.Combine(steam, "12345", "892970", "remote", "characters");
+        foreach (var directory in new[] { local, evidence, steam, cloud, remote }) Directory.CreateDirectory(directory);
+        try
+        {
+            string original = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "fresh.fch");
+            File.WriteAllBytes(original, Profile().File);
+            var plan = new CharacterStartPlan { PreparedFile = prepared,
+                Sha256 = CharacterStartCopy.Prepare(original, prepared, 200, 10, 40, -20),
+                CharactersLocalDirectory = local, SteamUserDataDirectory = steam };
+            var point = new HeightExpectation(10, -20, 40);
+            foreach (var collision in new[] { Path.Combine(local, "FRESH.fch.old"),
+                Path.Combine(cloud, "fresh.fch"), Path.Combine(remote, "fresh.fch") })
+            {
+                File.WriteAllText(collision, "existing");
+                Assert.Throws<IOException>(() => CharacterStartStage.Install(plan, "fresh", 200, point));
+                Assert.Equal("existing", File.ReadAllText(collision));
+                Assert.False(File.Exists(Path.Combine(local, "fresh.fch")));
+                File.Delete(collision);
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    internal sealed record Fixture(byte[] File, int World100Flag, int World200Flag);
 
     // A hand-built 1.0.16 profile payload. No game save or decompiled source is checked in.
-    private static Fixture Profile(int mapBytes = 0, long secondUid = 200)
+    internal static Fixture Profile(int mapBytes = 0, long secondUid = 200, bool firstSpawn = false)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -133,7 +242,7 @@ public class CharacterSavePositionTests
                 if (populated) { writer.Write("enemy"); writer.Write(2f); }
             }
         }
-        writer.Write(false); // first spawn
+        writer.Write(firstSpawn);
         writer.Write(2); // per-world records
         int first = World(writer, 100, mapBytes);
         int second = World(writer, secondUid, 0);

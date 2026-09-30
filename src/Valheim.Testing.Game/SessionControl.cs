@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using valheim_cli.Testing;
 
 namespace Valheim.Testing.Game;
 
@@ -104,6 +105,23 @@ public sealed class SessionControl(GameActor actor)
         Transition("join", args);
     }
 
+    /// <summary>Before a prepared-save join, require ValheimCLI to select this exact local filename, never a cloud
+    /// character or a display-name collision. Run with devcommands enabled while still at the menu.</summary>
+    public void RequireLocalCharacter(string filename)
+    {
+        if (string.IsNullOrWhiteSpace(filename) || filename.Any(char.IsWhiteSpace))
+            throw new ArgumentException("Give a single character filename.", nameof(filename));
+        var selected = actor.Execute("cli_select_character " + filename, requireSuccess: false);
+        RequireSelectedLocal(selected, filename);
+    }
+
+    private static void RequireSelectedLocal(CommandResult selected, string filename)
+    {
+        if (!selected.Output.Any(line => line.StartsWith("OK: Selected character '", StringComparison.Ordinal) &&
+            line.EndsWith(" (" + filename + ", Local)", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("The prepared character was not selected as the exact local file " + filename + ": " + string.Join(" | ", selected.Output));
+    }
+
     /// <summary>
     /// Joins a server that must refuse this client with <paramref name="expected"/>, for example
     /// <see cref="GameConnectionStatus.ErrorVersion"/> (3) from a mod's version check. Issues the session join exactly
@@ -185,7 +203,7 @@ public sealed class SessionControl(GameActor actor)
     /// first checked. Found in the native crossplay run: the join completes within a read.
     /// </summary>
     public SessionState JoinCrossplay(string remotePlayerId, string character, string worldUid, string menuExpectations, TimeSpan timeout,
-        bool enableDevcommands = true, CancellationToken cancellation = default, string? worldExpectations = null)
+        bool enableDevcommands = true, CancellationToken cancellation = default, string? worldExpectations = null, string? requiredLocalFilename = null)
     {
         ValidateWorldUid(worldUid);
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
@@ -199,6 +217,7 @@ public sealed class SessionControl(GameActor actor)
         var selected = actor.Execute("cli_select_character " + character, requireSuccess: false);
         if (!selected.Output.Any(line => line.StartsWith("OK: Selected character '", StringComparison.Ordinal)))
             throw new InvalidOperationException("The character was not selected: " + string.Join(" | ", selected.Output));
+        if (requiredLocalFilename != null) RequireSelectedLocal(selected, requiredLocalFilename);
         try
         {
             var started = actor.Execute("cli_connect_playfab_user " + remotePlayerId, requireSuccess: false); // Exactly once.

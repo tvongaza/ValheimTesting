@@ -79,7 +79,8 @@ internal static class CharacterSavePosition
                 for (int kind = 0; kind < 5; kind++) SkipNamedFloats(reader);
             }
 
-            ReadFlag(reader); // first spawn
+            if (ReadFlag(reader))
+                throw new InvalidDataException("The character has not completed its first spawn; the game would ignore a saved logout point.");
             int worldCount = ReadCount(reader);
             (int FlagOffset, int PointOffset)? found = null;
             var seen = new HashSet<long>();

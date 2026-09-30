@@ -26,16 +26,35 @@ public static class PlayerPlacement
         var support = client.RequireCapability("valheim.world/player-support");
         var clock = Stopwatch.StartNew();
         Observation? last = null;
+        TimeSpan? wrongPointSince = null;
         do
         {
             cancellation.ThrowIfCancellationRequested();
             last = client.Observe(support);
             RefuseFlying(last);
             if (last.Complete && SurfaceProbe.Supported(last, point)) return last.Data.Clone();
+            if (last.Complete && SettledElsewhere(last, point))
+            {
+                wrongPointSince ??= clock.Elapsed;
+                if (clock.Elapsed - wrongPointSince >= TimeSpan.FromSeconds(3))
+                    throw new InvalidOperationException($"The staged character is settled away from ({point.X}, {point.Height}, {point.Z}): " +
+                        last.Data.GetRawText() + ". No teleport was sent.");
+            }
+            else wrongPointSince = null;
             cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
         } while (clock.Elapsed < timeout);
         throw new TimeoutException($"The staged character did not settle at ({point.X}, {point.Height}, {point.Z}) within {timeout.TotalSeconds:F0} s; last reading: " +
             (last == null ? "none" : last.Data.GetRawText()) + ". No teleport was sent.");
+    }
+
+    private static bool SettledElsewhere(Observation observation, HeightExpectation point)
+    {
+        var d = observation.Data;
+        float x = d.GetProperty("x").GetSingle(), z = d.GetProperty("z").GetSingle(), speed = d.GetProperty("speed").GetSingle();
+        return float.IsFinite(x) && float.IsFinite(z) && float.IsFinite(speed) && speed <= .15f &&
+            d.GetProperty("grounded").GetBoolean() && !d.GetProperty("attached").GetBoolean() &&
+            !d.GetProperty("dead").GetBoolean() && !d.GetProperty("teleporting").GetBoolean() &&
+            Math.Sqrt(Math.Pow(x - point.X, 2) + Math.Pow(z - point.Z, 2)) > 2;
     }
 
     /// <summary>

@@ -17,10 +17,11 @@ It contains no credentials and no game files, so this repository's workflow publ
 | `vt-screenshot [png]` | Screenshot of `:0`. With `zbarimg` it also reads the Steam client's login QR code. |
 | `vt-stage-character [--replace] <name> < file.fch` | Stages a local character (never Steam Cloud). Publishes only complete, non-empty data and keeps an existing character of that name unless `--replace` is given. |
 
-For a character prepared with FullLifecycle's draft `prepare-character` command, stage the **copy** with a fresh name while the client is stopped. The staging helper only installs bytes; it does not establish that the game accepted the requested position. Set `client.startAtCharacterSave` in the run plan to require a client-observed first arrival without teleporting. This path still needs a native join check before acceptance use; the default arrival teleport remains the established route.
 | `vt-launch-valheim [--vanilla] [--env NAME]... [args]` | Launches the client with BepInEx (the same environment as `ClientLaunch` builds for Linux) and refuses when BepInEx is missing; only `--vanilla` launches without it. Waits for Steam and for the main menu, refuses a second client, retries early start-up failures twice after stopping only the failed attempt. |
 | `vt-stop-game [seconds]` | Stops the client `vt-launch-valheim` started, identified by PID and start time, and only that process. |
 | `vt-pids <name>`, `vt-stop-all <name>` | Find, or stop for container-wide cleanup, every process of a program name (never by command-line pattern). |
+
+For a character prepared with FullLifecycle's draft `prepare-character` command, use a **fresh filename** and set `client.character` to that filename, not the character's display name. An owned FullLifecycle run stages and removes its pinned copy; `vt-stage-character` is for other manual workflows. Neither stage operation proves that the game accepted the point. This path still needs a native join check before acceptance use; the default arrival teleport remains the established route.
 
 - A user `steam` (Steam refuses to run as root) whose Valheim settings skip the intro cinematic.
 

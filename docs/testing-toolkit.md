@@ -575,6 +575,12 @@ Between rounds come a confirmed save, the client's leave and a restart of only t
 
 Limits: the helper orders and records the steps, and its integration tests use scripted transports and fake processes. The steps' native behaviour is that of the pieces it calls, which have their own native evidence. The helper itself has not been run against a game yet.
 
+### Prepared character start (draft, not native-validated)
+
+`client.startAtCharacterSave` asks the first `ClientRounds` round to verify where a prepared local character actually spawned, without a server teleport. It requires a locally launched **owned** client and `client.characterStart` with a prepared `.fch` path, its SHA256, the client's `characters_local` directory and Steam's `userdata` directory. The runner checks the prepared save's world UID and exact declared `Arrival` before launch, refuses local and Steam Cloud filename collisions, stages the file under a fresh filename, and requires ValheimCLI's selection reply to name that file as `Local`. After the client stops, it removes only that staged file and its game-made backups. `clientStart=characterSave` and `clientStartSha256` record this path; the first round's step explicitly says it verified the prepared start. Later rounds retain the ordinary teleport. Hosted, attached and remote-profile clients are refused. The [FullLifecycle example](../examples/FullLifecycle/README.md#optional-character-start-at-the-first-site-draft) shows preparation and plan fields.
+
+This is a preview API awaiting a bounded native join check on disposable characters. A mock support reading or a correctly edited file alone does not prove that Valheim loaded the requested logout point; keep the normal teleport path for acceptance until that check passes.
+
 ## Refused joins, crossplay and hosted worlds (preview 13)
 
 Three join variants beside the plain dedicated-server join. They use ValheimCLI commands that the pinned build already has. Their fakes-based tests are in [SessionVariantTests](../tests/Valheim.Testing.Tests/SessionVariantTests.cs), [CrossplayPlanTests](../tests/Valheim.Testing.Tests/CrossplayPlanTests.cs) and [HostRoundsTests](../tests/Valheim.Testing.Tests/HostRoundsTests.cs).
