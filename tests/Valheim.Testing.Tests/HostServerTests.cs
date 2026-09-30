@@ -115,9 +115,11 @@ public sealed class HostServerTests : IDisposable
     // ---- crossplay's libraries ----
 
     // ldd's own format: a missing dependency is "name => not found"; the rest resolve to a path or are the loader and vDSO.
+    // The three missing lines are the real 1.0.16 libparty.so's on Ubuntu 24.04 without libpulse0 and libpulse-mainloop-glib0.
     private const string LddMissingPulse = """
         	linux-vdso.so.1 (0x00007ffd5e7f2000)
         	libpulse.so.0 => not found
+        	libpulse-simple.so.0 => not found
         	libpulse-mainloop-glib.so.0 => not found
         	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007f1c2a000000)
         	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f1c29c00000)
@@ -131,11 +133,12 @@ public sealed class HostServerTests : IDisposable
 
     [Fact] public void AMissingLibraryIsReadFromLddAndNamedWithItsPackage()
     {
-        Assert.Equal(new[] { "libpulse.so.0", "libpulse-mainloop-glib.so.0" }, CrossplayLibraries.Missing(LddMissingPulse));
+        Assert.Equal(new[] { "libpulse.so.0", "libpulse-simple.so.0", "libpulse-mainloop-glib.so.0" }, CrossplayLibraries.Missing(LddMissingPulse));
         Assert.Empty(CrossplayLibraries.Missing("\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\n\tnot found.so => /lib/not found.so (0x2)\n"));
         var error = Assert.Throws<InvalidOperationException>(() => CrossplayLibraries.Verdict("box", CheckReply(LddMissingPulse, 1)));
         Assert.Contains("Crossplay cannot start on box", error.Message);
-        Assert.Contains("libpulse.so.0 (package libpulse0), libpulse-mainloop-glib.so.0 (package libpulse-mainloop-glib0) are missing", error.Message);
+        Assert.Contains("libpulse.so.0 (package libpulse0), libpulse-simple.so.0 (package libpulse0), libpulse-mainloop-glib.so.0 (package libpulse-mainloop-glib0) are missing", error.Message);
+        Assert.DoesNotContain("also provide", error.Message);
         Assert.Contains("apt-get install libpulse0 libpulse-mainloop-glib0", error.Message);
         Assert.Contains("Nothing was started", error.Message);
         // A library with no known package is named as it is.

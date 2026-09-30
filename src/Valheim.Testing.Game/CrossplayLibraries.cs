@@ -21,6 +21,7 @@ public static class CrossplayLibraries
     public static IReadOnlyDictionary<string, string> Packages { get; } = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["libpulse.so.0"] = "libpulse0",
+        ["libpulse-simple.so.0"] = "libpulse0",
         ["libpulse-mainloop-glib.so.0"] = "libpulse-mainloop-glib0",
         ["libatomic.so.1"] = "libatomic1",
     };
