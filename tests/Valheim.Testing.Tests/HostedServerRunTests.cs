@@ -35,6 +35,8 @@ internal sealed class FakeServerHost : IGameHost
     public bool PortBusy { get; set; }
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
     public bool IgnoreQuit { get; set; }
+    /// <summary>The crossplay library check's reply: by default libparty.so loads.</summary>
+    public string PartyReply { get; set; } = "VT-LDD \tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 0\n";
     private string? _runtime; // The host runtime of the last server start, whose log a clean stop appends to.
     public List<FakeForward> Tunnels { get; } = [];
     /// <summary>What the copy does to the runtime after copying, for example editing a file.</summary>
@@ -53,6 +55,7 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostInstallScripts.BashPort) ? "port" :
         ReferenceEquals(script, HostServerScripts.Start) ? "start" :
         ReferenceEquals(script, HostServerScripts.Keep) ? "keep" :
+        ReferenceEquals(script, CrossplayLibraryScripts.Check) ? "party" :
         ReferenceEquals(script, InteractiveScripts.LinuxWait) ? "wait" :
         ReferenceEquals(script, InteractiveScripts.LinuxStop) ? "stop" :
         ReferenceEquals(script, InteractiveScripts.LinuxStart) ? "client-start" :
@@ -84,6 +87,7 @@ internal sealed class FakeServerHost : IGameHost
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }
             case "port": return Ok(PortBusy ? "VT-PORT busy\n" : "VT-PORT free\n");
+            case "party": return Ok(PartyReply);
             case "start":
             {
                 string token = Spec(v["spec"]).Single(line => line.Kind == "env" && line.Text.StartsWith("TEST_SESSION_TOKEN=", StringComparison.Ordinal)).Text["TEST_SESSION_TOKEN=".Length..];
@@ -391,6 +395,47 @@ public sealed class HostedServerRunTests : IDisposable
         var provenance = Result().GetProperty("Provenance");
         Assert.StartsWith("boot-1 clean", provenance.GetProperty("serverStops").GetString());
         Assert.Contains("lobby lobby-1; retired yes; PlayFab confirmation logged", provenance.GetProperty("crossplayLobbies").GetString());
+    }
+
+    // A crossplay plan checks that the host's runtime copy can load libparty.so before anything starts, in validate too; a host
+    // missing libpulse fails there with the packages to install, and no server starts. A plan without crossplay is not checked.
+    [Theory]
+    [InlineData("run")]
+    [InlineData("validate")]
+    public async Task ACrossplayHostMissingLibrariesIsRefusedBeforeAnythingStarts(string mode)
+    {
+        var server = NewServer(); var host = NewHost(server);
+        host.PartyReply = "VT-LDD \tlibpulse.so.0 => not found\nVT-LDD \tlibc.so.6 => /lib/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 1\n";
+        var (plan, profile) = Write(host, crossplay: true);
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, mode, plan, Output], Options(host, server)));
+        var step = Step("the server host can load crossplay's libraries");
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.Contains("libpulse.so.0 (package libpulse0) is missing", step.GetProperty("Error").GetString());
+        Assert.Equal(Runs + "/" + RunId + "/runtime", Assert.Single(host.Runs, run => run.Script == "party").Variables["runtime"]);
+        Assert.DoesNotContain(host.Runs, run => run.Script == "start");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task OnlyACrossplayPlanChecksTheLibrariesAndRecordsWhichLoaded(bool crossplay)
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host, crossplay: crossplay);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        var provenance = Result().GetProperty("Provenance");
+        if (crossplay)
+        {
+            Assert.True(Step("the server host can load crossplay's libraries").GetProperty("Passed").GetBoolean());
+            Assert.Equal("valheim_server_Data/Plugins/libparty.so loads on linux-box", provenance.GetProperty("crossplayLibraries").GetString());
+            Assert.Equal("1", Assert.Single(host.Runs, run => run.Script == "start").Variables["crossplay"]);
+        }
+        else
+        {
+            Assert.DoesNotContain("the server host can load crossplay's libraries", StepNames());
+            Assert.False(provenance.TryGetProperty("crossplayLibraries", out _));
+            Assert.DoesNotContain(host.Runs, run => run.Script == "party");
+        }
     }
 
     // The game reads its arguments lowercased: -Port names the game port, and one that differs from the profile's is refused.
