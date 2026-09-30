@@ -26,7 +26,7 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 
 The scenario never calls `PlayerPlacement.Protect` itself: `SessionControl.WaitForWorld` protects the joined player (god, ghost and debug mode, read back) as soon as the world is ready, so the join step fails if the game does not confirm it, and the player is never moved unprotected. Fly stays off; the arrival and marker checks measure a player standing on the ground.
 
-### Optional character start at the first site (draft)
+### Optional character start at the first site (preview)
 
 For repeated native runs on the **same known world**, a disposable local character that has already visited that world can start at the dry arrival site. This is opt-in; the normal plan still teleports after joining. Prepare a separate copy while the client is stopped:
 
@@ -57,7 +57,7 @@ Replace those sample coordinates and UID with the pinned plan's values. The comm
 
 The runner checks the prepared bytes, world UID, exact arrival point and hash **before launch**, refuses a same-named local or Steam Cloud character, stages the copy, requires ValheimCLI to report `(<filename>, Local)` at selection, and removes only that copy and its game-made backups after stopping the owned client. This preview option requires a locally launched owned client; attached, hosted and remote-profile clients are refused until they have an equivalent owned staging boundary. The first round then checks the client's own support reading at `arrival`, without a teleport or fallback; a wrong start fails. Later rounds and zone-cycle movements still use teleports.
 
-This path is **not yet native-validated**. Keep the option off for acceptance runs until a joined client confirms the prepared save on two disposable copies of one world UID. Do not use a personal or Steam Cloud character, and do not treat a prepared file alone as arrival evidence.
+This path passed a bounded [native Windows 1.0.16 joined-client check](https://github.com/tvongaza/ValheimTesting/pull/94#issuecomment-5912134571): prepared local copies started grounded at two dry points 1.9 km apart with no first-round teleport; copies whose saved point differed from the plan were refused before launch. The normal teleport flow also passed. The test does not establish other game versions or hosted, attached, or remote-profile clients. Use only a disposable local character, never a personal or Steam Cloud character, and rely on the client's support observation rather than the prepared file alone as arrival evidence.
 
 Observations use ValheimCLI's generic commands (`cli_zdos_at` on the server, `cli_prefabs_at` on the client). A mod that needs a test-only action or observation adds it to its adapter as another extension command.
 

@@ -10,7 +10,8 @@ namespace Valheim.Testing.Game;
 /// preloader, the runtime's <c>linux64</c> and <c>doorstop_libs</c> are put in front of LD_LIBRARY_PATH and
 /// <c>libdoorstop_x64.so</c> in front of LD_PRELOAD (for the server only, never the shells that start it), and inherited
 /// Doorstop variables are removed. Doorstop variables and <c>--doorstop-*</c> arguments from the caller are refused. The
-/// runtime's files are checked on the host when the server starts (<see cref="RequiredFiles"/>).
+/// runtime's files are checked on the host when the server starts (<see cref="RequiredFiles"/>), and for a
+/// <see cref="Crossplay"/> launch that the game's PlayFab library loads there (<see cref="CrossplayLibraries"/>).
 /// </summary>
 public sealed class HostServerLaunch
 {
@@ -32,6 +33,8 @@ public sealed class HostServerLaunch
     public IReadOnlyDictionary<string, string> Prepended { get; }
     /// <summary>Inherited variables removed before the launch: Doorstop's, apart from the ones set here.</summary>
     public IReadOnlyList<string> Unset { get; } = ["DOORSTOP_DISABLE"];
+    /// <summary>True when the arguments hold <c>-crossplay</c> (in any case, as the game reads it): the start then refuses a host whose <c>libparty.so</c> cannot load.</summary>
+    public bool Crossplay => Arguments.Any(argument => argument.Equals("-crossplay", StringComparison.OrdinalIgnoreCase));
     /// <summary>Files, relative to <see cref="Runtime"/>, the host must have before anything starts.</summary>
     public IReadOnlyList<string> RequiredFiles { get; } =
         [ServerLaunch.LinuxExecutable, "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "doorstop_libs/libdoorstop_x64.so"];
@@ -128,6 +131,7 @@ public static class HostServer
         {
             ["runtime"] = launch.Runtime, ["exe"] = ServerLaunch.LinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
             ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
+            ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
         }, timeout, cancellation).ConfigureAwait(false);
         if (!result.Succeeded)
@@ -147,6 +151,10 @@ public static class HostServer
         {
             "unsupported" => (Exception)new PlatformNotSupportedException($"Cannot start the Linux dedicated server on {host.Name}: {detail}"),
             "missing" => new FileNotFoundException($"The runtime on {host.Name} is incomplete: {detail}. Nothing was started."),
+            // Verdict throws the check's own refusal (a missing library, no libparty.so, no ldd).
+            "libraries" => CrossplayLibraries.Verdict(host.Name, result.Stdout) == null
+                ? new HostOperationException($"Unexpected reply while checking crossplay's libraries on {host.Name}", result)
+                : new HostOperationException($"The crossplay library check on {host.Name} passed but the start refused it", result),
             "exists" => new InvalidOperationException($"{directory} already exists on {host.Name}; give each boot a new directory. Nothing was started."),
             "failed" => new InvalidOperationException($"The dedicated server did not start on {host.Name}: {detail}. Evidence is in {directory}."),
             _ => new HostOperationException($"Unexpected reply while starting the dedicated server on {host.Name}", result),
@@ -154,15 +162,16 @@ public static class HostServer
     }
 }
 
-/// <summary>What stopping a server on a host found.</summary>
-public enum HostServerStop { Stopped, AlreadyGone }
+/// <summary>What stopping a server on a host found: it was killed, had gone already, or quit by itself when asked (SIGINT).</summary>
+public enum HostServerStop { Stopped, AlreadyGone, Quit }
 
 /// <summary>
 /// A dedicated server <see cref="HostServer"/> started, identified by process ID and start time on its host. It is an
 /// <see cref="IServerProcess"/>, so an <see cref="OwnedServerSession"/> launches, checks and stops it like a local one. Stopping
-/// kills only that process, and only while its start time still matches (a process ID reused by another program is never
-/// touched), then keeps the boot's logs in its boot directory and, when an evidence directory was given, fetches that directory
-/// here. Disposing stops it if it was not stopped yet.
+/// touches only that process, and only while its start time still matches (a process ID reused by another program is never
+/// touched): a clean stop (<see cref="StopCleanly"/>) sends it SIGINT, on which the game saves, retires its PlayFab lobby and
+/// quits, and kills it only if it has not exited in time. Then it keeps the boot's logs in its boot directory and, when an
+/// evidence directory was given, fetches that directory here. Disposing kills it if it was not stopped yet.
 /// </summary>
 public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
 {
@@ -218,9 +227,16 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
     /// keeps the logs and fetches the evidence. Each part is done once; a call after a failure repeats only what is left, which
     /// the identity check makes safe. A process still there after the kill, or an unproven stop or fetch, throws.
     /// </summary>
-    public async Task<HostServerStop> StopAsync(TimeSpan timeout, CancellationToken cancellation = default)
+    public Task<HostServerStop> StopAsync(TimeSpan timeout, CancellationToken cancellation = default) => StopAsync(TimeSpan.Zero, timeout, cancellation);
+
+    /// <summary>
+    /// <see cref="StopAsync(TimeSpan, CancellationToken)"/>, but first sends the server SIGINT and gives it <paramref name="quit"/>
+    /// to save and exit by itself, which it reports as <see cref="HostServerStop.Quit"/>; only then is it killed.
+    /// </summary>
+    public async Task<HostServerStop> StopAsync(TimeSpan quit, TimeSpan timeout, CancellationToken cancellation = default)
     {
         WaitText.RequireTimeout(timeout);
+        if (quit < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(quit));
         await _stopping.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
@@ -228,10 +244,12 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
             if (!_killed)
             {
                 string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
-                var result = (await _host.RunAsync(InteractiveScripts.LinuxStop, Variables(("seconds", seconds)), timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false))
-                    .EnsureSuccess($"Stopping server process {Id} on {HostName}");
+                string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+                var result = (await _host.RunAsync(InteractiveScripts.LinuxStop, Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "INT")),
+                    quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping server process {Id} on {HostName}");
                 outcome = InteractiveClient.Line(result.Stdout, "VT-STOP ") switch
                 {
+                    "quit" => HostServerStop.Quit,
                     "stopped" => HostServerStop.Stopped,
                     "gone" => HostServerStop.AlreadyGone,
                     "running" => throw new InvalidOperationException($"Server process {Id} on {HostName} was still running {WaitText.Seconds(timeout)} after it was killed."),
@@ -252,8 +270,20 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
         finally { _stopping.Release(); }
     }
 
-    /// <summary>The <see cref="IServerProcess"/> stop: <see cref="StopAsync"/>, waited for.</summary>
+    /// <summary>The <see cref="IServerProcess"/> stop: <see cref="StopAsync(TimeSpan, CancellationToken)"/>, waited for.</summary>
     public void Stop(TimeSpan timeout) => StopAsync(timeout).GetAwaiter().GetResult();
+
+    /// <summary>The <see cref="IServerProcess"/> clean stop: <see cref="StopAsync(TimeSpan, TimeSpan, CancellationToken)"/>, waited for.</summary>
+    public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        return StopAsync(quit, kill).GetAwaiter().GetResult() switch
+        {
+            HostServerStop.Quit => new(StopOutcome.Clean, null, clock.Elapsed, "SIGINT"),
+            HostServerStop.Stopped => new(StopOutcome.Killed, null, clock.Elapsed, quit > TimeSpan.Zero ? $"SIGINT; no exit within {WaitText.Seconds(quit)}" : "not asked to quit"),
+            _ => new(StopOutcome.AlreadyExited, null, clock.Elapsed, "not asked: it had exited"),
+        };
+    }
 
     /// <summary>Stops the process unless it was stopped already; an unproven stop throws.</summary>
     public void Dispose()
@@ -268,10 +298,12 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
 
     public override string ToString() => $"server process {Id} (started {StartIdentity}) on {HostName}";
 
-    private Dictionary<string, string> Variables((string Name, string Value) extra) => new()
+    private Dictionary<string, string> Variables(params (string Name, string Value)[] extra)
     {
-        ["game"] = Id.ToString(CultureInfo.InvariantCulture), ["start"] = StartIdentity, ["dir"] = BootDirectory, [extra.Name] = extra.Value,
-    };
+        var variables = new Dictionary<string, string> { ["game"] = Id.ToString(CultureInfo.InvariantCulture), ["start"] = StartIdentity, ["dir"] = BootDirectory };
+        foreach (var (name, value) in extra) variables[name] = value;
+        return variables;
+    }
 }
 
 // The fixed scripts of a dedicated server on a Linux host. Values arrive as variables (ScriptedGameHost.Compose); each ends
@@ -284,16 +316,23 @@ internal static class HostServerScripts
         started() { local s; s=$(cat "/proc/$1/stat" 2> /dev/null) || return 1; s=${s##*) }; set -- $s; [ "$1" != Z ] && echo "${20}"; }
         """;
 
-    // Variables: runtime, exe, files, dir, spec, logs, seconds. The recorder hands the server's PID back through a FIFO the
+    // Variables: runtime, exe, files, dir, spec, logs, seconds, crossplay, libraries. A crossplay launch first proves the game's
+    // libparty.so loads (CrossplayLibraryScripts), and otherwise replies with that check's lines and "libraries". The recorder hands the server's PID back through a FIFO the
     // script already holds open, so the start waits for that event (bounded by seconds) rather than looking for a file; the
     // FIFO is opened read-write at both ends, so neither side can block on a missing partner. The server's own descriptors
     // are only the logs and /dev/null. Nothing here is written to disk but the evidence files: arguments may hold a password.
-    public static readonly string Start = ("set -u\n" + Started + "\n" + """
+    public static readonly string Start = ("set -u\n" + Started + "\n" + CrossplayLibraryScripts.Body + "\n" + """
         if [ "$(uname -s)" != Linux ]; then echo "VT-SERVER unsupported this host runs $(uname -s); the Linux dedicated server needs a Linux host"; exit 0; fi
         while IFS= read -r f; do
             if [ -n "$f" ] && [ ! -f "$runtime/$f" ]; then echo "VT-SERVER missing $f"; exit 0; fi
         done <<< "$files"
         if [ ! -x "$runtime/$exe" ]; then echo "VT-SERVER missing $exe is not executable"; exit 0; fi
+        if [ -n "$crossplay" ]; then
+            party=$(vt_party_check)
+            if printf '%s\n' "$party" | grep -q -e ' => not found' || ! printf '%s\n' "$party" | grep -q -e '^VT-PARTY checked .* 0$'; then
+                printf '%s\n' "$party"; echo "VT-SERVER libraries"; exit 0
+            fi
+        fi
         if [ -e "$dir" ]; then echo "VT-SERVER exists"; exit 0; fi
         mkdir -p -- "$(dirname -- "$dir")" && mkdir -- "$dir" || exit 3
         i=0
@@ -315,11 +354,15 @@ internal static class HostServerScripts
                 arg) args+=("$text") ;;
             esac
         done <<< "$spec"
+        # A background job of a non-interactive shell starts with SIGINT ignored, and the clean stop sends SIGINT: env gives the
+        # server the default disposition back where it can (coreutils 8.31 and later).
+        signals=()
+        if env --default-signal=INT true 2> /dev/null; then signals=(--default-signal=INT); fi
         mkfifo -m 600 -- "$dir/started" || exit 3
         exec 3<> "$dir/started"
         cd -- "$runtime" || exit 3
         setsid bash -c 'f=$1; p=$2; x=$3; shift 3; exec 4<> "$f"; "$@" 4>&- & g=$!; printf "%s\n" "$g" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; printf "%s\n" "$g" >&4; exec 4>&-; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
-            vt-server "$dir/started" "$dir/pid" "$dir/exit" env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"} \
+            vt-server "$dir/started" "$dir/pid" "$dir/exit" env ${signals[@]+"${signals[@]}"} ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"} \
             > "$dir/stdout.log" 2> "$dir/stderr.log" < /dev/null 3<&- &
         game=
         read -r -t "$seconds" -u 3 game

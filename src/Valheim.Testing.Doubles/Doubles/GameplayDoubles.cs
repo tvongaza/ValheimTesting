@@ -188,13 +188,25 @@ public partial class HeightmapBuilder
     }
 
     internal static HeightmapBuilder? m_instance;
-    public static HeightmapBuilder instance => m_instance ??= new HeightmapBuilder();
+    private static readonly HeightmapBuilder s_disposed = new();
+    /// <summary>
+    /// The world's builder, made on first use as the game's. Setting it installs a builder a test prepared; setting null
+    /// leaves the world without one, as the game's after its builder is disposed, until a builder is set again.
+    /// <c>ValheimWorldScope</c> restores it.
+    /// </summary>
+    public static HeightmapBuilder? instance
+    {
+        get => ReferenceEquals(m_instance, s_disposed) ? null : m_instance ??= new HeightmapBuilder();
+        set => m_instance = value ?? s_disposed;
+    }
     private readonly List<HMBuildData> m_toBuild = new();
     private readonly List<HMBuildData> m_ready = new();
     /// <summary>Builds waiting for the build thread.</summary>
     public int QueuedCount => m_toBuild.Count;
     /// <summary>Finished builds not yet handed out.</summary>
     public int ReadyCount => m_ready.Count;
+    /// <summary>How many times <see cref="RequestTerrainSync"/> was called: a test can check that code asked only when the build was ready.</summary>
+    public int SyncRequests { get; private set; }
 
     public bool IsTerrainReady(Vector3 center, int width, float scale, bool distantLod, WorldGenerator worldGen)
     {
@@ -202,12 +214,28 @@ public partial class HeightmapBuilder
         if (!m_toBuild.Exists(d => d.IsEqual(center, width, scale, distantLod, worldGen))) m_toBuild.Add(new HMBuildData(center, width, scale, distantLod, worldGen));
         return false;
     }
+    /// <summary>
+    /// A ready build, handed out and removed from the ready list (so the next <see cref="IsTerrainReady"/> for it queues a
+    /// new one). With none ready it builds on the spot, as the game waits for its build thread: it never returns null.
+    /// </summary>
     public HMBuildData RequestTerrainSync(Vector3 center, int width, float scale, bool distantLod, WorldGenerator worldGen)
     {
+        SyncRequests++;
         var ready = m_ready.Find(d => d.IsEqual(center, width, scale, distantLod, worldGen));
         if (ready != null) { m_ready.Remove(ready); return ready; }
         m_toBuild.RemoveAll(d => d.IsEqual(center, width, scale, distantLod, worldGen));
         return Built(new HMBuildData(center, width, scale, distantLod, worldGen));
+    }
+    /// <summary>
+    /// Builds one terrain now and makes it ready, as if it had been queued and the build thread had run: the next
+    /// <see cref="IsTerrainReady"/> for it answers true. Returns the build.
+    /// </summary>
+    public HMBuildData MakeReady(Vector3 center, int width, float scale, bool distantLod, WorldGenerator worldGen)
+    {
+        m_toBuild.RemoveAll(d => d.IsEqual(center, width, scale, distantLod, worldGen));
+        var data = Built(new HMBuildData(center, width, scale, distantLod, worldGen));
+        m_ready.Add(data);
+        return data;
     }
     /// <summary>Builds everything queued and makes it ready, as the build thread does; returns how many were built.</summary>
     public int BuildQueued()
@@ -581,4 +609,84 @@ public static partial class ZDOVars
     public static readonly int s_addedDefaultItems = "addedDefaultItems".GetStableHashCode();
     public static readonly int s_picked = "picked".GetStableHashCode();
     public static readonly int s_enabled = "enabled".GetStableHashCode();
+}
+
+// Location and dungeon pieces a mod reads from a template: their settings, with the game's (1.0.16) defaults. What they do
+// when a location spawns (the chance roll, the weighted pick, spawning a creature or an item) is not modelled. The dungeon
+// theme fields (Room.Theme) and effect lists are left out.
+
+/// <summary>A branch kept only with a chance (<see cref="m_chanceToSpawn"/> percent); <see cref="m_OffObject"/> is shown instead when it is not.</summary>
+public partial class RandomSpawn : MonoBehaviour
+{
+    public GameObject m_OffObject = null!;
+    public float m_chanceToSpawn = 50f;
+    public Heightmap.Biome m_requireBiome;
+    public bool m_notInLava;
+    public int m_minElevation = -10000;
+    public int m_maxElevation = 10000;
+}
+
+/// <summary>One of several alternatives, picked by weight.</summary>
+public partial class RandomObject : MonoBehaviour
+{
+    [Serializable]
+    public partial class ObjectEntry
+    {
+        public GameObject m_object = null!;
+        public float m_weight = 1f;
+    }
+    public List<ObjectEntry> m_objects = new();
+    public Heightmap.Biome m_requireBiome;
+    public bool m_notInLava;
+    public int m_minElevation = -10000;
+    public int m_maxElevation = 10000;
+}
+
+/// <summary>A point that spawns a creature when a player comes near.</summary>
+public partial class CreatureSpawner : MonoBehaviour
+{
+    public GameObject m_creaturePrefab = null!;
+    public int m_maxLevel = 1;
+    public int m_minLevel = 1;
+    public float m_levelupChance = 10f;
+    public float m_respawnTimeMinuts = 20f;
+    public float m_triggerDistance = 60f;
+    public float m_triggerNoise;
+    public bool m_spawnAtNight = true;
+    public bool m_spawnAtDay = true;
+    public bool m_requireSpawnArea;
+    public bool m_spawnInPlayerBase;
+    public bool m_wakeUpAnimation;
+    public int m_spawnInterval = 5;
+    public string m_requiredGlobalKey = "";
+    public string m_blockingGlobalKey = "";
+    public bool m_setPatrolSpawnPoint;
+    public int m_spawnGroupID;
+    public int m_maxGroupSpawned = 1;
+    public float m_spawnGroupRadius;
+    public float m_spawnerWeight = 1f;
+}
+
+/// <summary>What an object drops when it is destroyed.</summary>
+public partial class DropOnDestroyed : MonoBehaviour
+{
+    public DropTable m_dropWhenDestroyed = new();
+    public float m_spawnYOffset = 0.5f;
+    public float m_spawnYStep = 0.3f;
+}
+
+/// <summary>An item lying in the world to be picked up: a fixed one, or one of <see cref="m_randomItemPrefabs"/>.</summary>
+public partial class PickableItem : MonoBehaviour
+{
+    [Serializable]
+    public partial struct RandomItem
+    {
+        public ItemDrop m_itemPrefab;
+        public int m_stackMin;
+        public int m_stackMax;
+    }
+    public ItemDrop m_itemPrefab = null!;
+    public int m_stack;
+    public RandomItem[] m_randomItemPrefabs = new RandomItem[0];
+    public float m_hoverOffset;
 }

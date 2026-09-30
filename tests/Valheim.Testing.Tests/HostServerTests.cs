@@ -112,6 +112,92 @@ public sealed class HostServerTests : IDisposable
         Assert.Empty(windows.Runs);
     }
 
+    // ---- crossplay's libraries ----
+
+    // ldd's own format: a missing dependency is "name => not found"; the rest resolve to a path or are the loader and vDSO.
+    // The three missing lines are the real 1.0.16 libparty.so's on Ubuntu 24.04 without libpulse0 and libpulse-mainloop-glib0.
+    private const string LddMissingPulse = """
+        	linux-vdso.so.1 (0x00007ffd5e7f2000)
+        	libpulse.so.0 => not found
+        	libpulse-simple.so.0 => not found
+        	libpulse-mainloop-glib.so.0 => not found
+        	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007f1c2a000000)
+        	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f1c29c00000)
+        	libpulse.so.0 => not found
+        	/lib64/ld-linux-x86-64.so.2 (0x00007f1c2a5f4000)
+        """;
+
+    // The check script's reply: each ldd line prefixed, then the verdict with ldd's exit code.
+    private static string CheckReply(string ldd, int code) =>
+        string.Concat(ldd.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => "VT-LDD " + line + "\n")) + $"VT-PARTY checked valheim_server_Data/Plugins/libparty.so {code}\n";
+
+    [Fact] public void AMissingLibraryIsReadFromLddAndNamedWithItsPackage()
+    {
+        Assert.Equal(new[] { "libpulse.so.0", "libpulse-simple.so.0", "libpulse-mainloop-glib.so.0" }, CrossplayLibraries.Missing(LddMissingPulse));
+        Assert.Empty(CrossplayLibraries.Missing("\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\n\tnot found.so => /lib/not found.so (0x2)\n"));
+        var error = Assert.Throws<InvalidOperationException>(() => CrossplayLibraries.Verdict("box", CheckReply(LddMissingPulse, 1)));
+        Assert.Contains("Crossplay cannot start on box", error.Message);
+        Assert.Contains("libpulse.so.0 (package libpulse0), libpulse-simple.so.0 (package libpulse0), libpulse-mainloop-glib.so.0 (package libpulse-mainloop-glib0) are missing", error.Message);
+        Assert.DoesNotContain("also provide", error.Message);
+        Assert.Contains("apt-get install libpulse0 libpulse-mainloop-glib0", error.Message);
+        Assert.Contains("Nothing was started", error.Message);
+        // A library with no known package is named as it is.
+        string unknown = CrossplayLibraries.Refusal("box", "valheim_server_Data/Plugins/libparty.so", ["libq.so.6"]);
+        Assert.Contains("libq.so.6 is missing", unknown);
+        Assert.DoesNotContain("apt-get", unknown);
+    }
+
+    [Fact] public void EachCheckVerdictIsItsOwnError()
+    {
+        Assert.Equal("valheim_server_Data/Plugins/libparty.so", CrossplayLibraries.Verdict("box",
+            "VT-LDD 	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 0\n"));
+        Assert.Contains("has no valheim_server_Data/Plugins/libparty.so",
+            Assert.Throws<FileNotFoundException>(() => CrossplayLibraries.Verdict("box", "VT-PARTY absent\n")).Message);
+        Assert.Contains("no ldd", Assert.Throws<PlatformNotSupportedException>(() => CrossplayLibraries.Verdict("box", "VT-PARTY noldd\n")).Message);
+        Assert.Throws<PlatformNotSupportedException>(() => CrossplayLibraries.Verdict("box", "VT-PARTY unsupported Darwin\n"));
+        // ldd failing without a missing library (another architecture, a truncated copy) is no proof either.
+        Assert.Contains("not a dynamic executable", Assert.Throws<InvalidOperationException>(() => CrossplayLibraries.Verdict("box",
+            "VT-LDD 	not a dynamic executable\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 1\n")).Message);
+        Assert.Null(CrossplayLibraries.Verdict("box", "something else\n"));
+        Assert.Null(CrossplayLibraries.Verdict("box", "VT-PARTY checked lib without-a-code\n"));
+    }
+
+    [Fact] public async Task TheCheckRunsOnABashHostWithTheRuntimeAndCandidates()
+    {
+        var host = new QueueHost();
+        host.Replies.Enqueue(Reply("VT-LDD 	libc.so.6 => /lib/libc.so.6 (0x1)\nVT-PARTY checked valheim_Data/Plugins/libparty.so 0\n"));
+        Assert.Equal("valheim_Data/Plugins/libparty.so", await CrossplayLibraries.RequireAsync(host, "/srv/rt/", TimeSpan.FromSeconds(30)));
+        var run = Assert.Single(host.Runs);
+        Assert.Same(CrossplayLibraryScripts.Check, run.Script);
+        Assert.Equal("/srv/rt", run.Variables["runtime"]);
+        Assert.Equal(string.Join('\n', CrossplayLibraries.PartyLibraries), run.Variables["libraries"]);
+        var unexpected = new QueueHost(); unexpected.Replies.Enqueue(Reply("hello\n"));
+        await Assert.ThrowsAsync<HostOperationException>(() => CrossplayLibraries.RequireAsync(unexpected, "/srv/rt", TimeSpan.FromSeconds(30)));
+        var windows = new QueueHost(HostShell.Pwsh);
+        await Assert.ThrowsAsync<PlatformNotSupportedException>(() => CrossplayLibraries.RequireAsync(windows, "/srv/rt", TimeSpan.FromSeconds(30)));
+        Assert.Empty(windows.Runs);
+    }
+
+    [Fact] public async Task ACrossplayStartChecksTheLibrariesFirstAndRefusesWithTheirNames()
+    {
+        // Only a launch with -crossplay (in any case, as the game reads it) asks the start script to check.
+        Assert.False(HostServerLaunch.Create("/srv/rt", ["-batchmode"]).Crossplay);
+        var launch = HostServerLaunch.Create("/srv/rt", ["-batchmode", "-CrossPlay"]);
+        Assert.True(launch.Crossplay);
+        var host = new QueueHost();
+        host.Replies.Enqueue(Reply(CheckReply(LddMissingPulse, 1) + "VT-SERVER libraries\n"));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(host, launch, "/srv/boot", TimeSpan.FromSeconds(30)));
+        Assert.Contains("apt-get install libpulse0 libpulse-mainloop-glib0", error.Message);
+        var run = Assert.Single(host.Runs);
+        Assert.Equal("1", run.Variables["crossplay"]);
+        Assert.Equal(string.Join('\n', CrossplayLibraries.PartyLibraries), run.Variables["libraries"]);
+        var plain = new QueueHost(); plain.Replies.Enqueue(Reply("VT-SERVER started 12 34\n"));
+        await HostServer.StartAsync(plain, HostServerLaunch.Create("/srv/rt", ["-batchmode"]), "/srv/boot", TimeSpan.FromSeconds(30));
+        Assert.Equal("", Assert.Single(plain.Runs).Variables["crossplay"]);
+        var absent = new QueueHost(); absent.Replies.Enqueue(Reply("VT-PARTY absent\nVT-SERVER libraries\n"));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => HostServer.StartAsync(absent, launch, "/srv/boot", TimeSpan.FromSeconds(30)));
+    }
+
     // ---- stopping ----
 
     [Fact] public async Task AStopKillsOnlyThatIdentityThenKeepsAndFetchesTheLogsOnce()
@@ -132,6 +218,30 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal(HostServerStop.AlreadyGone, await process.StopAsync(TimeSpan.FromSeconds(15)));
         process.Dispose();
         Assert.Equal(3, host.Runs.Count);
+    }
+
+    [Fact] public async Task ACleanStopAsksWithSigintFirstAndReportsWhetherItQuit()
+    {
+        var host = new QueueHost();
+        host.Replies.Enqueue(Reply("VT-SERVER started 4321 998877\n"));
+        var process = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-1", TimeSpan.FromSeconds(60));
+        host.Replies.Enqueue(Reply("VT-STOP quit\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
+        var stop = process.StopCleanly(TimeSpan.FromSeconds(120), TimeSpan.FromSeconds(15));
+        Assert.Equal((StopOutcome.Clean, "SIGINT"), (stop.Outcome, stop.Request));
+        var sent = host.Runs[1];
+        Assert.Same(InteractiveScripts.LinuxStop, sent.Script);
+        Assert.Equal(("120", "INT", "15"), (sent.Variables["quit"], sent.Variables["signal"], sent.Variables["seconds"]));
+        // One that did not quit in time was killed; a kill-only stop sends no quit request.
+        host.Replies.Enqueue(Reply("VT-SERVER started 5 6\n"));
+        var stubborn = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-2", TimeSpan.FromSeconds(60));
+        host.Replies.Enqueue(Reply("VT-STOP stopped\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
+        var killed = stubborn.StopCleanly(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(15));
+        Assert.Equal((StopOutcome.Killed, "SIGINT; no exit within 2.0 s"), (killed.Outcome, killed.Request));
+        host.Replies.Enqueue(Reply("VT-SERVER started 7 8\n"));
+        var plain = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-3", TimeSpan.FromSeconds(60));
+        host.Replies.Enqueue(Reply("VT-STOP stopped\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
+        Assert.Equal(HostServerStop.Stopped, await plain.StopAsync(TimeSpan.FromSeconds(15)));
+        Assert.Equal("0", host.Runs[^2].Variables["quit"]);
     }
 
     [Fact] public async Task AReusedProcessIdIsGoneAndAFailedFetchIsRetriedWithoutKillingAgain()

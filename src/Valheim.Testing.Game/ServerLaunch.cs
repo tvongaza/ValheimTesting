@@ -74,7 +74,9 @@ public static class ServerLaunch
         var names = host == ServerHost.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var passed = BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(ServerLaunch));
 
-        var start = new ProcessStartInfo(executable) { WorkingDirectory = runtime, UseShellExecute = false };
+        // On Windows the server gets a console of its own (with no window): a clean stop sends Ctrl+C to that console
+        // (QuitRequest.Interrupt), and a Ctrl+C in the runner's console no longer reaches the server.
+        var start = new ProcessStartInfo(executable) { WorkingDirectory = runtime, UseShellExecute = false, CreateNoWindow = platform == ServerPlatform.Windows };
         foreach (string argument in passed) start.ArgumentList.Add(argument);
         // Inherited Doorstop values would reach the server too; only the ones set below may.
         BepInExLoader.ApplyEnvironment(start, environment);

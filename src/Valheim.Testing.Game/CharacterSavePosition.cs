@@ -3,8 +3,8 @@ using System.Buffers.Binary;
 
 namespace Valheim.Testing.Game;
 
-// The game-side PlayerProfile format is not a public contract. Keep this byte-level
-// editor internal until a disposable-character lifecycle and a native join check exist.
+// The game-side PlayerProfile format is not a public contract. Keep this byte-level editor internal and
+// version-gated; the native join check establishes the 1.0.16 path, not compatibility with later formats.
 internal static class CharacterSavePosition
 {
     private const int SupportedVersion = 46; // Valheim 1.0.16

@@ -21,7 +21,7 @@ It contains no credentials and no game files, so this repository's workflow publ
 | `vt-stop-game [seconds]` | Stops the client `vt-launch-valheim` started, identified by PID and start time, and only that process. |
 | `vt-pids <name>`, `vt-stop-all <name>` | Find, or stop for container-wide cleanup, every process of a program name (never by command-line pattern). |
 
-For a character prepared with FullLifecycle's draft `prepare-character` command, use a **fresh filename** and set `client.character` to that filename, not the character's display name. An owned FullLifecycle run stages and removes its pinned copy; `vt-stage-character` is for other manual workflows. Neither stage operation proves that the game accepted the point. This path still needs a native join check before acceptance use; the default arrival teleport remains the established route.
+For a character prepared with FullLifecycle's preview `prepare-character` command, use a **fresh filename** and set `client.character` to that filename, not the character's display name. An owned FullLifecycle run stages and removes its pinned copy; `vt-stage-character` is for other manual workflows. Neither stage operation proves that the game accepted the point: the client support observation must confirm arrival. This path passed a bounded [Windows native join check](https://github.com/tvongaza/ValheimTesting/pull/94#issuecomment-5912134571); the Linux client image's prepared-start path has not been checked natively.
 
 - A user `steam` (Steam refuses to run as root) whose Valheim settings skip the intro cinematic.
 

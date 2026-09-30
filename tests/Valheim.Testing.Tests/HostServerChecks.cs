@@ -25,6 +25,8 @@ internal static class HostServerChecks
             "mkdir -p BepInEx",
             "printf 'args=%s\\n' \"$*\"",
             "env | grep -E '^(VT_TEST_TOKEN|SteamAppId|DOORSTOP_ENABLED|DOORSTOP_TARGET_ASSEMBLY)=' | sort",
+            // A server that ignores the quit request, for the kill fallback; set before the listening line the check waits for.
+            "if [ -n \"${VT_IGNORE_INT:-}\" ]; then trap '' INT; fi",
             "printf '[Info   :valheimCLI] Command server listening on 127.0.0.1:5577 this boot\\n' >> BepInEx/LogOutput.log",
             "exec sleep 300", ""));
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
@@ -84,6 +86,24 @@ internal static class HostServerChecks
             // The bystander is untouched.
             Assert.True((await host.RunAsync("kill -0 \"$p\"", new Dictionary<string, string> { ["p"] = bystander }, Generous)).Succeeded, "The bystander was stopped.");
 
+            // A clean stop sends SIGINT and the stand-in exits by itself (130: ended by SIGINT, not killed); one that ignores
+            // SIGINT is killed once the wait is over (137). The bystander is untouched either way.
+            async Task<ProcessStop> StopAfterListening(HostServerLaunch boot, string name, TimeSpan quit)
+            {
+                var started = await HostServer.StartAsync(host, boot, root + "/run/" + name, Generous, ["BepInEx/LogOutput.log"], Path.Combine(evidence.Path, name));
+                (await host.WaitForLogAsync(runtime + "/BepInEx/LogOutput.log", 0, StartupEvents.CliListening, StartupEvents.StartupFailures, Generous)).EnsureMatched();
+                var stop = started.StopCleanly(quit, TimeSpan.FromSeconds(15));
+                Assert.True(started.HasExited);
+                return stop with { ExitCode = await started.WaitForExitAsync(CancellationToken.None) };
+            }
+            var clean = await StopAfterListening(launch, "boot-2", TimeSpan.FromSeconds(15));
+            Assert.Equal((StopOutcome.Clean, 130, "SIGINT"), (clean.Outcome, clean.ExitCode, clean.Request));
+            var ignoring = HostServerLaunch.Create(runtime, ["-batchmode"], new Dictionary<string, string> { ["VT_TEST_TOKEN"] = "token-456", ["VT_IGNORE_INT"] = "1" });
+            var killed = await StopAfterListening(ignoring, "boot-3", TimeSpan.FromSeconds(1));
+            Assert.Equal((StopOutcome.Killed, 137), (killed.Outcome, killed.ExitCode));
+            Assert.StartsWith("SIGINT; no exit within 1.0 s", killed.Request);
+            Assert.True((await host.RunAsync("kill -0 \"$p\"", new Dictionary<string, string> { ["p"] = bystander }, Generous)).Succeeded, "The bystander was stopped.");
+
             // The evidence: this boot's log, the earlier one moved aside, an absent Unity log, and the server's output with the
             // arguments and environment the launch gave it.
             Assert.EndsWith("this boot", File.ReadAllText(Path.Combine(local, "game-0.log")).Trim());
@@ -99,6 +119,42 @@ internal static class HostServerChecks
             Assert.Equal(0, await host.LogOffsetAsync(runtime + "/BepInEx/LogOutput.log", Generous));
         }
         finally { await host.RunAsync("kill \"$p\" 2> /dev/null; true", new Dictionary<string, string> { ["p"] = bystander }, Generous); }
+    });
+
+    // The host's own loader decides whether crossplay can start. libparty.so here is a copy of the host's `true` (ldd reads an
+    // executable as it reads a library): as it is, every dependency resolves; with libc.so.6 renamed in the copy to the
+    // same-length libq.so.6, ldd reports that as not found. A crossplay start refuses before anything runs, a missing
+    // libparty.so is refused as absent, and the same runtime without -crossplay is never checked.
+    public static Task ACrossplayStartNeedsLibpartyToLoadOnTheHost(IGameHost host, string parent) => GameHostChecks.WithRootAsync(host, parent, async root =>
+    {
+        using var source = new TempDirectory();
+        WriteInstall(source.Path);
+        string runtime = root + "/runtime";
+        await host.ShipFilesAsync(source.Path, runtime, Generous);
+        var crossplay = HostServerLaunch.Create(runtime, ["-batchmode", "-crossplay"]);
+        await Assert.ThrowsAsync<FileNotFoundException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-absent", Generous));
+
+        // A client plugin in a mixed install must not stand in for the dedicated server's missing plugin.
+        string clientPlugin = runtime + "/valheim_Data/Plugins";
+        (await host.RunAsync("set -e; mkdir -p \"$plugins\"; cp \"$(type -P true)\" \"$plugins/libparty.so\"",
+            new Dictionary<string, string> { ["plugins"] = clientPlugin }, Generous)).EnsureSuccess("Writing a client-only libparty.so");
+        await Assert.ThrowsAsync<FileNotFoundException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-client-only", Generous));
+
+        string plugin = runtime + "/valheim_server_Data/Plugins";
+        async Task Party(string script) => (await host.RunAsync("set -e; mkdir -p \"$plugins\"; " + script, new Dictionary<string, string> { ["plugins"] = plugin }, Generous))
+            .EnsureSuccess("Writing a stand-in libparty.so");
+        await Party("cp \"$(type -P true)\" \"$plugins/libparty.so\"; ldd \"$plugins/libparty.so\" | grep -q 'libc\\.so\\.6 => '");
+        Assert.Equal("valheim_server_Data/Plugins/libparty.so", await CrossplayLibraries.RequireAsync(host, runtime, Generous));
+
+        await Party("LC_ALL=C sed 's/libc\\.so\\.6/libq.so.6/g' \"$(type -P true)\" > \"$plugins/libparty.so\"");
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
+        Assert.Contains("because libq.so.6 is missing", refused.Message);
+        var start = await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-refused", Generous));
+        Assert.Contains("because libq.so.6 is missing", start.Message);
+        Assert.Contains("Nothing was started", start.Message);
+        Assert.False((await host.RunAsync("[ -e \"$d\" ]", new Dictionary<string, string> { ["d"] = root + "/boot-refused" }, Generous)).Succeeded, "A refused start created its boot directory.");
     });
 
     public static async Task AListingMatchesTheLocalManifestAndPins(IGameHost host)
@@ -129,6 +185,9 @@ public class LocalHostServerTests
     [Fact] public Task AServerRunsFromAVerifiedCopyAndStopsByIdentity() =>
         OperatingSystem.IsLinux() ? HostServerChecks.AServerRunsFromAVerifiedCopyAndStopsByIdentity(new LocalGameHost("local-bash", HostShell.Bash), Path.GetTempPath()) : Task.CompletedTask;
 
+    [Fact] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost() =>
+        OperatingSystem.IsLinux() ? HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(new LocalGameHost("local-bash", HostShell.Bash), Path.GetTempPath()) : Task.CompletedTask;
+
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public Task AListingMatchesTheLocalManifestAndPins(string shell) => HostServerChecks.AListingMatchesTheLocalManifestAndPins(new LocalGameHost("local-" + shell, HostShell.Parse(shell)));
 
@@ -156,6 +215,9 @@ public class SshHostServerIntegrationTests
 
     [SshTheory, MemberData(nameof(Shells))] public Task AServerRunsFromAVerifiedCopyAndStopsByIdentity(string shell) =>
         HostServerChecks.AServerRunsFromAVerifiedCopyAndStopsByIdentity(Host(shell), Path.GetTempPath());
+
+    [SshTheory, MemberData(nameof(Shells))] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost(string shell) =>
+        HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(Host(shell), Path.GetTempPath());
 }
 
 [Trait("Category", "GameHosts")]
@@ -165,4 +227,7 @@ public class ContainerHostServerIntegrationTests
 
     [ContainerTheory, MemberData(nameof(Shells))] public Task AServerRunsFromAVerifiedCopyAndStopsByIdentity(string shell) =>
         HostServerChecks.AServerRunsFromAVerifiedCopyAndStopsByIdentity(new ContainerGameHost("ctr", Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER")!, HostShell.Parse(shell)), "/tmp");
+
+    [ContainerTheory, MemberData(nameof(Shells))] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost(string shell) =>
+        HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(new ContainerGameHost("ctr", Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER")!, HostShell.Parse(shell)), "/tmp");
 }

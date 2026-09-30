@@ -54,6 +54,12 @@ public partial class ServerRunPlan
     public int StartupSeconds { get; set; } = 300;
     public int CommandSeconds { get; set; } = 30;
     /// <summary>
+    /// How long stopping the owned server (at teardown and for each restart) waits for it to quit after it is asked (SIGINT,
+    /// or Ctrl+C on Windows): the game saves the world and retires its crossplay lobby. Killed only after that. 0 kills at
+    /// once, without the game's shutdown. Default 120, at most 1800.
+    /// </summary>
+    public int QuitSeconds { get; set; } = 120;
+    /// <summary>
     /// Every entry the runtime's <c>BepInEx/patchers</c> holds, by name. A clean runtime is BepInEx core and your plugins
     /// with an empty patchers directory; the runner refuses one holding anything not named here.
     /// </summary>
@@ -82,7 +88,7 @@ public partial class ServerRunPlan
         bool pinned = Pinned;
         Runtime.Validate(pinned); World.Validate(pinned);
         CheckPatchersAndLogScan();
-        if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120)
+        if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > 1800)
             throw new ArgumentException("Invalid port or time budget.");
         if (!string.IsNullOrEmpty(Executable) && Executable != ServerLaunch.WindowsExecutable && Executable != ServerLaunch.LinuxExecutable)
             throw new ArgumentException($"Executable must be omitted, {ServerLaunch.WindowsExecutable} or {ServerLaunch.LinuxExecutable} at the copied runtime's root.");
@@ -157,6 +163,16 @@ public partial class ServerRunPlan
     /// <summary>The strict <c>cli_expect</c> command, or <see cref="EnvironmentPinning.None"/> for an unpinned plan (see <see cref="GameActor.VerifyEnvironment"/>).</summary>
     public string ExpectCommand => !Pinned ? EnvironmentPinning.None :
         Expectations.ExpectCommand(Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), new()), strict: true);
+    /// <summary>
+    /// The file the arguments' <c>-logFile</c> names, expanded (for example <c>{runtime}/toolkit-unity.log</c>), or null. The game
+    /// writes all its own lines there, lobby lines included; BepInEx's log carries them only when BepInEx copies Unity's log.
+    /// </summary>
+    public string? GameLogFile(string runtime, string world)
+    {
+        int at = Array.FindIndex(Arguments, argument => argument.Equals("-logFile", StringComparison.OrdinalIgnoreCase));
+        return at >= 0 && at + 1 < Arguments.Length ? Expand(Arguments[at + 1], runtime, world) : null;
+    }
+
     public string Expand(string value, string runtime, string world) => value.Replace("{runtime}", runtime).Replace("{world}", world).Replace("{port}", Port.ToString(CultureInfo.InvariantCulture));
     /// <summary>
     /// What an owned dedicated server's startup waits on: ValheimCLI's listening line in this boot's BepInEx log (a

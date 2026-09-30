@@ -63,6 +63,10 @@ public sealed class CrossplayPlanTests : IDisposable
             Directory.CreateDirectory(runtime); Directory.CreateDirectory(world);
             File.WriteAllText(Path.Combine(runtime, ServerLaunch.LinuxExecutable), "server"); File.WriteAllText(Path.Combine(world, "Test.db"), "world");
             FakeInstalls.Server(runtime);
+            // On Linux a crossplay validate asks this machine's ldd whether libparty.so loads: a copy of `true` does.
+            string party = Path.Combine(runtime, "valheim_server_Data", "Plugins", "libparty.so");
+            Directory.CreateDirectory(Path.GetDirectoryName(party)!);
+            if (OperatingSystem.IsLinux()) File.Copy(File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true", party); else File.WriteAllText(party, "not checked here");
             string Plan(string name, bool crossplay, params string[] extra)
             {
                 string path = Path.Combine(root, name);
@@ -89,6 +93,18 @@ public sealed class CrossplayPlanTests : IDisposable
                 Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", Plan(crossplay + ".json", crossplay, "-port", "2466"), output], options));
                 var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
                 Assert.Equal(crossplay ? "true" : "false", result.GetProperty("Provenance").GetProperty("crossplay").GetString());
+                bool checkedHere = crossplay && OperatingSystem.IsLinux();
+                Assert.Equal(checkedHere, result.GetProperty("Steps").EnumerateArray().Any(step => step.GetProperty("Name").GetString() == "this machine can load crossplay's libraries"));
+            }
+            if (OperatingSystem.IsLinux())
+            {
+                // Without libparty.so, a local Linux crossplay runtime is refused before anything launches.
+                File.Delete(party);
+                string missing = Path.Combine(root, "out-missing");
+                Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", Plan("missing.json", true, "-port", "2466"), missing], options));
+                var step = JsonDocument.Parse(File.ReadAllText(Path.Combine(missing, "result.json"))).RootElement.GetProperty("Steps").EnumerateArray()
+                    .Single(step => step.GetProperty("Name").GetString() == "this machine can load crossplay's libraries");
+                Assert.Contains("has no valheim_server_Data/Plugins/libparty.so", step.GetProperty("Error").GetString());
             }
         }
         finally { Directory.Delete(root, true); }

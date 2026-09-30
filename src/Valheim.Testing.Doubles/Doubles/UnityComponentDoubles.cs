@@ -549,7 +549,15 @@ namespace UnityEngine
             foreach (var (source, target) in pairs) UnitySerialization.CopySerializedFields(source, target, map);
             if (copy.View is { } view) s_unityComponents.Add(view);
             if (copy.Wear is { } wear) s_unityComponents.Add(wear);
-            if (parent is not null) copy.OwnTransform.SetParent(parent, worldStays);
+            if (parent is not null)
+            {
+                if (!worldStays)
+                {
+                    copy.OwnTransform.position = OwnTransform.localPosition;
+                    copy.OwnTransform.rotation = OwnTransform.localRotation;
+                }
+                copy.OwnTransform.SetParent(parent, worldStays);
+            }
             if (copy.activeInHierarchy) HierarchyActivityChanged(copy, true);
             s_unityLastCloneMap = map;
         }
@@ -575,7 +583,7 @@ namespace UnityEngine
                 var childCopy = new GameObject(childObject.name) { Networked = false };
                 childCopy.OwnTransform.SetParent(copy.OwnTransform, false);
                 childCopy.OwnTransform.localPosition = child.localPosition;
-                childCopy.OwnTransform.rotation = child.rotation;
+                childCopy.OwnTransform.localRotation = child.localRotation;
                 MapHierarchy(childObject, childCopy, map, pairs);
             }
         }
@@ -717,10 +725,10 @@ namespace UnityEngine
 }
 
 /// <summary>
-/// The transform hierarchy. The world position is the parent's plus the parent's scale times the local position; parent
-/// rotation is not applied (a child of a rotated parent sits where it would under an unrotated one), and
-/// <see cref="rotation"/> is stored, not composed. Re-parenting keeps the world position by default and sends
-/// OnEnable/OnDisable when it changes whether the object is active in its hierarchy, as Unity does.
+/// The transform hierarchy. Parent rotation composes with child rotation, but does not rotate child position;
+/// world position is the parent's position plus its scale times local position. New transforms start unrotated.
+/// Re-parenting keeps world position and rotation by default and sends OnEnable/OnDisable when it changes
+/// whether the object is active in its hierarchy, as Unity does.
 /// </summary>
 public partial class Transform : UnityEngine.Component, IEnumerable
 {
@@ -735,7 +743,16 @@ public partial class Transform : UnityEngine.Component, IEnumerable
         set => m_localPosition = m_parent is null ? value : m_parent.InverseTransformPoint(value);
     }
     public UnityEngine.Vector3 localPosition { get => m_localPosition; set => m_localPosition = value; }
-    public UnityEngine.Quaternion rotation { get; set; }
+    private UnityEngine.Quaternion m_localRotation = UnityEngine.Quaternion.identity;
+    public UnityEngine.Quaternion rotation
+    {
+        get => m_parent is { } up ? up.rotation * m_localRotation : m_localRotation;
+        set => m_localRotation = m_parent is { } up ? UnityEngine.Quaternion.Inverse(up.rotation) * value : value;
+    }
+    /// <summary>The rotation relative to the parent.</summary>
+    public UnityEngine.Quaternion localRotation { get => m_localRotation; set => m_localRotation = value; }
+    /// <summary>The world rotation as Euler angles in degrees (<see cref="UnityEngine.Quaternion.eulerAngles"/>).</summary>
+    public UnityEngine.Vector3 eulerAngles { get => rotation.eulerAngles; set => rotation = UnityEngine.Quaternion.Euler(value); }
     public UnityEngine.Vector3 localScale { get => m_localScale; set => m_localScale = value; }
     public UnityEngine.Vector3 lossyScale => m_parent is null ? m_localScale : Scale(m_parent.lossyScale, m_localScale);
 
@@ -770,17 +787,18 @@ public partial class Transform : UnityEngine.Component, IEnumerable
     }
 
     public void SetParent(Transform? parent) => SetParent(parent, true);
-    /// <summary>Moves this transform under <paramref name="parent"/> (or to the root); with <paramref name="worldPositionStays"/> the world position is kept, otherwise the local one.</summary>
+    /// <summary>Moves this transform under <paramref name="parent"/> (or to the root); with <paramref name="worldPositionStays"/> the world position and rotation are kept, otherwise the local ones.</summary>
     public void SetParent(Transform? parent, bool worldPositionStays)
     {
         if (parent is not null && parent.IsChildOf(this)) throw new InvalidOperationException("A transform cannot become a child of itself or of one of its children.");
         var go = m_gameObject;
         bool wasActive = go?.activeInHierarchy ?? false;
         var world = position;
+        var worldRotation = rotation;
         Detach();
         m_parent = parent;
         parent?.m_children.Add(this);
-        if (worldPositionStays) position = world;
+        if (worldPositionStays) { position = world; rotation = worldRotation; }
         if (go is { Destroyed: false } && go.activeInHierarchy != wasActive) UnityEngine.GameObject.HierarchyActivityChanged(go, !wasActive);
     }
     internal void Detach()

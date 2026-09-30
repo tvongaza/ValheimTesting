@@ -46,9 +46,9 @@ public sealed record LogFileScan(string Role, string Path, bool Present, string?
 /// first occurrence and has a default severity a run may change with a written reason. BepInEx warning and error lines
 /// that match no pattern are counted as <see cref="UnknownWarning"/> and <see cref="UnknownError"/>, never ignored. Unity's
 /// Player.log has no levels, so there only the known patterns count. The same Unity message may appear in both logs.
-/// Owned processes are killed at teardown (<see cref="System.Diagnostics.Process.Kill(bool)"/>), not closed, so nothing
-/// the game or a mod logs while shutting down is in the logs: the scan sees what was logged during the run, not, for
-/// example, an UnpatchAll a mod calls when the game quits.
+/// Owned processes are asked to quit at teardown and killed only if they do not (<see cref="IServerProcess.StopCleanly"/>):
+/// after a clean stop the logs include what the game and its mods logged while shutting down, for example an UnpatchAll a
+/// mod calls when the game quits; after a kill they do not.
 /// </summary>
 public static class LogScanner
 {

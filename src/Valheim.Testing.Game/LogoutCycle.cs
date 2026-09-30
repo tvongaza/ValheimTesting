@@ -195,12 +195,8 @@ public sealed class LogoutCycle
     private (ProfileFileState After, ProfileFileState Old, TimeSpan Seen) WaitForWrite(ProfileFileState before, CancellationToken cancellation)
     {
         var clock = Stopwatch.StartNew();
-        using var changed = new SemaphoreSlim(0);
-        string directory = Path.GetDirectoryName(before.Path)!, name = Path.GetFileName(before.Path);
-        using var watcher = new FileSystemWatcher(directory) { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size };
-        void Wake(object sender, FileSystemEventArgs e) => changed.Release();
-        watcher.Changed += Wake; watcher.Created += Wake; watcher.Renamed += (sender, e) => Wake(sender, e);
-        watcher.EnableRaisingEvents = true;
+        string name = Path.GetFileName(before.Path);
+        using var changed = new ChangeSignal(Path.GetDirectoryName(before.Path)!);
         var last = ProfileFileState.Read(before.Path);
         while (!(last.Exists && last.Sha256 != before.Sha256))
         {
@@ -243,5 +239,39 @@ public sealed class LogoutCycle
             throw new ArgumentException("CharactersDirectory: the game keeps local characters in characters_local; a characters folder holds cloud characters, which a test must never use.");
         if (WriteTimeout <= TimeSpan.Zero) throw new ArgumentException("WriteTimeout: give the wait an explicit, positive timeout.");
         if (RereadInterval <= TimeSpan.Zero) throw new ArgumentException("RereadInterval: give a positive interval.");
+    }
+}
+
+// Wakes a wait when anything in one directory is created, written or renamed. The semaphore is never disposed: on
+// Windows a watcher callback already in flight still runs after the watcher's Dispose, and releasing a disposed
+// semaphore throws on a thread-pool thread, which ends the test host. It holds no unmanaged resource while its
+// wait handle is never asked for.
+internal sealed class ChangeSignal : IDisposable
+{
+    private readonly SemaphoreSlim _changed = new(0, 1);
+    private readonly FileSystemWatcher _watcher;
+
+    public ChangeSignal(string directory)
+    {
+        _watcher = new FileSystemWatcher(directory) { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size };
+        _watcher.Changed += Wake; _watcher.Created += Wake; _watcher.Renamed += Wake;
+        _watcher.EnableRaisingEvents = true;
+    }
+
+    /// <summary>Waits for a change after the last wait, or for <paramref name="timeout"/>; true when a change woke it.</summary>
+    public bool Wait(TimeSpan timeout, CancellationToken cancellation) => _changed.Wait(timeout, cancellation);
+
+    // Also runs after Dispose, from a callback that was already in flight.
+    internal void Wake(object? sender, FileSystemEventArgs e)
+    {
+        try { _changed.Release(); }
+        catch (SemaphoreFullException) { /* A wake is already pending. */ }
+    }
+
+    public void Dispose()
+    {
+        _watcher.EnableRaisingEvents = false;
+        _watcher.Changed -= Wake; _watcher.Created -= Wake; _watcher.Renamed -= Wake;
+        _watcher.Dispose();
     }
 }
