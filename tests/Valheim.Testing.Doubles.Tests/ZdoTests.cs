@@ -157,9 +157,11 @@ public sealed class ZdoTests
     {
         using var world = new ValheimWorldScope().WithTerrain(new Valheim.Testing.PlaneTerrain(30f)).WithZdos();
         var comp = world.RegisterHeightmap(new Vector2s(0, 0)).m_terrainComp!;
+        comp.m_modifiedHeight[3] = true; comp.m_levelDelta[3] = 1.5f;
         comp.Save();
+        byte[] saved = comp.m_nview.GetZDO().GetByteArray("TCData")!;
         ZDOMan.instance!.RoundTripThroughSave();
-        Assert.Equal(new byte[] { 1 }, comp.m_nview.GetZDO().GetByteArray("TCData"));
+        Assert.Equal(saved, comp.m_nview.GetZDO().GetByteArray("TCData"));
         comp.Save(); Assert.Equal(1, comp.SaveCount);
         comp.m_nview.ClaimOwnership(); comp.Save(); Assert.Equal(2, comp.SaveCount);
     }
