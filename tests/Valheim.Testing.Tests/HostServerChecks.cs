@@ -72,7 +72,13 @@ internal static class HostServerChecks
                 Assert.EndsWith("this boot", line);
                 await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(host, launch, root + "/run/boot-1", Generous));
             }
-            finally { Assert.Equal(HostServerStop.Stopped, await process.StopAsync(TimeSpan.FromSeconds(15))); }
+            catch
+            {
+                // Stop it anyway, and report what failed first.
+                try { await process.StopAsync(TimeSpan.FromSeconds(15)); } catch { }
+                throw;
+            }
+            Assert.Equal(HostServerStop.Stopped, await process.StopAsync(TimeSpan.FromSeconds(15)));
             Assert.Equal(137, await process.WaitForExitAsync(CancellationToken.None));
             Assert.Equal(HostServerStop.AlreadyGone, await process.StopAsync(TimeSpan.FromSeconds(15)));
             // The bystander is untouched.
