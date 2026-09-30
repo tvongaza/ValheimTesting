@@ -59,6 +59,10 @@ public sealed class SecondConsumerTests : IDisposable
         Assert.False(compiler.Load());
 
         compiler.m_nview.GetZDO().SetOwner(ZDOMan.instance!.m_sessionID);
+        compiler.m_initialized = false; // The game's other silent case: a compiler not set up yet.
+        compiler.Save();
+        Assert.Equal(0, compiler.SaveCount);
+        compiler.m_initialized = true;
         compiler.m_modifiedHeight[4] = true;
         compiler.Save();
         var wider = new TerrainComp(compiler.m_hmap, 4) { m_nview = compiler.m_nview };

@@ -392,6 +392,8 @@ public partial class TerrainComp
     /// <summary>The last operation's point and radius, saved with the terrain.</summary>
     public UnityEngine.Vector3 m_lastOpPoint;
     public float m_lastOpRadius;
+    /// <summary>The game's (private) flag, set once the compiler has its heightmap; until then Save writes nothing. True here from construction; a test sets it false to make a save silently not happen.</summary>
+    public bool m_initialized = true;
     public int SaveCount;
 
     /// <summary>The zone's live compiler: the one on the loaded heightmap whose zone holds the position, if it has one.</summary>
@@ -431,11 +433,11 @@ public partial class TerrainComp
     /// <c>Utils.Compress</c> of a ZPackage holding version 1, <see cref="m_operations"/>, <see cref="m_lastOpPoint"/>,
     /// <see cref="m_lastOpRadius"/>, the vertex count and per vertex a modified flag (then its level and smooth deltas),
     /// the texel count and per texel a modified flag (then its paint r, g, b, a). A peer that does not own the ZDO writes
-    /// nothing, which is how a test makes a save not happen (<c>GetZDO().SetOwner(other)</c>).
+    /// nothing, and so does a compiler that is not <see cref="m_initialized"/>: the game's Save returns silently in both cases.
     /// </summary>
     public void Save()
     {
-        if (m_nview == null || !m_nview.IsValid() || !m_nview.IsOwner())
+        if (!m_initialized || m_nview == null || !m_nview.IsValid() || !m_nview.IsOwner())
             return;
         SaveCount++;
         var package = new ZPackage();
