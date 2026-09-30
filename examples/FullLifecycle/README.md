@@ -26,6 +26,39 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 
 The scenario never calls `PlayerPlacement.Protect` itself: `SessionControl.WaitForWorld` protects the joined player (god, ghost and debug mode, read back) as soon as the world is ready, so the join step fails if the game does not confirm it, and the player is never moved unprotected. Fly stays off; the arrival and marker checks measure a player standing on the ground.
 
+### Optional character start at the first site (preview)
+
+For repeated native runs on the **same known world**, a disposable local character that has already visited that world can start at the dry arrival site. This is opt-in; the normal plan still teleports after joining. Prepare a separate copy while the client is stopped:
+
+```sh
+evidence=/absolute/path/to/new-evidence-directory
+source=/absolute/path/to/characters_local/mymodtester.fch
+world_uid=123456789
+arrival_x=125
+arrival_y=45
+arrival_z=-380
+fresh_name=mymod-test-001
+mkdir -p "$evidence"
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- \
+  prepare-character "$source" "$world_uid" "$arrival_x" "$arrival_y" "$arrival_z" \
+  "$evidence/$fresh_name.fch"
+```
+
+Replace those sample coordinates and UID with the pinned plan's values. The command validates the 1.0.16 save layout and hash, changes only the requested world's logout point, and refuses an existing output or a cloud-character source. It **does not install or launch** the copy. Use a fresh filename; `client.character` is that filename without `.fch`, never the display name. For an **owned** client, set `client.startAtCharacterSave` to `true` and include:
+
+```json
+"characterStart": {
+  "preparedFile": "/absolute/evidence/mymod-test-001.fch",
+  "sha256": "<PREPARED output's SHA256>",
+  "charactersLocalDirectory": "/absolute/client-save/characters_local",
+  "steamUserDataDirectory": "/absolute/Steam/userdata"
+}
+```
+
+The runner checks the prepared bytes, world UID, exact arrival point and hash **before launch**, refuses a same-named local or Steam Cloud character, stages the copy, requires ValheimCLI to report `(<filename>, Local)` at selection, and removes only that copy and its game-made backups after stopping the owned client. This preview option requires a locally launched owned client; attached, hosted and remote-profile clients are refused until they have an equivalent owned staging boundary. The first round then checks the client's own support reading at `arrival`, without a teleport or fallback; a wrong start fails. Later rounds and zone-cycle movements still use teleports.
+
+This path passed a bounded [native Windows 1.0.16 joined-client check](https://github.com/tvongaza/ValheimTesting/pull/94#issuecomment-5912134571): prepared local copies started grounded at two dry points 1.9 km apart with no first-round teleport; copies whose saved point differed from the plan were refused before launch. The normal teleport flow also passed. The test does not establish other game versions or hosted, attached, or remote-profile clients. Use only a disposable local character, never a personal or Steam Cloud character, and rely on the client's support observation rather than the prepared file alone as arrival evidence.
+
 Observations use ValheimCLI's generic commands (`cli_zdos_at` on the server, `cli_prefabs_at` on the client). A mod that needs a test-only action or observation adds it to its adapter as another extension command.
 
 ## Run the layers

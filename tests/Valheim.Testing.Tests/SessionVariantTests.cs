@@ -13,6 +13,17 @@ public sealed class SessionVariantTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("session-variants-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    [Theory]
+    [InlineData("OK: Selected character 'Tester' (fresh, Cloud)")]
+    [InlineData("OK: Selected character 'Tester' (another, Local)")]
+    public void PreparedCharacterSelectionRequiresTheExactLocalFilename(string reply)
+    {
+        var transport = new ScriptedTransport().On("cli_select_character fresh", _ => ScriptedTransport.Ok(reply));
+        using var actor = transport.Actor("client", Menu);
+        Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).RequireLocalCharacter("fresh"));
+        Assert.Equal(1, transport.Count("cli_select_character fresh"));
+    }
+
     private static CommandResult FailedJoin(string code) => new()
     {
         Ok = false, ErrorCode = code,

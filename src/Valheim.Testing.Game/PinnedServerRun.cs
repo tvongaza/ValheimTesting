@@ -77,6 +77,8 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
     public ClientSession OpenClient(ClientRunPlan client, string? profileClient = null)
     {
         ArgumentNullException.ThrowIfNull(client);
+        if (client.StartAtCharacterSave && Hosted != null && Hosted.Profile.Clients.Count != 0)
+            throw new NotSupportedException("A prepared character is staged on this runner's machine; remote profile clients need host-side staging and are not supported yet.");
         ClientSession session;
         if (Hosted != null && Hosted.Profile.Clients.Count != 0 && client.Owned)
         {
