@@ -78,6 +78,8 @@ public sealed class SteamAccountPool
             if (account.Host != null && !Name.IsMatch(account.Host)) errors.Add($"Account {account.Name}: host must be a host name from the environment profile.");
             if (account.PasswordVariable != null && !VariableName.IsMatch(account.PasswordVariable)) errors.Add($"Account {account.Name}: passwordVariable must be an environment variable name.");
             if (account.PasswordVariable != null && SteamGuard == SignedIn) errors.Add($"Account {account.Name}: a {SignedIn} account is never signed in by a run; leave out passwordVariable.");
+            if (account.SteamId != null && SteamPoolAccount.AccountId(account.SteamId) == null)
+                errors.Add($"Account {account.Name}: steamId must be the account's SteamID64, 17 digits starting 7656119 (an individual account).");
         }
         foreach (var twice in (Accounts ?? []).GroupBy(account => account.Name, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
             errors.Add($"Account {twice.Key} is listed twice; Steam account names ignore case.");
@@ -150,6 +152,9 @@ public sealed class SteamAccountPool
             ["seconds"] = seconds, ["account"] = account, ["number"] = number,
         }, timeout, cancellation);
 
+    /// <summary>This pool with only <paramref name="account"/>: the same pool name, lease directory and lease time, so its lease is the one every run of the pool sees.</summary>
+    internal SteamAccountPool Only(SteamPoolAccount account) => new() { Pool = Pool, LeaseDirectory = LeaseDirectory, LeaseMinutes = LeaseMinutes, SteamGuard = SteamGuard, Accounts = [account] };
+
     internal static string Seconds(TimeSpan life) => ((long)Math.Ceiling(life.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
 
     internal static void CheckOwner(string owner)
@@ -211,6 +216,17 @@ public sealed class SteamPoolAccount
     /// Never the password itself.
     /// </summary>
     public string? PasswordVariable { get; set; }
+    /// <summary>
+    /// The account's SteamID64 as a string of digits, for the optional signed-in check (<see cref="SteamAccountsProfile.CheckSignedIn"/>)
+    /// only: an identifier, not a credential. It is compared on this machine and never sent to a host or written to a report.
+    /// </summary>
+    public string? SteamId { get; set; }
+
+    // An individual account's SteamID64 is 0x01100001 in its high 32 bits (public universe, individual type, desktop instance) and
+    // its account id in the low 32 bits, which is what Steam records on Windows as the signed-in ActiveUser.
+    internal static uint? AccountId(string? steamId) =>
+        steamId is { Length: 17 } && steamId.All(char.IsAsciiDigit) && ulong.TryParse(steamId, NumberStyles.None, CultureInfo.InvariantCulture, out ulong id)
+            && id >> 32 == 0x01100001UL && (uint)id != 0 ? (uint)id : null;
 }
 
 public enum SteamAccountState { Free, Held, Contended, Unreadable }

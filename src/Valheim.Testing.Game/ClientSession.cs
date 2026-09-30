@@ -12,13 +12,21 @@ namespace Valheim.Testing.Game;
 /// and so on for later sessions: evidence is never overwritten). Disposing closes the
 /// connection and, for an owned client, stops only the process this session started (never one found by name): it asks the
 /// client to quit and kills it only if it does not (<see cref="Stopped"/>), then keeps its logs beside the evidence. An
-/// attached client's process is never touched.
+/// attached client's process is never touched. Given a <see cref="SteamAccountHold"/>, a session starts or attaches only while
+/// that lease is live (and signed-in checked when the profile asks), and a lost lease stops the owned client at once (an attached
+/// client is detached); the hold's owner releases it after disposing the session.
 /// </summary>
 public sealed class ClientSession : IDisposable
 {
     private readonly IServerProcess? _process;
-    private bool _disposed;
+    private readonly object _stopping = new();
+    private bool _disposed, _detachedForAccount, _stoppedForAccount;
+    private CancellationTokenRegistration _accountLost;
     public GameActor Actor { get; }
+    /// <summary>The Steam account lease this client runs on, or null when the run leases none.</summary>
+    public SteamAccountHold? Account { get; private set; }
+    /// <summary>Whether <see cref="Dispose"/> has run.</summary>
+    public bool Closed => _disposed;
     public bool Owned => _process != null;
     /// <summary>The owned client's process ID, or null for an attached client.</summary>
     public int? ProcessId => _process?.Id;
@@ -35,19 +43,30 @@ public sealed class ClientSession : IDisposable
 
     private ClientSession(GameActor actor, IServerProcess? process, IReadOnlyList<RunLog>? logs = null) { Actor = actor; _process = process; Logs = logs ?? []; }
 
-    /// <summary><see cref="Launch(ClientRunPlan, string, CancellationToken)"/> or <see cref="Attach"/>, as the plan's mode says.</summary>
+    /// <summary><see cref="Launch(ClientRunPlan, string, CancellationToken)"/> or <see cref="Attach(ClientRunPlan, string, IGameTransport)"/>, as the plan's mode says.</summary>
     public static ClientSession Open(ClientRunPlan plan, string output, CancellationToken cancellation = default) =>
         plan.Owned ? Launch(plan, output, cancellation) : Attach(plan, output);
 
+    /// <summary><see cref="Open(ClientRunPlan, string, CancellationToken)"/> on the leased Steam account <paramref name="account"/> (none when null).</summary>
+    public static ClientSession Open(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation = default) =>
+        plan.Owned ? Launch(plan, output, account, cancellation) : Attach(plan, output, account);
+
     /// <summary>Connects to an operator's client and verifies its menu pins. The operator launched it and still owns it.</summary>
-    public static ClientSession Attach(ClientRunPlan plan, string output, IGameTransport? transport = null)
+    public static ClientSession Attach(ClientRunPlan plan, string output, IGameTransport? transport = null) => Attach(plan, output, null, transport);
+
+    /// <summary>
+    /// <see cref="Attach(ClientRunPlan, string, IGameTransport)"/> once <paramref name="account"/>'s lease is live (and signed-in
+    /// checked when the profile asks). Losing the lease detaches the session; the operator's client is never touched.
+    /// </summary>
+    public static ClientSession Attach(ClientRunPlan plan, string output, SteamAccountHold? account, IGameTransport? transport = null)
     {
         if (plan.Owned) throw new ArgumentException("This plan's client is owned: launch it instead.");
+        account?.RequireReady(null); // Before the session assumes the client.
         transport ??= new CliTransport(plan.Host, plan.Port);
         GameActor actor;
         try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
         catch { transport.Dispose(); throw; }
-        try { actor.VerifyEnvironment(plan.MenuExpectations); return new ClientSession(actor, null); }
+        try { actor.VerifyEnvironment(plan.MenuExpectations); return new ClientSession(actor, null).Using(account); }
         catch { actor.Dispose(); throw; }
     }
 
@@ -63,9 +82,17 @@ public sealed class ClientSession : IDisposable
     /// <c>client-boot.stdout.log</c>/<c>.stderr.log</c>, and its BepInEx log and Unity's Player.log are copied beside them
     /// (<c>client-boot.game-0.log</c>, <c>client-boot.game-1.log</c>) when it stops; <see cref="Logs"/> lists them.
     /// </summary>
-    public static ClientSession Launch(ClientRunPlan plan, string output, CancellationToken cancellation = default)
+    public static ClientSession Launch(ClientRunPlan plan, string output, CancellationToken cancellation = default) => Launch(plan, output, null, cancellation);
+
+    /// <summary>
+    /// <see cref="Launch(ClientRunPlan, string, CancellationToken)"/> on the leased Steam account <paramref name="account"/>: refused
+    /// before anything starts unless its lease is live (and signed-in checked on this machine's host when the profile asks); losing
+    /// the lease later stops the client.
+    /// </summary>
+    public static ClientSession Launch(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation = default)
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
+        account?.RequireReady(null);
         BepInExLoader.RequirePatchers(plan.Install, plan.Patchers, "client install");
         plan.CheckInstallPins();
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
@@ -95,7 +122,7 @@ public sealed class ClientSession : IDisposable
                     using var states = StateWait.Connect(plan.Host, plan.Port);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
                 }, cancellation, () => cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog) : null,
-                [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")]);
+                [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")], account);
         }
         finally { cliLog?.Dispose(); }
     }
@@ -123,10 +150,11 @@ public sealed class ClientSession : IDisposable
 
     // exitHint adds to an early exit's reason, for example that BepInEx never wrote its log.
     internal static ClientSession Launch(ClientRunPlan plan, string output, Func<IServerProcess> start, Func<IGameTransport> connect,
-        Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs)
+        Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, SteamAccountHold? account = null)
     {
         if (plan.PasswordVariable is { } variable && Environment.GetEnvironmentVariable(variable) == null)
             throw new InvalidOperationException($"Set {variable} in this runner's environment; the launched client inherits it for the join.");
+        account?.RequireReady(null);
         var clock = Stopwatch.StartNew();
         var deadline = TimeSpan.FromSeconds(plan.StartSeconds);
         var process = start();
@@ -151,7 +179,9 @@ public sealed class ClientSession : IDisposable
             try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
             catch { transport.Dispose(); throw; }
             actor.VerifyEnvironment(plan.MenuExpectations);
-            return new ClientSession(actor, process, logs);
+            // A lease lost during startup: this client must not run on the account.
+            account?.ThrowIfLost();
+            return new ClientSession(actor, process, logs).Using(account);
         }
         catch
         {
@@ -193,13 +223,44 @@ public sealed class ClientSession : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        try { Actor.Dispose(); }
+        lock (_stopping)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
+        _accountLost.Dispose(); // Waits for a loss's stop that is running.
+        try { if (!_detachedForAccount) Actor.Dispose(); }
         finally
         {
             if (_process != null)
-                try { Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); } finally { _process.Dispose(); }
+                try { if (!_stoppedForAccount) Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); }
+                finally { _process.Dispose(); }
+        }
+    }
+
+    private ClientSession Using(SteamAccountHold? account)
+    {
+        if (account == null) return this;
+        Account = account;
+        _accountLost = account.Lost.Register(StopForLostAccount);
+        return this;
+    }
+
+    // The account's lease is gone: another run may take the account, so an owned client is killed now rather than asked to quit; an
+    // attached one is only disconnected. Dispose then keeps what this did.
+    private void StopForLostAccount()
+    {
+        lock (_stopping)
+        {
+            if (_disposed) return;
+            try { Actor.Dispose(); } catch (Exception) { } // The scenario's next command fails on the closed connection.
+            _detachedForAccount = true;
+            if (_process == null) return;
+            var clock = Stopwatch.StartNew();
+            bool exited = _process.HasExited;
+            _process.Stop(TimeSpan.FromSeconds(15));
+            Stopped = new ProcessStop(exited ? StopOutcome.AlreadyExited : StopOutcome.Killed, null, clock.Elapsed, "killed: its Steam account lease was lost");
+            _stoppedForAccount = true;
         }
     }
 }

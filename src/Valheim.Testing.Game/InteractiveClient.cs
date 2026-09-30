@@ -273,6 +273,20 @@ public static class InteractiveClient
         return await ReadStartAsync(host, launch.Platform, launchDirectory, task, result).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// <see cref="StartAsync(IGameHost, HostClientLaunch, string, TimeSpan, LinuxDisplay, CancellationToken)"/> on the leased Steam
+    /// account <paramref name="account"/>: refused before anything runs on the host unless its lease is live, was taken for a client
+    /// on this host, and passed the signed-in check when the profile asks for one.
+    /// </summary>
+    public static Task<InteractiveClientProcess> StartAsync(SteamAccountHold account, IGameHost host, HostClientLaunch launch, string launchDirectory, TimeSpan timeout,
+        LinuxDisplay? display = null, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(account);
+        ArgumentNullException.ThrowIfNull(host);
+        account.RequireReady(host.Name);
+        return StartAsync(host, launch, launchDirectory, timeout, display, cancellation);
+    }
+
     internal static async Task<InteractiveClientProcess> ReadStartAsync(IGameHost host, ClientPlatform platform, string launchDirectory, string? task, HostResult result)
     {
         string taskNote = task == null ? "" : $" The scheduled task {task} may still exist; check with: schtasks /Query /TN {task}";
