@@ -21,10 +21,10 @@ The toolkit packages, all on NuGet.org:
 | Package | Exact version | Use |
 |---|---|---|
 | `Valheim.Testing` | `0.1.0-preview.7` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
-| `Valheim.Testing.Game` | `0.1.0-preview.13` | External game observations, owned sessions, comparisons and reports |
+| `Valheim.Testing.Game` | `0.1.0-preview.14` | External game observations, owned sessions, comparisons and reports |
 | `Valheim.Testing.Cli` | `0.1.0-preview.5` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
 | `Valheim.Testing.Adapter` | `0.1.0-preview.2` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
-| `Valheim.Testing.Doubles` | `0.1.0-preview.5` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
+| `Valheim.Testing.Doubles` | `0.1.0-preview.6` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
 | `Valheim.Testing.Bindings` | `0.1.0-preview.1` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member (see [the binding check](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1)) |
 | `Valheim.Testing.Bindings.Tool` | `0.1.0-preview.1` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
 
@@ -42,7 +42,7 @@ Pin only the package your test project needs:
 <!-- Pure test project; not the production mod project. -->
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.7]" />
 <!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.13]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.14]" />
 <!-- A game-side test adapter plugin compiles the adapter source: -->
 <PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.2]" PrivateAssets="all" />
 <!-- A test that checks a built mod DLL against the game's assemblies in code: -->
