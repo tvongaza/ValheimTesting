@@ -87,15 +87,44 @@ public static class CrossplayServer
     public static CrossplayLobby WaitForLobby(GameActor server, string serverLog, TimeSpan timeout, CancellationToken cancellation = default)
     {
         WaitText.RequireTimeout(timeout);
+        var identity = RequirePlayFabServer(server);
+        using var log = new LogWait(serverLog, offset: 0);
+        var line = log.WaitAsync(LobbyCreated, timeout, LobbyFailures, cancellation).GetAwaiter().GetResult();
+        return Lobby(identity, line.Match, serverLog);
+    }
+
+    /// <summary>
+    /// <see cref="WaitForLobby(GameActor, string, TimeSpan, CancellationToken)"/> for a server on another machine
+    /// (<c>PinnedServerRun --profile</c>): the lobby line is awaited on <paramref name="host"/> in <paramref name="serverLog"/>,
+    /// the host's path of this boot's log (<see cref="HostBepInExLog"/> of the run's host runtime), from its start, with
+    /// the host's event-driven <see cref="IGameHost.WaitForLogAsync"/>.
+    /// </summary>
+    public static CrossplayLobby WaitForLobby(GameActor server, IGameHost host, string serverLog, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        WaitText.RequireTimeout(timeout);
+        var identity = RequirePlayFabServer(server);
+        var result = host.WaitForLogAsync(serverLog, 0, LobbyCreated, LobbyFailures, timeout, cancellation).GetAwaiter().GetResult();
+        return Lobby(identity, LobbyCreated.Match(result.EnsureMatched()), host.Name + ":" + serverLog);
+    }
+
+    /// <summary>A Linux host runtime's BepInEx log, as a path on that host.</summary>
+    public static string HostBepInExLog(string hostRuntimeDirectory) => hostRuntimeDirectory.TrimEnd('/') + "/BepInEx/LogOutput.log";
+
+    private static MultiplayerIdentity RequirePlayFabServer(GameActor server)
+    {
         var identity = MultiplayerIdentity.Read(server);
         if (!identity.IsServer) throw new InvalidOperationException("This game is not a server: " + identity);
         if (identity.Backend != "PlayFab")
             throw new InvalidOperationException($"The server's online backend is {identity.Backend}, not PlayFab: it was not started with -crossplay. Set \"crossplay\": true in the server plan.");
-        using var log = new LogWait(serverLog, offset: 0);
-        var line = log.WaitAsync(LobbyCreated, timeout, LobbyFailures, cancellation).GetAwaiter().GetResult();
-        string owner = line.Match.Groups["owner"].Value;
+        return identity;
+    }
+
+    private static CrossplayLobby Lobby(MultiplayerIdentity identity, Match match, string where)
+    {
+        string owner = match.Groups["owner"].Value;
         if (identity.PlayFabIdAvailable && identity.PlayFabId != owner)
-            throw new InvalidOperationException($"The lobby in {serverLog} is owned by another PlayFab id than this server's; is the log from another boot?");
-        return new CrossplayLobby(owner, line.Match.Groups["lobby"].Value);
+            throw new InvalidOperationException($"The lobby in {where} is owned by another PlayFab id than this server's; is the log from another boot?");
+        return new CrossplayLobby(owner, match.Groups["lobby"].Value);
     }
 }

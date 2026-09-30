@@ -277,6 +277,47 @@ public sealed class SessionVariantTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => CrossplayServer.WaitForLobby(other, log, TimeSpan.FromSeconds(5)));
     }
 
+    // A crossplay server on another machine: the lobby line is awaited on that host, in its own log, from the boot's start.
+    private sealed class LogHost(HostLogResult reply) : IGameHost
+    {
+        public List<(string Log, long Offset)> Waits { get; } = [];
+        public string Name => "linux-box";
+        public GameHostKind Kind => GameHostKind.Ssh;
+        public HostShell Shell => HostShell.Bash;
+        public Task<HostLogResult> WaitForLogAsync(string logPath, long fromOffset, System.Text.RegularExpressions.Regex success, IReadOnlyList<System.Text.RegularExpressions.Regex>? failures, TimeSpan timeout, CancellationToken cancellation = default)
+        {
+            Waits.Add((logPath, fromOffset));
+            return Task.FromResult(reply);
+        }
+        public Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<FetchedDirectory> FetchDirectoryAsync(string hostDirectory, string localDirectory, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<HostLock> AcquireLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<HostLockResult> CheckLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<HostLockResult> ReleaseLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<Shipment> ShipRevisionAsync(string repository, string revision, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<Shipment> ShipFilesAsync(string localDirectory, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<long> LogOffsetAsync(string logPath, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+        public Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default) => throw new NotSupportedException();
+    }
+
+    [Fact] public void ARemoteServersLobbyIsReadFromItsHostsLog()
+    {
+        const string line = "[Info   : Unity Log] Created PlayFab lobby with ID \"LOBBY-9\", ConnectionString \"c\" and owned by \"ENTITY9\"";
+        var host = new LogHost(new HostLogResult(HostLogOutcome.Matched, "log", line, TimeSpan.FromSeconds(1), line));
+        using var server = Server(Identity);
+        string log = CrossplayServer.HostBepInExLog("/srv/runs/run-1/runtime/");
+        Assert.Equal("/srv/runs/run-1/runtime/BepInEx/LogOutput.log", log);
+        Assert.Equal(new CrossplayLobby("ENTITY9", "LOBBY-9"), CrossplayServer.WaitForLobby(server, host, log, TimeSpan.FromSeconds(5)));
+        Assert.Equal((log, 0L), Assert.Single(host.Waits)); // This boot's log, from its start.
+        // A failed login on the host, expiry, and a server without crossplay (refused before the host is asked).
+        Assert.Throws<WaitFailedException>(() => CrossplayServer.WaitForLobby(server, new LogHost(new HostLogResult(HostLogOutcome.FailureMatched, "log", "Failed to login server to PlayFab backend", TimeSpan.Zero, null)), log, TimeSpan.FromSeconds(5)));
+        Assert.Throws<WaitTimeoutException>(() => CrossplayServer.WaitForLobby(server, new LogHost(new HostLogResult(HostLogOutcome.TimedOut, "log", null, TimeSpan.FromSeconds(5), "Register PlayFab server")), log, TimeSpan.FromSeconds(5)));
+        var untouched = new LogHost(new HostLogResult(HostLogOutcome.Matched, "log", line, TimeSpan.Zero, line));
+        using var steam = Server(Identity.Replace("backend=PlayFab", "backend=Steamworks"));
+        Assert.Throws<InvalidOperationException>(() => CrossplayServer.WaitForLobby(steam, untouched, log, TimeSpan.FromSeconds(5)));
+        Assert.Empty(untouched.Waits);
+    }
+
     [Fact] public void AServerWithoutCrossplayIsRefusedBeforeItsLogIsRead()
     {
         using var server = Server(Identity.Replace("backend=PlayFab", "backend=Steamworks"));

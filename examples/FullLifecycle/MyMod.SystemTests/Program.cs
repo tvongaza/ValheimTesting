@@ -64,7 +64,10 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
             },
             ServerLog = () => local ? Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log") : null,
             ClientLog = client => local && client.Owned ? Path.Combine(client.Install, "BepInEx", "LogOutput.log") : null,
-            Lobby = server => CrossplayServer.WaitForLobby(server, CrossplayServer.BepInExLog(run.RuntimeDirectory), TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation),
+            // A crossplay server on another machine (--profile): its lobby line is awaited in the host's own log.
+            Lobby = server => local
+                ? CrossplayServer.WaitForLobby(server, CrossplayServer.BepInExLog(run.RuntimeDirectory), TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation)
+                : CrossplayServer.WaitForLobby(server, run.ServerHost!, CrossplayServer.HostBepInExLog(run.RuntimeDirectory), TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation),
         });
         return Task.CompletedTask;
     },
