@@ -125,11 +125,17 @@ public sealed class DisposableCharacterStore
         return new DisposableCharacter(this, entry.Name, entry.PlayerId, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
     }
 
-    /// <summary>Whether a save belongs to a registered character (by player ID); any save format error propagates.</summary>
+    /// <summary>
+    /// Whether a save belongs to a registered character: its player ID is in the manifest and that entry's stored copy is
+    /// a plain file of the same player. A listed entry whose copy is missing, linked or another character throws, as
+    /// <see cref="Get"/> does; so does any save format error.
+    /// </summary>
     public bool Registers(byte[] characterFile)
     {
         long playerId = CharacterSavePosition.ReadIdentity(characterFile).PlayerId;
-        return ReadManifest().Characters.Any(entry => entry.PlayerId == playerId);
+        if (ReadManifest().Characters.FirstOrDefault(entry => entry.PlayerId == playerId) is not { } entry) return false;
+        ReadStored(entry);
+        return true;
     }
 
     // The bytes a handle stands for, re-verified at use: the registration still exists and the stored copy is unchanged.

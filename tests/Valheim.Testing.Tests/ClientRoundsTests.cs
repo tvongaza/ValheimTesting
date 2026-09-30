@@ -173,6 +173,30 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.False(File.Exists(Path.Combine(plan.CharacterStart.CharactersLocalDirectory, "tester-copy.fch")));
     }
 
+    [Fact] public void AMissingRegisteredCopyIsRefusedBeforeTheClientOpens()
+    {
+        var plan = PreparedPlan();
+        File.Delete(Path.Combine(plan.CharacterStart!.CharacterStore, "tester.fch"));
+        AssertRefusedBeforeOpening<FileNotFoundException>(plan);
+    }
+
+    [Fact] public void ASwappedRegisteredCopyIsRefusedBeforeTheClientOpens()
+    {
+        var plan = PreparedPlan();
+        File.WriteAllBytes(Path.Combine(plan.CharacterStart!.CharacterStore, "tester.fch"), CharacterSavePositionTests.Profile(playerId: 99).File);
+        AssertRefusedBeforeOpening<InvalidDataException>(plan);
+    }
+
+    private void AssertRefusedBeforeOpening<T>(ClientRunPlan plan) where T : Exception
+    {
+        var report = new ScenarioReport("rounds");
+        bool opened = false;
+        Assert.Throws<T>(() => Rounds(report, plan).Run(Server(), () => { opened = true; throw new IOException("must not open"); }, Measure()));
+        Assert.False(opened);
+        Assert.Equal(new[] { "stage the pinned disposable local character" }, Failed(report));
+        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
+    }
+
     [Fact] public void WrongStagedStartFailsRatherThanTeleportingOrMeasuring()
     {
         _atPoint = false;
