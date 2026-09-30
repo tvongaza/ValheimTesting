@@ -15,6 +15,7 @@ public sealed class ClientRoundsTests : IDisposable
     private readonly ScriptedTransport _client;
     private readonly RoundProcess _process = new();
     private bool _saves = true;
+    private bool _atPoint = true;
     private int _restarts, _opens;
     public void Dispose() => Directory.Delete(_output, recursive: true);
 
@@ -35,7 +36,7 @@ public sealed class ClientRoundsTests : IDisposable
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => new
             {
-                source = "local-player-support", complete = true, x = Point.X, y = Point.Height, z = Point.Z, speed = 0f,
+                source = "local-player-support", complete = true, x = _atPoint ? Point.X : 0f, y = Point.Height, z = _atPoint ? Point.Z : 0f, speed = 0f,
                 grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
             });
     }
@@ -113,6 +114,46 @@ public sealed class ClientRoundsTests : IDisposable
         foreach (string file in new[] { "first-arrival.json", "first-reading.json", "after-restart-arrival.json", "after-restart-reading.json" }) Assert.True(Wrote(file), file);
         Assert.True(JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "first-arrival.json"))).RootElement.GetProperty("grounded").GetBoolean());
         Assert.Equal("first,after-restart", report.Provenance["clientRoundsCompleted"]);
+    }
+
+    [Fact] public void StagedCharacterStartIsObservedWithoutAFirstTeleport()
+    {
+        var plan = Plan();
+        plan.StartAtCharacterSave = true;
+        var report = new ScenarioReport("rounds");
+        Rounds(report, plan).Run(Server(), Open(plan), Measure());
+        Assert.True(report.Passed);
+        Assert.Equal(new[] { 0, 1 }, _servers.Select(s => s.Count("cli_teleport_peer")));
+        Assert.True(Wrote("first-arrival.json"));
+        Assert.True(Wrote("after-restart-arrival.json"));
+    }
+
+    [Fact] public void WrongStagedStartFailsRatherThanTeleportingOrMeasuring()
+    {
+        _atPoint = false;
+        var plan = Plan();
+        plan.StartAtCharacterSave = true;
+        plan.ArrivalSeconds = 1;
+        var report = new ScenarioReport("rounds");
+        var error = Assert.Throws<TimeoutException>(() => Rounds(report, plan).Run(Server(), Open(plan), Measure()));
+        Assert.Contains("No teleport was sent", error.Message);
+        Assert.Equal(new[] { "first: arrive at the measurement point" }, Failed(report));
+        Assert.Equal(0, _servers.Sum(s => s.Count("cli_teleport_peer")));
+        Assert.False(Wrote("first-reading.json"));
+    }
+
+    [Fact] public void StagedStartWithoutAnArrivalPointIsRefusedBeforeOpeningTheClient()
+    {
+        var plan = Plan();
+        plan.StartAtCharacterSave = true;
+        var report = new ScenarioReport("rounds");
+        var error = Assert.Throws<ArgumentException>(() => new ClientRounds
+        {
+            Client = plan, WorldUid = WorldUid, Report = report, Output = _output,
+            WaitUntilJoinable = _ => { }, RestartServer = Server,
+        }.Run(Server(), Open(plan), Measure()));
+        Assert.Contains("needs an arrival point", error.Message);
+        Assert.Equal(0, _opens);
     }
 
     [Fact] public void AFailedSaveStopsBeforeTheLeaveAndRestartAndLeavesTheFirstRoundsEvidence()

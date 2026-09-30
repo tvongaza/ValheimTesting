@@ -67,6 +67,47 @@ public class CharacterSavePositionTests
         Assert.Throws<ArgumentOutOfRangeException>(() => CharacterSavePosition.AtWorld(file, 200, 1, float.PositiveInfinity, 3));
     }
 
+    [Fact]
+    public void PreparationWritesOnlyANewCopyOutsideTheCharacterDirectory()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "vt-character-" + Guid.NewGuid().ToString("N"));
+        string local = Path.Combine(root, "characters_local"), evidence = Path.Combine(root, "evidence");
+        Directory.CreateDirectory(local);
+        Directory.CreateDirectory(evidence);
+        try
+        {
+            string source = Path.Combine(local, "test.fch"), output = Path.Combine(evidence, "test.fch");
+            byte[] original = Profile().File;
+            File.WriteAllBytes(source, original);
+            string digest = CharacterStartCopy.Prepare(source, output, 200, 14, 50, -4);
+            Assert.Equal(original, File.ReadAllBytes(source));
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(output))).ToLowerInvariant(), digest);
+            Assert.NotEqual(original, File.ReadAllBytes(output));
+            Assert.Throws<IOException>(() => CharacterStartCopy.Prepare(source, output, 200, 1, 2, 3));
+            Assert.Equal(14f, BitConverter.ToSingle(Payload(File.ReadAllBytes(output)), Profile().World200Flag + 1));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void PreparationRefusesCloudSourcesAndLiveCharacterDestinations()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "vt-character-" + Guid.NewGuid().ToString("N"));
+        string local = Path.Combine(root, "characters_local"), cloud = Path.Combine(root, "characters");
+        Directory.CreateDirectory(local);
+        Directory.CreateDirectory(cloud);
+        try
+        {
+            string localFile = Path.Combine(local, "test.fch"), cloudFile = Path.Combine(cloud, "test.fch");
+            File.WriteAllBytes(localFile, Profile().File);
+            File.WriteAllBytes(cloudFile, Profile().File);
+            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(cloudFile, Path.Combine(root, "copy.fch"), 200, 1, 2, 3));
+            Assert.Throws<ArgumentException>(() => CharacterStartCopy.Prepare(localFile, Path.Combine(local, "copy.fch"), 200, 1, 2, 3));
+            Assert.False(File.Exists(Path.Combine(local, "copy.fch")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private sealed record Fixture(byte[] File, int World100Flag, int World200Flag);
 
     // A hand-built 1.0.16 profile payload. No game save or decompiled source is checked in.

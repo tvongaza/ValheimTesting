@@ -15,6 +15,30 @@ namespace Valheim.Testing.Game;
 public static class PlayerPlacement
 {
     /// <summary>
+    /// Verifies that a character staged at a world's logout point actually arrived at <paramref name="point"/>.
+    /// Reads only the client's support capability; never teleports or falls back to a teleport on failure.
+    /// Call after the join and world-ready/protection checks. Returns the reading that proved arrival.
+    /// </summary>
+    public static JsonElement ObserveArrival(GameActor client, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
+        var support = client.RequireCapability("valheim.world/player-support");
+        var clock = Stopwatch.StartNew();
+        Observation? last = null;
+        do
+        {
+            cancellation.ThrowIfCancellationRequested();
+            last = client.Observe(support);
+            RefuseFlying(last);
+            if (last.Complete && SurfaceProbe.Supported(last, point)) return last.Data.Clone();
+            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
+        } while (clock.Elapsed < timeout);
+        throw new TimeoutException($"The staged character did not settle at ({point.X}, {point.Height}, {point.Z}) within {timeout.TotalSeconds:F0} s; last reading: " +
+            (last == null ? "none" : last.Data.GetRawText()) + ". No teleport was sent.");
+    }
+
+    /// <summary>
     /// Turns on god, ghost and debug modes for the local player (<c>cli_set_player_safety true</c>) and requires the game
     /// to read all three back. The command sets the modes rather than toggling them, so running it again changes nothing;
     /// it is issued once and an unconfirmed reply fails. Debug flying stays off, so support observations remain

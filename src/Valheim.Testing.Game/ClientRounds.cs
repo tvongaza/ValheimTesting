@@ -125,7 +125,9 @@ public sealed class ClientRounds
         });
         if (Arrival is { } point)
             round.Step(ArriveStep, () => round.Write("arrival",
-                PlayerPlacement.Arrive(round.Server, round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor)));
+                Client.StartAtCharacterSave && round.Index == 0
+                    ? PlayerPlacement.ObserveArrival(round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation)
+                    : PlayerPlacement.Arrive(round.Server, round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor)));
     }
 
     // Two rounds have one save and one restart between them; with more, each names the round it leads to.
@@ -135,6 +137,8 @@ public sealed class ClientRounds
     private void Check()
     {
         CheckRoundNames(Rounds);
+        if (Client.StartAtCharacterSave && Arrival == null)
+            throw new ArgumentException("startAtCharacterSave needs an arrival point to verify on the client.");
         if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
         if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with HostRounds.");
         if (Client.Crossplay && Lobby == null) throw new ArgumentException("Lobby: a crossplay client joins the server's PlayFab lobby; supply Lobby, for example with CrossplayServer.WaitForLobby.");
