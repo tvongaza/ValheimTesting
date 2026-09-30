@@ -101,6 +101,12 @@ public partial class ZRpc : IDisposable
         ZLog.Log($"ZRpc timeout set to {m_timeout}s ");
     }
 
+    /// <summary>
+    /// Writes RPC arguments with the game's type table, as the game's <c>ZRpc.Serialize</c> does for peer and routed calls.
+    /// Unlike the game, which skips an argument of any other type without an error, an argument it cannot write throws.
+    /// </summary>
+    public static void Serialize(object[] parameters, ref ZPackage pkg) => ZRoutedRpc.SerializeArguments("ZRpc.Serialize", parameters, pkg, new List<Type>());
+
     private static ZPackage Package(string method, object[] args)
     {
         var pkg = new ZPackage(); pkg.Write(method.GetStableHashCode());

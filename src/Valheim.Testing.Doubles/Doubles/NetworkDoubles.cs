@@ -415,8 +415,9 @@ public partial class ZLog
 /// <summary>
 /// The game's package: one stream written and read at the same position, with the game's byte encoding for every
 /// Write/Read pair (little-endian numbers, strings with a 7-bit length prefix and UTF-8, a byte array or package with an
-/// int length). Write, then <see cref="SetPos"/>(0) to read back. Compressed packages round-trip, but their bytes come
-/// from the runtime's gzip at its default level, not the game's gzip at its Fastest level, so they differ.
+/// int length). Write, then <see cref="SetPos"/>(0) to read back. Every write has the bytes the game's own code wrote for the
+/// same values (tests/Valheim.Testing.Doubles.Tests/GameBytes). Compressed packages use the game's gzip level (Fastest) and
+/// each side reads the other's; their bytes can differ from the game's, at least in the gzip header.
 /// </summary>
 public sealed partial class ZPackage
 {
@@ -517,17 +518,9 @@ public sealed partial class ZPackage
     public void Clear() { m_writer.Flush(); m_stream.SetLength(0); m_stream.Position = 0; }
     public byte[] GenerateHash() { using var sha = System.Security.Cryptography.SHA512.Create(); return sha.ComputeHash(GetArray()); }
 
-    private static byte[] Compress(byte[] input)
-    {
-        using var output = new MemoryStream();
-        using (var gzip = new GZipStream(output, CompressionMode.Compress)) gzip.Write(input, 0, input.Length);
-        return output.ToArray();
-    }
-    private static byte[] Decompress(byte[] input)
-    {
-        using var gzip = new GZipStream(new MemoryStream(input), CompressionMode.Decompress);
-        using var output = new MemoryStream();
-        gzip.CopyTo(output);
-        return output.ToArray();
-    }
+    // The game's ZPackage compresses with Utils.Compress (gzip at the fastest level). Captured from the 1.0.16 Windows server,
+    // the game's stream differed from this one's (.NET 10, macOS) only in the gzip header's level and OS bytes; another zlib
+    // may differ further, so tests compare what each side reads, not the compressed bytes.
+    private static byte[] Compress(byte[] input) => Utils.Compress(input);
+    private static byte[] Decompress(byte[] input) => Utils.Decompress(input);
 }
