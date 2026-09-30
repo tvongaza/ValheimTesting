@@ -22,7 +22,10 @@ internal static class CharacterSavePosition
             throw new ArgumentOutOfRangeException(nameof(x), "The start position must be finite.");
 
         byte[] payload = ReadEnvelope(file);
-        (int flagOffset, int pointOffset) = LocateWorld(payload, worldUid);
+        Layout layout = Walk(payload, worldUid);
+        if (layout.FirstSpawn)
+            throw new InvalidDataException("The character has not completed its first spawn; the game would ignore a saved logout point.");
+        (int flagOffset, int pointOffset) = layout.World ?? throw new KeyNotFoundException("The character has no entry for the requested world UID.");
         payload[flagOffset] = 1;
         WriteFloat(payload, pointOffset, x);
         WriteFloat(payload, pointOffset + 4, y);
@@ -55,7 +58,16 @@ internal static class CharacterSavePosition
         return payload;
     }
 
-    private static (int FlagOffset, int PointOffset) LocateWorld(byte[] payload, long worldUid)
+    /// <summary>The save's player name and player ID. The ID is the game's stable identity for a character; it survives saves.</summary>
+    internal static CharacterIdentity ReadIdentity(byte[] file)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        return Walk(ReadEnvelope(file), worldUid: 0).Identity;
+    }
+
+    private sealed record Layout(bool FirstSpawn, (int FlagOffset, int PointOffset)? World, CharacterIdentity Identity);
+
+    private static Layout Walk(byte[] payload, long worldUid)
     {
         try
         {
@@ -79,8 +91,7 @@ internal static class CharacterSavePosition
                 for (int kind = 0; kind < 5; kind++) SkipNamedFloats(reader);
             }
 
-            if (ReadFlag(reader))
-                throw new InvalidDataException("The character has not completed its first spawn; the game would ignore a saved logout point.");
+            bool firstSpawn = ReadFlag(reader);
             int worldCount = ReadCount(reader);
             (int FlagOffset, int PointOffset)? found = null;
             var seen = new HashSet<long>();
@@ -97,17 +108,17 @@ internal static class CharacterSavePosition
                 ReadFlag(reader); // death point present
                 Skip(stream, 12 + 12); // death and home points
                 if (ReadFlag(reader)) Skip(stream, ReadBlobLength(reader, stream)); // map data
-                if (uid == worldUid) found = (flagOffset, pointOffset);
+                if (worldUid != 0 && uid == worldUid) found = (flagOffset, pointOffset);
             }
-            reader.ReadString(); // player name
-            reader.ReadInt64(); // player ID
+            string name = reader.ReadString();
+            long playerId = reader.ReadInt64();
             reader.ReadString(); // start seed
             ReadFlag(reader); // used cheats
             reader.ReadInt64(); // creation date
             if (ReadFlag(reader)) Skip(stream, ReadBlobLength(reader, stream)); // player data
             if (stream.Position != stream.Length)
                 throw new InvalidDataException("Character payload has unexpected trailing data.");
-            return found ?? throw new KeyNotFoundException("The character has no entry for the requested world UID.");
+            return new Layout(firstSpawn, found, new CharacterIdentity(name, playerId));
         }
         catch (EndOfStreamException ex)
         {
@@ -157,3 +168,5 @@ internal static class CharacterSavePosition
     private static void WriteFloat(byte[] payload, int offset, float value) =>
         BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(offset, sizeof(float)), value);
 }
+
+internal readonly record struct CharacterIdentity(string Name, long PlayerId);
