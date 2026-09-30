@@ -698,12 +698,54 @@ Game-side pieces that mods' test adapters kept copying, each checking the condit
 | `InstalledPlugin.Version(guid)`, `Command(name, guid)` | Whether a plugin is loaded, and a read-only capability reporting it. |
 | `KeyValueReply.Parse(line)`, `Single(lines, prefix)` | `key=value` fields of a console reply, `'quoted values'` included. A repeated key, an `ERROR:` line, no reply or two replies fail. |
 | `HarmonyCensus.Command()` | A read-only `harmony [owner]` capability listing every patched method with each patch's owner, kind, priority, index, before/after and patch method, from HarmonyX's own record. |
+| `ZonePresence.Command()` | A read-only client capability `zones <x,z> ...` reporting, for up to 64 zones, whether the terrain is loaded, the object instances standing there (all, and those not marked distant), and the saved objects of known prefabs without an instance; with the zone of the client's reference position and its synced simulation distance. For `ZoneCycle`, [below](#lifecycle-steps-leave-the-area-and-log-out). |
+| `PlayerCustomData.Command()` | A read-only client capability `custom-data [key-prefix]` listing the local player's `m_customData` entries with the profile's name, file name, save location (`Local` or `Cloud`) and path. For `LogoutCycle`. |
 
 `Members`, `KeyValueReply` and `FixtureGate` use no game types and have unit tests. The rest compile in CI in `tests/Valheim.Testing.Adapter.CompileCheck`: the sources as a consumer compiles them (net48, C# 10, nullable, warnings as errors) against the real HarmonyX 2.9.0 that BepInEx 5.4.23 ships and against declared signatures of the Unity, game, BepInEx and ValheimCLI members they use. That proves they compile and call those signatures; it does not prove the game still has them or that the private members they reflect on exist, which only a native run shows.
 
 Why a census: when a patch's target method is missing, HarmonyX 2.9.0 throws out of `PatchAll` ("Undefined target method"). BepInEx logs the error and the game carries on, but the rest of that plugin's `Awake`, including its later patch classes, never runs, so the mod stays loaded half-patched. On the runner side (Valheim.Testing.Game preview 13), `HarmonyCensus.Read(actor, "mymod.testing/harmony", owner).Check(owner, declared)` compares the census with the patches the mod declares (`new DeclaredPatch("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix")`; a target without a parameter list names every overload). `RequireApplied()` fails naming each declared patch that is not applied; other owners' patches on the same methods are reported beside it, never failed. `HarmonyCensus.OthersChanged(before, after, owner)` lists other owners' patches that a reload or unload removed or added. The toolkit's own reload path and adapter helpers never unpatch; an adapter that patches unpatches only its own Harmony ID (`harmony.UnpatchSelf()`), never `Harmony.UnpatchAll()`. [FullLifecycle](../examples/FullLifecycle/README.md) checks its mod's patch first.
 
 `ExtensionReload` holds the steps of [ReloadCheck](../examples/ReloadCheck/README.md): `Install(artifact, deployed)` copies beside the deployed DLL and renames over it; `WaitForReplacement(actor, id, version, replacing, timeout, interval)` waits for a new live instance at that version; `WaitForRemoval` waits until none is live. Both re-read `cli_extensions`, which is read-only, since a registration announces itself nowhere else.
+
+## Lifecycle steps: leave the area and log out
+
+Beyond save, restart and rejoin, two lifecycle events break mods: the game unloading a zone the player has left, and the character being written at logout. `ZoneCycle` and `LogoutCycle` (Valheim.Testing.Game preview 13) drive each once from a joined, protected client, observe the event instead of waiting a fixed time, and leave the client joined for the mod's own re-observation. The adapter registers the two read-only client observations they read (Valheim.Testing.Adapter preview 2): `ZonePresence.Command()` and `PlayerCustomData.Command()`, on the client's test adapter. Both run inside a `ClientRounds` measurement, where each part becomes a `{round}: ...` step and the readings are written to `{round}-zone-cycle.json` or `{round}-logout.json`, whether the cycle passes or fails.
+
+**Leave the area and come back.** In 1.0.16 a client keeps a zone's objects while its player is within its simulation distance: every object within *near* rings of zones round the player's zone, distant objects (large trees, locations) up to *near + far* rings, and the zone's terrain within *near* rings, removed once it has been out of that range for 4 s and its last near object has gone. The graphics setting picks the distance (near 1 to 6, far 2; the default is near 2, far 2, square), and the server lowers a client's to its own. Leaving destroys each object's instance; returning recreates it from its saved data. So a value kept only in a component field is gone, and a component whose teardown throws shows up in the log scan as `nre-remove-objects`.
+
+`ZoneCycle.Run` reads the `Zones` of interest and requires them loaded (terrain, and an instance for every saved object), then reads the client's simulation distance and refuses an `Away` point whose zone is fewer than near + far + 1 rings from any of them, before anything moves: nothing of a zone is unloaded closer, in any mode. The player arrives at `Away` with `PlayerPlacement.Arrive` (one teleport by the server, arrival read on the client, refused while flying); the zone the player actually stands in must be far enough too. It then waits until the client holds nothing of the zones (no terrain, no instance), has the player arrive at `Back` and waits until they are loaded again. `Away` and `Back` are declared dry ground, as for `ClientRounds.Arrival`. `StepTimeout` bounds each of the four waits; expiry names the zones still pending and the last reading, and no teleport is repeated. `ZoneId.Around(x, z, radius)` lists the zones round a site, and `ZoneCycle.RingsToLeave(range)` says how far is far enough.
+
+**Log out and log in.** In 1.0.16 the character is saved inside the logout, before the menu loads: the game writes `<name>.fch.new`, moves the previous file to `<name>.fch.old` and renames the new one to `<name>.fch`. It skips the save when its save system blocks character saves (logged "Character save blocked") and when the disk is full; a mod that breaks the save at quit (another mod's `UnpatchAll`, an exception in a save patch) has the same effect. The custom data (`Player.m_customData`) is saved with the player and read back when the character next spawns.
+
+`LogoutCycle.Run` reads the custom data and requires every one of `Keys` set, a character the game saves `Local` and the plan's character. It hashes `<CharactersDirectory>/<profile file>.fch` (SHA256), which must be in a folder named `characters_local`, the game's local characters; a cloud character is refused. The client leaves to its menu (ValheimCLI's session leave, which issues the logout and replies once the menu is up), and the runner waits up to `WriteTimeout` for the file's hash to change, woken by file events and re-reading every `RereadInterval` for filesystems that raise none. Then the client joins again with the plan's character, protected, as `ClientRounds` joins, and every key must come back with its value. `LogoutResult.OldMatchesBefore` says whether the `.fch.old` backup is the file hashed before: one save replaced it, not several.
+
+```csharp
+// The client's test adapter registers both observations next to its own commands:
+//   TestExtension.Register("mymod.testing", version, tokenVariable, () => MyMod.Ready, r => _registration = r, Logger.LogError,
+//       ZonePresence.Command(), PlayerCustomData.Command());
+var zones = new ZoneCycle
+{
+    Capability = "mymod.testing/zones", Zones = ZoneId.Around(site.X, site.Z, 16),
+    Away = new HeightExpectation(site.X + 640, site.Z, 31.2f), // declared dry ground ten zones away
+    Back = site, StepTimeout = TimeSpan.FromSeconds(60),
+};
+var logout = new LogoutCycle
+{
+    Capability = "mymod.testing/custom-data", KeyPrefix = "mymod.", Keys = ["mymod.home"],
+    CharactersDirectory = Path.Combine(clientSaveRoot, "characters_local"), WriteTimeout = TimeSpan.FromSeconds(10),
+};
+rounds.Run(server, openClient, round =>
+{
+    var before = ReadMarkers(round.Client);                       // the mod's own observation
+    zones.Run(round);
+    round.Step("the markers survive the zone reload", () => Compare(before, ReadMarkers(round.Client)));
+    logout.Run(round, plan.Client, worldUid);                     // leaves, checks the write, joins again
+});
+```
+
+`ClientRounds` makes the client leave after each measurement, so the logout cycle leaves the client joined again for it. Scan the client's logs at teardown (`ScenarioReport.ScanLogs`) for `nre-remove-objects` and errors during logout.
+
+Limits: both helpers are tested only against scripted transports, with the negative controls a native check needs (a component field that does not survive the reload, an away point inside the loaded range, zones that never unload, a logout that writes nothing, a key the save leaves out). The adapter observations compile against declared signatures and have not run in game; the native example with its two control mods is still to come. The runner must see the client's character folder: an owned client's on this machine, or a mounted copy of an attached client's. An unchanged hash is all the runner sees of a save that rewrote identical bytes; a moved player or a changed value makes the file differ. A world save asks every client to save its profile, so a save in the window between the hash and the leave counts as the logout's own (`OldMatchesBefore` is then false).
 
 ## Offline binding check (Valheim.Testing.Bindings, preview 1)
 
