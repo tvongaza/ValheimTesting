@@ -107,6 +107,24 @@ public class DungeonRoomsTests
         Assert.Contains("keeps no location", Assert.Single(DungeonRooms.OutsideZone(orphan)).Reason);
     }
 
+    [Fact] public void AGeneratorInANeighbouringZoneOfItsLocationFailsNamingBothZones()
+    {
+        // The adapter pairs a generator with the location nearest the queried ground position, not with its own zone's (the
+        // game keys a location by the zone it stands in), so a generator displaced one zone east arrives with its location.
+        // Negative control: every room lies in the location's zone, so only the displacement can fail it.
+        var transport = new ScriptedTransport().Extension("mymod.testing", "dungeon-rooms", _ =>
+            Reply(Dungeon(RoomData((Corridor, 128, -64, 0), (Hall, 150, -64, 0)), x: 161, zoneX: 3)));
+        using var server = transport.Actor("server");
+        var dungeon = Assert.Single(DungeonRooms.Read(server, Path, 100, -40));
+        Assert.Equal((61f, 5000f, 0f), dungeon.InteriorOffset);
+        var problem = Assert.Single(DungeonRooms.OutsideZone(dungeon, Sizes));
+        Assert.Null(problem.Room);
+        var error = Assert.Throws<InvalidOperationException>(() => DungeonRooms.RequireWithinZone(dungeon, Sizes));
+        Assert.Contains("DG_SunkenCrypt 123:45 stands in zone (3, -1), not its location's (2, -1)", error.Message);
+        // The same generator back inside its location's zone passes.
+        Assert.Empty(DungeonRooms.OutsideZone(One(Dungeon(RoomData((Corridor, 128, -64, 0), (Hall, 150, -64, 0)), x: 159, zoneX: 2)), Sizes));
+    }
+
     [Fact] public void LegacyRoomFieldsAreReadWhenThereIsNoRoomData()
     {
         var legacy = new object[] { new { hash = StableHash.Of(Corridor), x = 128f, y = 5030f, z = -64f, rx = 0f, ry = 270f, rz = 0f } };

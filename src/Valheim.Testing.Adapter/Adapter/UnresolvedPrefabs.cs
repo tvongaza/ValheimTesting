@@ -17,20 +17,25 @@ namespace Valheim.Testing.Adapter
     /// player from the prefab registered under its hash; for an unknown hash it logs "Missing prefab hash: &lt;hash&gt;" and
     /// creates nothing, and tries again on every pass, so a client without a server-side mod's prefabs silently lacks those
     /// objects. The runner's <c>UnresolvedPrefabs</c> and <c>VanillaClientCheck</c> in Valheim.Testing.Game read this on
-    /// a client that does not have the mod. Reading changes nothing. Written against the Valheim 1.0.16 decompile; not yet
-    /// run in game.
+    /// a client that does not have the mod. Reading changes nothing. Written against the Valheim 1.0.16 decompile and run on
+    /// a 1.0.16 client without a server-side mod.
     /// </summary>
     public static class UnresolvedPrefabs
     {
         public const string Source = "unresolved-prefabs";
-        /// <summary>The largest radius the census accepts, in metres: a client knows only the objects around its player.</summary>
+        /// <summary>
+        /// The largest radius the census accepts, in metres. A client loads zones, and so objects, only within about
+        /// near simulation distance x 64 + 32 m of its player (about 160 m at the default settings); a census reaching past
+        /// that never becomes complete there.
+        /// </summary>
         public const float MaxRadius = 256f;
         /// <summary>The most objects one census reads before refusing, rather than returning a truncated list.</summary>
         public const int MaxObjects = 50000;
 
         /// <summary>
         /// A read-only extension command <paramref name="name"/>: <c>[radius]</c> in metres (default 64, at most
-        /// <see cref="MaxRadius"/>) around the reference position. It replies <see cref="Observe"/>'s data.
+        /// <see cref="MaxRadius"/>; on a client keep it within the loaded area, about 160 m at default settings) around the
+        /// reference position. It replies <see cref="Observe"/>'s data.
         /// </summary>
         public static ExtensionCommand Command(string name = "unresolved-prefabs") =>
             new ExtensionCommand(name, "List prefab hashes near the player that this process cannot resolve: [radius]", Run, readOnly: true, needsWorld: true);
@@ -51,8 +56,10 @@ namespace Valheim.Testing.Adapter
         /// unresolved: [{hash, count, x, y, z}]}</c> for the ZDOs within <paramref name="radius"/> metres (horizontally) of
         /// <paramref name="centre"/>. <c>unresolved</c> has one entry per unknown hash, ordered by hash, with how many ZDOs
         /// carry it and where the first one is. A ZDO without a prefab (hash 0) is counted in <c>withoutPrefab</c>, since the
-        /// game creates nothing for it on purpose. <c>complete</c> is true once every zone the circle touches is loaded here
-        /// (its objects created or tried), so a census taken while the area still loads says so.
+        /// game creates nothing for it on purpose. The local player's own object (on a client) is left out of the census,
+        /// so <c>scanned</c> counts only objects the area delivered: the client always holds its own player, which proves
+        /// nothing about the area. <c>complete</c> is true once every zone the circle touches is loaded here (its objects
+        /// created or tried), so a census taken while the area still loads says so.
         /// </summary>
         public static Dictionary<string, object?> Observe(Vector3 centre, float radius)
         {
@@ -61,6 +68,7 @@ namespace Valheim.Testing.Adapter
             var system = ZoneSystem.instance ?? throw new InvalidOperationException("No ZoneSystem: load a world first.");
             Vector2s min = ZoneSystem.GetZone(new Vector3(centre.x - radius, 0f, centre.z - radius));
             Vector2s max = ZoneSystem.GetZone(new Vector3(centre.x + radius, 0f, centre.z + radius));
+            ZDO? own = OwnPlayerObject();
             int zones = 0, loaded = 0, scanned = 0, withoutPrefab = 0;
             var unresolved = new SortedDictionary<int, (int Count, Vector3 First)>();
             for (int zx = min.x; zx <= max.x; zx++)
@@ -71,6 +79,7 @@ namespace Valheim.Testing.Adapter
                     if (system.IsZoneLoaded(zone)) loaded++;
                     foreach (ZDO zdo in ZoneTerrain.ZoneObjects(zone, MaxObjects))
                     {
+                        if (ReferenceEquals(zdo, own)) continue;
                         Vector3 position = zdo.GetPosition();
                         float dx = position.x - centre.x, dz = position.z - centre.z;
                         if (dx * dx + dz * dz > radius * radius) continue;
@@ -91,6 +100,15 @@ namespace Valheim.Testing.Adapter
                     ["x"] = entry.Value.First.x, ["y"] = entry.Value.First.y, ["z"] = entry.Value.First.z,
                 }).ToArray(),
             };
+        }
+
+        // The local player's ZDO on a client, or null (a dedicated server has no local player).
+        private static ZDO? OwnPlayerObject()
+        {
+            Player player = Player.m_localPlayer;
+            if (player == null) return null;
+            ZNetView view = player.GetComponent<ZNetView>();
+            return view != null && view.IsValid() ? view.GetZDO() : null;
         }
     }
 }

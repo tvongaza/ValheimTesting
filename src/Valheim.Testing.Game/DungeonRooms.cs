@@ -9,7 +9,11 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public sealed record DungeonRoom(int Index, int Hash, float X, float Y, float Z, float RotationX, float RotationY, float RotationZ);
 
-/// <summary>The location instance the server keeps for a dungeon generator's zone.</summary>
+/// <summary>
+/// The location instance the server keeps nearest the queried ground position (in the 3 x 3 zones around it). The game keys
+/// each location instance by the zone its own position stands in, so this is found from the query, not from the
+/// generator's zone, and a generator displaced into a neighbouring zone still pairs with its location.
+/// </summary>
 public sealed record DungeonLocation(string? Prefab, float X, float Y, float Z, int ZoneX, int ZoneZ);
 
 /// <summary>A room prefab's size (<c>Room.m_size</c>) in metres: x across, y up, z along the room's own axes.</summary>
@@ -49,7 +53,8 @@ public static class DungeonRooms
     /// <summary>
     /// The dungeon generators saved within <paramref name="radius"/> metres (horizontally, at most 256) of
     /// (<paramref name="x"/>, <paramref name="z"/>), through <paramref name="capabilityPath"/> (for example
-    /// <c>mymod.testing/dungeon-rooms</c>). Search around the location's ground position.
+    /// <c>mymod.testing/dungeon-rooms</c>), each with the location nearest (x, z). Give the location's ground position. A
+    /// dungeon has no saved generator until its zone has been generated, so an unvisited dungeon reads as an empty list.
     /// </summary>
     public static IReadOnlyList<SavedDungeon> Read(GameActor actor, string capabilityPath, float x, float z, float radius = 64)
     {
@@ -121,7 +126,7 @@ public static class DungeonRooms
     {
         ArgumentNullException.ThrowIfNull(dungeon);
         if (!(tolerance >= 0)) throw new ArgumentOutOfRangeException(nameof(tolerance));
-        if (dungeon.Location is not { } location) return [new(null, null, $"{dungeon.Prefab} {dungeon.Uid}: the server keeps no location for zone ({dungeon.ZoneX}, {dungeon.ZoneZ})")];
+        if (dungeon.Location is not { } location) return [new(null, null, $"{dungeon.Prefab} {dungeon.Uid}: the server keeps no location near the queried position (generator in zone ({dungeon.ZoneX}, {dungeon.ZoneZ}))")];
         var problems = new List<DungeonRoomProblem>();
         if (dungeon.Rooms.Count == 0) problems.Add(new(null, null, $"{dungeon.Prefab} {dungeon.Uid} has no saved rooms (format {dungeon.Format})"));
         if (dungeon.ZoneX != location.ZoneX || dungeon.ZoneZ != location.ZoneZ)

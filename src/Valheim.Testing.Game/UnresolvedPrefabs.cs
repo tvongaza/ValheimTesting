@@ -9,8 +9,8 @@ public sealed record UnresolvedPrefab(int Hash, int Count, float X, float Y, flo
 /// <summary>
 /// A census of the saved objects (ZDOs) within <see cref="Radius"/> metres of (<see cref="X"/>, <see cref="Z"/>) whose
 /// prefab hash the observing process's <c>ZNetScene</c> cannot resolve. <see cref="Complete"/> once every zone the circle
-/// touches was loaded there; <see cref="Scanned"/> counts the objects read, <see cref="WithoutPrefab"/> those without a
-/// prefab (which the game creates nothing for on purpose).
+/// touches was loaded there; <see cref="Scanned"/> counts the objects read, leaving out the observing player's own object,
+/// and <see cref="WithoutPrefab"/> those without a prefab (which the game creates nothing for on purpose).
 /// </summary>
 public sealed record UnresolvedPrefabScan(bool Complete, float X, float Z, float Radius, int Zones, int ZonesLoaded, int Scanned, int WithoutPrefab,
     IReadOnlyList<UnresolvedPrefab> Unresolved)
@@ -24,7 +24,8 @@ public sealed record UnresolvedPrefabScan(bool Complete, float X, float Z, float
     public void RequireNone(IEnumerable<string>? knownPrefabs = null)
     {
         if (!Complete) throw new InvalidOperationException($"Incomplete census: {ZonesLoaded} of {Zones} zones loaded around ({F(X)}, {F(Z)}).");
-        // The observing player's own object is always there, so an empty census read nothing it could judge.
+        // The adapter leaves out the observing player's own object (a client always holds it), so an empty census means the
+        // area delivered nothing to judge.
         if (Scanned == 0) throw new InvalidOperationException($"The census around ({F(X)}, {F(Z)}) read no objects; an empty census proves nothing.");
         if (Unresolved.Count == 0) return;
         var names = knownPrefabs?.ToArray();
@@ -45,7 +46,11 @@ public static class UnresolvedPrefabs
 {
     public const string Source = "unresolved-prefabs";
 
-    /// <summary>One census, complete or not, through <paramref name="capabilityPath"/> (for example <c>mymod.testing/unresolved-prefabs</c>).</summary>
+    /// <summary>
+    /// One census, complete or not, through <paramref name="capabilityPath"/> (for example
+    /// <c>mymod.testing/unresolved-prefabs</c>). On a client keep <paramref name="radius"/> within the area it loads, about
+    /// near simulation distance x 64 + 32 m (160 m at default settings): a larger circle never becomes complete there.
+    /// </summary>
     public static UnresolvedPrefabScan Read(GameActor actor, string capabilityPath, float radius = 64)
     {
         ArgumentNullException.ThrowIfNull(actor);
