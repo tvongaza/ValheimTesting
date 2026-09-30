@@ -1,0 +1,58 @@
+# Bytes written by the game's own ZPackage and ZRpc for each case in ZPackageCases.cs (tests/Valheim.Testing.Doubles.GameCapture).
+# game 1.0.16, runtime 4.0.30319.42000, Microsoft Windows NT 10.0.26200.0
+exact	int 1	01-00-00-00
+exact	int -1	FF-FF-FF-FF
+exact	int min	00-00-00-80
+exact	uint 0xDEADBEEF	EF-BE-AD-DE
+exact	long -2	FE-FF-FF-FF-FF-FF-FF-FF
+exact	long max	FF-FF-FF-FF-FF-FF-FF-7F
+exact	ulong 1	01-00-00-00-00-00-00-00
+exact	short -2	FE-FF
+exact	ushort 0xBEEF	EF-BE
+exact	byte 7	07
+exact	sbyte -1	FF
+exact	char a	61
+exact	char e-acute	C3-A9
+exact	char U+20AC	E2-82-AC
+exact	char U+FFFF	EF-BF-BF
+exact	bool true	01
+exact	bool false	00
+exact	float 1.5	00-00-C0-3F
+exact	float -0	00-00-00-80
+exact	float max	FF-FF-7F-7F
+exact	float smallest subnormal	01-00-00-00
+exact	float NaN	00-00-C0-FF
+exact	double 1	00-00-00-00-00-00-F0-3F
+exact	double pi	18-2D-44-54-FB-21-09-40
+exact	string empty	00
+exact	string h e-acute	03-68-C3-A9
+exact	string CJK	06-E6-97-A5-E6-9C-AC
+exact	string astral	04-F0-9F-98-80
+exact	string 200 a	C8-01-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61-61
+exact	byte[] 1 2	02-00-00-00-01-02
+exact	byte[] empty	00-00-00-00
+exact	package inner	0A-00-00-00-05-69-6E-6E-65-72-2A-00-00-00
+exact	ZDOID 2 3	02-00-00-00-00-00-00-00-03-00-00-00
+exact	ZDOID None	00-00-00-00-00-00-00-00-00-00-00-00
+exact	Vector3 1 2 3	00-00-80-3F-00-00-00-40-00-00-40-40
+exact	Vector3 -0.5 1e6 3.25	00-00-00-BF-00-24-74-49-00-00-50-40
+exact	Quaternion identity	00-00-00-00-00-00-00-00-00-00-00-00-00-00-80-3F
+exact	Quaternion half	00-00-00-3F-00-00-00-3F-00-00-00-3F-00-00-00-3F
+exact	Vector2i 1 -1	01-00-00-00-FF-FF-FF-FF
+exact	Vector2s 1 -1	01-00-FF-FF
+exact	NumItems 0	00
+exact	NumItems 127	7F
+exact	NumItems 128	80-80
+exact	NumItems 300	81-2C
+exact	SmallRotation 0 0 0	00-80
+exact	SmallRotation 0 90 0	B4-80
+exact	SmallRotation 10 20 30	C0-03-14-A0
+exact	SmallRotation 359.5 180 0.5	68-81
+exact	routed numbers	01-00-00-00-EF-BE-AD-DE-FE-FF-FF-FF-FF-FF-FF-FF-00-00-C0-3F-00-00-00-00-00-00-F0-3F-01
+exact	routed values	03-68-C3-A9-0A-00-00-00-05-69-6E-6E-65-72-2A-00-00-00-02-00-00-00-01-61-01-62-00-00-80-3F-00-00-00-40-00-00-40-40-00-00-00-00-00-00-00-00-00-00-00-00-00-00-80-3F-02-00-00-00-00-00-00-00-03-00-00-00-07-00-00-00-01-78
+exact	routed empty list	00-00-00-00
+exact	HitData default	00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-EF-BF-BF-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00
+exact	HitData set	41-D8-01-00-00-00-48-41-00-00-40-40-00-00-00-40-02-00-00-00-20-42-00-00-40-40-05-00-00-20-41-00-00-00-42-00-00-A0-C0-00-00-00-00-00-00-00-00-00-00-80-3F-40-E2-01-00-04-00-00-00-00-00-00-00-05-00-00-00-07-00-00-00-00-3F-02-00-00-70-41-03-00-01-02-00-00-80-3F-00-00-80-3E-00-00-C0-3F-01-00
+exact	routed HitData	41-D8-01-00-00-00-48-41-00-00-40-40-00-00-00-40-02-00-00-00-20-42-00-00-40-40-05-00-00-20-41-00-00-00-42-00-00-A0-C0-00-00-00-00-00-00-00-00-00-00-80-3F-40-E2-01-00-04-00-00-00-00-00-00-00-05-00-00-00-07-00-00-00-00-3F-02-00-00-70-41-03-00-01-02-00-00-80-3F-00-00-80-3E-00-00-C0-3F-01-00
+exact	read double-compressed inner	0A-00-00-00-05-69-6E-6E-65-72-2A-00-00-00
+compressed	compressed inner	1E-00-00-00-1F-8B-08-00-00-00-00-00-00-0A-63-CD-CC-CB-4B-2D-D2-62-60-60-00-00-E0-73-2F-FF-0A-00-00-00

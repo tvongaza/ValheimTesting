@@ -5,7 +5,8 @@ using Valheim.Testing.Doubles;
 using Xunit;
 
 // The package and RPC doubles against the game's 1.0.16 encoding and delivery rules. Expected bytes are written out by
-// hand from the game's encoding (little-endian numbers, 7-bit length-prefixed UTF-8 strings), not produced by the double.
+// hand from the game's encoding (little-endian numbers, 7-bit length-prefixed UTF-8 strings), not produced by the double;
+// GameCapturedBytesTests checks the same encodings against bytes the game itself wrote.
 public sealed class RpcTests
 {
     public enum Mode { A, B }
