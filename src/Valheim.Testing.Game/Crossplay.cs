@@ -108,6 +108,49 @@ public static class CrossplayServer
         return Lobby(identity, LobbyCreated.Match(result.EnsureMatched()), host.Name + ":" + serverLog);
     }
 
+    /// <summary>
+    /// The game's line once a clean shutdown has marked a lobby inactive (1.0.16, <c>ZPlayFabMatchmaking.DeleteLobby</c>):
+    /// <c>Deactivated PlayFab lobby &lt;lobby id&gt;</c>. Logged from PlayFab's reply, so only if the reply arrives before the process ends.
+    /// </summary>
+    public static readonly Regex LobbyDeactivated = new(@"Deactivated PlayFab lobby (?<lobby>\S+)", RegexOptions.CultureInvariant);
+    /// <summary>The game's line when it starts retiring its lobby during its shutdown: <c>Unregister PlayFab server "&lt;name&gt;" and leaving network "..."</c>.</summary>
+    public static readonly Regex ServerUnregistered = new(@"Unregister PlayFab server ""[^""]*"" and leaving network", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// After a crossplay run's owned server boots have stopped: requires that every boot quit cleanly
+    /// (<see cref="StopOutcome.Clean"/>; one that had exited by itself counts only if its log shows the retirement) and
+    /// that every lobby a boot's log created was deactivated in that boot's log (<see cref="LobbyDeactivated"/>). A killed
+    /// server skips its shutdown, so its lobby stays active for hours and PlayFab can send later joins on the same address
+    /// and port to it: a run with one proves nothing about the next run's join and fails here. <paramref name="bootLogs"/> are
+    /// the boots' kept BepInEx logs in launch order, as <paramref name="stops"/> are. Returns one line per boot for the report.
+    /// </summary>
+    public static IReadOnlyList<string> RequireLobbiesRetired(IReadOnlyList<ProcessStop> stops, IReadOnlyList<string> bootLogs)
+    {
+        var lines = new List<string>();
+        var problems = new List<string>();
+        for (int i = 0; i < Math.Max(stops.Count, bootLogs.Count); i++)
+        {
+            string boot = "boot-" + (i + 1);
+            var stop = i < stops.Count ? stops[i] : null;
+            if (stop == null) { problems.Add($"{boot} was never stopped"); continue; }
+            if (i >= bootLogs.Count || !File.Exists(bootLogs[i])) { problems.Add($"{boot}: its BepInEx log was not kept, so its lobby's retirement cannot be read"); continue; }
+            string text = File.ReadAllText(bootLogs[i]);
+            var created = LobbyCreated.Matches(text).Select(match => match.Groups["lobby"].Value).Distinct().ToList();
+            var deactivated = LobbyDeactivated.Matches(text).Select(match => match.Groups["lobby"].Value).ToHashSet();
+            bool unregistered = ServerUnregistered.IsMatch(text);
+            if (stop.Outcome == StopOutcome.Killed)
+                problems.Add($"{boot} was {stop}: a killed server's PlayFab lobby stays active and can take later joins on this address and port, so this run is not a clean crossplay run");
+            else if (stop.Outcome == StopOutcome.AlreadyExited && !unregistered)
+                problems.Add($"{boot} had exited before the stop without the game's shutdown (no \"Unregister PlayFab server\" line)");
+            foreach (string lobby in created.Where(lobby => !deactivated.Contains(lobby)))
+                problems.Add($"{boot} created PlayFab lobby {lobby}, but its log never says \"Deactivated PlayFab lobby {lobby}\"" +
+                    (unregistered ? " (the shutdown started retiring it; PlayFab's reply did not arrive before the process ended)" : ""));
+            lines.Add($"{boot}: {stop}; lobbies created {(created.Count == 0 ? "none" : string.Join(",", created))}; deactivated {(deactivated.Count == 0 ? "none" : string.Join(",", deactivated))}");
+        }
+        if (problems.Count != 0) throw new InvalidOperationException(string.Join("; ", problems) + ".");
+        return lines;
+    }
+
     /// <summary>A Linux host runtime's BepInEx log, as a path on that host.</summary>
     public static string HostBepInExLog(string hostRuntimeDirectory) => hostRuntimeDirectory.TrimEnd('/') + "/BepInEx/LogOutput.log";
 

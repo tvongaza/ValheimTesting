@@ -96,6 +96,7 @@ public sealed class ClientRounds
             if (session != null)
                 try { Report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); }
                 catch when (!passed) { } // Recorded as its own failed step; the failure already on its way out is the one to rethrow.
+                finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
         }
     }
 

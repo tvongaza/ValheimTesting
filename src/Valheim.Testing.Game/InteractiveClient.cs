@@ -186,8 +186,8 @@ public sealed class HostClientLaunch
     }
 }
 
-/// <summary>What stopping an interactive client found.</summary>
-public enum InteractiveStop { Stopped, AlreadyGone }
+/// <summary>What stopping an interactive client found: it was killed, had gone already, or quit by itself when asked.</summary>
+public enum InteractiveStop { Stopped, AlreadyGone, Quit }
 
 /// <summary>
 /// Starts a game client inside a host's existing desktop session, where its display, GPU and signed-in Steam client are. A
@@ -403,18 +403,31 @@ public sealed class InteractiveClientProcess : IServerProcess, IAsyncDisposable
     /// Only the first successful call acts. A process that is still there afterwards, or an unproven stop, throws; a later call
     /// may try again, because the identity check makes it safe to repeat.
     /// </summary>
-    public async Task<InteractiveStop> StopAsync(TimeSpan timeout, CancellationToken cancellation = default)
+    public Task<InteractiveStop> StopAsync(TimeSpan timeout, CancellationToken cancellation = default) => StopAsync(TimeSpan.Zero, timeout, cancellation);
+
+    /// <summary>
+    /// <see cref="StopAsync(TimeSpan, CancellationToken)"/>, but first asks the game to quit (Windows: closes its main window;
+    /// Linux: SIGTERM) and gives it <paramref name="quit"/> to exit by itself, which it reports as <see cref="InteractiveStop.Quit"/>.
+    /// </summary>
+    public async Task<InteractiveStop> StopAsync(TimeSpan quit, TimeSpan timeout, CancellationToken cancellation = default)
     {
         WaitText.RequireTimeout(timeout);
+        if (quit < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(quit));
         if (Interlocked.Exchange(ref _stopped, 1) == 1) return InteractiveStop.AlreadyGone;
         try
         {
             string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+            string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
             var result = (await _host.RunAsync(_platform == ClientPlatform.Windows ? InteractiveScripts.WindowsStop : InteractiveScripts.LinuxStop,
-                Variables(("seconds", seconds)), timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping client process {Id} on {HostName}");
+                Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "TERM")), quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false))
+                .EnsureSuccess($"Stopping client process {Id} on {HostName}");
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-STOP ");
+            LastQuitRequest = _platform == ClientPlatform.Windows
+                ? (InteractiveClient.Line(result.Stdout, "VT-QUIT ") == "no-window" ? "window close: no main window in this session" : "window closed")
+                : "SIGTERM";
             InteractiveStop outcome = verdict switch
             {
+                "quit" => InteractiveStop.Quit,
                 "stopped" => InteractiveStop.Stopped,
                 "gone" => InteractiveStop.AlreadyGone,
                 "running" => throw new InvalidOperationException($"Client process {Id} on {HostName} was still running {WaitText.Seconds(timeout)} after it was killed."),
@@ -430,8 +443,24 @@ public sealed class InteractiveClientProcess : IServerProcess, IAsyncDisposable
         }
     }
 
-    /// <summary>The <see cref="IServerProcess"/> stop: <see cref="StopAsync"/>, waited for.</summary>
+    /// <summary>The <see cref="IServerProcess"/> stop: <see cref="StopAsync(TimeSpan, CancellationToken)"/>, waited for.</summary>
     public void Stop(TimeSpan timeout) => StopAsync(timeout).GetAwaiter().GetResult();
+
+    /// <summary>How the last stop asked the game to quit.</summary>
+    public string LastQuitRequest { get; private set; } = "not asked";
+
+    /// <summary>The <see cref="IServerProcess"/> clean stop: <see cref="StopAsync(TimeSpan, TimeSpan, CancellationToken)"/>, waited for.</summary>
+    public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var outcome = StopAsync(quit, kill).GetAwaiter().GetResult();
+        return outcome switch
+        {
+            InteractiveStop.Quit => new(StopOutcome.Clean, null, clock.Elapsed, LastQuitRequest),
+            InteractiveStop.Stopped => new(StopOutcome.Killed, null, clock.Elapsed, LastQuitRequest + $"; no exit within {WaitText.Seconds(quit)}"),
+            _ => new(StopOutcome.AlreadyExited, null, clock.Elapsed, "not asked: it had exited"),
+        };
+    }
 
     /// <summary>Stops the process unless it was stopped already; an unproven stop throws.</summary>
     public void Dispose()
@@ -446,10 +475,12 @@ public sealed class InteractiveClientProcess : IServerProcess, IAsyncDisposable
 
     public override string ToString() => $"client process {Id} (started {StartIdentity}) on {HostName}";
 
-    private Dictionary<string, string> Variables((string Name, string Value) extra) => new()
+    private Dictionary<string, string> Variables(params (string Name, string Value)[] extra)
     {
-        ["game"] = Id.ToString(CultureInfo.InvariantCulture), ["start"] = StartIdentity, ["dir"] = LaunchDirectory, [extra.Name] = extra.Value,
-    };
+        var variables = new Dictionary<string, string> { ["game"] = Id.ToString(CultureInfo.InvariantCulture), ["start"] = StartIdentity, ["dir"] = LaunchDirectory };
+        foreach (var (name, value) in extra) variables[name] = value;
+        return variables;
+    }
 }
 
 /// <summary>Windows command-line quoting, as the C runtime and CommandLineToArgvW read it back.</summary>
@@ -619,13 +650,21 @@ internal static class InteractiveScripts
         }
         """.ReplaceLineEndings("\n");
 
-    // Variables: game, start, seconds. The start time must still match, so a reused process ID is never touched.
+    // Variables: game, start, seconds, quit. The start time must still match, so a reused process ID is never touched. With
+    // quit > 0 the game's main window is closed first and it gets quit seconds to exit by itself ("quit"); a window in another
+    // session than this script's cannot be closed from here, and the game is then killed ("stopped", after "VT-QUIT no-window").
     public static readonly string WindowsStop = """
         $process = $null
         try { $process = [Diagnostics.Process]::GetProcessById([int]$game) } catch { }
         if ($null -eq $process) { 'VT-STOP gone'; exit 0 }
         try { $identity = [string]$process.StartTime.ToFileTimeUtc() } catch { if ($process.HasExited) { 'VT-STOP gone'; exit 0 }; throw }
         if ($identity -cne $start) { 'VT-STOP gone'; exit 0 }
+        if ([int]$quit -gt 0) {
+            $asked = $false
+            try { $asked = $process.CloseMainWindow() } catch { }
+            if (-not $asked) { 'VT-QUIT no-window' }
+            elseif ($process.WaitForExit([int]$quit * 1000)) { 'VT-STOP quit'; exit 0 }
+        }
         try { $process.Kill() } catch { if (-not $process.HasExited) { throw } }
         if ($process.WaitForExit([int]$seconds * 1000)) { 'VT-STOP stopped' } else { 'VT-STOP running' }
         """.ReplaceLineEndings("\n");
@@ -732,9 +771,15 @@ internal static class InteractiveScripts
         echo "VT-INTERACTIVE started $game $start"
         """).ReplaceLineEndings("\n");
 
-    // Variables: game, start, seconds.
+    // Variables: game, start, seconds, quit, signal. With quit > 0 the game is first sent the signal (INT or TERM) and given
+    // quit seconds to exit by itself ("quit"); only then, or with quit 0, is it killed ("stopped").
     public static readonly string LinuxStop = ("set -u\n" + LinuxStarted + "\n" + """
         if [ "$(started "$game")" != "$start" ]; then echo "VT-STOP gone"; exit 0; fi
+        if [ "$quit" -gt 0 ] && kill -s "$signal" "$game" 2> /dev/null; then
+            i=0
+            while [ "$(started "$game")" = "$start" ] && [ "$i" -lt $((quit * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+            if [ "$(started "$game")" != "$start" ]; then echo "VT-STOP quit"; exit 0; fi
+        fi
         kill -KILL "$game" 2> /dev/null
         i=0
         while [ "$(started "$game")" = "$start" ]; do

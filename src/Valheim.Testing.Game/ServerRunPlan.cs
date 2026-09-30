@@ -54,6 +54,12 @@ public partial class ServerRunPlan
     public int StartupSeconds { get; set; } = 300;
     public int CommandSeconds { get; set; } = 30;
     /// <summary>
+    /// How long stopping the owned server (at teardown and for each restart) waits for it to quit after it is asked (SIGINT,
+    /// or Ctrl+C on Windows): the game saves the world and retires its crossplay lobby. Killed only after that. 0 kills at
+    /// once, without the game's shutdown. Default 120, at most 1800.
+    /// </summary>
+    public int QuitSeconds { get; set; } = 120;
+    /// <summary>
     /// Every entry the runtime's <c>BepInEx/patchers</c> holds, by name. A clean runtime is BepInEx core and your plugins
     /// with an empty patchers directory; the runner refuses one holding anything not named here.
     /// </summary>
@@ -82,7 +88,7 @@ public partial class ServerRunPlan
         bool pinned = Pinned;
         Runtime.Validate(pinned); World.Validate(pinned);
         CheckPatchersAndLogScan();
-        if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120)
+        if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > 1800)
             throw new ArgumentException("Invalid port or time budget.");
         if (!string.IsNullOrEmpty(Executable) && Executable != ServerLaunch.WindowsExecutable && Executable != ServerLaunch.LinuxExecutable)
             throw new ArgumentException($"Executable must be omitted, {ServerLaunch.WindowsExecutable} or {ServerLaunch.LinuxExecutable} at the copied runtime's root.");

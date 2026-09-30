@@ -10,8 +10,9 @@ namespace Valheim.Testing.Game;
 /// to. Either way <see cref="Actor"/> is strictly pinned to the plan's menu expectations when the session is returned,
 /// and every command it sends is recorded to <c>client-commands.jsonl</c> in the output directory (<c>client-commands-2.jsonl</c>
 /// and so on for later sessions: evidence is never overwritten). Disposing closes the
-/// connection and, for an owned client, stops only the process this session started (never one found by name), then
-/// keeps its logs beside the evidence. An attached client's process is never touched.
+/// connection and, for an owned client, stops only the process this session started (never one found by name): it asks the
+/// client to quit and kills it only if it does not (<see cref="Stopped"/>), then keeps its logs beside the evidence. An
+/// attached client's process is never touched.
 /// </summary>
 public sealed class ClientSession : IDisposable
 {
@@ -26,6 +27,11 @@ public sealed class ClientSession : IDisposable
     /// for a teardown <see cref="ScenarioReport.ScanLogs"/>; empty for an attached client, whose logs are its operator's.
     /// </summary>
     public IReadOnlyList<RunLog> Logs { get; }
+
+    /// <summary>How long disposing waits for the owned client to quit (its profile save) after asking it, before it kills it. Default one minute.</summary>
+    public TimeSpan QuitTimeout { get; set; } = TimeSpan.FromMinutes(1);
+    /// <summary>How the owned client ended once disposed; null before that, and for an attached client.</summary>
+    public ProcessStop? Stopped { get; private set; }
 
     private ClientSession(GameActor actor, IServerProcess? process, IReadOnlyList<RunLog>? logs = null) { Actor = actor; _process = process; Logs = logs ?? []; }
 
@@ -79,7 +85,7 @@ public sealed class ClientSession : IDisposable
                 () =>
                 {
                     cliLog = new LogWait(log); // Opened before the launch: an earlier run's lines never count.
-                    return new DirectServerProcess(start, prefix, log, playerLog);
+                    return new DirectServerProcess(start, prefix, log, playerLog) { Quit = QuitRequest.CloseWindow };
                 },
                 () => new CliTransport(plan.Host, plan.Port),
                 async (left, token) =>
@@ -181,7 +187,10 @@ public sealed class ClientSession : IDisposable
         return found.Length != 0;
     }
 
-    /// <summary>Closes the connection and, for an owned client, stops the process this session started.</summary>
+    /// <summary>
+    /// Closes the connection and, for an owned client, stops the process this session started: asks it to quit (it saves
+    /// its profile, as a player's quit does), waits up to <see cref="QuitTimeout"/>, and kills it only then. <see cref="Stopped"/> says which.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -190,7 +199,7 @@ public sealed class ClientSession : IDisposable
         finally
         {
             if (_process != null)
-                try { _process.Stop(TimeSpan.FromSeconds(15)); } finally { _process.Dispose(); }
+                try { Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); } finally { _process.Dispose(); }
         }
     }
 }

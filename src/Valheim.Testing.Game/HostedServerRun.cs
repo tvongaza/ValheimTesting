@@ -181,6 +181,7 @@ internal sealed class HostedServerRun
             WorldDirectory, plan.ExpectCommand, options.SessionCapability,
             TimeSpan.FromSeconds(plan.StartupSeconds), TimeSpan.FromSeconds(plan.CommandSeconds), cancellation: run.Cancellation)
         {
+            QuitTimeout = TimeSpan.FromSeconds(plan.QuitSeconds),
             // This boot's log starts empty (the start moved any earlier one into the boot directory), so offset 0 is this boot's.
             Events = new StartupEvents
             {
@@ -297,7 +298,8 @@ internal sealed class HostedServerRun
 }
 
 /// <summary>
-/// A client <see cref="InteractiveClient"/> started for a <see cref="PinnedServerRun"/>: stopping it kills only that process,
+/// A client <see cref="InteractiveClient"/> started for a <see cref="PinnedServerRun"/>: stopping it stops only that process (a
+/// clean stop asks it to quit first),
 /// keeps its BepInEx log and Player.log in its launch directory, fetches that directory here and closes its CLI tunnel.
 /// </summary>
 internal sealed class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence) : IServerProcess
@@ -307,11 +309,21 @@ internal sealed class HostedClientProcess(InteractiveClientProcess process, IGam
     public bool HasExited => process.HasExited;
     public Task<int> WaitForExitAsync(CancellationToken cancellation) => process.WaitForExitAsync(cancellation);
 
-    public void Stop(TimeSpan timeout)
+    public void Stop(TimeSpan timeout) => Finish(() => process.Stop(timeout));
+
+    /// <summary>Asks the client to quit (<see cref="InteractiveClientProcess.StopCleanly"/>), then keeps and fetches its logs as <see cref="Stop"/> does.</summary>
+    public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
+    {
+        ProcessStop? stopped = null;
+        Finish(() => stopped = process.StopCleanly(quit, kill));
+        return stopped!;
+    }
+
+    private void Finish(Action stop)
     {
         try
         {
-            process.Stop(timeout);
+            stop();
             if (_kept) return;
             var kept = host.RunAsync(HostedClientScripts.Keep(host.Shell.Kind), new Dictionary<string, string> { ["install"] = install, ["dir"] = process.LaunchDirectory },
                 TimeSpan.FromSeconds(60)).GetAwaiter().GetResult().EnsureSuccess($"Keeping the logs of client process {Id} on {host.Name}");

@@ -134,6 +134,30 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal(3, host.Runs.Count);
     }
 
+    [Fact] public async Task ACleanStopAsksWithSigintFirstAndReportsWhetherItQuit()
+    {
+        var host = new QueueHost();
+        host.Replies.Enqueue(Reply("VT-SERVER started 4321 998877\n"));
+        var process = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-1", TimeSpan.FromSeconds(60));
+        host.Replies.Enqueue(Reply("VT-STOP quit\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
+        var stop = process.StopCleanly(TimeSpan.FromSeconds(120), TimeSpan.FromSeconds(15));
+        Assert.Equal((StopOutcome.Clean, "SIGINT"), (stop.Outcome, stop.Request));
+        var sent = host.Runs[1];
+        Assert.Same(InteractiveScripts.LinuxStop, sent.Script);
+        Assert.Equal(("120", "INT", "15"), (sent.Variables["quit"], sent.Variables["signal"], sent.Variables["seconds"]));
+        // One that did not quit in time was killed; a kill-only stop sends no quit request.
+        host.Replies.Enqueue(Reply("VT-SERVER started 5 6\n"));
+        var stubborn = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-2", TimeSpan.FromSeconds(60));
+        host.Replies.Enqueue(Reply("VT-STOP stopped\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
+        var killed = stubborn.StopCleanly(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(15));
+        Assert.Equal((StopOutcome.Killed, "SIGINT; no exit within 2.0 s"), (killed.Outcome, killed.Request));
+        host.Replies.Enqueue(Reply("VT-SERVER started 7 8\n"));
+        var plain = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-3", TimeSpan.FromSeconds(60));
+        host.Replies.Enqueue(Reply("VT-STOP stopped\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
+        Assert.Equal(HostServerStop.Stopped, await plain.StopAsync(TimeSpan.FromSeconds(15)));
+        Assert.Equal("0", host.Runs[^2].Variables["quit"]);
+    }
+
     [Fact] public async Task AReusedProcessIdIsGoneAndAFailedFetchIsRetriedWithoutKillingAgain()
     {
         var host = new QueueHost();
