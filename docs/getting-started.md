@@ -4,7 +4,7 @@ For your first adoption, use [Bring your mod](adopting.md) and its complete [mod
 
 Start with the lowest test layer that answers the question. Existing xUnit tests do not need to be rewritten or moved to this repository. Test packages belong in test projects, not in a production mod or a player's plugins directory.
 
-The [candidate API reference](reference/index.md) inventories current public declarations and links each package to its usage guide. The [compatibility-policy draft](reference/compatibility.md) records decisions still needed before stable packages; these preview APIs can change.
+The [candidate API reference](https://tvongaza.github.io/ValheimTesting/) inventories current public declarations and links each package to its usage guide. The [compatibility-policy draft](reference/compatibility.md) records decisions still needed before stable packages; these preview APIs can change.
 
 ## 1. Get the packages (no Valheim needed)
 
@@ -18,17 +18,17 @@ For supported hosts and runtime requirements, see the [platform table](../README
 
 ### Package versions and feeds
 
-The toolkit packages, all on NuGet.org:
+The toolkit packages are all on NuGet.org. The exact versions below are **known-good pins used by these examples**, not a claim that they are the newest releases. Open a package's NuGet page to choose a newer version, then update and run your own test project before changing its pin. The release workflow separately tests every newly published version from NuGet.org.
 
-| Package | Exact version | Use |
+| Package | Tested example version | Use |
 |---|---|---|
-| `Valheim.Testing` | `0.1.0-preview.7` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
-| `Valheim.Testing.Game` | `0.1.0-preview.17` | External game observations, owned sessions, comparisons and reports |
-| `Valheim.Testing.Cli` | `0.1.0-preview.5` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
-| `Valheim.Testing.Adapter` | `0.1.0-preview.3` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
-| `Valheim.Testing.Doubles` | `0.1.0-preview.7` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
-| `Valheim.Testing.Bindings` | `0.1.0-preview.1` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member (see [the binding check](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1)) |
-| `Valheim.Testing.Bindings.Tool` | `0.1.0-preview.1` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
+| [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing) | `0.1.0-preview.7` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
+| [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) | `0.1.0-preview.17` | External game observations, owned sessions, comparisons and reports |
+| [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) | `0.1.0-preview.5` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
+| [Valheim.Testing.Adapter](https://www.nuget.org/packages/Valheim.Testing.Adapter) | `0.1.0-preview.3` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
+| [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.1.0-preview.7` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
+| [Valheim.Testing.Bindings](https://www.nuget.org/packages/Valheim.Testing.Bindings) | `0.1.0-preview.1` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member (see [the binding check](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1)) |
+| [Valheim.Testing.Bindings.Tool](https://www.nuget.org/packages/Valheim.Testing.Bindings.Tool) | `0.1.0-preview.1` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
 
 Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
 

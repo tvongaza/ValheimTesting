@@ -6,7 +6,7 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 
 Bringing your own mod? Start with [the adoption guide](docs/adopting.md) and [a complete first mod test](examples/ModWithTests/README.md). Use [package setup](docs/getting-started.md) and the [example index](examples/README.md) for the next layer. Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually. Before a native run, read the [runtime hygiene and evidence checklist](docs/runtime-hygiene.md).
 
-Maintainers can build the [candidate API reference](docs/reference/index.md) from the current source. It is an inventory for the [stable-contract review](docs/reference/compatibility.md), not yet a published 1.0 API promise.
+Browse the [candidate API reference](https://tvongaza.github.io/ValheimTesting/) on GitHub Pages. It is generated from `main` and remains an inventory for the [stable-contract review](docs/reference/compatibility.md), not yet a 1.0 API promise.
 
 New to Valheim plugins? The community wiki's [BepInEx and Harmony overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the modding concepts used by these examples. Its older code samples are background, not a substitute for this toolkit's pinned game-version checks; see [wiki version caveats](docs/runtime-hygiene.md#wiki-pages-that-predate-10).
 
@@ -47,7 +47,7 @@ dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.7`, `Valheim.Testing.Game` `0.1.0-preview.17` (net10.0) or `Valheim.Testing.Doubles` `0.1.0-preview.7`, and compile `Valheim.Testing.Adapter` `0.1.0-preview.3` into a game-side test adapter; the transport is `Valheim.Testing.Cli` `0.1.0-preview.5`. To check offline that a built mod's game references still bind, install the `Valheim.Testing.Bindings.Tool` `0.1.0-preview.1` tool in CI, or reference the `Valheim.Testing.Bindings` `0.1.0-preview.1` library from a test. All restore from NuGet.org. Use the local feed only to try a build that is not yet published.
+`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Choose the packages in [getting started](docs/getting-started.md#package-versions-and-feeds): its exact versions are known-good example pins, while the linked NuGet pages show current releases. Pin the versions your mod tests actually use; a newly published package does not silently change a passing test. Use the local feed only to try a build that is not yet published.
 
 ## Platforms
 
