@@ -262,6 +262,8 @@ public abstract class ScriptedGameHost : IGameHost
 
     /// <summary>The executable and arguments that start the wrapper in the host's shell.</summary>
     internal abstract (string Executable, IReadOnlyList<string> Arguments) WrapperCommand();
+    /// <summary>Variables for the local process <see cref="WrapperCommand"/> starts; none unless a host sets the wrapper's own environment.</summary>
+    internal virtual IReadOnlyDictionary<string, string> WrapperEnvironment() => new Dictionary<string, string>();
     /// <summary>Whether a command that ended without the exit report failed in its transport rather than on the host.</summary>
     internal abstract bool IsTransportFailure(ProcessExit exit);
     public abstract Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default);
@@ -527,7 +529,7 @@ public abstract class ScriptedGameHost : IGameHost
         string secrets = "")
     {
         var (executable, arguments) = WrapperCommand();
-        return new(executable, arguments, Payload(Compose(Shell.Kind, script, variables), secrets), upload, output, lines, timeout);
+        return new(executable, arguments, Payload(Compose(Shell.Kind, script, variables), secrets), upload, output, lines, timeout) { Environment = WrapperEnvironment() };
     }
 
     /// <summary>The full script the host runs: preferences (PowerShell), variables as literals, the script and (PowerShell) a final <c>exit 0</c>.</summary>
@@ -580,6 +582,18 @@ public abstract class ScriptedGameHost : IGameHost
         ? ["-c", HostScripts.BashWrapper]
         : ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", EncodedPowerShellWrapper];
     internal static string EncodedPowerShellWrapper => Convert.ToBase64String(Encoding.Unicode.GetBytes(HostScripts.PowerShellWrapper));
+
+    /// <summary>
+    /// The variable that keeps a PowerShell 7 wrapper off its startup JIT profile, and its value. pwsh records which methods it
+    /// compiled at startup in one file per user (<c>StartupProfileData-NonInteractive</c> in its cache directory) and reads it on the
+    /// next start; pwsh processes starting at once corrupt that file, and every later start that reads it can fail: an invalid
+    /// assembly or culture name, a stack overflow or a segmentation fault (PowerShell/PowerShell#26528, dotnet/runtime#121977;
+    /// #133 here: 11 of 3000 parallel starts on macOS, 1 of 3000 on Linux, pwsh 7.6.6 on .NET 10). The runtime uses multi-core JIT
+    /// (which reads and writes that file) only with at least <c>MultiCoreJitMinNumCpus</c> processors; the value is hexadecimal, so
+    /// FFFF turns it off. pwsh then neither reads nor writes the file and starts a little slower. Windows PowerShell 5.1 runs on
+    /// .NET Framework and ignores it. Processes the script starts inherit it, which only affects .NET programs' startup.
+    /// </summary>
+    internal static readonly KeyValuePair<string, string> NoStartupJitProfile = new("DOTNET_MultiCoreJitMinNumCpus", "FFFF");
 
     /// <summary>
     /// Maps a command's end to an outcome. The wrapper's report (the last <c>[vt-exit] N</c> line on stderr) is the script's exit

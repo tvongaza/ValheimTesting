@@ -17,6 +17,9 @@ public sealed class LocalGameHost : ScriptedGameHost
     internal LocalGameHost(string name, HostShell shell, IProcessLauncher launcher) : base(name, shell, launcher) { }
     public override GameHostKind Kind => GameHostKind.Local;
     internal override (string Executable, IReadOnlyList<string> Arguments) WrapperCommand() => (Shell.Executable, WrapperArguments(Shell));
+    internal override IReadOnlyDictionary<string, string> WrapperEnvironment() => Shell.Kind == HostShellKind.PowerShell
+        ? new Dictionary<string, string> { [NoStartupJitProfile.Key] = NoStartupJitProfile.Value }
+        : base.WrapperEnvironment();
     internal override bool IsTransportFailure(ProcessExit exit) => false;
 
     /// <summary>The host's loopback is this machine's: nothing is started and the endpoint is the ValheimCLI port itself.</summary>
@@ -34,7 +37,10 @@ public sealed class LocalGameHost : ScriptedGameHost
 /// A machine reached through the system OpenSSH client (<c>ssh</c>, on Windows, macOS and Linux) with key or agent authentication
 /// only: BatchMode is always on, so ssh never prompts, and nothing here accepts a password. The destination is <c>user@host</c>,
 /// <c>ssh://user@host:port</c> or an ssh-config alias; the host key must already be known (or pass <c>StrictHostKeyChecking=accept-new</c>).
-/// A bash host needs a POSIX login shell; a PowerShell host works under any login shell, including Windows' cmd.exe.
+/// A bash host needs a POSIX login shell; a PowerShell host works under any login shell, including Windows' cmd.exe. Unlike a local
+/// or container host, the remote pwsh does not get <see cref="ScriptedGameHost.NoStartupJitProfile"/>: ssh passes no variables to
+/// it (the server's AcceptEnv decides), so a host that starts many pwsh processes at once can still hit pwsh's corrupted startup
+/// profile (#133) unless its own environment sets the variable.
 /// ssh exit 255 without the host's exit report is a transport failure.
 /// </summary>
 public sealed class SshGameHost : ScriptedGameHost
@@ -259,6 +265,8 @@ public sealed class ContainerGameHost : ScriptedGameHost
     {
         var arguments = new List<string> { "exec", "-i" };
         if (User != null) arguments.AddRange(["--user", User]);
+        // The same startup-profile guard as a local host's (NoStartupJitProfile), set for the shell inside the container.
+        if (Shell.Kind == HostShellKind.PowerShell) arguments.AddRange(["-e", NoStartupJitProfile.Key + "=" + NoStartupJitProfile.Value]);
         arguments.AddRange([Container, Shell.Executable]);
         arguments.AddRange(WrapperArguments(Shell));
         return (_docker, arguments);

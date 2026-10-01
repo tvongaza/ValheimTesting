@@ -60,6 +60,22 @@ public class GameHostTests
         _ = new SshGameHost("box", "ssh://tester@box:2222", HostShell.Bash, 0, ["StrictHostKeyChecking=accept-new"], null, "ssh", fake);
     }
 
+    // #133: a PowerShell 7 wrapper starts without the shared startup JIT profile that parallel pwsh processes corrupt. A local
+    // host sets the variable on the shell it starts, a container host on its docker exec; a bash shell gets nothing.
+    [Fact] public async Task APowerShellWrapperStartsOffTheSharedStartupJitProfile()
+    {
+        var guard = new KeyValuePair<string, string>("DOTNET_MultiCoreJitMinNumCpus", "FFFF");
+        var local = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0)).Exits(0, "", FakeLauncher.Report(0));
+        await Host("local", local, HostShell.Pwsh).RunAsync("exit 0", null, Timeout);
+        await Host("local", local, HostShell.Bash).RunAsync("true", null, Timeout);
+        Assert.Equal(new[] { guard }, local.Calls[0].Environment);
+        Assert.Empty(local.Calls[1].Environment);
+        var container = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0));
+        await Host("container", container, HostShell.Pwsh).RunAsync("exit 0", null, Timeout);
+        Assert.Equal(new[] { "exec", "-i", "--user", "valheim", "-e", "DOTNET_MultiCoreJitMinNumCpus=FFFF", "vt-server", "pwsh" }, container.Calls[0].Arguments.Take(8));
+        Assert.Empty(container.Calls[0].Environment); // docker itself is not a .NET program
+    }
+
     [Fact] public async Task AContainerHostExecsTheWrapperAsItsUser()
     {
         var fake = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0));
