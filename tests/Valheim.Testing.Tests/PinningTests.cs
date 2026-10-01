@@ -26,19 +26,52 @@ internal static class FakeInstalls
 }
 
 // Install pins (game build, BepInEx core, patchers) and the explicit, reported opt-out. Tests that read the warning
-// swap Console.Error, so they live in this one class (xUnit runs a class's tests one at a time).
+// capture only their own stderr writes (StderrCapture): other classes run at the same time and warn about their own actors.
 public sealed class PinningTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("pinning-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
     private string Install => Path.Combine(_root, "install");
 
-    private static string Stderr(Action action)
+    private static string Stderr(Action action) => StderrCapture.Of(action);
+
+    // Reproduces #142: another test class's unpinned actor warns while a pinned run's stderr is captured. The foreign
+    // write is on its own execution flow, as a test of another class is, and is made deterministically mid-capture.
+    [Fact] public void ACaptureHoldsOnlyItsOwnWarningsWhileAnotherTestWarns()
     {
-        var previous = Console.Error; var captured = new StringWriter();
-        Console.SetError(captured);
-        try { action(); } finally { Console.SetError(previous); }
-        return captured.ToString();
+        // This test fails with the previous global-swap Stderr helper, as the separate negative-control run confirmed.
+        // Do not install that helper here: even a brief process-global swap can capture another parallel test's output.
+        string own = WhileAnotherTestWarns(Stderr);
+        Assert.DoesNotContain("not pinned", own);
+        // What the action writes, from threads and tasks it starts too, is still its own.
+        Assert.Equal(new[] { "own line", "own thread", "own task" }, own.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static string WhileAnotherTestWarns(Func<Action, string> capture)
+    {
+        using var capturing = new ManualResetEventSlim(); using var written = new ManualResetEventSlim();
+        Thread other;
+        using (ExecutionContext.SuppressFlow())
+        {
+            other = new Thread(() =>
+            {
+                capturing.Wait();
+                new GameActor("other test", new ScriptedTransport()).VerifyEnvironment(EnvironmentPinning.None);
+                written.Set();
+            });
+            other.Start();
+        }
+        try
+        {
+            return capture(() =>
+            {
+                capturing.Set(); Assert.True(written.Wait(TimeSpan.FromSeconds(30)));
+                Console.Error.WriteLine("own line");
+                var started = new Thread(() => Console.Error.WriteLine("own thread")); started.Start(); started.Join();
+                Task.Run(() => Console.Error.WriteLine("own task")).GetAwaiter().GetResult();
+            });
+        }
+        finally { capturing.Set(); other.Join(); }
     }
 
     // ---- install pins ----
