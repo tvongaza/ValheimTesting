@@ -213,6 +213,30 @@ public class LocalGameHostShellTests
     private static bool OnPath(string name) =>
         (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Any(dir => File.Exists(Path.Combine(dir, name)));
 
+    // #133, with the real pwsh: a local pwsh host neither reads nor writes pwsh's startup JIT profile. Its cache directory is a
+    // fresh one (XDG_CACHE_HOME, Linux and macOS). The control, a pwsh started the same way without the guard, writes the profile
+    // there, so the check can see it.
+    [Fact] public async Task APwshHostLeavesTheStartupJitProfileAlone()
+    {
+        if (OperatingSystem.IsWindows() || !OnPath("pwsh")) return;
+        using var guarded = new TempDirectory();
+        using var control = new TempDirectory();
+        var host = new LocalGameHost("local-pwsh", HostShell.Pwsh, new CacheLauncher(guarded.Path));
+        var result = await host.RunAsync("$null = [System.Collections.Concurrent.ConcurrentDictionary[string,int]]::new()", null, GameHostChecks.Generous);
+        Assert.True(result.Succeeded, result.Describe());
+        var unguarded = await new CacheLauncher(control.Path).RunAsync(new ProcessCall("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit 0"], [], null, null, null, GameHostChecks.Generous), default);
+        Assert.Equal(0, unguarded.ExitCode);
+        Assert.Contains(Directory.EnumerateFiles(control.Path, "StartupProfileData-*", SearchOption.AllDirectories), _ => true);
+        Assert.Empty(Directory.EnumerateFiles(guarded.Path, "StartupProfileData-*", SearchOption.AllDirectories));
+    }
+    // Starts processes as the system does, with pwsh's cache directory moved to a test directory.
+    private sealed class CacheLauncher(string cache) : IProcessLauncher
+    {
+        public Task<ProcessExit> RunAsync(ProcessCall call, CancellationToken cancellation) =>
+            SystemProcessLauncher.Instance.RunAsync(call with { Environment = new Dictionary<string, string>(call.Environment) { ["XDG_CACHE_HOME"] = cache } }, cancellation);
+        public IOwnedProcess Start(string executable, IReadOnlyList<string> arguments) => SystemProcessLauncher.Instance.Start(executable, arguments);
+    }
+
     [Theory, MemberData(nameof(Shells))] public Task RunPassesValuesLiterallyAndReportsTheExitCode(string shell) => GameHostChecks.RunPassesValuesLiterallyAndReportsTheExitCode(Host(shell));
     [Theory, MemberData(nameof(Shells))] public Task ATimeoutIsUnknown(string shell) => GameHostChecks.ATimeoutIsUnknown(Host(shell));
     [Theory, MemberData(nameof(Shells))] public Task TwoRunsNeverShareTheLock(string shell) => GameHostChecks.TwoRunsNeverShareTheLock(Host(shell), Parent);

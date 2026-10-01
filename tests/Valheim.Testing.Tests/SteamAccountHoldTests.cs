@@ -184,11 +184,12 @@ public sealed class SteamSignedInUserTests
         File.WriteAllText(vdf, "\"users\"\n{\n\t\"76561197960265730\"\n\t{\n\t\t\"AccountName\"\t\t\"vt_client_two\"\n\t\t\"MostRecent\"\t\t\"0\"\n\t}\n" +
             "\t\"76561197960265729\"\n\t{\n\t\t\"AccountName\"\t\t\"vt_client_one\"\n\t\t\"RememberPassword\"\t\t\"1\"\n\t\t\"MostRecent\"\t\t\"1\"\n\t}\n}\n");
         var host = new LocalGameHost("here", HostShell.Parse(shell));
-        var (state, id, _) = await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path);
-        Assert.Equal(SteamSignedInState.Matches, state); Assert.Equal(1u, id);
+        var (state, id, detail) = await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path);
+        Assert.True(state == SteamSignedInState.Matches, $"{shell}: {state} {detail}"); Assert.Equal(1u, id);
         // Older Steam writes the key in lower case; no user marked MostRecent means none is signed in.
         File.WriteAllText(vdf, File.ReadAllText(vdf).Replace("\"MostRecent\"\t\t\"1\"", "\"mostrecent\"\t\t\"1\""));
-        Assert.Equal(1u, (await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path)).AccountId);
+        var lower = await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path);
+        Assert.True(lower.State == SteamSignedInState.Matches, $"{shell}: {lower.State} {lower.Detail}"); Assert.Equal(1u, lower.AccountId);
         File.WriteAllText(vdf, File.ReadAllText(vdf).Replace("\"mostrecent\"\t\t\"1\"", "\"mostrecent\"\t\t\"0\""));
         Assert.Equal(SteamSignedInState.NotSignedIn, (await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path)).State);
 
