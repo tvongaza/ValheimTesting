@@ -55,8 +55,64 @@ public sealed class LogScanTests : IDisposable
         Assert.Equal(1, count.Count); Assert.Equal(line, count.FirstLine);
         Assert.Equal(problem.Split('\n')[line - 1], count.First);
         Assert.All(scan.Counts.Where(other => other.Pattern != pattern), other => Assert.Equal(0, other.Count));
-        var severity = LogScanner.Patterns.FirstOrDefault(known => known.Name == pattern)?.Severity ?? (pattern == LogScanner.UnityException ? LogSeverity.Failure : LogSeverity.Warning);
+        var severity = LogScanner.Patterns.FirstOrDefault(known => known.Name == pattern)?.Severity
+            ?? (pattern is LogScanner.UnityException or LogScanner.UnknownError ? LogSeverity.Failure : LogSeverity.Warning);
         Assert.Equal(severity, count.Severity); Assert.Equal(severity == LogSeverity.Failure, scan.Failed);
+    }
+
+    [Theory]
+    [InlineData("server BepInEx log", "Error")]
+    [InlineData("client BepInEx log", "Fatal")]
+    public void UnclassifiedBepInExErrorsFailAnOtherwisePassingRun(string role, string level)
+    {
+        var log = Write(Boot + $"[{level}  :   BepInEx] A new loader failure\n" + Tail);
+        var report = new ScenarioReport("native smoke");
+        report.Step("scenario", () => { });
+        Assert.False(report.ScanLogs([log with { Role = role }]));
+        Assert.False(report.Passed);
+        var count = Count(Assert.Single(report.Logs), LogScanner.UnknownError);
+        Assert.Equal((LogSeverity.Failure, 1, 3), (count.Severity, count.Count, count.FirstLine));
+        Assert.Equal($"[{level}  :   BepInEx] A new loader failure", count.First);
+    }
+
+    [Fact] public void AKnownEnvironmentalErrorNeedsItsExactHeaderAndAReason()
+    {
+        const string known = "[Error  :   BepInEx] Unable to start Unity log writer";
+        var classifications = new Dictionary<string, LogClassification>
+        {
+            [LogScanner.UnknownError] = new() { Expected = [known], Reason = "The headless test host cannot open Unity's log writer." },
+        };
+        var scan = LogScanner.Scan(Write(Boot + known + "\n" + Tail), classifications);
+        Assert.False(scan.Failed);
+        var count = Count(scan, LogScanner.UnknownError);
+        Assert.Equal((LogSeverity.Failure, 0, 1), (count.Severity, count.Count, count.Expected));
+        Assert.Equal(known, count.FirstExpected);
+
+        scan = LogScanner.Scan(Write(Boot + known + "\n[Error  :   BepInEx] Unable to start Unity log writer again\n" + Tail), classifications);
+        Assert.True(scan.Failed);
+        count = Count(scan, LogScanner.UnknownError);
+        Assert.Equal((1, 1, 4), (count.Count, count.Expected, count.FirstLine));
+    }
+
+    [Fact] public void TheWholeUnknownErrorCategoryCannotBeDowngraded()
+    {
+        var classifications = new Dictionary<string, LogClassification>
+        {
+            [LogScanner.UnknownError] = new() { Severity = LogSeverity.Warning, Reason = "Ignore errors" },
+        };
+        Assert.Contains("exact expected", Assert.Throws<ArgumentException>(() => LogScanner.CheckClassifications(classifications)).Message);
+    }
+
+    [Fact] public void UnknownErrorAllowanceMustNameAFullErrorOrFatalHeader()
+    {
+        foreach (string expected in new[] { "Unable to start Unity log writer", "[Warning: BepInEx] Unable to start Unity log writer" })
+        {
+            var classifications = new Dictionary<string, LogClassification>
+            {
+                [LogScanner.UnknownError] = new() { Expected = [expected], Reason = "Known environment limitation." },
+            };
+            Assert.Contains("exact expected BepInEx Error or Fatal header", Assert.Throws<ArgumentException>(() => LogScanner.CheckClassifications(classifications)).Message);
+        }
     }
 
     [Fact] public void CountsAddUpAndKeepTheFirstOccurrence()
@@ -103,7 +159,7 @@ public sealed class LogScanTests : IDisposable
             "[Error  : Unity Log] NullReferenceException: Object reference not set to an instance of an object\n[Info   :   My Mod] ZNetScene.RemoveObjects was patched\n" + Tail));
         Assert.Equal(0, Count(elsewhere, "nre-remove-objects").Count); Assert.Equal(2, Count(elsewhere, LogScanner.UnknownError).Count);
         Assert.Equal(0, Count(elsewhere, LogScanner.UnityException).Count); // BepInEx's error records count them already
-        Assert.False(elsewhere.Failed);
+        Assert.True(elsewhere.Failed); // The unknown error is still a failure, just not attributed to RemoveObjects.
     }
     // HarmonyX skips a legacy instance UnpatchAll() when DisallowLegacyGlobalUnpatchAll is set: nothing was removed.
     [Fact] public void ASkippedLegacyUnpatchAllIsNotAGlobalUnpatch()

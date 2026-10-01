@@ -23,8 +23,9 @@ public sealed class LogClassification
     public LogSeverity? Severity { get; set; }
     /// <summary>
     /// Texts that name lines this run expects, such as a lookup a mod makes on purpose: a line of the pattern containing
-    /// one of them (ordinal) is counted as <see cref="LogPatternCount.Expected"/> and never fails the scan. Every other
-    /// line of the pattern still counts, so naming the expected lines keeps the pattern's check for the rest.
+    /// one of them (ordinal) is counted as <see cref="LogPatternCount.Expected"/> and never fails the scan. For
+    /// <see cref="LogScanner.UnknownError"/>, each text must be the entire BepInEx Error or Fatal header line and is
+    /// matched exactly. Every other line of the pattern still counts.
     /// </summary>
     public List<string> Expected { get; set; } = [];
     public string Reason { get; set; } = "";
@@ -58,7 +59,8 @@ public sealed record LogFileScan(string Role, string Path, bool Present, string?
 /// Harmony patch whose target is gone, a global unpatch, missing members after a game update, errors while objects unload,
 /// RPCs without a handler, objects whose prefab is not registered, missing scripts and shaders a GPU cannot run. Each known pattern is counted per log with its
 /// first occurrence and has a default severity a run may change with a written reason. BepInEx warning and error lines
-/// that match no pattern are counted as <see cref="UnknownWarning"/> and <see cref="UnknownError"/>, never ignored. Unity's
+/// that match no pattern are counted as <see cref="UnknownWarning"/> and <see cref="UnknownError"/>, never ignored.
+/// Unknown errors fail by default; a run can name an exact expected header line with a written reason. Unity's
 /// Player.log has no levels; there an exception Unity printed (a line that starts with the exception's type name, outside
 /// a BepInEx warning or error record) that no known pattern names is counted as <see cref="UnityException"/>, which fails.
 /// The same Unity message may appear in both logs.
@@ -132,6 +134,11 @@ public static class LogScanner
                 throw new ArgumentException($"Log scan: classify {entry.Key} as Failure or Warning, or name the lines it expects, with a written reason.");
             if (classification.Expected != null && classification.Expected.Any(string.IsNullOrWhiteSpace))
                 throw new ArgumentException($"Log scan: an expected line of {entry.Key} is named by non-empty text.");
+            if (entry.Key == UnknownError && classification.Severity == LogSeverity.Warning)
+                throw new ArgumentException("Log scan: unknown-error cannot be downgraded as a category; name each exact expected Error or Fatal header line with a written reason.");
+            if (entry.Key == UnknownError && classification.Expected != null && classification.Expected.Any(line =>
+                    Header.Match(line) is not { Success: true } match || match.Groups[1].Value is not ("Error" or "Fatal")))
+                throw new ArgumentException("Log scan: unknown-error needs the exact expected BepInEx Error or Fatal header line.");
         }
     }
 
@@ -160,7 +167,7 @@ public static class LogScanner
         // line ("NullReferenceException: Object reference not set ...") rarely says which code threw.
         void Hit(int index, int line)
         {
-            bool Named(string text) => lines[line].Contains(text, StringComparison.Ordinal)
+            bool Named(string text) => (index == unknownError ? lines[line].Equals(text, StringComparison.Ordinal) : lines[line].Contains(text, StringComparison.Ordinal))
                 || (index == unityException && Frames(lines, line).Any(frame => frame.Contains(text, StringComparison.Ordinal)));
             if (expected[index].Any(Named)) { expectedCounts[index]++; firstExpected[index] ??= Text(line); return; }
             counts[index]++;
@@ -199,7 +206,7 @@ public static class LogScanner
         var result = new List<LogPatternCount>(names.Count);
         for (int n = 0; n < names.Count; n++)
         {
-            var severity = n < Patterns.Count ? Patterns[n].Severity : n == unityException ? LogSeverity.Failure : LogSeverity.Warning;
+            var severity = n < Patterns.Count ? Patterns[n].Severity : n == unityException || n == unknownError ? LogSeverity.Failure : LogSeverity.Warning;
             string? reason = null;
             if (classifications != null && classifications.TryGetValue(names[n], out var chosen)) { severity = chosen.Severity ?? severity; reason = chosen.Reason; }
             result.Add(new(names[n], severity, reason, counts[n], first[n]?.Line, first[n]?.Text, expectedCounts[n], firstExpected[n], firstFrame[n]));

@@ -36,6 +36,12 @@
     "MYMOD_TEST_FIXTURES": "1"
   },
   "patchers": [],
+  "logScan": {
+    "unknown-error": {
+      "expected": ["[Error  :   BepInEx] Unable to start Unity log writer"],
+      "reason": "The tested Windows client cannot attach BepInEx's Unity log writer; its Player.log is scanned separately."
+    }
+  },
   "pins": {
     "worlduid": "<the fixture world's UID>",
     "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",
