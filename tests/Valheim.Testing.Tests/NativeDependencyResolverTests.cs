@@ -48,6 +48,18 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains("missing or changed", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(lockFile)).Message);
     }
 
+    [Fact] public void AnEditedLockCannotStageAnExtraCliPackOutsideTheSelectedManifest()
+    {
+        var plan = NativeDependencyResolver.Resolve(Request(_rig.Parent));
+        Assert.True(plan.Ready);
+        plan.CliFiles.Add(plan.CliFiles[0]);
+        string path = Path.Combine(_rig.Root, "edited-lock.json");
+        plan.Write(path);
+        Assert.Contains("exactly the ValheimCLI core and packs", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(path)).Message);
+        Assert.Throws<InvalidDataException>(() => plan.ApplyTo(_rig.Manifest(), Path.Combine(_rig.Root, "should-not-be-written.json")));
+        Assert.False(File.Exists(Path.Combine(_rig.Root, "should-not-be-written.json")));
+    }
+
     [Fact] public void UniqueReferencedLibraryIsIncludedAndAmbiguityIsLeftForAnExplicitChoice()
     {
         string mod = _rig.Write("uses/Uses.dll", RegressionRig.Assembly("Uses", new("example.uses"), reference: typeof(FactAttribute)));

@@ -64,7 +64,7 @@ public sealed class NativeDependencyLock
     {
         ArgumentNullException.ThrowIfNull(environment);
         if (!Ready) throw new InvalidOperationException($"Resolve the {Gaps.Count} dependency choice(s) before applying this lock.");
-        if (CliFiles.Count == 0) throw new InvalidDataException("The dependency lock has no ValheimCLI core and packs.");
+        RequireExactCliSet();
         CliManifest.Write(cliManifestPath);
         var core = CliFiles.Where(file => CliManifest.Files.Any(entry => entry.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)
             && entry.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal))).ToList();
@@ -91,11 +91,19 @@ public sealed class NativeDependencyLock
         foreach (var file in plan.Mods.Concat(plan.Plugins).Concat(plan.CliFiles))
             if (!File.Exists(file.File) || !WorldFixture.Hash(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"The pinned file {file.File} ({file.Reason}) is missing or changed; resolve from explicit roots again.");
-        foreach (var declared in plan.CliManifest.Files)
-            if (plan.CliFiles.Count(file => Path.GetFileName(file.File).Equals(declared.File, StringComparison.OrdinalIgnoreCase)
+        plan.RequireExactCliSet();
+        return plan;
+    }
+
+    private void RequireExactCliSet()
+    {
+        CliManifest.Validate();
+        if (CliFiles.Count == 0 || CliFiles.Count != CliManifest.Files.Count)
+            throw new InvalidDataException("The dependency lock must contain exactly the ValheimCLI core and packs selected by its capability manifest.");
+        foreach (var declared in CliManifest.Files)
+            if (CliFiles.Count(file => Path.GetFileName(file.File).Equals(declared.File, StringComparison.OrdinalIgnoreCase)
                 && file.Sha256.Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase)) != 1)
                 throw new InvalidDataException($"The pinned ValheimCLI file {declared.File} is not exactly the build in the lock.");
-        return plan;
     }
 
     private static readonly JsonSerializerOptions Json = new()
