@@ -5,7 +5,7 @@ namespace Valheim.Testing.Game;
 /// <summary>
 /// Plugin pins derived from the staged files instead of typed by hand: the MD5 that <c>cli_manifest</c> and
 /// <c>cli_expect</c> compare, of the exact file the run installs. A typed file name that is not there is refused with what
-/// the folder holds; a typed hash that matches no installed file is what <see cref="ClientRunPlan.Preflight"/> refuses.
+/// the folder holds; a typed hash that matches no installed file is what <see cref="ClientRunPlan.Preflight()"/> refuses.
 /// </summary>
 public static class PluginPins
 {
@@ -60,30 +60,27 @@ internal static class OwnedClientPreflight
     internal const string ScriptEngineConfig = ScriptEngine + ".cfg";
     internal const string CliConfig = "valheimCLI.valheimCLI.cfg";
 
-    internal static void Check(string install, IReadOnlyDictionary<string, string> pins, bool pinned, HostWorldPlan? hostWorld, string? hostWorldName)
+    internal static Dictionary<string, List<string>> Check(string install, IReadOnlyDictionary<string, string> pins, bool pinned, HostWorldPlan? hostWorld, string? hostWorldName)
     {
+        var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         if (pinned)
         {
-            var located = RequireInstalled(install, pins);
+            located = RequireInstalled(install, pins);
             RequireScriptsLoad(install, pins, located);
         }
         RequireStandingFile(install, pins, hostWorld?.WorldUid, hostWorldName);
+        return located;
     }
 
     /// <summary>Where each pinned plugin MD5 is installed (relative paths); refuses one installed nowhere or more than once.</summary>
     internal static Dictionary<string, List<string>> RequireInstalled(string install, IReadOnlyDictionary<string, string> pins)
     {
         var installed = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (string folder in new[] { Plugins, Scripts })
+        foreach (string dll in InstalledDlls(install))
         {
-            string root = Path.Combine(install, folder);
-            if (!Directory.Exists(root)) continue;
-            foreach (string dll in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !InstallPins.IsMacMetadata(path)))
-            {
-                string md5 = PluginPins.Md5(dll);
-                if (!installed.TryGetValue(md5, out var paths)) installed[md5] = paths = [];
-                paths.Add(Path.GetRelativePath(install, dll).Replace('\\', '/'));
-            }
+            string md5 = PluginPins.Md5(dll);
+            if (!installed.TryGetValue(md5, out var paths)) installed[md5] = paths = [];
+            paths.Add(Path.GetRelativePath(install, dll).Replace('\\', '/'));
         }
         var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var problems = new List<string>();
@@ -106,6 +103,18 @@ internal static class OwnedClientPreflight
         return located;
     }
 
+    /// <summary>Every DLL BepInEx can load from the install: <c>BepInEx/plugins</c> and <c>BepInEx/scripts</c>, any subfolder (macOS metadata files skipped).</summary>
+    internal static IEnumerable<string> InstalledDlls(string install)
+    {
+        foreach (string folder in new[] { Plugins, Scripts })
+        {
+            string root = Path.Combine(install, folder);
+            if (!Directory.Exists(root)) continue;
+            foreach (string dll in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !InstallPins.IsMacMetadata(path)).Order(StringComparer.Ordinal))
+                yield return dll;
+        }
+    }
+
     // A file whose name holds the pin's last dotted part (com.jotunn.jotunn: Jotunn.dll), for the hint.
     private static bool Resembles(string path, string plugin)
     {
@@ -121,6 +130,22 @@ internal static class OwnedClientPreflight
     {
         string scripts = Slash(Scripts) + "/";
         var inScripts = located.Where(entry => entry.Value[0].StartsWith(scripts, StringComparison.OrdinalIgnoreCase)).Select(entry => $"{entry.Key} ({entry.Value[0]})").Order(StringComparer.Ordinal).ToList();
+        RequireScriptsLoad(install, pins, located, inScripts);
+    }
+
+    /// <summary>Apply the same startup-loader check to manifest files even when the plan does not pin each pack separately.</summary>
+    internal static void RequireManifestScriptsLoad(string install, IReadOnlyDictionary<string, string> pins,
+        Dictionary<string, List<string>> located, IReadOnlyList<string> manifestFiles)
+    {
+        string scripts = Slash(Scripts) + "/";
+        var inScripts = manifestFiles.Where(path => path.StartsWith(scripts, StringComparison.OrdinalIgnoreCase))
+            .Select(path => $"ValheimCLI manifest file ({path})").ToList();
+        RequireScriptsLoad(install, pins, located, inScripts);
+    }
+
+    private static void RequireScriptsLoad(string install, IReadOnlyDictionary<string, string> pins,
+        Dictionary<string, List<string>> located, List<string> inScripts)
+    {
         if (inScripts.Count == 0) return;
         string listed = string.Join(", ", inScripts);
         string remedy = "or install the current ValheimCLI core and its packs in BepInEx/plugins, which needs no ScriptEngine.";

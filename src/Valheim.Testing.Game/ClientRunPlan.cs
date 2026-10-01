@@ -83,6 +83,27 @@ public sealed class ClientRunPlan
     /// command record starts with the "environment not pinned" marker.
     /// </summary>
     public string Pinning { get; set; } = EnvironmentPinning.Strict;
+    /// <summary>
+    /// The ValheimCLI extension commands (<c>owner/command</c>, such as <c>valheim.world/terrain</c>) the run uses beyond what
+    /// its runner requires itself (<see cref="HostRounds"/> adds <see cref="CliCapabilities.HostedRounds"/>). Checked
+    /// against <see cref="CliManifest"/> before an owned launch, and live once the client answers, owned or attached
+    /// (<see cref="CliCapabilities.Require(GameActor, string[])"/>).
+    /// </summary>
+    public string[] Capabilities { get; set; } = [];
+    /// <summary>
+    /// Owned only: the full path of the <see cref="CliCapabilityManifest"/> of the ValheimCLI core and packs staged in
+    /// <see cref="Install"/>. Set, the preflight refuses before launch an install whose ValheimCLI files are not exactly that
+    /// set by SHA256, or a set without a capability the run uses; a manifest that is missing or malformed is refused, never
+    /// skipped. Left out, no static capability check runs: the live check after the client answers is the only one, and the
+    /// report says so (<see cref="CliPreflight"/>). An attached client's files are its operator's, so it takes no manifest.
+    /// </summary>
+    public string? CliManifest { get; set; }
+    /// <summary>
+    /// Which capability checks apply, for the report's <c>cliPreflight</c>: <c>static and live</c> for an owned client with a
+    /// <see cref="CliManifest"/>, otherwise <c>live only</c> with the reason.
+    /// </summary>
+    [JsonIgnore] public string CliPreflight => !Owned ? "live only: an attached client's files are its operator's"
+        : CliManifest == null ? "live only: the plan names no cliManifest" : "static (cliManifest) and live";
     /// <summary>Whether <see cref="Pinning"/> is <c>strict</c>; refuses any value but <c>strict</c> or <c>none</c>.</summary>
     [JsonIgnore] public bool Pinned => EnvironmentPinning.IsStrict(Pinning, "The client's");
 
@@ -146,6 +167,12 @@ public sealed class ClientRunPlan
         CharacterStart?.Validate(Character);
         if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600 || BepInExSeconds is < 5 or > 1800) throw new ArgumentException("Client timeouts are out of range.");
         HostWorld?.Validate(pinned);
+        if (Capabilities == null || Capabilities.Any(path => path == null || path.Split('/') is not [{ Length: > 0 }, { Length: > 0 }] || path.Any(char.IsWhiteSpace)) || Capabilities.Distinct(StringComparer.Ordinal).Count() != Capabilities.Length)
+            throw new ArgumentException("Name each of the client's capabilities once, as owner/command.");
+        if (CliManifest != null && !Owned)
+            throw new ArgumentException("An attached client's files are its operator's: leave out cliManifest. Its capabilities are checked live once it answers.");
+        if (CliManifest != null && !Path.IsPathFullyQualified(CliManifest))
+            throw new ArgumentException("Give the full path of the client's cliManifest.");
         if (!pinned)
         {
             if (Pins.Count != 0 || InstallPins != null)
@@ -187,24 +214,49 @@ public sealed class ClientRunPlan
     /// <c>BepInEx/plugins</c> or <c>BepInEx/scripts</c> (a hash typed by hand or a wrong staged file matches none), a pinned
     /// plugin in <c>scripts</c> has ScriptEngine pinned and set to <c>LoadOnStart</c>, and ValheimCLI's standing expectations
     /// file, when its config sets one, parses one pin per line, names a world when strict, and agrees with the plan's pins and
-    /// hosted world. An unpinned client skips the plugin checks, which need pins. An attached client's install is its
-    /// operator's and is not read. <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/> runs the
-    /// install part itself; <see cref="HostRounds"/> runs all of it before it places the fixture.
+    /// hosted world. An unpinned client skips the plugin checks, which need pins. With a <see cref="CliManifest"/>, last, the
+    /// install's ValheimCLI files must be exactly its set and provide <see cref="Capabilities"/> (<see cref="CheckCliManifest"/>).
+    /// An attached client's install is its operator's and is not read. <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/>
+    /// runs the install part itself; <see cref="HostRounds"/> runs all of it before it places the fixture.
     /// </summary>
-    public void Preflight()
+    public void Preflight() => Preflight([]);
+
+    /// <summary>
+    /// <see cref="Preflight()"/>, with <paramref name="capabilities"/> (<c>owner/command</c>) that the runner itself uses
+    /// added to <see cref="Capabilities"/> for the manifest check (<see cref="HostRounds"/> passes <see cref="CliCapabilities.HostedRounds"/>).
+    /// </summary>
+    public void Preflight(IEnumerable<string> capabilities)
     {
+        ArgumentNullException.ThrowIfNull(capabilities);
         var identity = HostWorld?.Preflight();
-        if (Owned) CheckOwnedInstall(identity?.Name);
+        if (Owned) CheckOwnedInstall(identity?.Name, capabilities);
     }
 
     /// <summary>The owned launch's checks on this machine's install, in order, returning the launch they allow.</summary>
-    internal System.Diagnostics.ProcessStartInfo CheckOwnedInstall(string? hostWorldName = null)
+    internal System.Diagnostics.ProcessStartInfo CheckOwnedInstall(string? hostWorldName = null, IEnumerable<string>? capabilities = null)
     {
         BepInExLoader.RequirePatchers(Install, Patchers, "client install");
         CheckInstallPins();
         var start = ClientSession.StartInfo(this, ClientLaunch.CurrentHost); // The install's loader and slices.
-        OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);
+        var located = OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);
+        var manifestCheck = CheckCliManifest(capabilities);
+        if (manifestCheck != null)
+            OwnedClientPreflight.RequireManifestScriptsLoad(Install, Pins, located, manifestCheck.Files);
         return start;
+    }
+
+    /// <summary>
+    /// The static capability check alone: an owned client's install against its <see cref="CliManifest"/>
+    /// (<see cref="CliCapabilityManifest.Check"/>), requiring <see cref="Capabilities"/> and <paramref name="capabilities"/>.
+    /// Null, with nothing read, for a plan without a manifest or an attached client, whose capabilities only the live check
+    /// sees. Refuses a missing manifest (<see cref="FileNotFoundException"/>), a malformed one (<see cref="InvalidDataException"/>)
+    /// and an install that is not its set or lacks a capability (<see cref="InvalidOperationException"/>).
+    /// </summary>
+    public CliManifestCheck? CheckCliManifest(IEnumerable<string>? capabilities = null)
+    {
+        if (!Owned || CliManifest == null) return null;
+        var manifest = CliCapabilityManifest.Read(CliManifest);
+        return manifest.Check(Install, Capabilities.Concat(capabilities ?? []));
     }
 
     /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>

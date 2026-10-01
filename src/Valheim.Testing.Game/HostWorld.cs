@@ -286,8 +286,10 @@ public static class HostWorlds
 /// <summary>
 /// The hosted (listen-server) twin of <see cref="ClientRounds"/>: one game client hosts a fixture world and is both the
 /// server and the client of each check. <see cref="Run"/> first runs the plan's static preflight
-/// (<see cref="ClientRunPlan.Preflight"/>: the fixture's pinned files and own world UID, and an owned client's install), so
-/// a wrong fixture or install stops the run before the fixture is copied or the game started. It then places the fixture
+/// (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/>: the fixture's pinned files and own world UID, and an owned
+/// client's install, whose ValheimCLI set must also provide <see cref="CliCapabilities.HostedRounds"/> when the plan names a
+/// <see cref="ClientRunPlan.CliManifest"/>), so a wrong fixture, install or ValheimCLI set stops the run before the fixture
+/// is copied or the game started. It then places the fixture
 /// world (<see cref="HostedWorld"/>), opens the client, requires the session commands the rounds use
 /// (<see cref="CliCapabilities.HostedRounds"/>, naming a missing pack or an old ValheimCLI), then for each of <see cref="Rounds"/>:
 /// <list type="number">
@@ -295,8 +297,8 @@ public static class HostWorlds
 /// <item>runs the mod's measurement, whose <see cref="ClientRound.Server"/> and <see cref="ClientRound.Client"/> are the same host;</item>
 /// <item>between rounds, a confirmed world save (<see cref="SessionControl.Save"/>); after every round the host leaves to its menu, which saves again.</item>
 /// </list>
-/// The report records <c>role</c> <c>host</c>, <c>hostWorld</c>, <c>hostCrossplay</c>, <c>hostRounds</c> and
-/// <c>hostRoundsCompleted</c>. The first failure stops the rounds and is rethrown. The client is closed in every outcome
+/// The report records <c>role</c> <c>host</c>, <c>hostWorld</c>, <c>hostCrossplay</c>, <c>hostRounds</c>,
+/// <c>hostRoundsCompleted</c> and <c>cliPreflight</c> (<see cref="ClientRunPlan.CliPreflight"/>). The first failure stops the rounds and is rethrown. The client is closed in every outcome
 /// (an owned client stopped, an attached one detached), then the world is moved into the evidence
 /// (<c>hostWorldEvidence</c>). After a failure an attached client may still host the world, so its world is left in place
 /// and named in <c>hostWorldLeftInPlace</c>: remove it once the client has left it.
@@ -322,6 +324,7 @@ public sealed class HostRounds
         Report.Provenance["hostCrossplay"] = plan.Crossplay ? "true" : "false";
         Report.Provenance["hostRounds"] = string.Join(",", Rounds);
         Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
+        Report.Provenance["cliPreflight"] = Client.CliPreflight;
         var completed = new List<string>();
         HostedWorld? world = null;
         ClientSession? session = null;
@@ -329,7 +332,7 @@ public sealed class HostRounds
         try
         {
             Report.Step(Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
-                Client.Preflight);
+                () => Client.Preflight(CliCapabilities.HostedRounds));
             string saveDirectory = plan.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(Client.Owned ? ClientLaunch.Detect(Client.Install) : HostedWorld.CurrentPlatform);
             Report.Step("place the disposable fixture world in the client's local worlds", () => world = HostedWorld.Place(plan, saveDirectory, Output, Client.Pinned));
             var placed = world!;
