@@ -64,8 +64,13 @@ namespace Valheim.Testing.Doubles
         /// <summary>A new, empty ZDOMan (this session's id is 1).</summary>
         public ValheimWorldScope WithZdos() { ZDOMan.instance = new ZDOMan(); return this; }
         public ValheimWorldScope WithZoneSystem() { ZoneSystem.instance = new ZoneSystem(); return this; }
-        /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>), and no Unity components yet for FindObjectsByType and RunFrame.</summary>
-        public ValheimWorldScope WithScene() { ZNetScene.instance = new ZNetScene(); UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>(); return this; }
+        /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>), and no GameObjects or Unity components yet for FindObjectsByType and RunFrame.</summary>
+        public ValheimWorldScope WithScene()
+        {
+            ZNetScene.instance = new ZNetScene();
+            UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>(); UnityEngine.Object.s_unityGameObjects = new List<UnityEngine.GameObject>();
+            return this;
+        }
         /// <summary>A new <c>ZNet</c> with no peers, as the server or a client, a new <c>ZRoutedRpc</c> and a new Jotunn <c>NetworkManager</c>.</summary>
         public ValheimWorldScope WithNetwork(bool server = true)
         {

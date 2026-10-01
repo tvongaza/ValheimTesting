@@ -41,20 +41,30 @@ namespace UnityEngine
         /// searches and <see cref="RunFrame"/> drives. <c>ValheimWorldScope.WithScene</c> gives a test its own.
         /// </summary>
         internal static List<Component> s_unityComponents = new();
+        /// <summary>
+        /// Every GameObject made since the scene began, with <c>new GameObject</c> or by <c>Instantiate</c>, as Unity puts
+        /// each one in the scene: what <see cref="FindObjectsByType{T}(FindObjectsSortMode)"/> searches for GameObjects.
+        /// <c>ValheimWorldScope.WithScene</c> gives a test its own.
+        /// </summary>
+        internal static List<GameObject> s_unityGameObjects = new();
 
         /// <summary>
-        /// Every live component of type <typeparamref name="T"/> on an object active in its hierarchy (or also inactive
-        /// ones with <see cref="FindObjectsInactive.Include"/>), as Unity 6's FindObjectsByType. Only components attached
-        /// with <c>AddComponent</c> or made by <c>Instantiate</c> are found.
+        /// As Unity 6's FindObjectsByType: every live GameObject, or component of type <typeparamref name="T"/>, in the
+        /// scene and active in its hierarchy (inactive ones too with <see cref="FindObjectsInactive.Include"/>). A GameObject
+        /// counts with no components. Destroyed objects and assets (<see cref="GameObject.IsAsset"/>, with their children
+        /// and components) are not found. Only components attached with <c>AddComponent</c> or made by <c>Instantiate</c>
+        /// are found.
         /// </summary>
         public static T[] FindObjectsByType<T>(FindObjectsSortMode sortMode) where T : Object => FindObjectsByType<T>(FindObjectsInactive.Exclude, sortMode);
         public static T[] FindObjectsByType<T>(FindObjectsInactive findObjectsInactive, FindObjectsSortMode sortMode) where T : Object
         {
             s_unityComponents.RemoveAll(c => c.Destroyed);
+            s_unityGameObjects.RemoveAll(o => o.Destroyed);
+            bool Found(GameObject go) => go.InScene && (findObjectsInactive == FindObjectsInactive.Include || go.activeInHierarchy);
             var found = new List<T>();
+            foreach (var go in s_unityGameObjects) if (go is T match && Found(go)) found.Add(match);
             foreach (var component in s_unityComponents)
-                if (component is T match && component.m_gameObject is { Destroyed: false } owner &&
-                    (findObjectsInactive == FindObjectsInactive.Include || owner.activeInHierarchy))
+                if (component is T match && component.m_gameObject is { Destroyed: false } owner && Found(owner))
                     found.Add(match);
             if (sortMode == FindObjectsSortMode.InstanceID) found.Sort((a, b) => a.GetInstanceID().CompareTo(b.GetInstanceID()));
             return found.ToArray();
@@ -481,6 +491,39 @@ namespace UnityEngine
             ThrowIfDestroyed();
             foreach (var component in AllComponents()) if (!component.Destroyed && component is T match) return match;
             return null!;
+        }
+        /// <summary>
+        /// The first live component that is a <paramref name="type"/> (a base type or interface matches too), or null, as
+        /// <see cref="GetComponent{T}"/>. As Unity, refuses a type that is neither a component nor an interface.
+        /// </summary>
+        public Component GetComponent(Type type)
+        {
+            ThrowIfDestroyed();
+            CheckComponentType(type);
+            foreach (var component in AllComponents()) if (!component.Destroyed && type.IsInstanceOfType(component)) return component;
+            return null!;
+        }
+        internal static void CheckComponentType(Type type)
+        {
+            if (type is null) throw new ArgumentNullException(nameof(type));
+            if (!typeof(Component).IsAssignableFrom(type) && !type.IsInterface)
+                throw new ArgumentException($"GetComponent requires that the requested component '{type.Name}' derives from MonoBehaviour or Component or is an interface.");
+        }
+
+        /// <summary>
+        /// Not a Unity member: true for an object that stands for one of the game's assets, such as a prefab loaded from
+        /// its asset bundles (<see cref="global::ZNetScene.AddPrefab"/> sets it). An asset, its children and their
+        /// components are not in the scene, so FindObjectsByType does not find them; <c>Instantiate</c>'s copies are.
+        /// </summary>
+        public bool IsAsset;
+        /// <summary>In the scene: neither it nor any parent is an asset.</summary>
+        internal bool InScene
+        {
+            get
+            {
+                for (GameObject? go = this; go is not null; go = go.m_transform?.m_parent?.m_gameObject) if (go.IsAsset) return false;
+                return true;
+            }
         }
         public T[] GetComponents<T>() where T : class
         {
