@@ -59,4 +59,31 @@ public static class DefaultSmokeWorld
             throw;
         }
     }
+
+    /// <summary>
+    /// Creates the same pinned world in a dedicated server's <c>-savedir</c> layout,
+    /// <c>worlds_local/VTDefaultSmoke/</c>, under a new root. It checks the embedded world through
+    /// <see cref="Prepare"/> before moving its own files; no existing server save is changed.
+    /// </summary>
+    public static WorldIdentity PrepareServerSaveRoot(string newRoot)
+    {
+        newRoot = Path.GetFullPath(newRoot);
+        if (Path.Exists(newRoot)) throw new IOException("Use a new directory for the dedicated smoke save; an existing save is never replaced.");
+        Directory.CreateDirectory(newRoot);
+        try
+        {
+            string temporary = Path.Combine(newRoot, "verified-fixture");
+            WorldIdentity identity = Prepare(temporary);
+            string local = Path.Combine(newRoot, "worlds_local");
+            Directory.CreateDirectory(local);
+            Directory.Move(Path.Combine(temporary, Name), Path.Combine(local, Name));
+            Directory.Delete(temporary);
+            return identity;
+        }
+        catch
+        {
+            Directory.Delete(newRoot, recursive: true);
+            throw;
+        }
+    }
 }

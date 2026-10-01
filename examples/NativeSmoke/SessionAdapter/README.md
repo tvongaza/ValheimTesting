@@ -1,0 +1,5 @@
+# Native smoke dedicated-server session adapter
+
+This BepInEx plugin is installed **only in a disposable test server**. It serves one read-only ValheimCLI capability, `valheim.testing.native-smoke/session`, through `Valheim.Testing.Adapter.TestExtension`. The owned runner sets `VT_NATIVE_SMOKE_SESSION_TOKEN` and `VT_NATIVE_SMOKE_PLUGIN_GUIDS` (semicolon-separated selected GUIDs). The reply includes process, save root, dedicated mode, world readiness and connection readiness; `complete` is true only once every deliberately selected plugin is present in BepInEx's loaded plugin registry. The runner must also pin each selected DLL and CLI file by hash: a GUID alone does not prove the expected build.
+
+Compile with `-p:ValheimPath=<matching game/server folder> -p:CliDll=<exact valheimCLI.dll>`. The adapter's linked source comes from this repository's `Valheim.Testing.Adapter` package. Do not copy this DLL into a production server or a clean joined client. The next #156 step is the one-command dedicated-server staging and clean-client join, with a native run against ProceduralRoads and MWL.
