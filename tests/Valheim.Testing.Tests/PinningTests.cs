@@ -39,15 +39,8 @@ public sealed class PinningTests : IDisposable
     // write is on its own execution flow, as a test of another class is, and is made deterministically mid-capture.
     [Fact] public void ACaptureHoldsOnlyItsOwnWarningsWhileAnotherTestWarns()
     {
-        // The negative control: swapping the global writer, as this class did before, catches the other test's warning.
-        string swapped = WhileAnotherTestWarns(action =>
-        {
-            var previous = Console.Error; var captured = new StringWriter();
-            Console.SetError(captured);
-            try { action(); } finally { Console.SetError(previous); }
-            return captured.ToString();
-        });
-        Assert.Contains("WARNING: environment not pinned: game actor \"other test\"", swapped);
+        // This test fails with the previous global-swap Stderr helper, as the separate negative-control run confirmed.
+        // Do not install that helper here: even a brief process-global swap can capture another parallel test's output.
         string own = WhileAnotherTestWarns(Stderr);
         Assert.DoesNotContain("not pinned", own);
         // What the action writes, from threads and tasks it starts too, is still its own.
