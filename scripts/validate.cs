@@ -5,16 +5,32 @@
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example,
 // executes the two no-game examples, runs the package-consuming mod tests, packs the libraries into the local feed and
 // runs the packed binding-check tool.
+//
+// Each command is announced with the time, watched while it runs and stopped at a deadline (#171): twice a macOS CI job sat
+// in this script until GitHub cancelled it, its runner no longer answering, and the whole log was lost. Now a command that
+// outlives VALHEIM_TESTING_VALIDATE_DEADLINE (seconds; default 600, five times the slowest normal command) or that runs
+// the machine out of disk or memory is stopped with a process table first, while the runner can still report it. Test runs
+// name a test that makes no progress for five minutes (--blame-hang). The same lines go to artifacts/validate/validate.log,
+// next to the test results, for CI to keep when the step fails.
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 string root = FindRoot();
+string results = Path.Combine(root, "artifacts", "validate");
+Directory.CreateDirectory(results);
+string transcript = Path.Combine(results, "validate.log");
+File.WriteAllText(transcript, "");
+var started = Stopwatch.StartNew();
+TimeSpan deadline = TimeSpan.FromSeconds(Environment.GetEnvironmentVariable("VALHEIM_TESTING_VALIDATE_DEADLINE") is { Length: > 0 } seconds
+    ? int.Parse(seconds, System.Globalization.CultureInfo.InvariantCulture)
+    : 600);
 
-Run("dotnet", "test", "tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "-c", "Release", "-m:1");
-Run("dotnet", "test", "tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj", "-c", "Release", "-m:1");
-Run("dotnet", "test", "tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj", "-c", "Release", "-m:1");
+Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj");
+Test("tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj");
+Test("tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj");
 // The adapter source is compiled into a mod's game-side adapter against the game; here, against declared signatures
 // and the real HarmonyX (see the project for what that does and does not prove).
 Run("dotnet", "build", "tests/Valheim.Testing.Adapter.CompileCheck/Valheim.Testing.Adapter.CompileCheck.csproj", "-c", "Release", "-m:1");
@@ -49,7 +65,7 @@ try
         """);
     string cache = Path.Combine(consumer, "packages");
     // The package's source compiles into the consumer: an obsolete API in it would be every adopting mod's warning.
-    Run("dotnet", "test", project, "-c", "Release", "-m:1", "-p:RestorePackagesPath=" + cache, "-p:WarningsAsErrors=CS0612%3BCS0618%3BSYSLIB0050%3BSYSLIB0051");
+    Test(project, "-p:RestorePackagesPath=" + cache, "-p:WarningsAsErrors=CS0612%3BCS0618%3BSYSLIB0050%3BSYSLIB0051");
     string packed = Path.Combine(root, ".packages", $"Valheim.Testing.Doubles.{doublesVersion}.nupkg");
     string restored = Path.Combine(cache, "valheim.testing.doubles", doublesVersion.ToLowerInvariant(), $"valheim.testing.doubles.{doublesVersion.ToLowerInvariant()}.nupkg");
     if (!File.Exists(restored) || !File.ReadAllBytes(packed).AsSpan().SequenceEqual(File.ReadAllBytes(restored)))
@@ -64,7 +80,7 @@ foreach (string project in Directory.GetFiles(Path.Combine(root, "examples"), "*
              .OrderBy(p => p, StringComparer.Ordinal))
     Run("dotnet", "build", project, "-c", "Release", "-m:1");
 // The full-life-cycle example's external projects; its game-side mod and adapter need a game install and build elsewhere.
-Run("dotnet", "test", "examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj", "-c", "Release", "-m:1");
+Test("examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj");
 Run("dotnet", "run", "--project", "examples/NoGameTerrain", "-c", "Release", "--no-build");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
 foreach (string name in new[] { "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool" })
@@ -90,7 +106,7 @@ finally
 {
     if (Directory.Exists(tools)) Directory.Delete(tools, recursive: true);
 }
-Console.WriteLine("Local validation passed.");
+Note("Local validation passed.");
 return 0;
 
 string SourceVersion(string name) =>
@@ -119,15 +135,133 @@ static string FindRoot()
     throw new InvalidOperationException("Run from inside the ValheimTesting repository.");
 }
 
+// A test run's results go under artifacts/validate. When its test host is stopped (--blame-hang) or crashes, vstest reports
+// only "Test host process crashed"; the blame sequence file says which tests had started and not completed, so name them.
+void Test(string project, params string[] extra)
+{
+    string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
+    try
+    {
+        Run("dotnet", ["test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
+            "--results-directory", output, .. extra]);
+    }
+    catch
+    {
+        if (Directory.Exists(output))
+            foreach (string sequence in Directory.GetFiles(output, "Sequence_*.xml", SearchOption.AllDirectories))
+                foreach (var test in XDocument.Load(sequence).Root!.Elements("Test").Where(t => (string?)t.Attribute("Completed") != "True"))
+                    Note($"started and not completed: {(string?)test.Attribute("DisplayName")} ({Path.GetRelativePath(results, sequence)})");
+        throw;
+    }
+}
+
 void Run(string file, params string[] arguments)
 {
+    string command = file + " " + string.Join(' ', arguments);
+    Note("start: " + command);
     var info = new ProcessStartInfo(file) { UseShellExecute = false, WorkingDirectory = root };
     foreach (string argument in arguments) info.ArgumentList.Add(argument);
     using Process process = Process.Start(info) ?? throw new InvalidOperationException("Could not start " + file);
-    process.WaitForExit();
+    var clock = Stopwatch.StartNew();
+    // Waits for the exit; each minute without one says what the machine looks like, so a slow command leaves a trail.
+    while (!process.WaitForExit(TimeSpan.FromSeconds(60)))
+    {
+        var (state, starved) = Machine();
+        Note($"still running after {Elapsed(clock.Elapsed)}: {command}; {state}");
+        string? reason = clock.Elapsed >= deadline ? $"no exit within the {Elapsed(deadline)} deadline" : starved;
+        if (reason == null) continue;
+        Note($"stopping {command}: {reason}");
+        Diagnose();
+        try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* Exited meanwhile. */ }
+        process.WaitForExit();
+        throw new TimeoutException($"Validation command stopped ({reason}): {command}");
+    }
     if (process.ExitCode != 0)
     {
-        Console.Error.WriteLine($"FAILED ({process.ExitCode}): {file} {string.Join(' ', arguments)}");
+        Note($"FAILED ({process.ExitCode}) after {Elapsed(clock.Elapsed)}: {command}");
         throw new InvalidOperationException("Validation command failed with exit code " + process.ExitCode);
+    }
+    Note($"done in {Elapsed(clock.Elapsed)}: {command}");
+}
+
+// One line to the console and the transcript: UTC time and time since validation started.
+void Note(string text)
+{
+    string line = $"[validate {DateTime.UtcNow:HH:mm:ss}Z +{Elapsed(started.Elapsed)}] {text}";
+    Console.Out.WriteLine(line);
+    Console.Out.Flush();
+    File.AppendAllText(transcript, line + Environment.NewLine);
+}
+
+static string Elapsed(TimeSpan span) => $"{(int)span.TotalMinutes}m{span.Seconds:00}s";
+
+// Free disk where builds and temporary copies go, and memory as the system judges it. Starved (a reason) when the disk has
+// under 1 GiB left or the system reports critical memory pressure: either can stop the CI runner itself from reporting.
+(string State, string? Starved) Machine()
+{
+    var parts = new List<string>();
+    string? starved = null;
+    foreach (string path in new[] { root, Path.GetTempPath() }.Select(p => Path.GetPathRoot(Path.GetFullPath(p))!).Distinct())
+    {
+        long free = new DriveInfo(path).AvailableFreeSpace;
+        parts.Add($"free disk {path} {free / (1024.0 * 1024 * 1024):0.0} GiB");
+        if (free < 1L << 30) starved ??= $"under 1 GiB free on {path}";
+    }
+    if (OperatingSystem.IsMacOS())
+    {
+        // kern.memorystatus_vm_pressure_level: 1 normal, 2 warning, 4 critical.
+        string level = Capture("sysctl", "-n", "kern.memorystatus_vm_pressure_level").Trim();
+        string free = Capture("memory_pressure", "-Q").Split('\n').FirstOrDefault(l => l.Contains("free percentage"))?.Split(':').Last().Trim() ?? "?";
+        parts.Add($"memory pressure level {level}, {free} free");
+        if (level == "4") starved ??= "critical memory pressure";
+    }
+    else if (OperatingSystem.IsLinux())
+    {
+        var info = File.ReadLines("/proc/meminfo").Select(l => l.Split(':')).ToDictionary(p => p[0], p => long.Parse(p[1].Trim().Split(' ')[0]));
+        double available = (double)info["MemAvailable"] / info["MemTotal"];
+        parts.Add($"memory {available:P0} available");
+        if (available < 0.03) starved ??= "under 3% of memory available";
+    }
+    Process[] all = Process.GetProcesses();
+    parts.Add($"{all.Length} processes");
+    foreach (Process process in all) process.Dispose();
+    return (string.Join(", ", parts), starved);
+}
+
+// Before a stop: every process (with parents, so the stuck command's tree can be read off) and the disks.
+void Diagnose()
+{
+    string processes = OperatingSystem.IsWindows()
+        ? Capture("tasklist")
+        : Capture("ps", "-A", "-o", "pid,ppid,pgid,stat,etime,time,rss,%cpu,command");
+    string disks = OperatingSystem.IsWindows() ? "" : Capture("df", "-h");
+    foreach (string block in new[] { processes, disks })
+    {
+        Console.Out.WriteLine(block);
+        File.AppendAllText(transcript, block + Environment.NewLine);
+    }
+    Console.Out.Flush();
+}
+
+// A diagnostic command's output, or why there is none; never waits more than 30 s.
+static string Capture(string file, params string[] arguments)
+{
+    try
+    {
+        var info = new ProcessStartInfo(file) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (string argument in arguments) info.ArgumentList.Add(argument);
+        using Process process = Process.Start(info)!;
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(30_000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            return $"({file} did not finish within 30 s)";
+        }
+        return output.Wait(5_000) ? output.Result + (error.Wait(5_000) ? error.Result : "") : $"({file}: no output)";
+    }
+    catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+    {
+        return $"({file}: {e.Message})";
     }
 }
