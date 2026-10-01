@@ -3,8 +3,8 @@
 //   dotnet run scripts/release-consumer.cs -- pins
 //   dotnet run scripts/release-consumer.cs -- consumer [--wait-minutes 30]
 //
-// pins: every copyable version pin in the README, CONTRIBUTING, docs and examples must name the newest version of its
-// package on NuGet.org. A pin to a superseded version, or to a version NuGet.org does not serve, fails. Copyable pins are
+// pins: every copyable version pin in the README, CONTRIBUTING, docs and examples must name a version served by
+// NuGet.org. A missing version fails; an older tested version remains valid and reproducible. Copyable pins are
 // a PackageReference, a `dotnet tool install` or `dotnet add package` command, `-p:ToolkitPackageVersion=` (the Game
 // package), and a backticked package ID followed by a backticked version, as in the package table. History in prose
 // ("new in Game preview.11") is not a pin. Dated native-validation records are not scanned.
@@ -61,11 +61,9 @@ async Task<int> Pins()
     foreach (Pin pin in pins)
     {
         List<string> versions = published[pin.Id];
-        string? newest = versions.Count == 0 ? null : versions.Max(VersionComparer.Instance);
         string? problem =
-            newest == null ? $"{pin.Id} is not on NuGet.org" :
-            !versions.Contains(pin.Version, StringComparer.OrdinalIgnoreCase) ? $"{pin.Id} {pin.Version} is not on NuGet.org (newest {newest})" :
-            VersionComparer.Instance.Compare(pin.Version, newest) < 0 ? $"{pin.Id} {pin.Version} is superseded by {newest}" :
+            versions.Count == 0 ? $"{pin.Id} is not on NuGet.org" :
+            !versions.Contains(pin.Version, StringComparer.OrdinalIgnoreCase) ? $"{pin.Id} {pin.Version} is not on NuGet.org" :
             null;
         Console.WriteLine($"{(problem == null ? "ok  " : "FAIL")} {pin.File}:{pin.Line} {pin.Id} {pin.Version}");
         if (problem == null) continue;
@@ -74,8 +72,8 @@ async Task<int> Pins()
         if (actions) Console.WriteLine($"::error file={pin.File},line={pin.Line}::{problem}");
     }
     Console.WriteLine(bad == 0
-        ? $"All {pins.Count} documented pins name the newest published version."
-        : $"{bad} of {pins.Count} documented pins are stale. Update them to the newest published version (CONTRIBUTING.md, release step 4).");
+        ? $"All {pins.Count} documented pins name versions served by NuGet.org."
+        : $"{bad} of {pins.Count} documented pins are not served by NuGet.org.");
     return bad == 0 ? 0 : 1;
 }
 
@@ -239,6 +237,7 @@ List<Pin> FindPins()
         new Regex($@"Include=""{Id}""\s+Version=""\[?{Version}\]?"""),
         new Regex($@"dotnet\s+(?:tool\s+install|add\s+package)\s+{Id}\s+--version\s+{Version}"),
         new Regex($@"`{Id}`[\s|]*`{Version}`"),
+        new Regex($@"\[{Id}\]\(https://www\.nuget\.org/packages/[^)]+\)\s*\|\s*`{Version}`"),
     };
     var toolkit = new Regex($@"ToolkitPackageVersion={Version}");
     var pins = new List<Pin>();
@@ -340,38 +339,3 @@ static string FindRoot()
 }
 
 record Pin(string File, int Line, string Id, string Version);
-
-// NuGet's SemVer 2 order for the versions used here: numeric release parts, then a prerelease sorts before its release,
-// and prerelease labels compare part by part, numbers numerically.
-sealed class VersionComparer : IComparer<string>
-{
-    public static readonly VersionComparer Instance = new();
-
-    public int Compare(string? x, string? y)
-    {
-        var (xr, xp) = Split(x!);
-        var (yr, yp) = Split(y!);
-        for (int i = 0; i < Math.Max(xr.Length, yr.Length); i++)
-        {
-            int c = (i < xr.Length ? xr[i] : 0).CompareTo(i < yr.Length ? yr[i] : 0);
-            if (c != 0) return c;
-        }
-        if (xp == null || yp == null) return xp == null ? (yp == null ? 0 : 1) : -1;
-        string[] xs = xp.Split('.'), ys = yp.Split('.');
-        for (int i = 0; i < Math.Min(xs.Length, ys.Length); i++)
-        {
-            bool xn = long.TryParse(xs[i], out long xv), yn = long.TryParse(ys[i], out long yv);
-            int c = xn && yn ? xv.CompareTo(yv) : xn ? -1 : yn ? 1 : string.Compare(xs[i], ys[i], StringComparison.OrdinalIgnoreCase);
-            if (c != 0) return c;
-        }
-        return xs.Length.CompareTo(ys.Length);
-    }
-
-    static (long[] Release, string? Prerelease) Split(string version)
-    {
-        string core = version.Split('+')[0];
-        int dash = core.IndexOf('-');
-        string release = dash < 0 ? core : core[..dash];
-        return (release.Split('.').Select(long.Parse).ToArray(), dash < 0 ? null : core[(dash + 1)..]);
-    }
-}

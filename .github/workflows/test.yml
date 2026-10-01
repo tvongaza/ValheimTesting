@@ -64,9 +64,9 @@ jobs:
       - run: dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
         working-directory: ${{ runner.temp }}/mod
   doc-pins:
-    name: doc pins (newest published)
-    # Every copyable version pin in the README, docs and examples must name the newest version on NuGet.org. After a release
-    # this fails until the docs follow-up PR lands (CONTRIBUTING.md, release step 4); it reads NuGet.org and needs no build.
+    name: doc pins (published versions)
+    # Every copyable pin must resolve on NuGet.org. Examples keep their tested exact versions until intentionally upgraded;
+    # a new package release alone does not invalidate them. This reads NuGet.org and needs no build.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
