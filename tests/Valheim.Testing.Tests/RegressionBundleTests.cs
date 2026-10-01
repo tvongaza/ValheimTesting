@@ -37,7 +37,20 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Equal(new[] { "run-manifest.json", "run-manifest.json" }, manifest.Results.Select(result => result.Sha256Source));
         Assert.Contains(manifest.Checks, check => check.StartsWith("the arms' command traces pin the same world", StringComparison.Ordinal));
         RegressionBundle.Verify(output, _rig.Spec());
-        Assert.False(Directory.Exists(output + ".incomplete"));
+        Assert.Empty(Directory.EnumerateDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".incomplete-*"));
+    }
+
+    [Fact] public void AnExistingIncompleteDirectoryIsNeverDeleted()
+    {
+        string output = _rig.Output();
+        string existing = output + ".incomplete";
+        Directory.CreateDirectory(existing);
+        string valued = Path.Combine(existing, "keep.txt");
+        File.WriteAllText(valued, "not created by this run");
+
+        RegressionBundle.Create(_rig.Spec(), output, _rig.Sources);
+        Assert.Equal("not created by this run", File.ReadAllText(valued));
+        Assert.True(Directory.Exists(output));
     }
 
     // ---- names and paths of the environment ----
@@ -49,7 +62,7 @@ public sealed class RegressionBundleTests : IDisposable
         var error = Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), output, _rig.Sources));
         Assert.Contains("Scenario.cs:5: names plugin ProceduralRoads, which is not in the plugin allowlist", error.Message);
         Assert.False(Directory.Exists(output));
-        Assert.False(Directory.Exists(output + ".incomplete"));
+        Assert.Empty(Directory.EnumerateDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".incomplete-*"));
     }
 
     [Fact] public void APluginTheNativeRunPinnedOutsideTheAllowlistCannotBeNamedAnywhere()

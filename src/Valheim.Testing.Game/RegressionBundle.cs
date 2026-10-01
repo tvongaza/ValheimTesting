@@ -265,8 +265,8 @@ public static class RegressionBundle
         var native = spec.Native == null ? null : CheckNative(spec);
         if (native != null) checks.AddRange(native.Excerpts);
 
-        string staging = output + ".incomplete";
-        if (Path.Exists(staging)) Directory.Delete(staging, recursive: true);
+        // A unique sibling is ours to clean up. A predictable ".incomplete" directory may belong to someone else.
+        string staging = output + ".incomplete-" + Guid.NewGuid().ToString("N");
         Directory.CreateDirectory(staging);
         try
         {
