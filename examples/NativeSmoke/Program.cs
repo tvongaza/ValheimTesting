@@ -1,11 +1,11 @@
 using System.Diagnostics;
 using Valheim.Testing.Game;
 
-// This first slice is a client-hosted smoke. A dedicated server and exact multi-mod arms follow in #156/#158.
-if (!Arguments.TryRead(args, out var options, out var mods, out var error))
+// This first slice is a client-hosted smoke. An owned dedicated server follows in #156.
+if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: native-smoke --game DIR --mod DLL [--mod DLL ...] --source COMMIT --cli-manifest FILE --cli-files DIR --steam-userdata DIR --output NEW_DIR [--search-root DIR] [--loader-package FILE] [--port 9500] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: native-smoke --game DIR --mod DLL [--mod DLL ...] --source COMMIT --cli-manifest FILE --cli-files DIR --steam-userdata DIR --output NEW_DIR [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--port 9500] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -35,14 +35,34 @@ try
     {
         Mods = selectedMods, GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(game))!,
         BepInExCore = core, CliManifest = cliManifest, CliFiles = cliFiles,
-        SearchRoots = options.TryGetValue("--search-root", out string? search) ? [Path.GetFullPath(search)] : [],
+        SearchRoots = roots!.Select(Path.GetFullPath).ToList(),
         Capabilities = [.. CliCapabilities.HostedRounds],
+        OptionalReferences = [.. optionalReferences!],
     };
     var dependencies = NativeDependencyResolver.Resolve(request);
     Directory.CreateDirectory(output);
     dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
     if (!dependencies.Ready)
         throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
+    NativeDependencyLock? comparison = null;
+    string? compareMod = null;
+    if (options.TryGetValue("--compare-mod", out string? compareFile))
+    {
+        compareMod = Path.GetFullPath(compareFile);
+        if (!File.Exists(compareMod)) throw new FileNotFoundException("--compare-mod file does not exist: " + compareMod, compareMod);
+        var compareRequest = new NativeDependencyRequest
+        {
+            Mods = [compareMod, .. selectedMods.Skip(1)], GameManaged = request.GameManaged,
+            BepInExCore = request.BepInExCore, CliManifest = cliManifest, CliFiles = cliFiles,
+            SearchRoots = [.. request.SearchRoots], Capabilities = [.. request.Capabilities],
+            OptionalReferences = [.. request.OptionalReferences],
+        };
+        comparison = NativeDependencyResolver.Resolve(compareRequest);
+        comparison.Write(Path.Combine(output, "comparison-dependencies.lock.json"));
+        if (!comparison.Ready)
+            throw new InvalidDataException("Comparison dependency choices remain: " + string.Join("; ", comparison.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
+        dependencies.RequireSameFixedInputs(comparison);
+    }
 
     var world = DefaultSmokeWorld.Prepare(Path.Combine(output, "world-source"));
     var character = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
@@ -54,7 +74,7 @@ try
         Client = new RegressionClient { Port = port, Character = DefaultSmokeCharacter.Name,
             CharacterStore = character.Root, SteamUserDataDirectory = steamUserdata },
         Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
-            { ["smoke"] = new() { File = mod, Sha256 = WorldFixture.Hash(mod), Commit = options["--source"] } } },
+            { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = WorldFixture.Hash(mod), Commit = options["--source"] } } },
         LoaderPackage = loader,
     };
     if (options.TryGetValue("--expected-log-error", out string? expectedError))
@@ -64,12 +84,22 @@ try
     // TargetedRegression calls one build its arm; other deliberately selected mods are fixed plugins in that same arm.
     // The resolver checks their combined dependency closure, duplicate GUIDs and declared incompatibilities first.
     environment.Plugins.AddRange(dependencies.Mods.Skip(1).Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }));
+    if (comparison != null)
+        environment.Mod.Arms.Add("after", new RegressionArm
+        { File = compareMod!, Sha256 = WorldFixture.Hash(compareMod!), Commit = options["--compare-source"] });
     environment.Write(Path.Combine(output, "environment.json"));
     var runner = new TargetedRegression(environment);
-    var report = runner.Run("smoke", Path.Combine(output, "evidence"), "selected plugin loads in a hosted fixture",
-        ["first"], _ => { }, cancel.Token);
-    Console.WriteLine((report.Passed ? "PASS" : "FAIL") + $": hosted fixture and {selectedMods.Count} selected mod(s); {elapsed.Elapsed.TotalSeconds:F1}s; private evidence in {output}");
-    return report.Passed ? 0 : 1;
+    bool passed = true;
+    foreach (string arm in environment.Mod.Arms.Keys)
+    {
+        var report = runner.Run(arm, Path.Combine(output, "evidence", arm), "selected plugin loads in a hosted fixture",
+            ["first"], _ => { }, cancel.Token);
+        passed &= report.Passed;
+        // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.
+        if (!report.Passed) break;
+    }
+    Console.WriteLine((passed ? "PASS" : "FAIL") + $": hosted fixture, {selectedMods.Count} selected mod(s), {environment.Mod.Arms.Count} arm(s); {elapsed.Elapsed.TotalSeconds:F1}s; private evidence in {output}");
+    return passed ? 0 : 1;
 }
 catch (Exception failure) when (failure is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException or FormatException)
 {
@@ -90,22 +120,33 @@ finally
 file static class Arguments
 {
     private static readonly HashSet<string> Required = ["--game", "--mod", "--source", "--cli-manifest", "--cli-files", "--steam-userdata", "--output"];
-    private static readonly HashSet<string> Allowed = [.. Required, "--search-root", "--loader-package", "--port", "--expected-log-error", "--expected-log-reason"];
+    private static readonly HashSet<string> Allowed = [.. Required, "--loader-package", "--port", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
 
-    public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods, out string error)
+    public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
+        out List<string>? roots, out List<string>? optionalReferences, out string error)
     {
         result = null;
         mods = null;
+        roots = null;
+        optionalReferences = null;
         error = "";
         if (args.Length % 2 != 0) { error = "Every option needs one value."; return false; }
         var found = new Dictionary<string, string>(StringComparer.Ordinal);
         var selected = new List<string>();
+        var searchRoots = new List<string>();
+        var optional = new List<string>();
         for (int i = 0; i < args.Length; i += 2)
         {
             if (args[i] == "--mod" && !string.IsNullOrWhiteSpace(args[i + 1]))
             {
                 selected.Add(args[i + 1]);
                 found.TryAdd("--mod", args[i + 1]);
+                continue;
+            }
+            if (args[i] == "--search-root" || args[i] == "--optional-reference")
+            {
+                if (string.IsNullOrWhiteSpace(args[i + 1])) { error = "Empty option: " + args[i]; return false; }
+                (args[i] == "--search-root" ? searchRoots : optional).Add(args[i + 1]);
                 continue;
             }
             if (!Allowed.Contains(args[i]) || !found.TryAdd(args[i], args[i + 1]) || string.IsNullOrWhiteSpace(args[i + 1]))
@@ -115,8 +156,12 @@ file static class Arguments
         if (missing.Count != 0) { error = "Missing: " + string.Join(", ", missing); return false; }
         if (found.ContainsKey("--expected-log-error") != found.ContainsKey("--expected-log-reason"))
         { error = "--expected-log-error needs --expected-log-reason (and vice versa); an unexplained error is never ignored."; return false; }
+        if (found.ContainsKey("--compare-mod") != found.ContainsKey("--compare-source"))
+        { error = "--compare-mod needs --compare-source (and vice versa); both builds need provenance."; return false; }
         result = found;
         mods = selected;
+        roots = searchRoots;
+        optionalReferences = optional;
         return true;
     }
 }

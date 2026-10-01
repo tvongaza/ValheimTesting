@@ -59,6 +59,31 @@ public sealed class NativeDependencyLock
     public List<NativeDependencyGap> Gaps { get; set; } = [];
     [JsonIgnore] public bool Ready => Gaps.Count == 0;
 
+    /// <summary>
+    /// Requires an A/B comparison to change only the first selected mod. Companions, their resolved dependencies,
+    /// optional-reference decisions and ValheimCLI must remain byte-identical; otherwise a difference in the native
+    /// result could be caused by the environment rather than that mod build.
+    /// </summary>
+    public void RequireSameFixedInputs(NativeDependencyLock other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        if (!Ready || !other.Ready || Mods.Count == 0 || other.Mods.Count == 0)
+            throw new InvalidDataException("Both A/B dependency locks must be ready and name a selected mod.");
+        static string[] Identity(IEnumerable<NativeDependencyFile> files) => files
+            .Select(file => Path.GetFileName(file.File).ToLowerInvariant() + ":" + file.Sha256.ToLowerInvariant())
+            .Order(StringComparer.Ordinal).ToArray();
+        static void Same(string label, string[] left, string[] right)
+        {
+            if (!left.SequenceEqual(right, StringComparer.Ordinal))
+                throw new InvalidDataException($"A/B {label} differ; keep every input except the first selected mod identical. Before: {string.Join(", ", left)}; after: {string.Join(", ", right)}.");
+        }
+        Same("companion mods", Identity(Mods.Skip(1)), Identity(other.Mods.Skip(1)));
+        Same("plugin dependencies", Identity(Plugins), Identity(other.Plugins));
+        Same("ValheimCLI files", Identity(CliFiles), Identity(other.CliFiles));
+        Same("optional references", OptionalReferences.Order(StringComparer.Ordinal).ToArray(),
+            other.OptionalReferences.Order(StringComparer.Ordinal).ToArray());
+    }
+
     /// <summary>Fills a targeted run's dependency and ValheimCLI fields from this lock, leaving its fixture and mod arms to the caller.</summary>
     public void ApplyTo(RegressionEnvironment environment, string cliManifestPath)
     {

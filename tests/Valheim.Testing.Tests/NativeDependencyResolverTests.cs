@@ -143,6 +143,31 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains("example.mod", plan.Gaps[0].Reason);
     }
 
+    [Fact] public void ComparisonMayChangeOnlyThePrimaryMod()
+    {
+        var before = NativeDependencyResolver.Resolve(Request(_rig.Parent));
+        Assert.True(before.Ready);
+        var after = new NativeDependencyLock
+        {
+            Mods = [new("/alternate/Parent.dll", new string('a', 64), "selected mod")],
+            Plugins = [.. before.Plugins], CliFiles = [.. before.CliFiles],
+            OptionalReferences = [.. before.OptionalReferences],
+        };
+        before.RequireSameFixedInputs(after);
+
+        after.Plugins = [new("/alternate/Dependency.dll", new string('b', 64), "dependency")];
+        Assert.Contains("plugin dependencies differ", Assert.Throws<InvalidDataException>(() => before.RequireSameFixedInputs(after)).Message);
+        after.Plugins = [.. before.Plugins];
+        after.Mods.Add(new("/alternate/Companion.dll", new string('c', 64), "selected mod"));
+        Assert.Contains("companion mods differ", Assert.Throws<InvalidDataException>(() => before.RequireSameFixedInputs(after)).Message);
+        after.Mods.RemoveAt(1);
+        after.CliFiles.RemoveAt(0);
+        Assert.Contains("ValheimCLI files differ", Assert.Throws<InvalidDataException>(() => before.RequireSameFixedInputs(after)).Message);
+        after.CliFiles = [.. before.CliFiles];
+        after.OptionalReferences.Add("optional.integration");
+        Assert.Contains("optional references differ", Assert.Throws<InvalidDataException>(() => before.RequireSameFixedInputs(after)).Message);
+    }
+
     private NativeDependencyRequest Request(string mod) => new()
     {
         Mods = [mod], SearchRoots = [Path.Combine(_rig.Root, "deps")],
