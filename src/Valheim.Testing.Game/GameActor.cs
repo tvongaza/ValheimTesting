@@ -26,6 +26,24 @@ public sealed class CliTransport : IGameTransport
 }
 public sealed record Capability(string Path, string Instance, bool ReadOnly, int SchemaVersion);
 
+/// <summary>
+/// An actor for ValheimCLI actions and observations. After strict <see cref="VerifyEnvironment"/>, it checks the
+/// expected world and plugins before every command.
+/// </summary>
+/// <example>
+/// Load reviewed, strict expectations, then discover the adapter command before reading its state:
+/// <code>
+/// string pins = StrictExpectations.Load(pinsFile);
+/// using var actor = new GameActor("session", new CliTransport("127.0.0.1", 5577));
+/// actor.VerifyEnvironment(pins);
+/// var capability = actor.RequireCapability("mymod.testing/session");
+/// bool enabled = actor.Observe(capability).Data.GetProperty("devcommands").GetBoolean();
+/// </code>
+/// The pin file comes from the test plan, not from the running game. After a world or plugin transition, verify the new
+/// expected pins and rediscover capabilities before another action. See the compiling
+/// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/SessionControl/Program.cs">pinning example</see>
+/// and <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/MyMod.SystemTests/ServerFixture.cs">adapter observation</see>.
+/// </example>
 public sealed class GameActor : IDisposable
 {
     private readonly IGameTransport _transport;

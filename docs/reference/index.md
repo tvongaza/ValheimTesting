@@ -6,6 +6,8 @@ Start with [Bring your mod](https://github.com/tvongaza/ValheimTesting/blob/main
 
 For short examples on selected API pages, see [declaring synthetic terrain](xref:Valheim.Testing.CompositeTerrain), [copying a pinned world](xref:Valheim.Testing.Game.WorldFixture), and [registering](xref:Valheim.Testing.Game.DisposableCharacterStore) then [positioning](xref:Valheim.Testing.Game.CharacterStartCopy) a disposable character. The character examples start from a game-created local save; they do not synthesize a player. For complete runnable flows, follow the linked guides and examples.
 
+For game-facing tests, [pin and observe through `GameActor`](xref:Valheim.Testing.Game.GameActor), then let [`PinnedServerRun` own the server lifecycle](xref:Valheim.Testing.Game.PinnedServerRun). Their excerpts link to compiling examples; the API page is not a replacement for the complete scenario.
+
 The source-only `Valheim.Testing.Adapter` reference is extracted from the same source compiled by `tests/Valheim.Testing.Adapter.CompileCheck`, with unrelated game/reference stubs filtered out. `Valheim.Testing.Doubles` is also shipped as source. Its declarations intentionally model only selected game behavior; consult [game doubles](https://github.com/tvongaza/ValheimTesting/blob/main/docs/testing-toolkit.md#game-doubles) before using them as evidence of native behavior.
 
 | Package | Reference in this preview | Authoritative usage guide |
