@@ -592,6 +592,7 @@ public abstract class ScriptedGameHost : IGameHost
     /// (which reads and writes that file) only with at least <c>MultiCoreJitMinNumCpus</c> processors; the value is hexadecimal, so
     /// FFFF turns it off. pwsh then neither reads nor writes the file and starts a little slower. Windows PowerShell 5.1 runs on
     /// .NET Framework and ignores it. Processes the script starts inherit it, which only affects .NET programs' startup.
+    /// A workaround: #145 tracks the upstream fixes and when to remove it (<c>scripts/pwsh-startup-stress.cs</c> checks the race).
     /// </summary>
     internal static readonly KeyValuePair<string, string> NoStartupJitProfile = new("DOTNET_MultiCoreJitMinNumCpus", "FFFF");
 
