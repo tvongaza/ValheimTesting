@@ -105,6 +105,7 @@ controls in a disposable fixture. Server Devcommands is a user-suggested referen
 for enabling client devcommands if that check exposes a missing game-level step.
 No dependency on that mod or general admin-command bypass has been added.
 
+
 ## Shared owned-session lifecycle (preview 2)
 
 `Valheim.Testing.Game` now owns `OwnedServerSession`, `DirectServerProcess` and
@@ -199,6 +200,7 @@ client-owned arrival/support observations, without granting client admin rights.
 Protection changes gameplay (as the game does in 1.0.16): monsters neither notice nor target a player in ghost mode, an egg hatches only near a player who is not in ghost mode, and a creature hit by a player in god or ghost mode is marked cheated, which marks the items it drops. Pass `WaitForWorld(..., protectPlayer: false)` for combat, aggro, taming, hatching and loot checks, for any check that needs a vulnerable player, and when an operator manages these modes; call `PlayerPlacement.Protect` yourself for the steps that should be protected.
 
 Declare the support point on dry ground: a player standing in water is not grounded at the ground's height, so the check fails, which is correct but tells you nothing about the road. `examples/ClientSurfaceCheck` uses `RequireSupported`.
+
 
 ## Published-library validation update
 
@@ -722,7 +724,7 @@ Many third-party regressions need the same small shape: one owned client hosting
 
 It returns a `StagedArm`: the strict `ClientRunPlan` (every staged plugin's declared GUID pinned by its MD5, no `absent` pins for anything else; the clean install loads nothing unlisted), its `RunManifest` (the arms, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; install-relative paths only) and `Verify()`, which refuses any file added, changed or removed in the staged folders since. `Preflight()` stages every arm in turn. `Run(arm, output, scenario, rounds, measure)` stages the arm, writes `run-manifest.json`, calls `Verify()` right before the launch, runs `HostRounds` with the scenario's capabilities required live before its first round, scans the client's logs and writes the report in every outcome. `Remove` deletes the disposable install, only when it carries the marker.
 
-Limits: one owned client hosting one world. The disposable install is a full copy of the game on first use, copied again when the game build, BepInEx core or a file at the game's root (its Doorstop loader) changes. The checks read what BepInEx reads before loading; a dependency found by reflection at run time is caught only live. Characters and machine reservations stay with the environment's own procedure. The checks are tested with emitted assemblies and fake installs.
+Limits: one owned client hosting one world. The disposable install is a full copy of the game on first use, copied again when the game build, BepInEx core or the set or contents of files at the game's root and in `doorstop_libs` change. The checks read what BepInEx reads before loading; a dependency found by reflection at run time is caught only live. Characters and machine reservations stay with the environment's own procedure. The checks are tested with emitted assemblies and fake installs.
 
 ## Game-side adapter helpers (Valheim.Testing.Adapter, preview 1)
 
