@@ -5,13 +5,13 @@ namespace Valheim.Testing.Game;
 /// <summary>What the optional signed-in check found on a client's host.</summary>
 public enum SteamSignedInState
 {
-    /// <summary>The host's Steam client is signed in to the leased account.</summary>
+    /// <summary>The host's account signal matches the leased account. On Linux and macOS this is the last recorded login.</summary>
     Matches,
-    /// <summary>It is signed in to another account.</summary>
+    /// <summary>The host's account signal names another account.</summary>
     OtherAccount,
-    /// <summary>No account is signed in there.</summary>
+    /// <summary>The host's account signal names no account.</summary>
     NotSignedIn,
-    /// <summary>The signed-in account could not be read. Never taken as a pass.</summary>
+    /// <summary>The host's account signal could not be read. Never taken as a pass.</summary>
     Unknown,
 }
 
@@ -121,12 +121,12 @@ public sealed class SteamAccountHold : IAsyncDisposable
         {
             case SteamSignedInState.Matches: SignedInChecked = true; return;
             case SteamSignedInState.OtherAccount:
-                throw new SteamSignedInException(state, Account, clientHost.Name, $"The Steam client on {clientHost.Name} is signed in to another account than {Account} (the pool's steamId for it). " +
+                throw new SteamSignedInException(state, Account, clientHost.Name, $"The Steam account check on {clientHost.Name} reported another account than {Account} (the pool's steamId for it). " +
                     $"Refused before launch: sign it in to {Account}, or correct the pool.");
             case SteamSignedInState.NotSignedIn:
-                throw new SteamSignedInException(state, Account, clientHost.Name, $"No Steam account is signed in on {clientHost.Name}; the client there needs {Account}. Refused before launch.");
+                throw new SteamSignedInException(state, Account, clientHost.Name, $"The Steam account check on {clientHost.Name} found no account; the client there needs {Account}. Refused before launch.");
             default:
-                throw new SteamSignedInException(state, Account, clientHost.Name, $"The signed-in Steam account on {clientHost.Name} is unknown ({detail}), so the signed-in check cannot " +
+                throw new SteamSignedInException(state, Account, clientHost.Name, $"The Steam account check on {clientHost.Name} is inconclusive ({detail}), so it cannot " +
                     $"confirm it is {Account}. Refused before launch.");
         }
     }

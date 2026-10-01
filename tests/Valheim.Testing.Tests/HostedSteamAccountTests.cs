@@ -172,10 +172,10 @@ public sealed partial class HostedServerRunTests
     [Theory]
     [InlineData("VT-STEAMUSER id 76561197960265729", null)]
     [InlineData("VT-STEAMUSER account 1", null)]
-    [InlineData("VT-STEAMUSER id 76561197960265730", "signed in to another account than vt_client_one")]
-    [InlineData("VT-STEAMUSER none", "No Steam account is signed in on linux-gpu")]
-    [InlineData("VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories", "is unknown (the host user has no loginusers.vdf")]
-    [InlineData("", "is unknown (unexpected reply")]
+    [InlineData("VT-STEAMUSER id 76561197960265730", "reported another account than vt_client_one")]
+    [InlineData("VT-STEAMUSER none", "account check on linux-gpu found no account")]
+    [InlineData("VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories", "is inconclusive (the host user has no loginusers.vdf")]
+    [InlineData("", "is inconclusive (unexpected reply")]
     public async Task TheSignedInCheckPassesOnlyTheLeasedAccount(string reply, string? refusal)
     {
         LeaseBox.WritePool(_root, Leases);
