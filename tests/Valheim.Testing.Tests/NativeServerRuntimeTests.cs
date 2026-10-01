@@ -61,6 +61,10 @@ public sealed class NativeServerRuntimeTests : IDisposable
         Assert.Contains("share filename", Assert.Throws<InvalidDataException>(() =>
             NativeServerRuntime.Prepare(_rig.Game, refused, dependencies, adapter, 5588, [settings, duplicate])).Message);
         Assert.False(Directory.Exists(refused));
+        string cliConfig = _rig.Write("settings/valheimCLI.valheimCLI.cfg", Encoding.UTF8.GetBytes("[Server]\nEnabled = false\n"));
+        Assert.Contains("owned by the smoke", Assert.Throws<InvalidDataException>(() =>
+            NativeServerRuntime.Prepare(_rig.Game, refused, dependencies, adapter, 5588, [cliConfig])).Message);
+        Assert.False(Directory.Exists(refused));
     }
 
     [Fact] public void DuplicateAdapterIdentityIsRefusedBeforeCopying()
