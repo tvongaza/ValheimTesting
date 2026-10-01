@@ -173,4 +173,35 @@ public sealed class HostedScenarioTests : IDisposable
         Assert.StartsWith("not observed", report.Provenance["hostBroadcast"]);
         Assert.Equal(0, _greetings);
     }
+    // validate-host runs the run's own preflight: a plan whose fixture holds another world UID is refused there, naming the
+    // UID the fixture holds, and nothing is copied into the client's worlds.
+    [Fact] public void ValidateHostRunsTheRunsPreflightAndRefusesAnotherWorldUid()
+    {
+        string Validate(string worldUid, string output)
+        {
+            var plan = Plan();
+            var pins = new System.Text.Json.Nodes.JsonObject();
+            foreach (var pin in plan.Client.Pins) pins[pin.Key] = pin.Value;
+            var sha256 = new System.Text.Json.Nodes.JsonObject();
+            foreach (var file in plan.Client.HostWorld!.World.Sha256) sha256[file.Key] = file.Value;
+            System.Text.Json.Nodes.JsonObject Point(Site site) => new() { ["x"] = site.X, ["z"] = site.Z, ["ground"] = site.Ground };
+            var json = new System.Text.Json.Nodes.JsonObject
+            {
+                ["scenario"] = plan.Scenario, ["newGreeting"] = plan.NewGreeting, ["drySite"] = Point(plan.DrySite), ["wetSite"] = Point(plan.WetSite),
+                ["client"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["mode"] = plan.Client.Mode, ["port"] = plan.Client.Port, ["character"] = plan.Client.Character, ["pins"] = pins,
+                    ["hostWorld"] = new System.Text.Json.Nodes.JsonObject { ["world"] = new System.Text.Json.Nodes.JsonObject { ["source"] = Fixture, ["sha256"] = sha256 }, ["worldUid"] = worldUid },
+                },
+            };
+            string path = Path.Combine(_root, "hosted-" + worldUid + ".json");
+            File.WriteAllText(path, json.ToJsonString());
+            Assert.Equal(worldUid == WorldUid ? 0 : 1, HostedRun.Run([HostedRun.ValidateMode, path, output]));
+            return File.ReadAllText(Path.Combine(output, "result.json"));
+        }
+        Assert.Contains("preflight the fixture world, before it is copied", Validate(WorldUid, Path.Combine(_root, "validate-right")));
+        string wrong = Validate("4243", Path.Combine(_root, "validate-wrong"));
+        Assert.Contains("hostWorld.worldUid is 4243", wrong); Assert.Contains("with UID 4242", wrong);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(Save, "worlds_local")));
+    }
 }
