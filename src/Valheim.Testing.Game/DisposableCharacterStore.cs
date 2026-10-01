@@ -17,6 +17,21 @@ namespace Valheim.Testing.Game;
 /// A registration is not a security boundary against someone deliberately editing the manifest; it stops a run, an
 /// example or a plan from using a character nobody registered.
 /// </remarks>
+/// <example>
+/// Create the test character in Valheim, complete its first spawn, visit the fixture world, then save it locally.
+/// Register that <c>characters_local</c> file once; on a later run, open the store and get a fresh handle:
+/// <code>
+/// var store = DisposableCharacterStore.Create(storeDirectory);
+/// store.Register("tester", localCharacterFile);
+///
+/// store = DisposableCharacterStore.Open(storeDirectory);
+/// var character = store.Get("tester");
+/// </code>
+/// After the game saves this same character again, use <see cref="Refresh"/> and then take a new handle with
+/// <see cref="Get"/>. The store must be outside the game's character folders.
+/// Pass <c>character</c> to <see cref="CharacterStartCopy.Prepare"/>. Copies keep the same player ID; they are not
+/// independent characters for simultaneous players.
+/// </example>
 public sealed class DisposableCharacterStore
 {
     public const string ManifestFile = "disposable-characters.json";
