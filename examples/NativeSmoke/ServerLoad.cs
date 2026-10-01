@@ -10,10 +10,11 @@ internal static class ServerLoad
 {
     public static async Task<int> RunAsync(string[] args)
     {
-        if (!TryRead(args, out var options, out var mods, out var roots, out var configs, out var optional, out string error))
+        if (!TryRead(args, out var options, out var mods, out var roots, out var configs,
+                out var pluginFiles, out var pluginDirectories, out var optional, out string error))
         {
             Console.Error.WriteLine(error);
-            Console.Error.WriteLine("Usage: native-smoke server-load --server DIR --mod DLL [--mod DLL ...] --adapter DLL --cli-manifest FILE --cli-files DIR --output NEW_DIR [--client DIR --steam-userdata DIR --client-cli-port 5689] [--search-root DIR ...] [--config FILE ...] [--optional-reference ASSEMBLY ...] [--cli-port 5688] [--game-port 2486] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+            Console.Error.WriteLine("Usage: native-smoke server-load --server DIR --mod DLL [--mod DLL ...] --adapter DLL --cli-manifest FILE --cli-files DIR --output NEW_DIR [--client DIR --steam-userdata DIR --client-cli-port 5689] [--search-root DIR ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] [--optional-reference ASSEMBLY ...] [--cli-port 5688] [--game-port 2486] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
             return 2;
         }
         using var cancel = new CancellationTokenSource();
@@ -57,7 +58,8 @@ internal static class ServerLoad
             string world = Path.Combine(output, "world-source");
             DefaultSmokeWorld.PrepareServerSaveRoot(world);
             using var runtime = NativeServerRuntime.Prepare(server, Path.Combine(output, "staged-runtime"), dependencies, adapter,
-                cliPort, configs!.Select(Path.GetFullPath).ToList());
+                cliPort, configs!.Select(Path.GetFullPath).ToList(), pluginFiles!.Select(Path.GetFullPath).ToList(),
+                pluginDirectories!.Select(Path.GetFullPath).ToList());
             using var clientRuntime = joinClient
                 ? NativeCleanClientRuntime.Prepare(Path.GetFullPath(options["--client"]), Path.Combine(output, "staged-client"), dependencies, clientCliPort)
                 : null;
@@ -134,7 +136,8 @@ internal static class ServerLoad
             }
             Console.WriteLine((result == 0 ? (joinClient ? "SERVER_JOIN_PASS" : "SERVER_LOAD_PASS") : "SERVER_LOAD_FAIL") +
                 $": {mods!.Count} selected mod(s), {clock.Elapsed.TotalSeconds:F1}s. " +
-                (joinClient ? "Clean client joined with selected server mods absent." : "A clean-client join has not run.") +
+                (result != 0 ? "See the private evidence for the failed check." :
+                    joinClient ? "Clean client joined with selected server mods absent." : "A clean-client join has not run.") +
                 $" Private evidence in {output}");
             return result;
         }
@@ -146,9 +149,10 @@ internal static class ServerLoad
     }
 
     private static bool TryRead(string[] args, out Dictionary<string, string>? options, out List<string>? mods,
-        out List<string>? roots, out List<string>? configs, out List<string>? optional, out string error)
+        out List<string>? roots, out List<string>? configs, out List<string>? pluginFiles,
+        out List<string>? pluginDirectories, out List<string>? optional, out string error)
     {
-        options = null; mods = null; roots = null; configs = null; optional = null; error = "";
+        options = null; mods = null; roots = null; configs = null; pluginFiles = null; pluginDirectories = null; optional = null; error = "";
         var required = new HashSet<string>(StringComparer.Ordinal) { "--server", "--mod", "--adapter", "--cli-manifest", "--cli-files", "--output" };
         var allowed = new HashSet<string>(required, StringComparer.Ordinal)
         { "--cli-port", "--game-port", "--client", "--steam-userdata", "--client-cli-port", "--expected-log-error", "--expected-log-reason" };
@@ -156,6 +160,7 @@ internal static class ServerLoad
         var found = new Dictionary<string, string>(StringComparer.Ordinal);
         var selected = new List<string>(); var searches = new List<string>();
         var configFiles = new List<string>(); var omissions = new List<string>();
+        var sidecarFiles = new List<string>(); var sidecarDirectories = new List<string>();
         for (int i = 0; i < args.Length; i += 2)
         {
             string key = args[i], value = args[i + 1];
@@ -163,6 +168,8 @@ internal static class ServerLoad
             if (key == "--mod") { selected.Add(value); found.TryAdd(key, value); }
             else if (key == "--search-root") searches.Add(value);
             else if (key == "--config") configFiles.Add(value);
+            else if (key == "--plugin-file") sidecarFiles.Add(value);
+            else if (key == "--plugin-dir") sidecarDirectories.Add(value);
             else if (key == "--optional-reference") omissions.Add(value);
             else if (!allowed.Contains(key) || !found.TryAdd(key, value))
             { error = "Unknown or repeated option: " + key; return false; }
@@ -175,7 +182,8 @@ internal static class ServerLoad
         { error = "--client needs --steam-userdata (and vice versa) to stage a disposable character safely."; return false; }
         if (found.ContainsKey("--client-cli-port") && !found.ContainsKey("--client"))
         { error = "--client-cli-port needs --client."; return false; }
-        options = found; mods = selected; roots = searches; configs = configFiles; optional = omissions;
+        options = found; mods = selected; roots = searches; configs = configFiles;
+        pluginFiles = sidecarFiles; pluginDirectories = sidecarDirectories; optional = omissions;
         return true;
     }
 }

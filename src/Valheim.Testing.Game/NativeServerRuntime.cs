@@ -26,10 +26,12 @@ public sealed class NativeServerRuntime : IDisposable
     /// Copies <paramref name="source"/> into <paramref name="outputParent"/> and replaces only the copy's plugin,
     /// script, config and patcher folders. Refuses duplicate staged file names or plugin GUIDs before copying.
     /// The adapter must declare exactly one BepInEx plugin. Explicit config files are copied by filename into the
-    /// disposable runtime only; the returned manifest pins them alongside the staged DLLs.
+    /// disposable runtime only. Explicit plugin sidecars (non-DLL files and directories such as an asset manifest and
+    /// bundles) are copied beside the selected DLLs. The returned manifest pins every staged file.
     /// </summary>
     public static NativeServerRuntime Prepare(string source, string outputParent, NativeDependencyLock dependencies,
-        string adapter, int cliPort, IReadOnlyList<string>? configFiles = null)
+        string adapter, int cliPort, IReadOnlyList<string>? configFiles = null,
+        IReadOnlyList<string>? pluginFiles = null, IReadOnlyList<string>? pluginDirectories = null)
     {
         ArgumentNullException.ThrowIfNull(dependencies);
         if (!dependencies.Ready || dependencies.Mods.Count == 0)
@@ -37,20 +39,40 @@ public sealed class NativeServerRuntime : IDisposable
         if (cliPort is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(cliPort));
         source = Path.GetFullPath(source); adapter = Path.GetFullPath(adapter);
         var configs = (configFiles ?? []).Select(Path.GetFullPath).ToList();
+        var sidecarFiles = (pluginFiles ?? []).Select(Path.GetFullPath).ToList();
+        var sidecarDirectories = (pluginDirectories ?? []).Select(Path.GetFullPath).ToList();
         foreach (string config in configs)
             if (!File.Exists(config)) throw new FileNotFoundException("An explicitly selected server config is missing.", config);
+        foreach (string file in sidecarFiles)
+        {
+            if (!File.Exists(file)) throw new FileNotFoundException("An explicitly selected plugin sidecar is missing.", file);
+            if (Path.GetExtension(file).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Plugin DLLs belong in --mod or a dependency search root, not a sidecar: " + file);
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("A plugin sidecar cannot be a link: " + file);
+        }
+        foreach (string directory in sidecarDirectories)
+            if (!Directory.Exists(directory)) throw new DirectoryNotFoundException("An explicitly selected plugin sidecar directory is missing: " + directory);
         var duplicateConfig = configs.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicateConfig != null) throw new InvalidDataException("Two selected server configs share filename " + duplicateConfig.Key + ".");
         if (configs.Any(config => Path.GetFileName(config).Equals("valheimCLI.valheimCLI.cfg", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException("ValheimCLI config is owned by the smoke; do not supply it as a mod config.");
         var configHashes = configs.ToDictionary(config => config, WorldFixture.Hash, StringComparer.Ordinal);
+        var sidecarHashes = sidecarFiles.ToDictionary(file => file, WorldFixture.Hash, StringComparer.Ordinal);
+        var directoryHashes = sidecarDirectories.ToDictionary(directory => directory, WorldFixture.Manifest, StringComparer.Ordinal);
+        if (directoryHashes.Any(entry => entry.Value.Keys.Any(path => Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase))))
+            throw new InvalidDataException("Plugin sidecar directories cannot contain DLLs; select each plugin or library through dependency resolution.");
         ServerLaunch.Detect(source);
         if (!File.Exists(adapter)) throw new FileNotFoundException("The test-only session adapter is missing.", adapter);
         var files = dependencies.CliFiles.Concat(dependencies.Mods).Concat(dependencies.Plugins)
             .Select(file => file.File).Append(adapter).ToList();
         var duplicateName = files.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
         if (duplicateName != null) throw new InvalidDataException("Two selected server files share the plugin filename " + duplicateName.Key + ".");
+        var sidecarNames = sidecarFiles.Select(Path.GetFileName).Concat(sidecarDirectories.Select(Path.GetFileName)).ToList();
+        var duplicateSidecar = sidecarNames.GroupBy(name => name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+        if (duplicateSidecar != null || sidecarNames.Any(name => files.Any(file => Path.GetFileName(file).Equals(name, StringComparison.OrdinalIgnoreCase))))
+            throw new InvalidDataException("Plugin sidecars must have distinct names and cannot replace a selected DLL.");
         var pins = new Dictionary<string, string>(StringComparer.Ordinal);
         var selected = new List<string>();
         var selectedFiles = dependencies.Mods.Select(file => file.File).ToHashSet(StringComparer.Ordinal);
@@ -92,6 +114,26 @@ public sealed class NativeServerRuntime : IDisposable
                 string target = Path.Combine(plugins, Path.GetFileName(file));
                 File.Copy(file, target);
                 if (WorldFixture.Hash(target) != WorldFixture.Hash(file)) throw new IOException("Staged server file changed while copying: " + file);
+            }
+            foreach (string file in sidecarFiles)
+            {
+                string target = Path.Combine(plugins, Path.GetFileName(file));
+                File.Copy(file, target);
+                if (!WorldFixture.Hash(target).Equals(sidecarHashes[file], StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("A staged plugin sidecar changed while copying: " + file);
+            }
+            foreach (string directory in sidecarDirectories)
+            {
+                string target = Path.Combine(plugins, Path.GetFileName(directory));
+                foreach (var (relative, hash) in directoryHashes[directory])
+                {
+                    string destination = Path.Combine(target, relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    File.Copy(Path.Combine(directory, relative), destination);
+                    if (!WorldFixture.Hash(destination).Equals(hash, StringComparison.OrdinalIgnoreCase))
+                        throw new IOException("A staged plugin sidecar changed while copying: " + relative);
+                }
+                WorldFixture.Verify(directory, directoryHashes[directory]);
             }
             File.WriteAllText(Path.Combine(bep, "config", "valheimCLI.valheimCLI.cfg"),
                 "[Server]\nEnabled = true\nPort = " + cliPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");

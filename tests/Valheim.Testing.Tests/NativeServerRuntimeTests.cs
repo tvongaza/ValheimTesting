@@ -27,17 +27,22 @@ public sealed class NativeServerRuntimeTests : IDisposable
         string worldRoot = Path.Combine(_rig.Root, "server-world");
         DefaultSmokeWorld.PrepareServerSaveRoot(worldRoot);
         string settings = _rig.Write("settings/example.mod.cfg", Encoding.UTF8.GetBytes("[Smoke]\nGenerate = false\n"));
+        string assetManifest = _rig.Write("content/assetBundleManifest_full", Encoding.UTF8.GetBytes("asset manifest"));
+        string bundle = _rig.Write("content/Bundles/site1", Encoding.UTF8.GetBytes("site bundle"));
         string staged;
-        using (var runtime = NativeServerRuntime.Prepare(_rig.Game, Path.Combine(_rig.Root, "server-output"), dependencies, adapter, 5588, [settings]))
+        using (var runtime = NativeServerRuntime.Prepare(_rig.Game, Path.Combine(_rig.Root, "server-output"),
+                   dependencies, adapter, 5588, [settings], [assetManifest], [Path.GetDirectoryName(bundle)!]))
         {
             staged = runtime.RuntimeDirectory;
             string plugins = Path.Combine(staged, "BepInEx", "plugins");
             Assert.Equal(new[] { "Dependency.dll", "ExampleMod.dll", "NativeSmoke.SessionAdapter.dll", "Valheim.Cli.Standard.dll", "valheimCLI.dll" },
-                Directory.GetFiles(plugins).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray());
+                Directory.GetFiles(plugins, "*.dll").Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray());
             Assert.Equal(new[] { "example.mod" }, runtime.SelectedGuids);
             Assert.Equal(5, runtime.Pins.Count);
             Assert.Empty(Directory.GetFiles(Path.Combine(staged, "BepInEx", "scripts")));
             Assert.Empty(Directory.GetFiles(Path.Combine(staged, "BepInEx", "patchers")));
+            Assert.Equal(File.ReadAllBytes(assetManifest), File.ReadAllBytes(Path.Combine(plugins, "assetBundleManifest_full")));
+            Assert.Equal(File.ReadAllBytes(bundle), File.ReadAllBytes(Path.Combine(plugins, "Bundles", "site1")));
             Assert.Contains("Port = 5588", File.ReadAllText(Path.Combine(staged, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
             Assert.Equal(File.ReadAllBytes(settings), File.ReadAllBytes(Path.Combine(staged, "BepInEx", "config", "example.mod.cfg")));
             Assert.NotEmpty(runtime.Manifest());
@@ -64,6 +69,11 @@ public sealed class NativeServerRuntimeTests : IDisposable
         string cliConfig = _rig.Write("settings/valheimCLI.valheimCLI.cfg", Encoding.UTF8.GetBytes("[Server]\nEnabled = false\n"));
         Assert.Contains("owned by the smoke", Assert.Throws<InvalidDataException>(() =>
             NativeServerRuntime.Prepare(_rig.Game, refused, dependencies, adapter, 5588, [cliConfig])).Message);
+        Assert.False(Directory.Exists(refused));
+        string hiddenDll = _rig.Write("content/Bundles/hidden.dll", Encoding.UTF8.GetBytes("not an allowed plugin"));
+        Assert.Contains("cannot contain DLLs", Assert.Throws<InvalidDataException>(() =>
+            NativeServerRuntime.Prepare(_rig.Game, refused, dependencies, adapter, 5588,
+                pluginDirectories: [Path.GetDirectoryName(hiddenDll)!])).Message);
         Assert.False(Directory.Exists(refused));
     }
 
