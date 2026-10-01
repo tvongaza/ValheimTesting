@@ -8,7 +8,7 @@ using Valheim.Testing.Game;
 // plan exists, so it is outside the pinned runner. A hosted run has no dedicated server to pin, so validate-host and host
 // have their own entry point (HostedRun).
 if (args.Length > 0 && args[0] == ServerFixture.Mode) return ServerFixture.Run(args);
-if (args.Length > 0 && args[0] == CharacterFixture.Mode) return CharacterFixture.Run(args);
+if (args.Length > 0 && CharacterFixture.Handles(args[0])) return CharacterFixture.Run(args);
 if (args.Length > 0 && args[0] is HostedRun.RunMode or HostedRun.ValidateMode) return HostedRun.Run(args);
 return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<LifecyclePlan>
 {
@@ -43,12 +43,8 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
         Action<GameActor> joinable = server => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation);
         if (run.Plan.Scenario == LifecyclePlan.LifecycleScenario)
         {
-            DrySiteScenario.Run(run.Plan, run.Server, run.Session.Restart, () =>
-                {
-                    var client = ClientSession.Open(run.Plan.Client!, run.Output, run.Cancellation);
-                    run.Logs.AddRange(client.Logs); // Scanned with the server's at teardown, after the scenario stops the client.
-                    return client;
-                },
+            // Its logs are scanned with the server's at teardown, after the scenario stops the client, and also after a failed startup.
+            DrySiteScenario.Run(run.Plan, run.Server, run.Session.Restart, () => ClientSession.Open(run.Plan.Client!, run.Output, run.Logs, run.Cancellation),
                 joinable, run.Report, run.Output, run.Cancellation);
             return Task.CompletedTask;
         }
@@ -65,9 +61,7 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
                 // A second client in one run keeps its command record and logs apart from the first one's.
                 string own = Path.Combine(run.Output, directory);
                 Directory.CreateDirectory(own);
-                var session = ClientSession.Open(client, own, run.Cancellation);
-                run.Logs.AddRange(session.Logs);
-                return session;
+                return ClientSession.Open(client, own, run.Logs, run.Cancellation);
             },
             ServerLog = () => local ? Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log") : null,
             ClientLog = client => local && client.Owned ? Path.Combine(client.Install, "BepInEx", "LogOutput.log") : null,

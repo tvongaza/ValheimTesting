@@ -32,6 +32,9 @@ internal sealed class CampaignWorld : IDisposable
     // The server's installed control and fixture state.
     public bool ControlMissingTarget, ControlPatchApplied, ControlPatchAllThrew, ControlWarningMissing, OtherPluginLookupWarning, ControlServerOnlyPrefab, OversizedRoom, NoDungeon, Crossplay, RefusalSucceeds;
     public string RefusalStatus = "ErrorVersion";
+    // The content census: MyMod built without its recipe (on both sides, as the control's build), an undeclared item of
+    // MyMod's, and a client that reports being the server.
+    public bool OmitRecipe, ExtraItem, ClientCensusSaysServer;
 
     private readonly List<(float X, float Z, string Label)> _markers = [], _savedMarkers = [];
     private readonly List<(float X, float Z)> _controlObjects = [];
@@ -175,7 +178,8 @@ internal sealed class CampaignWorld : IDisposable
                 return new { source = "global-key-change", complete = true, action = args[0], name = args[1], value = (string?)null, keys = _keys.ToArray() };
             }, readOnly: false)
             .Extension("mymod.testing", "config", args => Config(args, server: true, installed: true, _serverGreeting))
-            .Extension("mymod.testing", "dungeon-rooms", _ => Dungeons());
+            .Extension("mymod.testing", "dungeon-rooms", _ => Dungeons())
+            .Extension("mymod.testing", "content-census", args => ContentCensusReply(args, server: true));
         Servers.Add(transport);
         return transport.Actor("server", "cli_expect worlduid=" + WorldUid);
     }
@@ -274,6 +278,7 @@ internal sealed class CampaignWorld : IDisposable
             })
             .Extension("mymod.testing", "globalkeys", _ => new { source = "global-keys", complete = true, server = false, keys = (_joined ? _keys : new List<string>()).Order(StringComparer.Ordinal).ToArray() })
             .Extension("mymod.testing", "config", args => Config(args, server: false, installed: ClientHasMod, _clientGreeting))
+            .Extension("mymod.testing", "content-census", args => ContentCensusReply(args, server: false))
             .Extension("mymod.testing", "unresolved-prefabs", args =>
             {
                 float radius = F(args[0]);
@@ -330,6 +335,34 @@ internal sealed class CampaignWorld : IDisposable
             return new { x = zone.X, z = zone.Z, terrainLoaded = loaded, instances = instances ? saved + 2 : 0, nearInstances = loaded ? saved + 1 : 0, saved, withoutInstance = loaded ? 0 : saved };
         }).ToArray();
         return new { source = "zone-presence", complete = _joined, reference = new { x = PlayerZone.X, z = PlayerZone.Z }, simulation = new { near = 2, far = 2, classic = true }, zones };
+    }
+
+    // The adapter's content census of a process with MyMod (or, on a client without it, of the game's content only).
+    private object ContentCensusReply(IReadOnlyList<string> args, bool server)
+    {
+        bool installed = server || ClientHasMod;
+        object Entry(string name) => new { name, hash = StableHash.Of(name), listed = 1, resolves = name };
+        object Reference(string name, int amount = 0) => new { name, lookup = "resolved", amount };
+        var items = new List<object>();
+        if (installed) items.Add(Entry(ContentCensusScenario.ItemName));
+        if (installed && ExtraItem) items.Add(Entry("MyMod_Extra"));
+        object[] recipes = !installed || OmitRecipe ? [] :
+        [
+            new
+            {
+                name = ContentCensusScenario.RecipeName, enabled = true, amount = 1, item = Reference(ContentCensusScenario.ItemName),
+                station = Reference("piece_workbench"), minStationLevel = 1, resources = new[] { Reference("Wood", 2) },
+            },
+        ];
+        return new
+        {
+            source = "content-census", complete = true, ready = true, reason = (string?)null,
+            side = server || ClientCensusSaysServer ? "server" : "client", dedicated = server,
+            owner = new { guid = args[0], installed, version = installed ? "0.1.0" : null, md5 = installed ? Md5Mod : null },
+            scope = args.Skip(1).ToArray(),
+            totals = new { items = 900, itemIndex = 900, recipes = 400, prefabs = 3000, prefabIndex = 3000 },
+            items, prefabs = installed ? new[] { Entry(ContentCensusScenario.ItemName) } : [], recipes, collisions = Array.Empty<object>(),
+        };
     }
 
     private object Config(IReadOnlyList<string> args, bool server, bool installed, string value) => new

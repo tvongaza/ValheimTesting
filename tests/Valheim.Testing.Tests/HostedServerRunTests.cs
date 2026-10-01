@@ -596,4 +596,49 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("release client host linux-gpu's lock", StepNames());
         Assert.Contains(Result().GetProperty("Logs").EnumerateArray(), log => log.GetProperty("Role").GetString() == "client-1 BepInEx log");
     }
+
+    // A client that started but never reached its menu (here its pins do not hold) is stopped; its fetched logs are still scanned.
+    [Fact] public async Task AProfileClientWhoseStartupFailsStillHasItsLogsScannedAndListed()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        string clientInstall = clientHost.Local("/home/tester/valheim");
+        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
+        FakeInstalls.Client(clientInstall);
+        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        var (plan, profile) = Write(host, withClient: true);
+        // Strict, so the menu pins are checked; the scripted client does not hold them.
+        var client = new ClientRunPlan
+        {
+            Mode = "owned", Install = _root, Port = 5578, StartSeconds = 30, Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) }, InstallPins = InstallPins.Of(clientInstall),
+        };
+        Exception? failed = null;
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        {
+            failed = Record.Exception(() => run.OpenClient(client));
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport { PinsHold = false })));
+        Assert.IsType<InvalidOperationException>(failed);
+        Assert.Single(clientHost.Stops);
+        Assert.Contains("listening on 127.0.0.1:5578", File.ReadAllText(Path.Combine(Output, "client-1", "game-0.log")));
+        var roles = Result().GetProperty("Logs").EnumerateArray().Select(log => log.GetProperty("Role").GetString()).ToList();
+        Assert.Contains("client-1 BepInEx log", roles);
+        Assert.Contains("client-1 Player.log", roles);
+    }
+
+    [Fact] public async Task AnArm64ProfileClientIsRefusedBeforeItsHostIsLockedOrAnythingStarts()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        var (plan, profile) = Write(host, withClient: true);
+        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, Architecture = "arm64" };
+        Exception? refused = null;
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        {
+            refused = Record.Exception(() => run.OpenClient(client));
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport())));
+        Assert.Contains("architecture arm64 is for a macOS client launched in this runner's own session", Assert.IsType<ArgumentException>(refused).Message);
+        Assert.Empty(clientHost.Claims); Assert.Empty(clientHost.Runs); Assert.Empty(clientHost.Tunnels);
+    }
 }

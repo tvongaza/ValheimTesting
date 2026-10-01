@@ -12,7 +12,13 @@
     <!-- The version handshake's net version (VersionHandshake). Build a mismatched MyMod for the refused-join scenario
          with -p:MyModNetVersion=2 (into another output folder); both sides of a join must agree on it. -->
     <MyModNetVersion Condition="'$(MyModNetVersion)' == ''">1</MyModNetVersion>
+    <!-- The content census's negative control (Content.cs): -p:MyModOmit=recipe builds a MyMod without its recipe, into
+         another output folder. Nothing else can be omitted. -->
+    <DefineConstants Condition="'$(MyModOmit)' == 'recipe'">$(DefineConstants);MYMOD_OMIT_RECIPE</DefineConstants>
   </PropertyGroup>
+  <Target Name="CheckMyModOmit" BeforeTargets="BeforeBuild" Condition="'$(MyModOmit)' != '' And '$(MyModOmit)' != 'recipe'">
+    <Error Text="MyModOmit is 'recipe' (the content census's negative control) or unset, not '$(MyModOmit)'." />
+  </Target>
   <ItemGroup><Compile Include="../../ModWithTests/MyMod/DrySiteRule.cs" Link="DrySiteRule.cs" /></ItemGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"><_Parameter1>MyModNetVersion</_Parameter1><_Parameter2>$(MyModNetVersion)</_Parameter2></AssemblyAttribute>

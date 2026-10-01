@@ -4,7 +4,7 @@
 #
 #   dev-loop.sh <MyMod.csproj> [test-plan.yaml]
 #
-# ValheimCLI's examples/smoke-plan.yaml is a plan to start from.
+# smoke-plan.yaml, next to this script, is a strict plan to start from.
 #
 #   1. dotnet build -c Release (stops on a failed build)
 #   2. with a plan: writes a temporary copy of VALHEIM_EXPECTATIONS whose pin

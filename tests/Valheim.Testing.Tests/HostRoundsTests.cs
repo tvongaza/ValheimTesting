@@ -130,6 +130,7 @@ public sealed class HostRoundsTests : IDisposable
         Assert.Equal(Name, report.Provenance["hostWorld"]);
         Assert.Equal("false", report.Provenance["hostCrossplay"]);
         Assert.Equal("first,after-restart", report.Provenance["hostRoundsCompleted"]);
+        Assert.Equal("x64", report.Provenance["clientArchitecture"]); // The plan asked for none.
         // The world, with what the game wrote for it, left the client's worlds for the evidence; the user's world stayed.
         Assert.Empty(OurWorldFiles());
         Assert.Equal("the user's world", File.ReadAllText(Path.Combine(Worlds, "MyWorld.fwl")));

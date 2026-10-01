@@ -37,24 +37,12 @@ The Roads pilot checkout has its own existing net10.0/net48 suite, the four extr
 
 ## Extension API v1
 
-Keep the core in normal `BepInEx/plugins`. Put only the optional test adapter in `BepInEx/scripts` for ScriptEngine reload. Do not load a second CLI/API assembly with the adapter. Core hot replacement during adapter work is not supported: finish work and restart the process. Assembly unload/managed-memory reclamation is not promised.
+ValheimCLI owns the game-side extension API: registration and instance tokens, command roles, the devcommands and joined-client rules, the mutation gate, cancellation, cleanup and quiescence probes, result limits and `cli_extensions` discovery. Its reference is ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/testing-toolkit.md#extension-api-v1); this repository does not keep a copy. What the toolkit adds on top of it:
 
-```csharp
-registration = valheimCLIPlugin.Instance.Extensions.Register("my.mod.tests", "0.1.0", 1,
-    new ExtensionCommand("snapshot", "Read a complete observation", Snapshot,
-        readOnly: true, role: ExtensionRole.Server, needsWorld: true));
-// OnDestroy: registration?.Dispose();
-```
-
-Registration validates every command before publishing any. Names are namespaced by owner. Each instance has a new token. Dispose removes capabilities immediately and cancels queued/active handlers. Cleanup runs in reverse order after work settles; cleanup failure prevents silent replacement. Handlers run on the main thread, yield `null` to wait a frame, and must return `context.Succeed(data)` or `context.Fail(code, message)`. Arbitrary Unity yield instructions are not supported in v1.
-
-Mutation is the safe default (`readOnly: false`), requires devcommands, and uses the existing async operation gate. Joined-client mutation also requires the existing opt-in client setting. Trusted adapters can of course mislabel or ignore these rules; this is an API contract, not a sandbox. Tests must serialize other synchronous console mutations themselves.
-
-If an effect continues after cancellation, install a `WaitForQuiescence` probe *before* issuing it. The core holds the gate and retiring owner until the probe confirms completion. A throwing/stuck probe leaves the owner blocked rather than claiming successful cleanup; diagnose and restart. The API cannot roll back arbitrary terrain/spawn/save effects.
-
-Use `cli_extensions` to discover commands, instance tokens and result versions. Use `cli_extension owner/command args` over the normal ValheimCLI connection. JSON values are bounded to 256 KiB/16 levels, strings/finite numbers/bools/arrays/string-keyed objects. Unsupported values fail explicitly. The actor rejects stale instance tokens and incomplete measurements. Arguments are single tokens in this preview; adapters validate their own grammar.
-
-The bundled `valheim.world/terrain x z generator|loaded-ground` observation demonstrates reuse. It distinguishes raw generator height from actual loaded heightmap ground. Missing heightmap returns `complete: false` and null height; it does not invent a zero.
+- Keep the core in `BepInEx/plugins` and only the test adapter in `BepInEx/scripts`, and never load a second ValheimCLI assembly with the adapter. `Valheim.Testing.Adapter`'s `TestExtension.Register` waits for the API before registering (see [adapter helpers](#game-side-adapter-helpers-valheimtestingadapter-preview-1)).
+- `GameActor.RequireCapability`, `Invoke` and `Observe` discover a command with `cli_extensions` and reject a stale instance token; `ObserveComplete` rejects an incomplete measurement. The World Tools pack's `valheim.world/terrain x z generator|loaded-ground` observation reports `complete: false` and a null height where no heightmap is loaded, which stays incomplete, never a zero.
+- `ExtensionReload` and the [ReloadCheck](../examples/ReloadCheck/README.md) example, with its probe, check a replacement end to end: new instance, removed command refused, old resources cleaned up, core and connection unchanged.
+- Arguments are single tokens in this preview; an adapter validates its own grammar. The API is a contract, not a sandbox, and cannot roll back arbitrary terrain, spawn or save effects: tests serialize their own console mutations.
 
 ## Actors, fixtures and evidence
 
@@ -100,6 +88,8 @@ A log failure carries the matched line and the five lines read before it (`WaitF
 
 Do not expand this into a full-world matrix per commit. These checks gate the preview release and relevant engine/adapter changes, not every local test iteration.
 
+Small authored worlds from terrain-generator mods (Expand World Data and Size) could make some of these fixtures cheaper or more reproducible; the [authored fixture notes](fixture-authoring.md) record what their documented controls offer and a bounded pilot. None is required or tested.
+
 ## Mod-owned adapters and compatibility commands
 
 MWL port/shipment probes now belong to `MoreWorldLocations.TestAdapter` in MWL's
@@ -108,18 +98,7 @@ core no longer registers `cli_mwl_*` commands or resolves MWL types. Install the
 optional adapter to retain those command names. An older core that still owns
 the names is refused by the adapter rather than silently overwritten.
 
-An adapter may register compatibility console commands calling
-`ExtensionHost.Execute(registry, path, arguments, output)`. This is the same
-dispatcher as `cli_extension`; it does not bypass role, world, devcommands, client
-opt-in, cancellation or the mutation gate. The adapter must remove only its own
-command instances when disposed. Successful results can include a bounded
-`legacyLines` string array to retain established output alongside structured JSON.
-
-Extension mutation checks read the raw devcommands flag. Valheim's
-`IsCheatsEnabled()` also requires being the server, and would otherwise reject
-every opted-in joined client. Ten pure policy tests cover the distinction and
-ensure the opt-in cannot waive world or role restrictions. This does not expand
-the waiver for ordinary console commands owned by other plugins.
+An adapter may keep established console command names as compatibility commands that dispatch through ValheimCLI's extension host, with the same role, world, devcommands, client opt-in, cancellation and mutation-gate checks; `Valheim.Testing.Adapter`'s `ConsoleAliases` does this. How the host dispatches them and why extension mutations read the raw devcommands flag is in ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/testing-toolkit.md).
 
 Client-side follow-up: run an opted-in joined-client mutation and its refused
 controls in a disposable fixture. Server Devcommands is a user-suggested reference
@@ -550,26 +529,26 @@ Limits: this boots a server with no ValheimCLI or mod plugins; it does not test 
 | | Windows | Linux | macOS |
 |---|---|---|---|
 | Detected from | `valheim.exe` | `valheim.x86_64` (user-execute bit required) | `Valheim.app/Contents/MacOS/Valheim` (user-execute bit required) |
-| Loader files required | `BepInEx/core/BepInEx.Preloader.dll` and `BepInEx.dll`; `winhttp.dll`; `doorstop_config.ini` enabling Doorstop and targeting `BepInEx\core\BepInEx.Preloader.dll` (any case, either separator, relative or absolute; another existing DLL is refused), in Doorstop 4 (`[General] enabled`, `target_assembly`) or Doorstop 3 (`[UnityDoorstop] enabled`, `targetAssembly`) form | BepInEx core; `doorstop_libs/libdoorstop_x64.so` | BepInEx core; `doorstop_libs/libdoorstop_x64.dylib` (BepInExPack_Valheim) or a universal `libdoorstop.dylib` (BepInEx's macOS build) with the requested slice |
+| Loader files required | `BepInEx/core/BepInEx.Preloader.dll` and `BepInEx.dll`; `winhttp.dll`; `doorstop_config.ini` enabling Doorstop and targeting `BepInEx\core\BepInEx.Preloader.dll` (any case, either separator, relative or absolute; another existing DLL is refused), in Doorstop 4 (`[General] enabled`, `target_assembly`) or Doorstop 3 (`[UnityDoorstop] enabled`, `targetAssembly`) form | BepInEx core; `doorstop_libs/libdoorstop_x64.so` | BepInEx core; `doorstop_libs/libdoorstop_x64.dylib` (BepInExPack_Valheim) or a `libdoorstop.dylib` at the root (UnityDoorstop 4.5 or later, universal or arm64-only) with the requested slice; for arm64 also `BepInEx/core/MonoMod.RuntimeDetour.dll` 25 or later |
 | Started executable | `valheim.exe` | `valheim.x86_64` | `/usr/bin/arch -x86_64` or `-arm64`, then the bundle executable |
 | Loader variables set | none; the proxy DLL reads its ini | `DOORSTOP_ENABLED=1`, `DOORSTOP_TARGET_ASSEMBLY`, `doorstop_libs` prepended to `LD_LIBRARY_PATH`, `libdoorstop_x64.so` prepended to `LD_PRELOAD` | `DOORSTOP_ENABLED=1`, `DOORSTOP_TARGET_ASSEMBLY`, the library's full path prepended to `DYLD_INSERT_LIBRARIES` and passed with `arch -e` |
-| Architectures | x64 | x64 | x86_64 (default; Rosetta on Apple Silicon) or native arm64 |
+| Architectures | x64 | x64 | x86_64 (default; the Rosetta compatibility path on Apple Silicon) or native arm64, chosen by the caller (`client.architecture` in a plan) |
 | Also needed to run | desktop session, Steam | desktop session with `DISPLAY` or `WAYLAND_DISPLAY`, GPU, Steam | logged-in desktop session, Steam |
 
 On every platform `-console` is added first unless the caller passes `console: false` or already includes it, other arguments follow unchanged, `SteamAppId` defaults to 892970 unless the caller sets it, and caller environment is applied first with existing search-list entries kept. A caller value for `DOORSTOP_ENABLED`, `DOORSTOP_TARGET_ASSEMBLY` or `DOORSTOP_DISABLE`, or a `--doorstop-*` argument, is refused because it would start a vanilla client; the same variables are removed if inherited. Linux and macOS install paths may not contain `:` (Linux also `;`), which their search lists cannot represent.
 
-On macOS the game is started through `/usr/bin/arch` with an explicit slice, because a universal executable otherwise runs as the parent's architecture, which the Doorstop library may lack. `arch` is a protected system binary, so the kernel drops `DYLD_*` from its environment; `ClientLaunch` passes them with `-e` instead, and `arch` execs the game in place, so the started PID is the game's. It reads the Mach-O slices of the game and of each Doorstop library and inserts the first library with the requested slice, refusing with the slices it found otherwise. BepInExPack_Valheim ships only an x86_64 library, which is its supported route. A native arm64 launch needs the universal `libdoorstop.dylib` and a BepInEx core that runs natively on arm64, which this check cannot see. `LaunchArchitectures` reports the slices an install can be launched as.
+On macOS the game is started through `/usr/bin/arch` with an explicit slice, because a universal executable otherwise runs as the parent's architecture, which the Doorstop library may lack. `arch` is a protected system binary, so the kernel drops `DYLD_*` from its environment; `ClientLaunch` passes them with `-e` instead, and `arch` execs the game in place, so the started PID is the game's. It reads the Mach-O slices of the game and of each Doorstop library and inserts the first library with the requested slice, refusing with the slices it found otherwise; `arch` fails rather than start another slice, so an arm64 request never falls back to Rosetta. BepInExPack_Valheim ships only an x86_64 library and a core on legacy MonoMod, which is the x86_64 route under Rosetta: the default and the compatibility path. The native arm64 route needs a `libdoorstop.dylib` with an arm64 slice (a universal build is one way) and a BepInEx core whose MonoMod can hook on arm64. `ClientLaunch` checks the core by the version of `BepInEx/core/MonoMod.RuntimeDetour.dll` (read, never loaded): 25 or later, the reorganised MonoMod that the native BepInEx 5.4.23.5 core uses, or the arm64 launch is refused with the version it found. Nothing on disk says whether each plugin's own hooks and native libraries work on arm64. `LaunchArchitectures` reports the slices an install can be launched as, arm64 only with such a core. [Native Apple Silicon client](getting-started.md#native-apple-silicon-client) has the install recipe, the default and the limits.
 
-Limits: `ClientLaunch` only builds the launch. A game client needs an interactive desktop session with a display, a GPU and a running, signed-in Steam client. A process started from a service, a scheduled task without a logged-in user or an SSH session usually has no display, so it fails or never shows a window. Starting it inside the user's session on another machine is [`InteractiveClient`'s job](#clients-in-a-hosts-desktop-session). For a Linux machine with an NVIDIA GPU, [`docker/linux-client`](../docker/linux-client/README.md) provides that session in a container: headless Xorg on the GPU, a Steam client logged in by QR approval, and `vt-launch-valheim`, which sets the same Linux loader environment as `ClientLaunch`. A native client system test (join a dedicated server on a prepared world, ClientSurfaceCheck and PaintCheck) has passed with it on a rented GPU VM. Unit tests cover detection, refusals, loader checks, slice selection and environment merging with fake install trees on all three platforms; no client has been started through `ClientLaunch` yet.
+Limits: `ClientLaunch` only builds the launch. A game client needs an interactive desktop session with a display, a GPU and a running, signed-in Steam client. A process started from a service, a scheduled task without a logged-in user or an SSH session usually has no display, so it fails or never shows a window. Starting it inside the user's session on another machine is [`InteractiveClient`'s job](#clients-in-a-hosts-desktop-session). For a Linux machine with an NVIDIA GPU, [`docker/linux-client`](../docker/linux-client/README.md) provides that session in a container: headless Xorg on the GPU, a Steam client logged in by QR approval, and `vt-launch-valheim`, which sets the same Linux loader environment as `ClientLaunch`. A native client system test (join a dedicated server on a prepared world, ClientSurfaceCheck and PaintCheck) has passed with it on a rented GPU VM. Unit tests cover detection, refusals, loader checks, slice selection and environment merging with fake install trees on all three platforms. `ClientSession.Launch` builds its owned launch with `ClientLaunch`, and the [native Windows joined-client check](https://github.com/tvongaza/ValheimTesting/pull/94#issuecomment-5912134571) started its client that way.
 
 ## Game clients in system tests (preview 12)
 
 A system test that looks from a client describes it with a `ClientRunPlan` section and opens it with `ClientSession`. The [FullLifecycle example](../examples/FullLifecycle/README.md) uses both.
 
-- `ClientRunPlan` holds the mode (`owned` or `attach`), the install, its `installPins` and launch arguments (owned only), the client's ValheimCLI host and port, strict plugin pins, the join address, a disposable local character, the name of the environment variable holding the join password, and the start, join and arrival timeouts. `Validate(params absentPlugins)` refuses a plan before anything starts: an owned client off this machine or without `installPins`, pins with a world key, no exact ValheimCLI pin, a listed plugin that is neither an exact MD5 nor `absent`, and any of `absentPlugins` not pinned `absent` (a server-only mod's claim is what a client without it sees). `MenuExpectations` and `WorldExpectations(worldUid)` are the strict pins at the menu and once joined. `"pinning": "none"` opts the client out ([Pins and the opt-out](#pins-and-the-opt-out)).
+- `ClientRunPlan` holds the mode (`owned` or `attach`), the install, its `installPins`, launch arguments and `architecture` (owned only; `x64`, the default, or `arm64` for a native macOS client; see [the native client](getting-started.md#native-apple-silicon-client)), the client's ValheimCLI host and port, strict plugin pins, the join address, a disposable local character, the name of the environment variable holding the join password, and the start, join and arrival timeouts. `Validate(params absentPlugins)` refuses a plan before anything starts: an owned client off this machine or without `installPins`, an `architecture` other than `x64` or `arm64`, `arm64` for a Windows or Linux client (a Windows-style path, or an install here that is not `Valheim.app`), a `Valheim.app` install on this machine that the launch's own slice and core check refuses for the plan's architecture (so a runner's `validate` refuses it, and `run` refuses it before the server starts), and any architecture for an attached client, pins with a world key, no exact ValheimCLI pin, a listed plugin that is neither an exact MD5 nor `absent`, and any of `absentPlugins` not pinned `absent` (a server-only mod's claim is what a client without it sees). `MenuExpectations` and `WorldExpectations(worldUid)` are the strict pins at the menu and once joined. `"pinning": "none"` opts the client out ([Pins and the opt-out](#pins-and-the-opt-out)).
 - `ClientSession.Launch(plan, output)` starts an owned client through `ClientLaunch` and returns it at its main menu, strictly pinned. It refuses first when the install's `BepInEx/patchers` holds anything the plan's `patchers` does not name, when its game build, BepInEx core or patchers differ from `installPins`, when something already listens on the client's CLI port (a command could reach a client it does not own), when no Steam client runs in this session, or when the password variable is missing from its own environment (the client inherits it). Startup waits on events, never on polling: ValheimCLI's listening line in this launch's BepInEx log (any of `StartupEvents.StartupFailures` ends it), then the `MainMenu` state push, each raced against the process exit, which ends startup at once with the exit code (and, when BepInEx wrote nothing, the path of `Player.log`). A failed startup stops the process it started. Disposing closes the connection and stops only that process, then keeps its BepInEx log and `Player.log` beside the evidence; `Logs` lists them for the teardown scan.
 - `ClientSession.Attach(plan, output)` connects to an operator's client and verifies its menu pins; disposing never touches that process.
-- Each session records every command to `client-commands.jsonl` (then `-2`, `-3`, and so on: evidence is never overwritten); an owned session also writes `client-process.json`.
+- Each session records every command to `client-commands.jsonl` (then `-2`, `-3`, and so on: evidence is never overwritten); an owned session also writes `client-process.json`, with the `architecture` it launched, which `Architecture` also gives (null for an attached client). `ClientRounds` and `HostRounds` record it as provenance `clientArchitecture` (`attached` for an attached client). `ClientSession.Open(plan, output, logs)` adds the owned client's kept logs to `logs` for the teardown scan, also when its startup fails after the process started; `PinnedServerRunContext.OpenClient` does the same for its `Logs`, so a client that never reached its menu is still scanned and listed in `result.json`. An arm64 plan is refused before the CLI port, Steam or the process are touched when `ClientLaunch` refuses the install, and a remote profile client (`PinnedServerRun --profile`) refuses `arm64` before its host is locked.
 - `ClientSession.Launch(plan, output, start, connect, ready)` takes the process, connection and readiness as functions, so a mod's integration tests can drive startup failures, timeouts and cleanup without a game.
 - `PinnedFile` pins a plan's input file by full path and SHA256; `Verified()` rechecks the hash before use.
 
@@ -600,7 +579,7 @@ Limits: the helper orders and records the steps, and its integration tests use s
 
 ### Prepared character start (preview)
 
-`client.startAtCharacterSave` asks the first `ClientRounds` round to verify where a prepared local character actually spawned, without a server teleport. It requires a locally launched **owned** client and `client.characterStart` with a prepared `.fch` path, its SHA256, the client's `characters_local` directory and Steam's `userdata` directory. The runner checks the prepared save's world UID and exact declared `Arrival` before launch, refuses local and Steam Cloud filename collisions, stages the file under a fresh filename, and requires ValheimCLI's selection reply to name that file as `Local`. After the client stops, it removes only that staged file and its game-made backups. `clientStart=characterSave` and `clientStartSha256` record this path; the first round's step explicitly says it verified the prepared start. Later rounds retain the ordinary teleport. Hosted, attached and remote-profile clients are refused. The [FullLifecycle example](../examples/FullLifecycle/README.md#optional-character-start-at-the-first-site-preview) shows preparation and plan fields.
+`client.startAtCharacterSave` asks the first `ClientRounds` round to verify where a prepared local character actually spawned, without a server teleport. It requires a locally launched **owned** client and `client.characterStart` with a prepared `.fch` path, its SHA256, the client's `characters_local` directory, Steam's `userdata` directory and the `characterStore` that registers the character. Only a registered disposable character can be prepared: `DisposableCharacterStore` keeps a copy of each registered character outside the game's folders with a manifest of names and the game's player IDs, `CharacterStartCopy.Prepare` takes a `DisposableCharacter` from it rather than a path, and each use re-checks the registration and the stored copy (`Refresh` takes a newer save of the same player only). The runner checks the prepared save's world UID, exact declared `Arrival` and registered player before launch, refuses local and Steam Cloud filename collisions, stages the file under a fresh filename, and requires ValheimCLI's selection reply to name that file as `Local`. After the client stops, it removes only that staged file and its game-made backups. `clientStart=characterSave` and `clientStartSha256` record this path; the first round's step explicitly says it verified the prepared start. Later rounds retain the ordinary teleport. Hosted, attached and remote-profile clients are refused. The [FullLifecycle example](../examples/FullLifecycle/README.md#optional-character-start-at-the-first-site-preview) shows preparation and plan fields.
 
 This preview path passed a bounded [Windows 1.0.16 native joined-client check](https://github.com/tvongaza/ValheimTesting/pull/94#issuecomment-5912134571): two prepared copies started grounded at dry sites 1.9 km apart without a first-round teleport, while mismatched and unedited copies were refused before launch. The normal teleport control passed. This does not establish other game versions or Linux-client behavior. A mock support reading or a correctly edited file alone does not prove arrival; the joined client's support observation remains required.
 
@@ -856,6 +835,7 @@ Game-side pieces that mods' test adapters kept copying, each checking the condit
 | `InstalledPlugin.Version(guid)`, `Command(name, guid)` | Whether a plugin is loaded, and a read-only capability reporting it. |
 | `KeyValueReply.Parse(line)`, `Single(lines, prefix)` | `key=value` fields of a console reply, `'quoted values'` included. A repeated key, an `ERROR:` line, no reply or two replies fail. |
 | `QuitLogFlush.Enable()`, `Quitting(signal)` | (preview 3) Makes the lines plugins log while the game quits reach BepInEx's disk log for the teardown [log scan](#log-scan-at-teardown): does nothing until the first quit signal (`Application.quitting`, the adapter's own `OnApplicationQuit` through `Quitting`, `AppDomain.ProcessExit`/`DomainUnload`), then flushes after every line. Not from `OnDestroy`: a script reload destroys a plugin without quitting. |
+| `ContentCensus.Command()` | (preview 3) A read-only `content-census <owner-guid> <prefix> ...` capability listing the items, recipes and network prefabs whose names start with a prefix, by the game's hash, with the owner plugin's build and the side that observed; see [Registered content census](#registered-content-census-adapter-preview-3-game-preview-15). |
 | `HarmonyCensus.Command()` | A read-only `harmony [owner]` capability listing every patched method with each patch's owner, kind, priority, index, before/after and patch method, from HarmonyX's own record. |
 | `ZonePresence.Command()` | A read-only client capability `zones <x,z> ...` reporting, for up to 64 zones, whether the terrain is loaded, the object instances standing there (all, and those not marked distant), and the saved objects of known prefabs without an instance; with the zone of the client's reference position and its synced simulation distance. For `ZoneCycle`, [below](#lifecycle-steps-leave-the-area-and-log-out). |
 | `PlayerCustomData.Command()` | A read-only client capability `custom-data [key-prefix]` listing the local player's `m_customData` entries with the profile's name, file name, save location (`Local` or `Cloud`) and path. For `LogoutCycle`. |
@@ -928,6 +908,61 @@ Four adapter commands and their runner-side readers. The adapter commands are wr
 Native run (Valheim 1.0.16 dedicated server and a joined client, [FullLifecycle's native campaign](../examples/FullLifecycle/README.md#native-campaign)): `defeated_eikthyr` set on the server was listed on the client and survived a world save and restart; a config entry changed on the server reached the client and survived a restart; a client without the mod resolved every prefab hash near the site, and a prefab registered only on the server was named by its hash (`1334784479`, `MyModControl_ServerOnly`); a `SunkenCrypt4`'s saved rooms (1.0 `roomData`) all lay in its location's zone, with an interior offset of about (0.63, 5001, 0.26).
 
 Not validated in game: an oversized room in a custom test dungeon failing the check, and a generator displaced from its location's zone; both are covered only by scripted replies.
+
+## Registered content census (Adapter preview 3, Game preview 15)
+
+A registration double (#21) shows that a mod calls ObjectDB or ZNetScene; only the running game shows what each process ended up with. An item can be missing on a client whose registration ran too early, a recipe can point at a crafting station or resource the game cannot find, and two names can share one hash. The content census (#91) asks each process for its registered items, recipes and network prefabs by stable identity and reconciles them with what the mod declares for each side. This preview covers ObjectDB items and recipes and ZNetScene prefabs; pieces and status effects are a later slice with the same format.
+
+**Declare the expectations** in a file the mod's system tests own, from the mod's design, never from a census (a census copied into its own expectations can only pass):
+
+```json
+{
+  "owner": "example.mymod",
+  "scope": ["MyMod_", "Recipe_MyMod_"],
+  "items":   [{ "name": "MyMod_SurveyStake", "sides": ["server", "client"] }],
+  "prefabs": [{ "name": "MyMod_SurveyStake", "sides": ["server", "client"] }],
+  "recipes": [{ "name": "Recipe_MyMod_SurveyStake", "sides": ["server", "client"],
+                "item": "MyMod_SurveyStake", "station": "piece_workbench", "resources": ["Wood"] }]
+}
+```
+
+`owner` is the plugin GUID whose build must be the pinned one on each side. `scope` lists the name prefixes that are the mod's own content: every expected name starts with one, the census lists only names in scope, and only those can be unexpected, so vanilla content never is. An entry names the prefab or recipe object (`name`, the identity; items and prefabs are also identified by the game's hash of it, `StableHash.Of`) and the `sides` that must have it. A recipe may declare the `item` it crafts, its crafting `station` (a prefab name, or `none` for crafting by hand) and its `resources` (item prefab names); a dependency left out is not checked. `pieces` and `statusEffects` are accepted in the same shape and always reported unsupported for now. Anything else (another key, a side other than `server` or `client`, a name twice, a name outside the scope, an empty list) is refused when the file is read. `ContentExpectations.Load(path)` reads it; the constructor takes the same in code.
+
+**Register the observation** in the test adapter on both sides: `ContentCensus.Command()` next to the others in `TestExtension.Register`. It is read-only and needs a loaded world.
+
+**Read and reconcile** each side through its own strictly pinned actor:
+
+```csharp
+var expectations = ContentExpectations.Load("content-expectations.json");
+var server = ContentCensus.Read(serverActor, "mymod.testing/content-census", expectations);
+var client = ContentCensus.Read(clientActor, "mymod.testing/content-census", expectations);
+var report = ContentCensus.Reconcile(expectations,
+    new SideObservation(CensusSide.Server, plan.Pins["example.mymod"], server),
+    new SideObservation(CensusSide.Client, plan.Client.Pins["example.mymod"], client));
+round.Write("content-census", new { server, client, report }); // evidence first
+report.RequirePassed();
+```
+
+`Read` throws for a census that is not ready (no world, the registries not populated yet, a client whose player has not spawned), for an empty registry, for a reply for another owner or scope and for any malformed reply: none of them is an empty census. `Reconcile` gives every expected entry a state per side, and every in-scope entry a side was not expected to have is unexpected:
+
+| State | Meaning |
+|---|---|
+| `present` | Registered once, and the game's own lookup by its hash (`ObjectDB.GetItemPrefab`, `ZNetScene.GetPrefab`) returns it; a recipe dependency the game resolves |
+| `missing` | Not registered on that side, not observed there, or listed but not found by the game's lookup (registered after the index was built) |
+| `unexpected` | In scope on that side but not declared for it, or a recipe resource that is not declared |
+| `duplicate` | Listed more than once, or its hash shared with another name (the game's indexes use `Dictionary.Add`, so one of them is not indexed), or two recipes of one name |
+| `unresolved` | A recipe's item, station or resource the game's lookup does not find, or not the declared one |
+| `unsupported` | A check the census cannot answer: a kind it does not observe yet, the dependencies of a recipe registered twice, a reference without a name. Never a pass |
+
+A side is refused, and its expected entries are missing, when no observation was supplied for it, when the observation reports being the other side, or when its owner plugin is not loaded or is another build than pinned (`stale build: ...`). The census reports the MD5 of the owner's file as ValheimCLI's strict pins hash it, and `Reconcile` takes the pinned MD5 or a prefix of at least 8 hex characters; the actor's strict pins still check every loaded plugin, and whether a file changed after it loaded, before each command. `Passed` holds only when every side with expectations was accepted and every entry is present. `Failures` lists every problem as `side: state kind name (why)`.
+
+**Which checks need a client.** Every process builds its own registries from its own plugins, so a server census says nothing about a client: a client expectation is satisfied only by that client's own census, and a server census handed in as the client's is refused. Declare `client` wherever players need the content: items and recipes for crafting and inventories, and the prefab wherever the object is created (an object whose prefab a process lacks is never created there, see [vanilla clients](#world-observations-global-keys-synced-config-vanilla-clients-dungeon-rooms-adapter-preview-2-game-preview-13)). A server-only entry declares `["server"]`, and the client then must not have it in scope. A client census is read only once the client has joined and its player has spawned, so content a mod registers after a server's config sync is included; content registered later than that is not.
+
+**When the adapter reads.** On demand, never at a registration hook. In Valheim 1.0.16 the world scene's `ObjectDB.Awake` indexes its items and `ZNetScene.Awake` its prefabs as the scene loads, and mods register in postfixes on those, so both have settled before a world loads; the main menu's own ObjectDB (`FejdStartup.SetupObjectDB`) is not the world's and is never read. A recipe's item and resources resolve when `ObjectDB.GetItemPrefab` returns a prefab of that name whose shared item name is the reference's (crafting adds the result by prefab name and counts resources by shared name); its station when `ZNetScene.GetPrefab` returns a prefab of that name with a crafting station of the same station name. Nothing else is looked up.
+
+[FullLifecycle](../examples/FullLifecycle/README.md#native-campaign)'s `content-census` scenario runs it on a server and a joined client in both rounds, with MyMod's item, prefab and recipe declared in `content-expectations.json`, and its `omitted-recipe` control (MyMod built with `-p:MyModOmit=recipe`) must fail on that recipe alone.
+
+Limits: the runner side is tested against scripted replies (hash collision, duplicates, a missing dependency, a missing, swapped or empty observation, a stale build, an unsupported check, the omitted-recipe control); the adapter observation compiles in CI against declared signatures and is written against the Valheim 1.0.16 decompile, but has not run in game yet. Ownership of an entry is not observable (ObjectDB and ZNetScene do not record which plugin added what), which is why the scope is by name prefix. Localization tokens, pieces and status effects are not checked yet.
 
 ## Offline binding check (Valheim.Testing.Bindings, preview 1)
 

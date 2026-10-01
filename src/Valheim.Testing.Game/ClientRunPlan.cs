@@ -17,6 +17,16 @@ public sealed class ClientRunPlan
     public string Install { get; set; } = "";
     /// <summary>Owned only: extra game arguments; <see cref="ClientLaunch"/> adds <c>-console</c>.</summary>
     public string[] LaunchArguments { get; set; } = [];
+    /// <summary>
+    /// Owned only: the slice a macOS client (<c>Valheim.app</c>) runs as, <c>x64</c> or <c>arm64</c>. Left out, it is <c>x64</c>:
+    /// under Rosetta on Apple Silicon, BepInExPack_Valheim's own loader and core work as installed, so a plan means the same
+    /// process on every Mac. <c>arm64</c> is the native path: the install needs a Doorstop library with an arm64 slice and a
+    /// BepInEx core built on MonoMod 25 or later, and the launch refuses one without them rather than fall back to Rosetta.
+    /// Windows and Linux clients are x64 only, so <c>arm64</c> is refused for them. <see cref="Validate"/> runs the launch's slice
+    /// and core check on a <c>Valheim.app</c> install on this machine, so a runner refuses such a plan before it starts anything.
+    /// Recorded in <c>client-process.json</c>.
+    /// </summary>
+    public string Architecture { get; set; } = "";
     public string Host { get; set; } = "127.0.0.1";
     /// <summary>The client's ValheimCLI port (its <c>[Server] Port</c> setting); it must differ from the server's.</summary>
     public int Port { get; set; }
@@ -70,6 +80,13 @@ public sealed class ClientRunPlan
     [JsonIgnore] public bool Pinned => EnvironmentPinning.IsStrict(Pinning, "The client's");
 
     public bool Owned => Mode == "owned";
+    /// <summary><see cref="Architecture"/> as the launch takes it; refuses any value but <c>x64</c>, <c>arm64</c> or none.</summary>
+    [JsonIgnore] public ClientArchitecture LaunchArchitecture => Architecture switch
+    {
+        "" or "x64" => ClientArchitecture.X64,
+        "arm64" => ClientArchitecture.Arm64,
+        _ => throw new ArgumentException($"Client architecture \"{Architecture}\" is neither x64 nor arm64; leave it out for x64."),
+    };
 
     /// <summary>A full path on a Windows host (drive or UNC) or a POSIX host (rooted), whichever machine this runs on.</summary>
     internal static bool IsFullPathOnAnyHost(string? path) =>
@@ -89,8 +106,19 @@ public sealed class ClientRunPlan
         // The install is a path on the client's machine, which with an environment profile is not this one (a Windows
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
-        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Patchers.Length != 0 || InstallPins != null))
-            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments and patchers.");
+        var architecture = LaunchArchitecture;
+        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Patchers.Length != 0 || InstallPins != null || Architecture.Length != 0))
+            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, patchers and architecture.");
+        var platform = Owned ? InstallPlatform() : null;
+        if (architecture == ClientArchitecture.Arm64 && platform is { } other && other != ClientPlatform.MacOS)
+            throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {other} client is x64 only. Leave architecture out.");
+        // The launch's own slice and core check on an install on this machine, so validate and run refuse it before a server starts.
+        if (platform == ClientPlatform.MacOS)
+            try { ClientLaunch.RequireMacArchitecture(Path.GetFullPath(Install), architecture); }
+            catch (Exception error) when (error is InvalidOperationException or IOException)
+            {
+                throw new ArgumentException($"The client install cannot launch as {ClientLaunch.PlanName(architecture)}: {error.Message}", error);
+            }
         BepInExLoader.CheckPatcherNames(Patchers);
         if (string.IsNullOrWhiteSpace(Host) || Port is < 1024 or > 65535) throw new ArgumentException("Give the client's ValheimCLI host and port.");
         if (Owned && Host is not ("127.0.0.1" or "localhost")) throw new ArgumentException("An owned client runs on this machine; its ValheimCLI host is 127.0.0.1.");
@@ -127,6 +155,16 @@ public sealed class ClientRunPlan
         if (Owned)
             (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, BepInEx core and patchers in installPins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\"."))
                 .Validate("client install");
+    }
+
+    // The owned install's platform where the plan shows it: the install on this machine, or a Windows-style path to another
+    // machine. A POSIX path that is not here stays unknown until the launch, which refuses arm64 for a Linux client too.
+    private ClientPlatform? InstallPlatform()
+    {
+        if (Directory.Exists(Install))
+            try { return ClientLaunch.Detect(Install); }
+            catch (Exception error) when (error is IOException or ArgumentException or InvalidOperationException) { return null; }
+        return System.Text.RegularExpressions.Regex.IsMatch(Install, @"^([A-Za-z]:[\\/]|\\\\)") ? ClientPlatform.Windows : null;
     }
 
     /// <summary>Strict pins at the menu: plugins only. <see cref="EnvironmentPinning.None"/> for an unpinned client.</summary>

@@ -58,10 +58,11 @@ public sealed class ClientRoundsTests : IDisposable
         Directory.CreateDirectory(local); Directory.CreateDirectory(evidence); Directory.CreateDirectory(steam);
         string source = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "tester-copy.fch");
         File.WriteAllBytes(source, CharacterSavePositionTests.Profile(secondUid: 4242).File);
-        string hash = CharacterStartCopy.Prepare(source, prepared, 4242, Point.X, Point.Height, Point.Z);
+        string hash = CharacterStartCopy.Prepare(CharacterSavePositionTests.Register(_output, source), prepared, 4242, Point.X, Point.Height, Point.Z);
         plan.CharacterStart = new CharacterStartPlan
         {
             PreparedFile = prepared, Sha256 = hash, CharactersLocalDirectory = local, SteamUserDataDirectory = steam,
+            CharacterStore = Path.Combine(_output, "store"),
         };
         return plan;
     }
@@ -133,6 +134,17 @@ public sealed class ClientRoundsTests : IDisposable
         foreach (string file in new[] { "first-arrival.json", "first-reading.json", "after-restart-arrival.json", "after-restart-reading.json" }) Assert.True(Wrote(file), file);
         Assert.True(JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "first-arrival.json"))).RootElement.GetProperty("grounded").GetBoolean());
         Assert.Equal("first,after-restart", report.Provenance["clientRoundsCompleted"]);
+        Assert.Equal("x64", report.Provenance["clientArchitecture"]);
+    }
+
+    [Theory] [InlineData("owned", "arm64", "arm64")] [InlineData("owned", "x64", "x64")] [InlineData("attach", "", "attached")]
+    public void TheReportRecordsTheClientsArchitecture(string mode, string architecture, string recorded)
+    {
+        var plan = Plan(mode); plan.Architecture = architecture;
+        var report = new ScenarioReport("rounds");
+        Rounds(report, plan, names: ["only"]).Run(Server(), Open(plan), Measure());
+        Assert.True(report.Passed, string.Join("; ", Failed(report)));
+        Assert.Equal(recorded, report.Provenance["clientArchitecture"]);
     }
 
     [Fact] public void StagedCharacterStartIsObservedWithoutAFirstTeleport()
@@ -159,6 +171,41 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
         Assert.True(File.Exists(plan.CharacterStart.PreparedFile));
         Assert.Contains(report.Steps, step => step.Name == "remove only the staged character and its game-made backups" && step.Passed);
+    }
+
+    [Fact] public void AnUnregisteredPreparedCharacterIsRefusedBeforeTheClientOpens()
+    {
+        var plan = PreparedPlan();
+        plan.CharacterStart!.CharacterStore = DisposableCharacterStore.Create(Path.Combine(_output, "other-store")).Root;
+        var report = new ScenarioReport("rounds");
+        bool opened = false;
+        Assert.Throws<InvalidDataException>(() => Rounds(report, plan).Run(Server(), () => { opened = true; throw new IOException("must not open"); }, Measure()));
+        Assert.False(opened);
+        Assert.False(File.Exists(Path.Combine(plan.CharacterStart.CharactersLocalDirectory, "tester-copy.fch")));
+    }
+
+    [Fact] public void AMissingRegisteredCopyIsRefusedBeforeTheClientOpens()
+    {
+        var plan = PreparedPlan();
+        File.Delete(Path.Combine(plan.CharacterStart!.CharacterStore, "tester.fch"));
+        AssertRefusedBeforeOpening<FileNotFoundException>(plan);
+    }
+
+    [Fact] public void ASwappedRegisteredCopyIsRefusedBeforeTheClientOpens()
+    {
+        var plan = PreparedPlan();
+        File.WriteAllBytes(Path.Combine(plan.CharacterStart!.CharacterStore, "tester.fch"), CharacterSavePositionTests.Profile(playerId: 99).File);
+        AssertRefusedBeforeOpening<InvalidDataException>(plan);
+    }
+
+    private void AssertRefusedBeforeOpening<T>(ClientRunPlan plan) where T : Exception
+    {
+        var report = new ScenarioReport("rounds");
+        bool opened = false;
+        Assert.Throws<T>(() => Rounds(report, plan).Run(Server(), () => { opened = true; throw new IOException("must not open"); }, Measure()));
+        Assert.False(opened);
+        Assert.Equal(new[] { "stage the pinned disposable local character" }, Failed(report));
+        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
     }
 
     [Fact] public void WrongStagedStartFailsRatherThanTeleportingOrMeasuring()

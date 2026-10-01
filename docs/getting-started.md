@@ -140,7 +140,46 @@ What works: owned dedicated-server native checks on Linux, locally or in CI; the
 
 On macOS the dedicated server runs natively (Game preview 15). Valheim Dedicated Server (Steam app 896660) has a macOS build: install it with anonymous SteamCMD (`steamcmd +force_install_dir <dir> +login anonymous +app_update 896660 validate +quit`; SteamCMD itself runs under Rosetta on Apple Silicon, the server does not). The install is not an app bundle: the server is `valheim_server/Valheim`, a universal (x86_64 and arm64) executable beside Unity's and Mono's libraries and its `Data` folder, and `steamapps/appmanifest_896660.acf` records its build id (25527701, the same as the Windows and Linux servers, on 30 September 2026; check the build ids match before comparing a Mac server with a client on another OS). `ServerLaunch.Detect` returns `MacOS` for such a runtime, and on a Mac `CreateStartInfo` starts it through `/usr/bin/arch` as the machine's own architecture with Doorstop inserted. A macOS server runs only on a Mac, a Mac still runs neither the Windows nor the Linux server, and a `Valheim.app` client is refused as a server runtime.
 
-Modded runs need BepInEx that runs natively on Apple Silicon: BepInExPack_Valheim's Doorstop and core are x86_64 only. Put a universal `libdoorstop.dylib` (UnityDoorstop 4.5) at the runtime's root and a BepInEx 5.4.23.5 core rebuilt against HarmonyX and MonoMod releases with arm64 support in `BepInEx/core`, as the native Mac client uses (community builds, not upstream BepInEx); `CreateStartInfo` refuses a runtime whose server or Doorstop lacks the machine's slice. The server first looks for `steamclient.dylib` beside itself and then used the installed Steam client's; on a Mac without the Steam client, SteamCMD's own `steamclient.dylib` is universal but has not been tried. Remote macOS server hosts (`--profile`) are not supported yet. The Linux image also builds on Apple Silicon with `--platform linux/amd64`, but only under emulation; see its [Apple Silicon notes](../docker/linux-server/README.md#apple-silicon-experimental).
+Modded runs need BepInEx that runs natively on Apple Silicon: BepInExPack_Valheim's Doorstop and core are x86_64 only. Put a `libdoorstop.dylib` with an arm64 slice (UnityDoorstop 4.5 or later; its universal build is one way) at the runtime's root and a BepInEx 5.4.23.5 core rebuilt against HarmonyX and MonoMod releases with arm64 support in `BepInEx/core`, the same stack as the [native Mac client](#native-apple-silicon-client) (community builds, not upstream BepInEx); `CreateStartInfo` refuses a runtime whose server or Doorstop lacks the machine's slice. The server first looks for `steamclient.dylib` beside itself and then used the installed Steam client's; on a Mac without the Steam client, SteamCMD's own `steamclient.dylib` is universal but has not been tried. Remote macOS server hosts (`--profile`) are not supported yet. The Linux image also builds on Apple Silicon with `--platform linux/amd64`, but only under emulation; see its [Apple Silicon notes](../docker/linux-server/README.md#apple-silicon-experimental).
+
+### Native Apple Silicon client
+
+The macOS game client is universal (`lipo -info <install>/valheim.app/Contents/MacOS/Valheim` lists `x86_64 arm64`), and a modded client can run either way. Rosetta is the compatibility path, not the only modded one:
+
+| `client.architecture` | Runs as | Install needs | Use it when |
+|---|---|---|---|
+| left out, or `"x64"` | x86_64 under Rosetta | BepInExPack_Valheim as installed: `doorstop_libs/libdoorstop_x64.dylib` and its core | Default. Every Mac and every mod that works on Intel Macs; slower on Apple Silicon |
+| `"arm64"` (Game preview 15) | native arm64 | a `libdoorstop.dylib` with an **arm64 slice** at the install's root (UnityDoorstop 4.5 or later; a universal or an arm64-only build both have it) and a BepInEx core built on MonoMod 25 or later | Apple Silicon, with mods that have no Intel-only native parts |
+
+The core matters as much as the loader. BepInExPack_Valheim's core uses legacy MonoMod (before 25), which cannot apply Harmony hooks on arm64, where a page is writable or executable but never both. A native core is BepInEx 5.4.23.5 rebuilt on HarmonyX 2.16.1 and MonoMod 25 ([source branch](https://github.com/bbauti/BepInEx/tree/codex/macos-arm64-valheim)); it is a community build, not an upstream BepInEx release. `ClientLaunch` checks both before anything starts: an arm64 plan whose game or Doorstop library has no arm64 slice, or whose `BepInEx/core/MonoMod.RuntimeDetour.dll` is missing or older than 25, is refused with the reason. `ClientRunPlan.Validate` runs the same check on an install on this machine, so a runner's `validate` refuses such a plan and `run` refuses it before it starts the server. It never falls back to Rosetta: the game starts through `/usr/bin/arch -arm64`, which fails rather than run another slice. Windows and Linux clients are x64 only, so `ClientRunPlan.Validate` refuses `arm64` for one, and a remote profile client (Windows or Linux) refuses it too.
+
+The default stays x64 because it works with the loader and core every Valheim mod guide installs, on every Mac, and a plan then means the same process wherever it runs; arm64 needs a different core that the toolkit cannot supply. Choose `arm64` explicitly once the install has it.
+
+A short recipe with the community installer [Relokk1/valheim-native-arm64](https://github.com/Relokk1/valheim-native-arm64), pinned to the commit checked here (read `install.sh` before running it; it downloads BepInExPack_Valheim 5.4.2333 from Thunderstore, replaces `BepInEx/core` with its rebuilt core, copies UnityDoorstop 4.5.0's universal `libdoorstop.dylib` to the install's root, sets `Type = GameObject` in `BepInEx.cfg`, removes the quarantine attribute and moves an existing `BepInEx` folder to `BepInEx.backup-<date>`). Use a test install and a disposable local character, never your own:
+
+```sh
+git clone https://github.com/Relokk1/valheim-native-arm64.git
+cd valheim-native-arm64
+git checkout cd5565a82dbff8332989c812cb141ad5638dbd52
+./install.sh "<client install>"   # the folder that holds valheim.app
+```
+
+Then add ValheimCLI and your plugins to `BepInEx/plugins`, compute `installPins` with `InstallPins.Of("<client install>")`, and set the client section to launch natively:
+
+```json
+"client": {
+  "mode": "owned",
+  "install": "<client install>",
+  "architecture": "arm64",
+  "installPins": { "game": "...", "bepinexCore": "...", "patchers": "..." }
+}
+```
+
+Do not start the game with the installer's `play.sh`; `ClientSession.Launch` starts it itself (the same `arch -arm64` launch with Doorstop inserted) and owns that process. The repository redistributes none of these binaries. `client-process.json` and the report's `clientArchitecture` record which slice ran; BepInEx's log reads `System platform: OSX Arm64` in a native process, and `vmmap <pid> | grep "Code Type"` shows `ARM64`.
+
+Status and limits: the owned `ClientSession` launch with `"architecture": "arm64"` passed FullLifecycle's synced-config scenario on an Apple M2 (macOS 26.5, Valheim 1.0.16, a native macOS dedicated server of the same version) on 30 September 2026 ([#113](https://github.com/tvongaza/ValheimTesting/pull/113)): the client process's code type was ARM64, BepInEx 5.4.23.5 logged `System platform: OSX Arm64` on MonoMod.RuntimeDetour 25.3.4, ValheimCLI with its Standard and WorldTools packs, MyMod and its test adapter loaded with exact pins, strict commands replied, and the client joined with a disposable local character, read the synced greeting, rejoined after a confirmed save and a server-only restart with the saved value, and stopped cleanly. Arm64 plans against an install with the pack's MonoMod 22 core or without an arm64 Doorstop were refused before launch. This is one machine and one game build; other chips, macOS versions and mods are unchecked. The unit tests cover the plan field, slice and core selection and every refusal with synthetic installs. Mods with native libraries built only for Intel, Windows or Linux will not load natively; asset bundles without Metal shaders render pink; unusual MonoMod IL hooks may behave differently on MonoMod 25; and some newer Macs were reported to need an arm64e Doorstop build. Test each mod natively before relying on it, and keep the x64 path for anything that fails.
+
+Two Mac session limits apply to any owned Mac client, native or not. The client needs an unlocked, logged-in desktop session with the display on: on a locked console it stalls after the first scene and never reaches its menu. And the first launch of an install copied to a new path waits on macOS Gatekeeper's first-launch prompt: the process sits suspended until someone at the Mac answers it, so answer that prompt for each new copy before relying on unattended runs.
 
 ## 5. Read the result, then keep human judgement separate
 
@@ -164,15 +203,15 @@ Reload tests must provide a pins file and explicitly advance the changed plugin'
 
 ## Developer loop
 
-For the edit-build-test round of a mod on your own machine, [`tools/dev-loop`](../tools/dev-loop/README.md) has the scripts that moved here from ValheimCLI: `dev-loop` builds the mod, installs its DLL, launches Valheim and runs a test plan in strict mode with the mod's pin replaced by the md5 of the build it just deployed; `pin-mods` snapshots and checks a game's plugin pins; `log-summary.sh` counts the log's warnings and errors. Each comes as a bash script for macOS/Linux and a PowerShell twin for Windows (`log-summary` is folded into `dev-loop.ps1`).
+For the edit-build-test round of a mod on your own machine, [`tools/dev-loop`](../tools/dev-loop/README.md) has the scripts that moved here from ValheimCLI: `dev-loop` builds the mod, installs its DLL, launches Valheim and runs a test plan in strict mode with the mod's pin replaced by the md5 of the build it just deployed; `pin-mods` snapshots and checks a game's plugin pins; `log-summary.sh` counts the log's warnings and errors; `world-hash` proves which saved world a game loaded; `sample-value` records a value over time as CSV. Each comes as a bash script for macOS/Linux and a PowerShell twin for Windows (`log-summary` is folded into `dev-loop.ps1`).
 
 ```sh
-VALHEIM_CLI=/path/to/valheim-cli VALHEIM_EXPECTATIONS=pins.txt tools/dev-loop/dev-loop.sh MyMod.csproj smoke-plan.yaml
+VALHEIM_CLI=/path/to/valheim-cli VALHEIM_EXPECTATIONS=pins.txt tools/dev-loop/dev-loop.sh MyMod.csproj tools/dev-loop/smoke-plan.yaml
 ```
 
 ```powershell
 $env:VALHEIM_CLI = 'C:\path\to\valheim-cli.exe'; $env:VALHEIM_EXPECTATIONS = 'pins.txt'
-powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj smoke-plan.yaml
+powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj tools\dev-loop\smoke-plan.yaml
 ```
 
-The scripts drive the `valheim-cli` executable, which this repository does not build: take it from a [ValheimCLI](https://github.com/tvongaza/valheimCLI) release or build its `CLI` project, at or after the commit in [`cli-dependency.json`](../cli-dependency.json). ValheimCLI's `examples/smoke-plan.yaml` is a plan to start from. `dev-loop` deploys only to a stopped game; point it at a disposable install, world and character. The [tools README](../tools/dev-loop/README.md) lists the environment variables, exit codes and tests.
+The scripts drive the `valheim-cli` executable, which this repository does not build: take it from a [ValheimCLI](https://github.com/tvongaza/valheimCLI) release or build its `CLI` project, at or after the commit in [`cli-dependency.json`](../cli-dependency.json). [`tools/dev-loop/smoke-plan.yaml`](../tools/dev-loop/smoke-plan.yaml) is a strict plan to start from. `dev-loop` deploys only to a stopped game; point it at a disposable install, world and character. The [tools README](../tools/dev-loop/README.md) lists the environment variables, exit codes and tests.
