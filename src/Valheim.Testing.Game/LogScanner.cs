@@ -108,9 +108,10 @@ public static class LogScanner
         // Unity: a bundle's shader was not built for this graphics API (magenta objects on Vulkan or OpenGL clients). The
         // wording is as the Valheim-Modding wiki's Valheim-Unity-Project-Guide quotes it.
         new("shader-unsupported", LogSeverity.Warning, new(@"not supported on this GPU|Shader Unsupported\b|Desired shader compiler platform \d+ is not available in shader blob", Options)),
-        // The macOS client's own Apple plugins (GameKitWrapper, AppleCoreNativeMac) failing to load at startup: Player.log on
-        // Valheim 1.0.16 had these DllNotFoundExceptions in every macOS client run (native arm64 and Rosetta, with or without
-        // mods, 30 Sep 2026). The game continues; they are the game's own, so they do not count as UnityException.
+        // The macOS game's own Apple plugins (GameKitWrapper, AppleCoreNativeMac) failing to load at startup: these
+        // DllNotFoundExceptions were in the Unity log of every macOS client and dedicated server run kept from 18 to 30 Sep
+        // 2026 (Valheim 1.0.16, native arm64 and Rosetta, with or without mods). The game continues; they are the game's own,
+        // so they do not count as UnityException.
         new("macos-apple-plugin-missing", LogSeverity.Warning, new(@"\bDllNotFoundException\b", Options), new(@"\bApple\.(?:GameKit|Core)\.", Options)),
     ];
 

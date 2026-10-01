@@ -284,7 +284,7 @@ public sealed class LogScanTests : IDisposable
         "09/30/2026 20:34:02: Placed location StartTemple in zone 0,0  duration 9.5084 ms\n" +
         "09/30/2026 20:34:03: Placed location ShipSetting01 in zone -4,-2  duration 1.9998 ms\n";
     private const string UnityTail = "\n09/30/2026 20:34:03: SpawnPrefab StoneSpawner_Fader SPAWNING BossStone_Fader\n";
-    // The macOS client's own plugins, as every macOS client's Player.log on 1.0.16 had them (30 Sep 2026).
+    // The macOS game's own plugins, as every kept macOS Unity log on 1.0.16 had them (clients and dedicated servers, 18-30 Sep 2026).
     private const string AppleGameKit =
         "DllNotFoundException: GameKitWrapper assembly:<unknown assembly> type:<unknown type> member:(null)\n" +
         "  at (wrapper managed-to-native) Apple.GameKit.DefaultNSErrorHandler+Interop.DefaultNSErrorHandler_Set(Apple.Core.Runtime.NSExceptionCallback)\n" +
@@ -330,7 +330,7 @@ public sealed class LogScanTests : IDisposable
         Assert.Equal(1, Count(scan, "missing-method").Count); Assert.Equal(2, Count(scan, "macos-apple-plugin-missing").Count);
         Assert.Equal(0, Count(scan, LogScanner.UnityException).Count);
     }
-    // The macOS client's missing Apple plugins only warn; another missing native library (PlayFab's, which crossplay needs) fails.
+    // The macOS game's missing Apple plugins only warn; another missing native library (PlayFab's, which crossplay needs) fails.
     [Fact] public void OnlyTheMacClientsOwnPluginsAreExcused()
     {
         var mac = LogScanner.Scan(PlayerLog(AppleGameKit + "\n" + AppleCore + UnityTail));
