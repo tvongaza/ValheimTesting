@@ -75,6 +75,19 @@ foreach (var (page, excerpt) in new (string Page, string Excerpt)[]
         throw new InvalidOperationException($"DocFX omitted the selected contextual example from {page}.");
 }
 
+// DocFX can log "Found project reference without a matching metadata reference" for Valheim.Testing.csproj (Roslyn's
+// MSBuild workspace; whether it appears depends on project load order, not on these sources). It costs nothing as long
+// as the pages of the projects that reference Valheim.Testing still link its types, which these check.
+foreach (var (page, link) in new (string Page, string Link)[]
+{
+    ("api/Valheim.Testing.Doubles.TerrainWorld.html", "href=\"Valheim.Testing.ITerrain.html\""),
+    ("api/Valheim.Testing.Game.TerrainCapture.html", "href=\"Valheim.Testing.ReplayTerrain.html\""),
+})
+{
+    string file = Path.Combine(site, page);
+    if (!File.Exists(file) || !File.ReadAllText(file).Contains(link, StringComparison.Ordinal))
+        throw new InvalidOperationException($"DocFX did not link {page} to Valheim.Testing ({link}): the project reference was lost.");
+}
 // DocFX's build manifest records source_base_path as an absolute local path.
 // It is build metadata, not a page asset; do not publish it.
 File.Delete(Path.Combine(site, "manifest.json"));
