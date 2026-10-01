@@ -4,5 +4,7 @@ obj/
 .packages/*
 !.packages/.gitkeep
 artifacts/
+docs/reference/api/
+docs/reference/_site/
 .DS_Store
 *.user

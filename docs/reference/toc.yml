@@ -1,0 +1,6 @@
+- name: API reference home
+  href: index.md
+- name: Candidate compatibility policy
+  href: compatibility.md
+- name: Current public surface
+  href: api/
