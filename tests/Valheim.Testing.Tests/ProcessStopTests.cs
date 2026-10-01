@@ -224,11 +224,14 @@ public class ProcessCaptureStarvationTests
         var start = OperatingSystem.IsWindows()
             ? new ProcessStartInfo("ping", "-t 127.0.0.1") { CreateNoWindow = true }
             : new ProcessStartInfo("/bin/sleep", "30");
-        using var release = new ManualResetEventSlim();
+        // Never disposed: blockers still queued when the test ends start afterwards, and a Wait on a disposed event would throw
+        // on a pool thread and crash the test host.
+        var release = new ManualResetEventSlim();
         ThreadPool.GetMinThreads(out int workers, out _);
         // More blockers than the pool has threads or adds in the test's time (about two a second while starved), so any work
         // item queued after them waits.
-        for (int i = 0; i < workers + 100; i++) ThreadPool.UnsafeQueueUserWorkItem(_ => release.Wait(), null);
+        int blockers = workers + 100, finished = 0;
+        for (int i = 0; i < blockers; i++) ThreadPool.UnsafeQueueUserWorkItem(_ => { release.Wait(); Interlocked.Increment(ref finished); }, null);
         try
         {
             using var owned = new DirectServerProcess(start, Path.Combine(dir.Path, "owned"));
@@ -238,6 +241,12 @@ public class ProcessCaptureStarvationTests
             Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"stopped and kept in {clock.Elapsed}");
             Assert.True(File.Exists(Path.Combine(dir.Path, "owned.stdout.log")));
         }
-        finally { release.Set(); }
+        finally
+        {
+            release.Set();
+            // The released pool drains the blockers before the next test runs.
+            var drained = Stopwatch.StartNew();
+            while (Volatile.Read(ref finished) < blockers && drained.Elapsed < TimeSpan.FromSeconds(60)) Thread.Sleep(50);
+        }
     }
 }
