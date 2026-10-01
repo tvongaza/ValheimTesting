@@ -109,7 +109,7 @@ For the current split ValheimCLI build, a typical disposable Roads fixture insta
 | Capture pack | Optional | Only for clutter controls |
 | ScriptEngine | Only for reload tests | Only for reload tests |
 
-A clean test runtime is BepInEx core plus these plugins, with an empty `BepInEx/patchers` folder: a preloader patcher left behind by a removed mod breaks the game's types before any plugin loads. The pinned runner refuses patchers its plan does not name.
+A clean test runtime is BepInEx core plus these plugins, with an empty `BepInEx/patchers` folder: a preloader patcher left behind by a removed mod breaks the game's types before any plugin loads. The pinned runner refuses patchers its plan does not name. For the plugin dependency and load-order concept, see the wiki's [BepInEx dependencies](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices#bepinex-dependencies-and-incompatibilities); use the [runtime hygiene checklist](runtime-hygiene.md#plugins) for this toolkit's tested rules.
 
 Core stays in plugins. Put each optional pack in plugins **or** scripts, never both. See the ValheimCLI [pack installation and ownership guide](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md). An older monolithic ValheimCLI and extracted packs cannot be mixed.
 
