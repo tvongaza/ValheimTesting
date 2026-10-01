@@ -79,6 +79,31 @@ public class ProcessStopTests
         Assert.True(owned.HasExited);
     }
 
+    // A capture can only stay open after the exit when another process holds the pipe; the failure names which one.
+    [Fact] public void ACaptureHeldOpenByAnEscapedProcessIsNamed()
+    {
+        if (OperatingSystem.IsWindows()) return; // The escape below is a POSIX double fork.
+        using var dir = new TempDirectory();
+        string pidFile = Path.Combine(dir.Path, "escaped.pid"), ready = Path.Combine(dir.Path, "ready");
+        // The subshell starts a sleep with the inherited stdout (stderr closed) and exits, so the sleep leaves the owned tree.
+        var start = new ProcessStartInfo("/bin/sh");
+        foreach (string argument in new[] { "-c", "(sleep 30 2>/dev/null & echo $! > \"$1\"); : > \"$2\"; sleep 30", "sh", pidFile, ready }) start.ArgumentList.Add(argument);
+        using var owned = new DirectServerProcess(start, Path.Combine(dir.Path, "owned"));
+        try
+        {
+            using (var created = new FileSystemWatcher(dir.Path, "ready") { EnableRaisingEvents = true })
+                if (!File.Exists(ready)) created.WaitForChanged(WatcherChangeTypes.Created, 10_000);
+            var error = Assert.Throws<TimeoutException>(() => owned.StopCleanly(TimeSpan.Zero, TimeSpan.FromSeconds(1)));
+            Assert.Contains("stdout still open", error.Message);
+            Assert.DoesNotContain("stderr", error.Message);
+        }
+        finally
+        {
+            if (File.Exists(pidFile) && int.TryParse(File.ReadAllText(pidFile).Trim(), out int pid))
+                try { using var escaped = Process.GetProcessById(pid); escaped.Kill(); escaped.WaitForExit(); } catch (ArgumentException) { }
+        }
+    }
+
     [Fact] public void ALocalProcessIgnoringSigintIsKilledAfterTheWait()
     {
         if (OperatingSystem.IsWindows()) return;
@@ -182,5 +207,46 @@ public class ProcessStopTests
         public Task<int> WaitForExitAsync(CancellationToken cancellation) => Task.FromResult(-1);
         public void Stop(TimeSpan timeout) => Stopped = true;
         public void Dispose() { }
+    }
+}
+
+// #121: the captures must not need the thread pool. With every pool thread blocked, as when many tests in a run block at once,
+// a killed process's output is still kept within the stop bound. It starves the pool, so it runs alone.
+[CollectionDefinition(nameof(ThreadPoolStarvation), DisableParallelization = true)]
+public sealed class ThreadPoolStarvation { }
+
+[Collection(nameof(ThreadPoolStarvation))]
+public class ProcessCaptureStarvationTests
+{
+    [Fact] public void TheOutputIsKeptWhileTheThreadPoolIsStarved()
+    {
+        using var dir = new TempDirectory();
+        var start = OperatingSystem.IsWindows()
+            ? new ProcessStartInfo("ping", "-t 127.0.0.1") { CreateNoWindow = true }
+            : new ProcessStartInfo("/bin/sleep", "30");
+        // Never disposed: blockers still queued when the test ends start afterwards, and a Wait on a disposed event would throw
+        // on a pool thread and crash the test host.
+        var release = new ManualResetEventSlim();
+        ThreadPool.GetMinThreads(out int workers, out _);
+        // More blockers than the pool has threads or adds in the test's time (about two a second while starved), so any work
+        // item queued after them waits.
+        int blockers = workers + 100, finished = 0;
+        for (int i = 0; i < blockers; i++) ThreadPool.UnsafeQueueUserWorkItem(_ => { release.Wait(); Interlocked.Increment(ref finished); }, null);
+        try
+        {
+            using var owned = new DirectServerProcess(start, Path.Combine(dir.Path, "owned"));
+            var clock = Stopwatch.StartNew();
+            var stop = owned.StopCleanly(TimeSpan.Zero, TimeSpan.FromSeconds(5));
+            Assert.Equal(StopOutcome.Killed, stop.Outcome);
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"stopped and kept in {clock.Elapsed}");
+            Assert.True(File.Exists(Path.Combine(dir.Path, "owned.stdout.log")));
+        }
+        finally
+        {
+            release.Set();
+            // The released pool drains the blockers before the next test runs.
+            var drained = Stopwatch.StartNew();
+            while (Volatile.Read(ref finished) < blockers && drained.Elapsed < TimeSpan.FromSeconds(60)) Thread.Sleep(50);
+        }
     }
 }

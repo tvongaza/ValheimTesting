@@ -368,10 +368,23 @@ public sealed class DirectServerProcess : IServerProcess
         await _process.WaitForExitAsync(cancellation).ConfigureAwait(false);
         return _process.ExitCode;
     }
-    private static async Task Capture(StreamReader reader, string path)
+    // Each output is copied on its own thread, not the thread pool: on Windows a redirected pipe has no overlapped I/O, so an
+    // async copy holds a pool thread in a blocking read for the process's whole life, and its last read and continuation wait
+    // for a free pool thread after the process ends. In a busy test run (many tests blocking pool threads at once) that wait
+    // outlasted the 5 s stop bound (#121). A dedicated thread's read returns as soon as the pipe's last writer closes.
+    private static Task Capture(StreamReader reader, string path)
     {
-        await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        await reader.BaseStream.CopyToAsync(file);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        new Thread(() =>
+        {
+            try
+            {
+                using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read)) reader.BaseStream.CopyTo(file);
+                done.SetResult();
+            }
+            catch (Exception error) { done.SetException(error); }
+        }) { IsBackground = true, Name = "capture " + Path.GetFileName(path) }.Start();
+        return done.Task;
     }
     public void Stop(TimeSpan timeout)
     {
@@ -408,7 +421,14 @@ public sealed class DirectServerProcess : IServerProcess
     // The process output and the game's logs as they were when it stopped (the next boot overwrites the game's).
     private void Keep(TimeSpan timeout)
     {
-        if (!Task.WaitAll([_stdout, _stderr], timeout)) throw new TimeoutException("Process log capture did not finish.");
+        if (!Task.WaitAll([_stdout, _stderr], timeout))
+        {
+            // An escaped child or another process inheriting a pipe can keep its capture open after this process exits.
+            // A stalled capture is also possible; the pending pipe identifies which copy needs investigation.
+            var open = new[] { ("stdout", _stdout), ("stderr", _stderr) }.Where(capture => !capture.Item2.IsCompleted).Select(capture => capture.Item1);
+            throw new TimeoutException($"Process log capture did not finish within {WaitText.Seconds(timeout)} after process {_process.Id} exited (exit {_process.ExitCode}): " +
+                $"{string.Join(" and ", open)} still open; another process may hold that pipe, or its capture has stalled. The copy so far is in {_logPrefix}.std*.log.");
+        }
         for (int i = 0; i < _gameLogs.Length; i++)
         {
             string target = _logPrefix + ".game-" + i + ".log";
