@@ -243,7 +243,8 @@ internal static class SteamSignedInUsers
         };
     }
 
-    // Linux and macOS: the account Steam last signed in, from the first loginusers.vdf found (a remembered sign-in is the running one).
+    // Linux and macOS: the account Steam last signed in, from the first loginusers.vdf found. This file does not prove
+    // Steam is running or that the remembered account still has an active session.
     // Older clients mark it MostRecent "1"; the current macOS client (September 2026) writes no MostRecent key at all and records
     // each user's last sign-in as Timestamp, so without any MostRecent key the single newest Timestamp is that account, and a tie or
     // no Timestamp is unreadable. A user is a bare "<SteamID64>" line; only its id is printed. Variable: steam (optional Steam directory).
