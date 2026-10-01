@@ -7,6 +7,7 @@
 //   dotnet run scripts/api-docs.cs
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 string root = FindRoot();
 foreach (string path in new[]
@@ -56,6 +57,18 @@ foreach (string page in new[]
 })
     if (!File.Exists(Path.Combine(site, page)))
         throw new InvalidOperationException($"DocFX omitted a package's reference page: {page}");
+
+// DocFX's build manifest records source_base_path as an absolute local path.
+// It is build metadata, not a page asset; do not publish it.
+File.Delete(Path.Combine(site, "manifest.json"));
+string[] privatePaths = [root, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)];
+foreach (string file in Directory.EnumerateFiles(site, "*", SearchOption.AllDirectories))
+{
+    byte[] contents = File.ReadAllBytes(file);
+    foreach (string path in privatePaths.Where(path => !string.IsNullOrWhiteSpace(path)))
+        if (contents.AsSpan().IndexOf(Encoding.UTF8.GetBytes(path)) >= 0)
+            throw new InvalidOperationException($"Generated reference contains a build-machine path in {Path.GetRelativePath(site, file)}.");
+}
 
 Console.WriteLine("Preview API reference ready: docs/reference/_site/index.html");
 

@@ -1,0 +1,56 @@
+name: API reference site
+
+# The existing test workflow builds the reference on PRs. Only main publishes it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/api-pages.yml'
+      - '.config/dotnet-tools.json'
+      - 'cli-dependency.json'
+      - 'docs/reference/**'
+      - 'scripts/api-docs.cs'
+      - 'scripts/bootstrap-cli.cs'
+      - 'scripts/validate.cs'
+      - 'src/**'
+      - 'tests/Valheim.Testing.Adapter.CompileCheck/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run scripts/bootstrap-cli.cs
+      - run: dotnet run scripts/validate.cs
+      - run: dotnet tool restore
+      - run: dotnet run scripts/api-docs.cs
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/reference/_site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
