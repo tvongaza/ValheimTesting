@@ -31,7 +31,7 @@ Every DLL is pinned by SHA256; leave a `sha256` empty and the preflight tells yo
 
 ## 1. Fill in the manifest
 
-Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the manifest. `install` is a new directory: the tool creates it as a copy of `game` and owns it, and refuses any existing directory it did not create. The fixture root holds exactly one world, as the game saved it:
+Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the manifest. `install` is a new directory: the tool creates it as a copy of `game` and owns it, and refuses any existing directory it did not create. For a basic smoke, `DefaultSmokeWorld.Prepare(newDirectory)` writes a small server-created Valheim 1.0.16 world; set `fixture.root` to that directory and `fixture.worldUid` to the returned identity's `UidText`. It refuses an existing directory, and the run copies the fixture again before the game can edit it. A later game version needs a native load check. For a mod-specific world, supply your own fixture instead. The fixture root holds exactly one world, as the game saved it:
 
 ```text
 <fixture root>/
