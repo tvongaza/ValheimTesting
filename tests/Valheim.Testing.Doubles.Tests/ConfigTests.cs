@@ -139,7 +139,7 @@ public sealed class ConfigTests : IDisposable
         Assert.Contains("Kept = yes", Lines(config.FileText)); // an unbound value is written back
         Assert.True(config.TryGetEntry<Mode>("General", "Mode", out var mode)); Assert.Equal(Mode.Everything, mode.Value);
         Assert.False(config.TryGetEntry<Mode>("General", "Kept", out _));
-        Assert.Equal(1, config.Count); Assert.Same(mode, config["General", "Mode"]);
+        Assert.Same(mode, Assert.Single(config).Value); Assert.Same(mode, config["General", "Mode"]);
     }
 
     [Fact] public void DefinitionsRefuseWhatBepInExRefusesAndValuesConvertAsItDoes()

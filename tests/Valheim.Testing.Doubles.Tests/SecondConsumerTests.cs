@@ -67,7 +67,7 @@ public sealed class SecondConsumerTests : IDisposable
         compiler.Save();
         var wider = new TerrainComp(compiler.m_hmap, 4) { m_nview = compiler.m_nview };
         Assert.False(wider.Load()); // 9 vertices saved, 25 here: the game's "height array missmatch".
-        Assert.False(wider.m_modifiedHeight.Any(flag => flag));
+        Assert.DoesNotContain(true, wider.m_modifiedHeight);
     }
 
     [Fact] public void APreOnePointZeroPaintGridIsSpreadWithTheGamesMapping()

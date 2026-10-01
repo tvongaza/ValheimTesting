@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.Versioning;
 using System.Text;
 using Valheim.Testing.Game;
 using Xunit;
@@ -466,7 +467,8 @@ public class InteractiveClientDisplayTests
             int.TryParse(Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_PORT"), out int port) ? port : 0,
             (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_OPTIONS") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
-    [DisplayTheory, MemberData(nameof(Hosts))] public async Task ALinuxClientStartsOnTheDisplayNextToSteamAndStopsAlone(string kind)
+    [DisplayTheory, MemberData(nameof(Hosts)), SupportedOSPlatform("linux")] // DisplayTheory skips it elsewhere.
+    public async Task ALinuxClientStartsOnTheDisplayNextToSteamAndStopsAlone(string kind)
     {
         string display = Environment.GetEnvironmentVariable("VALHEIM_TESTING_DISPLAY")!;
         using var root = new TempDirectory();

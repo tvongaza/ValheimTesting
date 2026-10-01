@@ -66,7 +66,7 @@ public sealed class GameplayTests : IDisposable
     {
         _scope.WithHeightmapBuilder();
         var world = new TerrainWorld(new Valheim.Testing.PlaneTerrain(33f));
-        var builder = HeightmapBuilder.instance; var centre = new Vector3(64, 0, 0);
+        var builder = HeightmapBuilder.instance; Assert.NotNull(builder); var centre = new Vector3(64, 0, 0);
         Assert.False(builder.IsTerrainReady(centre, 4, 16f, false, world)); Assert.Equal(1, builder.QueuedCount);
         Assert.False(builder.IsTerrainReady(centre, 4, 16f, false, world)); Assert.Equal(1, builder.QueuedCount); // queued once
         Assert.Equal(1, builder.BuildQueued());
@@ -89,11 +89,12 @@ public sealed class GameplayTests : IDisposable
     {
         _scope.WithHeightmapBuilder();
         var world = new SplitWorld();
+        var builder = HeightmapBuilder.instance; Assert.NotNull(builder);
         // x from -32 to 32 in four steps: the west corners are Meadows (10 m), the east ones Mountain (50 m).
-        var data = HeightmapBuilder.instance.RequestTerrainSync(Vector3.zero, 4, 16f, false, world);
+        var data = builder.RequestTerrainSync(Vector3.zero, 4, 16f, false, world);
         Assert.Equal(10f, data.m_baseHeights[0]); Assert.Equal(50f, data.m_baseHeights[4]); Assert.Equal(30f, data.m_baseHeights[2], 3);
         // A distant LOD takes each point's own biome, then evens out steps over 10 m inside the zone (not on its edge).
-        var lod = HeightmapBuilder.instance.RequestTerrainSync(Vector3.zero, 4, 16f, true, world);
+        var lod = builder.RequestTerrainSync(Vector3.zero, 4, 16f, true, world);
         Assert.Equal(new[] { 10f, 10f, 50f, 50f, 50f }, lod.m_baseHeights.Take(5)); // the edge row keeps the step
         Assert.Equal(new[] { 10f, 30f, 40f, 50f, 50f }, lod.m_baseHeights.Skip(5).Take(5));
     }
