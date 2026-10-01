@@ -14,13 +14,14 @@ public sealed class HostRoundsTests : IDisposable
     private string Worlds => Path.Combine(Save, "worlds_local");
     private string Output => Path.Combine(_root, "out");
     private readonly RoundProcess _process = new();
+    private readonly PreflightInstall _install = PreflightInstall.Create(); // An owned client's install that passes the preflight.
     private int _opens;
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose() { _install.Dispose(); Directory.Delete(_root, recursive: true); }
 
     public HostRoundsTests()
     {
         Directory.CreateDirectory(Fixture); Directory.CreateDirectory(Worlds); Directory.CreateDirectory(Output);
-        File.WriteAllText(Path.Combine(Fixture, Name + ".fwl"), "fixture metadata");
+        File.WriteAllBytes(Path.Combine(Fixture, Name + ".fwl"), OwnedRunPreflightTests.Metadata(Name, long.Parse(WorldUid)));
         File.WriteAllText(Path.Combine(Fixture, Name + ".db"), "fixture world");
         File.WriteAllText(Path.Combine(Worlds, "MyWorld.fwl"), "the user's world"); // Never touched.
         File.WriteAllText(Path.Combine(Worlds, "MyWorld.db"), "the user's world");
@@ -28,8 +29,9 @@ public sealed class HostRoundsTests : IDisposable
 
     private ClientRunPlan Plan(string mode = "owned", bool crossplay = false) => new()
     {
-        Mode = mode, Install = mode == "owned" ? Path.GetFullPath("client-install") : "", Port = 5556, Character = "Tester",
-        Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), ["my.mod"] = "absent" },
+        Mode = mode, Install = mode == "owned" ? _install.Root : "", Port = 5556, Character = "Tester",
+        Pins = new() { ["valheimCLI.valheimCLI"] = mode == "owned" ? _install.CliMd5 : new string('a', 32), ["my.mod"] = "absent" },
+        InstallPins = mode == "owned" ? InstallPins.Of(_install.Root) : null,
         HostWorld = new() { World = new() { Source = Fixture, Sha256 = new(WorldFixture.Manifest(Fixture)) }, WorldUid = WorldUid, Crossplay = crossplay, SaveDirectory = Save },
     };
 
@@ -42,7 +44,8 @@ public sealed class HostRoundsTests : IDisposable
         public string LoadedUid = WorldUid;
         public int Readings, SaveNumber = 5;
         public ScriptedTransport Transport { get; }
-        public Game(string worlds)
+        // leaveOffered false: the host's ValheimCLI has no valheim.session/leave (an older Standard pack).
+        public Game(string worlds, bool leaveOffered = true)
         {
             bool devcommands = false;
             Transport = new ScriptedTransport()
@@ -68,7 +71,7 @@ public sealed class HostRoundsTests : IDisposable
                     };
                 })
                 .Extension("valheim.session", "save", _ => new { source = "session-save", complete = true, worldUid = LoadedUid, saved = true, before = SaveNumber, after = SaveAdvances ? ++SaveNumber : SaveNumber, milliseconds = 10 }, readOnly: false)
-                .Extension("valheim.session", "leave", _ =>
+                .Extension(leaveOffered ? "valheim.session" : "other.extension", "leave", _ =>
                 {
                     Hosting = false;
                     File.WriteAllText(Path.Combine(worlds, Name + ".db.old"), "backup");
@@ -108,8 +111,10 @@ public sealed class HostRoundsTests : IDisposable
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
         Assert.Equal(new[]
         {
+            "preflight the fixture world and the owned client's install, before anything is copied or started",
             "place the disposable fixture world in the client's local worlds",
             "launch the owned client to its menu, plugins pinned",
+            "the client's ValheimCLI offers the session commands the rounds use",
             "first: host the fixture world with the disposable character, protected", "first: measure",
             "confirmed world save", "first: the host leaves to its menu",
             "after-restart: restart the hosted world, protected", "after-restart: measure", "after-restart: the host leaves to its menu",
@@ -232,6 +237,44 @@ public sealed class HostRoundsTests : IDisposable
         Assert.True(report.Passed);
         Assert.Empty(OurWorldFiles());
         Assert.Equal(0, _process.Stops);
+    }
+
+    // The preflight (#117): a wrong fixture or install stops the run before the fixture is copied or the client opened.
+    [Fact] public void AFixtureWithAnotherUidStopsBeforeItIsCopiedOrTheClientOpens()
+    {
+        var plan = Plan(); plan.HostWorld!.WorldUid = "450017353"; // Another snapshot's UID behind the same world name.
+        var game = new Game(Worlds); var report = new ScenarioReport("host");
+        var error = Assert.Throws<InvalidOperationException>(() => Rounds(report, plan).Run(Open(plan, game), Measure()));
+        Assert.Contains($"holds world {Name} with UID {WorldUid}", error.Message);
+        Assert.Equal(new[] { "preflight the fixture world and the owned client's install, before anything is copied or started" }, report.Steps.Select(s => s.Name));
+        Assert.Equal(0, _opens); Assert.Empty(game.Transport.Commands);
+        Assert.Empty(OurWorldFiles()); Assert.Empty(Directory.GetDirectories(Output, "valheim-test-*"));
+        // Negative control: the fixture's own UID passes (the first test).
+    }
+
+    [Fact] public void AnInstallThatFailsThePreflightStopsBeforeTheFixtureIsCopied()
+    {
+        _install.Standing("expect.txt", $"valheimCLI.valheimCLI={_install.CliMd5} my.mod=absent\n"); // Two pins on one line.
+        var game = new Game(Worlds); var report = new ScenarioReport("host");
+        var error = Assert.Throws<InvalidOperationException>(() => Rounds(report, Plan()).Run(Open(Plan(), game), Measure()));
+        Assert.Contains("line 1 holds 2 key=value pins", error.Message);
+        Assert.Equal(0, _opens); Assert.Empty(OurWorldFiles()); Assert.Empty(Directory.GetDirectories(Output, "valheim-test-*"));
+        // An attached client's install is its operator's: only the fixture is preflighted.
+        var attached = new ScenarioReport("host");
+        Rounds(attached, Plan("attach")).Run(Open(Plan("attach"), new Game(Worlds)), Measure());
+        Assert.True(attached.Passed);
+        Assert.Equal("preflight the fixture world, before it is copied", attached.Steps[0].Name);
+    }
+
+    [Fact] public void AHostWithoutTheSessionCommandsStopsBeforeTheWorldRound()
+    {
+        var game = new Game(Worlds, leaveOffered: false); var report = new ScenarioReport("host");
+        var error = Assert.Throws<InvalidOperationException>(() => Rounds(report, Plan()).Run(Open(Plan(), game), Measure()));
+        Assert.Contains("lacks valheim.session/leave", error.Message);
+        Assert.Contains("the Standard pack", error.Message);
+        Assert.Equal(new[] { "the client's ValheimCLI offers the session commands the rounds use" }, Failed(report));
+        Assert.Equal(0, game.Transport.Count("cli_start_host_world"));
+        Assert.Equal(1, _process.Stops);
     }
 
     [Fact] public void AJoiningClientPlanIsNotAHost()

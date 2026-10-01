@@ -28,9 +28,21 @@ public sealed class HostedScenarioTests : IDisposable
     public HostedScenarioTests()
     {
         Directory.CreateDirectory(Fixture); Directory.CreateDirectory(Output); Directory.CreateDirectory(Path.Combine(Save, "worlds_local"));
-        File.WriteAllText(Path.Combine(Fixture, Name + ".fwl"), "fixture metadata");
+        File.WriteAllBytes(Path.Combine(Fixture, Name + ".fwl"), Metadata(Name, long.Parse(WorldUid, CultureInfo.InvariantCulture)));
         File.WriteAllText(Path.Combine(Fixture, Name + ".db"), "fixture world");
         File.WriteAllText(HostLog, "[Info   :   BepInEx] Chainloader startup complete\n");
+    }
+
+    // The fixture's world metadata as the game writes it (a length-prefixed package: version, name, seed name, seed, UID, ...),
+    // which the run's preflight reads to check that the fixture holds the planned world UID.
+    private static byte[] Metadata(string name, long uid)
+    {
+        using var package = new MemoryStream();
+        using (var writer = new BinaryWriter(package, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(41); writer.Write(name); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(uid); writer.Write(2);
+        }
+        return [.. BitConverter.GetBytes((int)package.Length), .. package.ToArray()];
     }
 
     private HostedPlan Plan() => new()
@@ -126,7 +138,9 @@ public sealed class HostedScenarioTests : IDisposable
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
         Assert.Equal(new[]
         {
+            "preflight the fixture world, before it is copied",
             "place the disposable fixture world in the client's local worlds", "attach to the operator's client at its menu, plugins pinned",
+            "the client's ValheimCLI offers the session commands the rounds use",
             "first: host the fixture world with the disposable character, protected", "first: host: the mod's Harmony patches are applied",
             "first: no marker at either site before the mod acts", "first: the mod marks the dry site", "first: the mod refuses the wet site",
             "first: host: one marker at the dry site, none at the wet site",

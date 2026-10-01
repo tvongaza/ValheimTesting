@@ -49,6 +49,22 @@ public sealed class HostWorldPlan
             throw new ArgumentException("hostWorld.saveDirectory: give the full path of the client's data directory (the one that holds worlds_local), or leave it out for this user's default.");
         if (SaveSeconds is < 1 or > 600) throw new ArgumentException("hostWorld.saveSeconds is 1 to 600.");
     }
+
+    /// <summary>
+    /// Before the fixture is copied: its files must still be the pinned ones (when the plan lists hashes), and the world its
+    /// own metadata states (<see cref="WorldIdentity.Read"/>) must have <see cref="WorldUid"/>. A world name reused for
+    /// another snapshot has another UID, and is refused here as the wrong fixture, naming the UID it holds, instead of after
+    /// the game loaded it. Returns that identity.
+    /// </summary>
+    public WorldIdentity Preflight()
+    {
+        if (World.Sha256.Count != 0) WorldFixture.Verify(World.Source, World.Sha256);
+        var identity = WorldIdentity.Read(World.Source);
+        if (identity.UidText != WorldUid)
+            throw new InvalidOperationException($"hostWorld.worldUid is {WorldUid}, but the fixture {World.Source} holds world {identity.Name} with UID {identity.UidText} ({identity.File}): " +
+                "the same name, another world. Pin the UID of this exact fixture (WorldIdentity.Read(fixture).UidText), or point hostWorld.world at the fixture the UID belongs to.");
+        return identity;
+    }
 }
 
 /// <summary>
@@ -204,7 +220,9 @@ public static class HostWorlds
     /// and no password. The command only starts the world, so this re-pins the client at once with its menu pins, waits
     /// for the plan's world UID to be ready (a missing fixture would be created fresh, with another UID, and fail here),
     /// verifies the world pins, then waits for the host's player and protects it unless <paramref name="protectPlayer"/>
-    /// is false (<see cref="SessionControl.WaitForWorld"/>). The whole start is bounded by <paramref name="timeout"/>.
+    /// is false (<see cref="SessionControl.WaitForWorld"/>). When the world loads between two reads, the strict menu pins
+    /// refuse it ("loaded but not listed"); the exact world pins are then checked at once, and a world with another UID fails
+    /// as the wrong world rather than as a load failure. The whole start is bounded by <paramref name="timeout"/>.
     /// </summary>
     public static SessionState Start(GameActor host, ClientRunPlan plan, string worldName, TimeSpan timeout, CancellationToken cancellation = default, bool protectPlayer = true)
     {
@@ -229,9 +247,20 @@ public static class HostWorlds
                 throw new InvalidOperationException("The hosted world did not start as planned: " + (line ?? string.Join(" | ", reply.Output)));
         }
         finally { host.InvalidateEnvironment(); } // A start that may have begun changes the world.
-        host.VerifyEnvironment(plan.MenuExpectations); // Plugins only: the world is still loading.
-        session.WaitForWorld(world.WorldUid, Left(), cancellation, protectPlayer: false);
-        host.VerifyEnvironment(plan.WorldExpectations(world.WorldUid));
+        try
+        {
+            host.VerifyEnvironment(plan.MenuExpectations); // Plugins only: the world is still loading.
+            session.WaitForWorld(world.WorldUid, Left(), cancellation, protectPlayer: false);
+        }
+        // The world loaded between two reads, so the menu pins no longer hold ("loaded but not listed"). The exact world pins
+        // below decide whether it is the fixture's world; the wait for readiness then goes on.
+        catch (Exception error) when (SessionControl.LoadedButNotListed(error)) { }
+        try { host.VerifyEnvironment(plan.WorldExpectations(world.WorldUid)); }
+        catch (InvalidOperationException error) when (error.Message.Contains("worlduid:", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"The hosted world loaded, but it is not world UID {world.WorldUid}: {error.Message}. The client hosted another world under the fixture's name " +
+                "(a wrong fixture, not a load failure; a load failure is reported as one). HostWorldPlan.Preflight reads the fixture's own UID before the run.", error);
+        }
         return session.WaitForWorld(world.WorldUid, Left(), cancellation, protectPlayer);
 
         TimeSpan Left()
@@ -256,8 +285,11 @@ public static class HostWorlds
 
 /// <summary>
 /// The hosted (listen-server) twin of <see cref="ClientRounds"/>: one game client hosts a fixture world and is both the
-/// server and the client of each check. <see cref="Run"/> places the fixture world (<see cref="HostedWorld"/>), opens the
-/// client, then for each of <see cref="Rounds"/>:
+/// server and the client of each check. <see cref="Run"/> first runs the plan's static preflight
+/// (<see cref="ClientRunPlan.Preflight"/>: the fixture's pinned files and own world UID, and an owned client's install), so
+/// a wrong fixture or install stops the run before the fixture is copied or the game started. It then places the fixture
+/// world (<see cref="HostedWorld"/>), opens the client, requires the session commands the rounds use
+/// (<see cref="CliCapabilities.HostedRounds"/>, naming a missing pack or an old ValheimCLI), then for each of <see cref="Rounds"/>:
 /// <list type="number">
 /// <item>hosts the world with the plan's disposable character, protected (<see cref="HostWorlds.Start"/>; from the second round on, this is the host world's restart);</item>
 /// <item>runs the mod's measurement, whose <see cref="ClientRound.Server"/> and <see cref="ClientRound.Client"/> are the same host;</item>
@@ -296,6 +328,8 @@ public sealed class HostRounds
         bool passed = false;
         try
         {
+            Report.Step(Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
+                Client.Preflight);
             string saveDirectory = plan.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(Client.Owned ? ClientLaunch.Detect(Client.Install) : HostedWorld.CurrentPlatform);
             Report.Step("place the disposable fixture world in the client's local worlds", () => world = HostedWorld.Place(plan, saveDirectory, Output, Client.Pinned));
             var placed = world!;
@@ -303,6 +337,7 @@ public sealed class HostRounds
             Report.Step(OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
                 () => session = openClient());
             var host = session!.Actor;
+            Report.Step("the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(host, CliCapabilities.HostedRounds));
             for (int i = 0; i < Rounds.Count; i++)
             {
                 var round = new ClientRound(Rounds[i], i, i == Rounds.Count - 1, host, host, Report, Output);

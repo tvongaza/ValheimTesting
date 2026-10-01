@@ -109,9 +109,13 @@ public sealed class ClientSession : IDisposable
     /// when no Steam client is running here, when the plan's password variable is not set in this process (the client
     /// inherits it), when the install's <c>BepInEx/patchers</c> holds anything the plan's <see cref="ClientRunPlan.Patchers"/>
     /// does not name, when its game build, BepInEx core or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>,
-    /// or when <see cref="ClientLaunch"/> refuses the install for the plan's <see cref="ClientRunPlan.Architecture"/> (an
-    /// arm64 request without an arm64 Doorstop library or a native BepInEx core is refused, never run under Rosetta).
-    /// A failed startup stops the process it started. The process's output goes to
+    /// when <see cref="ClientLaunch"/> refuses the install for the plan's <see cref="ClientRunPlan.Architecture"/> (an
+    /// arm64 request without an arm64 Doorstop library or a native BepInEx core is refused, never run under Rosetta) or its
+    /// Doorstop proxy and configuration are from different versions, or when the rest of
+    /// <see cref="ClientRunPlan.Preflight"/>'s install checks fail (a pinned plugin build that is not installed, a script
+    /// ScriptEngine will not load at start, a standing expectations file that would refuse the run). Once started, BepInEx must
+    /// write this launch's first log line within <see cref="ClientRunPlan.BepInExSeconds"/>, or startup fails then, naming the
+    /// loader, instead of at the start deadline. A failed startup stops the process it started. The process's output goes to
     /// <c>client-boot.stdout.log</c>/<c>.stderr.log</c>, and its BepInEx log and Unity's Player.log are copied beside them
     /// (<c>client-boot.game-0.log</c>, <c>client-boot.game-1.log</c>) when it stops; <see cref="Logs"/> lists them.
     /// </summary>
@@ -126,9 +130,7 @@ public sealed class ClientSession : IDisposable
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
         account?.RequireReady(null);
-        BepInExLoader.RequirePatchers(plan.Install, plan.Patchers, "client install");
-        plan.CheckInstallPins();
-        var start = StartInfo(plan, ClientLaunch.CurrentHost); // The install's loader and slices, before any port or Steam check.
+        var start = plan.CheckOwnedInstall(); // Patchers, install pins, loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
         try { reservation.Start(); }
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }
@@ -151,7 +153,9 @@ public sealed class ClientSession : IDisposable
                 async (left, token) =>
                 {
                     var clock = Stopwatch.StartNew();
-                    await cliLog!.WaitAsync(StartupEvents.CliListening, left, StartupEvents.StartupFailures, token).ConfigureAwait(false);
+                    var bepInEx = TimeSpan.FromSeconds(plan.BepInExSeconds);
+                    await StartupEvents.WaitForBepInExLog(cliLog!, bepInEx < left ? bepInEx : left, playerLog, token).ConfigureAwait(false);
+                    await cliLog!.WaitAsync(StartupEvents.CliListening, left - clock.Elapsed, StartupEvents.StartupFailures, token).ConfigureAwait(false);
                     using var states = StateWait.Connect(plan.Host, plan.Port);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
                 }, cancellation, () => cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog) : null,

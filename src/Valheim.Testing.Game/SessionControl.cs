@@ -60,7 +60,7 @@ public sealed class SessionControl(GameActor actor)
             var state = Read(capability);
             lastReady = state.WorldReady;
             if (state.LoadError) throw new InvalidOperationException("The game reports a world load error.");
-            if (state.WorldPresent && state.WorldUid != worldUid) throw new InvalidOperationException("A different world is loaded.");
+            if (state.WorldPresent && state.WorldUid != worldUid) throw new InvalidOperationException($"A different world is loaded: UID {state.WorldUid}, expected {worldUid}. The world loaded, so this is the wrong world (another fixture or a fresh one), not a load failure.");
             if (state.WorldReady)
             {
                 if (!protectPlayer || state.Dedicated) return state;
@@ -265,7 +265,7 @@ public sealed class SessionControl(GameActor actor)
     }
 
     // ValheimCLI's strict cli_expect refusal once a world is loaded that the pins do not list.
-    private static bool LoadedButNotListed(Exception error) => error.Message.Contains("is loaded but not listed (strict)", StringComparison.Ordinal);
+    internal static bool LoadedButNotListed(Exception error) => error.Message.Contains("is loaded but not listed (strict)", StringComparison.Ordinal);
 
     public void Leave() => Transition("leave", []);
     private void Transition(string action, string[] arguments)

@@ -51,6 +51,23 @@ public sealed class WorldFixture : IDisposable
         catch { fixture.Dispose(); throw; }
     }
     /// <summary>
+    /// Refuses <paramref name="source"/> unless its files are exactly <paramref name="expectedHashes"/> (relative path to
+    /// SHA256), naming each missing, unexpected or changed file: the check <see cref="Copy"/> makes, without copying.
+    /// </summary>
+    public static void Verify(string source, IReadOnlyDictionary<string, string> expectedHashes)
+    {
+        if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
+        source = Path.GetFullPath(source);
+        if (!Directory.Exists(source)) throw new DirectoryNotFoundException("Fixture source does not exist: " + source);
+        var actual = Hashes(source, []);
+        var problems = expectedHashes.Keys.Where(key => !actual.ContainsKey(key)).Order(StringComparer.Ordinal).Select(key => key + " is missing")
+            .Concat(actual.Keys.Where(key => !expectedHashes.ContainsKey(key)).Order(StringComparer.Ordinal).Select(key => key + " is not in the manifest"))
+            .Concat(actual.Where(item => expectedHashes.TryGetValue(item.Key, out var hash) && !string.Equals(item.Value, hash, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(item => item.Key, StringComparer.Ordinal).Select(item => $"{item.Key} is {item.Value}, pinned {expectedHashes[item.Key]}")).ToList();
+        if (problems.Count != 0)
+            throw new InvalidOperationException($"Fixture hash mismatch in {source}: {string.Join("; ", problems)}. The fixture changed after it was pinned, or the plan names another one; build the manifest from the exact directory (WorldFixture.Manifest).");
+    }
+    /// <summary>
     /// The SHA256 manifest of every file under <paramref name="source"/>, keyed by this platform's relative path: what a
     /// pinned plan records and <see cref="Copy"/> verifies. Build it on the platform that will copy the fixture, from the
     /// exact directory the plan names. Links are refused, as in <see cref="Copy"/>.

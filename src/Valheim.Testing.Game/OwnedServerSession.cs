@@ -78,6 +78,24 @@ public sealed class StartupEvents
     public IReadOnlyList<string> ReadyStates { get; init; } = StateWait.WorldLoaded;
     public IReadOnlyList<string> FailureStates { get; init; } = [];
 
+    /// <summary>
+    /// Waits for this launch's first line in BepInEx's log (<paramref name="log"/>, opened before the launch, so an earlier
+    /// run's lines never count) within <paramref name="within"/>; a <see cref="StartupFailures"/> line ends it at once. Doorstop
+    /// starts BepInEx before the game's first frame, so a game still running without that line runs without BepInEx: the
+    /// expiry is a <see cref="WaitFailedException"/> naming the loader, not a timeout of the whole startup.
+    /// </summary>
+    internal static async Task WaitForBepInExLog(LogWait log, TimeSpan within, string? playerLog, CancellationToken cancellation)
+    {
+        try { await log.WaitAsync(AnyLine, within, StartupFailures, cancellation).ConfigureAwait(false); }
+        catch (WaitTimeoutException timeout)
+        {
+            throw new WaitFailedException("BepInEx's startup log", $"BepInEx wrote nothing to {log.LogPath} within {WaitText.Seconds(within)} of the launch, so the game runs without it: " +
+                $"Doorstop did not start BepInEx. Check that {BepInExLoader.WindowsProxy} and {BepInExLoader.WindowsConfig} (the Doorstop library and run script on macOS and Linux) come from one BepInExPack; " +
+                $"Unity's player log ({playerLog ?? "Player.log"}) shows what the game did", timeout.Elapsed, timeout.LastSeen);
+        }
+    }
+    private static readonly Regex AnyLine = new("^", RegexOptions.CultureInvariant);
+
     // A process that exits before BepInEx writes its log never ran BepInEx: the reason is in Unity's own log.
     internal static string NoBepInExLog(string bepInExLog, string? playerLog) =>
         $" before BepInEx wrote {bepInExLog}. Read the Unity player log ({playerLog ?? "Player.log, or the file passed with -logFile"}) for the reason;" +
