@@ -376,6 +376,24 @@ public sealed class LogScanTests : IDisposable
         Assert.Equal(0, Count(scan, LogScanner.UnknownError).Count);
         Assert.StartsWith("at System.IO.Directory.GetFiles", count.FirstFrame); // only runtime frames: the first one
     }
+    [Fact] public void AUnityMessageEndsAnEarlierBepInExErrorRecordWithoutABlankLine()
+    {
+        var scan = LogScanner.Scan(PlayerLog("[Error  : My Mod] Failed to load an optional config\n" +
+            "09/30/2026 20:34:02: Continuing startup\n" + JotunnNre));
+        Assert.Equal(1, Count(scan, LogScanner.UnknownError).Count);
+        Assert.Equal(1, Count(scan, LogScanner.UnityException).Count);
+        Assert.True(scan.Failed);
+    }
+    [Fact] public void OneExceptionCannotBorrowTheNextExceptionsFrame()
+    {
+        var scan = LogScanner.Scan(PlayerLog(
+            "DllNotFoundException: libParty.so assembly:<unknown assembly> type:<unknown type> member:(null)\n" +
+            "  at PlayFab.Party.PlayFabMultiplayerManager.InitializeImpl () [0x000c4] in <c0ffee>:0 \n" +
+            AppleCore));
+        Assert.Equal(1, Count(scan, LogScanner.UnityException).Count);
+        Assert.Equal(1, Count(scan, "macos-apple-plugin-missing").Count);
+        Assert.True(scan.Failed);
+    }
     // Routine Unity lines and words that only look like exceptions are not counted.
     [Fact] public void RoutineUnityLinesAreNotExceptions()
     {

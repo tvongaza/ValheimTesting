@@ -9,7 +9,7 @@ public enum LogSeverity { Failure, Warning }
 
 /// <summary>
 /// A known log problem. <see cref="Line"/> matches one line; with <see cref="Frame"/>, the line counts only when a line of
-/// its stack trace (the lines after it, up to a blank line or the next BepInEx log header) matches the frame.
+/// its stack trace (up to a blank line, the next log message or the next exception) matches the frame.
 /// </summary>
 public sealed record LogPattern(string Name, LogSeverity Severity, Regex Line, Regex? Frame = null);
 
@@ -73,6 +73,8 @@ public static class LogScanner
     private const int FrameLines = 20, TextLimit = 500;
     // BepInEx's disk log line: "[Level  :Source] message". Continuation lines (stack traces) have no header.
     private static readonly Regex Header = new(@"^\[(Info|Message|Warning|Error|Fatal|Debug) *:[^\]]*\]", Options);
+    // A timestamped Unity line in a mixed console log starts a new message even without a blank separator.
+    private static readonly Regex UnityTimestamp = new(@"^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}:", Options);
     // How Unity prints an exception it caught: the type name at the start of the line, then ": message" or nothing, for
     // example "NullReferenceException: Object reference not set to an instance of an object". Its frames follow, indented.
     private static readonly Regex ExceptionLine = new(@"^(?:[A-Za-z_]\w*\.)*\w*Exception(?::|$)", Options);
@@ -179,6 +181,7 @@ public static class LogScanner
             string line = lines[i];
             var header = Header.Match(line);
             if (header.Success) { EndRecord(); level = header.Groups[1].Value; headerLine = i; }
+            else if (UnityTimestamp.IsMatch(line)) EndRecord();
             else if (line.Trim().Length == 0) { EndRecord(); continue; }
             bool named = false;
             for (int p = 0; p < Patterns.Count; p++)
@@ -204,12 +207,12 @@ public static class LogScanner
         return new(log.Role, log.Path, true, null, result);
     }
 
-    // The stack trace under line `at`: the lines after it, up to a blank line or the next BepInEx header.
+    // The stack trace under line `at`: stop before another log message or exception, even without a blank separator.
     private static IEnumerable<string> Frames(List<string> lines, int at)
     {
         for (int i = at + 1; i < lines.Count && i <= at + FrameLines; i++)
         {
-            if (lines[i].Trim().Length == 0 || Header.IsMatch(lines[i])) yield break;
+            if (lines[i].Trim().Length == 0 || Header.IsMatch(lines[i]) || UnityTimestamp.IsMatch(lines[i]) || ExceptionLine.IsMatch(lines[i])) yield break;
             yield return lines[i];
         }
     }
