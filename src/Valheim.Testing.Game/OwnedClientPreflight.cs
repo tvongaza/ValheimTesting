@@ -1,0 +1,201 @@
+using System.Security.Cryptography;
+
+namespace Valheim.Testing.Game;
+
+/// <summary>
+/// Plugin pins derived from the staged files instead of typed by hand: the MD5 that <c>cli_manifest</c> and
+/// <c>cli_expect</c> compare, of the exact file the run installs. A typed file name that is not there is refused with what
+/// the folder holds; a typed hash that matches no installed file is what <see cref="ClientRunPlan.Preflight"/> refuses.
+/// </summary>
+public static class PluginPins
+{
+    /// <summary>The file's MD5 as ValheimCLI reports it: 32 lower-case hex characters.</summary>
+    public static string Md5(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(MD5.HashData(stream)).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Pins for plugins by their files under <paramref name="install"/>: each value of <paramref name="files"/> is a path
+    /// relative to the install (<c>BepInEx/plugins/Jotunn.dll</c>) and becomes that file's MD5, or is <c>absent</c> and stays
+    /// so. Refuses a path that is not a file there, naming the DLLs its folder holds, so a mistyped candidate name fails before
+    /// anything launches rather than as a pin the game cannot meet.
+    /// </summary>
+    public static Dictionary<string, string> Of(string install, IReadOnlyDictionary<string, string> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        install = Path.GetFullPath(install);
+        var pins = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (plugin, file) in files)
+        {
+            if (file == "absent") { pins[plugin] = file; continue; }
+            if (string.IsNullOrWhiteSpace(file) || Path.IsPathRooted(file)) throw new ArgumentException($"{plugin}: give its file relative to the install, or absent.", nameof(files));
+            string path = Path.GetFullPath(Path.Combine(install, file.Replace('\\', Path.DirectorySeparatorChar)));
+            string relative = Path.GetRelativePath(install, path);
+            if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new ArgumentException($"{plugin}: {file} leaves the install; give a file under {install}.", nameof(files));
+            if (!File.Exists(path))
+            {
+                string folder = Path.GetDirectoryName(path)!;
+                var there = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.dll").Select(Path.GetFileName).OfType<string>().Order(StringComparer.Ordinal).ToList() : new List<string>();
+                throw new FileNotFoundException($"{plugin}: {file} is not in the install {install}; its folder holds {(there.Count == 0 ? "no DLL" : string.Join(", ", there))}. Name the file the run stages.", path);
+            }
+            pins[plugin] = Md5(path);
+        }
+        return pins;
+    }
+}
+
+/// <summary>
+/// The static checks of an owned client install that need no game: every pinned plugin build is installed exactly once,
+/// a plugin in <c>BepInEx/scripts</c> will load at start, and ValheimCLI's standing expectations file, when set, is
+/// readable and cannot refuse the run. Each fact found here would otherwise surface as a client that never answers, or
+/// one that refuses every command, after the launch.
+/// </summary>
+internal static class OwnedClientPreflight
+{
+    internal static readonly string Plugins = Path.Combine("BepInEx", "plugins"), Scripts = Path.Combine("BepInEx", "scripts"), Config = Path.Combine("BepInEx", "config");
+    internal const string ScriptEngine = "com.bepis.bepinex.scriptengine";
+    internal const string ScriptEngineConfig = ScriptEngine + ".cfg";
+    internal const string CliConfig = "valheimCLI.valheimCLI.cfg";
+
+    internal static void Check(string install, IReadOnlyDictionary<string, string> pins, bool pinned, HostWorldPlan? hostWorld, string? hostWorldName)
+    {
+        if (pinned)
+        {
+            var located = RequireInstalled(install, pins);
+            RequireScriptsLoad(install, pins, located);
+        }
+        RequireStandingFile(install, pins, hostWorld?.WorldUid, hostWorldName);
+    }
+
+    /// <summary>Where each pinned plugin MD5 is installed (relative paths); refuses one installed nowhere or more than once.</summary>
+    internal static Dictionary<string, List<string>> RequireInstalled(string install, IReadOnlyDictionary<string, string> pins)
+    {
+        var installed = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (string folder in new[] { Plugins, Scripts })
+        {
+            string root = Path.Combine(install, folder);
+            if (!Directory.Exists(root)) continue;
+            foreach (string dll in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !InstallPins.IsMacMetadata(path)))
+            {
+                string md5 = PluginPins.Md5(dll);
+                if (!installed.TryGetValue(md5, out var paths)) installed[md5] = paths = [];
+                paths.Add(Path.GetRelativePath(install, dll).Replace('\\', '/'));
+            }
+        }
+        var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var problems = new List<string>();
+        foreach (var (plugin, value) in pins)
+        {
+            if (value == "absent") continue;
+            string md5 = value.ToLowerInvariant();
+            if (!installed.TryGetValue(md5, out var paths))
+            {
+                string hint = string.Join(", ", installed.SelectMany(entry => entry.Value.Select(path => (Path: path, Md5: entry.Key)))
+                    .Where(file => Resembles(file.Path, plugin)).OrderBy(file => file.Path, StringComparer.Ordinal).Select(file => $"{file.Path} is {file.Md5}"));
+                problems.Add($"{plugin}={md5} is in neither {Slash(Plugins)} nor {Slash(Scripts)}" + (hint.Length == 0 ? "" : $" ({hint})"));
+            }
+            else if (paths.Count > 1) problems.Add($"{plugin}={md5} is installed {paths.Count} times ({string.Join(", ", paths)}); BepInEx loads one and skips the rest, so keep one");
+            else located[plugin] = paths;
+        }
+        if (problems.Count != 0)
+            throw new InvalidOperationException($"The client install does not hold the plugin builds the plan pins: {string.Join("; ", problems)}. " +
+                "Stage the pinned builds, or derive the pins from the staged files (PluginPins.Of) rather than typing names or hashes.");
+        return located;
+    }
+
+    // A file whose name holds the pin's last dotted part (com.jotunn.jotunn: Jotunn.dll), for the hint.
+    private static bool Resembles(string path, string plugin)
+    {
+        string last = plugin.Split('.', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? plugin;
+        return last.Length >= 3 && Path.GetFileNameWithoutExtension(path).Contains(last, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A pinned plugin in <c>BepInEx/scripts</c> loads only through ScriptEngine, and at start only with its
+    /// <c>[General] LoadOnStart = true</c> (ScriptEngine's default is false): otherwise ValheimCLI there never opens its port.
+    /// </summary>
+    internal static void RequireScriptsLoad(string install, IReadOnlyDictionary<string, string> pins, Dictionary<string, List<string>> located)
+    {
+        string scripts = Slash(Scripts) + "/";
+        var inScripts = located.Where(entry => entry.Value[0].StartsWith(scripts, StringComparison.OrdinalIgnoreCase)).Select(entry => $"{entry.Key} ({entry.Value[0]})").Order(StringComparer.Ordinal).ToList();
+        if (inScripts.Count == 0) return;
+        string listed = string.Join(", ", inScripts);
+        string remedy = "or install the current ValheimCLI core and its packs in BepInEx/plugins, which needs no ScriptEngine.";
+        if (!pins.Any(pin => pin.Key.Equals(ScriptEngine, StringComparison.OrdinalIgnoreCase) && pin.Value != "absent"))
+            throw new InvalidOperationException($"The plan pins {listed} in {Slash(Scripts)}, which only ScriptEngine loads, but does not pin ScriptEngine ({ScriptEngine}) as loaded. Install and pin ScriptEngine, " + remedy);
+        var enginePaths = located.Where(entry => entry.Key.Equals(ScriptEngine, StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.Value).FirstOrDefault();
+        if (enginePaths == null ||
+            !enginePaths[0].StartsWith(Slash(Plugins) + "/", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"The plan pins {listed} in {Slash(Scripts)}, but ScriptEngine ({ScriptEngine}) must itself be installed in {Slash(Plugins)}. " +
+                "A ScriptEngine DLL in scripts cannot load itself or the other scripts; move and pin it in plugins, " + remedy);
+        string config = Path.Combine(install, Config, ScriptEngineConfig);
+        string? loadOnStart = File.Exists(config) ? IniValue(config, "General", "LoadOnStart") : null;
+        if (!string.Equals(loadOnStart, "true", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"The plan pins {listed} in {Slash(Scripts)}, but ScriptEngine will not load them at start: " +
+                (File.Exists(config) ? $"{Slash(Config)}/{ScriptEngineConfig} has [General] LoadOnStart = {loadOnStart ?? "(not set)"}" : $"{Slash(Config)}/{ScriptEngineConfig} does not exist yet, and LoadOnStart defaults to false") +
+                ", so ScriptEngine loads scripts only on its reload key and the client never answers. Set [General] LoadOnStart = true, " + remedy);
+    }
+
+    /// <summary>
+    /// ValheimCLI's <c>[Expectations] File</c>, when set in <c>BepInEx/config/valheimCLI.valheimCLI.cfg</c>, is checked before
+    /// every command but the diagnostics. Refuses one that is missing or malformed (<see cref="StandingPins.Parse"/>), a strict
+    /// one that names no world (every command is refused once a world loads; <c>world=any</c> lets a host or join through
+    /// while the actor still pins the exact UID), and one that contradicts the plan's pins or hosted world.
+    /// </summary>
+    internal static void RequireStandingFile(string install, IReadOnlyDictionary<string, string> pins, string? worldUid, string? worldName)
+    {
+        string config = Path.Combine(install, Config, CliConfig);
+        if (!File.Exists(config)) return;
+        string configured = IniValue(config, "Expectations", "File")?.Trim() ?? "";
+        if (configured.Length == 0) return;
+        bool strict = string.Equals(IniValue(config, "Expectations", "Strict"), "true", StringComparison.OrdinalIgnoreCase);
+        // As ValheimCLI resolves it (Expectations.ResolvePath): a relative path is relative to BepInEx/config.
+        string path = Path.IsPathRooted(configured) ? configured : Path.Combine(install, Config, configured);
+        string where = $"ValheimCLI's standing expectations file {path} ([Expectations] File in {Slash(Config)}/{CliConfig})";
+        if (!File.Exists(path))
+            throw new InvalidOperationException($"{where} does not exist, and ValheimCLI refuses every command but its diagnostics until it does. Write it (StandingPins.Write) or clear the setting.");
+        IReadOnlyList<KeyValuePair<string, string>> standing;
+        try { standing = StandingPins.Read(path); }
+        catch (ArgumentException error) { throw new InvalidOperationException($"{where} is malformed, so the game would refuse every command: {error.Message}", error); }
+        var problems = new List<string>();
+        if (strict && !standing.Any(pin => pin.Key is "world" or "worlduid"))
+            problems.Add("it is strict (Strict = true) but names no world, so every command is refused once a world loads; add world=any (the toolkit's actor still pins the exact world UID) or the exact worlduid=");
+        foreach (var (key, value) in standing)
+        {
+            if (key == "worlduid" && worldUid != null && value != worldUid) problems.Add($"worlduid={value}, but the plan hosts world UID {worldUid}");
+            else if (key == "world" && value != "any" && worldName != null && !Same(value, worldName)) problems.Add($"world={value}, but the plan hosts {worldName}");
+            else if (pins.FirstOrDefault(p => Same(p.Key, key)) is { Key: not null } planned && Contradicts(value, planned.Value.ToLowerInvariant()))
+                problems.Add($"{key}={value}, but the plan pins {planned.Key}={planned.Value}");
+        }
+        if (problems.Count != 0)
+            throw new InvalidOperationException($"{where} would refuse this run: {string.Join("; ", problems)}.");
+    }
+
+    // ValheimCLI compares names case-insensitively, with a space written as _.
+    private static bool Same(string a, string b) => string.Equals(a.Replace(' ', '_'), b.Replace(' ', '_'), StringComparison.OrdinalIgnoreCase);
+    // A standing value no game can meet together with the plan's exact pin: absent against a build, or another hash (prefix).
+    private static bool Contradicts(string standing, string planned) =>
+        standing == "any" ? planned == "absent" : standing == "absent" ? planned != "absent" : planned == "absent" || !planned.StartsWith(standing, StringComparison.Ordinal);
+
+    private static string Slash(string relative) => relative.Replace('\\', '/');
+
+    /// <summary>A BepInEx .cfg / .ini value: <c>key = value</c> in <c>[section]</c>, comments (<c>#</c>, <c>;</c>) skipped; null when absent.</summary>
+    internal static string? IniValue(string path, string section, string key)
+    {
+        string? current = null, found = null;
+        foreach (string raw in File.ReadLines(path))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line[0] is '#' or ';') continue;
+            if (line[0] == '[') { current = line.Trim('[', ']').Trim(); continue; }
+            int equals = line.IndexOf('=');
+            if (equals > 0 && string.Equals(current, section, StringComparison.OrdinalIgnoreCase) && line[..equals].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+                found = line[(equals + 1)..].Trim();
+        }
+        return found;
+    }
+}

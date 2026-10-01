@@ -139,7 +139,7 @@ public sealed class GameActor : IDisposable
     { if (!result.Ok) throw new InvalidOperationException($"{result.ErrorCode}: {result.Message}"); }
     public Capability RequireCapability(string path, int schemaVersion = 1)
     {
-        var reply = Execute("cli_extensions");
+        var reply = CliCapabilities.ListingReply(this); // An old ValheimCLI without cli_extensions is named as one.
         using var doc = ParseLine(reply, "EXTENSIONS ");
         if (doc.RootElement.GetProperty("apiVersion").GetInt32() != 1) throw new InvalidOperationException("Unsupported extension API.");
         foreach (var extension in doc.RootElement.GetProperty("extensions").EnumerateArray())
@@ -152,7 +152,7 @@ public sealed class GameActor : IDisposable
                     return new Capability(path, extension.GetProperty("instance").GetString()!, command.GetProperty("readOnly").GetBoolean(), schemaVersion);
                 }
         }
-        throw new InvalidOperationException("Required capability is absent: " + path);
+        throw new InvalidOperationException("Required capability is absent: " + path + ". " + CliCapabilities.Provider(path.Split('/')[0]));
     }
     public JsonElement Invoke(Capability command, params string[] arguments)
     {

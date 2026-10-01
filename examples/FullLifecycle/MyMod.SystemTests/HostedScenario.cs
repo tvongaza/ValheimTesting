@@ -113,8 +113,9 @@ public static class HostedScenario
 
 /// <summary>
 /// The hosted run's own entry point, beside the pinned server runner (a host has no dedicated server to pin):
-/// <c>validate-host|host &lt;plan.json&gt; &lt;new-output-directory&gt;</c>. <c>validate-host</c> checks the plan, the
-/// fixture world's hashes and an owned client's install pins, and launches nothing. <c>host</c> runs
+/// <c>validate-host|host &lt;plan.json&gt; &lt;new-output-directory&gt;</c>. <c>validate-host</c> checks the plan and runs
+/// the same preflight <see cref="HostRounds"/> starts with (<see cref="ClientRunPlan.Preflight"/>: the fixture world's
+/// hashes and own world UID, and an owned client's install), and copies or launches nothing. <c>host</c> runs
 /// <see cref="HostedScenario"/>, then scans the owned client's logs, writes <c>result.json</c> and <c>junit.xml</c> and
 /// prints PASS or FAIL.
 /// </summary>
@@ -148,9 +149,9 @@ public static class HostedRun
             Directory.CreateDirectory(output); ownOutput = true;
             if (args[0] == ValidateMode)
             {
-                // A verified copy, removed again: the same check the run makes before it places the world.
-                report.Step("the host fixture world matches its pins", () => WorldFixture.Copy(plan.Client.HostWorld!.World.Source, output, plan.Client.HostWorld.World.Sha256).Dispose());
-                report.Step("the owned client's install is its pinned build", plan.Client.CheckInstallPins);
+                // The run's first step, alone: a wrong fixture or install fails here as it would before the run copies anything.
+                report.Step(plan.Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
+                    plan.Client.Preflight);
             }
             else
             {
@@ -170,7 +171,7 @@ public static class HostedRun
             if (logs.Count != 0) report.ScanLogs(logs);
             if (ownOutput) report.Write(output);
         }
-        Console.WriteLine(!report.Passed ? "FAIL" : args[0] == RunMode ? "PASS" : "VALIDATED (plan, fixture world and install pins only; no game was launched)");
+        Console.WriteLine(!report.Passed ? "FAIL" : args[0] == RunMode ? "PASS" : "VALIDATED (plan and the run's preflight only; nothing was copied and no game was launched)");
         return report.Passed ? 0 : 1;
     }
 }

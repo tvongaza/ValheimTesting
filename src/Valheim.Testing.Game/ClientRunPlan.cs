@@ -59,6 +59,13 @@ public sealed class ClientRunPlan
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
     public string? PasswordVariable { get; set; }
     public int StartSeconds { get; set; } = 300;
+    /// <summary>
+    /// Owned only: how long after the launch BepInEx may take to write its first line to this launch's
+    /// <c>BepInEx/LogOutput.log</c>, 5 to 1800 seconds (default 60; never more than <see cref="StartSeconds"/>). Doorstop starts
+    /// BepInEx before the game's first frame, so a game still running without that line runs without BepInEx, and startup
+    /// ends then instead of at the start deadline.
+    /// </summary>
+    public int BepInExSeconds { get; set; } = 60;
     public int JoinSeconds { get; set; } = 180;
     public int ArrivalSeconds { get; set; } = 120;
     /// <summary>Owned only: every entry the install's <c>BepInEx/patchers</c> holds, by name; the launch refuses any other.</summary>
@@ -137,7 +144,7 @@ public sealed class ClientRunPlan
         if (!StartAtCharacterSave && CharacterStart != null)
             throw new ArgumentException("characterStart is unused without startAtCharacterSave.");
         CharacterStart?.Validate(Character);
-        if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600) throw new ArgumentException("Client timeouts are out of range.");
+        if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600 || BepInExSeconds is < 5 or > 1800) throw new ArgumentException("Client timeouts are out of range.");
         HostWorld?.Validate(pinned);
         if (!pinned)
         {
@@ -171,6 +178,35 @@ public sealed class ClientRunPlan
     public string MenuExpectations => !Pinned ? EnvironmentPinning.None : Expect(Pins.Select(p => p.Key + "=" + p.Value));
     /// <summary>Strict pins once joined: plugins and the server's world. <see cref="EnvironmentPinning.None"/> for an unpinned client.</summary>
     public string WorldExpectations(string worldUid) => !Pinned ? EnvironmentPinning.None : Expect(Pins.Select(p => p.Key + "=" + p.Value).Append("worlduid=" + worldUid));
+    /// <summary>
+    /// The static preflight of the run, after <see cref="Validate"/> and before anything is copied or started; every fact it
+    /// needs is on disk here. A hosting client's fixture must still be its pinned files and must hold the world
+    /// <see cref="HostWorldPlan.WorldUid"/> names (<see cref="HostWorldPlan.Preflight"/>). An owned client's install must pass
+    /// what its launch checks first: its patchers, <see cref="InstallPins"/> and BepInEx loader (a Doorstop proxy and
+    /// configuration from different versions included). Then: every pinned plugin build is installed exactly once in
+    /// <c>BepInEx/plugins</c> or <c>BepInEx/scripts</c> (a hash typed by hand or a wrong staged file matches none), a pinned
+    /// plugin in <c>scripts</c> has ScriptEngine pinned and set to <c>LoadOnStart</c>, and ValheimCLI's standing expectations
+    /// file, when its config sets one, parses one pin per line, names a world when strict, and agrees with the plan's pins and
+    /// hosted world. An unpinned client skips the plugin checks, which need pins. An attached client's install is its
+    /// operator's and is not read. <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/> runs the
+    /// install part itself; <see cref="HostRounds"/> runs all of it before it places the fixture.
+    /// </summary>
+    public void Preflight()
+    {
+        var identity = HostWorld?.Preflight();
+        if (Owned) CheckOwnedInstall(identity?.Name);
+    }
+
+    /// <summary>The owned launch's checks on this machine's install, in order, returning the launch they allow.</summary>
+    internal System.Diagnostics.ProcessStartInfo CheckOwnedInstall(string? hostWorldName = null)
+    {
+        BepInExLoader.RequirePatchers(Install, Patchers, "client install");
+        CheckInstallPins();
+        var start = ClientSession.StartInfo(this, ClientLaunch.CurrentHost); // The install's loader and slices.
+        OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);
+        return start;
+    }
+
     /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>
     public void CheckInstallPins()
     {

@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Text;
 
 namespace Valheim.Testing.Game;
 
@@ -92,10 +94,11 @@ internal static class BepInExLoader
     }
 
     // Doorstop 4 reads [General] enabled and target_assembly; Doorstop 3 read [UnityDoorstop] enabled and targetAssembly.
-    // BepInExPack_Valheim installs have been seen with Doorstop 4's winhttp.dll and the Doorstop 3 file, so both are read.
     // Either section may enable the loader, none may disable it (a value other than true reads as false), and every stated
     // target must be BepInEx's preloader: with the proxy present but a disabled or redirected configuration, the game would
     // start without BepInEx. Windows paths compare case-insensitively, with either separator and relative or absolute.
+    // The proxy reads only its own version's section, so when winhttp.dll shows which version it is, the configuration
+    // must be written for that version (RequireMatchingProxy).
     private static readonly (string Section, string Target)[] Sections = [("General", "target_assembly"), ("UnityDoorstop", "targetAssembly")];
     private static void RequireConfig(string root, string kind)
     {
@@ -104,11 +107,12 @@ internal static class BepInExLoader
         string? section = null;
         var enabled = new List<(string Section, string Value)>();
         var targets = new List<(string Section, string Value)>();
+        var sections = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string raw in File.ReadLines(path))
         {
             string line = raw.Trim();
             if (line.Length == 0 || line[0] is '#' or ';') continue;
-            if (line[0] == '[') { section = line.Trim('[', ']').Trim(); continue; }
+            if (line[0] == '[') { section = line.Trim('[', ']').Trim(); sections.Add(section); continue; }
             int equals = line.IndexOf('=');
             var known = Sections.FirstOrDefault(entry => string.Equals(entry.Section, section, StringComparison.OrdinalIgnoreCase));
             if (equals < 0 || known.Section == null) continue;
@@ -128,6 +132,49 @@ internal static class BepInExLoader
         foreach (var (targetSection, target) in stated)
             if (!string.Equals(Normalize(root, target), expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"{WindowsConfig} [{targetSection}] targets {target}, not BepInEx's preloader; set it to {WindowsPreloader}, or the game starts without BepInEx.");
+        RequireMatchingProxy(root, kind, sections, enabled, stated);
+    }
+
+    // A Doorstop 4 winhttp.dll beside BepInExPack's older Doorstop 3 doorstop_config.ini (a mod manager's launch copies
+    // its own proxy into the game folder) started the Windows client without BepInEx: no BepInEx log, the game at its menu.
+    // Adding a [General] section to that file did not make it load. So a proxy that shows its version needs a file written
+    // for that version: Doorstop 4 its [General] keys and no [UnityDoorstop] section, Doorstop 3 its [UnityDoorstop] keys.
+    private static void RequireMatchingProxy(string root, string kind, HashSet<string> sections, List<(string Section, string Value)> enabled, List<(string Section, string Value)> targets)
+    {
+        byte[] proxy = File.ReadAllBytes(Path.Combine(root, WindowsProxy));
+        int? major = ProxyDoorstopMajor(proxy);
+        if (major == null) return;
+        string own = major == 4 ? "General" : "UnityDoorstop", other = major == 4 ? "UnityDoorstop" : "General";
+        bool configured = enabled.Any(entry => entry.Section == own) && targets.Any(entry => entry.Section == own);
+        if (configured && (major == 3 || !sections.Contains(other))) return;
+        string version = ProxyFileVersion(proxy) is { } found ? " (file version " + found + ")" : "";
+        string written = sections.Contains(other) ? $"written for Doorstop {7 - major} ([{other}])" : $"without the [{own}] enabled and {(major == 4 ? "target_assembly" : "targetAssembly")} it reads";
+        throw new InvalidOperationException($"The {kind}'s {WindowsProxy} is Doorstop {major}{version}, which reads only [{own}] in {WindowsConfig}, but that file is {written}. " +
+            "A proxy and configuration from different Doorstop versions start the game without BepInEx (a Doorstop 4 proxy beside a Doorstop 3 file did, even with a [General] section added). " +
+            $"Install {WindowsProxy} and {WindowsConfig} from one BepInExPack, for example by restoring the pack's {WindowsProxy} after a mod manager replaced it.");
+    }
+
+    /// <summary>
+    /// The Doorstop major version of a <c>winhttp.dll</c> proxy, from the configuration key its code reads (it holds the key
+    /// as text): 4 for <c>target_assembly</c>, 3 for <c>targetAssembly</c>; null when it holds neither or both, which says
+    /// nothing. A proxy's file version alone is not used: <c>.doorstop_version</c> beside it outlives a replaced proxy.
+    /// </summary>
+    internal static int? ProxyDoorstopMajor(byte[] proxy)
+    {
+        bool four = Holds(proxy, "target_assembly"), three = Holds(proxy, "targetAssembly");
+        return four == three ? null : four ? 4 : 3;
+    }
+    private static bool Holds(byte[] bytes, string text) =>
+        bytes.AsSpan().IndexOf(Encoding.ASCII.GetBytes(text)) >= 0 || bytes.AsSpan().IndexOf(Encoding.Unicode.GetBytes(text)) >= 0;
+
+    /// <summary>The file version in a Windows DLL's version resource (VS_FIXEDFILEINFO, read from its bytes), for messages; null without one.</summary>
+    internal static string? ProxyFileVersion(byte[] dll)
+    {
+        ReadOnlySpan<byte> signature = [0xBD, 0x04, 0xEF, 0xFE]; // dwSignature 0xFEEF04BD, little-endian
+        int at = dll.AsSpan().IndexOf(signature);
+        if (at < 0 || at + 16 > dll.Length) return null;
+        uint high = BinaryPrimitives.ReadUInt32LittleEndian(dll.AsSpan(at + 8)), low = BinaryPrimitives.ReadUInt32LittleEndian(dll.AsSpan(at + 12));
+        return $"{high >> 16}.{high & 0xFFFF}.{low >> 16}";
     }
     private const string WindowsPreloader = @"BepInEx\core\BepInEx.Preloader.dll";
     private static string Normalize(string root, string target) =>
