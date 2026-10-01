@@ -39,6 +39,8 @@ jobs:
       - run: dotnet --info
       - run: dotnet run scripts/bootstrap-cli.cs
       - run: dotnet run scripts/validate.cs
+      - name: Build targeted regression from NuGet.org only
+        run: dotnet run scripts/targeted-consumer.cs
       - name: Build candidate API reference
         if: runner.os == 'Linux'
         run: |
