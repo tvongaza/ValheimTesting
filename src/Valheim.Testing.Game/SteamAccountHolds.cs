@@ -103,7 +103,8 @@ public sealed class SteamAccountHold : IAsyncDisposable
     /// <summary>
     /// The optional signed-in check, on the client's own host: its Steam client must be signed in to this account (the pool's
     /// <see cref="SteamPoolAccount.SteamId"/>). Windows reads the signed-in user from <c>HKCU\Software\Valve\Steam\ActiveProcess\ActiveUser</c>;
-    /// Linux and macOS read the <c>MostRecent</c> user of the host user's <c>loginusers.vdf</c>. Another account, none, or a state that
+    /// Linux and macOS read the account Steam last signed in from the host user's <c>loginusers.vdf</c> (its <c>MostRecent</c> user, or
+    /// with current clients that write no <c>MostRecent</c>, the single newest <c>Timestamp</c>). Another account, none, or a state that
     /// cannot be read throws <see cref="SteamSignedInException"/>: unreadable is refused, never passed. The SteamIDs are compared here and
     /// never written anywhere.
     /// </summary>
@@ -242,8 +243,10 @@ internal static class SteamSignedInUsers
         };
     }
 
-    // Linux and macOS: the MostRecent user of the first loginusers.vdf found, the account Steam last signed in (a remembered sign-in
-    // is the running one). A user is a bare "<SteamID64>" line; only its id is printed. Variable: steam (optional Steam directory).
+    // Linux and macOS: the account Steam last signed in, from the first loginusers.vdf found (a remembered sign-in is the running one).
+    // Older clients mark it MostRecent "1"; the current macOS client (September 2026) writes no MostRecent key at all and records
+    // each user's last sign-in as Timestamp, so without any MostRecent key the single newest Timestamp is that account, and a tie or
+    // no Timestamp is unreadable. A user is a bare "<SteamID64>" line; only its id is printed. Variable: steam (optional Steam directory).
     public static readonly string Bash = """
         set -u
         found=
@@ -256,9 +259,18 @@ internal static class SteamSignedInUsers
         if [ ! -r "$found" ]; then echo "VT-STEAMUSER unreadable the host user cannot read its loginusers.vdf"; exit 0; fi
         awk '
             { line = tolower($0) }
-            line ~ /^[ \t]*"[0-9]+"[ \t\r]*$/ { id = line; gsub(/[^0-9]/, "", id); next }
-            line ~ /^[ \t]*"mostrecent"[ \t]+"1"/ { if (id != "") { print "VT-STEAMUSER id " id; done = 1; exit } }
-            END { if (!done) print "VT-STEAMUSER none" }
+            line ~ /^[ \t]*"[0-9]+"[ \t\r]*$/ { id = line; gsub(/[^0-9]/, "", id); users++; next }
+            line ~ /^[ \t]*"mostrecent"[ \t]/ { marked = 1; if (line ~ /"mostrecent"[ \t]+"1"/ && id != "" && recent == "") recent = id; next }
+            line ~ /^[ \t]*"timestamp"[ \t]+"[0-9]+"/ && id != "" {
+                t = line; sub(/^[ \t]*"timestamp"[ \t]+"/, "", t); sub(/".*/, "", t); t += 0
+                if (t > best) { best = t; newest = id; tie = 0 } else if (t == best) tie = 1
+            }
+            END {
+                if (marked) { if (recent != "") print "VT-STEAMUSER id " recent; else print "VT-STEAMUSER none"; exit }
+                if (users == 0) { print "VT-STEAMUSER none"; exit }
+                if (newest == "" || tie) { print "VT-STEAMUSER unreadable loginusers.vdf marks no MostRecent user and has no single newest Timestamp"; exit }
+                print "VT-STEAMUSER id " newest
+            }
         ' "$found"
         """.ReplaceLineEndings("\n");
 
@@ -283,12 +295,19 @@ internal static class SteamSignedInUsers
         foreach ($candidate in $candidates) { if ([IO.File]::Exists($candidate)) { $found = $candidate; break } }
         if ($null -eq $found) { 'VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories'; exit 0 }
         try { $lines = [IO.File]::ReadAllLines($found) } catch { 'VT-STEAMUSER unreadable the host user cannot read its loginusers.vdf'; exit 0 }
-        $id = ''
+        $id = ''; $marked = $false; $recent = ''; $users = 0; $best = [long]0; $newest = ''; $tie = $false
         foreach ($line in $lines) {
             $l = $line.Trim().ToLowerInvariant()
-            if ($l -cmatch '^"([0-9]+)"$') { $id = $Matches[1] }
-            elseif ($l -cmatch '^"mostrecent"\s+"1"' -and $id) { 'VT-STEAMUSER id ' + $id; exit 0 }
+            if ($l -cmatch '^"([0-9]+)"$') { $id = $Matches[1]; $users++ }
+            elseif ($l -cmatch '^"mostrecent"\s') { $marked = $true; if ($l -cmatch '^"mostrecent"\s+"1"' -and $id -and -not $recent) { $recent = $id } }
+            elseif ($l -cmatch '^"timestamp"\s+"([0-9]+)"' -and $id) {
+                $t = [long]$Matches[1]
+                if ($t -gt $best) { $best = $t; $newest = $id; $tie = $false } elseif ($t -eq $best) { $tie = $true }
+            }
         }
-        'VT-STEAMUSER none'
+        if ($marked) { if ($recent) { 'VT-STEAMUSER id ' + $recent } else { 'VT-STEAMUSER none' }; exit 0 }
+        if ($users -eq 0) { 'VT-STEAMUSER none'; exit 0 }
+        if (-not $newest -or $tie) { 'VT-STEAMUSER unreadable loginusers.vdf marks no MostRecent user and has no single newest Timestamp'; exit 0 }
+        'VT-STEAMUSER id ' + $newest
         """.ReplaceLineEndings("\n");
 }

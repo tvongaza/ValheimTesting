@@ -191,6 +191,23 @@ public sealed class SteamSignedInUserTests
         Assert.Equal(1u, (await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path)).AccountId);
         File.WriteAllText(vdf, File.ReadAllText(vdf).Replace("\"mostrecent\"\t\t\"1\"", "\"mostrecent\"\t\t\"0\""));
         Assert.Equal(SteamSignedInState.NotSignedIn, (await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path)).State);
+
+        // The current macOS client writes no MostRecent key; each user's Timestamp is its last sign-in, and the newest is the account.
+        // The newer user is listed first here, so file order cannot pass for the rule.
+        string Current(long first, long? second) => "\"users\"\n{\n\t\"76561197960265731\"\n\t{\n\t\t\"AccountName\"\t\t\"vt_client_three\"\n" +
+            $"\t\t\"AutoLogin\"\t\t\"1\"\n\t\t\"Timestamp\"\t\t\"{first}\"\n\t}}\n\t\"76561197960265730\"\n\t{{\n\t\t\"AccountName\"\t\t\"vt_client_two\"\n" +
+            (second is { } t ? $"\t\t\"Timestamp\"\t\t\"{t}\"\n" : "") + "\t}\n}\n";
+        File.WriteAllText(vdf, Current(1790396214, 1789360035));
+        Assert.Equal(3u, (await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path)).AccountId);
+        File.WriteAllText(vdf, Current(1789360035, 1790396214));
+        Assert.Equal(2u, (await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path)).AccountId);
+        File.WriteAllText(vdf, Current(1790396214, 1790396214));
+        var tie = await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path);
+        Assert.Equal(SteamSignedInState.Unknown, tie.State); Assert.Contains("newest Timestamp", tie.Detail);
+        File.WriteAllText(vdf, Current(1790396214, null).Replace("\t\t\"Timestamp\"\t\t\"1790396214\"\n", ""));
+        Assert.Equal(SteamSignedInState.Unknown, (await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path)).State);
+        File.WriteAllText(vdf, "\"users\"\n{\n}\n");
+        Assert.Equal(SteamSignedInState.NotSignedIn, (await SteamSignedInUsers.ReadAsync(host, Timeout, default, steam.Path)).State);
     }
 
     // On Windows the registry script runs for real: whatever this machine's Steam state is, it answers in a known form. The id is
