@@ -48,7 +48,8 @@ try
         </configuration>
         """);
     string cache = Path.Combine(consumer, "packages");
-    Run("dotnet", "test", project, "-c", "Release", "-m:1", "-p:RestorePackagesPath=" + cache);
+    // The package's source compiles into the consumer: an obsolete API in it would be every adopting mod's warning.
+    Run("dotnet", "test", project, "-c", "Release", "-m:1", "-p:RestorePackagesPath=" + cache, "-p:WarningsAsErrors=CS0612%3BCS0618%3BSYSLIB0050%3BSYSLIB0051");
     string packed = Path.Combine(root, ".packages", $"Valheim.Testing.Doubles.{doublesVersion}.nupkg");
     string restored = Path.Combine(cache, "valheim.testing.doubles", doublesVersion.ToLowerInvariant(), $"valheim.testing.doubles.{doublesVersion.ToLowerInvariant()}.nupkg");
     if (!File.Exists(restored) || !File.ReadAllBytes(packed).AsSpan().SequenceEqual(File.ReadAllBytes(restored)))

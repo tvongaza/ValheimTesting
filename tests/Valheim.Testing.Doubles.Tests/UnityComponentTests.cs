@@ -65,6 +65,21 @@ public sealed class LootHolder : MonoBehaviour
     public int State { get => m_state; set => m_state = value; }
 }
 
+// Unity's rules for what an [NonSerialized] public field and a class without [Serializable] mean: neither is copied.
+public sealed class SerializationRules : MonoBehaviour
+{
+    [Serializable] public sealed class Kept { public int Value; [NonSerialized] public int Transient = -1; }
+    public sealed class NotMarked { public int Value; }
+    public int Copied;
+    [NonSerialized] public int Skipped;
+    [NonSerialized] [SerializeField] private int m_skippedPrivate;
+    public Kept? KeptRef;
+    public NotMarked? NotMarkedRef;
+    public List<Kept> KeptList = new();
+    public List<NotMarked> NotMarkedList = new();
+    public int SkippedPrivate { get => m_skippedPrivate; set => m_skippedPrivate = value; }
+}
+
 public sealed class UnityComponentTests : IDisposable
 {
     private readonly ValheimWorldScope _scope = new ValheimWorldScope().WithScene();
@@ -189,6 +204,24 @@ public sealed class UnityComponentTests : IDisposable
         copied.Entries[0].Count = 1; Assert.Equal(5, holder.Entries[0].Count);
         var component = Object.Instantiate(holder); // a component copies its whole object
         Assert.NotSame(chest, component.gameObject); Assert.Equal("chest", component.gameObject.name);
+    }
+
+    // [NonSerialized] excludes a field even when it is public or has [SerializeField], at the top and inside a copied class;
+    // a class without [Serializable] is not copied at all, alone or in a list, so the copy keeps its constructor's value.
+    [Fact] public void InstantiateSkipsNonSerializedFieldsAndClassesWithoutSerializable()
+    {
+        var source = new GameObject("rules").AddComponent<SerializationRules>();
+        source.Copied = 1; source.Skipped = 2; source.SkippedPrivate = 3;
+        source.KeptRef = new SerializationRules.Kept { Value = 4, Transient = 5 };
+        source.NotMarkedRef = new SerializationRules.NotMarked { Value = 6 };
+        source.KeptList.Add(new SerializationRules.Kept { Value = 7, Transient = 8 });
+        source.NotMarkedList.Add(new SerializationRules.NotMarked { Value = 9 });
+        var copy = Object.Instantiate(source.gameObject).GetComponent<SerializationRules>();
+        Assert.Equal((1, 0, 0), (copy.Copied, copy.Skipped, copy.SkippedPrivate));
+        Assert.NotSame(source.KeptRef, copy.KeptRef); Assert.Equal((4, -1), (copy.KeptRef!.Value, copy.KeptRef.Transient));
+        Assert.Null(copy.NotMarkedRef);
+        Assert.Equal((7, -1), (Assert.Single(copy.KeptList).Value, copy.KeptList[0].Transient)); Assert.NotSame(source.KeptList[0], copy.KeptList[0]);
+        Assert.Empty(copy.NotMarkedList); Assert.NotSame(source.NotMarkedList, copy.NotMarkedList);
     }
 
     [Fact] public void AnInstantiatedInactivePrefabStaysAsleepAndACopyUnderAParentKeepsItsLocalPosition()

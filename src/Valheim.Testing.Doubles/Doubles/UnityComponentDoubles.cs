@@ -629,8 +629,11 @@ namespace UnityEngine
                     if (IsSerialized(field)) field.SetValue(target, CopyValue(field.GetValue(source), field.FieldType, map, depth));
         }
 
+        // [NonSerialized] and [Serializable] are read as attributes: FieldInfo.IsNotSerialized and TypeAttributes.Serializable
+        // name the same metadata flags but are obsolete on .NET 8 and later (SYSLIB0050), and this source compiles into the
+        // consumer's project, where the warning would be the mod's.
         private static bool IsSerialized(FieldInfo field) =>
-            !field.IsInitOnly && !field.IsLiteral && !field.IsNotSerialized &&
+            !field.IsInitOnly && !field.IsLiteral && !field.IsDefined(typeof(NonSerializedAttribute), false) &&
             (field.IsPublic || field.IsDefined(typeof(SerializeField), false)) && IsSerializable(field.FieldType);
 
         private static bool IsSerializable(Type type)
@@ -641,7 +644,7 @@ namespace UnityEngine
             if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>)) return IsSerializable(type.GetGenericArguments()[0]);
             if (type.IsValueType) return true;
             if (type.IsGenericType || type.IsAbstract || type.IsInterface || typeof(Delegate).IsAssignableFrom(type)) return false;
-            return (type.Attributes & TypeAttributes.Serializable) != 0;
+            return type.IsDefined(typeof(SerializableAttribute), false);
         }
 
         private static object? CopyValue(object? value, Type type, Dictionary<Object, Object> map, int depth)
