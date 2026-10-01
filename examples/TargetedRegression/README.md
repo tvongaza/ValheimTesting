@@ -78,6 +78,6 @@ Make a public copy with [RegressionBundle](../RegressionBundle/README.md): it ch
 ## Limits
 
 - One owned client hosting one world. A dedicated server, a second client and restarts of a server process are FullLifecycle's.
-- The disposable install is a full copy of the game the first time (a few GB); it is reused while the game build and BepInEx core stay the same.
+- The disposable install is a full copy of the game the first time (a few GB); it is reused while the game build, BepInEx core and the files at the game's root (its Doorstop loader) stay the same, and copied again when one changes.
 - The tool does not stage characters, reserve a machine or publish anything. Use your environment's own procedure for characters and machine access.
 - The metadata checks read what BepInEx reads; a dependency a mod finds by reflection at run time, or a config value it needs, is caught only by the live run.

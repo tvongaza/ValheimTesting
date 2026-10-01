@@ -522,7 +522,7 @@ public sealed class TargetedRegression
 
     private sealed record Marker(string Tool, string GameSha256, string BepInExCoreSha256, string? Arm, Dictionary<string, string>? Tree);
 
-    // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build and core are the game's.
+    // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build, core and loader are the game's.
     private string PrepareInstall()
     {
         var env = Environment;
@@ -537,7 +537,7 @@ public sealed class TargetedRegression
         {
             var marker = RequireOwned(install);
             bool current = marker.GameSha256 == pins.Game && marker.BepInExCoreSha256 == pins.BepInExCore && Directory.Exists(Path.Combine(install, InstallPins.CoreDirectory)) &&
-                InstallPins.Of(install) is var found && found.Game == pins.Game && found.BepInExCore == pins.BepInExCore;
+                InstallPins.Of(install) is var found && found.Game == pins.Game && found.BepInExCore == pins.BepInExCore && LoaderCopied(game, install);
             if (!current) Directory.Delete(install, recursive: true);
         }
         if (!Directory.Exists(install))
@@ -557,6 +557,17 @@ public sealed class TargetedRegression
         if (copied.Game != pins.Game || copied.BepInExCore != pins.BepInExCore)
             throw new InvalidOperationException($"The disposable install {install} does not match the prepared game after copying (game {copied.Game} vs {pins.Game}, core {copied.BepInExCore} vs {pins.BepInExCore}). Remove it and stage again.");
         return install;
+    }
+
+    // Every file at the prepared game's root and in its doorstop_libs (the Doorstop loader and its configuration on every
+    // platform) must be in the reused install unchanged. A mod manager replacing the game's winhttp.dll changes neither the
+    // game build nor BepInEx's core: without this, the copy kept the replaced loader after the game's own was restored.
+    private static bool LoaderCopied(string game, string install)
+    {
+        string libraries = Path.Combine(game, "doorstop_libs");
+        var files = Directory.EnumerateFiles(game).Concat(Directory.Exists(libraries) ? Directory.EnumerateFiles(libraries, "*", SearchOption.AllDirectories) : [])
+            .Where(path => !InstallPins.IsMacMetadata(path)).Select(path => Path.GetRelativePath(game, path));
+        return files.All(relative => File.Exists(Path.Combine(install, relative)) && WorldFixture.Hash(Path.Combine(install, relative)) == WorldFixture.Hash(Path.Combine(game, relative)));
     }
 
     private static void Copy(string source, string target, string root)
