@@ -38,6 +38,8 @@ public sealed class LogScanTests : IDisposable
         { "missing-prefab-hash", Boot + "[Warning: Unity Log] 09/29/2026 12:00:00: Missing prefab hash: -887680680\n", 3 },
         { "missing-script", Boot + "[Warning: Unity Log] The referenced script on this Behaviour (Game Object 'BrokenPiece') is missing!\n", 3 },
         { "shader-unsupported", Boot + "[Warning: Unity Log] WARNING: Shader Unsupported: 'Custom/Piece' - All subshaders removed\n", 3 },
+        { "macos-apple-plugin-missing", Boot + AppleGameKit, 3 },
+        { LogScanner.UnityException, Boot + JotunnNre, 3 },
         { LogScanner.UnknownWarning, Boot + "[Warning:  My Mod] Config value out of range; using 5\n", 3 },
         { LogScanner.UnknownError, Boot + "[Error  :  My Mod] Could not open the cache file\nSystem.IO.IOException: Sharing violation\n", 3 },
     };
@@ -53,7 +55,7 @@ public sealed class LogScanTests : IDisposable
         Assert.Equal(1, count.Count); Assert.Equal(line, count.FirstLine);
         Assert.Equal(problem.Split('\n')[line - 1], count.First);
         Assert.All(scan.Counts.Where(other => other.Pattern != pattern), other => Assert.Equal(0, other.Count));
-        var severity = LogScanner.Patterns.FirstOrDefault(known => known.Name == pattern)?.Severity ?? LogSeverity.Warning;
+        var severity = LogScanner.Patterns.FirstOrDefault(known => known.Name == pattern)?.Severity ?? (pattern == LogScanner.UnityException ? LogSeverity.Failure : LogSeverity.Warning);
         Assert.Equal(severity, count.Severity); Assert.Equal(severity == LogSeverity.Failure, scan.Failed);
     }
 
@@ -89,6 +91,7 @@ public sealed class LogScanTests : IDisposable
             "Some other message\n", "Player.log", required: false));
         Assert.Equal(1, Count(scan, "shader-unsupported").Count); Assert.Equal(1, Count(scan, "nre-remove-objects").Count);
         Assert.Equal(0, Count(scan, LogScanner.UnknownWarning).Count); Assert.Equal(0, Count(scan, LogScanner.UnknownError).Count);
+        Assert.Equal(0, Count(scan, LogScanner.UnityException).Count); // the RemoveObjects NRE is counted once, by its pattern
         Assert.True(scan.Failed);
     }
 
@@ -99,6 +102,7 @@ public sealed class LogScanTests : IDisposable
             // The frame belongs to the next record, not to this NRE.
             "[Error  : Unity Log] NullReferenceException: Object reference not set to an instance of an object\n[Info   :   My Mod] ZNetScene.RemoveObjects was patched\n" + Tail));
         Assert.Equal(0, Count(elsewhere, "nre-remove-objects").Count); Assert.Equal(2, Count(elsewhere, LogScanner.UnknownError).Count);
+        Assert.Equal(0, Count(elsewhere, LogScanner.UnityException).Count); // BepInEx's error records count them already
         Assert.False(elsewhere.Failed);
     }
     // HarmonyX skips a legacy instance UnpatchAll() when DisallowLegacyGlobalUnpatchAll is set: nothing was removed.
@@ -265,5 +269,140 @@ public sealed class LogScanTests : IDisposable
         plan.CheckPatchersAndLogScan();
         File.WriteAllText(path, """{ "logScan": { "rpc-method-missing": { "severity": "failure", "reason": "x", "extra": 1 } } }""");
         Assert.ThrowsAny<JsonException>(() => ServerRunPlan.Read<ServerRunPlan>(path));
+    }
+    // Unity's Player.log of the 30 Sep 2026 Jötunn #494 negative control (Valheim 1.0.16, Windows client), shortened and with
+    // the assembly ids replaced: an exception Jötunn threw in a death hook, which BepInEx's log did not have.
+    private const string JotunnNre =
+        "NullReferenceException: Object reference not set to an instance of an object\n" +
+        "  at Jotunn.Managers.CreatureManager+<>c__DisplayClass26_0.<EnableCumulativeLevelEffects>b__0 (Jotunn.Entities.CustomCreature x) [0x0000b] in <c0ffee>:0 \n" +
+        "  at System.Linq.Enumerable.Any[TSource] (System.Collections.Generic.IEnumerable`1[T] source, System.Func`2[T,TResult] predicate) [0x0002c] in <c0ffee>:0 \n" +
+        "  at Jotunn.Managers.CreatureManager.EnableCumulativeLevelEffects (LevelEffects self, System.Int32 level) [0x00012] in <c0ffee>:0 \n" +
+        "  at (wrapper dynamic-method) LevelEffects.DMD<LevelEffects::SetupLevelVisualization>(LevelEffects,int)\n" +
+        "  at Ragdoll.Setup (UnityEngine.Vector3 velocity, System.Single hue, System.Single saturation, System.Single value, CharacterDrop characterDrop, System.Int32 level, System.Boolean cheated) [0x00104] in <c0ffee>:0 \n" +
+        "  at Character.OnDeath () [0x0030d] in <c0ffee>:0 \n";
+    private const string UnityLines =
+        "09/30/2026 20:34:02: Placed location StartTemple in zone 0,0  duration 9.5084 ms\n" +
+        "09/30/2026 20:34:03: Placed location ShipSetting01 in zone -4,-2  duration 1.9998 ms\n";
+    private const string UnityTail = "\n09/30/2026 20:34:03: SpawnPrefab StoneSpawner_Fader SPAWNING BossStone_Fader\n";
+    // The macOS game's own plugins, as every kept macOS Unity log on 1.0.16 had them (clients and dedicated servers, 18-30 Sep 2026).
+    private const string AppleGameKit =
+        "DllNotFoundException: GameKitWrapper assembly:<unknown assembly> type:<unknown type> member:(null)\n" +
+        "  at (wrapper managed-to-native) Apple.GameKit.DefaultNSErrorHandler+Interop.DefaultNSErrorHandler_Set(Apple.Core.Runtime.NSExceptionCallback)\n" +
+        "  at Apple.GameKit.DefaultNSErrorHandler.Init () [0x00000] in <c0ffee>:0 \n";
+    private const string AppleCore =
+        "DllNotFoundException: AppleCoreNativeMac assembly:<unknown assembly> type:<unknown type> member:(null)\n" +
+        "  at (wrapper managed-to-native) Apple.Core.Availability.AppleCore_GetRuntimeEnvironment()\n" +
+        "  at Apple.Core.Availability.Initialize () [0x00000] in <c0ffee>:0 \n";
+    private RunLog PlayerLog(string text) => Write(text, "Player.log", required: false) with { Role = "client Player.log" };
+
+    [Fact] public void AnExceptionInPlayerLogFailsWithItsFirstLineAndTheFrameThatThrew()
+    {
+        var scan = LogScanner.Scan(PlayerLog(UnityLines + JotunnNre + UnityTail));
+        Assert.True(scan.Failed);
+        var count = Count(scan, LogScanner.UnityException);
+        Assert.Equal((LogSeverity.Failure, 1, 3), (count.Severity, count.Count, count.FirstLine));
+        Assert.Equal("NullReferenceException: Object reference not set to an instance of an object", count.First);
+        Assert.StartsWith("at Jotunn.Managers.CreatureManager+<>c__DisplayClass26_0.<EnableCumulativeLevelEffects>b__0", count.FirstFrame);
+        Assert.All(scan.Counts.Where(other => other.Pattern != LogScanner.UnityException), other => Assert.Equal(0, other.Count));
+
+        var report = new ScenarioReport("scan"); report.Step("scenario", () => { });
+        Assert.False(report.ScanLogs([PlayerLog(UnityLines + JotunnNre + UnityTail)]));
+        var step = Assert.Single(report.Steps, s => s.Name == "scan run logs");
+        Assert.Contains("client Player.log: unity-exception x1, first at line 3: NullReferenceException: Object reference not set", step.Error);
+        Assert.Contains("[at Jotunn.Managers.CreatureManager+<>c__DisplayClass26_0.<EnableCumulativeLevelEffects>b__0", step.Error);
+    }
+    // The frame chosen is the first that names the code that threw, past the runtime's own frames.
+    [Fact] public void TheUsefulFrameSkipsRuntimeFrames()
+    {
+        var scan = LogScanner.Scan(PlayerLog("Default audio device was changed, but the audio system failed to initialize it. Attempting to reset sound system.\n" +
+            "FieldAccessException: Field `Terminal:commands' is inaccessible from method `MyMod.TestAdapter.Plugin/<>c:<Start>b__3_0 (Terminal/ConsoleCommand)'\n" +
+            "  at System.Linq.Enumerable.TryGetFirst[TSource] (System.Collections.Generic.IEnumerable`1[T] source, System.Func`2[T,TResult] predicate, System.Boolean& found) [0x00000] in <c0ffee>:0 \n" +
+            "  at MyMod.TestAdapter.Plugin+<Start>d__3.MoveNext () [0x0009b] in <c0ffee>:0 \n" + UnityTail));
+        var count = Count(scan, LogScanner.UnityException);
+        Assert.Equal((1, 2), (count.Count, count.FirstLine));
+        Assert.Equal("at MyMod.TestAdapter.Plugin+<Start>d__3.MoveNext () [0x0009b] in <c0ffee>:0", count.FirstFrame);
+    }
+    // A known pattern's exception is counted once, by that pattern.
+    [Fact] public void AKnownExceptionIsNotAlsoAUnityException()
+    {
+        var scan = LogScanner.Scan(PlayerLog(UnityLines + "MissingMethodException: Method not found: void ZNet.OldMethod()\n  at MyMod.Patches.Postfix () [0x00000] in <c0ffee>:0 \n" + UnityTail +
+            AppleGameKit + "\n" + AppleCore + UnityTail));
+        Assert.Equal(1, Count(scan, "missing-method").Count); Assert.Equal(2, Count(scan, "macos-apple-plugin-missing").Count);
+        Assert.Equal(0, Count(scan, LogScanner.UnityException).Count);
+    }
+    // The macOS game's missing Apple plugins only warn; another missing native library (PlayFab's, which crossplay needs) fails.
+    [Fact] public void OnlyTheMacClientsOwnPluginsAreExcused()
+    {
+        var mac = LogScanner.Scan(PlayerLog(AppleGameKit + "\n" + AppleCore + UnityTail));
+        Assert.False(mac.Failed);
+        Assert.Equal((LogSeverity.Warning, 2), (Count(mac, "macos-apple-plugin-missing").Severity, Count(mac, "macos-apple-plugin-missing").Count));
+        var party = LogScanner.Scan(PlayerLog("DllNotFoundException: libParty.so assembly:<unknown assembly> type:<unknown type> member:(null)\n" +
+            "  at (wrapper managed-to-native) PartyCSharpSDK.Interop.PFPInterop.PartyInitialize(byte[],PartyCSharpSDK.Interop.PARTY_HANDLE&)\n" +
+            "  at PlayFab.Party.PlayFabMultiplayerManager.InitializeImpl () [0x000c4] in <c0ffee>:0 \n"));
+        Assert.True(party.Failed);
+        Assert.Equal(0, Count(party, "macos-apple-plugin-missing").Count);
+        Assert.Equal("at PlayFab.Party.PlayFabMultiplayerManager.InitializeImpl () [0x000c4] in <c0ffee>:0", Count(party, LogScanner.UnityException).FirstFrame);
+    }
+    // A negative control that throws on purpose names that exception by a frame; every other exception still fails.
+    [Fact] public void AnExpectedExceptionIsNamedByItsFrameAndOthersStillFail()
+    {
+        var classifications = new Dictionary<string, LogClassification>
+        {
+            [LogScanner.UnityException] = new() { Expected = ["Jotunn.Managers.CreatureManager.EnableCumulativeLevelEffects"], Reason = "The negative control runs Jotunn without the #494 fix." },
+        };
+        var controlOnly = LogScanner.Scan(PlayerLog(UnityLines + JotunnNre + UnityTail), classifications);
+        Assert.False(controlOnly.Failed);
+        var count = Count(controlOnly, LogScanner.UnityException);
+        Assert.Equal((0, 1), (count.Count, count.Expected));
+        Assert.Equal("NullReferenceException: Object reference not set to an instance of an object", count.FirstExpected);
+        Assert.Equal("The negative control runs Jotunn without the #494 fix.", count.Reason);
+
+        var another = "NullReferenceException: Object reference not set to an instance of an object\n  at MyMod.Marker.Update () [0x00010] in <c0ffee>:0 \n";
+        var both = LogScanner.Scan(PlayerLog(UnityLines + JotunnNre + UnityTail + another), classifications);
+        Assert.True(both.Failed);
+        count = Count(both, LogScanner.UnityException);
+        Assert.Equal((1, 1, 12), (count.Count, count.Expected, count.FirstLine));
+        Assert.Equal("at MyMod.Marker.Update () [0x00010] in <c0ffee>:0", count.FirstFrame);
+        LogScanner.CheckClassifications(classifications);
+    }
+    // Player.log and a server's output mix BepInEx's console lines with Unity's: Unity's exception after an Info line counts.
+    [Fact] public void AnExceptionAfterBepInExConsoleLinesCounts()
+    {
+        var scan = LogScanner.Scan(PlayerLog("[Message:   BepInEx] Preloader finished\n" +
+            "DirectoryNotFoundException: Could not find a part of the path '/home/steam/server/BepInEx/scripts'.\n" +
+            "  at System.IO.Directory.GetFiles (System.String path, System.String searchPattern, System.IO.SearchOption searchOption) [0x00008] in <c0ffee>:0 \n"));
+        var count = Count(scan, LogScanner.UnityException);
+        Assert.Equal((1, 2), (count.Count, count.FirstLine));
+        Assert.Equal(0, Count(scan, LogScanner.UnknownError).Count);
+        Assert.StartsWith("at System.IO.Directory.GetFiles", count.FirstFrame); // only runtime frames: the first one
+    }
+    [Fact] public void AUnityMessageEndsAnEarlierBepInExErrorRecordWithoutABlankLine()
+    {
+        var scan = LogScanner.Scan(PlayerLog("[Error  : My Mod] Failed to load an optional config\n" +
+            "09/30/2026 20:34:02: Continuing startup\n" + JotunnNre));
+        Assert.Equal(1, Count(scan, LogScanner.UnknownError).Count);
+        Assert.Equal(1, Count(scan, LogScanner.UnityException).Count);
+        Assert.True(scan.Failed);
+    }
+    [Fact] public void OneExceptionCannotBorrowTheNextExceptionsFrame()
+    {
+        var scan = LogScanner.Scan(PlayerLog(
+            "DllNotFoundException: libParty.so assembly:<unknown assembly> type:<unknown type> member:(null)\n" +
+            "  at PlayFab.Party.PlayFabMultiplayerManager.InitializeImpl () [0x000c4] in <c0ffee>:0 \n" +
+            AppleCore));
+        Assert.Equal(1, Count(scan, LogScanner.UnityException).Count);
+        Assert.Equal(1, Count(scan, "macos-apple-plugin-missing").Count);
+        Assert.True(scan.Failed);
+    }
+    // Routine Unity lines and words that only look like exceptions are not counted.
+    [Fact] public void RoutineUnityLinesAreNotExceptions()
+    {
+        var scan = LogScanner.Scan(PlayerLog(UnityLines +
+            "Unloading 93 unused Assets to reduce memory usage. Loaded Objects now: 293256.\n" +
+            "09/30/2026 20:34:02: Exception handling test skipped: no exception\n" +
+            "No exceptions were thrown during the load\n" +
+            "  ExceptionHandlerInstalled: true\n" + UnityTail));
+        Assert.False(scan.Failed);
+        Assert.All(scan.Counts, count => Assert.Equal(0, count.Count));
     }
 }

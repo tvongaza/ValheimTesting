@@ -9,7 +9,7 @@ public enum LogSeverity { Failure, Warning }
 
 /// <summary>
 /// A known log problem. <see cref="Line"/> matches one line; with <see cref="Frame"/>, the line counts only when a line of
-/// its stack trace (the lines after it, up to a blank line or the next BepInEx log header) matches the frame.
+/// its stack trace (up to a blank line, the next log message or the next exception) matches the frame.
 /// </summary>
 public sealed record LogPattern(string Name, LogSeverity Severity, Regex Line, Regex? Frame = null);
 
@@ -39,9 +39,10 @@ public sealed record RunLog(string Role, string Path, bool Required = false);
 /// <summary>
 /// How often a pattern matched in one log and where first; <see cref="Reason"/> is set when the run reclassified it.
 /// Lines the run named as expected are counted apart in <see cref="Expected"/> (the first in <see cref="FirstExpected"/>)
-/// and never fail.
+/// and never fail. <see cref="FirstFrame"/> is the most useful stack frame under the first counted line, for
+/// <see cref="LogScanner.UnityException"/>: the first frame outside the runtime's own System, Mono and wrapper frames.
 /// </summary>
-public sealed record LogPatternCount(string Pattern, LogSeverity Severity, string? Reason, int Count, int? FirstLine, string? First, int Expected = 0, string? FirstExpected = null);
+public sealed record LogPatternCount(string Pattern, LogSeverity Severity, string? Reason, int Count, int? FirstLine, string? First, int Expected = 0, string? FirstExpected = null, string? FirstFrame = null);
 
 /// <summary>
 /// One log's scan. An absent log has no counts (absent is not zero); <see cref="Problem"/> says why a required one is
@@ -58,18 +59,27 @@ public sealed record LogFileScan(string Role, string Path, bool Present, string?
 /// RPCs without a handler, objects whose prefab is not registered, missing scripts and shaders a GPU cannot run. Each known pattern is counted per log with its
 /// first occurrence and has a default severity a run may change with a written reason. BepInEx warning and error lines
 /// that match no pattern are counted as <see cref="UnknownWarning"/> and <see cref="UnknownError"/>, never ignored. Unity's
-/// Player.log has no levels, so there only the known patterns count. The same Unity message may appear in both logs.
+/// Player.log has no levels; there an exception Unity printed (a line that starts with the exception's type name, outside
+/// a BepInEx warning or error record) that no known pattern names is counted as <see cref="UnityException"/>, which fails.
+/// The same Unity message may appear in both logs.
 /// Owned processes are asked to quit at teardown and killed only if they do not (<see cref="IServerProcess.StopCleanly"/>):
 /// after a clean stop the logs include what the game and its mods logged while shutting down, for example an UnpatchAll a
 /// mod calls when the game quits; after a kill they do not.
 /// </summary>
 public static class LogScanner
 {
-    public const string UnknownWarning = "unknown-warning", UnknownError = "unknown-error";
+    public const string UnknownWarning = "unknown-warning", UnknownError = "unknown-error", UnityException = "unity-exception";
     private const RegexOptions Options = RegexOptions.CultureInvariant;
     private const int FrameLines = 20, TextLimit = 500;
     // BepInEx's disk log line: "[Level  :Source] message". Continuation lines (stack traces) have no header.
     private static readonly Regex Header = new(@"^\[(Info|Message|Warning|Error|Fatal|Debug) *:[^\]]*\]", Options);
+    // A timestamped Unity line in a mixed console log starts a new message even without a blank separator.
+    private static readonly Regex UnityTimestamp = new(@"^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}:", Options);
+    // How Unity prints an exception it caught: the type name at the start of the line, then ": message" or nothing, for
+    // example "NullReferenceException: Object reference not set to an instance of an object". Its frames follow, indented.
+    private static readonly Regex ExceptionLine = new(@"^(?:[A-Za-z_]\w*\.)*\w*Exception(?::|$)", Options);
+    // Frames that say where the runtime was, not which code threw: skipped when choosing FirstFrame.
+    private static readonly Regex RuntimeFrame = new(@"^\s*(?:at\s+)?(?:\(wrapper |System\.|Mono\.)", Options);
 
     /// <summary>The known patterns and their default severities.</summary>
     public static IReadOnlyList<LogPattern> Patterns { get; } =
@@ -100,10 +110,15 @@ public static class LogScanner
         // Unity: a bundle's shader was not built for this graphics API (magenta objects on Vulkan or OpenGL clients). The
         // wording is as the Valheim-Modding wiki's Valheim-Unity-Project-Guide quotes it.
         new("shader-unsupported", LogSeverity.Warning, new(@"not supported on this GPU|Shader Unsupported\b|Desired shader compiler platform \d+ is not available in shader blob", Options)),
+        // The macOS game's own Apple plugins (GameKitWrapper, AppleCoreNativeMac) failing to load at startup: these
+        // DllNotFoundExceptions were in the Unity log of every macOS client and dedicated server run kept from 18 to 30 Sep
+        // 2026 (Valheim 1.0.16, native arm64 and Rosetta, with or without mods). The game continues; they are the game's own,
+        // so they do not count as UnityException.
+        new("macos-apple-plugin-missing", LogSeverity.Warning, new(@"\bDllNotFoundException\b", Options), new(@"\bApple\.(?:GameKit|Core)\.", Options)),
     ];
 
-    /// <summary>Every name a classification may use: the patterns, <see cref="UnknownWarning"/> and <see cref="UnknownError"/>.</summary>
-    public static IReadOnlyList<string> Names { get; } = [.. Patterns.Select(pattern => pattern.Name), UnknownWarning, UnknownError];
+    /// <summary>Every name a classification may use: the patterns, <see cref="UnityException"/>, <see cref="UnknownWarning"/> and <see cref="UnknownError"/>.</summary>
+    public static IReadOnlyList<string> Names { get; } = [.. Patterns.Select(pattern => pattern.Name), UnityException, UnknownWarning, UnknownError];
 
     /// <summary>Refuses a classification of an unknown name or without a written reason.</summary>
     public static void CheckClassifications(IReadOnlyDictionary<string, LogClassification>? classifications)
@@ -137,20 +152,28 @@ public static class LogScanner
         var first = new (int Line, string Text)?[names.Count];
         var expectedCounts = new int[names.Count];
         var firstExpected = new string?[names.Count];
+        var firstFrame = new string?[names.Count];
+        int unityException = Patterns.Count, unknownWarning = names.Count - 2, unknownError = names.Count - 1;
         var expected = names.Select(name => classifications != null && classifications.TryGetValue(name, out var chosen) ? chosen.Expected ?? [] : []).ToArray();
         string Text(int line) => lines[line].Length > TextLimit ? lines[line][..TextLimit] + " [truncated]" : lines[line];
+        // A UnityException is expected when the named text is in its first line or in one of its frames, because the first
+        // line ("NullReferenceException: Object reference not set ...") rarely says which code threw.
         void Hit(int index, int line)
         {
-            if (expected[index].Any(text => lines[line].Contains(text, StringComparison.Ordinal))) { expectedCounts[index]++; firstExpected[index] ??= Text(line); return; }
+            bool Named(string text) => lines[line].Contains(text, StringComparison.Ordinal)
+                || (index == unityException && Frames(lines, line).Any(frame => frame.Contains(text, StringComparison.Ordinal)));
+            if (expected[index].Any(Named)) { expectedCounts[index]++; firstExpected[index] ??= Text(line); return; }
             counts[index]++;
-            first[index] ??= (line + 1, Text(line));
+            if (first[index] != null) return;
+            first[index] = (line + 1, Text(line));
+            if (index == unityException) firstFrame[index] = UsefulFrame(lines, line);
         }
         // The current BepInEx record: its header's level and line, and whether a known pattern matched in it.
         string? level = null; int headerLine = -1; bool known = false;
         void EndRecord()
         {
-            if (!known && level is "Warning") Hit(names.Count - 2, headerLine);
-            if (!known && level is "Error" or "Fatal") Hit(names.Count - 1, headerLine);
+            if (!known && level is "Warning") Hit(unknownWarning, headerLine);
+            if (!known && level is "Error" or "Fatal") Hit(unknownError, headerLine);
             level = null; known = false;
         }
         for (int i = 0; i < lines.Count; i++)
@@ -158,35 +181,49 @@ public static class LogScanner
             string line = lines[i];
             var header = Header.Match(line);
             if (header.Success) { EndRecord(); level = header.Groups[1].Value; headerLine = i; }
+            else if (UnityTimestamp.IsMatch(line)) EndRecord();
             else if (line.Trim().Length == 0) { EndRecord(); continue; }
+            bool named = false;
             for (int p = 0; p < Patterns.Count; p++)
             {
                 var pattern = Patterns[p];
                 if (!pattern.Line.IsMatch(line) || (pattern.Frame != null && !HasFrame(lines, i, pattern.Frame))) continue;
-                Hit(p, i); known = true;
+                Hit(p, i); known = true; named = true;
             }
+            // Inside a BepInEx warning or error record the exception is already counted, by a pattern or as unknown. Info,
+            // Message and Debug records do not hold exceptions; there an unheadered line is Unity's own, where Player.log
+            // or a server's output mixes BepInEx's console lines with Unity's.
+            if (!named && !header.Success && level is not ("Warning" or "Error" or "Fatal") && ExceptionLine.IsMatch(line)) Hit(unityException, i);
         }
         EndRecord();
         var result = new List<LogPatternCount>(names.Count);
         for (int n = 0; n < names.Count; n++)
         {
-            var severity = n < Patterns.Count ? Patterns[n].Severity : LogSeverity.Warning;
+            var severity = n < Patterns.Count ? Patterns[n].Severity : n == unityException ? LogSeverity.Failure : LogSeverity.Warning;
             string? reason = null;
             if (classifications != null && classifications.TryGetValue(names[n], out var chosen)) { severity = chosen.Severity ?? severity; reason = chosen.Reason; }
-            result.Add(new(names[n], severity, reason, counts[n], first[n]?.Line, first[n]?.Text, expectedCounts[n], firstExpected[n]));
+            result.Add(new(names[n], severity, reason, counts[n], first[n]?.Line, first[n]?.Text, expectedCounts[n], firstExpected[n], firstFrame[n]));
         }
         return new(log.Role, log.Path, true, null, result);
     }
 
-    // The stack trace under line `at`: the lines after it, up to a blank line or the next BepInEx header.
-    private static bool HasFrame(List<string> lines, int at, Regex frame)
+    // The stack trace under line `at`: stop before another log message or exception, even without a blank separator.
+    private static IEnumerable<string> Frames(List<string> lines, int at)
     {
         for (int i = at + 1; i < lines.Count && i <= at + FrameLines; i++)
         {
-            if (lines[i].Trim().Length == 0 || Header.IsMatch(lines[i])) return false;
-            if (frame.IsMatch(lines[i])) return true;
+            if (lines[i].Trim().Length == 0 || Header.IsMatch(lines[i]) || UnityTimestamp.IsMatch(lines[i]) || ExceptionLine.IsMatch(lines[i])) yield break;
+            yield return lines[i];
         }
-        return false;
+    }
+    private static bool HasFrame(List<string> lines, int at, Regex frame) => Frames(lines, at).Any(frame.IsMatch);
+
+    // The first frame that names the code that threw, else the first frame; trimmed and cut to the text limit.
+    private static string? UsefulFrame(List<string> lines, int at)
+    {
+        var frames = Frames(lines, at).Select(frame => frame.Trim()).Where(frame => frame.Length != 0).ToList();
+        var frame = frames.FirstOrDefault(frame => !RuntimeFrame.IsMatch(frame)) ?? frames.FirstOrDefault();
+        return frame == null || frame.Length <= TextLimit ? frame : frame[..TextLimit] + " [truncated]";
     }
 
     // DirectServerProcess leaves "<copy>.absent" when the game never created the log.
