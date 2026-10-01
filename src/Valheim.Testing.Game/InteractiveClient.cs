@@ -595,19 +595,28 @@ internal static class InteractiveScripts
                 $deadline = [DateTime]::UtcNow.AddSeconds([double]$seconds)
                 $watcher = New-Object IO.FileSystemWatcher -ArgumentList $dir
                 $running = $false
+                $unread = $null
                 try {
                     while ($null -eq $verdict) {
-                        if ([IO.File]::Exists($pidFile)) { $verdict = 'VT-INTERACTIVE started ' + [IO.File]::ReadAllText($pidFile, $utf8).Trim(); break }
-                        if ([IO.File]::Exists($errorFile)) { $verdict = 'VT-INTERACTIVE failed the launcher reported: ' + ([IO.File]::ReadAllText($errorFile, $utf8) -replace '\s+', ' ').Trim(); break }
+                        # Both files are moved into place complete, but another process (an antivirus scan of the new file) can
+                        # hold one for a moment: a file that cannot be read yet is read again on the next look.
+                        $started = $null; $reported = $null
+                        try { if ([IO.File]::Exists($pidFile)) { $started = [IO.File]::ReadAllText($pidFile, $utf8) } } catch { $unread = $_.Exception.Message }
+                        if ($null -ne $started) { $verdict = 'VT-INTERACTIVE started ' + $started.Trim(); break }
+                        try { if ([IO.File]::Exists($errorFile)) { $reported = [IO.File]::ReadAllText($errorFile, $utf8) } } catch { $unread = $_.Exception.Message }
+                        if ($null -ne $reported) { $verdict = 'VT-INTERACTIVE failed the launcher reported: ' + ($reported -replace '\s+', ' ').Trim(); break }
                         $state = $registered.State
                         $result = '0x{0:X8}' -f $registered.LastTaskResult
                         if ($state -eq 4) { $running = $true }
-                        elseif ($running) {
-                            # The launcher writes its file before it ends, so one more look settles it.
-                            if (-not [IO.File]::Exists($pidFile) -and -not [IO.File]::Exists($errorFile)) { $verdict = 'VT-INTERACTIVE failed the launcher ended without starting the game (task result ' + $result + ')' }
-                            continue
+                        elseif ($running -and -not [IO.File]::Exists($pidFile) -and -not [IO.File]::Exists($errorFile)) {
+                            # The launcher moves its file into place before it ends, so an ended task without one never started the game.
+                            $verdict = 'VT-INTERACTIVE failed the launcher ended without starting the game (task result ' + $result + ')'; break
                         }
-                        if ([DateTime]::UtcNow -ge $deadline) { $verdict = 'VT-INTERACTIVE failed no game started within ' + $seconds + ' s (task state ' + $state + ', result ' + $result + ')'; break }
+                        if ([DateTime]::UtcNow -ge $deadline) {
+                            $verdict = 'VT-INTERACTIVE failed no game started within ' + $seconds + ' s (task state ' + $state + ', result ' + $result + ')'
+                            if ($unread) { $verdict += '; the launcher''s file could not be read: ' + ($unread -replace '\s+', ' ').Trim() }
+                            break
+                        }
                         [void]$watcher.WaitForChanged([IO.WatcherChangeTypes]::All, 500)
                     }
                 } finally { $watcher.Dispose() }
@@ -624,7 +633,7 @@ internal static class InteractiveScripts
         """.ReplaceLineEndings("\n");
 
     // Runs in the desktop session (Windows PowerShell 5.1, started by the task). It reads the spec, takes the secrets from their
-    // file and deletes it, starts the game and records its ID and start time (moved into place, so the file is complete).
+    // file and deletes it, starts the game and records its ID and start time, or the error (each moved into place, so the file is complete).
     public static readonly string WindowsLauncher = """
         param([string]$dir)
         $ErrorActionPreference = 'Stop'
@@ -659,7 +668,9 @@ internal static class InteractiveScripts
             [IO.File]::WriteAllText($temporary, [string]$game.Id + ' ' + $game.StartTime.ToFileTimeUtc(), $utf8)
             [IO.File]::Move($temporary, (Join-Path $dir 'pid'))
         } catch {
-            [IO.File]::WriteAllText((Join-Path $dir 'launcher-error.txt'), $_.Exception.Message, $utf8)
+            $temporary = Join-Path $dir 'launcher-error.tmp'
+            [IO.File]::WriteAllText($temporary, $_.Exception.Message, $utf8)
+            [IO.File]::Move($temporary, (Join-Path $dir 'launcher-error.txt'))
             exit 1
         }
         """.ReplaceLineEndings("\n");
