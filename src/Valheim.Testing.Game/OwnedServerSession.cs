@@ -423,11 +423,11 @@ public sealed class DirectServerProcess : IServerProcess
     {
         if (!Task.WaitAll([_stdout, _stderr], timeout))
         {
-            // The process has exited, so a capture still open means another process holds its pipe: one the owned process
-            // started outside its own tree, or one that inherited the handle.
+            // An escaped child or another process inheriting a pipe can keep its capture open after this process exits.
+            // A stalled capture is also possible; the pending pipe identifies which copy needs investigation.
             var open = new[] { ("stdout", _stdout), ("stderr", _stderr) }.Where(capture => !capture.Item2.IsCompleted).Select(capture => capture.Item1);
             throw new TimeoutException($"Process log capture did not finish within {WaitText.Seconds(timeout)} after process {_process.Id} exited (exit {_process.ExitCode}): " +
-                $"{string.Join(" and ", open)} still open, so another process still holds that pipe. The copy so far is in {_logPrefix}.std*.log.");
+                $"{string.Join(" and ", open)} still open; another process may hold that pipe, or its capture has stalled. The copy so far is in {_logPrefix}.std*.log.");
         }
         for (int i = 0; i < _gameLogs.Length; i++)
         {
