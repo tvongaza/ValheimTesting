@@ -65,7 +65,15 @@ internal static class CharacterSavePosition
         return Walk(ReadEnvelope(file), worldUid: 0).Identity;
     }
 
-    private sealed record Layout(bool FirstSpawn, (int FlagOffset, int PointOffset)? World, CharacterIdentity Identity);
+    // The packaged smoke character should have skipped the intro but never entered a world.
+    internal static bool IsFreshSmokeSeed(byte[] file)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        var layout = Walk(ReadEnvelope(file), worldUid: 0);
+        return !layout.FirstSpawn && layout.WorldCount == 0;
+    }
+
+    private sealed record Layout(bool FirstSpawn, int WorldCount, (int FlagOffset, int PointOffset)? World, CharacterIdentity Identity);
 
     private static Layout Walk(byte[] payload, long worldUid)
     {
@@ -118,7 +126,7 @@ internal static class CharacterSavePosition
             if (ReadFlag(reader)) Skip(stream, ReadBlobLength(reader, stream)); // player data
             if (stream.Position != stream.Length)
                 throw new InvalidDataException("Character payload has unexpected trailing data.");
-            return new Layout(firstSpawn, found, new CharacterIdentity(name, playerId));
+            return new Layout(firstSpawn, worldCount, found, new CharacterIdentity(name, playerId));
         }
         catch (EndOfStreamException ex)
         {

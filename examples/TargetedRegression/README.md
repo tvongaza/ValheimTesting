@@ -31,7 +31,17 @@ Every DLL is pinned by SHA256; leave a `sha256` empty and the preflight tells yo
 
 ## 1. Fill in the manifest
 
-Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the manifest. `install` is a new directory: the tool creates it as a copy of `game` and owns it, and refuses any existing directory it did not create. For a basic smoke, `DefaultSmokeWorld.Prepare(newDirectory)` writes a small server-created Valheim 1.0.16 world; set `fixture.root` to that directory and `fixture.worldUid` to the returned identity's `UidText`. It refuses an existing directory, and the run copies the fixture again before the game can edit it. A later game version needs a native load check. For a mod-specific world, supply your own fixture instead. The fixture root holds exactly one world, as the game saved it:
+Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the manifest. `install` is a new directory: the tool creates it as a copy of `game` and owns it, and refuses any existing directory it did not create. For a basic smoke, use the pinned, game-created Valheim 1.0.16 world and character:
+
+```csharp
+var world = DefaultSmokeWorld.Prepare(Path.Combine(runRoot, "world-source"));
+var character = DefaultSmokeCharacter.Ensure(Path.Combine(runRoot, "character-source"));
+// regression.json: fixture.root = runRoot/world-source; fixture.worldUid = world.UidText
+// client.character = DefaultSmokeCharacter.Name; client.characterStore = character.Root
+// client.steamUserDataDirectory = the full path to Steam's userdata directory
+```
+
+Use a new `world-source` for each preparation. `Ensure` repairs a missing or stale character only in its own marked store, and refuses an unfamiliar file or personal character directory. The run stages that character only while its owned client is active, then removes its local file and backups. The fixture world is copied before the game edits it. A later game version needs a native load check; for a mod-specific world or character, supply your own registered fixture instead. The world source holds exactly one world, as the game saved it:
 
 ```text
 <fixture root>/
@@ -43,7 +53,7 @@ Copy `regression.sample.json` somewhere outside the repository and replace every
 
 Read its UID from the world itself, never from its name: `WorldIdentity.Read(root).UidText`, or let the preflight tell you which UID the fixture holds. Name the arms however you like; `parent` and `candidate` are the convention. Two arms with the same SHA256 are refused unless you set `"repeatability": true` on purpose. Optional fields: `cli.manifest` (recommended; see step 6 below), `configs` (BepInEx config files by name; without `valheimCLI.valheimCLI.cfg` one is written with `client.port`), `patchers`, `optionalReferences` (assembly names a staged DLL only uses when present), `gamePins` (pin the prepared game's build and BepInEx core), `client.saveDirectory`, `client.startSeconds` and `client.joinSeconds`. `logScan` can name an exact, known BepInEx error header with a written reason, for example `"logScan": { "unknown-error": { "expected": ["[Error  :   BepInEx] Unable to start Unity log writer"], "reason": "Known log-writer limitation on this test client" } }`. New or different errors still fail the run; see the [log scan contract](../../docs/testing-toolkit.md#log-scan-at-teardown).
 
-For a hosted run that should stage its own test character, register a **game-created** local character once in a [`DisposableCharacterStore`](../../docs/testing-toolkit.md#plan-rules-and-client-rounds-preview-13). Set `client.character` to its registered name, `client.characterStore` to that store's full path, and `client.steamUserDataDirectory` to Steam's `userdata` directory. Preflight checks the registration without touching `characters_local`. `run` refuses a name already in local or cloud saves, copies just that registered character before launch, and removes its file and game-made backups after the owned client stops, including on failure. The character and fixture are still supplied by you; a portable default fixture and seed character remain follow-up work.
+For a custom hosted character, register a **game-created** local save once in a [`DisposableCharacterStore`](../../docs/testing-toolkit.md#plan-rules-and-client-rounds-preview-13). Set `client.character` to its registered name, `client.characterStore` to that store's full path, and `client.steamUserDataDirectory` to Steam's `userdata` directory. Preflight checks the registration without touching `characters_local`. `run` refuses a name already in local or cloud saves, copies just that registered character before launch, and removes its file and game-made backups after the owned client stops, including on failure. The packaged default is for one client at a time: copies share its player ID.
 
 ## 2. Preflight, without the game
 
