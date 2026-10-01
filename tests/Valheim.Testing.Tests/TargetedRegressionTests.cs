@@ -12,6 +12,19 @@ public sealed class TargetedRegressionTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [Fact] public void ATargetedRunValidatesItsExpectedErrorLinesBeforeStaging()
+    {
+        var manifest = _rig.Manifest();
+        manifest.LogScan[LogScanner.UnknownError] = new()
+        {
+            Expected = ["[Error  :   BepInEx] Unable to start Unity log writer"],
+            Reason = "Known environmental log-writer failure on the test client.",
+        };
+        new TargetedRegression(manifest).Preflight();
+        manifest.LogScan[LogScanner.UnknownError].Expected = ["Unable to start Unity log writer"];
+        Assert.Contains("exact expected BepInEx Error or Fatal header", Assert.Throws<ArgumentException>(() => new TargetedRegression(manifest)).Message);
+    }
+
     [Fact] public void AValidManifestStagesOnlyTheAllowlistThenPreflightsEveryArm()
     {
         var regression = new TargetedRegression(_rig.Manifest(), ["example.probe/read"]);

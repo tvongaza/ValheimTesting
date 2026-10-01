@@ -32,6 +32,8 @@ public sealed class RegressionEnvironment
     public List<RegressionFile> Patchers { get; set; } = [];
     /// <summary>Assembly names a staged DLL references but only uses when present (a guarded soft integration); none by default.</summary>
     public List<string> OptionalReferences { get; set; } = [];
+    /// <summary>Reasoned expected log lines for this native regression; unclassified BepInEx errors fail by default.</summary>
+    public Dictionary<string, LogClassification> LogScan { get; set; } = [];
     /// <summary>Optional: the game build and BepInEx core <see cref="Game"/> must have (<see cref="InstallPins"/>; its patchers value is not compared).</summary>
     public InstallPins? GamePins { get; set; }
 
@@ -90,6 +92,7 @@ public sealed class RegressionEnvironment
         foreach (string reference in OptionalReferences)
             if (string.IsNullOrWhiteSpace(reference) || reference.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"optionalReferences: \"{reference}\" is not an assembly name (no .dll).");
+        LogScanner.CheckClassifications(LogScan);
         GamePins?.Validate("game");
         var names = Files().Where(file => !Patchers.Contains(file)).Select(file => Path.GetFileName(file.File)).Append(Mod.InstallAs)
             .GroupBy(name => name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
@@ -495,7 +498,7 @@ public sealed class TargetedRegression
         }
         finally
         {
-            if (logs.Count != 0) report.ScanLogs(logs);
+            if (logs.Count != 0) report.ScanLogs(logs, Environment.LogScan);
             report.Provenance["disposableInstall"] = "kept for the next arm; remove it with TargetedRegression.Remove";
             report.Write(output);
         }
