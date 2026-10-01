@@ -105,6 +105,7 @@ controls in a disposable fixture. Server Devcommands is a user-suggested referen
 for enabling client devcommands if that check exposes a missing game-level step.
 No dependency on that mod or general admin-command bypass has been added.
 
+
 ## Shared owned-session lifecycle (preview 2)
 
 `Valheim.Testing.Game` now owns `OwnedServerSession`, `DirectServerProcess` and
@@ -199,6 +200,7 @@ client-owned arrival/support observations, without granting client admin rights.
 Protection changes gameplay (as the game does in 1.0.16): monsters neither notice nor target a player in ghost mode, an egg hatches only near a player who is not in ghost mode, and a creature hit by a player in god or ghost mode is marked cheated, which marks the items it drops. Pass `WaitForWorld(..., protectPlayer: false)` for combat, aggro, taming, hatching and loot checks, for any check that needs a vulnerable player, and when an operator manages these modes; call `PlayerPlacement.Protect` yourself for the steps that should be protected.
 
 Declare the support point on dry ground: a player standing in water is not grounded at the ground's height, so the check fails, which is correct but tells you nothing about the road. `examples/ClientSurfaceCheck` uses `RequireSupported`.
+
 
 ## Published-library validation update
 
@@ -693,15 +695,16 @@ With `"cliManifest": "<full path>"` in an owned client plan, `ClientRunPlan.Pref
 - a manifest file that is missing or malformed: it is never treated as absent;
 - a manifest DLL that no file in `BepInEx/plugins` or `BepInEx/scripts` (any subfolder) has by SHA256, or that is installed more than once;
 - any other DLL there with one of the manifest's file names, or declaring one of its plugin GUIDs (read from the assembly's `[BepInPlugin]` metadata, never by loading it): another build, a stale copy or a renamed one, so a mixed set is refused, and replacing any declared DLL without updating its hash invalidates the manifest;
+- a manifest DLL in `BepInEx/scripts` when ScriptEngine is not pinned in `BepInEx/plugins` with `LoadOnStart = true`, even if that pack is not separately pinned in the plan;
 - a set that lacks a capability in the plan's `capabilities` or the runner's own (`HostRounds` adds `CliCapabilities.HostedRounds`), or offers it with a result version other than 1.
 
-Each refusal names the file, the hash found and the manifest's, every capability the run needs that the refused file provides, and the pack that provides it; a set whose files register no extension commands at all is named as a monolithic ValheimCLI. DLLs the manifest does not mention (the mods) are not judged here. `plan.CheckCliManifest(capabilities)` runs this check alone and returns what it found (`CliManifestCheck`: the build, the installed files, the capabilities); `CliCapabilityManifest.Read(path).Check(install, capabilities)` is the same without a plan.
+File and capability mismatches name the file, the hashes found and expected, and the capabilities lost; a set whose files register no extension commands at all is named as a monolithic ValheimCLI. A ScriptEngine refusal names the manifest file in `scripts` and the missing startup setting. DLLs the manifest does not mention (the mods) are not judged here. `plan.CheckCliManifest(capabilities)` checks the file set and capabilities alone and returns what it found (`CliManifestCheck`: the build, the installed files, the capabilities); `CliCapabilityManifest.Read(path).Check(install, capabilities)` does the same without a plan. The plan's full preflight also checks that ScriptEngine can load any manifest files in `scripts` at startup.
 
 The policy without a manifest: `cliManifest` is optional, so existing plans and ValheimCLI builds that ship no manifest still run, but nothing claims a static pass that did not happen. No static capability check runs; the live check once the client answers is the only one, and `HostRounds` and `ClientRounds` record it in the report's provenance: `cliPreflight` is `static (cliManifest) and live`, `live only: the plan names no cliManifest`, or `live only: an attached client's files are its operator's`. An attached client takes no manifest (`Validate` refuses one); its `capabilities` are required live when the session attaches.
 
 The toolkit hard-codes no ValheimCLI version. A ValheimCLI build can ship its own manifest; until it does, `CliCapabilityManifest.Generate(build, dllPaths, listing)` writes one from a known build. It hashes each DLL, reads its plugin GUIDs, and reads the extensions from its IL: each `ExtensionRegistry.Register(id, version, apiVersion, new ExtensionCommand(name, ..., resultVersion), ...)` with literal names, as ValheimCLI's packs register them. Registrations without literal names and console-module listings (`cli.standard/commands`) are not claimed; a registration whose shape it does not recognise is refused rather than guessed. Pass `listing`, the `cli_extensions` reply of a client that loaded exactly these files (from its `client-commands.jsonl`, for example), and the generator also requires every owner the files register to be live there with the same commands and versions, so the game confirms what the IL says. `Write(path)` and `Read(path)` check the format.
 
-Limits: the static check proves which files are installed and what their IL registers, not that BepInEx loads them or that their registrations succeed in the game; `CliCapabilities.Require` after launch stays authoritative. Generating from IL covers ValheimCLI's registration pattern, not every way a plugin could register an extension.
+Limits: the static check proves which files are installed, what their IL registers, and whether ScriptEngine is configured to load manifest files in `scripts` at startup. It cannot prove that BepInEx actually loads them or that their registrations succeed in the game; `CliCapabilities.Require` after launch stays authoritative. Generating from IL covers ValheimCLI's registration pattern, not every way a plugin could register an extension.
 
 ## Targeted native regressions (preview 17)
 
@@ -721,7 +724,7 @@ Many third-party regressions need the same small shape: one owned client hosting
 
 It returns a `StagedArm`: the strict `ClientRunPlan` (every staged plugin's declared GUID pinned by its MD5, no `absent` pins for anything else; the clean install loads nothing unlisted), its `RunManifest` (the arms, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; install-relative paths only) and `Verify()`, which refuses any file added, changed or removed in the staged folders since. `Preflight()` stages every arm in turn. `Run(arm, output, scenario, rounds, measure)` stages the arm, writes `run-manifest.json`, calls `Verify()` right before the launch, runs `HostRounds` with the scenario's capabilities required live before its first round, scans the client's logs and writes the report in every outcome. `Remove` deletes the disposable install, only when it carries the marker.
 
-Limits: one owned client hosting one world. The disposable install is a full copy of the game on first use, copied again when the game build, BepInEx core or a file at the game's root (its Doorstop loader) changes. The checks read what BepInEx reads before loading; a dependency found by reflection at run time is caught only live. Characters and machine reservations stay with the environment's own procedure. The checks are tested with emitted assemblies and fake installs.
+Limits: one owned client hosting one world. The disposable install is a full copy of the game on first use, copied again when the game build, BepInEx core or the set or contents of files at the game's root and in `doorstop_libs` change. The checks read what BepInEx reads before loading; a dependency found by reflection at run time is caught only live. Characters and machine reservations stay with the environment's own procedure. The checks are tested with emitted assemblies and fake installs.
 
 ### Public bundles (preview 17)
 
@@ -978,6 +981,8 @@ Limits: in CI both helpers are tested against scripted transports, with the nega
 ## World observations: global keys, synced config, vanilla clients, dungeon rooms (Adapter preview 2, Game preview 13)
 
 Four adapter commands and their runner-side readers. The adapter commands are written against the Valheim 1.0.16 decompile, compile in CI (`tests/Valheim.Testing.Adapter.CompileCheck`) and have run on a 1.0.16 dedicated server with a joined client (see "Native run" below). The runner side is tested with scripted replies, including a negative control for each check.
+
+For location authoring context, the wiki explains [altitude relative to sea level and terrain-modifier ordering](https://github.com/Valheim-Modding/Wiki/wiki/Creating-Locations). Those notes are not evidence for the room encoding, zone pairing or replication behavior measured here; the pinned 1.0.16 run and game-code checks below are.
 
 | Adapter (register with `TestExtension.Register`) | Runner (Valheim.Testing.Game) | What it answers |
 |---|---|---|

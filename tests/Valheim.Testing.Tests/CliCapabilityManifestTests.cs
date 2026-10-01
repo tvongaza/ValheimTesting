@@ -191,6 +191,22 @@ public sealed class CliCapabilityManifestTests : IDisposable
             Assert.Throws<InvalidOperationException>(() => plan.Preflight(CliCapabilities.HostedRounds)).Message);
     }
 
+    [Fact] public void AManifestPackInScriptsMustLoadAtStartupEvenWhenItIsNotSeparatelyPinned()
+    {
+        var builds = new Builds();
+        using var install = Staged(builds, (Core, builds.Core), (WorldTools, builds.WorldTools));
+        install.Add("BepInEx/scripts/" + Standard, builds.Standard);
+        var plan = PlanFor(install, Manifest(builds));
+        Assert.DoesNotContain("valheimCLI.standard", plan.Pins.Keys);
+        Assert.Contains("does not pin ScriptEngine", Assert.Throws<InvalidOperationException>(() => plan.Preflight(CliCapabilities.HostedRounds)).Message);
+
+        install.Add("BepInEx/plugins/ScriptEngine.dll", "script engine");
+        plan.Pins[OwnedClientPreflight.ScriptEngine] = OwnedRunPreflightTests.Md5("script engine");
+        Assert.Contains("LoadOnStart defaults to false", Assert.Throws<InvalidOperationException>(() => plan.Preflight(CliCapabilities.HostedRounds)).Message);
+        install.Add("BepInEx/config/com.bepis.bepinex.scriptengine.cfg", "[General]\nLoadOnStart = true\n");
+        plan.Preflight(CliCapabilities.HostedRounds);
+    }
+
     // ---- the policy without a manifest, and for attached clients ----
 
     [Fact] public void WithoutAManifestOnlyTheLiveCheckRunsAndTheReportSaysSo()

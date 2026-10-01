@@ -60,14 +60,16 @@ internal static class OwnedClientPreflight
     internal const string ScriptEngineConfig = ScriptEngine + ".cfg";
     internal const string CliConfig = "valheimCLI.valheimCLI.cfg";
 
-    internal static void Check(string install, IReadOnlyDictionary<string, string> pins, bool pinned, HostWorldPlan? hostWorld, string? hostWorldName)
+    internal static Dictionary<string, List<string>> Check(string install, IReadOnlyDictionary<string, string> pins, bool pinned, HostWorldPlan? hostWorld, string? hostWorldName)
     {
+        var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         if (pinned)
         {
-            var located = RequireInstalled(install, pins);
+            located = RequireInstalled(install, pins);
             RequireScriptsLoad(install, pins, located);
         }
         RequireStandingFile(install, pins, hostWorld?.WorldUid, hostWorldName);
+        return located;
     }
 
     /// <summary>Where each pinned plugin MD5 is installed (relative paths); refuses one installed nowhere or more than once.</summary>
@@ -128,6 +130,22 @@ internal static class OwnedClientPreflight
     {
         string scripts = Slash(Scripts) + "/";
         var inScripts = located.Where(entry => entry.Value[0].StartsWith(scripts, StringComparison.OrdinalIgnoreCase)).Select(entry => $"{entry.Key} ({entry.Value[0]})").Order(StringComparer.Ordinal).ToList();
+        RequireScriptsLoad(install, pins, located, inScripts);
+    }
+
+    /// <summary>Apply the same startup-loader check to manifest files even when the plan does not pin each pack separately.</summary>
+    internal static void RequireManifestScriptsLoad(string install, IReadOnlyDictionary<string, string> pins,
+        Dictionary<string, List<string>> located, IReadOnlyList<string> manifestFiles)
+    {
+        string scripts = Slash(Scripts) + "/";
+        var inScripts = manifestFiles.Where(path => path.StartsWith(scripts, StringComparison.OrdinalIgnoreCase))
+            .Select(path => $"ValheimCLI manifest file ({path})").ToList();
+        RequireScriptsLoad(install, pins, located, inScripts);
+    }
+
+    private static void RequireScriptsLoad(string install, IReadOnlyDictionary<string, string> pins,
+        Dictionary<string, List<string>> located, List<string> inScripts)
+    {
         if (inScripts.Count == 0) return;
         string listed = string.Join(", ", inScripts);
         string remedy = "or install the current ValheimCLI core and its packs in BepInEx/plugins, which needs no ScriptEngine.";

@@ -520,7 +520,8 @@ public sealed class TargetedRegression
 
     // ---- the disposable install ----
 
-    private sealed record Marker(string Tool, string GameSha256, string BepInExCoreSha256, string? Arm, Dictionary<string, string>? Tree);
+    private sealed record Marker(string Tool, string GameSha256, string BepInExCoreSha256, string? Arm,
+        Dictionary<string, string>? Tree, Dictionary<string, string>? LoaderFiles);
 
     // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build, core and loader are the game's.
     private string PrepareInstall()
@@ -537,13 +538,13 @@ public sealed class TargetedRegression
         {
             var marker = RequireOwned(install);
             bool current = marker.GameSha256 == pins.Game && marker.BepInExCoreSha256 == pins.BepInExCore && Directory.Exists(Path.Combine(install, InstallPins.CoreDirectory)) &&
-                InstallPins.Of(install) is var found && found.Game == pins.Game && found.BepInExCore == pins.BepInExCore && LoaderCopied(game, install);
+                InstallPins.Of(install) is var found && found.Game == pins.Game && found.BepInExCore == pins.BepInExCore && LoaderCopied(game, install, marker.LoaderFiles);
             if (!current) Directory.Delete(install, recursive: true);
         }
         if (!Directory.Exists(install))
         {
             Copy(game, install, game);
-            WriteMarker(install, null, null, pins);
+            WriteMarker(install, null, null, pins, LoaderFiles(game));
         }
         foreach (string folder in StagedFolders.Append("cache"))
         {
@@ -559,15 +560,24 @@ public sealed class TargetedRegression
         return install;
     }
 
-    // Every file at the prepared game's root and in its doorstop_libs (the Doorstop loader and its configuration on every
-    // platform) must be in the reused install unchanged. A mod manager replacing the game's winhttp.dll changes neither the
-    // game build nor BepInEx's core: without this, the copy kept the replaced loader after the game's own was restored.
-    private static bool LoaderCopied(string game, string install)
+    // Remember the source file set as well as its contents: removal of an old Doorstop proxy must invalidate the copy too.
+    // The install may acquire unrelated runtime files at its root, so compare it to the source snapshot rather than requiring
+    // the install's root directory to have exactly the same entries.
+    private static Dictionary<string, string> LoaderFiles(string game)
     {
         string libraries = Path.Combine(game, "doorstop_libs");
-        var files = Directory.EnumerateFiles(game).Concat(Directory.Exists(libraries) ? Directory.EnumerateFiles(libraries, "*", SearchOption.AllDirectories) : [])
-            .Where(path => !InstallPins.IsMacMetadata(path)).Select(path => Path.GetRelativePath(game, path));
-        return files.All(relative => File.Exists(Path.Combine(install, relative)) && WorldFixture.Hash(Path.Combine(install, relative)) == WorldFixture.Hash(Path.Combine(game, relative)));
+        return Directory.EnumerateFiles(game).Concat(Directory.Exists(libraries) ? Directory.EnumerateFiles(libraries, "*", SearchOption.AllDirectories) : [])
+            .Where(path => !InstallPins.IsMacMetadata(path))
+            .ToDictionary(path => Path.GetRelativePath(game, path).Replace('\\', '/'), WorldFixture.Hash, StringComparer.Ordinal);
+    }
+
+    private static bool LoaderCopied(string game, string install, Dictionary<string, string>? recorded)
+    {
+        if (recorded == null) return false; // An older marker cannot prove which files were copied.
+        var current = LoaderFiles(game);
+        return current.Count == recorded.Count && current.All(file =>
+            recorded.TryGetValue(file.Key, out string? hash) && hash == file.Value &&
+            File.Exists(Path.Combine(install, file.Key)) && WorldFixture.Hash(Path.Combine(install, file.Key)) == file.Value);
     }
 
     private static void Copy(string source, string target, string root)
@@ -600,10 +610,12 @@ public sealed class TargetedRegression
         return marker;
     }
 
-    private static void WriteMarker(string install, string? arm, Dictionary<string, string>? tree, InstallPins? pins = null)
+    private static void WriteMarker(string install, string? arm, Dictionary<string, string>? tree, InstallPins? pins = null,
+        Dictionary<string, string>? loaderFiles = null)
     {
         var previous = pins == null ? RequireOwned(install) : null;
-        var marker = new Marker(nameof(TargetedRegression), pins?.Game ?? previous!.GameSha256, pins?.BepInExCore ?? previous!.BepInExCoreSha256, arm, tree);
+        var marker = new Marker(nameof(TargetedRegression), pins?.Game ?? previous!.GameSha256, pins?.BepInExCore ?? previous!.BepInExCoreSha256,
+            arm, tree, loaderFiles ?? previous?.LoaderFiles);
         File.WriteAllText(Path.Combine(install, MarkerFile), JsonSerializer.Serialize(marker, ManifestJson));
     }
 
