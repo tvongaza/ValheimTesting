@@ -71,6 +71,10 @@ Each evidence directory holds `result.json`, `junit.xml`, `run-manifest.json` (t
 
 Compare the arms by their `result.json`, never by an exit code alone: the parent should fail at the step the change fixes, the candidate should pass every step, and `run-manifest.json` should differ only in the mod's hash. Logs, saves and command traces can hold account identifiers and machine paths; keep them private.
 
+## Share the result
+
+Make a public copy with [RegressionBundle](../RegressionBundle/README.md): it checks each arm's `result.json` against its `junit.xml`, command trace and `run-manifest.json`, then writes `Scenario.cs` and `Program.cs` exactly as they ran with a project pinned to the toolkit, a template of your manifest with placeholders and a generated A/B table, and refuses machine paths, private names and unrelated plugin names. It publishes nothing; you review the directory before sharing it.
+
 ## Limits
 
 - One owned client hosting one world. A dedicated server, a second client and restarts of a server process are FullLifecycle's.

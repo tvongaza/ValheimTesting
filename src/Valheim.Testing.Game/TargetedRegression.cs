@@ -467,6 +467,7 @@ public sealed class TargetedRegression
         if (Path.Exists(output)) throw new IOException($"{output} already exists; give every run a new evidence directory.");
         Directory.CreateDirectory(output);
         var report = new ScenarioReport(scenario);
+        report.Provenance["toolkit"] = ToolkitVersion; // A public bundle must not pin an older toolkit than this.
         var logs = new List<RunLog>();
         try
         {
@@ -509,6 +510,11 @@ public sealed class TargetedRegression
         RequireOwned(install);
         Directory.Delete(install, recursive: true);
     }
+
+    /// <summary>This toolkit's package and version, as a run's provenance records it (<c>Valheim.Testing.Game 0.1.0-preview.17</c>).</summary>
+    public static string ToolkitVersion =>
+        "Valheim.Testing.Game " + (typeof(TargetedRegression).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "unknown");
 
     internal static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
