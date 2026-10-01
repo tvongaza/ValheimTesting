@@ -218,6 +218,24 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("Stage the disposable local character", error.Message);
     }
 
+    [Fact] public void ARegisteredCharacterCanBePreflightedWithoutTouchingTheLiveCharacterFolder()
+    {
+        string local = Path.Combine(_rig.Save, "characters_local");
+        string source = Path.Combine(local, "smoketest.fch");
+        File.WriteAllBytes(source, CharacterSavePositionTests.Profile(playerId: 917).File);
+        string storePath = Path.Combine(_rig.Root, "registered-test-characters");
+        DisposableCharacterStore.Create(storePath).Register("smoketest", source);
+        File.Delete(source);
+        string steam = Path.Combine(_rig.Root, "userdata");
+        Directory.CreateDirectory(steam);
+
+        var manifest = _rig.Manifest();
+        manifest.Client.CharacterStore = storePath;
+        manifest.Client.SteamUserDataDirectory = steam;
+        new TargetedRegression(manifest).Preflight();
+        Assert.Empty(Directory.EnumerateFiles(local)); // Preflight must not put a character into the game folder.
+    }
+
     // ---- the ValheimCLI set (#124's capability manifest) ----
 
     [Fact] public void AStaleOrIncompleteValheimCliSetIsRefusedByItsCapabilityManifest()

@@ -66,6 +66,31 @@ internal sealed class CharacterStartStage : IDisposable
         // completed its first spawn, and has the exact expected coordinates. The independent client support check follows.
         if (!bytes.AsSpan().SequenceEqual(CharacterSavePosition.AtWorld(bytes, worldUid, arrival.X, arrival.Height, arrival.Z)))
             throw new InvalidDataException("The prepared character's logout point differs from the plan's world and arrival point.");
+        return InstallBytes(bytes, local, steam, character);
+    }
+
+    // Hosted smoke starts at the game's ordinary spawn. A registered, game-created character is copied only for the
+    // lifetime of the owned client; this path never edits its position or takes a personal save by filename.
+    internal static CharacterStartStage InstallRegistered(string storeDirectory, string registeredName, string localDirectory,
+        string steamUserDataDirectory, string character)
+    {
+        var store = DisposableCharacterStore.Open(storeDirectory);
+        byte[] bytes = store.Read(store.Get(registeredName));
+        return InstallBytes(bytes, localDirectory, steamUserDataDirectory, character);
+    }
+
+    private static CharacterStartStage InstallBytes(byte[] bytes, string local, string steam, string character)
+    {
+        if (string.IsNullOrWhiteSpace(character) || character is "." or ".." || character != Path.GetFileName(character) ||
+            character.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || character.EndsWith(".fch", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Use a fresh local character filename without .fch.");
+        local = Path.GetFullPath(local);
+        steam = Path.GetFullPath(steam);
+        CharacterStartCopy.RejectLinkedAncestors(local, allowLiveCharacterLeaf: true);
+        if (!Directory.Exists(local) || !Directory.Exists(steam) ||
+            !Path.GetFileName(Path.TrimEndingDirectorySeparator(local)).Equals("characters_local", StringComparison.OrdinalIgnoreCase) ||
+            !Path.GetFileName(Path.TrimEndingDirectorySeparator(steam)).Equals("userdata", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Stage only into the owned client's characters_local folder, with Steam's userdata directory supplied for collision checks.");
         string installed = Path.Combine(local, character + ".fch");
         RefuseCollisions(local, character);
         string siblingCloud = Path.Combine(Path.GetDirectoryName(local)!, "characters");
