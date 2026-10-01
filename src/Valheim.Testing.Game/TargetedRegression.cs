@@ -1,0 +1,683 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace Valheim.Testing.Game;
+
+/// <summary>
+/// The environment manifest of a targeted native regression: one owned client, one disposable hosted world, one mod under
+/// test in two or more arms (conventionally <c>parent</c> and <c>candidate</c>), its runtime dependencies and an optional
+/// game-side probe. Everything machine-specific lives here: paths, the client's port and disposable character, which
+/// files are staged. The scenario source (the rounds and their assertions) stays free of them, so the same source can be
+/// shared. <see cref="Read"/> resolves relative paths against the manifest's own directory and refuses unknown fields.
+/// </summary>
+public sealed class RegressionEnvironment
+{
+    /// <summary>A short name for the run: letters, digits, <c>-</c> and <c>_</c>.</summary>
+    public string Name { get; set; } = "";
+    /// <summary>A prepared Valheim install with BepInEx (its <c>BepInEx/core</c> and Doorstop loader), only ever read.</summary>
+    public string Game { get; set; } = "";
+    /// <summary>The disposable install <see cref="TargetedRegression"/> creates from <see cref="Game"/> and owns; never a valued one.</summary>
+    public string Install { get; set; } = "";
+    public RegressionClient Client { get; set; } = new();
+    public RegressionFixture Fixture { get; set; } = new();
+    public RegressionCli Cli { get; set; } = new();
+    /// <summary>Every other DLL the run loads: the mod's dependencies and any plugin the scenario needs. A library (no plugin) may be listed.</summary>
+    public List<RegressionFile> Plugins { get; set; } = [];
+    /// <summary>An optional game-side test probe: a plugin that serves the scenario's observations.</summary>
+    public RegressionFile? Probe { get; set; }
+    public RegressionMod Mod { get; set; } = new();
+    /// <summary>Config files to place in <c>BepInEx/config</c>, by file name. Without <c>valheimCLI.valheimCLI.cfg</c> one is written with the client's port.</summary>
+    public Dictionary<string, string> Configs { get; set; } = [];
+    /// <summary>BepInEx preloader patchers to place in <c>BepInEx/patchers</c>; none by default.</summary>
+    public List<RegressionFile> Patchers { get; set; } = [];
+    /// <summary>Assembly names a staged DLL references but only uses when present (a guarded soft integration); none by default.</summary>
+    public List<string> OptionalReferences { get; set; } = [];
+    /// <summary>Optional: the game build and BepInEx core <see cref="Game"/> must have (<see cref="InstallPins"/>; its patchers value is not compared).</summary>
+    public InstallPins? GamePins { get; set; }
+
+    private static readonly Regex Token = new(@"^[A-Za-z0-9][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant);
+
+    /// <summary>Reads and validates a manifest; relative paths are relative to the manifest's directory.</summary>
+    public static RegressionEnvironment Read(string path)
+    {
+        path = Path.GetFullPath(path);
+        RegressionEnvironment manifest;
+        try { manifest = ClientPlanFile.Read<RegressionEnvironment>(path); }
+        catch (JsonException error) { throw new ArgumentException($"{path} is not a regression manifest: {error.Message}", error); }
+        manifest.Resolve(Path.GetDirectoryName(path)!);
+        manifest.Validate();
+        return manifest;
+    }
+
+    /// <summary>Writes the manifest as indented JSON.</summary>
+    public void Write(string path) => ClientPlanFile.Write(path, this);
+
+    private void Resolve(string directory)
+    {
+        string Full(string value) => value.Length == 0 || Path.IsPathFullyQualified(value) ? value : Path.GetFullPath(Path.Combine(directory, value));
+        Game = Full(Game); Install = Full(Install); Fixture.Root = Full(Fixture.Root);
+        if (Client.SaveDirectory != null) Client.SaveDirectory = Full(Client.SaveDirectory);
+        foreach (var file in Files()) file.File = Full(file.File);
+        foreach (var arm in Mod.Arms.Values) arm.File = Full(arm.File);
+        foreach (string key in Configs.Keys.ToList()) Configs[key] = Full(Configs[key]);
+        if (Cli.Manifest != null) Cli.Manifest = Full(Cli.Manifest);
+    }
+
+    private IEnumerable<RegressionFile> Files() =>
+        new[] { Cli.Core }.Concat(Cli.Packs).Concat(Plugins).Concat(Probe == null ? [] : [Probe]).Concat(Patchers);
+
+    /// <summary>Refuses a manifest that cannot describe one clean run, naming the field and the fix. Reads no file.</summary>
+    public void Validate()
+    {
+        if (!Token.IsMatch(Name)) throw new ArgumentException("name: give the run a short name of letters, digits, - and _.");
+        if (!Path.IsPathFullyQualified(Game)) throw new ArgumentException("game: give the prepared Valheim install with BepInEx (only read, never changed).");
+        if (!Path.IsPathFullyQualified(Install)) throw new ArgumentException("install: give the path of the disposable install this tool creates and owns.");
+        if (Inside(Install, Game) || Inside(Game, Install))
+            throw new ArgumentException($"install {Install} and game {Game} overlap: the disposable install is a separate directory, never the prepared install or inside it.");
+        Client.Validate();
+        Fixture.Validate();
+        Cli.Validate();
+        foreach (var (file, field) in Plugins.Select((file, i) => (file, $"plugins[{i}]"))) file.Validate(field);
+        Probe?.Validate("probe");
+        foreach (var (file, field) in Patchers.Select((file, i) => (file, $"patchers[{i}]"))) file.Validate(field);
+        Mod.Validate();
+        foreach (var (name, source) in Configs)
+        {
+            if (name.Length == 0 || name != Path.GetFileName(name) || !name.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"configs: \"{name}\" is not a BepInEx config file name (<plugin guid>.cfg, no folder).");
+            if (!Path.IsPathFullyQualified(source)) throw new ArgumentException($"configs.{name}: give the file to copy.");
+        }
+        foreach (string reference in OptionalReferences)
+            if (string.IsNullOrWhiteSpace(reference) || reference.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"optionalReferences: \"{reference}\" is not an assembly name (no .dll).");
+        GamePins?.Validate("game");
+        var names = Files().Where(file => !Patchers.Contains(file)).Select(file => Path.GetFileName(file.File)).Append(Mod.InstallAs)
+            .GroupBy(name => name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+        if (names != null) throw new ArgumentException($"Two staged plugins are both named {names.Key} in BepInEx/plugins; rename one copy, or list the file once.");
+    }
+
+    internal static bool Inside(string path, string root)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return path.Equals(root, comparison) || path.StartsWith(root + Path.DirectorySeparatorChar, comparison);
+    }
+
+    internal static void RequireToken(string value, string field)
+    {
+        if (!Token.IsMatch(value)) throw new ArgumentException($"{field}: \"{value}\" is not a name of letters, digits, - and _.");
+    }
+}
+
+/// <summary>The owned client: its ValheimCLI port, the disposable local character and launch options.</summary>
+public sealed class RegressionClient
+{
+    public int Port { get; set; }
+    /// <summary>An existing disposable <b>local</b> character's file name without <c>.fch</c>, never a cloud character.</summary>
+    public string Character { get; set; } = "";
+    public string[] LaunchArguments { get; set; } = [];
+    public int StartSeconds { get; set; } = 300;
+    public int JoinSeconds { get; set; } = 180;
+    /// <summary>The client's data directory (holds <c>worlds_local</c> and <c>characters_local</c>); default this user's.</summary>
+    public string? SaveDirectory { get; set; }
+
+    public void Validate()
+    {
+        if (Port is < 1024 or > 65535) throw new ArgumentException("client.port: give the client's ValheimCLI port, 1024 to 65535.");
+        if (Character.Length == 0 || Character.Any(char.IsWhiteSpace) || Character.EndsWith(".fch", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("client.character: give the disposable local character's file name, without .fch.");
+        if (SaveDirectory != null && !Path.IsPathFullyQualified(SaveDirectory)) throw new ArgumentException("client.saveDirectory: give a full path, or leave it out for this user's.");
+    }
+}
+
+/// <summary>The hosted fixture: a directory that holds exactly one world (<see cref="FixtureLayout.ExpectedTree"/>), and that world's UID.</summary>
+public sealed class RegressionFixture
+{
+    public string Root { get; set; } = "";
+    public string WorldUid { get; set; } = "";
+    public void Validate()
+    {
+        if (!Path.IsPathFullyQualified(Root)) throw new ArgumentException("fixture.root: give the directory that holds the one world folder.\n" + FixtureLayout.ExpectedTree);
+        if (!long.TryParse(WorldUid, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out _))
+            throw new ArgumentException("fixture.worldUid: give the fixture world's exact UID (WorldIdentity.Read(root).UidText), never one from its name.");
+    }
+}
+
+/// <summary>The ValheimCLI core and only the packs the scenario needs, all staged in <c>BepInEx/plugins</c>.</summary>
+public sealed class RegressionCli
+{
+    public RegressionFile Core { get; set; } = new();
+    public List<RegressionFile> Packs { get; set; } = [];
+    /// <summary>
+    /// The <see cref="CliCapabilityManifest"/> of this ValheimCLI build. Set, the staged core and packs must be exactly its set
+    /// and provide every ValheimCLI capability the run uses before anything launches; left out, only the live check runs.
+    /// </summary>
+    public string? Manifest { get; set; }
+    public void Validate()
+    {
+        Core.Validate("cli.core");
+        foreach (var (file, field) in Packs.Select((file, i) => (file, $"cli.packs[{i}]"))) file.Validate(field);
+        if (Manifest != null && !Path.IsPathFullyQualified(Manifest)) throw new ArgumentException("cli.manifest: give the capability manifest's path.");
+    }
+}
+
+/// <summary>A file to stage, by path and its SHA256.</summary>
+public sealed class RegressionFile
+{
+    public string File { get; set; } = "";
+    public string Sha256 { get; set; } = "";
+    public void Validate(string field)
+    {
+        if (!Path.IsPathFullyQualified(File)) throw new ArgumentException($"{field}.file: give the DLL to stage.");
+        if (Sha256.Length != 0 && (Sha256.Length != 64 || !Sha256.All(Uri.IsHexDigit))) throw new ArgumentException($"{field}.sha256: give the file's full SHA256.");
+    }
+}
+
+/// <summary>The mod under test: the file name it is installed as and its arms, which differ only in this DLL.</summary>
+public sealed class RegressionMod
+{
+    /// <summary>The DLL's name in <c>BepInEx/plugins</c>, the same for every arm.</summary>
+    public string InstallAs { get; set; } = "";
+    /// <summary>The builds compared, by name (conventionally <c>parent</c> and <c>candidate</c>), in run order.</summary>
+    public Dictionary<string, RegressionArm> Arms { get; set; } = [];
+    /// <summary>Deliberately runs the same build in two arms (a repeatability run); otherwise two arms with one hash are refused.</summary>
+    public bool Repeatability { get; set; }
+
+    public void Validate()
+    {
+        if (InstallAs.Length == 0 || InstallAs != Path.GetFileName(InstallAs) || !InstallAs.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("mod.installAs: give the DLL's file name in BepInEx/plugins (no folder), the same for every arm.");
+        if (Arms.Count == 0) throw new ArgumentException("mod.arms: name at least one arm, for example parent and candidate.");
+        foreach (var (name, arm) in Arms) { RegressionEnvironment.RequireToken(name, "mod.arms"); arm.Validate("mod.arms." + name); }
+        foreach (var same in Arms.GroupBy(arm => arm.Value.Sha256, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+            if (!Repeatability)
+                throw new ArgumentException($"mod.arms {string.Join(" and ", same.Select(arm => arm.Key))} are the same build (sha256 {same.Key}): comparing a build with itself proves nothing. " +
+                    "Stage each arm's own build (the parent commit's for the parent), or set mod.repeatability to true for a deliberate repeatability run.");
+    }
+}
+
+/// <summary>One arm's build of the mod under test: the file, its SHA256 and the source commit it was built from.</summary>
+public sealed class RegressionArm
+{
+    public string File { get; set; } = "";
+    public string Sha256 { get; set; } = "";
+    public string Commit { get; set; } = "";
+    public void Validate(string field)
+    {
+        if (!Path.IsPathFullyQualified(File)) throw new ArgumentException($"{field}.file: give the arm's built DLL.");
+        if (Sha256.Length != 64 || !Sha256.All(Uri.IsHexDigit)) throw new ArgumentException($"{field}.sha256: pin the arm's build by its full SHA256; the hash is what tells the arms apart.");
+        if (Commit.Length == 0 || Commit.Any(char.IsWhiteSpace)) throw new ArgumentException($"{field}.commit: give the source commit the arm was built from.");
+    }
+}
+
+/// <summary>One DLL in the staged allowlist, as the run manifest records it (install-relative path, no machine path).</summary>
+public sealed record StagedFile(string Role, string Path, string Sha256, string Md5, string? Assembly, IReadOnlyList<string> Plugins);
+
+/// <summary>
+/// What one arm's run loads, for review and evidence: only the allowlist and the exact staged hashes; no machine path and no
+/// pin for any plugin outside the allowlist.
+/// </summary>
+/// <param name="Capabilities">Every ValheimCLI extension command the run uses: checked against <c>cli.manifest</c> before launch, when set, and live.</param>
+/// <param name="LiveOnlyCapabilities">The scenario's commands of other owners (a probe's or the mod's extensions): checked live only.</param>
+/// <param name="CliManifest">What the static ValheimCLI check found, or why none ran.</param>
+public sealed record RunManifest(string Name, string Arm, string ModPlugin, string ModCommit, string ModSha256, bool Repeatability,
+    IReadOnlyList<RunManifestArm> Arms, IReadOnlyList<StagedFile> Allowlist, IReadOnlyList<StagedFile> Configs,
+    InstallPins InstallPins, string World, string WorldUid, int FixtureFiles, IReadOnlyList<string> Capabilities,
+    IReadOnlyList<string> LiveOnlyCapabilities, string CliManifest);
+
+/// <summary>One arm of the comparison: its name, commit, distinct artifact name and SHA256.</summary>
+public sealed record RunManifestArm(string Arm, string Commit, string Artifact, string Sha256, string Md5);
+
+/// <summary>
+/// One arm staged into the disposable install and preflighted: the strict client plan the runner hands to
+/// <see cref="HostRounds"/>, and the run manifest.
+/// </summary>
+public sealed class StagedArm
+{
+    internal StagedArm(string arm, ClientRunPlan plan, RunManifest manifest, IReadOnlyDictionary<string, string> tree, string install)
+    { Arm = arm; Plan = plan; Manifest = manifest; Tree = tree; _install = install; }
+    private readonly string _install;
+
+    public string Arm { get; }
+    /// <summary>The strict client plan: every staged plugin pinned by MD5 under its declared GUID, the install pins and the pinned fixture.</summary>
+    public ClientRunPlan Plan { get; }
+    public RunManifest Manifest { get; }
+    /// <summary>Every staged file under <c>BepInEx/plugins</c>, <c>patchers</c>, <c>config</c> and <c>scripts</c>, by relative path and SHA256.</summary>
+    public IReadOnlyDictionary<string, string> Tree { get; }
+
+    /// <summary>
+    /// Refuses unless the staged tree is still exactly the allowlist: an extra plugin loads even when the test never calls
+    /// it, and a changed or removed file is another run. Call it right before the launch.
+    /// </summary>
+    public void Verify()
+    {
+        var found = TargetedRegression.StagedTree(_install);
+        var problems = found.Keys.Except(Tree.Keys).Order(StringComparer.Ordinal).Select(path => $"{path} is not in the allowlist")
+            .Concat(Tree.Keys.Except(found.Keys).Order(StringComparer.Ordinal).Select(path => $"{path} is missing"))
+            .Concat(Tree.Where(file => found.TryGetValue(file.Key, out var hash) && hash != file.Value).OrderBy(file => file.Key, StringComparer.Ordinal).Select(file => $"{file.Key} changed after staging")).ToList();
+        if (problems.Count != 0)
+            throw new InvalidOperationException($"The disposable install changed after it was staged for {Arm}: {string.Join("; ", problems)}. " +
+                "A plugin outside the allowlist loads even if the test never calls it. Declare it in the manifest (plugins, probe or configs) and stage again, or stage again to remove it.");
+    }
+
+    /// <summary>The arm table and allowlist as lines for a person to review.</summary>
+    public IEnumerable<string> Describe()
+    {
+        yield return $"{Manifest.Name}: arm {Arm}, mod {Manifest.ModPlugin} at {Manifest.ModCommit}, sha256 {Manifest.ModSha256}{(Manifest.Repeatability ? " (repeatability run)" : "")}";
+        foreach (var arm in Manifest.Arms) yield return $"  arm {arm.Arm,-12} commit {arm.Commit,-12} artifact {arm.Artifact}  sha256 {arm.Sha256}  md5 {arm.Md5}";
+        foreach (var file in Manifest.Allowlist) yield return $"  {file.Role,-12} {file.Path}  md5 {file.Md5}  {string.Join(", ", file.Plugins)}";
+        yield return $"  fixture      {Manifest.World} uid {Manifest.WorldUid} ({Manifest.FixtureFiles} files)";
+        yield return $"  capabilities {string.Join(", ", Manifest.Capabilities)}{(Manifest.LiveOnlyCapabilities.Count == 0 ? "" : "; live only: " + string.Join(", ", Manifest.LiveOnlyCapabilities))}";
+        yield return $"  cli manifest {Manifest.CliManifest}";
+    }
+
+    /// <summary>The arm, mod build and allowlist hashes as report provenance.</summary>
+    public void Record(IDictionary<string, string> provenance)
+    {
+        provenance["regression"] = Manifest.Name;
+        provenance["arm"] = Arm;
+        provenance["modPlugin"] = Manifest.ModPlugin;
+        provenance["modCommit"] = Manifest.ModCommit;
+        provenance["modSha256"] = Manifest.ModSha256;
+        provenance["allowlist"] = string.Join(", ", Manifest.Allowlist.Select(file => $"{file.Path}={file.Md5}"));
+        provenance["worldUid"] = Manifest.WorldUid;
+        Manifest.InstallPins.Record(provenance, "client");
+    }
+}
+
+/// <summary>
+/// Stages and preflights a targeted native regression from its <see cref="RegressionEnvironment"/>, without the game, then
+/// hands one arm to the existing strict-pinned <see cref="HostRounds"/>.
+/// <list type="number">
+/// <item>The fixture root must hold exactly one world with the manifest's UID (<see cref="FixtureLayout"/>).</item>
+/// <item>Every staged file must be its pinned SHA256; each arm is copied to its own artifact name first.</item>
+/// <item>The disposable install is a copy of the prepared game with <c>BepInEx/plugins</c>, <c>patchers</c>, <c>config</c>
+/// and <c>scripts</c> rebuilt from the allowlist only: the ValheimCLI core and packs, the plugins, the probe and one arm.</item>
+/// <item>Every hard <c>[BepInDependency]</c> any staged plugin declares must be met by a staged plugin's own
+/// <c>[BepInPlugin]</c> (with its minimum version), no <c>[BepInIncompatibility]</c> may be staged, every plugin must load in
+/// the client process, and every assembly reference must resolve to the game, BepInEx or a staged DLL. File names count for nothing.</item>
+/// <item>The plan's own <see cref="ClientRunPlan.Validate"/> and <see cref="ClientRunPlan.Preflight(IEnumerable{string})"/> run on the
+/// staged install, including the static ValheimCLI capability check against <see cref="RegressionCli.Manifest"/> when set.</item>
+/// </list>
+/// Nothing launches. <see cref="Run"/> repeats the staging for one arm, refuses any file outside the allowlist right before
+/// the launch, and keeps <see cref="HostRounds"/>' live capability check and strict per-command pins as the second gate.
+/// </summary>
+public sealed class TargetedRegression
+{
+    /// <summary>The file that marks a disposable install as this tool's; an install without it is never changed.</summary>
+    public const string MarkerFile = "valheim-testing-install.json";
+    /// <summary>Where each arm's build is copied under its own artifact name, inside the disposable install.</summary>
+    public const string ArtifactsDirectory = "valheim-testing-artifacts";
+    internal const string CliPlugin = "valheimCLI.valheimCLI", CliConfig = "valheimCLI.valheimCLI.cfg", BepInExConfig = "BepInEx.cfg";
+    private static readonly string[] StagedFolders = ["plugins", "patchers", "config", "scripts"];
+    // What a copy of the prepared install leaves out: everything BepInEx loads or writes besides its core.
+    // ValheimCLI's own extension owners: the Standard and World Tools packs register valheim.* and cli.*.
+    private static bool OwnedByCli(string path) => path.StartsWith("valheim.", StringComparison.Ordinal) || path.StartsWith("cli.", StringComparison.Ordinal);
+    private static readonly string[] NotCopied = ["plugins", "patchers", "config", "scripts", "cache", "DumpedAssemblies", "LogOutput.log", "LogOutput.log.1", "LogOutput.log.2"];
+
+    public RegressionEnvironment Environment { get; }
+    /// <summary>
+    /// The ValheimCLI capabilities the run uses: <see cref="CliCapabilities.HostedRounds"/> and the scenario's own whose owner is
+    /// ValheimCLI's (<c>valheim.*</c> or <c>cli.*</c>). They are checked against <see cref="RegressionCli.Manifest"/> before
+    /// launch, when it is set, and live once the client answers.
+    /// </summary>
+    public IReadOnlyList<string> Capabilities { get; }
+    /// <summary>The scenario's capabilities of any other owner (a probe's or the mod's own extension): checked live before the first round.</summary>
+    public IReadOnlyList<string> LiveOnlyCapabilities { get; }
+
+    public TargetedRegression(RegressionEnvironment environment, IEnumerable<string>? scenarioCapabilities = null)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        environment.Validate();
+        Environment = environment;
+        var scenario = (scenarioCapabilities ?? []).Distinct(StringComparer.Ordinal).ToList();
+        if (scenario.Any(path => path == null || path.Split('/') is not [{ Length: > 0 }, { Length: > 0 }]))
+            throw new ArgumentException("Name each scenario capability as owner/command.", nameof(scenarioCapabilities));
+        Capabilities = CliCapabilities.HostedRounds.Concat(scenario.Where(OwnedByCli)).Distinct(StringComparer.Ordinal).ToList();
+        LiveOnlyCapabilities = scenario.Where(path => !OwnedByCli(path)).ToList();
+    }
+
+    /// <summary>Stages and preflights every arm in turn, without the game; returns them in manifest order (the last stays staged).</summary>
+    public IReadOnlyList<StagedArm> Preflight() => Environment.Mod.Arms.Keys.Select(Stage).ToList();
+
+    /// <summary>
+    /// Stages <paramref name="arm"/> into the disposable install and runs every static check (see the class summary).
+    /// Refuses with the corrective action at the first problem; nothing is launched.
+    /// </summary>
+    public StagedArm Stage(string arm)
+    {
+        var env = Environment;
+        if (!env.Mod.Arms.TryGetValue(arm, out var chosen))
+            throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.Mod.Arms.Keys)}.");
+        var identity = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
+        var fixture = WorldFixture.Manifest(env.Fixture.Root);
+
+        // Every source is the pinned build before anything is copied.
+        var sources = new List<(string Role, RegressionFile File, string Sha256)>();
+        void Source(string role, RegressionFile file, string field) => sources.Add((role, file, RequirePinned(file.File, file.Sha256, field)));
+        Source("cli-core", env.Cli.Core, "cli.core");
+        foreach (var (pack, i) in env.Cli.Packs.Select((pack, i) => (pack, i))) Source("cli-pack", pack, $"cli.packs[{i}]");
+        foreach (var (plugin, i) in env.Plugins.Select((plugin, i) => (plugin, i))) Source("plugin", plugin, $"plugins[{i}]");
+        if (env.Probe != null) Source("probe", env.Probe, "probe");
+        foreach (var (name, other) in env.Mod.Arms) RequireArm(name, other);
+        foreach (var (name, path) in env.Configs) if (!File.Exists(path)) throw new FileNotFoundException($"configs.{name}: {path} does not exist.", path);
+        var patchers = env.Patchers.Select((file, i) => (File: file, Sha256: RequirePinned(file.File, file.Sha256, $"patchers[{i}]"))).ToList();
+
+        // The metadata decides what each DLL is, never its name.
+        var metadata = new Dictionary<string, PluginAssembly>(StringComparer.Ordinal);
+        PluginAssembly Read(string path) => metadata.TryGetValue(path, out var known) ? known : metadata[path] = PluginMetadata.Read(path);
+        var armPlugins = env.Mod.Arms.ToDictionary(entry => entry.Key, entry => Read(entry.Value.File));
+        foreach (var (name, read) in armPlugins)
+            if (read.Plugins.Count == 0) throw new InvalidOperationException($"mod.arms.{name}: {env.Mod.Arms[name].File} declares no [BepInPlugin]; it is not a build of the mod under test.");
+        var guids = armPlugins.Select(entry => (entry.Key, Guids: string.Join(", ", entry.Value.Plugins.Select(p => p.Guid).Order(StringComparer.Ordinal)))).ToList();
+        if (guids.Select(entry => entry.Guids).Distinct(StringComparer.Ordinal).Count() > 1)
+            throw new InvalidOperationException($"The arms declare different plugins ({string.Join("; ", guids.Select(entry => $"{entry.Key}: {entry.Guids}"))}): they are not builds of one mod. Stage the same mod's parent and candidate builds.");
+        var core = Read(env.Cli.Core.File);
+        if (!core.Plugins.Any(plugin => plugin.Guid == CliPlugin))
+            throw new InvalidOperationException($"cli.core: {env.Cli.Core.File} declares {Declared(core)}, not ValheimCLI's core plugin {CliPlugin}. Give the core valheimCLI.dll of one coherent ValheimCLI build.");
+        foreach (var (pack, i) in env.Cli.Packs.Select((pack, i) => (pack, i)))
+            if (Read(pack.File).Plugins.Count == 0) throw new InvalidOperationException($"cli.packs[{i}]: {pack.File} declares no [BepInPlugin]; a ValheimCLI pack is a plugin.");
+        if (env.Probe != null && Read(env.Probe.File).Plugins.Count == 0)
+            throw new InvalidOperationException($"probe: {env.Probe.File} declares no [BepInPlugin]; a probe is a plugin.");
+
+        string install = PrepareInstall();
+        string plugins = Path.Combine(install, "BepInEx", "plugins");
+        var staged = new List<(StagedFile File, PluginAssembly Metadata)>();
+        void Place(string role, string source, string sha256, string name)
+        {
+            string target = Path.Combine(plugins, name);
+            File.Copy(source, target);
+            RequireCopied(target, sha256);
+            var read = Read(source);
+            staged.Add((new(role, "BepInEx/plugins/" + name, sha256, PluginPins.Md5(target), read.AssemblyName, read.Plugins.Select(p => $"{p.Guid} {p.Version}").ToList()), read));
+        }
+        foreach (var (role, file, sha256) in sources) Place(role, file.File, sha256, Path.GetFileName(file.File));
+
+        // Each arm under its own artifact name, then only the chosen one installed.
+        string artifacts = Path.Combine(install, ArtifactsDirectory);
+        if (Directory.Exists(artifacts)) Directory.Delete(artifacts, recursive: true);
+        Directory.CreateDirectory(artifacts);
+        var arms = new List<RunManifestArm>();
+        foreach (var (name, build) in env.Mod.Arms)
+        {
+            string artifact = $"{name}-{env.Mod.InstallAs}";
+            File.Copy(build.File, Path.Combine(artifacts, artifact));
+            RequireCopied(Path.Combine(artifacts, artifact), build.Sha256);
+            arms.Add(new(name, build.Commit, artifact, build.Sha256.ToLowerInvariant(), PluginPins.Md5(Path.Combine(artifacts, artifact))));
+        }
+        Place("mod", Path.Combine(artifacts, $"{arm}-{env.Mod.InstallAs}"), chosen.Sha256.ToLowerInvariant(), env.Mod.InstallAs);
+        var allowlist = staged.Select(entry => entry.File).ToList();
+
+        foreach (var (file, sha256) in patchers)
+        {
+            string target = Path.Combine(install, "BepInEx", "patchers", Path.GetFileName(file.File));
+            File.Copy(file.File, target);
+            RequireCopied(target, sha256);
+        }
+        string config = Path.Combine(install, "BepInEx", "config");
+        foreach (var (name, source) in env.Configs) File.Copy(source, Path.Combine(config, name), overwrite: true);
+        if (!env.Configs.ContainsKey(CliConfig))
+            File.WriteAllText(Path.Combine(config, CliConfig), $"[Server]\nEnabled = true\nPort = {env.Client.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n");
+        var configs = Directory.EnumerateFiles(config).Order(StringComparer.Ordinal)
+            .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), WorldFixture.Hash(path), PluginPins.Md5(path), null, [])).ToList();
+
+        RequireDependencies(staged);
+        RequireReferences(install, staged);
+        string saveDirectory = env.Client.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(install));
+        string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
+        if (!File.Exists(character))
+            throw new InvalidOperationException($"client.character: {env.Client.Character}.fch is not in {Path.GetDirectoryName(character)}. Stage the disposable local character (never a cloud one) before the run, or name the one that is staged.");
+        var installPins = InstallPins.Of(install);
+        var plan = new ClientRunPlan
+        {
+            Mode = "owned", Install = install, Port = env.Client.Port, Character = env.Client.Character,
+            LaunchArguments = env.Client.LaunchArguments, StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
+            Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),
+            Patchers = patchers.Select(file => Path.GetFileName(file.File.File)).ToArray(),
+            InstallPins = installPins,
+            CliManifest = env.Cli.Manifest,
+            Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // HostRounds adds its own.
+            HostWorld = new HostWorldPlan
+            {
+                World = new PinnedDirectory { Source = Path.GetFullPath(env.Fixture.Root), Sha256 = new Dictionary<string, string>(fixture) },
+                WorldUid = env.Fixture.WorldUid, SaveDirectory = env.Client.SaveDirectory,
+            },
+        };
+        plan.Validate();
+        plan.Preflight(CliCapabilities.HostedRounds);
+        string cliManifest = plan.CheckCliManifest(CliCapabilities.HostedRounds)?.ToString() ?? plan.CliPreflight;
+
+        var tree = StagedTree(install);
+        WriteMarker(install, arm, tree);
+        var manifest = new RunManifest(env.Name, arm, string.Join(", ", armPlugins[arm].Plugins.Select(p => p.Guid)), chosen.Commit, chosen.Sha256.ToLowerInvariant(),
+            env.Mod.Repeatability, arms, allowlist, configs, installPins, identity.Name, identity.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest);
+        return new StagedArm(arm, plan, manifest, tree, install);
+    }
+
+    /// <summary>
+    /// Runs one arm: stages and preflights it, writes <c>run-manifest.json</c>, then <see cref="HostRounds"/> with
+    /// <paramref name="rounds"/> and <paramref name="measure"/>, refusing a changed install right before the launch and
+    /// requiring the scenario's capabilities live before its first round. Scans the client's logs and writes
+    /// <c>result.json</c> and <c>junit.xml</c> in every outcome. <paramref name="output"/> must not exist yet.
+    /// </summary>
+    public ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(measure);
+        output = Path.GetFullPath(output);
+        if (Path.Exists(output)) throw new IOException($"{output} already exists; give every run a new evidence directory.");
+        Directory.CreateDirectory(output);
+        var report = new ScenarioReport(scenario);
+        var logs = new List<RunLog>();
+        try
+        {
+            StagedArm? stagedArm = null;
+            report.Step($"stage arm {arm} from the allowlist and preflight it, before the game starts", () => stagedArm = Stage(arm));
+            var staged = stagedArm!;
+            staged.Record(report.Provenance);
+            File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
+            new HostRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
+            {
+                staged.Verify();
+                return ClientSession.Open(staged.Plan, output, logs, cancellation);
+            }, round =>
+            {
+                // ValheimCLI's own commands were required when the client answered; a probe's are live once it registered them.
+                if (round.Index == 0 && LiveOnlyCapabilities.Count != 0)
+                    round.Step("the client offers the scenario's probe and mod commands", () => CliCapabilities.Require(round.Client, LiveOnlyCapabilities));
+                measure(round);
+            });
+        }
+        catch (Exception error)
+        {
+            if (report.Steps.All(step => step.Passed)) report.RecordFailure("runner failed", error);
+            Console.Error.WriteLine(error.Message);
+        }
+        finally
+        {
+            if (logs.Count != 0) report.ScanLogs(logs);
+            report.Provenance["disposableInstall"] = "kept for the next arm; remove it with TargetedRegression.Remove";
+            report.Write(output);
+        }
+        return report;
+    }
+
+    /// <summary>Deletes the disposable install, only when it carries this tool's marker.</summary>
+    public static void Remove(RegressionEnvironment environment)
+    {
+        string install = Path.GetFullPath(environment.Install);
+        if (!Directory.Exists(install)) return;
+        RequireOwned(install);
+        Directory.Delete(install, recursive: true);
+    }
+
+    internal static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    // ---- the disposable install ----
+
+    private sealed record Marker(string Tool, string GameSha256, string BepInExCoreSha256, string? Arm, Dictionary<string, string>? Tree);
+
+    // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build and core are the game's.
+    private string PrepareInstall()
+    {
+        var env = Environment;
+        string game = Path.GetFullPath(env.Game), install = Path.GetFullPath(env.Install);
+        if (!Directory.Exists(game)) throw new DirectoryNotFoundException($"game: {game} does not exist. Give the prepared Valheim install with BepInEx.");
+        if (!Directory.Exists(Path.Combine(game, InstallPins.CoreDirectory)))
+            throw new InvalidOperationException($"game: {game} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first; the disposable install is copied from it.");
+        var pins = InstallPins.Of(game);
+        if (env.GamePins != null)
+            env.GamePins.Compare(new InstallPins { Game = pins.Game, BepInExCore = pins.BepInExCore, Patchers = env.GamePins.Patchers }, "prepared game", "Managed");
+        if (Directory.Exists(install))
+        {
+            var marker = RequireOwned(install);
+            bool current = marker.GameSha256 == pins.Game && marker.BepInExCoreSha256 == pins.BepInExCore && Directory.Exists(Path.Combine(install, InstallPins.CoreDirectory)) &&
+                InstallPins.Of(install) is var found && found.Game == pins.Game && found.BepInExCore == pins.BepInExCore;
+            if (!current) Directory.Delete(install, recursive: true);
+        }
+        if (!Directory.Exists(install))
+        {
+            Copy(game, install, game);
+            WriteMarker(install, null, null, pins);
+        }
+        foreach (string folder in StagedFolders.Append("cache"))
+        {
+            string path = Path.Combine(install, "BepInEx", folder);
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        foreach (string folder in new[] { "plugins", "patchers", "config" }) Directory.CreateDirectory(Path.Combine(install, "BepInEx", folder));
+        string settings = Path.Combine(game, "BepInEx", "config", BepInExConfig);
+        if (File.Exists(settings)) File.Copy(settings, Path.Combine(install, "BepInEx", "config", BepInExConfig));
+        var copied = InstallPins.Of(install);
+        if (copied.Game != pins.Game || copied.BepInExCore != pins.BepInExCore)
+            throw new InvalidOperationException($"The disposable install {install} does not match the prepared game after copying (game {copied.Game} vs {pins.Game}, core {copied.BepInExCore} vs {pins.BepInExCore}). Remove it and stage again.");
+        return install;
+    }
+
+    private static void Copy(string source, string target, string root)
+    {
+        Directory.CreateDirectory(target);
+        foreach (string entry in Directory.EnumerateFileSystemEntries(source))
+        {
+            string relative = Path.GetRelativePath(root, entry);
+            string[] parts = relative.Split(Path.DirectorySeparatorChar);
+            if (parts.Length == 2 && parts[0] == "BepInEx" && NotCopied.Contains(parts[1], StringComparer.OrdinalIgnoreCase)) continue;
+            string destination = Path.Combine(target, Path.GetFileName(entry));
+            var info = new FileInfo(entry);
+            if (info.LinkTarget != null)
+            {
+                if (Directory.Exists(entry)) Directory.CreateSymbolicLink(destination, info.LinkTarget); else File.CreateSymbolicLink(destination, info.LinkTarget);
+            }
+            else if (Directory.Exists(entry)) Copy(entry, destination, root);
+            else File.Copy(entry, destination);
+        }
+    }
+
+    private static Marker RequireOwned(string install)
+    {
+        string path = Path.Combine(install, MarkerFile);
+        Marker? marker = null;
+        try { if (File.Exists(path)) marker = JsonSerializer.Deserialize<Marker>(File.ReadAllText(path), ManifestJson); }
+        catch (JsonException) { }
+        if (marker?.Tool != nameof(TargetedRegression))
+            throw new InvalidOperationException($"install: {install} exists and is not a disposable install this tool created (no {MarkerFile}). It is never changed: give a new directory, or remove that one yourself if it is disposable.");
+        return marker;
+    }
+
+    private static void WriteMarker(string install, string? arm, Dictionary<string, string>? tree, InstallPins? pins = null)
+    {
+        var previous = pins == null ? RequireOwned(install) : null;
+        var marker = new Marker(nameof(TargetedRegression), pins?.Game ?? previous!.GameSha256, pins?.BepInExCore ?? previous!.BepInExCoreSha256, arm, tree);
+        File.WriteAllText(Path.Combine(install, MarkerFile), JsonSerializer.Serialize(marker, ManifestJson));
+    }
+
+    /// <summary>Every file under the install's <c>BepInEx/plugins</c>, <c>patchers</c>, <c>config</c> and <c>scripts</c>, by relative path and SHA256.</summary>
+    internal static Dictionary<string, string> StagedTree(string install)
+    {
+        var tree = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string folder in StagedFolders)
+        {
+            string root = Path.Combine(install, "BepInEx", folder);
+            if (!Directory.Exists(root)) continue;
+            foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => !InstallPins.IsMacMetadata(path)))
+                tree[Path.GetRelativePath(install, file).Replace('\\', '/')] = WorldFixture.Hash(file);
+        }
+        return tree;
+    }
+
+    // ---- hashes ----
+
+    private static string RequirePinned(string path, string sha256, string field)
+    {
+        if (!File.Exists(path)) throw new FileNotFoundException($"{field}: {path} does not exist. Build or download it, or correct the path.", path);
+        string actual = WorldFixture.Hash(path);
+        if (sha256.Length == 0)
+            throw new InvalidOperationException($"{field}: pin {path} by its SHA256. It is {actual} now; check that this is the build you intend, then add \"sha256\": \"{actual}\".");
+        if (!actual.Equals(sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"{field}: {path} is sha256 {actual}, but the manifest pins {sha256.ToLowerInvariant()}: it is another build than the one reviewed. Stage the pinned build, or review this one and pin {actual}.");
+        return actual;
+    }
+
+    private static void RequireArm(string name, RegressionArm arm)
+    {
+        if (!File.Exists(arm.File)) throw new FileNotFoundException($"mod.arms.{name}: {arm.File} does not exist. Build commit {arm.Commit}, or correct the path.", arm.File);
+        string actual = WorldFixture.Hash(arm.File);
+        if (!actual.Equals(arm.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"mod.arms.{name}: {arm.File} is sha256 {actual}, but the manifest pins {arm.Sha256.ToLowerInvariant()} for commit {arm.Commit}: " +
+                $"the file is another build. Rebuild {name} from {arm.Commit} and stage that file, or review this one and pin {actual}.");
+    }
+
+    private static void RequireCopied(string target, string sha256)
+    {
+        if (!WorldFixture.Hash(target).Equals(sha256, StringComparison.OrdinalIgnoreCase)) throw new IOException($"{target} changed while it was copied; stage again.");
+    }
+
+    // ---- what the staged DLLs declare ----
+
+    private static string Declared(PluginAssembly assembly) =>
+        assembly.Plugins.Count == 0 ? "no plugin" : string.Join(", ", assembly.Plugins.Select(plugin => plugin.Guid));
+
+    private static void RequireDependencies(IReadOnlyList<(StagedFile File, PluginAssembly Metadata)> staged)
+    {
+        var problems = new List<string>();
+        var providers = new Dictionary<string, (StagedFile File, PluginDeclaration Plugin)>(StringComparer.Ordinal);
+        foreach (var (file, metadata) in staged)
+            foreach (var plugin in metadata.Plugins)
+                if (providers.TryGetValue(plugin.Guid, out var other)) problems.Add($"{plugin.Guid} is declared by both {other.File.Path} and {file.Path}; BepInEx loads one and skips the other. Keep one in the manifest");
+                else providers[plugin.Guid] = (file, plugin);
+        foreach (var (file, metadata) in staged)
+            foreach (var plugin in metadata.Plugins)
+            {
+                foreach (var dependency in plugin.Dependencies.Where(dependency => dependency.Hard))
+                {
+                    if (!providers.TryGetValue(dependency.Guid, out var provider))
+                        problems.Add($"{plugin.Guid} ({file.Path}) has a hard [BepInDependency(\"{dependency.Guid}\"{(dependency.MinimumVersion == null ? "" : $", \"{dependency.MinimumVersion}\"")})] that nothing staged declares, so BepInEx would skip it after the game starts. " +
+                            $"Add the DLL that declares [BepInPlugin(\"{dependency.Guid}\")] to plugins in the manifest, with its SHA256 (a file name alone does not count)");
+                    else if (dependency.MinimumVersion != null && !AtLeast(provider.Plugin.Version, dependency.MinimumVersion))
+                        problems.Add($"{plugin.Guid} ({file.Path}) needs {dependency.Guid} {dependency.MinimumVersion} or newer, and the staged {provider.File.Path} declares {provider.Plugin.Version}. Stage a newer {dependency.Guid}");
+                }
+                foreach (string incompatible in plugin.Incompatibilities)
+                    if (providers.TryGetValue(incompatible, out var provider))
+                        problems.Add($"{plugin.Guid} ({file.Path}) declares [BepInIncompatibility(\"{incompatible}\")] and {provider.File.Path} declares it, so BepInEx would skip {plugin.Guid}. Remove one of them from the manifest");
+                if (plugin.Processes.Count != 0 && !plugin.Processes.Any(process => Path.GetFileNameWithoutExtension(process).Equals("valheim", StringComparison.OrdinalIgnoreCase)))
+                    problems.Add($"{plugin.Guid} ({file.Path}) loads only in {string.Join(", ", plugin.Processes)} ([BepInProcess]), and the client is valheim, so it would never load. Stage the mod's client build, or remove it from the manifest");
+            }
+        if (problems.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", problems) + ".");
+    }
+
+    private static bool AtLeast(string version, string minimum) =>
+        Version.TryParse(version, out var have) && Version.TryParse(minimum, out var need) && have >= need;
+
+    private void RequireReferences(string install, IReadOnlyList<(StagedFile File, PluginAssembly Metadata)> staged)
+    {
+        string managed = Path.GetDirectoryName(InstallPins.GameAssembly(install))!;
+        var provided = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string folder in new[] { managed, Path.Combine(install, InstallPins.CoreDirectory) })
+            foreach (string dll in Directory.EnumerateFiles(folder, "*.dll")) provided.Add(Path.GetFileNameWithoutExtension(dll));
+        foreach (var (_, metadata) in staged) provided.Add(metadata.AssemblyName);
+        provided.UnionWith(Environment.OptionalReferences);
+        var missing = staged.SelectMany(entry => entry.Metadata.References.Where(reference => !provided.Contains(reference)).Select(reference => $"{entry.File.Path} references assembly {reference}")).ToList();
+        if (missing.Count != 0)
+            throw new InvalidOperationException($"Assemblies the staged DLLs reference are not in the game's Managed folder, BepInEx/core or the allowlist: {string.Join("; ", missing)}. " +
+                "Add the DLL that provides each one to plugins in the manifest (a library whose assembly name it is), or list the name in optionalReferences if the mod only uses it when present.");
+    }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "mymod-mark",
+  "game": "<full path of a prepared Valheim install with BepInEx; only read>",
+  "install": "<full path of a new directory for the disposable install>",
+  "client": {
+    "port": 5560,
+    "character": "<disposable local character file name, without .fch>",
+    "launchArguments": ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"]
+  },
+  "fixture": {
+    "root": "<directory that holds exactly one world folder>",
+    "worldUid": "<that world's UID>"
+  },
+  "cli": {
+    "core": { "file": "<ValheimCLI build>/valheimCLI.dll", "sha256": "<sha256>" },
+    "packs": [
+      { "file": "<ValheimCLI build>/Valheim.Cli.Standard.dll", "sha256": "<sha256>" },
+      { "file": "<ValheimCLI build>/Valheim.Cli.WorldTools.dll", "sha256": "<sha256>" }
+    ],
+    "manifest": "<that build's capability manifest>"
+  },
+  "plugins": [],
+  "probe": { "file": "<probe build>/MyMod.TestAdapter.dll", "sha256": "<sha256>" },
+  "mod": {
+    "installAs": "MyMod.dll",
+    "arms": {
+      "parent": { "file": "<parent build>/MyMod.dll", "sha256": "<sha256>", "commit": "<parent commit>" },
+      "candidate": { "file": "<candidate build>/MyMod.dll", "sha256": "<sha256>", "commit": "<candidate commit>" }
+    }
+  }
+}

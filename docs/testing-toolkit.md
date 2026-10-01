@@ -105,7 +105,6 @@ controls in a disposable fixture. Server Devcommands is a user-suggested referen
 for enabling client devcommands if that check exposes a missing game-level step.
 No dependency on that mod or general admin-command bypass has been added.
 
-
 ## Shared owned-session lifecycle (preview 2)
 
 `Valheim.Testing.Game` now owns `OwnedServerSession`, `DirectServerProcess` and
@@ -200,7 +199,6 @@ client-owned arrival/support observations, without granting client admin rights.
 Protection changes gameplay (as the game does in 1.0.16): monsters neither notice nor target a player in ghost mode, an egg hatches only near a player who is not in ghost mode, and a creature hit by a player in god or ghost mode is marked cheated, which marks the items it drops. Pass `WaitForWorld(..., protectPlayer: false)` for combat, aggro, taming, hatching and loot checks, for any check that needs a vulnerable player, and when an operator manages these modes; call `PlayerPlacement.Protect` yourself for the steps that should be protected.
 
 Declare the support point on dry ground: a player standing in water is not grounded at the ground's height, so the check fails, which is correct but tells you nothing about the road. `examples/ClientSurfaceCheck` uses `RequireSupported`.
-
 
 ## Published-library validation update
 
@@ -704,6 +702,26 @@ The policy without a manifest: `cliManifest` is optional, so existing plans and 
 The toolkit hard-codes no ValheimCLI version. A ValheimCLI build can ship its own manifest; until it does, `CliCapabilityManifest.Generate(build, dllPaths, listing)` writes one from a known build. It hashes each DLL, reads its plugin GUIDs, and reads the extensions from its IL: each `ExtensionRegistry.Register(id, version, apiVersion, new ExtensionCommand(name, ..., resultVersion), ...)` with literal names, as ValheimCLI's packs register them. Registrations without literal names and console-module listings (`cli.standard/commands`) are not claimed; a registration whose shape it does not recognise is refused rather than guessed. Pass `listing`, the `cli_extensions` reply of a client that loaded exactly these files (from its `client-commands.jsonl`, for example), and the generator also requires every owner the files register to be live there with the same commands and versions, so the game confirms what the IL says. `Write(path)` and `Read(path)` check the format.
 
 Limits: the static check proves which files are installed and what their IL registers, not that BepInEx loads them or that their registrations succeed in the game; `CliCapabilities.Require` after launch stays authoritative. Generating from IL covers ValheimCLI's registration pattern, not every way a plugin could register an extension.
+
+## Targeted native regressions (preview 17)
+
+Many third-party regressions need the same small shape: one owned client hosting one disposable fixture world, one mod under test in a parent and a candidate build, its dependencies and perhaps a probe. Two such hand-written A/B runs spent most of their attempts on setup: a fixture passed one directory too deep, a dependency the mod declares but nobody staged, a stale ValheimCLI pack set, and a wrong DLL staged under the right name. [TargetedRegression](../examples/TargetedRegression/README.md) is a copyable template for that shape; the library part is a manifest, a stager and a preflight, and the run itself is the existing `HostRounds`.
+
+`RegressionEnvironment` is the environment manifest: the prepared game (only read), the disposable install path, the client's port and disposable character, the fixture root and UID, the ValheimCLI core and packs, other plugins, an optional probe and the mod's arms, each with its file, SHA256 and source commit. `Read` resolves relative paths against the manifest and refuses unknown fields. Scenario source stays free of all of it.
+
+`TargetedRegression.Stage(arm)` works without the game and refuses at the first problem, naming the field and the fix:
+
+| Check | What is refused |
+|---|---|
+| Fixture layout (`FixtureLayout.Discover`) | A root that is the world folder itself, a `worlds_local` wrapper, several worlds or none, each named with the expected one-world tree and the tree found; then a world whose own metadata holds another UID (`HostWorldPlan.Preflight`) |
+| Hashes | A file that is missing or not its pinned SHA256 (an empty `sha256` prints the hash to review); an arm whose file is another build than its commit's; two arms with one SHA256 unless `mod.repeatability` |
+| Clean install | An existing install directory this tool did not create (`valheim-testing-install.json`); the install copies the game except `BepInEx/plugins`, `patchers`, `config`, `scripts` and `cache`, which are rebuilt from the manifest only. Each arm is copied under its own artifact name first |
+| Declared metadata (`PluginMetadata.Read`, no assembly loaded) | A hard `[BepInDependency]` no staged `[BepInPlugin]` declares, or one older than its minimum version; a staged `[BepInIncompatibility]`; a plugin whose `[BepInProcess]` excludes the client; one GUID declared twice; an assembly reference that neither the game's Managed folder, `BepInEx/core` nor a staged DLL provides (unless listed in `optionalReferences`). File names never count |
+| Plan | The disposable character missing from `characters_local`, then the strict plan's own `Validate` and `Preflight` on the staged install, which with `cli.manifest` includes the [static ValheimCLI capability check](#valheimcli-capability-manifest-preview-17): the hosted rounds' commands and the scenario's capabilities owned by ValheimCLI (`valheim.*`, `cli.*`). A probe's or the mod's own commands are checked live only, before the first round |
+
+It returns a `StagedArm`: the strict `ClientRunPlan` (every staged plugin's declared GUID pinned by its MD5, no `absent` pins for anything else; the clean install loads nothing unlisted), its `RunManifest` (the arms, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; install-relative paths only) and `Verify()`, which refuses any file added, changed or removed in the staged folders since. `Preflight()` stages every arm in turn. `Run(arm, output, scenario, rounds, measure)` stages the arm, writes `run-manifest.json`, calls `Verify()` right before the launch, runs `HostRounds` with the scenario's capabilities required live before its first round, scans the client's logs and writes the report in every outcome. `Remove` deletes the disposable install, only when it carries the marker.
+
+Limits: one owned client hosting one world. The disposable install is a full copy of the game on first use. The checks read what BepInEx reads before loading; a dependency found by reflection at run time is caught only live. Characters and machine reservations stay with the environment's own procedure. The checks are tested with emitted assemblies and fake installs.
 
 ## Game-side adapter helpers (Valheim.Testing.Adapter, preview 1)
 
