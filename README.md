@@ -45,7 +45,7 @@ dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
-`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.7`, `Valheim.Testing.Game` `0.1.0-preview.16` (net10.0) or `Valheim.Testing.Doubles` `0.1.0-preview.7`, and compile `Valheim.Testing.Adapter` `0.1.0-preview.3` into a game-side test adapter; the transport is `Valheim.Testing.Cli` `0.1.0-preview.5`. To check offline that a built mod's game references still bind, install the `Valheim.Testing.Bindings.Tool` `0.1.0-preview.1` tool in CI, or reference the `Valheim.Testing.Bindings` `0.1.0-preview.1` library from a test. All restore from NuGet.org. Use the local feed only to try a build that is not yet published.
+`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. To test a mod, pin `Valheim.Testing` `0.1.0-preview.7`, `Valheim.Testing.Game` `0.1.0-preview.17` (net10.0) or `Valheim.Testing.Doubles` `0.1.0-preview.7`, and compile `Valheim.Testing.Adapter` `0.1.0-preview.3` into a game-side test adapter; the transport is `Valheim.Testing.Cli` `0.1.0-preview.5`. To check offline that a built mod's game references still bind, install the `Valheim.Testing.Bindings.Tool` `0.1.0-preview.1` tool in CI, or reference the `Valheim.Testing.Bindings` `0.1.0-preview.1` library from a test. All restore from NuGet.org. Use the local feed only to try a build that is not yet published.
 
 ## Platforms
 
