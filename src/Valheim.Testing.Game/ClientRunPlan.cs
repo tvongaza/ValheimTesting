@@ -238,8 +238,10 @@ public sealed class ClientRunPlan
         BepInExLoader.RequirePatchers(Install, Patchers, "client install");
         CheckInstallPins();
         var start = ClientSession.StartInfo(this, ClientLaunch.CurrentHost); // The install's loader and slices.
-        OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);
-        CheckCliManifest(capabilities);
+        var located = OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);
+        var manifestCheck = CheckCliManifest(capabilities);
+        if (manifestCheck != null)
+            OwnedClientPreflight.RequireManifestScriptsLoad(Install, Pins, located, manifestCheck.Files);
         return start;
     }
 

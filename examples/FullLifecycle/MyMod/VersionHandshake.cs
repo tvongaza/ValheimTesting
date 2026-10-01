@@ -7,7 +7,8 @@ using HarmonyLib;
 namespace MyMod;
 
 /// <summary>
-/// A version handshake in the pattern of the Valheim-Modding wiki's RPC-Version-Handshaking page: on every new connection
+/// A version handshake adapted from the Valheim-Modding wiki's RPC-Version-Handshaking concept
+/// (https://github.com/Valheim-Modding/Wiki/wiki/RPC-Version-Handshaking): on every new connection
 /// each side registers an RPC and sends its version, and the server refuses a peer whose version differs with the game's
 /// own "incompatible version" error (3), as the game refuses a client of another network version. One difference: MyMod
 /// is server-side, so a client without MyMod (which never sends a version) is let in, and only a client with another MyMod
