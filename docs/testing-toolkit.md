@@ -947,6 +947,8 @@ Limits: in CI both helpers are tested against scripted transports, with the nega
 
 Four adapter commands and their runner-side readers. The adapter commands are written against the Valheim 1.0.16 decompile, compile in CI (`tests/Valheim.Testing.Adapter.CompileCheck`) and have run on a 1.0.16 dedicated server with a joined client (see "Native run" below). The runner side is tested with scripted replies, including a negative control for each check.
 
+For location authoring context, the wiki explains [altitude relative to sea level and terrain-modifier ordering](https://github.com/Valheim-Modding/Wiki/wiki/Creating-Locations). Those notes are not evidence for the room encoding, zone pairing or replication behavior measured here; the pinned 1.0.16 run and game-code checks below are.
+
 | Adapter (register with `TestExtension.Register`) | Runner (Valheim.Testing.Game) | What it answers |
 |---|---|---|
 | `GlobalKeyCommands.List()` (read-only, `globalkeys`), `GlobalKeyCommands.Change(enableVariable, tokenVariable)` (fixture, server, `globalkey set <name> [value]` / `remove <name>`) | `GlobalKeyFixture` | The global keys each side holds; sets and removes keys on the server |
