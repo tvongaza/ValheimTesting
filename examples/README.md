@@ -6,6 +6,7 @@ Bringing an existing mod? Start with [ModWithTests](ModWithTests/README.md), the
 |---|---|---|
 | [ModWithTests](ModWithTests/README.md) | How do I test my actual mod source with shared game doubles? | None; no game or ValheimCLI needed |
 | [FullLifecycle](FullLifecycle/README.md) | How does one mod test one feature at every layer, from unit tests to an owned server and client through save, restart and rejoin? | Integration tests: none. The runner owns a dedicated server copy and, in owned mode, the client; it stops only what it started |
+| [TargetedRegression](TargetedRegression/README.md) | How do I check a parent and a candidate build of one mod in the real game, with a preflight that needs no game? | `preflight` none; `run` creates and owns a disposable install copied from a prepared game, then hosts a disposable world in one owned client |
 | [NoGameTerrain](NoGameTerrain/README.md) | How do independent expectations and exact replay work? | None; no game needed |
 | [SharedWorld](SharedWorld/README.md) | How do composed terrain, zone seams, isolated snapshots and grid-dump parity work? | None; no game needed; writes a PNG only when given a path |
 | [SessionControl](SessionControl/README.md) | How do I inspect readiness and explicitly join, leave or confirm a save? | Explicit session/save mutations; no process ownership |
