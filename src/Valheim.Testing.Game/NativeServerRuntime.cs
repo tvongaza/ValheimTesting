@@ -17,9 +17,10 @@ public sealed class NativeServerRuntime : IDisposable
     public string RuntimeDirectory => Copy.DirectoryPath;
     public IReadOnlyDictionary<string, string> Pins { get; }
     public IReadOnlyList<string> SelectedGuids { get; }
+    private readonly int _cliPort;
 
-    private NativeServerRuntime(WorldFixture copy, Dictionary<string, string> pins, List<string> selectedGuids)
-    { Copy = copy; Pins = pins; SelectedGuids = selectedGuids; }
+    private NativeServerRuntime(WorldFixture copy, Dictionary<string, string> pins, List<string> selectedGuids, int cliPort)
+    { Copy = copy; Pins = pins; SelectedGuids = selectedGuids; _cliPort = cliPort; }
 
     /// <summary>
     /// Copies <paramref name="source"/> into <paramref name="outputParent"/> and replaces only the copy's plugin,
@@ -84,7 +85,7 @@ public sealed class NativeServerRuntime : IDisposable
             }
             File.WriteAllText(Path.Combine(bep, "config", "valheimCLI.valheimCLI.cfg"),
                 "[Server]\nEnabled = true\nPort = " + cliPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
-            return new NativeServerRuntime(copy, pins, selected);
+            return new NativeServerRuntime(copy, pins, selected, cliPort);
         }
         catch { copy.Dispose(); throw; }
     }
@@ -101,6 +102,8 @@ public sealed class NativeServerRuntime : IDisposable
     {
         if (cliPort is < 1024 or > 65535 || gamePort is < 1024 or > 65533)
             throw new ArgumentOutOfRangeException(nameof(cliPort), "Choose available CLI and game ports in their supported ranges.");
+        if (cliPort != _cliPort)
+            throw new ArgumentException("The server plan's CLI port must match the port staged in its disposable config.", nameof(cliPort));
         worldRoot = Path.GetFullPath(worldRoot);
         string world = Path.Combine(worldRoot, "worlds_local", DefaultSmokeWorld.Name);
         if (!Directory.Exists(world) || !File.Exists(Path.Combine(world, "_main.1.fwl2")))

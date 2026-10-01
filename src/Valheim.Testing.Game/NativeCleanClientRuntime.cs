@@ -11,9 +11,10 @@ public sealed class NativeCleanClientRuntime : IDisposable
     public string RuntimeDirectory => Copy.DirectoryPath;
     public string CliManifestFile { get; }
     public IReadOnlyDictionary<string, string> CliPins { get; }
+    private readonly int _cliPort;
 
-    private NativeCleanClientRuntime(WorldFixture copy, string manifest, Dictionary<string, string> pins)
-    { Copy = copy; CliManifestFile = manifest; CliPins = pins; }
+    private NativeCleanClientRuntime(WorldFixture copy, string manifest, Dictionary<string, string> pins, int cliPort)
+    { Copy = copy; CliManifestFile = manifest; CliPins = pins; _cliPort = cliPort; }
 
     /// <summary>Copies a prepared client install, clearing plugins, scripts, config and patchers only in the copy.</summary>
     public static NativeCleanClientRuntime Prepare(string source, string outputParent, NativeDependencyLock dependencies,
@@ -61,7 +62,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
                 cliPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
             string manifest = Path.Combine(copy.DirectoryPath, "native-smoke-cli-manifest.json");
             dependencies.CliManifest.Write(manifest);
-            return new NativeCleanClientRuntime(copy, manifest, pins);
+            return new NativeCleanClientRuntime(copy, manifest, pins, cliPort);
         }
         catch { copy.Dispose(); throw; }
     }
@@ -70,6 +71,8 @@ public sealed class NativeCleanClientRuntime : IDisposable
     public ClientRunPlan Plan(int cliPort, int gamePort, IEnumerable<string> absentServerGuids)
     {
         ArgumentNullException.ThrowIfNull(absentServerGuids);
+        if (cliPort != _cliPort)
+            throw new ArgumentException("The client plan's CLI port must match the port staged in its disposable config.", nameof(cliPort));
         var pins = CliPins.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
         foreach (string guid in absentServerGuids)
             if (!pins.TryAdd(guid, "absent"))

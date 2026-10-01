@@ -37,6 +37,8 @@ public sealed class NativeCleanClientRuntimeTests : IDisposable
             Assert.Equal("127.0.0.1:2486", plan.Join);
             Assert.Equal(DefaultSmokeCharacter.Name, plan.Character);
             Assert.Equal(staged, plan.Install);
+            Assert.Contains("must match", Assert.Throws<ArgumentException>(() =>
+                runtime.Plan(5590, 2486, ["example.mod"])).Message);
         }
         Assert.False(Directory.Exists(staged));
         Assert.Equal(original.OrderBy(entry => entry.Key), WorldFixture.Manifest(_rig.Game).OrderBy(entry => entry.Key));

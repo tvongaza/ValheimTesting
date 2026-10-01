@@ -47,6 +47,8 @@ public sealed class NativeServerRuntimeTests : IDisposable
             Assert.Contains("-savedir", plan.Arguments);
             Assert.Equal(worldRoot, plan.World.Source);
             Assert.Equal(staged, plan.Runtime.Source);
+            Assert.Contains("must match", Assert.Throws<ArgumentException>(() =>
+                runtime.Plan(worldRoot, 5589)).Message);
         }
         Assert.False(Directory.Exists(staged));
         Assert.Equal(original.OrderBy(entry => entry.Key), WorldFixture.Manifest(_rig.Game).OrderBy(entry => entry.Key));
