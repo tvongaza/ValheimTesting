@@ -51,7 +51,7 @@ Exit codes: `0` every selected framework passed; `1` a build or test run failed,
 
 - `<TargetFrameworks>net48;net10.0</TargetFrameworks>` and xunit v2.
 - The console runner, as a package reference: `<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />` (use your xunit version). The script runs the `tools/net48/xunit.console.exe` of the version the project restored.
-- On macOS and Linux, Mono: `brew install mono` on macOS, `sudo apt-get install mono-complete` on Debian or Ubuntu. Without it the script stops before running anything (exit 3) and says so; `--framework net10.0` runs the modern leg alone. Windows needs nothing extra: .NET Framework 4.8 is part of the system.
+- On macOS and Linux, Mono: `brew install mono` on macOS, `sudo apt-get install --no-install-recommends mono-devel` on Debian or Ubuntu (`mono-runtime` alone lacks the `System.Runtime` and `netstandard` facades the console runner loads; `mono-complete` works too, but adds about 28 MB of documentation and tools). Without it the script stops before running anything (exit 3) and says so; `--framework net10.0` runs the modern leg alone. Windows needs nothing extra: .NET Framework 4.8 is part of the system.
 
 [ModWithTests](../../examples/ModWithTests/README.md#also-test-on-net-framework) shows the project changes.
 
@@ -75,7 +75,7 @@ Mono adds a limit of its own. A mod's suite whose test collections ran in parall
 
 ## In GitHub Actions
 
-Hosted runners have no Mono: install it in the job (`sudo apt-get install -y mono-complete` on `ubuntu-latest`, `brew install mono` on `macos-latest`), or run the .NET Framework leg on `windows-latest`, which needs nothing. This repository's `test-runners` job does all three with the ModWithTests example; see [test.yml](../../.github/workflows/test.yml).
+Hosted runners have no Mono: install it in the job (`sudo apt-get install -y --no-install-recommends mono-devel` on `ubuntu-latest`, `brew install mono` on `macos-latest`), or run the .NET Framework leg on `windows-latest`, which needs nothing. This repository's `test-runners` job does all three with the ModWithTests example; see [test.yml](../../.github/workflows/test.yml).
 
 ## Tests
 
