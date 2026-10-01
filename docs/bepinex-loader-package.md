@@ -4,9 +4,15 @@ A Doorstop proxy and its configuration can pass a static shape check yet fail to
 
 `BepInExLoaderPackage` lets a targeted regression select one reviewed, extracted BepInEx/UnityDoorstop package instead of inheriting whichever loader files happen to be in the prepared game. It pins the package's core, proxy or library, and configuration by SHA256. The disposable install receives those files after the game is copied; the source game is never changed.
 
+```sh
+dotnet run scripts/bepinex-loader.cs -- capture /path/to/extracted-pack BepInExPack_Valheim 5.4.2202 /private/loader.json
+dotnet run scripts/bepinex-loader.cs -- check /private/loader.json
+```
+
+From C# the same operation is:
+
 ```csharp
-var loader = BepInExLoaderPackage.Capture(
-    extractedPackageRoot, "BepInExPack_Valheim", "5.4.2202");
+var loader = BepInExLoaderPackage.Capture(extractedPackageRoot, "BepInExPack_Valheim", "5.4.2202");
 loader.Write(privateManifestPath);
 
 var environment = RegressionEnvironment.Read(privateRegressionManifest);
