@@ -126,7 +126,7 @@ fi
 mono=${MONO:-mono}
 if [ "$any_netfx" = 1 ] && [ "$on_windows" = 0 ] && ! command -v "$mono" >/dev/null 2>&1; then
   echo "ERROR: .NET Framework tests need Mono on macOS and Linux, and '$mono' is not on PATH." >&2
-  echo "  Install it (macOS: brew install mono; Debian/Ubuntu: sudo apt-get install mono-complete)," >&2
+  echo "  Install it (macOS: brew install mono; Debian/Ubuntu: sudo apt-get install mono-devel)," >&2
   echo "  or run only the modern framework with --framework net10.0." >&2
   exit 3
 fi

@@ -158,7 +158,7 @@ $mono = [Environment]::GetEnvironmentVariable('MONO')
 if ([string]::IsNullOrEmpty($mono)) { $mono = 'mono' }
 if ($anyNetFramework -and -not $onWindows -and $null -eq (Get-Command $mono -ErrorAction SilentlyContinue)) {
     Write-Problem "ERROR: .NET Framework tests need Mono on macOS and Linux, and '$mono' is not on PATH."
-    Write-Problem '  Install it (macOS: brew install mono; Debian/Ubuntu: sudo apt-get install mono-complete),'
+    Write-Problem '  Install it (macOS: brew install mono; Debian/Ubuntu: sudo apt-get install mono-devel),'
     Write-Problem '  or run only the modern framework with --framework net10.0.'
     exit 3
 }

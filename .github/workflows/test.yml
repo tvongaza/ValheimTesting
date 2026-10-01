@@ -178,13 +178,50 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
-      # Hosted Linux and macOS images carry no Mono.
+      # Hosted Linux and macOS images carry no Mono. On Ubuntu, mono-devel is the smallest package set that runs the net48
+      # leg: mono-runtime alone lacks the System.Runtime and netstandard facades the console runner loads. Its archives
+      # are cached because the mirror's speed, not their size, decides the install time: the same 52 MB took 6 s or
+      # several minutes on different runners.
+      - name: Key the Mono packages
+        if: runner.os == 'Linux'
+        id: mono-debs
+        run: |
+          sudo apt-get update -q
+          # Name, size and checksum of each archive apt would fetch: a new package version is a new key, never a stale hit.
+          apt-get install --print-uris -qq -y --no-install-recommends mono-devel > "$RUNNER_TEMP/mono-uris.txt"
+          echo "key=mono-debs-$ImageOS-${{ runner.arch }}-$(sha256sum < "$RUNNER_TEMP/mono-uris.txt" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Restore the Mono packages
+        if: runner.os == 'Linux'
+        id: mono-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/mono-debs
+          key: ${{ steps.mono-debs.outputs.key }}
       - name: Install Mono
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends mono-complete
+          # apt installs a same-size archive from its cache without checking it, and --print-uris gives only MD5 sums,
+          # so a restored archive is used only when its SHA256 is the one the signed index gives; apt downloads the rest.
+          # <package>=<version> (an epoch's colon is %3a in a file name) and the file name of each archive:
+          archives() { while read -r _ file _; do v=${file#*_}; id="${file%%_*}=${v%_*}"; printf '%s %s\n' "${id//%3a/:}" "$file"; done < "$RUNNER_TEMP/mono-uris.txt"; }
+          if [ -d "$RUNNER_TEMP/mono-debs" ]; then
+            apt-cache show $(archives | cut -d' ' -f1) | awk '/^Package:/ { p = $2 } /^Version:/ { v = $2 } /^SHA256:/ { print p "=" v, $2 }' > "$RUNNER_TEMP/mono-sha256.txt"
+            while read -r id file; do
+              f="$RUNNER_TEMP/mono-debs/$file"; [ -f "$f" ] || continue
+              want=$(awk -v id="$id" '$1 == id { print $2; exit }' "$RUNNER_TEMP/mono-sha256.txt")
+              if [ -n "$want" ] && [ "$(sha256sum < "$f" | cut -d' ' -f1)" = "$want" ]; then sudo cp "$f" /var/cache/apt/archives/
+              else echo "Not using the cached $file: it is not the archive the index names."; fi
+            done < <(archives)
+          fi
+          sudo apt-get install -y -q --no-install-recommends mono-devel
           mono --version
+          mkdir -p "$RUNNER_TEMP/mono-debs"; cp /var/cache/apt/archives/*.deb "$RUNNER_TEMP/mono-debs/"
+      - name: Save the Mono packages
+        if: runner.os == 'Linux' && steps.mono-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/mono-debs
+          key: ${{ steps.mono-debs.outputs.key }}
       - name: Install Mono
         if: runner.os == 'macOS'
         env:
