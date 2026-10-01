@@ -65,10 +65,10 @@ public sealed class NativeDependencyLock
         ArgumentNullException.ThrowIfNull(environment);
         if (!Ready) throw new InvalidOperationException($"Resolve the {Gaps.Count} dependency choice(s) before applying this lock.");
         RequireExactCliSet();
-        CliManifest.Write(cliManifestPath);
         var core = CliFiles.Where(file => CliManifest.Files.Any(entry => entry.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)
             && entry.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal))).ToList();
         if (core.Count != 1) throw new InvalidDataException("The dependency lock needs exactly one ValheimCLI core.");
+        CliManifest.Write(cliManifestPath);
         environment.Cli = new RegressionCli
         {
             Core = new RegressionFile { File = core[0].File, Sha256 = core[0].Sha256 },
@@ -100,6 +100,8 @@ public sealed class NativeDependencyLock
         CliManifest.Validate();
         if (CliFiles.Count == 0 || CliFiles.Count != CliManifest.Files.Count)
             throw new InvalidDataException("The dependency lock must contain exactly the ValheimCLI core and packs selected by its capability manifest.");
+        if (CliManifest.Files.Count(file => file.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal)) != 1)
+            throw new InvalidDataException("The dependency lock needs exactly one ValheimCLI core.");
         foreach (var declared in CliManifest.Files)
             if (CliFiles.Count(file => Path.GetFileName(file.File).Equals(declared.File, StringComparison.OrdinalIgnoreCase)
                 && file.Sha256.Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase)) != 1)

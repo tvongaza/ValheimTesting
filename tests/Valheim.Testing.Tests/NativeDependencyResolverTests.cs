@@ -60,6 +60,16 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_rig.Root, "should-not-be-written.json")));
     }
 
+    [Fact] public void AnEditedLockWithoutTheCliCoreIsNotReady()
+    {
+        var plan = NativeDependencyResolver.Resolve(Request(_rig.Parent));
+        var core = Assert.Single(plan.CliManifest.Files.Where(file => file.Plugins.Contains("valheimCLI.valheimCLI")));
+        core.Plugins = ["a.different.plugin"];
+        string path = Path.Combine(_rig.Root, "no-core-lock.json");
+        plan.Write(path);
+        Assert.Contains("exactly one ValheimCLI core", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(path)).Message);
+    }
+
     [Fact] public void UniqueReferencedLibraryIsIncludedAndAmbiguityIsLeftForAnExplicitChoice()
     {
         string mod = _rig.Write("uses/Uses.dll", RegressionRig.Assembly("Uses", new("example.uses"), reference: typeof(FactAttribute)));
