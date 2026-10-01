@@ -172,6 +172,22 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("overlap", Assert.Throws<ArgumentException>(overlap.Validate).Message);
     }
 
+    [Fact] public void AReusedInstallIsCopiedAgainWhenTheGamesLoaderChanged()
+    {
+        // Found on a Windows station: the prepared game held a mod manager's Doorstop proxy, which the preflight refused.
+        // Restoring the game's own proxy changed neither the game build nor BepInEx's core, and the reused copy kept the old one.
+        _rig.Write("game/.doorstop_version", Encoding.UTF8.GetBytes("4.4.0"));
+        new TargetedRegression(_rig.Manifest()).Stage("parent");
+        string earlier = Path.Combine(_rig.Install, "from-the-first-copy.txt");
+        File.WriteAllText(earlier, "only in the disposable install");
+        new TargetedRegression(_rig.Manifest()).Stage("candidate");
+        Assert.True(File.Exists(earlier)); // Nothing changed in the game: the install is reused.
+        _rig.Write("game/.doorstop_version", Encoding.UTF8.GetBytes("3.4.0"));
+        new TargetedRegression(_rig.Manifest()).Stage("candidate").Verify();
+        Assert.Equal("3.4.0", File.ReadAllText(Path.Combine(_rig.Install, ".doorstop_version")));
+        Assert.False(File.Exists(earlier)); // Copied again from the game.
+    }
+
     [Fact] public void AMissingCharacterIsRefusedBeforeTheLaunch()
     {
         var manifest = _rig.Manifest();
