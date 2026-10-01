@@ -136,7 +136,8 @@ internal static class GameHostChecks
         var failed = await host.WaitForLogAsync(log, offset, success, failures, Generous);
         Assert.Equal(HostLogOutcome.FailureMatched, failed.Outcome); Assert.Equal("[Fatal] Could not load [MyMod]", failed.Line);
 
-        var expired = await host.WaitForLogAsync(log, offset, new Regex("never written"), null, TimeSpan.FromSeconds(3));
+        // The deadline counts the shell's start too: long enough for a cold pwsh on a busy runner (over 3 s on macOS) to read the lines already there.
+        var expired = await host.WaitForLogAsync(log, offset, new Regex("never written"), null, TimeSpan.FromSeconds(10));
         Assert.Equal(HostLogOutcome.TimedOut, expired.Outcome); Assert.Equal("[Info] Command server listening on 5577", expired.LastLine);
 
         // A log that appears after the wait began is read from its start.
