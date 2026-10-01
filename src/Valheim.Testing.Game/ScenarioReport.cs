@@ -69,7 +69,7 @@ public sealed class ScenarioReport
                 {
                     if (scan.Problem != null) failures.Add(scan.Problem);
                     foreach (var count in scan.Counts.Where(count => count.Severity == LogSeverity.Failure && count.Count > 0))
-                        failures.Add($"{scan.Role}: {count.Pattern} x{count.Count}, first at line {count.FirstLine}: {count.First}");
+                        failures.Add($"{scan.Role}: {count.Pattern} x{count.Count}, first at line {count.FirstLine}: {count.First}" + (count.FirstFrame is { } frame ? $" [{frame}]" : ""));
                 }
                 if (failures.Count != 0) throw new InvalidOperationException("The run's logs hold failures. " + string.Join(" | ", failures));
             });
