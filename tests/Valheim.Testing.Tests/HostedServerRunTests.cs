@@ -37,6 +37,8 @@ internal sealed class FakeServerHost : IGameHost
     public bool IgnoreQuit { get; set; }
     /// <summary>The crossplay library check's reply: by default libparty.so loads.</summary>
     public string PartyReply { get; set; } = "VT-LDD \tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 0\n";
+    /// <summary>The signed-in Steam user check's reply.</summary>
+    public string SteamUserReply { get; set; } = "VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories\n";
     private string? _runtime; // The host runtime of the last server start, whose log a clean stop appends to.
     public List<FakeForward> Tunnels { get; } = [];
     /// <summary>What the copy does to the runtime after copying, for example editing a file.</summary>
@@ -60,7 +62,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, InteractiveScripts.LinuxStop) ? "stop" :
         ReferenceEquals(script, InteractiveScripts.LinuxStart) ? "client-start" :
         ReferenceEquals(script, HostedClientScripts.BashKeep) ? "client-keep" :
-        ReferenceEquals(script, HostedClientScripts.BashMoveAside) ? "move-aside" : "other";
+        ReferenceEquals(script, HostedClientScripts.BashMoveAside) ? "move-aside" :
+        ReferenceEquals(script, SteamSignedInUsers.Bash) ? "steam-user" : "other";
 
     public async Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default)
     {
@@ -88,6 +91,7 @@ internal sealed class FakeServerHost : IGameHost
             }
             case "port": return Ok(PortBusy ? "VT-PORT busy\n" : "VT-PORT free\n");
             case "party": return Ok(PartyReply);
+            case "steam-user": return Ok(SteamUserReply);
             case "start":
             {
                 string token = Spec(v["spec"]).Single(line => line.Kind == "env" && line.Text.StartsWith("TEST_SESSION_TOKEN=", StringComparison.Ordinal)).Text["TEST_SESSION_TOKEN=".Length..];
@@ -230,7 +234,7 @@ internal sealed class FakeServerHost : IGameHost
 }
 
 // PinnedServerRun --profile: the dedicated server on the profile's server host, against a fake host (no shell, no game).
-public sealed class HostedServerRunTests : IDisposable
+public sealed partial class HostedServerRunTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("hosted-run-").FullName;
     private const string Install = "/opt/valheim/server", Runs = "/srv/vt/runs", RunId = "run-test";
@@ -244,7 +248,7 @@ public sealed class HostedServerRunTests : IDisposable
 
     // The host's install (the runtime the plan pins) and a local world; returns the plan and the profile.
     private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false, bool unpinned = false,
-        bool crossplay = false, string portOption = "-port", string gamePort = "2456")
+        bool crossplay = false, string portOption = "-port", string gamePort = "2456", object? steamAccounts = null, string? steamAccount = null)
     {
         string install = host.Local(Install);
         Directory.CreateDirectory(install);
@@ -275,28 +279,31 @@ public sealed class HostedServerRunTests : IDisposable
         if (withClient)
         {
             hosts["linux-gpu"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-gpu.example", @lock = "/home/tester/lock" };
-            clients["player"] = new { host = "linux-gpu", install = "/home/tester/valheim", runtime = "/home/tester/runs", cliPort = 5578 };
+            var player = new Dictionary<string, object> { ["host"] = "linux-gpu", ["install"] = "/home/tester/valheim", ["runtime"] = "/home/tester/runs", ["cliPort"] = 5578 };
+            if (steamAccount != null) player["steamAccount"] = steamAccount;
+            clients["player"] = player;
         }
+        if (steamAccounts != null) hosts[LeaseBox.Name] = LeaseBox.Profile;
         var server = hostPlatform == "windows"
             ? new { host = "linux-box", install = @"C:\valheim\server", runtime = @"C:\vt\runs", cliPort = 5577, gamePort = 2456 }
             : new { host = "linux-box", install = Install, runtime = Runs, cliPort = 5577, gamePort = 2456 };
         string profilePath = Path.Combine(_root, "environment.json");
-        File.WriteAllText(profilePath, JsonSerializer.Serialize(new { hosts, server, clients }));
+        File.WriteAllText(profilePath, JsonSerializer.Serialize(steamAccounts == null ? new { hosts, server, clients } : (object)new { hosts, server, clients, steamAccounts }));
         return (planPath, profilePath);
     }
 
     private static PinnedServerRunOptions<ServerRunPlan> Options(FakeServerHost host, FakeOwnedServer? server, Func<PinnedServerRunContext<ServerRunPlan>, Task>? scenario = null,
-        FakeServerHost? clientHost = null, IGameTransport? clientTransport = null) => new()
+        FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, TimeSpan? renewEvery = null, string name = "toolkit-smoke") => new()
     {
-        Name = "toolkit-smoke",
+        Name = name,
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", EnableDevcommands = false,
         Scenario = scenario ?? (_ => Task.CompletedTask),
         HostSeams = new HostedSeams
         {
-            Host = name => name == "linux-box" ? host : clientHost ?? throw new InvalidOperationException("No fake host " + name),
+            Host = hostName => hostName == "linux-box" ? host : hostName == LeaseBox.Name && leaseHost != null ? leaseHost : clientHost ?? throw new InvalidOperationException("No fake host " + hostName),
             Connect = port => port == 15578 ? clientTransport! : server!.Connect(),
-            StateWaits = false, RunId = RunId,
+            StateWaits = false, RunId = RunId, SteamRenewEvery = renewEvery,
         },
     };
     private JsonElement Result() => JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "result.json"))).RootElement;

@@ -14,14 +14,17 @@ internal sealed class HostedSeams
     /// <summary>False skips the state pushes (a fake transport has none).</summary>
     public bool StateWaits { get; init; } = true;
     public string? RunId { get; init; }
+    /// <summary>Shorter Steam account leases and renewals than the pool's, so a test sees them lapse.</summary>
+    public TimeSpan? SteamLeaseTime { get; init; }
+    public TimeSpan? SteamRenewEvery { get; init; }
 }
 
 /// <summary>
 /// The parts of a <see cref="PinnedServerRun"/> that differ when its dedicated server runs on the environment profile's server
 /// host (<c>--profile</c>): the host lock, the runtime copied from the host's install and verified there, the world copy
 /// shipped and verified there, the port check, the loopback CLI tunnel, the owned session through <see cref="HostServer"/>,
-/// clients through <see cref="InteractiveClient"/>, and the teardown that fetches evidence, closes the tunnel and releases the
-/// locks.
+/// clients through <see cref="InteractiveClient"/>, each client's Steam account lease when the profile has a pool, and the teardown
+/// that fetches evidence, closes the tunnel and releases the leases and locks.
 /// </summary>
 internal sealed class HostedServerRun
 {
@@ -30,6 +33,8 @@ internal sealed class HostedServerRun
     private readonly HostedSeams _seams;
     private readonly string _owner;
     private readonly List<(string Host, HostLock Lock)> _clientLocks = [];
+    private readonly List<ClientAccount> _accounts = [];
+    private IGameHost? _leaseHost;
     private HostLock? _lock;
     private CliTunnel? _tunnel;
     private HostListing? _runtime;
@@ -55,6 +60,8 @@ internal sealed class HostedServerRun
     public string WorldDirectory { get; }
     /// <summary>The runtime copy's files on the host, once copied.</summary>
     public IReadOnlyDictionary<string, string> RuntimeHashes => _runtime?.Files ?? new Dictionary<string, string>();
+    /// <summary>Runs when a client's Steam account lease is lost: the runner cancels the run (its client was stopped already).</summary>
+    public Action? AccountLost { get; set; }
 
     /// <summary>Refuses a profile and plan that cannot run a server on the profile's server host, before anything is touched.</summary>
     public static HostedServerRun Create(EnvironmentProfile profile, ServerRunPlan plan, string runner, HostedSeams? seams)
@@ -204,12 +211,50 @@ internal sealed class HostedServerRun
     /// An owned client on the profile's client host, started in its desktop session (<see cref="InteractiveClient"/>) with the
     /// checks <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/> makes locally, made on the host: the
     /// install's patchers and pins, a free CLI port. ValheimCLI is reached through the host's tunnel. Disposing the session stops
-    /// only that client, keeps its logs, fetches them to <c>client-N</c> in the output and closes the tunnel.
+    /// only that client, keeps its logs, fetches them to <c>client-N</c> in the output and closes the tunnel. With the profile's
+    /// <c>steamAccounts</c>, the client's account is leased (and its host's signed-in user checked, when asked) before anything
+    /// else on its host is touched, and released at teardown once the client is gone.
     /// </summary>
-    public ClientSession OpenClient(string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
-        OpenClientAsync(output, plan, name, cancellation).GetAwaiter().GetResult();
+    public ClientSession OpenClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
+        OpenClientAsync(report, output, plan, name, cancellation).GetAwaiter().GetResult();
 
-    private async Task<ClientSession> OpenClientAsync(string output, ClientRunPlan plan, string name, CancellationToken cancellation)
+    /// <summary>An attached client with the profile's <c>steamAccounts</c>: its account is leased (and checked) before the session assumes the client.</summary>
+    public ClientSession AttachClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
+        AttachClientAsync(report, output, plan, name, cancellation).GetAwaiter().GetResult();
+
+    private async Task<ClientSession> AttachClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation)
+    {
+        if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment profile.", nameof(name));
+        var account = await HoldAccountAsync(report, name, () => ClientHost(role), cancellation).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The profile has no steamAccounts pool; attach with ClientSession.Attach.");
+        return account.Session = ClientSession.Attach(plan, output, account.Hold, _seams.Connect?.Invoke(plan.Port));
+    }
+
+    private IGameHost ClientHost(GameRole role) => role.Host == Role.Host ? Host : _seams.Host?.Invoke(role.Host) ?? Profile.CreateHost(role.Host);
+
+    // With steamAccounts: leases the client's account and, when the profile asks, checks its host's signed-in user, each as its own
+    // step, before the client starts or is attached. A held account refuses the client here, naming its holder.
+    private async Task<ClientAccount?> HoldAccountAsync(ScenarioReport report, string name, Func<IGameHost> clientHost, CancellationToken cancellation)
+    {
+        var section = Profile.SteamAccounts;
+        if (section == null) return null;
+        ClientAccount? held = null;
+        await report.StepAsync($"lease a Steam account for client {name}", async () =>
+        {
+            _leaseHost ??= section.LeaseHost == Role.Host ? Host : _seams.Host?.Invoke(section.LeaseHost) ?? Profile.CreateHost(section.LeaseHost);
+            var hold = await SteamAccountHold.AcquireAsync(Profile, name, _owner + " client " + name, _leaseHost, Quick, _seams.SteamLeaseTime, _seams.SteamRenewEvery,
+                cancellation).ConfigureAwait(false);
+            _accounts.Add(held = new ClientAccount(name, hold));
+            hold.Lost.Register(() => AccountLost?.Invoke());
+            hold.Record(report);
+        }).ConfigureAwait(false);
+        if (section.CheckSignedIn)
+            await report.StepAsync($"client {name}'s host is signed in to Steam account {held!.Hold.Account} (signed-in check)",
+                () => held.Hold.CheckSignedInAsync(clientHost(), cancellation)).ConfigureAwait(false);
+        return held;
+    }
+
+    private async Task<ClientSession> OpenClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation)
     {
         if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment profile.", nameof(name));
         // A profile client host runs Windows or Linux (HostClientLaunch refuses macOS), whose clients are x64 only.
@@ -219,7 +264,8 @@ internal sealed class HostedServerRun
         var hostProfile = Profile.Hosts[role.Host];
         var platform = hostProfile.Platform switch { "windows" => ClientPlatform.Windows, "linux" => ClientPlatform.Linux, _ => ClientPlatform.MacOS };
         var launch = HostClientLaunch.Create(platform, role.Install, plan.LaunchArguments, secretVariables: plan.PasswordVariable is { } password ? new[] { password } : null);
-        var host = role.Host == Role.Host ? Host : _seams.Host?.Invoke(role.Host) ?? Profile.CreateHost(role.Host);
+        var host = ClientHost(role);
+        var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
         // The server's lock covers its own host; another client host is locked for the rest of the run.
         if (role.Host != Role.Host && !_clientLocks.Any(held => held.Host == role.Host))
             _clientLocks.Add((role.Host, await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)));
@@ -243,8 +289,15 @@ internal sealed class HostedServerRun
             string local = Path.Combine(output, "client-" + n);
             var display = platform != ClientPlatform.Linux ? null : host.Kind == GameHostKind.Container ? LinuxDisplay.ClientContainer : new LinuxDisplay();
             var start = TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds));
-            return ClientSession.Launch(plan, output,
-                () => new HostedClientProcess(InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation).GetAwaiter().GetResult(), host, role.Install, tunnel, local),
+            var session = ClientSession.Launch(plan, output,
+                () =>
+                {
+                    var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
+                        : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
+                    var process = new HostedClientProcess(started.GetAwaiter().GetResult(), host, role.Install, tunnel, local);
+                    if (account != null) account.Process = process; // Its lease is released only once this process is gone.
+                    return process;
+                },
                 () => Connect(tunnel),
                 async (left, token) =>
                 {
@@ -254,7 +307,10 @@ internal sealed class HostedServerRun
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
                 }, cancellation, null,
-                [new RunLog($"client-{n} BepInEx log", Path.Combine(local, "game-0.log"), Required: true), new RunLog($"client-{n} Player.log", Path.Combine(local, "game-1.log"))]);
+                [new RunLog($"client-{n} BepInEx log", Path.Combine(local, "game-0.log"), Required: true), new RunLog($"client-{n} Player.log", Path.Combine(local, "game-1.log"))],
+                account?.Hold);
+            if (account != null) account.Session = session;
+            return session;
         }
         catch { tunnel.Dispose(); throw; }
     }
@@ -276,6 +332,23 @@ internal sealed class HostedServerRun
         if (launched && _worldShipped && serverStopped)
             await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long)).ConfigureAwait(false);
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
+        foreach (var account in _accounts)
+        {
+            // An account is released only once its client is gone: a session the scenario left open is closed first.
+            if (account.Session is { Closed: false } open)
+                await Try(open.Owned ? $"stop only the owned client {account.Client}" : $"detach from the operator's client {account.Client}",
+                    () => { open.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
+            await Try($"release client {account.Client}'s Steam account lease", async () =>
+            {
+                if (account.Process is { HasExited: false })
+                {
+                    await account.Hold.KeepAsync().ConfigureAwait(false);
+                    throw new SteamAccountLeaseException(SteamAccountLeaseState.Unknown, account.Hold.Pool, [], $"Kept the lease on Steam account {account.Hold.Account}: the client " +
+                        $"{account.Client} may still run on {account.Hold.ClientHost}. Without renewals it ends at {account.Hold.ExpiresUtc:u}.");
+                }
+                await account.Hold.ReleaseAsync().ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
         foreach (var (name, held) in _clientLocks) await Try($"release client host {name}'s lock", () => ReleaseAsync(held)).ConfigureAwait(false);
         if (_lock != null)
             await Try("release the server host's lock", () => serverStopped ? ReleaseAsync(_lock)
@@ -300,10 +373,20 @@ internal sealed class HostedServerRun
         {
             if (current is HostOperationException { Outcome: not HostOutcome.Exited } host) return host.Message;
             if (current is HostLockException { State: HostLockState.Unknown } hostLock) return hostLock.Message;
+            if (current is SteamAccountLeaseException { State: SteamAccountLeaseState.Unknown } lease) return lease.Message;
             if (current is AggregateException aggregate) return aggregate.InnerExceptions.Select(UnknownOutcome).FirstOrDefault(reason => reason != null);
         }
         return null;
     }
+}
+
+/// <summary>A profile client's leased Steam account, with what must be gone before its lease is released.</summary>
+internal sealed class ClientAccount(string client, SteamAccountHold hold)
+{
+    public string Client { get; } = client;
+    public SteamAccountHold Hold { get; } = hold;
+    public ClientSession? Session { get; set; }
+    public IServerProcess? Process { get; set; }
 }
 
 /// <summary>

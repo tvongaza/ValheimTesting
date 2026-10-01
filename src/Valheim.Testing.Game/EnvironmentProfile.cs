@@ -24,12 +24,27 @@ public sealed class EnvironmentProfile
     public GameRole? Server { get; set; }
     /// <summary>The game clients by name.</summary>
     public Dictionary<string, GameRole> Clients { get; set; } = [];
+    /// <summary>
+    /// Optional: the Steam account pool the clients lease their accounts from (<see cref="SteamAccountHold"/>). Leave it out when
+    /// one person runs one client on one machine; nothing is leased then and runs behave exactly as without it.
+    /// </summary>
+    public SteamAccountsProfile? SteamAccounts { get; set; }
 
-    /// <summary>Reads and validates a profile file.</summary>
-    public static EnvironmentProfile Read(string path) => Parse(File.ReadAllText(path));
-    public static EnvironmentProfile Parse(string json)
+    /// <summary>Reads and validates a profile file. A <see cref="SteamAccounts"/> pool path is relative to the profile's directory.</summary>
+    public static EnvironmentProfile Read(string path) => Parse(File.ReadAllText(path), Path.GetDirectoryName(Path.GetFullPath(path))!);
+    /// <summary>Parses and validates a profile. A <see cref="SteamAccounts"/> pool path is relative to the current directory.</summary>
+    public static EnvironmentProfile Parse(string json) => Parse(json, Environment.CurrentDirectory);
+    internal static EnvironmentProfile Parse(string json, string directory)
     {
         var profile = JsonSerializer.Deserialize<EnvironmentProfile>(json, Json) ?? throw new ArgumentException("Empty environment profile.");
+        // Read before validating, so the clients' accounts are checked against it with everything else.
+        if (profile.SteamAccounts is { Pool: { Length: > 0 } pool } accounts)
+        {
+            accounts.PoolFile = Path.GetFullPath(pool, directory);
+            try { accounts.Accounts = SteamAccountPool.Read(accounts.PoolFile); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+            { throw new ArgumentException($"Invalid environment profile: steamAccounts.pool {accounts.PoolFile} cannot be read: {error.Message}", error); }
+        }
         profile.Validate();
         return profile;
     }
@@ -71,6 +86,11 @@ public sealed class EnvironmentProfile
             .Where(role => role.Port != 0);
         foreach (var shared in here.GroupBy(role => role.Port).Where(group => group.Count() > 1))
             errors.Add($"{string.Join(" and ", shared.Select(role => role.Role))} would all be reached on local port {shared.Key}.");
+        SteamAccounts?.Validate(this, errors);
+        if (SteamAccounts == null)
+            foreach (var (name, client) in Clients.Where(client => client.Value.SteamAccount != null))
+                errors.Add($"The client {name} names Steam account {client.SteamAccount}, but the profile has no steamAccounts pool to lease it from.");
+        if (Server?.SteamAccount != null) errors.Add("The server's steamAccount: a dedicated server needs no Steam account; only clients name one.");
         if (errors.Count != 0) throw new ArgumentException("Invalid environment profile: " + string.Join(" ", errors));
     }
 
@@ -176,6 +196,11 @@ public sealed class GameRole
     public int GamePort { get; set; }
     /// <summary>The local end of the CLI tunnel; 0 picks a free port.</summary>
     public int LocalCliPort { get; set; }
+    /// <summary>
+    /// Clients only, with <see cref="EnvironmentProfile.SteamAccounts"/>: the pool account this client always leases. Left out, it
+    /// leases the first free account for its host.
+    /// </summary>
+    public string? SteamAccount { get; set; }
 
     internal void Validate(string role, HostProfile host, List<string> errors)
     {
@@ -200,4 +225,60 @@ public sealed class GameRole
         string child = Trim(path), parent = Trim(root);
         return child.Equals(parent, comparison) || child.StartsWith(parent + "/", comparison);
     }
+}
+
+/// <summary>
+/// The optional <c>steamAccounts</c> section: one pool file (<see cref="SteamAccountPool"/>, names only) and the one host its leases
+/// live on, shared by every run and profile that uses the pool. Each client of a run leases an account before it starts
+/// (<see cref="SteamAccountHold"/>), keeps it renewed while it runs and releases it after teardown.
+/// </summary>
+public sealed class SteamAccountsProfile
+{
+    /// <summary>The pool file, relative to the profile's directory or absolute. Its <c>leaseDirectory</c> is on <see cref="LeaseHost"/>.</summary>
+    public string Pool { get; set; } = "";
+    /// <summary>The profile host that keeps the leases. Every run sharing the pool must use the same host and directory.</summary>
+    public string LeaseHost { get; set; } = "";
+    /// <summary>
+    /// Optional guard: before a client starts, its host's signed-in Steam user must be the leased account (the pool's
+    /// <see cref="SteamPoolAccount.SteamId"/>). A host whose signed-in user cannot be read is refused, not passed.
+    /// </summary>
+    public bool CheckSignedIn { get; set; }
+    /// <summary>The pool file's full path, once read.</summary>
+    [JsonIgnore] public string? PoolFile { get; internal set; }
+    /// <summary>The pool, once <see cref="EnvironmentProfile.Read"/> or <see cref="EnvironmentProfile.Parse(string)"/> has read it; set it yourself for a profile built in code.</summary>
+    [JsonIgnore] public SteamAccountPool? Accounts { get; set; }
+
+    internal void Validate(EnvironmentProfile profile, List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(Pool)) errors.Add("steamAccounts: name the pool file.");
+        if (!profile.Hosts.TryGetValue(LeaseHost ?? "", out var leaseHost)) errors.Add($"steamAccounts: the lease host '{LeaseHost}' is not listed under hosts.");
+        if (profile.Clients.Count == 0) errors.Add("steamAccounts: list the clients that lease accounts under clients.");
+        if (Accounts == null) return;
+        try { Accounts.Validate(); }
+        catch (ArgumentException error) { errors.Add("steamAccounts: " + error.Message); return; }
+        if (leaseHost != null && !leaseHost.IsAbsolutePath(Accounts.LeaseDirectory))
+            errors.Add($"steamAccounts: the pool's leaseDirectory must be an absolute path on the lease host '{LeaseHost}'.");
+        foreach (var (name, client) in profile.Clients)
+        {
+            var candidates = Candidates(client);
+            if (client.SteamAccount != null && candidates.Count == 0)
+            {
+                var named = Accounts.Accounts.FirstOrDefault(account => string.Equals(account.Name, client.SteamAccount, StringComparison.OrdinalIgnoreCase));
+                errors.Add(named == null ? $"The client {name} names Steam account {client.SteamAccount}, which pool {Accounts.Pool} does not list."
+                    : $"The client {name} names Steam account {named.Name}, which pool {Accounts.Pool} keeps for host '{named.Host}', not '{client.Host}'.");
+            }
+            else if (candidates.Count == 0) errors.Add($"No account of pool {Accounts.Pool} is for the client {name}'s host '{client.Host}'.");
+            if (CheckSignedIn)
+                foreach (var account in candidates.Where(account => account.SteamId == null))
+                    errors.Add($"checkSignedIn compares the client {name}'s signed-in Steam user with its account: give account {account.Name} its steamId in pool {Accounts.Pool}.");
+        }
+        foreach (var shared in profile.Clients.Where(client => client.Value.SteamAccount != null)
+                     .GroupBy(client => client.Value.SteamAccount!, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+            errors.Add($"Clients {string.Join(", ", shared.Select(client => client.Key))} name the same Steam account {shared.Key}; an account runs one client at a time.");
+    }
+
+    /// <summary>The accounts <paramref name="client"/> may lease: the one it names, or every account for its host or for any host.</summary>
+    internal IReadOnlyList<SteamPoolAccount> Candidates(GameRole client) => (Accounts?.Accounts ?? [])
+        .Where(account => (client.SteamAccount == null || string.Equals(account.Name, client.SteamAccount, StringComparison.OrdinalIgnoreCase))
+            && (account.Host == null || account.Host == client.Host)).ToList();
 }

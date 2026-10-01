@@ -72,22 +72,25 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
     /// starts on its profile host, inside that host's desktop session (<see cref="InteractiveClient"/>): the install, CLI port
     /// and host come from the profile (the plan's <c>install</c> is not read), the install's patchers and pins are checked on the
     /// host, the host's lock is held for the rest of the run, and ValheimCLI is reached through the host's loopback tunnel.
-    /// <paramref name="profileClient"/> names the profile's client when it lists several. Otherwise, and for an attached client,
-    /// this is <see cref="ClientSession.Open"/>. Disposing the session stops only the client it started.
+    /// <paramref name="profileClient"/> names the profile's client when it lists several. With the profile's <c>steamAccounts</c>,
+    /// that client's Steam account is leased first, owned or attached (<see cref="SteamAccountHold"/>): a held account refuses the
+    /// client, a lost lease stops it and cancels the run, and the lease is released at teardown. Otherwise, and for an attached
+    /// client, this is <see cref="ClientSession.Open(ClientRunPlan, string, CancellationToken)"/>. Disposing the session stops only
+    /// the client it started.
     /// </summary>
     public ClientSession OpenClient(ClientRunPlan client, string? profileClient = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         if (client.StartAtCharacterSave && Hosted != null && Hosted.Profile.Clients.Count != 0)
             throw new NotSupportedException("A prepared character is staged on this runner's machine; remote profile clients need host-side staging and are not supported yet.");
-        if (Hosted != null && Hosted.Profile.Clients.Count != 0 && client.Owned)
+        ClientSession session;
+        if (Hosted != null && Hosted.Profile.Clients.Count != 0 && (client.Owned || Hosted.Profile.SteamAccounts != null))
         {
             var clients = Hosted.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList();
             string name = profileClient ?? (clients.Count == 1 ? clients[0]
                 : throw new ArgumentException($"The environment profile names clients {string.Join(", ", clients)}; say which one opens.", nameof(profileClient)));
-            ClientSession session;
             // A startup that fails after the client started still kept its logs: they are scanned and listed like an opened client's.
-            try { session = Hosted.OpenClient(Output, client, name, Cancellation); }
+            try { session = client.Owned ? Hosted.OpenClient(Report, Output, client, name, Cancellation) : Hosted.AttachClient(Report, Output, client, name, Cancellation); }
             catch (Exception error) { Logs.AddRange(ClientSession.KeptLogs(error)); throw; }
             Logs.AddRange(session.Logs); // Scanned with the server's at teardown, after the scenario closes the client.
             return session;
@@ -128,7 +131,8 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// starts each boot with <see cref="HostServer"/> and waits for its listening line in the host's log, and at teardown stops only
 /// the process it started, fetches each boot's logs (<c>boot-N/</c>) and the world copy (<c>host-world/</c>), closes the tunnel
 /// and releases the lock. <see cref="PinnedServerRunContext{TPlan}.OpenClient"/> starts a profile client in its host's desktop
-/// session. A host operation whose outcome is unknown (a lost reply, a transport failure, an unproven lock), when nothing else
+/// session, on a leased Steam account when the profile has <c>steamAccounts</c>, released at teardown after the client stopped.
+/// A host operation whose outcome is unknown (a lost reply, a transport failure, an unproven lock or lease release), when nothing else
 /// failed for certain, prints UNKNOWN and returns 3: neither a pass nor a failure.
 /// </para>
 /// Returns the process exit code: 0 when every step passed, 1 on failure, 2 on bad usage, 3 when the outcome is unknown.
@@ -181,6 +185,8 @@ public static class PinnedServerRun
                 // The runtime is the server host's install, copied and checked there; nothing local is read for it.
                 var profile = EnvironmentProfile.Read(profilePath);
                 hosted = HostedServerRun.Create(profile, plan, options.Name, options.HostSeams);
+                // A client's lost Steam account lease stops that client, then the run, as Ctrl+C would.
+                hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };
                 report.Provenance["profileSha256"] = WorldFixture.Hash(profilePath);
                 hosted.Record(report.Provenance);
                 platform = ServerPlatform.Linux;
