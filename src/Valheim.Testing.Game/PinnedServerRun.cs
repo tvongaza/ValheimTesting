@@ -137,6 +137,27 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// </para>
 /// Returns the process exit code: 0 when every step passed, 1 on failure, 2 on bad usage, 3 when the outcome is unknown.
 /// </summary>
+/// <example>
+/// A mod supplies its validated plan, adapter session capability and scenario. The toolkit owns fixture copies,
+/// startup, teardown and the report:
+/// <code>
+/// return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions&lt;LifecyclePlan&gt;
+/// {
+///     Name = "mymod-system-test",
+///     ReadPlan = LifecyclePlan.ReadValidated,
+///     SessionCapability = "mymod.testing/session",
+///     SessionTokenVariable = LifecyclePlan.SessionTokenVariable,
+///     Scenario = run =&gt;
+///     {
+///         DrySiteServerScenario.Run(run.Plan, run.Server, run.Session.Restart, run.Report);
+///         return Task.CompletedTask;
+///     },
+/// });
+/// </code>
+/// <c>validate</c> checks the pinned inputs without launching the game; <c>run</c> executes the scenario on a disposable
+/// copy. For client rounds, restarts and failure-safe cleanup, see the compiling
+/// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/MyMod.SystemTests/Program.cs">full lifecycle runner</see>.
+/// </example>
 public static class PinnedServerRun
 {
     /// <summary>The option that names an environment profile; it comes before the mode.</summary>

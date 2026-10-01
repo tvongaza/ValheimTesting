@@ -58,6 +58,23 @@ foreach (string page in new[]
     if (!File.Exists(Path.Combine(site, page)))
         throw new InvalidOperationException($"DocFX omitted a package's reference page: {page}");
 
+// These selected examples explain the order of operations. A successful metadata build alone does not prove that
+// DocFX rendered an XML <example> on the page a mod author will read.
+foreach (var (page, excerpt) in new (string Page, string Excerpt)[]
+{
+    ("api/Valheim.Testing.CompositeTerrain.html", "float terraceHeight = terrain.GetHeight"),
+    ("api/Valheim.Testing.Game.WorldFixture.html", "WorldFixture.Verify(fixtureSource, reviewedHashes)"),
+    ("api/Valheim.Testing.Game.DisposableCharacterStore.html", "store.Register(\"tester\", localCharacterFile)"),
+    ("api/Valheim.Testing.Game.CharacterStartCopy.html", "CharacterStartCopy.Prepare("),
+    ("api/Valheim.Testing.Game.GameActor.html", "actor.RequireCapability(\"mymod.testing/session\")"),
+    ("api/Valheim.Testing.Game.PinnedServerRun.html", "PinnedServerRun.MainAsync(args"),
+})
+{
+    string file = Path.Combine(site, page);
+    if (!File.Exists(file) || !File.ReadAllText(file).Contains(excerpt, StringComparison.Ordinal))
+        throw new InvalidOperationException($"DocFX omitted the selected contextual example from {page}.");
+}
+
 // DocFX's build manifest records source_base_path as an absolute local path.
 // It is build metadata, not a page asset; do not publish it.
 File.Delete(Path.Combine(site, "manifest.json"));
