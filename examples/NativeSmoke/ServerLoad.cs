@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using valheimCLI;
 using Valheim.Testing.Game;
@@ -12,7 +13,7 @@ internal static class ServerLoad
         if (!TryRead(args, out var options, out var mods, out var roots, out var optional, out string error))
         {
             Console.Error.WriteLine(error);
-            Console.Error.WriteLine("Usage: native-smoke server-load --server DIR --mod DLL [--mod DLL ...] --adapter DLL --cli-manifest FILE --cli-files DIR --output NEW_DIR [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--cli-port 5688] [--game-port 2486] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+            Console.Error.WriteLine("Usage: native-smoke server-load --server DIR --mod DLL [--mod DLL ...] --adapter DLL --cli-manifest FILE --cli-files DIR --output NEW_DIR [--client DIR --steam-userdata DIR --client-cli-port 5689] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--cli-port 5688] [--game-port 2486] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
             return 2;
         }
         using var cancel = new CancellationTokenSource();
@@ -28,7 +29,11 @@ internal static class ServerLoad
             string cliFiles = Path.GetFullPath(options["--cli-files"]);
             int cliPort = options.TryGetValue("--cli-port", out string? cliValue) ? int.Parse(cliValue, CultureInfo.InvariantCulture) : 5688;
             int gamePort = options.TryGetValue("--game-port", out string? gameValue) ? int.Parse(gameValue, CultureInfo.InvariantCulture) : 2486;
+            bool joinClient = options.ContainsKey("--client");
+            int clientCliPort = options.TryGetValue("--client-cli-port", out string? clientValue) ? int.Parse(clientValue, CultureInfo.InvariantCulture) : 5689;
             if (Math.Abs(cliPort - gamePort) < 3) throw new ArgumentException("Choose a CLI port away from the game's three-port range.");
+            if (joinClient && (clientCliPort == cliPort || Math.Abs(clientCliPort - gamePort) < 3))
+                throw new ArgumentException("The clean client's CLI port must differ from the server CLI and game ports.");
             foreach (string path in new[] { server, cliFiles })
                 if (!Directory.Exists(path)) throw new DirectoryNotFoundException("A server or ValheimCLI directory is missing: " + path);
             foreach (string path in new[] { adapter, cliManifest }.Concat(mods!.Select(Path.GetFullPath)))
@@ -39,7 +44,10 @@ internal static class ServerLoad
                 GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(server))!,
                 BepInExCore = Path.Combine(server, InstallPins.CoreDirectory),
                 CliManifest = cliManifest, CliFiles = cliFiles,
-                Capabilities = ["valheim.session/state"], OptionalReferences = [.. optional!],
+                Capabilities = joinClient
+                    ? ["valheim.session/state", "valheim.session/join", "valheim.session/leave"]
+                    : ["valheim.session/state"],
+                OptionalReferences = [.. optional!],
             };
             var dependencies = NativeDependencyResolver.Resolve(request);
             Directory.CreateDirectory(output);
@@ -49,41 +57,82 @@ internal static class ServerLoad
             string world = Path.Combine(output, "world-source");
             DefaultSmokeWorld.PrepareServerSaveRoot(world);
             using var runtime = NativeServerRuntime.Prepare(server, Path.Combine(output, "staged-runtime"), dependencies, adapter, cliPort);
-            var plan = runtime.Plan(world, cliPort, gamePort);
+            using var clientRuntime = joinClient
+                ? NativeCleanClientRuntime.Prepare(Path.GetFullPath(options["--client"]), Path.Combine(output, "staged-client"), dependencies, clientCliPort)
+                : null;
+            string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
+            var plan = runtime.Plan(world, cliPort, gamePort, password);
+            var absentGuids = runtime.Pins.Keys.Except(clientRuntime?.CliPins.Keys ?? [], StringComparer.Ordinal)
+                .Where(guid => guid != NativeServerRuntime.SessionAdapterPluginGuid).Order(StringComparer.Ordinal).ToArray();
+            ClientRunPlan? clientPlan = clientRuntime?.Plan(clientCliPort, gamePort, absentGuids);
+            DisposableCharacterStore? character = clientRuntime == null ? null
+                : DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
             if (options.TryGetValue("--expected-log-error", out string? expectedError))
                 plan.LogScan[LogScanner.UnknownError] = new LogClassification
                 { Expected = [expectedError], Reason = options["--expected-log-reason"] };
             string planFile = Path.Combine(output, "plan.json");
             File.WriteAllText(planFile, JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true }));
-            int result = await PinnedServerRun.MainAsync(["run", planFile, Path.Combine(output, "evidence")],
-                new PinnedServerRunOptions<ServerRunPlan>
-                {
-                    Name = "native-smoke-server-load",
-                    ReadPlan = path =>
+            string? previousPassword = Environment.GetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable);
+            if (joinClient) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, password);
+            int result;
+            try
+            {
+                result = await PinnedServerRun.MainAsync(["run", planFile, Path.Combine(output, "evidence")],
+                    new PinnedServerRunOptions<ServerRunPlan>
                     {
-                        var read = ServerRunPlan.Read<ServerRunPlan>(path);
-                        read.ValidateServerPlan(read.Pins.Keys.Where(key => key != "worlduid"), NativeServerRuntime.SessionTokenVariable);
-                        return read;
-                    },
-                    SessionCapability = NativeServerRuntime.SessionCapability,
-                    SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
-                    EnableDevcommands = false,
-                    Scenario = run =>
-                    {
-                        run.Report.Step("selected server mods loaded and world identity matches", () =>
+                        Name = "native-smoke-server-load",
+                        ReadPlan = path =>
                         {
-                            var worlds = run.Server.Execute("cli_world").Output.Select(Expectations.ParseWorld).OfType<WorldFacts>().ToArray();
-                            if (worlds.Length != 1 || worlds[0].Uid != DefaultSmokeWorld.Uid)
-                                throw new InvalidDataException("The dedicated server did not load the packaged smoke world UID.");
-                        });
-                        run.Report.Step("dedicated server accepts a game connection", () =>
-                            OwnedServerSession.WaitUntilJoinable(run.Server, NativeServerRuntime.SessionCapability,
-                                TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation));
-                        return Task.CompletedTask;
-                    },
-                });
-            Console.WriteLine((result == 0 ? "SERVER_LOAD_PASS" : "SERVER_LOAD_FAIL") +
-                $": {mods!.Count} selected mod(s), {clock.Elapsed.TotalSeconds:F1}s. A clean-client join has not run. Private evidence in {output}");
+                            var read = ServerRunPlan.Read<ServerRunPlan>(path);
+                            read.ValidateServerPlan(read.Pins.Keys.Where(key => key != "worlduid"), NativeServerRuntime.SessionTokenVariable);
+                            return read;
+                        },
+                        SessionCapability = NativeServerRuntime.SessionCapability,
+                        SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
+                        EnableDevcommands = false,
+                        Scenario = run =>
+                        {
+                            run.Report.Step("selected server mods loaded and world identity matches", () =>
+                            {
+                                var worlds = run.Server.Execute("cli_world").Output.Select(Expectations.ParseWorld).OfType<WorldFacts>().ToArray();
+                                if (worlds.Length != 1 || worlds[0].Uid != DefaultSmokeWorld.Uid)
+                                    throw new InvalidDataException("The dedicated server did not load the packaged smoke world UID.");
+                            });
+                            run.Report.Step("dedicated server accepts a game connection", () =>
+                                OwnedServerSession.WaitUntilJoinable(run.Server, NativeServerRuntime.SessionCapability,
+                                    TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation));
+                            if (clientPlan != null)
+                            {
+                                string saves = HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(clientPlan.Install));
+                                using var stagedCharacter = DefaultSmokeCharacter.StageForRun(character!,
+                                    Path.Combine(saves, "characters_local"), options["--steam-userdata"]);
+                                new ClientRounds
+                                {
+                                    Client = clientPlan, WorldUid = DefaultSmokeWorld.Uid, Report = run.Report, Output = run.Output,
+                                    WaitUntilJoinable = serverActor => OwnedServerSession.WaitUntilJoinable(serverActor,
+                                        NativeServerRuntime.SessionCapability, TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation),
+                                    RestartServer = run.Session.Restart, Rounds = ["first"], ProtectPlayer = false,
+                                    Cancellation = run.Cancellation,
+                                }.Run(run.Server, () => run.OpenClient(clientPlan), round =>
+                                    round.Step("clean client can read the joined world", () =>
+                                    {
+                                        var state = new SessionControl(round.Client).Read();
+                                        if (!state.WorldReady || !state.PlayerReady || state.WorldUid != DefaultSmokeWorld.Uid)
+                                            throw new InvalidDataException("The clean client has no ready player in the pinned world.");
+                                    }));
+                            }
+                            return Task.CompletedTask;
+                        },
+                    });
+            }
+            finally
+            {
+                if (joinClient) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, previousPassword);
+            }
+            Console.WriteLine((result == 0 ? (joinClient ? "SERVER_JOIN_PASS" : "SERVER_LOAD_PASS") : "SERVER_LOAD_FAIL") +
+                $": {mods!.Count} selected mod(s), {clock.Elapsed.TotalSeconds:F1}s. " +
+                (joinClient ? "Clean client joined with selected server mods absent." : "A clean-client join has not run.") +
+                $" Private evidence in {output}");
             return result;
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException or FormatException)
@@ -99,7 +148,7 @@ internal static class ServerLoad
         options = null; mods = null; roots = null; optional = null; error = "";
         var required = new HashSet<string>(StringComparer.Ordinal) { "--server", "--mod", "--adapter", "--cli-manifest", "--cli-files", "--output" };
         var allowed = new HashSet<string>(required, StringComparer.Ordinal)
-        { "--cli-port", "--game-port", "--expected-log-error", "--expected-log-reason" };
+        { "--cli-port", "--game-port", "--client", "--steam-userdata", "--client-cli-port", "--expected-log-error", "--expected-log-reason" };
         if (args.Length % 2 != 0) { error = "Every option needs one value."; return false; }
         var found = new Dictionary<string, string>(StringComparer.Ordinal);
         var selected = new List<string>(); var searches = new List<string>(); var omissions = new List<string>();
@@ -117,6 +166,10 @@ internal static class ServerLoad
         if (missing.Count != 0) { error = "Missing: " + string.Join(", ", missing); return false; }
         if (found.ContainsKey("--expected-log-error") != found.ContainsKey("--expected-log-reason"))
         { error = "An expected log error needs its full header and a written reason."; return false; }
+        if (found.ContainsKey("--client") != found.ContainsKey("--steam-userdata"))
+        { error = "--client needs --steam-userdata (and vice versa) to stage a disposable character safely."; return false; }
+        if (found.ContainsKey("--client-cli-port") && !found.ContainsKey("--client"))
+        { error = "--client-cli-port needs --client."; return false; }
         options = found; mods = selected; roots = searches; optional = omissions;
         return true;
     }

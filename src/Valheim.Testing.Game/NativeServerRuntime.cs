@@ -97,7 +97,7 @@ public sealed class NativeServerRuntime : IDisposable
     /// its password is generated for this run and its test-only session token is supplied only by
     /// <see cref="PinnedServerRun"/>. The caller must keep the staged runtime alive through the run.
     /// </summary>
-    public ServerRunPlan Plan(string worldRoot, int cliPort, int gamePort = 2456)
+    public ServerRunPlan Plan(string worldRoot, int cliPort, int gamePort = 2456, string? password = null)
     {
         if (cliPort is < 1024 or > 65535 || gamePort is < 1024 or > 65533)
             throw new ArgumentOutOfRangeException(nameof(cliPort), "Choose available CLI and game ports in their supported ranges.");
@@ -108,7 +108,9 @@ public sealed class NativeServerRuntime : IDisposable
         var identity = WorldIdentity.Read(Path.Combine(worldRoot, "worlds_local"));
         if (identity.Name != DefaultSmokeWorld.Name || identity.UidText != DefaultSmokeWorld.Uid || identity.SeedName != DefaultSmokeWorld.SeedName)
             throw new InvalidDataException("The dedicated smoke world metadata differs from the packaged fixture.");
-        string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
+        password ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
+        if (password.Length < 5 || password.Any(char.IsWhiteSpace))
+            throw new ArgumentException("The private server password needs at least five non-space characters.", nameof(password));
         var plan = new ServerRunPlan
         {
             Scenario = "native-smoke-server-load",

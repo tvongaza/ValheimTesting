@@ -38,6 +38,12 @@ public sealed class ClientRounds
     public required Func<GameActor> RestartServer { get; init; }
     /// <summary>Where the player stands to measure; null leaves the player where it joined.</summary>
     public HeightExpectation? Arrival { get; init; }
+    /// <summary>
+    /// Whether to enable god, ghost and debug protection after joining. The default protects a character before terrain
+    /// or movement checks. Set false only for a short load/join smoke or a scenario that needs ordinary gameplay and
+    /// intentionally avoids those modes; server admin privileges may be unavailable to a clean client.
+    /// </summary>
+    public bool ProtectPlayer { get; init; } = true;
     /// <summary>The arrival step's name within a round, saying where the player goes.</summary>
     public string ArriveStep { get; init; } = "arrive at the measurement point";
     /// <summary>The client's opening step's name; the default says whether it is launched or attached, with plugins pinned.</summary>
@@ -127,16 +133,16 @@ public sealed class ClientRounds
         {
             CrossplayLobby? lobby = null;
             round.Step("the server's crossplay lobby is open", () => lobby = Lobby!(round.Server));
-            round.Step("join the owned server's crossplay lobby with the disposable character, protected", () =>
+            round.Step("join the owned server's crossplay lobby with the disposable character" + (ProtectPlayer ? ", protected" : ""), () =>
             {
                 // Devcommands first; the join command exactly once, then the connection is awaited on the session state.
                 session.JoinCrossplay(lobby!.RemotePlayerId, Client.Character, WorldUid, Client.MenuExpectations, TimeSpan.FromSeconds(Client.JoinSeconds), cancellation: Cancellation,
                     worldExpectations: Client.WorldExpectations(WorldUid), requiredLocalFilename: preparedStart ? Client.Character : null);
                 round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
-                session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
+                session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
             });
         }
-        else round.Step("join the owned server with the disposable character, protected", () =>
+        else round.Step("join the owned server with the disposable character" + (ProtectPlayer ? ", protected" : ""), () =>
         {
             if (preparedStart)
             {
@@ -145,8 +151,8 @@ public sealed class ClientRounds
             }
             session.Join(Client.Join, Client.Character, Client.PasswordVariable, enableDevcommands: !preparedStart); // Join exactly once.
             round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
-            // Protects the player once the world is ready (god, ghost, debug mode, read back); fly stays off.
-            session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
+            // When requested, protects the player once the world is ready (god, ghost, debug mode, read back); fly stays off.
+            session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
         });
         if (Arrival is { } point)
         {

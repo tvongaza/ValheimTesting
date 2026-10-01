@@ -1,0 +1,90 @@
+namespace Valheim.Testing.Game;
+
+/// <summary>
+/// An owned client with only the pinned ValheimCLI core and packs. It is the client half of a server-only native smoke:
+/// selected server plugins and their dependencies are pinned absent when it joins. The source game is never edited.
+/// </summary>
+public sealed class NativeCleanClientRuntime : IDisposable
+{
+    public const string PasswordVariable = "VT_NATIVE_SMOKE_JOIN_PASSWORD";
+    public WorldFixture Copy { get; }
+    public string RuntimeDirectory => Copy.DirectoryPath;
+    public string CliManifestFile { get; }
+    public IReadOnlyDictionary<string, string> CliPins { get; }
+
+    private NativeCleanClientRuntime(WorldFixture copy, string manifest, Dictionary<string, string> pins)
+    { Copy = copy; CliManifestFile = manifest; CliPins = pins; }
+
+    /// <summary>Copies a prepared client install, clearing plugins, scripts, config and patchers only in the copy.</summary>
+    public static NativeCleanClientRuntime Prepare(string source, string outputParent, NativeDependencyLock dependencies,
+        int cliPort)
+    {
+        ArgumentNullException.ThrowIfNull(dependencies);
+        if (!dependencies.Ready || dependencies.CliFiles.Count == 0)
+            throw new InvalidDataException("A ready dependency lock with a pinned ValheimCLI build is required.");
+        if (cliPort is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(cliPort));
+        source = Path.GetFullPath(source);
+        _ = ClientLaunch.Detect(source);
+        var files = dependencies.CliFiles.Select(file => file.File).ToList();
+        var duplicate = files.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
+        if (duplicate != null) throw new InvalidDataException("Two pinned ValheimCLI files share filename " + duplicate.Key + ".");
+        var pins = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in dependencies.CliFiles)
+        {
+            if (!File.Exists(file.File) || !WorldFixture.Hash(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("A pinned ValheimCLI file changed: " + file.File);
+            foreach (var plugin in PluginMetadata.Read(file.File).Plugins)
+                if (!pins.TryAdd(plugin.Guid, PluginPins.Md5(file.File)))
+                    throw new InvalidDataException("Two pinned ValheimCLI files declare " + plugin.Guid + ".");
+        }
+        if (!pins.ContainsKey("valheimCLI.valheimCLI")) throw new InvalidDataException("The pinned client set has no ValheimCLI core.");
+
+        var copy = WorldFixture.Copy(source, outputParent, WorldFixture.Manifest(source));
+        try
+        {
+            string bep = Path.Combine(copy.DirectoryPath, "BepInEx");
+            foreach (string name in new[] { "plugins", "scripts", "config", "patchers" })
+            {
+                string folder = Path.Combine(bep, name);
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+                Directory.CreateDirectory(folder);
+            }
+            foreach (string file in files)
+            {
+                string target = Path.Combine(bep, "plugins", Path.GetFileName(file));
+                File.Copy(file, target);
+                if (WorldFixture.Hash(target) != WorldFixture.Hash(file))
+                    throw new IOException("A staged ValheimCLI file changed: " + file);
+            }
+            File.WriteAllText(Path.Combine(bep, "config", "valheimCLI.valheimCLI.cfg"),
+                "[Server]\nEnabled = true\nAllowOnServerClients = true\nPort = " +
+                cliPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
+            string manifest = Path.Combine(copy.DirectoryPath, "native-smoke-cli-manifest.json");
+            dependencies.CliManifest.Write(manifest);
+            return new NativeCleanClientRuntime(copy, manifest, pins);
+        }
+        catch { copy.Dispose(); throw; }
+    }
+
+    /// <summary>A strict owned-client join plan. Every named server plugin is required absent.</summary>
+    public ClientRunPlan Plan(int cliPort, int gamePort, IEnumerable<string> absentServerGuids)
+    {
+        ArgumentNullException.ThrowIfNull(absentServerGuids);
+        var pins = CliPins.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        foreach (string guid in absentServerGuids)
+            if (!pins.TryAdd(guid, "absent"))
+                throw new InvalidDataException("The clean client would load server plugin " + guid + ".");
+        var plan = new ClientRunPlan
+        {
+            Mode = "owned", Install = RuntimeDirectory, Port = cliPort, Join = "127.0.0.1:" + gamePort,
+            Character = DefaultSmokeCharacter.Name, PasswordVariable = PasswordVariable, Pins = pins,
+            InstallPins = InstallPins.Of(RuntimeDirectory), CliManifest = CliManifestFile,
+            Capabilities = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"],
+        };
+        plan.Validate(absentServerGuids.ToArray());
+        plan.Preflight();
+        return plan;
+    }
+
+    public void Dispose() => Copy.Dispose();
+}
