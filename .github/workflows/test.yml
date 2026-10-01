@@ -39,6 +39,11 @@ jobs:
       - run: dotnet --info
       - run: dotnet run scripts/bootstrap-cli.cs
       - run: dotnet run scripts/validate.cs
+      - name: Build candidate API reference
+        if: runner.os == 'Linux'
+        run: |
+          dotnet tool restore
+          dotnet run scripts/api-docs.cs
   mod-example:
     name: mod example (published packages)
     # Keep in step with examples/ModWithTests/.github/workflows/tests.yml. A copy outside the checkout leaves this

@@ -1,0 +1,7 @@
+apiRules:
+- include:
+    uidRegex: ^Valheim\.Testing(\.|$)
+- include:
+    uidRegex: ^Valheim\.Cli\.Testing(\.|$)
+- exclude:
+    uidRegex: .*

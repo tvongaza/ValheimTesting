@@ -86,7 +86,7 @@ public sealed record LogoutResult(CustomDataReading Before, ProfileFileState Fil
 /// blocks character saves (logged "Character save blocked") and when the disk is full.
 /// </para>
 /// <para>
-/// <see cref="Run(ClientRound, ClientRunPlan, string, CancellationToken)"/> reads the <see cref="Keys"/> (each must be set),
+/// <see cref="Run(ClientRound, ClientRunPlan, string, CancellationToken, string)"/> reads the <see cref="Keys"/> (each must be set),
 /// hashes the profile file, has the client leave to its menu, waits for a different hash, joins again with the plan's
 /// character (protected, as <see cref="ClientRounds"/> joins) and requires every key back with its value. Only a disposable
 /// local character: the game must report it saved <c>Local</c>, and <see cref="CharactersDirectory"/> must be the game's

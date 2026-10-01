@@ -6,6 +6,8 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 
 Bringing your own mod? Start with [the adoption guide](docs/adopting.md) and [a complete first mod test](examples/ModWithTests/README.md). Use [package setup](docs/getting-started.md) and the [example index](examples/README.md) for the next layer. Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually. Before a native run, read the [runtime hygiene and evidence checklist](docs/runtime-hygiene.md).
 
+Maintainers can build the [candidate API reference](docs/reference/index.md) from the current source. It is an inventory for the [stable-contract review](docs/reference/compatibility.md), not yet a published 1.0 API promise.
+
 New to Valheim plugins? The community wiki's [BepInEx and Harmony overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the modding concepts used by these examples. Its older code samples are background, not a substitute for this toolkit's pinned game-version checks; see [wiki version caveats](docs/runtime-hygiene.md#wiki-pages-that-predate-10).
 
 ## Contribute

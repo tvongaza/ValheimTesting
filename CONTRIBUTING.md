@@ -28,6 +28,10 @@ Fork the repository, clone your fork, and make a focused branch from current `ma
 ```sh
 dotnet run scripts/bootstrap-cli.cs
 dotnet run scripts/validate.cs
+
+# For a public API or documentation change, build the candidate reference too:
+dotnet tool restore
+dotnet run scripts/api-docs.cs
 ```
 
 Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game examples and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout.
