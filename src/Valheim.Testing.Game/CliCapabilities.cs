@@ -45,9 +45,15 @@ public static class CliCapabilities
     internal static Dictionary<string, int> Listing(GameActor actor)
     {
         using var document = GameActor.ParseLine(ListingReply(actor), "EXTENSIONS ");
-        if (document.RootElement.GetProperty("apiVersion").GetInt32() != 1) throw new InvalidOperationException("Unsupported extension API.");
+        return Parse(document.RootElement);
+    }
+
+    /// <summary>The live commands of a <c>cli_extensions</c> result (its JSON after <c>EXTENSIONS </c>); closing owners are not live.</summary>
+    internal static Dictionary<string, int> Parse(JsonElement root)
+    {
+        if (root.GetProperty("apiVersion").GetInt32() != 1) throw new InvalidOperationException("Unsupported extension API.");
         var live = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var extension in document.RootElement.GetProperty("extensions").EnumerateArray())
+        foreach (var extension in root.GetProperty("extensions").EnumerateArray())
         {
             if (extension.GetProperty("closing").GetBoolean()) continue;
             foreach (var command in extension.GetProperty("commands").EnumerateArray())

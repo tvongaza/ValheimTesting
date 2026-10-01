@@ -5,7 +5,7 @@ namespace Valheim.Testing.Game;
 /// <summary>
 /// Plugin pins derived from the staged files instead of typed by hand: the MD5 that <c>cli_manifest</c> and
 /// <c>cli_expect</c> compare, of the exact file the run installs. A typed file name that is not there is refused with what
-/// the folder holds; a typed hash that matches no installed file is what <see cref="ClientRunPlan.Preflight"/> refuses.
+/// the folder holds; a typed hash that matches no installed file is what <see cref="ClientRunPlan.Preflight()"/> refuses.
 /// </summary>
 public static class PluginPins
 {
@@ -74,16 +74,11 @@ internal static class OwnedClientPreflight
     internal static Dictionary<string, List<string>> RequireInstalled(string install, IReadOnlyDictionary<string, string> pins)
     {
         var installed = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (string folder in new[] { Plugins, Scripts })
+        foreach (string dll in InstalledDlls(install))
         {
-            string root = Path.Combine(install, folder);
-            if (!Directory.Exists(root)) continue;
-            foreach (string dll in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !InstallPins.IsMacMetadata(path)))
-            {
-                string md5 = PluginPins.Md5(dll);
-                if (!installed.TryGetValue(md5, out var paths)) installed[md5] = paths = [];
-                paths.Add(Path.GetRelativePath(install, dll).Replace('\\', '/'));
-            }
+            string md5 = PluginPins.Md5(dll);
+            if (!installed.TryGetValue(md5, out var paths)) installed[md5] = paths = [];
+            paths.Add(Path.GetRelativePath(install, dll).Replace('\\', '/'));
         }
         var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var problems = new List<string>();
@@ -104,6 +99,18 @@ internal static class OwnedClientPreflight
             throw new InvalidOperationException($"The client install does not hold the plugin builds the plan pins: {string.Join("; ", problems)}. " +
                 "Stage the pinned builds, or derive the pins from the staged files (PluginPins.Of) rather than typing names or hashes.");
         return located;
+    }
+
+    /// <summary>Every DLL BepInEx can load from the install: <c>BepInEx/plugins</c> and <c>BepInEx/scripts</c>, any subfolder (macOS metadata files skipped).</summary>
+    internal static IEnumerable<string> InstalledDlls(string install)
+    {
+        foreach (string folder in new[] { Plugins, Scripts })
+        {
+            string root = Path.Combine(install, folder);
+            if (!Directory.Exists(root)) continue;
+            foreach (string dll in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !InstallPins.IsMacMetadata(path)).Order(StringComparer.Ordinal))
+                yield return dll;
+        }
     }
 
     // A file whose name holds the pin's last dotted part (com.jotunn.jotunn: Jotunn.dll), for the hint.

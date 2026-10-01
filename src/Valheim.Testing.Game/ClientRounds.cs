@@ -68,6 +68,7 @@ public sealed class ClientRounds
         Report.Provenance["clientStart"] = Client.StartAtCharacterSave ? "characterSave" : "teleport";
         // What an owned client is launched as (never another slice); an attached client's is its operator's.
         Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
+        Report.Provenance["cliPreflight"] = Client.CliPreflight;
         if (Client.StartAtCharacterSave) Report.Provenance["clientStartSha256"] = Client.CharacterStart!.Sha256;
         var completed = new List<string>();
         ClientSession? session = null;

@@ -97,7 +97,12 @@ public sealed class ClientSession : IDisposable
         GameActor actor;
         try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
         catch { transport.Dispose(); throw; }
-        try { actor.VerifyEnvironment(plan.MenuExpectations); return new ClientSession(actor, null).Using(account); }
+        try
+        {
+            actor.VerifyEnvironment(plan.MenuExpectations);
+            if (plan.Capabilities.Length != 0) CliCapabilities.Require(actor, plan.Capabilities); // The only capability check an attached client gets.
+            return new ClientSession(actor, null).Using(account);
+        }
         catch { actor.Dispose(); throw; }
     }
 
@@ -112,7 +117,7 @@ public sealed class ClientSession : IDisposable
     /// when <see cref="ClientLaunch"/> refuses the install for the plan's <see cref="ClientRunPlan.Architecture"/> (an
     /// arm64 request without an arm64 Doorstop library or a native BepInEx core is refused, never run under Rosetta) or its
     /// Doorstop proxy and configuration are from different versions, or when the rest of
-    /// <see cref="ClientRunPlan.Preflight"/>'s install checks fail (a pinned plugin build that is not installed, a script
+    /// <see cref="ClientRunPlan.Preflight()"/>'s install checks fail (a pinned plugin build that is not installed, a script
     /// ScriptEngine will not load at start, a standing expectations file that would refuse the run). Once started, BepInEx must
     /// write this launch's first log line within <see cref="ClientRunPlan.BepInExSeconds"/>, or startup fails then, naming the
     /// loader, instead of at the start deadline. A failed startup stops the process it started. The process's output goes to
@@ -221,6 +226,7 @@ public sealed class ClientSession : IDisposable
             try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
             catch { transport.Dispose(); throw; }
             actor.VerifyEnvironment(plan.MenuExpectations);
+            if (plan.Capabilities.Length != 0) CliCapabilities.Require(actor, plan.Capabilities); // Live, after any static manifest check.
             // A lease lost during startup: this client must not run on the account.
             account?.ThrowIfLost();
             return new ClientSession(actor, process, logs, architecture).Using(account);

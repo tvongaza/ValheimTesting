@@ -441,6 +441,7 @@ internal sealed class PreflightInstall : IDisposable
         return install;
     }
     public void Add(string relative, string content) => _install.Add(relative, content);
+    public void Add(string relative, byte[] content) => _install.Add(relative, content);
 
     /// <summary>Points ValheimCLI's <c>[Expectations] File</c> at <paramref name="file"/> in BepInEx/config, written with <paramref name="text"/> unless null.</summary>
     public void Standing(string file, string? text, bool strict = false)

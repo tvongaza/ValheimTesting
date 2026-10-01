@@ -114,8 +114,9 @@ public static class HostedScenario
 /// <summary>
 /// The hosted run's own entry point, beside the pinned server runner (a host has no dedicated server to pin):
 /// <c>validate-host|host &lt;plan.json&gt; &lt;new-output-directory&gt;</c>. <c>validate-host</c> checks the plan and runs
-/// the same preflight <see cref="HostRounds"/> starts with (<see cref="ClientRunPlan.Preflight"/>: the fixture world's
-/// hashes and own world UID, and an owned client's install), and copies or launches nothing. <c>host</c> runs
+/// the same preflight <see cref="HostRounds"/> starts with (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/>: the
+/// fixture world's hashes and own world UID, and an owned client's install, with its ValheimCLI set against its
+/// <c>cliManifest</c> when the plan names one), and copies or launches nothing. <c>host</c> runs
 /// <see cref="HostedScenario"/>, then scans the owned client's logs, writes <c>result.json</c> and <c>junit.xml</c> and
 /// prints PASS or FAIL.
 /// </summary>
@@ -150,8 +151,9 @@ public static class HostedRun
             if (args[0] == ValidateMode)
             {
                 // The run's first step, alone: a wrong fixture or install fails here as it would before the run copies anything.
+                report.Provenance["cliPreflight"] = plan.Client.CliPreflight;
                 report.Step(plan.Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
-                    plan.Client.Preflight);
+                    () => plan.Client.Preflight(CliCapabilities.HostedRounds));
             }
             else
             {
