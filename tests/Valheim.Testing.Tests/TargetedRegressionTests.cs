@@ -186,6 +186,14 @@ public sealed class TargetedRegressionTests : IDisposable
         new TargetedRegression(_rig.Manifest()).Stage("candidate").Verify();
         Assert.Equal("3.4.0", File.ReadAllText(Path.Combine(_rig.Install, ".doorstop_version")));
         Assert.False(File.Exists(earlier)); // Copied again from the game.
+
+        // Removing a loader file must also invalidate the copy. Otherwise an old proxy can survive in the install.
+        string stale = Path.Combine(_rig.Install, "from-the-second-copy.txt");
+        File.WriteAllText(stale, "only in the disposable install");
+        File.Delete(Path.Combine(_rig.Game, ".doorstop_version"));
+        new TargetedRegression(_rig.Manifest()).Stage("candidate").Verify();
+        Assert.False(File.Exists(Path.Combine(_rig.Install, ".doorstop_version")));
+        Assert.False(File.Exists(stale));
     }
 
     [Fact] public void AMissingCharacterIsRefusedBeforeTheLaunch()
