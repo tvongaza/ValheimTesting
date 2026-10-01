@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Valheim.Testing.Game;
 
+if (args.Length != 0 && args[0] == "server-load") return await ServerLoad.RunAsync(args[1..]);
+
 // This first slice is a client-hosted smoke. An owned dedicated server follows in #156.
 if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {

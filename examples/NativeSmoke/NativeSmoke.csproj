@@ -5,5 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
-  <ItemGroup><ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" /></ItemGroup>
+  <ItemGroup>
+    <Compile Remove="SessionAdapter/**/*.cs" />
+    <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
+  </ItemGroup>
 </Project>
