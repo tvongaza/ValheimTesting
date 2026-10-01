@@ -106,7 +106,7 @@ public static class ServerLaunch
         else if (platform == ServerPlatform.Linux) BepInExLoader.RequireFile(runtime, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the runtime");
         else
         {
-            macDoorstop = ClientLaunch.MacDoorstop(runtime, executable, macArchitecture);
+            macDoorstop = ClientLaunch.MacDoorstop(runtime, executable, macArchitecture, client: false);
             // DYLD_INSERT_LIBRARIES splits on ':', so such a path cannot be listed.
             if (runtime.Contains(':')) throw new ArgumentException("A macOS runtime path cannot contain ':'.", nameof(runtimeDirectory));
         }

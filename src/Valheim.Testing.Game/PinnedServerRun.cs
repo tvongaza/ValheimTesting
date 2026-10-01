@@ -67,7 +67,8 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
     public List<RunLog> Logs { get; } = [];
 
     /// <summary>
-    /// Opens the plan's game client and adds its logs to <see cref="Logs"/>. With a profile that names clients, an owned client
+    /// Opens the plan's game client and adds its logs to <see cref="Logs"/>, also when its startup fails after the process
+    /// started (a client that never reached its menu is still scanned and listed in the result). With a profile that names clients, an owned client
     /// starts on its profile host, inside that host's desktop session (<see cref="InteractiveClient"/>): the install, CLI port
     /// and host come from the profile (the plan's <c>install</c> is not read), the install's patchers and pins are checked on the
     /// host, the host's lock is held for the rest of the run, and ValheimCLI is reached through the host's loopback tunnel.
@@ -79,21 +80,20 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
         ArgumentNullException.ThrowIfNull(client);
         if (client.StartAtCharacterSave && Hosted != null && Hosted.Profile.Clients.Count != 0)
             throw new NotSupportedException("A prepared character is staged on this runner's machine; remote profile clients need host-side staging and are not supported yet.");
-        ClientSession session;
         if (Hosted != null && Hosted.Profile.Clients.Count != 0 && client.Owned)
         {
             var clients = Hosted.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList();
             string name = profileClient ?? (clients.Count == 1 ? clients[0]
                 : throw new ArgumentException($"The environment profile names clients {string.Join(", ", clients)}; say which one opens.", nameof(profileClient)));
-            session = Hosted.OpenClient(Output, client, name, Cancellation);
+            ClientSession session;
+            // A startup that fails after the client started still kept its logs: they are scanned and listed like an opened client's.
+            try { session = Hosted.OpenClient(Output, client, name, Cancellation); }
+            catch (Exception error) { Logs.AddRange(ClientSession.KeptLogs(error)); throw; }
+            Logs.AddRange(session.Logs); // Scanned with the server's at teardown, after the scenario closes the client.
+            return session;
         }
-        else
-        {
-            if (profileClient != null) throw new ArgumentException("A profile client opens only for an owned client in a run with an environment profile that names clients.", nameof(profileClient));
-            session = ClientSession.Open(client, Output, Cancellation);
-        }
-        Logs.AddRange(session.Logs); // Scanned with the server's at teardown, after the scenario closes the client.
-        return session;
+        if (profileClient != null) throw new ArgumentException("A profile client opens only for an owned client in a run with an environment profile that names clients.", nameof(profileClient));
+        return ClientSession.Open(client, Output, Logs, Cancellation);
     }
 }
 

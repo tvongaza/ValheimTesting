@@ -212,6 +212,10 @@ internal sealed class HostedServerRun
     private async Task<ClientSession> OpenClientAsync(string output, ClientRunPlan plan, string name, CancellationToken cancellation)
     {
         if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment profile.", nameof(name));
+        // A profile client host runs Windows or Linux (HostClientLaunch refuses macOS), whose clients are x64 only.
+        if (plan.LaunchArchitecture != ClientArchitecture.X64)
+            throw new ArgumentException($"Profile client '{name}' starts in a remote host's desktop session, where only x64 Windows and Linux clients run; " +
+                "architecture arm64 is for a macOS client launched in this runner's own session (ClientSession.Launch). Leave architecture out.");
         var hostProfile = Profile.Hosts[role.Host];
         var platform = hostProfile.Platform switch { "windows" => ClientPlatform.Windows, "linux" => ClientPlatform.Linux, _ => ClientPlatform.MacOS };
         var launch = HostClientLaunch.Create(platform, role.Install, plan.LaunchArguments, secretVariables: plan.PasswordVariable is { } password ? new[] { password } : null);

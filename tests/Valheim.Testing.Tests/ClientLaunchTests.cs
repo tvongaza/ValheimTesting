@@ -1,11 +1,15 @@
 using System.Buffers.Binary;
+using System.Reflection;
+using System.Reflection.Emit;
 using Valheim.Testing.Game;
 using Xunit;
 
 public class ClientLaunchTests
 {
     // Mach-O CPU types; the fake executables and libraries below carry real headers so slice detection is exercised.
-    private const int X86_64 = 0x01000007, Arm64 = 0x0100000C;
+    internal const int X86_64 = 0x01000007, Arm64 = 0x0100000C;
+    // BepInExPack_Valheim's core ships legacy MonoMod; the native Apple Silicon core, the reorganised MonoMod 25.
+    internal static readonly Version LegacyDetour = new(22, 1, 29, 1), NativeDetour = new(25, 3, 4, 0);
 
     [Fact] public void CurrentHostFollowsTheOperatingSystem()
     {
@@ -240,7 +244,7 @@ public class ClientLaunchTests
     }
     [Fact] public void MacArm64UsesTheUniversalLibraryAndX64KeepsThePackOne()
     {
-        using var install = Install.Mac(universalDoorstop: true);
+        using var install = Install.Mac(universalDoorstop: true, core: NativeDetour);
         var arm = ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS).ArgumentList.ToList();
         Assert.Equal("-arm64", arm[0]);
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "libdoorstop.dylib") }, ExportPair(arm, "DYLD_INSERT_LIBRARIES"));
@@ -254,12 +258,64 @@ public class ClientLaunchTests
         var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS));
         Assert.Contains("arm64 slice", error.Message);
         Assert.Contains("libdoorstop_x64.dylib: x86_64", error.Message);
-        Assert.Contains("Rosetta", error.Message);
+        Assert.Contains("UnityDoorstop 4.5 or later, universal or arm64-only", error.Message);
+        Assert.Contains("request x64 to run under Rosetta", error.Message);
         Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
+    }
+    // What a native install looks like: an arm64-only (or universal) Doorstop at the root, the pack's x64 library removed.
+    [Fact] public void MacArm64OnlyDoorstopLaunchesNativelyAndRefusesX64()
+    {
+        using var install = Install.Mac(packDoorstop: false, arm64Doorstop: true, core: NativeDetour);
+        var arm = ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS).ArgumentList.ToList();
+        Assert.Equal("-arm64", arm[0]);
+        Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "libdoorstop.dylib") }, ExportPair(arm, "DYLD_INSERT_LIBRARIES"));
+        var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS));
+        Assert.Contains("No Doorstop library in the install has an x86_64 slice (libdoorstop.dylib: arm64)", error.Message);
+        Assert.Equal(new[] { ClientArchitecture.Arm64 }, ClientLaunch.LaunchArchitectures(install.Root));
+    }
+    [Fact] public void MacArm64OnlyDoorstopBesideThePackLibraryServesEachArchitecture()
+    {
+        using var install = Install.Mac(arm64Doorstop: true, core: NativeDetour);
+        var arm = ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS).ArgumentList.ToList();
+        Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "libdoorstop.dylib") }, ExportPair(arm, "DYLD_INSERT_LIBRARIES"));
+        var x64 = ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS).ArgumentList.ToList();
+        Assert.Equal("-x86_64", x64[0]);
+        Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "doorstop_libs", "libdoorstop_x64.dylib") }, ExportPair(x64, "DYLD_INSERT_LIBRARIES"));
+        Assert.Equal(new[] { ClientArchitecture.X64, ClientArchitecture.Arm64 }, ClientLaunch.LaunchArchitectures(install.Root));
+    }
+    // The pack's core with an arm64 Doorstop: dyld would load it natively and the first Harmony patch would fail, so it never starts.
+    [Fact] public void MacArm64WithTheLegacyMonoModCoreIsRefusedAndX64StillLaunches()
+    {
+        using var install = Install.Mac(universalDoorstop: true, core: LegacyDetour);
+        var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS));
+        Assert.Contains("MonoMod.RuntimeDetour.dll is version 22.1.29.1", error.Message);
+        Assert.Contains("MonoMod before 25 cannot apply Harmony hooks on arm64", error.Message);
+        Assert.Contains("request x64 to run under Rosetta", error.Message);
+        Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal("-x86_64", ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS).ArgumentList[0]);
+    }
+    [Fact] public void MacArm64WithoutAReadableMonoModCoreIsRefused()
+    {
+        using var install = Install.Mac(universalDoorstop: true);
+        var missing = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS));
+        Assert.Contains("has no " + Path.Combine("BepInEx", "core", "MonoMod.RuntimeDetour.dll"), missing.Message);
+        install.Add("BepInEx/core/MonoMod.RuntimeDetour.dll", "fake");
+        var unreadable = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS));
+        Assert.Contains("MonoMod.RuntimeDetour.dll is not a .NET assembly", unreadable.Message);
+        Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
+    }
+    // Unchanged by the native path: an x64 launch reads no MonoMod version, whatever core the install has.
+    [Fact] public void MacX64NeverReadsTheCoresMonoModVersion()
+    {
+        using var install = Install.Mac(universalDoorstop: true);
+        install.Add("BepInEx/core/MonoMod.RuntimeDetour.dll", "fake");
+        var start = ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS);
+        Assert.Equal("-x86_64", start.ArgumentList[0]);
+        Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "doorstop_libs", "libdoorstop_x64.dylib") }, ExportPair(start.ArgumentList.ToList(), "DYLD_INSERT_LIBRARIES"));
     }
     [Fact] public void MacGameWithoutTheRequestedSliceIsRefused()
     {
-        using var install = Install.Mac(game: Thin(X86_64), universalDoorstop: true);
+        using var install = Install.Mac(game: Thin(X86_64), universalDoorstop: true, core: NativeDetour);
         var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS));
         Assert.Contains("has no arm64 slice (found: x86_64)", error.Message);
         Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
@@ -347,7 +403,7 @@ public class ClientLaunchTests
         Assert.Empty(ClientLaunch.MachOArchitectures(install.Add("class", new byte[] { 0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x00, 0x00, 0x41 })));
     }
 
-    private static string[] ExportPair(List<string> arguments, string name)
+    internal static string[] ExportPair(List<string> arguments, string name)
     {
         int value = arguments.FindIndex(argument => argument.StartsWith(name + "=", StringComparison.Ordinal));
         Assert.True(value > 0, name + " is not exported to arch");
@@ -355,14 +411,14 @@ public class ClientLaunchTests
     }
     private static string DoorstopConfig(string enabled, string target) =>
         $"# General options for Unity Doorstop\n[General]\n\n# Enable Doorstop?\n{enabled}\n\n{target}\n\n[UnityMono]\ndebug_enabled = false\n";
-    private static byte[] Thin(int cpu)
+    internal static byte[] Thin(int cpu)
     {
         var image = new byte[32];
         BinaryPrimitives.WriteUInt32LittleEndian(image, 0xFEEDFACF);
         BinaryPrimitives.WriteInt32LittleEndian(image.AsSpan(4), cpu);
         return image;
     }
-    private static byte[] Fat(params int[] cpus)
+    internal static byte[] Fat(params int[] cpus)
     {
         var image = new byte[8 + cpus.Length * 20];
         BinaryPrimitives.WriteUInt32BigEndian(image, 0xCAFEBABE);
@@ -371,7 +427,17 @@ public class ClientLaunchTests
         return image;
     }
 
-    private sealed class Install : IDisposable
+    // A .NET assembly with only a name and version, as BepInEx's core holds MonoMod.RuntimeDetour.dll; nothing loads it.
+    internal static byte[] ManagedAssembly(string name, Version version)
+    {
+        var assembly = new PersistedAssemblyBuilder(new AssemblyName(name) { Version = version }, typeof(object).Assembly);
+        assembly.DefineDynamicModule(name).DefineType("Marker", TypeAttributes.Public).CreateType();
+        using var image = new MemoryStream();
+        assembly.Save(image);
+        return image.ToArray();
+    }
+
+    internal sealed class Install : IDisposable
     {
         private readonly string _parent = Path.Combine(Path.GetTempPath(), "client-launch-" + Guid.NewGuid().ToString("N"));
         public string Root { get; }
@@ -405,14 +471,18 @@ public class ClientLaunchTests
             install.SetExecutable(executable);
             return install;
         }
-        // A universal game with the pack's x64-only Doorstop library, optionally beside the universal one of BepInEx's macOS build.
-        public static Install Mac(string name = "install", bool executable = true, string bundle = "Valheim.app", byte[]? game = null, bool universalDoorstop = false)
+        // A universal game with the pack's x64-only Doorstop library (unless packDoorstop is false), optionally with a universal
+        // or arm64-only libdoorstop.dylib at the root, and a core whose MonoMod.RuntimeDetour.dll has the given version.
+        public static Install Mac(string name = "install", bool executable = true, string bundle = "Valheim.app", byte[]? game = null, bool universalDoorstop = false,
+            bool packDoorstop = true, bool arm64Doorstop = false, Version? core = null)
         {
             var install = new Install(name);
             install.Executable = install.Add(bundle + "/Contents/MacOS/Valheim", game ?? Fat(X86_64, Arm64));
-            install.Add("doorstop_libs/libdoorstop_x64.dylib", Thin(X86_64));
+            if (packDoorstop) install.Add("doorstop_libs/libdoorstop_x64.dylib", Thin(X86_64));
             if (universalDoorstop) install.Add("libdoorstop.dylib", Fat(X86_64, Arm64));
+            if (arm64Doorstop) install.Add("libdoorstop.dylib", Thin(Arm64));
             install.AddCore();
+            if (core != null) install.Add("BepInEx/core/MonoMod.RuntimeDetour.dll", ManagedAssembly("MonoMod.RuntimeDetour", core));
             install.SetExecutable(executable);
             return install;
         }

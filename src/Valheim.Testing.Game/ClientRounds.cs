@@ -66,6 +66,8 @@ public sealed class ClientRounds
         Report.Provenance["clientRounds"] = string.Join(",", Rounds);
         Report.Provenance["clientJoin"] = Client.Crossplay ? "crossplay" : "address";
         Report.Provenance["clientStart"] = Client.StartAtCharacterSave ? "characterSave" : "teleport";
+        // What an owned client is launched as (never another slice); an attached client's is its operator's.
+        Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
         if (Client.StartAtCharacterSave) Report.Provenance["clientStartSha256"] = Client.CharacterStart!.Sha256;
         var completed = new List<string>();
         ClientSession? session = null;

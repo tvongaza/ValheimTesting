@@ -23,6 +23,11 @@ public sealed class ClientSession : IDisposable
     /// <summary>The owned client's process ID, or null for an attached client.</summary>
     public int? ProcessId => _process?.Id;
     /// <summary>
+    /// The slice the owned client was launched as (<see cref="ClientRunPlan.Architecture"/>; x64 unless the plan asked for arm64),
+    /// or null for an attached client, whose operator chose it.
+    /// </summary>
+    public ClientArchitecture? Architecture { get; }
+    /// <summary>
     /// The owned client's logs as kept beside the evidence once it is disposed (its BepInEx log and Unity's Player.log),
     /// for a teardown <see cref="ScenarioReport.ScanLogs"/>; empty for an attached client, whose logs are its operator's.
     /// </summary>
@@ -33,11 +38,38 @@ public sealed class ClientSession : IDisposable
     /// <summary>How the owned client ended once disposed; null before that, and for an attached client.</summary>
     public ProcessStop? Stopped { get; private set; }
 
-    private ClientSession(GameActor actor, IServerProcess? process, IReadOnlyList<RunLog>? logs = null) { Actor = actor; _process = process; Logs = logs ?? []; }
+    private ClientSession(GameActor actor, IServerProcess? process, IReadOnlyList<RunLog>? logs = null, ClientArchitecture? architecture = null)
+    {
+        Actor = actor; _process = process; Logs = logs ?? []; Architecture = architecture;
+    }
 
     /// <summary><see cref="Launch(ClientRunPlan, string, CancellationToken)"/> or <see cref="Attach"/>, as the plan's mode says.</summary>
     public static ClientSession Open(ClientRunPlan plan, string output, CancellationToken cancellation = default) =>
         plan.Owned ? Launch(plan, output, cancellation) : Attach(plan, output);
+
+    /// <summary>
+    /// <see cref="Open(ClientRunPlan, string, CancellationToken)"/>, adding the logs the owned client keeps beside the evidence
+    /// (<see cref="Logs"/>) to <paramref name="logs"/> for the teardown scan: when the session opens, and also when its startup
+    /// fails after the process started, so a client that never reached its menu is still scanned and listed in the result.
+    /// </summary>
+    public static ClientSession Open(ClientRunPlan plan, string output, ICollection<RunLog> logs, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(logs);
+        ClientSession session;
+        try { session = Open(plan, output, cancellation); }
+        catch (Exception error)
+        {
+            foreach (var log in KeptLogs(error)) logs.Add(log);
+            throw;
+        }
+        foreach (var log in session.Logs) logs.Add(log);
+        return session;
+    }
+
+    // A failed owned startup carries the logs its stopped process kept, for Open's log list (and the profile client's path).
+    private const string KeptLogsKey = "Valheim.Testing.Game.ClientSession.KeptLogs";
+    /// <summary>The logs a failed owned startup kept beside the evidence (its process had started); empty for any other failure.</summary>
+    internal static IReadOnlyList<RunLog> KeptLogs(Exception error) => error.Data[KeptLogsKey] as IReadOnlyList<RunLog> ?? [];
 
     /// <summary>Connects to an operator's client and verifies its menu pins. The operator launched it and still owns it.</summary>
     public static ClientSession Attach(ClientRunPlan plan, string output, IGameTransport? transport = null)
@@ -58,7 +90,9 @@ public sealed class ClientSession : IDisposable
     /// when something already listens on the client's CLI port (a command could reach a client this session does not own),
     /// when no Steam client is running here, when the plan's password variable is not set in this process (the client
     /// inherits it), when the install's <c>BepInEx/patchers</c> holds anything the plan's <see cref="ClientRunPlan.Patchers"/>
-    /// does not name, or when its game build, BepInEx core or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>.
+    /// does not name, when its game build, BepInEx core or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>,
+    /// or when <see cref="ClientLaunch"/> refuses the install for the plan's <see cref="ClientRunPlan.Architecture"/> (an
+    /// arm64 request without an arm64 Doorstop library or a native BepInEx core is refused, never run under Rosetta).
     /// A failed startup stops the process it started. The process's output goes to
     /// <c>client-boot.stdout.log</c>/<c>.stderr.log</c>, and its BepInEx log and Unity's Player.log are copied beside them
     /// (<c>client-boot.game-0.log</c>, <c>client-boot.game-1.log</c>) when it stops; <see cref="Logs"/> lists them.
@@ -68,6 +102,7 @@ public sealed class ClientSession : IDisposable
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
         BepInExLoader.RequirePatchers(plan.Install, plan.Patchers, "client install");
         plan.CheckInstallPins();
+        var start = StartInfo(plan, ClientLaunch.CurrentHost); // The install's loader and slices, before any port or Steam check.
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
         try { reservation.Start(); }
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }
@@ -76,7 +111,6 @@ public sealed class ClientSession : IDisposable
         string log = Path.Combine(plan.Install, "BepInEx", "LogOutput.log");
         var platform = ClientLaunch.Detect(plan.Install);
         string playerLog = PlayerLog(platform);
-        var start = ClientLaunch.CreateStartInfo(plan.Install, plan.LaunchArguments);
         string prefix = Path.Combine(output, "client-boot");
         LogWait? cliLog = null;
         try
@@ -99,6 +133,10 @@ public sealed class ClientSession : IDisposable
         }
         finally { cliLog?.Dispose(); }
     }
+
+    /// <summary>The owned launch of the plan's install as the plan's architecture, built for <paramref name="host"/> (injectable for tests).</summary>
+    internal static ProcessStartInfo StartInfo(ClientRunPlan plan, ClientPlatform host) =>
+        ClientLaunch.CreateStartInfo(plan.Install, plan.LaunchArguments, null, plan.LaunchArchitecture, true, host);
 
     /// <summary>Where Unity writes the game client's Player.log on <paramref name="platform"/> (company IronGate, product Valheim).</summary>
     internal static string PlayerLog(ClientPlatform platform)
@@ -127,13 +165,14 @@ public sealed class ClientSession : IDisposable
     {
         if (plan.PasswordVariable is { } variable && Environment.GetEnvironmentVariable(variable) == null)
             throw new InvalidOperationException($"Set {variable} in this runner's environment; the launched client inherits it for the join.");
+        var architecture = plan.LaunchArchitecture;
         var clock = Stopwatch.StartNew();
         var deadline = TimeSpan.FromSeconds(plan.StartSeconds);
         var process = start();
         GameActor? actor = null;
         try
         {
-            File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["install"] = plan.Install }, plan.Pinned)));
+            File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["install"] = plan.Install, ["architecture"] = ClientLaunch.PlanName(architecture) }, plan.Pinned)));
             using (var abandon = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             {
                 var exited = process.WaitForExitAsync(abandon.Token);
@@ -151,10 +190,12 @@ public sealed class ClientSession : IDisposable
             try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
             catch { transport.Dispose(); throw; }
             actor.VerifyEnvironment(plan.MenuExpectations);
-            return new ClientSession(actor, process, logs);
+            return new ClientSession(actor, process, logs, architecture);
         }
-        catch
+        catch (Exception error)
         {
+            // Stopping keeps the logs beside the evidence; the caller lists them for the scan even though no session opened.
+            if (logs is { Count: > 0 }) error.Data[KeptLogsKey] = logs;
             actor?.Dispose();
             try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
             throw;

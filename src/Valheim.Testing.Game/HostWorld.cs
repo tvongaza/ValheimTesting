@@ -289,6 +289,7 @@ public sealed class HostRounds
         Report.Provenance["role"] = "host";
         Report.Provenance["hostCrossplay"] = plan.Crossplay ? "true" : "false";
         Report.Provenance["hostRounds"] = string.Join(",", Rounds);
+        Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
         var completed = new List<string>();
         HostedWorld? world = null;
         ClientSession? session = null;

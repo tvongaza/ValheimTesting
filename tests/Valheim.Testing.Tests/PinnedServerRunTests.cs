@@ -16,7 +16,8 @@ public sealed class PinnedServerRunTests : IDisposable
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
 
     // runtimePins: the pins to write (default: the runtime's own). Unpinned: pinning "none", no pins and no fixture manifests.
-    private string WritePlan(bool linux, string[]? patchers = null, Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false)
+    private string WritePlan(bool linux, string[]? patchers = null, Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false,
+        object? client = null)
     {
         Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
         string server = Path.Combine(Runtime, linux ? ServerLaunch.LinuxExecutable : ServerLaunch.WindowsExecutable);
@@ -38,6 +39,7 @@ public sealed class PinnedServerRunTests : IDisposable
         };
         if (unpinned) plan["pinning"] = "none";
         else plan["runtimePins"] = runtimePins ?? InstallPins.Of(Runtime);
+        if (client != null) plan["client"] = client;
         string path = Path.Combine(_root, "plan.json");
         File.WriteAllText(path, JsonSerializer.Serialize(plan));
         return path;
@@ -53,6 +55,24 @@ public sealed class PinnedServerRunTests : IDisposable
         SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60)),
     };
     private JsonElement Result() => JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "result.json"))).RootElement;
+    // A mod plan with a client section, read and validated the way a mod runner's ReadPlan does.
+    private static PinnedServerRunOptions<CrossplayPlanTests.ClientPlan> ClientOptions(FakeOwnedServer? server = null) => new()
+    {
+        Name = "toolkit-smoke",
+        ReadPlan = path =>
+        {
+            var plan = ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path);
+            plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); plan.Client?.Validate();
+            return plan;
+        },
+        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", EnableDevcommands = false,
+        Scenario = _ => Task.CompletedTask,
+        SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60)),
+    };
+    private static object MacClient(string install, string architecture) => new
+    {
+        mode = "owned", install, architecture, port = 5556, join = "127.0.0.1:2456", character = "Tester", pinning = "none",
+    };
     private static bool HostRunsLinux => !OperatingSystem.IsWindows();
 
     [Fact] public async Task ValidateCopiesAndVerifiesTheFixturesWithoutLaunching()
@@ -68,6 +88,22 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(InstallPins.Of(Runtime).Game, result.GetProperty("Provenance").GetProperty("runtimeGameSha256").GetString());
         Assert.Equal("strict", result.GetProperty("Pinning").GetString());
         Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json"))); Assert.True(File.Exists(Path.Combine(Output, "junit.xml")));
+    }
+    // The launch's architecture check runs when the plan is read: validate refuses the plan, and run refuses it before the server starts.
+    [Fact] public async Task AnArm64ClientWithoutTheNativeCoreIsRefusedAtValidateAndBeforeTheServerStarts()
+    {
+        using var legacy = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.LegacyDetour);
+        string plan = WritePlan(linux: HostRunsLinux, client: MacClient(legacy.Root, "arm64"));
+        Assert.Contains("MonoMod before 25", Assert.Throws<ArgumentException>(() => ClientOptions().ReadPlan(plan)).Message);
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], ClientOptions()));
+        Assert.False(Directory.Exists(Output)); // Refused before anything was copied or written.
+        var server = new FakeOwnedServer("test.mod");
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], ClientOptions(server)));
+        Assert.Empty(server.Events); Assert.False(Directory.Exists(Output));
+        using var native = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
+        string nativePlan = WritePlan(linux: HostRunsLinux, client: MacClient(native.Root, "arm64"));
+        Assert.Equal(ClientArchitecture.Arm64, ClientOptions().ReadPlan(nativePlan).Client!.LaunchArchitecture);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", nativePlan, Output], ClientOptions()));
     }
     [Fact] public async Task ExistingEvidenceIsNeverOverwrittenAndBadUsageIsRefused()
     {

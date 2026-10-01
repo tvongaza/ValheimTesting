@@ -288,7 +288,8 @@ public class ServerLaunchTests
         Assert.Contains("no arm64 slice", Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(intelOnly.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64)).Message);
         using var stockDoorstop = Runtime.Mac(doorstop: Thin(X86_64));
         var error = Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(stockDoorstop.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64));
-        Assert.Contains("universal libdoorstop.dylib", error.Message);
+        Assert.Contains("libdoorstop.dylib with an arm64 slice", error.Message);
+        Assert.DoesNotContain("request x64", error.Message); // A server runs as the machine's slice; there is no other to request.
         using var noDoorstop = Runtime.Mac(withDoorstop: false);
         Assert.Throws<FileNotFoundException>(() => ServerLaunch.CreateStartInfo(noDoorstop.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64));
     }
