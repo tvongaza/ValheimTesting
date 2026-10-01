@@ -28,6 +28,19 @@ public sealed class TerrainRegion
 /// river facts together. This is explicit replacement, not native biome blending.
 /// Use pure terrain inputs and predicates when sharing a fixture across workers.
 /// </summary>
+/// <example>
+/// Give a real mod algorithm a declared slope with a flat, half-open terrace; assert the result independently in the
+/// mod's test project. No Unity process or game data is involved:
+/// <code>
+/// ITerrain terrain = new CompositeTerrain(
+///     new PlaneTerrain(40f, 0.25f, -0.5f),
+///     TerrainRegion.Rectangle(4f, -2f, 8f, 2f, new PlaneTerrain(60f)));
+/// float terraceHeight = terrain.GetHeight(4f, -2f); // 60; minimum edge included
+/// float outsideHeight = terrain.GetHeight(8f, 0f);  // 42; maximum edge excluded
+/// </code>
+/// See the <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/SharedWorld/Program.cs">runnable shared-world example</see>
+/// for a complete pure test fixture.
+/// </example>
 public sealed class CompositeTerrain : ITerrain
 {
     private readonly ITerrain _background;

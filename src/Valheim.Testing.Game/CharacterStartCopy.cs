@@ -8,8 +8,32 @@ namespace Valheim.Testing.Game;
 /// file. This refuses Valheim character directories as output; a runner must stage the resulting file separately while
 /// the game is stopped and verify arrival after joining. The character must already have visited the requested world.
 /// </summary>
+/// <example>
+/// Start with a game-created character registered in <see cref="DisposableCharacterStore"/>. Prepare a fresh file in an
+/// evidence directory, then pin its returned SHA256 in the owned-client plan:
+/// <code>
+/// var store = DisposableCharacterStore.Open(storeDirectory);
+/// var character = store.Get("tester");
+/// string prepared = Path.Combine(evidenceDirectory, "tester-run-001.fch");
+/// string sha256 = CharacterStartCopy.Prepare(
+///     character, prepared, worldUid, 125f, 45f, -380f);
+/// </code>
+/// Set the owned-client plan's character name to <c>tester-run-001</c>, and its character-start fields to the prepared
+/// file, SHA256, and store directory. The evidence directory must already exist. <c>Prepare</c> does not install the
+/// copy or launch the game; see the
+/// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/README.md#optional-character-start-at-the-first-site-preview">owned-client example</see>
+/// for staging and verifying the actual arrival. This is a position-only edit, not character creation or customization.
+/// </example>
 public static class CharacterStartCopy
 {
+    /// <summary>
+    /// Copies <paramref name="character"/> to a new <c>.fch</c> at <paramref name="destination"/>, setting only the
+    /// logout point for <paramref name="worldUid"/>. Returns the prepared file's SHA256 for the owned-client plan.
+    /// </summary>
+    /// <remarks>
+    /// The character must have completed its first spawn and visited this world. The output directory must exist, the
+    /// destination must not exist, and neither may be a live character directory. This does not create a new player ID.
+    /// </remarks>
     public static string Prepare(DisposableCharacter character, string destination, long worldUid, float x, float y, float z)
     {
         ArgumentNullException.ThrowIfNull(character);

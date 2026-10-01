@@ -3,6 +3,19 @@ using System.Text.Json;
 
 namespace Valheim.Testing.Game;
 // Owns only a newly-created directory. Never edits or launches the source world.
+/// <summary>Verified, disposable copy of a world fixture. Disposing removes only the new copy unless <see cref="Preserve"/> is set.</summary>
+/// <example>
+/// Obtain hashes with <see cref="Manifest"/> when authoring the fixture, persist and review them in the plan, then
+/// use those hashes for the run. Never recalculate them from an unexpected source during the run:
+/// <code>
+/// WorldFixture.Verify(fixtureSource, reviewedHashes);
+/// using var fixture = WorldFixture.Copy(fixtureSource, runDirectory, reviewedHashes);
+/// string disposableWorld = fixture.DirectoryPath;
+/// // Stop the owned game before the fixture is disposed.
+/// </code>
+/// See the <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/MyMod.SystemTests/ServerFixture.cs">runnable server example</see>
+/// for the full preparation and cleanup sequence.
+/// </example>
 public sealed class WorldFixture : IDisposable
 {
     public string DirectoryPath { get; }
@@ -10,6 +23,7 @@ public sealed class WorldFixture : IDisposable
     public bool Preserve { get; set; }
     private bool _disposed;
     private WorldFixture(string path, Dictionary<string, string> hashes) { DirectoryPath = path; SourceHashes = hashes; }
+    /// <summary>Copies an exact, previously pinned fixture into a new directory owned by this instance.</summary>
     public static WorldFixture Copy(string source, string outputParent, IReadOnlyDictionary<string, string> expectedHashes)
     {
         if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
