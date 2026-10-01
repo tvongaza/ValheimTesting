@@ -10,10 +10,10 @@ internal static class ServerLoad
 {
     public static async Task<int> RunAsync(string[] args)
     {
-        if (!TryRead(args, out var options, out var mods, out var roots, out var optional, out string error))
+        if (!TryRead(args, out var options, out var mods, out var roots, out var configs, out var optional, out string error))
         {
             Console.Error.WriteLine(error);
-            Console.Error.WriteLine("Usage: native-smoke server-load --server DIR --mod DLL [--mod DLL ...] --adapter DLL --cli-manifest FILE --cli-files DIR --output NEW_DIR [--client DIR --steam-userdata DIR --client-cli-port 5689] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--cli-port 5688] [--game-port 2486] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+            Console.Error.WriteLine("Usage: native-smoke server-load --server DIR --mod DLL [--mod DLL ...] --adapter DLL --cli-manifest FILE --cli-files DIR --output NEW_DIR [--client DIR --steam-userdata DIR --client-cli-port 5689] [--search-root DIR ...] [--config FILE ...] [--optional-reference ASSEMBLY ...] [--cli-port 5688] [--game-port 2486] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
             return 2;
         }
         using var cancel = new CancellationTokenSource();
@@ -56,7 +56,8 @@ internal static class ServerLoad
                 throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
             string world = Path.Combine(output, "world-source");
             DefaultSmokeWorld.PrepareServerSaveRoot(world);
-            using var runtime = NativeServerRuntime.Prepare(server, Path.Combine(output, "staged-runtime"), dependencies, adapter, cliPort);
+            using var runtime = NativeServerRuntime.Prepare(server, Path.Combine(output, "staged-runtime"), dependencies, adapter,
+                cliPort, configs!.Select(Path.GetFullPath).ToList());
             using var clientRuntime = joinClient
                 ? NativeCleanClientRuntime.Prepare(Path.GetFullPath(options["--client"]), Path.Combine(output, "staged-client"), dependencies, clientCliPort)
                 : null;
@@ -98,6 +99,8 @@ internal static class ServerLoad
                                 if (worlds.Length != 1 || worlds[0].Uid != DefaultSmokeWorld.Uid)
                                     throw new InvalidDataException("The dedicated server did not load the packaged smoke world UID.");
                             });
+                            run.Report.Provenance["firstModLoadedSecondsFromCommand"] =
+                                clock.Elapsed.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture);
                             run.Report.Step("dedicated server accepts a game connection", () =>
                                 OwnedServerSession.WaitUntilJoinable(run.Server, NativeServerRuntime.SessionCapability,
                                     TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation));
@@ -135,7 +138,7 @@ internal static class ServerLoad
                 $" Private evidence in {output}");
             return result;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException or FormatException)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             return 3;
@@ -143,21 +146,23 @@ internal static class ServerLoad
     }
 
     private static bool TryRead(string[] args, out Dictionary<string, string>? options, out List<string>? mods,
-        out List<string>? roots, out List<string>? optional, out string error)
+        out List<string>? roots, out List<string>? configs, out List<string>? optional, out string error)
     {
-        options = null; mods = null; roots = null; optional = null; error = "";
+        options = null; mods = null; roots = null; configs = null; optional = null; error = "";
         var required = new HashSet<string>(StringComparer.Ordinal) { "--server", "--mod", "--adapter", "--cli-manifest", "--cli-files", "--output" };
         var allowed = new HashSet<string>(required, StringComparer.Ordinal)
         { "--cli-port", "--game-port", "--client", "--steam-userdata", "--client-cli-port", "--expected-log-error", "--expected-log-reason" };
         if (args.Length % 2 != 0) { error = "Every option needs one value."; return false; }
         var found = new Dictionary<string, string>(StringComparer.Ordinal);
-        var selected = new List<string>(); var searches = new List<string>(); var omissions = new List<string>();
+        var selected = new List<string>(); var searches = new List<string>();
+        var configFiles = new List<string>(); var omissions = new List<string>();
         for (int i = 0; i < args.Length; i += 2)
         {
             string key = args[i], value = args[i + 1];
             if (string.IsNullOrWhiteSpace(value)) { error = "Empty option: " + key; return false; }
             if (key == "--mod") { selected.Add(value); found.TryAdd(key, value); }
             else if (key == "--search-root") searches.Add(value);
+            else if (key == "--config") configFiles.Add(value);
             else if (key == "--optional-reference") omissions.Add(value);
             else if (!allowed.Contains(key) || !found.TryAdd(key, value))
             { error = "Unknown or repeated option: " + key; return false; }
@@ -170,7 +175,7 @@ internal static class ServerLoad
         { error = "--client needs --steam-userdata (and vice versa) to stage a disposable character safely."; return false; }
         if (found.ContainsKey("--client-cli-port") && !found.ContainsKey("--client"))
         { error = "--client-cli-port needs --client."; return false; }
-        options = found; mods = selected; roots = searches; optional = omissions;
+        options = found; mods = selected; roots = searches; configs = configFiles; optional = omissions;
         return true;
     }
 }

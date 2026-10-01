@@ -26,8 +26,9 @@ public sealed class NativeServerRuntimeTests : IDisposable
         var original = WorldFixture.Manifest(_rig.Game);
         string worldRoot = Path.Combine(_rig.Root, "server-world");
         DefaultSmokeWorld.PrepareServerSaveRoot(worldRoot);
+        string settings = _rig.Write("settings/example.mod.cfg", Encoding.UTF8.GetBytes("[Smoke]\nGenerate = false\n"));
         string staged;
-        using (var runtime = NativeServerRuntime.Prepare(_rig.Game, Path.Combine(_rig.Root, "server-output"), dependencies, adapter, 5588))
+        using (var runtime = NativeServerRuntime.Prepare(_rig.Game, Path.Combine(_rig.Root, "server-output"), dependencies, adapter, 5588, [settings]))
         {
             staged = runtime.RuntimeDirectory;
             string plugins = Path.Combine(staged, "BepInEx", "plugins");
@@ -38,6 +39,7 @@ public sealed class NativeServerRuntimeTests : IDisposable
             Assert.Empty(Directory.GetFiles(Path.Combine(staged, "BepInEx", "scripts")));
             Assert.Empty(Directory.GetFiles(Path.Combine(staged, "BepInEx", "patchers")));
             Assert.Contains("Port = 5588", File.ReadAllText(Path.Combine(staged, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
+            Assert.Equal(File.ReadAllBytes(settings), File.ReadAllBytes(Path.Combine(staged, "BepInEx", "config", "example.mod.cfg")));
             Assert.NotEmpty(runtime.Manifest());
             var plan = runtime.Plan(worldRoot, 5588);
             Assert.Equal(DefaultSmokeWorld.Uid, plan.Pins["worlduid"]);
@@ -51,8 +53,14 @@ public sealed class NativeServerRuntimeTests : IDisposable
                 runtime.Plan(worldRoot, 5589)).Message);
         }
         Assert.False(Directory.Exists(staged));
+        Assert.Equal("[Smoke]\nGenerate = false\n", File.ReadAllText(settings));
         Assert.Equal(original.OrderBy(entry => entry.Key), WorldFixture.Manifest(_rig.Game).OrderBy(entry => entry.Key));
         Assert.True(File.Exists(Path.Combine(_rig.Game, "BepInEx", "plugins", "Unrelated.dll")));
+        string duplicate = _rig.Write("other/example.mod.cfg", Encoding.UTF8.GetBytes("different"));
+        string refused = Path.Combine(_rig.Root, "duplicate-config-output");
+        Assert.Contains("share filename", Assert.Throws<InvalidDataException>(() =>
+            NativeServerRuntime.Prepare(_rig.Game, refused, dependencies, adapter, 5588, [settings, duplicate])).Message);
+        Assert.False(Directory.Exists(refused));
     }
 
     [Fact] public void DuplicateAdapterIdentityIsRefusedBeforeCopying()

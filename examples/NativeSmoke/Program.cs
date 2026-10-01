@@ -103,7 +103,7 @@ try
     Console.WriteLine((passed ? "PASS" : "FAIL") + $": hosted fixture, {selectedMods.Count} selected mod(s), {environment.Mod.Arms.Count} arm(s); {elapsed.Elapsed.TotalSeconds:F1}s; private evidence in {output}");
     return passed ? 0 : 1;
 }
-catch (Exception failure) when (failure is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException or FormatException)
+catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException)
 {
     Console.Error.WriteLine("REFUSED: " + failure.Message);
     return 3;

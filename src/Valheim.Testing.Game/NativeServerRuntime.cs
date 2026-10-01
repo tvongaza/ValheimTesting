@@ -25,16 +25,26 @@ public sealed class NativeServerRuntime : IDisposable
     /// <summary>
     /// Copies <paramref name="source"/> into <paramref name="outputParent"/> and replaces only the copy's plugin,
     /// script, config and patcher folders. Refuses duplicate staged file names or plugin GUIDs before copying.
-    /// The adapter must declare exactly one BepInEx plugin; its own SHA256 joins the returned copy's manifest.
+    /// The adapter must declare exactly one BepInEx plugin. Explicit config files are copied by filename into the
+    /// disposable runtime only; the returned manifest pins them alongside the staged DLLs.
     /// </summary>
     public static NativeServerRuntime Prepare(string source, string outputParent, NativeDependencyLock dependencies,
-        string adapter, int cliPort)
+        string adapter, int cliPort, IReadOnlyList<string>? configFiles = null)
     {
         ArgumentNullException.ThrowIfNull(dependencies);
         if (!dependencies.Ready || dependencies.Mods.Count == 0)
             throw new InvalidDataException("The native dependency lock must be ready and contain selected server mods.");
         if (cliPort is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(cliPort));
         source = Path.GetFullPath(source); adapter = Path.GetFullPath(adapter);
+        var configs = (configFiles ?? []).Select(Path.GetFullPath).ToList();
+        foreach (string config in configs)
+            if (!File.Exists(config)) throw new FileNotFoundException("An explicitly selected server config is missing.", config);
+        var duplicateConfig = configs.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateConfig != null) throw new InvalidDataException("Two selected server configs share filename " + duplicateConfig.Key + ".");
+        if (configs.Any(config => Path.GetFileName(config).Equals("valheimCLI.valheimCLI.cfg", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("ValheimCLI config is owned by the smoke; do not supply it as a mod config.");
+        var configHashes = configs.ToDictionary(config => config, WorldFixture.Hash, StringComparer.Ordinal);
         ServerLaunch.Detect(source);
         if (!File.Exists(adapter)) throw new FileNotFoundException("The test-only session adapter is missing.", adapter);
         var files = dependencies.CliFiles.Concat(dependencies.Mods).Concat(dependencies.Plugins)
@@ -85,6 +95,15 @@ public sealed class NativeServerRuntime : IDisposable
             }
             File.WriteAllText(Path.Combine(bep, "config", "valheimCLI.valheimCLI.cfg"),
                 "[Server]\nEnabled = true\nPort = " + cliPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
+            foreach (string config in configs)
+            {
+                if (!WorldFixture.Hash(config).Equals(configHashes[config], StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("A selected server config changed while staging: " + config);
+                string target = Path.Combine(bep, "config", Path.GetFileName(config));
+                File.Copy(config, target);
+                if (!WorldFixture.Hash(target).Equals(configHashes[config], StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("A staged server config changed while copying: " + config);
+            }
             return new NativeServerRuntime(copy, pins, selected, cliPort);
         }
         catch { copy.Dispose(); throw; }
