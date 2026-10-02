@@ -3,7 +3,7 @@ using Valheim.Testing.Game;
 
 if (args.Length != 0 && args[0] == "server-load") return await ServerLoad.RunAsync(args[1..]);
 
-// This first slice is a client-hosted smoke. An owned dedicated server follows in #156.
+// The default path hosts a world in an owned client; server-load uses an owned dedicated server.
 if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {
     Console.Error.WriteLine(error);
@@ -15,6 +15,8 @@ using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); };
 var elapsed = Stopwatch.StartNew();
 RegressionEnvironment? environment = null;
+int exitCode = 3;
+string? outcome = null;
 try
 {
     string output = Path.GetFullPath(options!["--output"]);
@@ -28,6 +30,7 @@ try
     string? loader = options.TryGetValue("--loader-package", out string? loaderFile) ? Path.GetFullPath(loaderFile) : null;
     foreach (var (name, path) in new[] { ("--game", game), ("--cli-files", cliFiles), ("--steam-userdata", steamUserdata) })
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
+    SmokeOutput.RefuseInside(output, game, cliFiles, steamUserdata);
     foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
         if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
     if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--loader-package file does not exist: " + loader, loader);
@@ -100,13 +103,12 @@ try
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.
         if (!report.Passed) break;
     }
-    Console.WriteLine((passed ? "PASS" : "FAIL") + $": hosted fixture, {selectedMods.Count} selected mod(s), {environment.Mod.Arms.Count} arm(s); {elapsed.Elapsed.TotalSeconds:F1}s; private evidence in {output}");
-    return passed ? 0 : 1;
+    exitCode = passed ? 0 : 1;
+    outcome = $": hosted fixture, {selectedMods.Count} selected mod(s), {environment.Mod.Arms.Count} arm(s); private evidence in {output}";
 }
 catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException)
 {
     Console.Error.WriteLine("REFUSED: " + failure.Message);
-    return 3;
 }
 finally
 {
@@ -116,8 +118,12 @@ finally
         {
             // A partially copied install may not yet have its ownership marker. Never delete it by path alone.
             Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + environment.Install);
+            if (exitCode == 0) exitCode = 1;
         }
 }
+if (outcome != null)
+    Console.WriteLine((exitCode == 0 ? "PASS" : "FAIL") + outcome + $"; {elapsed.Elapsed.TotalSeconds:F1}s");
+return exitCode;
 
 file static class Arguments
 {

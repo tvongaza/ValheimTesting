@@ -37,6 +37,12 @@ internal static class ServerLoad
                 throw new ArgumentException("The clean client's CLI port must differ from the server CLI and game ports.");
             foreach (string path in new[] { server, cliFiles })
                 if (!Directory.Exists(path)) throw new DirectoryNotFoundException("A server or ValheimCLI directory is missing: " + path);
+            if (joinClient && !Directory.Exists(Path.GetFullPath(options["--steam-userdata"])))
+                throw new DirectoryNotFoundException("The clean client's Steam userdata directory is missing: " + options["--steam-userdata"]);
+            string[] protectedRoots = joinClient
+                ? [server, cliFiles, Path.GetFullPath(options["--client"]), Path.GetFullPath(options["--steam-userdata"])]
+                : [server, cliFiles];
+            SmokeOutput.RefuseInside(output, protectedRoots);
             foreach (string path in new[] { adapter, cliManifest }.Concat(mods!.Select(Path.GetFullPath)))
                 if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
             var request = new NativeDependencyRequest

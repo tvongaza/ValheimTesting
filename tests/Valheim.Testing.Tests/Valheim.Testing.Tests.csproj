@@ -4,6 +4,7 @@
     <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
     <!-- The adapter package's helpers that use no game types; the rest of its source compiles in Valheim.Testing.Adapter.CompileCheck. -->
     <Compile Include="../../src/Valheim.Testing.Adapter/Adapter/Members.cs;../../src/Valheim.Testing.Adapter/Adapter/KeyValueReply.cs;../../src/Valheim.Testing.Adapter/Adapter/FixtureGate.cs" LinkBase="Adapter" />
+    <Compile Include="../../examples/NativeSmoke/SmokeOutput.cs" Link="NativeSmoke/SmokeOutput.cs" />
     <!-- Compiles small ValheimCLI-shaped assemblies at test time for the capability manifest tests; none is committed. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
