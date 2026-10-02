@@ -189,6 +189,9 @@ public sealed class NativeServerRuntime : IDisposable
             Environment = new Dictionary<string, string> { [SelectedGuidsVariable] = string.Join(";", SelectedGuids) },
             Pins = Pins.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal),
             Port = cliPort,
+            // This is a disposable plugin-load smoke: it asserts no save-on-quit or crossplay retirement. Keep the
+            // bounded kill fallback prompt when a host cannot deliver a console quit (the general runner keeps 120 s).
+            QuitSeconds = 20,
         };
         plan.Pins["worlduid"] = DefaultSmokeWorld.Uid;
         plan.ValidateServerPlan(Pins.Keys, SessionTokenVariable);

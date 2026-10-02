@@ -56,6 +56,7 @@ public sealed class NativeServerRuntimeTests : IDisposable
             Assert.Contains("-savedir", plan.Arguments);
             Assert.Equal(worldRoot, plan.World.Source);
             Assert.Equal(staged, plan.Runtime.Source);
+            Assert.Equal(20, plan.QuitSeconds); // Setup/load smoke can fall back promptly; save/crossplay plans keep their own budget.
             Assert.Contains("must match", Assert.Throws<ArgumentException>(() =>
                 runtime.Plan(worldRoot, 5589)).Message);
         }

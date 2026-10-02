@@ -47,6 +47,13 @@ public class ProcessStopTests
         Assert.Equal("already exited (not asked: it had exited, exit 3)", new ProcessStop(StopOutcome.AlreadyExited, 3, TimeSpan.Zero, "not asked: it had exited").ToString());
     }
 
+    [Fact] public void WindowsSignalHelperCannotOutwaitTheSmokeQuitBudget()
+    {
+        Assert.Equal(20_000, ProcessQuit.WindowsHelperWaitMilliseconds(TimeSpan.FromSeconds(20)));
+        Assert.Equal(30_000, ProcessQuit.WindowsHelperWaitMilliseconds(TimeSpan.FromSeconds(120)));
+        Assert.Equal(1, ProcessQuit.WindowsHelperWaitMilliseconds(TimeSpan.Zero));
+    }
+
     // ---- a real local process ----
 
     [Fact] public void ALocalProcessAskedWithSigintQuitsWithoutAKill()
@@ -207,6 +214,40 @@ public class ProcessStopTests
         public Task<int> WaitForExitAsync(CancellationToken cancellation) => Task.FromResult(-1);
         public void Stop(TimeSpan timeout) => Stopped = true;
         public void Dispose() { }
+    }
+}
+
+// SSH_CONNECTION is process-wide. Keep this Windows-only test isolated and restore the variable even on failure.
+[CollectionDefinition(nameof(WindowsSshQuitSignal), DisableParallelization = true)]
+public sealed class WindowsSshQuitSignal { }
+
+[Collection(nameof(WindowsSshQuitSignal))]
+public sealed class WindowsSshQuitSignalTests
+{
+    [Fact] public void AnSshLaunchedChildReceivesCtrlBreakBeforeTheQuitDeadline()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var dir = new TempDirectory();
+        string marker = Path.Combine(dir.Path, "control-event.txt");
+        string? previousSsh = Environment.GetEnvironmentVariable("SSH_CONNECTION");
+        Environment.SetEnvironmentVariable("SSH_CONNECTION", "test-runner-over-ssh");
+        try
+        {
+            var start = new ProcessStartInfo("dotnet") { CreateNoWindow = true };
+            start.ArgumentList.Add(typeof(Valheim.Testing.ProcessSignalProbe.Marker).Assembly.Location);
+            start.ArgumentList.Add(marker);
+            using var owned = new DirectServerProcess(start, Path.Combine(dir.Path, "owned"));
+            var ready = Stopwatch.StartNew();
+            while (!File.Exists(marker + ".ready") && ready.Elapsed < TimeSpan.FromSeconds(10)) Thread.Sleep(25);
+            Assert.True(File.Exists(marker + ".ready"), "the probe did not install its console handler");
+
+            var stop = owned.StopCleanly(TimeSpan.FromSeconds(25), TimeSpan.FromSeconds(5));
+            Assert.Equal(StopOutcome.Clean, stop.Outcome);
+            Assert.Equal("Ctrl+Break", stop.Request);
+            Assert.Equal("ControlBreak", File.ReadAllText(marker));
+            Assert.True(stop.Elapsed < TimeSpan.FromSeconds(25), stop.ToString());
+        }
+        finally { Environment.SetEnvironmentVariable("SSH_CONNECTION", previousSsh); }
     }
 }
 

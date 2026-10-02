@@ -260,12 +260,12 @@ A killed game skips its own shutdown: nothing after the last confirmed save is k
 
 | Process | Asked with | Waits (default) |
 |---|---|---|
-| Owned dedicated server, local (`DirectServerProcess`) | Linux: SIGINT. Windows: Ctrl+C to the server's own console (`ServerLaunch` starts it with a windowless console of its own, so a Ctrl+C in the runner's console no longer reaches it) | plan `quitSeconds` (120) |
+| Owned dedicated server, local (`DirectServerProcess`) | Linux and macOS: SIGINT. Windows: Ctrl+Break to the server's own windowless console when the runner was launched over SSH (whose inherited setting can ignore Ctrl+C); Ctrl+C otherwise | plan `quitSeconds` (120) |
 | Owned dedicated server on a Linux host (`HostServerProcess`) | SIGINT, only while its start time still matches | plan `quitSeconds` (120) |
 | Owned client (`ClientSession`) | Windows: its main window is closed. Linux and macOS: SIGTERM | `ClientSession.QuitTimeout` (60 s) |
 | Client in a host's desktop session (`InteractiveClientProcess`) | Windows: its main window is closed; from an SSH session the window is in another session and cannot be closed, so it is killed. Linux: SIGTERM | as the caller passes |
 
-The game then saves (a server its world, a client its profile), retires a crossplay lobby and exits. `quitSeconds: 0` kills at once. `OwnedServerSession.Stops` records every stop, restarts included; `PinnedServerRun` writes them to the report as `serverStops` (for example `boot-1 clean after 9.4 s (Ctrl+C, exit 0); boot-2 killed after 120.0 s (Ctrl+C; no exit within 120.0 s)`) and prints a warning for each killed boot. `ClientRounds` and `HostRounds` record the owned client's as `clientStop`. An ordinary run still passes after a kill, because the kill frees the process; a crossplay run does not (see [Crossplay](#crossplay-playfab)). `IServerProcess.Stop(timeout)` still kills at once, for callers that want that.
+The game then saves (a server its world, a client its profile), retires a crossplay lobby and exits if its shutdown handler runs. `quitSeconds: 0` kills at once. `OwnedServerSession.Stops` records every stop, restarts included; `PinnedServerRun` writes them to the report as `serverStops` (for example `boot-1 clean after 9.4 s (Ctrl+C, exit 0); boot-2 killed after 120.0 s (Ctrl+Break; no exit within 120.0 s)`) and prints a warning for each killed boot. A short `quitSeconds` belongs only to a disposable setup/load smoke that does not claim a save or lobby retirement; `NativeSmoke server-load` uses 20 s. Save/restart and crossplay runs retain their longer deadline and must verify the game's shutdown evidence. `ClientRounds` and `HostRounds` record the owned client's as `clientStop`. An ordinary run still passes after a kill, because the kill frees the process; a crossplay run does not (see [Crossplay](#crossplay-playfab)). `IServerProcess.Stop(timeout)` still kills at once, for callers that want that.
 
 ### Log scan at teardown
 

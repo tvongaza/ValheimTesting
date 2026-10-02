@@ -92,7 +92,7 @@ void Boot(int boot, string worldStep, params string[] markers)
         if (stop.Outcome != StopOutcome.Clean) throw new InvalidOperationException("The server did not quit when asked: " + stop);
     });
 }
-// Asks the server to quit (SIGINT; Ctrl+C to its own console on Windows), so the game saves; killed only after 60 s.
+// Asks the server to quit (SIGINT; Ctrl+Break over Windows SSH, Ctrl+C on other Windows hosts); killed only after 60 s.
 ProcessStop? Stop()
 {
     if (server == null) return null;

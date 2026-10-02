@@ -114,8 +114,8 @@ public static class ServerLaunch
         var names = host == ServerHost.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var passed = BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(ServerLaunch));
 
-        // On Windows the server gets a console of its own (with no window): a clean stop sends Ctrl+C to that console
-        // (QuitRequest.Interrupt), and a Ctrl+C in the runner's console no longer reaches the server.
+        // On Windows the server gets a console of its own (with no window): stop signals that console rather than the
+        // runner's. An SSH parent can make it ignore Ctrl+C, so ProcessQuit uses Ctrl+Break in that launch context.
         var start = new ProcessStartInfo(executable) { WorkingDirectory = runtime, UseShellExecute = false, CreateNoWindow = platform == ServerPlatform.Windows };
         foreach (string argument in passed) start.ArgumentList.Add(argument);
         // Inherited Doorstop values would reach the server too; only the ones set below may.

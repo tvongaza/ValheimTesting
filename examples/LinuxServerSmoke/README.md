@@ -15,7 +15,7 @@ It passes a generated world name, a throwaway password it never prints, `-public
 2. The owned process starts.
 3. BepInEx's `LogOutput.log` reports `Chainloader startup complete`.
 4. The server log shows `Get create world <generated name>` and then `Opened Steam server`, which Valheim 1.0 logs once the new world's locations are generated.
-5. The process is stopped cleanly: asked to quit (SIGINT; Ctrl+C to its own console on Windows); if it has not quit within 60 s it is killed and the step fails. `result.json` records each stop (`stop1`, `stop2`).
+5. The process is stopped cleanly: asked to quit (SIGINT; Ctrl+Break over Windows SSH, Ctrl+C on other Windows hosts); if it has not quit within 60 s it is killed and the step fails. `result.json` records each stop (`stop1`, `stop2`).
 6. The clean stop saved the world: `World save (5/5) done` in the server log.
 7. to 10. The same for a second boot on the same world and save folder (`-logFile <output>/server-2.log`, `boot-2.*` logs): the process starts, BepInEx's chainloader finishes, the server log shows `ZNet.LoadWorld: <name> (<name>), save number` (the saved world, not a new one) and then `Opened Steam server`, and the process stops cleanly.
 

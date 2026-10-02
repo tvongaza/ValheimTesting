@@ -414,8 +414,10 @@ public sealed class DirectServerProcess : IServerProcess
             Stop(kill);
             return new(StopOutcome.Killed, _process.ExitCode, clock.Elapsed, "not asked to quit");
         }
-        var (sent, request) = ProcessQuit.Request(_process, Quit);
-        if (sent && _process.WaitForExit((int)quit.TotalMilliseconds))
+        var (sent, request) = ProcessQuit.Request(_process, Quit, quit);
+        // The helper itself takes time, so the wait uses the caller's remaining quit budget.
+        TimeSpan remaining = quit - clock.Elapsed;
+        if (sent && remaining > TimeSpan.Zero && _process.WaitForExit((int)remaining.TotalMilliseconds))
         {
             _process.WaitForExit(); // Also completes the exit code.
             Keep(kill);
