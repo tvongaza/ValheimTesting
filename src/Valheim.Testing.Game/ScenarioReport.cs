@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Xml.Linq;
 
 namespace Valheim.Testing.Game;
 public sealed record StepResult(string Name, bool Passed, double Seconds, string Error);
+public sealed record TerrainSnapshotReference(string Site, string WorldUid, string File, string Sha256);
 public sealed class ScenarioReport
 {
     public string Name { get; }
@@ -11,6 +13,9 @@ public sealed class ScenarioReport
     public List<StepResult> Steps { get; } = new();
     /// <summary>The teardown log scans (<see cref="ScanLogs"/>), one per log.</summary>
     public List<LogFileScan> Logs { get; } = new();
+    /// <summary>Bounded read-only terrain evidence written beside this report.</summary>
+    public List<TerrainSnapshotReference> TerrainSnapshots { get; } = new();
+    private readonly List<TerrainSiteSnapshot> _terrainCaptures = new();
     public bool Passed => Steps.Count > 0 && Steps.All(x => x.Passed);
     /// <summary><c>strict</c>, or <c>none</c> once <see cref="MarkNotPinned"/> recorded an explicit opt-out.</summary>
     public string Pinning { get; private set; } = EnvironmentPinning.Strict;
@@ -30,6 +35,24 @@ public sealed class ScenarioReport
         var clock = Stopwatch.StartNew();
         try { action(); Steps.Add(new(name, true, clock.Elapsed.TotalSeconds, "")); }
         catch (Exception error) { Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, error.Message)); throw; }
+    }
+    /// <summary>Attach a site capture to the next <see cref="Write"/>. The capture retains exact ValheimCLI replies.</summary>
+    public void AttachTerrainSnapshot(TerrainSiteSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _terrainCaptures.Add(snapshot);
+    }
+    /// <summary>Run an assertion, optionally capturing the site if it fails. A failed capture is recorded separately;
+    /// the original assertion failure remains the thrown exception.</summary>
+    public void StepWithTerrainOnFailure(string name, Action assertion, Func<TerrainSiteSnapshot> capture)
+    {
+        try { Step(name, assertion); }
+        catch
+        {
+            try { AttachTerrainSnapshot(capture()); }
+            catch (Exception error) { RecordFailure("capture terrain after " + name, error); }
+            throw;
+        }
     }
     /// <summary>
     /// The async twin of <see cref="Step"/>: records the awaited action's outcome and time and rethrows its failure. With
@@ -80,6 +103,21 @@ public sealed class ScenarioReport
     public void Write(string directory)
     {
         Directory.CreateDirectory(directory);
+        TerrainSnapshots.Clear();
+        if (_terrainCaptures.Count > 0)
+        {
+            string captures = Path.Combine(directory, "terrain-snapshots");
+            Directory.CreateDirectory(captures);
+            for (int i = 0; i < _terrainCaptures.Count; i++)
+            {
+                string file = $"terrain-snapshots/site-{i + 1:D3}.json";
+                string path = Path.Combine(directory, file);
+                string content = JsonSerializer.Serialize(_terrainCaptures[i], new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(path, content);
+                TerrainSnapshots.Add(new(_terrainCaptures[i].Site, _terrainCaptures[i].WorldUid, file,
+                    Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant()));
+            }
+        }
         File.WriteAllText(Path.Combine(directory, "result.json"), JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         bool unpinned = Pinning != EnvironmentPinning.Strict;
         var suite = new XElement("testsuite", new XAttribute("name", Name), new XAttribute("tests", Steps.Count + (unpinned ? 1 : 0)), new XAttribute("failures", Steps.Count(x => !x.Passed)));
