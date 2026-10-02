@@ -233,12 +233,13 @@ static string Elapsed(TimeSpan span) => $"{(int)span.TotalMinutes}m{span.Seconds
     return (string.Join(", ", parts), starved);
 }
 
-// Before a stop: every process (with parents, so the stuck command's tree can be read off) and the disks.
+// Before a stop: process names and parents identify the stuck tree without copying unrelated command-line arguments
+// (which may contain credentials) into the CI artifact.
 void Diagnose()
 {
     string processes = OperatingSystem.IsWindows()
         ? Capture("tasklist")
-        : Capture("ps", "-A", "-o", "pid,ppid,pgid,stat,etime,time,rss,%cpu,command");
+        : Capture("ps", "-A", "-o", "pid,ppid,pgid,stat,etime,time,rss,%cpu,comm");
     string disks = OperatingSystem.IsWindows() ? "" : Capture("df", "-h");
     foreach (string block in new[] { processes, disks })
     {
