@@ -14,7 +14,7 @@ internal static class ServerLoad
                 out var pluginFiles, out var pluginDirectories, out var optional, out string error))
         {
             Console.Error.WriteLine(error);
-            Console.Error.WriteLine("Usage: native-smoke server-load --server DIR --mod DLL [--mod DLL ...] --adapter DLL --cli-manifest FILE --cli-files DIR --output NEW_DIR [--client DIR --steam-userdata DIR --client-cli-port 5689] [--search-root DIR ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] [--optional-reference ASSEMBLY ...] [--cli-port 5688] [--game-port 2486] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+            Console.Error.WriteLine("Usage: valheim-test server-load --server DIR --mod DLL [--mod DLL ...] --output NEW_DIR [--client DIR] [--adapter DLL] [--cli-manifest FILE --cli-files DIR] [--steam-userdata DIR] [--search-root DIR ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] [--optional-reference ASSEMBLY ...] [--cli-port 5688] [--game-port 2486] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
             return 2;
         }
         using var cancel = new CancellationTokenSource();
@@ -26,25 +26,25 @@ internal static class ServerLoad
             string output = Path.GetFullPath(options!["--output"]);
             if (Path.Exists(output)) throw new IOException("--output must be new; existing evidence will not be overwritten: " + output);
             string server = Path.GetFullPath(options["--server"]);
-            string adapter = Path.GetFullPath(options["--adapter"]);
-            string cliManifest = Path.GetFullPath(options["--cli-manifest"]);
-            string cliFiles = Path.GetFullPath(options["--cli-files"]);
+            string? adapter = options.TryGetValue("--adapter", out string? adapterFile) ? Path.GetFullPath(adapterFile) : null;
+            var (cliManifest, cliFiles) = SmokeInputs.Cli(options, server);
             int cliPort = options.TryGetValue("--cli-port", out string? cliValue) ? int.Parse(cliValue, CultureInfo.InvariantCulture) : 5688;
             int gamePort = options.TryGetValue("--game-port", out string? gameValue) ? int.Parse(gameValue, CultureInfo.InvariantCulture) : 2486;
             bool joinClient = options.ContainsKey("--client");
+            string? steamUserdata = joinClient ? SmokeInputs.SteamUserdata(options) : null;
             int clientCliPort = options.TryGetValue("--client-cli-port", out string? clientValue) ? int.Parse(clientValue, CultureInfo.InvariantCulture) : 5689;
             if (Math.Abs(cliPort - gamePort) < 3) throw new ArgumentException("Choose a CLI port away from the game's three-port range.");
             if (joinClient && (clientCliPort == cliPort || Math.Abs(clientCliPort - gamePort) < 3))
                 throw new ArgumentException("The clean client's CLI port must differ from the server CLI and game ports.");
             foreach (string path in new[] { server, cliFiles })
                 if (!Directory.Exists(path)) throw new DirectoryNotFoundException("A server or ValheimCLI directory is missing: " + path);
-            if (joinClient && !Directory.Exists(Path.GetFullPath(options["--steam-userdata"])))
-                throw new DirectoryNotFoundException("The clean client's Steam userdata directory is missing: " + options["--steam-userdata"]);
+            if (joinClient && !Directory.Exists(steamUserdata))
+                throw new DirectoryNotFoundException("The clean client's Steam userdata directory is missing: " + steamUserdata);
             string[] protectedRoots = joinClient
-                ? [server, cliFiles, Path.GetFullPath(options["--client"]), Path.GetFullPath(options["--steam-userdata"])]
+                ? [server, cliFiles, Path.GetFullPath(options["--client"]), steamUserdata!]
                 : [server, cliFiles];
             SmokeOutput.RefuseInside(output, protectedRoots);
-            foreach (string path in new[] { adapter, cliManifest }.Concat(mods!.Select(Path.GetFullPath)))
+            foreach (string path in new[] { adapter, cliManifest }.OfType<string>().Concat(mods!.Select(Path.GetFullPath)))
                 if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
             var request = new NativeDependencyRequest
             {
@@ -62,6 +62,8 @@ internal static class ServerLoad
             dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
             if (!dependencies.Ready)
                 throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
+            await SmokeProject.CreateAsync(output, server: true, cancel.Token);
+            adapter ??= await SmokeAdapter.BuildAsync(server, dependencies, output, cancel.Token);
             string world = Path.Combine(output, "world-source");
             DefaultSmokeWorld.PrepareServerSaveRoot(world);
             using var runtime = NativeServerRuntime.Prepare(server, Path.Combine(output, "staged-runtime"), dependencies, adapter,
@@ -117,7 +119,7 @@ internal static class ServerLoad
                             {
                                 string saves = HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(clientPlan.Install));
                                 using var stagedCharacter = DefaultSmokeCharacter.StageForRun(character!,
-                                    Path.Combine(saves, "characters_local"), options["--steam-userdata"]);
+                                    Path.Combine(saves, "characters_local"), steamUserdata!);
                                 new ClientRounds
                                 {
                                     Client = clientPlan, WorldUid = DefaultSmokeWorld.Uid, Report = run.Report, Output = run.Output,
@@ -148,7 +150,7 @@ internal static class ServerLoad
                 $" Private evidence in {output}");
             return result;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or HttpRequestException or OperationCanceledException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             return 3;
@@ -161,9 +163,9 @@ internal static class ServerLoad
         out List<string>? pluginDirectories, out List<string>? optional, out string error)
     {
         options = null; mods = null; roots = null; configs = null; pluginFiles = null; pluginDirectories = null; optional = null; error = "";
-        var required = new HashSet<string>(StringComparer.Ordinal) { "--server", "--mod", "--adapter", "--cli-manifest", "--cli-files", "--output" };
+        var required = new HashSet<string>(StringComparer.Ordinal) { "--server", "--mod", "--output" };
         var allowed = new HashSet<string>(required, StringComparer.Ordinal)
-        { "--cli-port", "--game-port", "--client", "--steam-userdata", "--client-cli-port", "--expected-log-error", "--expected-log-reason" };
+        { "--adapter", "--cli-manifest", "--cli-files", "--cli-port", "--game-port", "--client", "--steam-userdata", "--client-cli-port", "--expected-log-error", "--expected-log-reason" };
         if (args.Length % 2 != 0) { error = "Every option needs one value."; return false; }
         var found = new Dictionary<string, string>(StringComparer.Ordinal);
         var selected = new List<string>(); var searches = new List<string>();
@@ -186,8 +188,8 @@ internal static class ServerLoad
         if (missing.Count != 0) { error = "Missing: " + string.Join(", ", missing); return false; }
         if (found.ContainsKey("--expected-log-error") != found.ContainsKey("--expected-log-reason"))
         { error = "An expected log error needs its full header and a written reason."; return false; }
-        if (found.ContainsKey("--client") != found.ContainsKey("--steam-userdata"))
-        { error = "--client needs --steam-userdata (and vice versa) to stage a disposable character safely."; return false; }
+        if (found.ContainsKey("--steam-userdata") && !found.ContainsKey("--client"))
+        { error = "--steam-userdata needs --client."; return false; }
         if (found.ContainsKey("--client-cli-port") && !found.ContainsKey("--client"))
         { error = "--client-cli-port needs --client."; return false; }
         options = found; mods = selected; roots = searches; configs = configFiles;

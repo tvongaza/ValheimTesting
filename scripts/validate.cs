@@ -90,6 +90,7 @@ Run("dotnet", "run", "--project", "examples/NoGameTerrain", "-c", "Release", "--
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
 foreach (string name in new[] { "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool" })
     Run("dotnet", "pack", $"src/{name}/{name}.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
+Run("dotnet", "pack", "examples/NativeSmoke/NativeSmoke.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
 // Install the packed binding-check tool as a mod's CI would, from the fresh local feed only, and let it check its own
 // library against the Mono.Cecil it ships with: a real assembly whose every Cecil reference must bind (exit 0).
 string tools = Path.Combine(Path.GetTempPath(), "valheim-bindings-tool-" + Guid.NewGuid().ToString("N"));
@@ -106,6 +107,12 @@ try
     string built = Path.Combine(root, "src", "Valheim.Testing.Bindings.Tool", "bin", "Release", "net10.0");
     Run(Path.Combine(tools, "bin", OperatingSystem.IsWindows() ? "valheim-bindings.exe" : "valheim-bindings"),
         Path.Combine(built, "Valheim.Testing.Bindings.dll"), "--game-dir", built, "--only", "Mono.Cecil", "--require", "Mono.Cecil");
+    string smokeVersion = Regex.Match(File.ReadAllText(Path.Combine(root, "examples", "NativeSmoke", "NativeSmoke.csproj")),
+        "<Version>([^<]+)</Version>").Groups[1].Value;
+    Run("dotnet", "tool", "install", "Valheim.Testing.NativeSmoke", "--version", smokeVersion,
+        "--tool-path", Path.Combine(tools, "smoke"), "--configfile", config);
+    string smokeDll = Directory.GetFiles(Path.Combine(tools, "smoke", ".store"), "NativeSmoke.dll", SearchOption.AllDirectories).Single();
+    Run("dotnet", smokeDll, "help");
 }
 finally
 {

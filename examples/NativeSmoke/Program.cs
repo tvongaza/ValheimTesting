@@ -1,6 +1,16 @@
 using System.Diagnostics;
 using Valheim.Testing.Game;
 
+if (args is ["help" or "--help"])
+{
+    Console.WriteLine("valheim-test start --game DIR --mod DLL [--mod DLL ...] --output NEW_DIR [setup options]");
+    Console.WriteLine("valheim-test server-load --server DIR --mod DLL [--mod DLL ...] --output NEW_DIR [setup options]");
+    Console.WriteLine("valheim-test server-load-ab --server DIR --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [setup options]");
+    Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
+    return 0;
+}
+if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(args[1..]);
+if (args.Length != 0 && args[0] == "start") args = args[1..];
 if (args.Length != 0 && args[0] == "server-load") return await ServerLoad.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "server-load-ab") return await ServerLoadComparison.RunAsync(args[1..]);
 
@@ -8,7 +18,7 @@ if (args.Length != 0 && args[0] == "server-load-ab") return await ServerLoadComp
 if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: native-smoke --game DIR --mod DLL [--mod DLL ...] --source COMMIT --cli-manifest FILE --cli-files DIR --steam-userdata DIR --output NEW_DIR [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--port 9500] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start --game DIR --mod DLL [--mod DLL ...] --output NEW_DIR [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--steam-userdata DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--port 9500] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -25,9 +35,8 @@ try
     string game = Path.GetFullPath(options["--game"]);
     var selectedMods = mods!.Select(Path.GetFullPath).ToList();
     string mod = selectedMods[0];
-    string cliManifest = Path.GetFullPath(options["--cli-manifest"]);
-    string cliFiles = Path.GetFullPath(options["--cli-files"]);
-    string steamUserdata = Path.GetFullPath(options["--steam-userdata"]);
+    var (cliManifest, cliFiles) = SmokeInputs.Cli(options, game);
+    string steamUserdata = SmokeInputs.SteamUserdata(options);
     string? loader = options.TryGetValue("--loader-package", out string? loaderFile) ? Path.GetFullPath(loaderFile) : null;
     foreach (var (name, path) in new[] { ("--game", game), ("--cli-files", cliFiles), ("--steam-userdata", steamUserdata) })
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
@@ -50,6 +59,7 @@ try
     dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
     if (!dependencies.Ready)
         throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
+    await SmokeProject.CreateAsync(output, server: false, cancel.Token);
     NativeDependencyLock? comparison = null;
     string? compareMod = null;
     if (options.TryGetValue("--compare-mod", out string? compareFile))
@@ -80,7 +90,8 @@ try
         Client = new RegressionClient { Port = port, Character = DefaultSmokeCharacter.Name,
             CharacterStore = character.Root, SteamUserDataDirectory = steamUserdata },
         Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
-            { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = WorldFixture.Hash(mod), Commit = options["--source"] } } },
+            { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = WorldFixture.Hash(mod),
+                Commit = options.TryGetValue("--source", out string? source) ? source : "artifact-sha256:" + WorldFixture.Hash(mod) } } },
         LoaderPackage = loader,
     };
     if (options.TryGetValue("--expected-log-error", out string? expectedError))
@@ -99,7 +110,9 @@ try
     foreach (string arm in environment.Mod.Arms.Keys)
     {
         var report = runner.Run(arm, Path.Combine(output, "evidence", arm), "selected plugin loads in a hosted fixture",
-            ["first"], _ => { }, cancel.Token);
+            ["first"], _ => { }, cancel.Token, afterPinnedClientOpened: ready =>
+                ready.Provenance["firstModLoadedSecondsFromCommand"] =
+                    elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
         passed &= report.Passed;
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.
         if (!report.Passed) break;
@@ -107,7 +120,7 @@ try
     exitCode = passed ? 0 : 1;
     outcome = $": hosted fixture, {selectedMods.Count} selected mod(s), {environment.Mod.Arms.Count} arm(s); private evidence in {output}";
 }
-catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException)
+catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or HttpRequestException or OperationCanceledException)
 {
     Console.Error.WriteLine("REFUSED: " + failure.Message);
 }
@@ -128,8 +141,8 @@ return exitCode;
 
 file static class Arguments
 {
-    private static readonly HashSet<string> Required = ["--game", "--mod", "--source", "--cli-manifest", "--cli-files", "--steam-userdata", "--output"];
-    private static readonly HashSet<string> Allowed = [.. Required, "--loader-package", "--port", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
+    private static readonly HashSet<string> Required = ["--game", "--mod", "--output"];
+    private static readonly HashSet<string> Allowed = [.. Required, "--source", "--cli-manifest", "--cli-files", "--steam-userdata", "--loader-package", "--port", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
 
     public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
         out List<string>? roots, out List<string>? optionalReferences, out string error)

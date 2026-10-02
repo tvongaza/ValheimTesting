@@ -24,7 +24,7 @@ using System.Text.RegularExpressions;
 
 const string NuGetOrg = "https://api.nuget.org/v3/index.json";
 const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
-string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool"];
+string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
 string root = FindRoot();
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
@@ -190,14 +190,27 @@ async Task<int> Consumer()
         string libraryDir = Path.GetDirectoryName(library)!;
         Run(env, work, exe, library, "--game-dir", libraryDir, "--only", "Mono.Cecil", "--require", "Mono.Cecil");
 
+        // The installed native-smoke tool must work without a repository checkout. Its init command creates and
+        // builds an editable consumer from the just-published Game package, with NuGet.org as its only feed.
+        string smokeTools = Path.Combine(work, "smoke-tools");
+        Run(env, work, "dotnet", "tool", "install", "Valheim.Testing.NativeSmoke", "--version",
+            manifest["Valheim.Testing.NativeSmoke"], "--tool-path", smokeTools, "--configfile", config);
+        string smoke = Path.Combine(smokeTools, OperatingSystem.IsWindows() ? "valheim-test.exe" : "valheim-test");
+        Run(env, work, smoke, "help");
+        string smokeOutput = Path.Combine(work, "smoke-consumer");
+        Run(env, work, smoke, "init", "--output", smokeOutput);
+        if (!File.Exists(Path.Combine(smokeOutput, "consumer", "SmokeCheck.csproj")))
+            throw new InvalidOperationException("The installed native-smoke tool wrote no editable consumer.");
+
         // Every Valheim.Testing* package restored came from NuGet.org at the manifest version, and nothing else.
         var restored = Directory.GetDirectories(cache, "valheim.testing*")
             .SelectMany(Directory.GetDirectories)
             .Select(d => (Id: Path.GetFileName(Path.GetDirectoryName(d)!), Version: Path.GetFileName(d), Dir: d))
             .ToList();
-        var toolStore = Directory.GetDirectories(Path.Combine(tools, ".store"), "valheim.testing*")
-            .SelectMany(Directory.GetDirectories)
-            .Select(d => (Id: Path.GetFileName(Path.GetDirectoryName(d)!), Version: Path.GetFileName(d), Dir: Path.Combine(d, Path.GetFileName(Path.GetDirectoryName(d)!), Path.GetFileName(d))))
+        var toolStore = new[] { tools, smokeTools }.SelectMany(toolRoot =>
+            Directory.GetDirectories(Path.Combine(toolRoot, ".store"), "valheim.testing*")
+                .SelectMany(Directory.GetDirectories)
+                .Select(d => (Id: Path.GetFileName(Path.GetDirectoryName(d)!), Version: Path.GetFileName(d), Dir: Path.Combine(d, Path.GetFileName(Path.GetDirectoryName(d)!), Path.GetFileName(d)))))
             .ToList();
         int wrong = 0;
         foreach (var (id, version) in manifest.OrderBy(p => p.Key, StringComparer.Ordinal))
@@ -304,7 +317,9 @@ static string? SourceOf(string packageDir)
 }
 
 string SourceVersion(string name) =>
-    Regex.Match(File.ReadAllText(Path.Combine(root, "src", name, name + ".csproj")), "<Version>([^<]+)</Version>") is { Success: true } m
+    Regex.Match(File.ReadAllText(name == "Valheim.Testing.NativeSmoke"
+        ? Path.Combine(root, "examples", "NativeSmoke", "NativeSmoke.csproj")
+        : Path.Combine(root, "src", name, name + ".csproj")), "<Version>([^<]+)</Version>") is { Success: true } m
         ? m.Groups[1].Value
         : throw new InvalidOperationException("No <Version> in " + name + ".csproj");
 
