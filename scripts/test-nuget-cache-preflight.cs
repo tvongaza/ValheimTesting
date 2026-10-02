@@ -81,8 +81,8 @@ string Run(string script, string packages, string http, bool noRestore)
 {
     if (!noRestore)
     {
-        // Rebuild the file-based app's assets against a stable test cache. Those assets can
-        // otherwise reference packages in a temporary directory deleted by an earlier run.
+        // Force a restore of the file-based app against the stable test cache. Its generated assets can otherwise
+        // retain a prior invocation's temporary package path after that directory was removed.
         var restore = new ProcessStartInfo("dotnet") { WorkingDirectory = root, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (string argument in new[] { "restore", Path.Combine(root, "scripts", script), "--force" }) restore.ArgumentList.Add(argument);
         restore.Environment["NUGET_PACKAGES"] = packages;

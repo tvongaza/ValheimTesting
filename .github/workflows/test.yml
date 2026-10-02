@@ -41,10 +41,23 @@ jobs:
         if: runner.os != 'Windows'
       - run: pwsh -File scripts/run.ps1 bootstrap
         if: runner.os == 'Windows'
+      # validate.cs stops a command at its own 10-minute deadline, with a process table; the step timeout is the backstop if
+      # the script itself stops answering. Normal runs take 2-5 minutes. Its transcript and test results are kept when the
+      # step fails or is cancelled (#171).
       - run: bash scripts/run.sh validate
         if: runner.os != 'Windows'
+        timeout-minutes: 20
       - run: pwsh -File scripts/run.ps1 validate
         if: runner.os == 'Windows'
+        timeout-minutes: 20
+      - name: Keep the validation transcript
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: validate-${{ matrix.os }}
+          path: artifacts/validate
+          if-no-files-found: ignore
+          retention-days: 14
       - run: dotnet run scripts/test-nuget-cache-preflight.cs
       - name: Build targeted regression from NuGet.org only
         run: dotnet run scripts/targeted-consumer.cs
