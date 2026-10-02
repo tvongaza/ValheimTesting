@@ -1,4 +1,4 @@
-// Run after bootstrap-cli.cs and validate.cs; checks their cache-only mode without restoring packages.
+// Run after bootstrap-cli.cs and validate.cs; checks cache selection and the first script restore.
 //   dotnet run scripts/test-nuget-cache-preflight.cs
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
