@@ -2,6 +2,8 @@
 
 For your first adoption, use [Bring your mod](adopting.md) and its complete [mod test example](../examples/ModWithTests/README.md).
 
+Investigating a plugin that will not load, or a failure that appears only when two mods are installed? Follow [Debug a mod load or mod conflict](debugging-mods.md) for copyable single-mod, combined-set and remove-one-mod checks.
+
 Start with the lowest test layer that answers the question. Existing xUnit tests do not need to be rewritten or moved to this repository. Test packages belong in test projects, not in a production mod or a player's plugins directory.
 
 The [candidate API reference](https://tvongaza.github.io/ValheimTesting/) inventories current public declarations and links each package to its usage guide. The [compatibility-policy draft](reference/compatibility.md) records decisions still needed before stable packages; these preview APIs can change.

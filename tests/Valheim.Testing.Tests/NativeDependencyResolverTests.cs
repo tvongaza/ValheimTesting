@@ -143,6 +143,49 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains("example.mod", plan.Gaps[0].Reason);
     }
 
+    [Fact] public void MissingHardDependencyIsRefusedBeforeAnInstallIsCreated()
+    {
+        var request = Request(_rig.Parent);
+        request.SearchRoots = [];
+        var plan = NativeDependencyResolver.Resolve(request);
+        var gap = Assert.Single(plan.Gaps);
+        Assert.Equal("plugin", gap.Kind);
+        Assert.Contains("example.dependency", gap.Reason);
+        Assert.False(Directory.Exists(_rig.Install));
+    }
+
+    [Fact] public void ExplicitlyIncompatiblePairIsRefusedBeforeAnInstallIsCreated()
+    {
+        string clash = _rig.Write("clash/Clash.dll", RegressionRig.Assembly("Clash",
+            new("example.clash") { Incompatible = ["example.mod"] }));
+        var request = Request(_rig.Parent);
+        request.Mods.Add(clash);
+        var plan = NativeDependencyResolver.Resolve(request);
+        var gap = Assert.Single(plan.Gaps);
+        Assert.Equal("incompatible-plugin", gap.Kind);
+        Assert.Contains("example.mod", gap.Reason);
+        Assert.False(Directory.Exists(_rig.Install));
+    }
+
+    [Fact] public void SelectedSoftPartnerActivatesItsAssemblyReference()
+    {
+        string primary = _rig.Write("soft-primary/Primary.dll", RegressionRig.Assembly("Primary",
+            new("example.primary") { Soft = ["example.partner"] }, reference: typeof(FactAttribute)));
+        string partner = _rig.Write("soft-partner/xunit.core.dll", RegressionRig.Assembly("xunit.core",
+            new("example.partner")));
+        var request = Request(primary);
+        request.SearchRoots = [Path.GetDirectoryName(partner)!];
+        var alone = NativeDependencyResolver.Resolve(request);
+        Assert.Equal("optional-reference", Assert.Single(alone.Gaps).Kind);
+
+        request.Mods.Add(partner);
+        var together = NativeDependencyResolver.Resolve(request);
+        Assert.True(together.Ready, string.Join("; ", together.Gaps.Select(gap => gap.Reason)));
+        Assert.Empty(together.Plugins);
+        Assert.Equal(new[] { "example.primary", "example.partner" }, together.Mods
+            .SelectMany(file => PluginMetadata.Read(file.File).Plugins.Select(plugin => plugin.Guid)));
+    }
+
     [Fact] public void ComparisonMayChangeOnlyThePrimaryMod()
     {
         var before = NativeDependencyResolver.Resolve(Request(_rig.Parent));
@@ -166,6 +209,32 @@ public sealed class NativeDependencyResolverTests : IDisposable
         after.CliFiles = [.. before.CliFiles];
         after.OptionalReferences.Add("optional.integration");
         Assert.Contains("optional references differ", Assert.Throws<InvalidDataException>(() => before.RequireSameFixedInputs(after)).Message);
+    }
+
+    [Fact] public void RemoveModComparisonKeepsSurvivorsAndCliPinnedWhileAllowingDependencyPruning()
+    {
+        string secondary = _rig.Write("secondary/Secondary.dll", RegressionRig.Assembly("Secondary", new("example.secondary")));
+        var request = Request(_rig.Parent);
+        request.Mods.Add(secondary);
+        var before = NativeDependencyResolver.Resolve(request);
+        Assert.True(before.Ready);
+        request.Mods.Remove(_rig.Parent);
+        var after = NativeDependencyResolver.Resolve(request);
+        Assert.True(after.Ready);
+        Assert.Empty(after.Plugins); // The primary mod's hard dependency was pruned.
+        before.RequireSameExceptRemovedMod(after, _rig.Parent);
+
+        after.Mods[0] = after.Mods[0] with { Sha256 = new string('0', 64) };
+        Assert.Contains("remaining selected mods changed", Assert.Throws<InvalidDataException>(() =>
+            before.RequireSameExceptRemovedMod(after, _rig.Parent)).Message);
+        after.Mods[0] = before.Mods[1];
+        after.Plugins.Add(new("/new/Plugin.dll", new string('1', 64), "new dependency"));
+        Assert.Contains("new plugin dependency", Assert.Throws<InvalidDataException>(() =>
+            before.RequireSameExceptRemovedMod(after, _rig.Parent)).Message);
+        after.Plugins.Clear();
+        after.CliFiles.RemoveAt(0);
+        Assert.Contains("ValheimCLI files changed", Assert.Throws<InvalidDataException>(() =>
+            before.RequireSameExceptRemovedMod(after, _rig.Parent)).Message);
     }
 
     private NativeDependencyRequest Request(string mod) => new()

@@ -84,6 +84,38 @@ public sealed class NativeDependencyLock
             other.OptionalReferences.Order(StringComparer.Ordinal).ToArray());
     }
 
+    /// <summary>
+    /// Checks an add/remove-mod comparison before either arm starts. The second arm must contain the same selected
+    /// files in the same order except for <paramref name="removedMod"/>. Its resolved dependency closure may shrink,
+    /// but it may not acquire a new file; ValheimCLI and explicit optional-reference decisions stay fixed.
+    /// </summary>
+    public void RequireSameExceptRemovedMod(NativeDependencyLock other, string removedMod)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        if (!Ready || !other.Ready || Mods.Count < 2)
+            throw new InvalidDataException("Both A/B dependency locks must be ready and the first arm needs at least two selected mods.");
+        string removed = Path.GetFullPath(removedMod);
+        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var matches = Mods.Where(file => Path.GetFullPath(file.File).Equals(removed, pathComparison)).ToArray();
+        if (matches.Length != 1)
+            throw new InvalidDataException("The removed mod must identify exactly one selected DLL in the first arm.");
+        static string Identity(NativeDependencyFile file) =>
+            Path.GetFullPath(file.File) + ":" + file.Sha256.ToLowerInvariant();
+        var expected = Mods.Where(file => !Path.GetFullPath(file.File).Equals(removed, pathComparison))
+            .Select(Identity).ToArray();
+        if (!expected.SequenceEqual(other.Mods.Select(Identity), StringComparer.Ordinal))
+            throw new InvalidDataException("The remaining selected mods changed between A/B arms.");
+        var originalDependencies = Plugins.Select(Identity).ToHashSet(StringComparer.Ordinal);
+        if (other.Plugins.Any(file => !originalDependencies.Contains(Identity(file))))
+            throw new InvalidDataException("Removing a mod introduced a new plugin dependency; review both arms instead of treating this as an isolated removal.");
+        if (!CliFiles.Select(Identity).Order(StringComparer.Ordinal).SequenceEqual(
+                other.CliFiles.Select(Identity).Order(StringComparer.Ordinal), StringComparer.Ordinal))
+            throw new InvalidDataException("ValheimCLI files changed between A/B arms.");
+        if (!OptionalReferences.Order(StringComparer.Ordinal).SequenceEqual(
+                other.OptionalReferences.Order(StringComparer.Ordinal), StringComparer.Ordinal))
+            throw new InvalidDataException("Optional-reference decisions changed between A/B arms.");
+    }
+
     /// <summary>Fills a targeted run's dependency and ValheimCLI fields from this lock, leaving its fixture and mod arms to the caller.</summary>
     public void ApplyTo(RegressionEnvironment environment, string cliManifestPath)
     {

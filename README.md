@@ -4,7 +4,7 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 
 > Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
 
-Bringing your own mod? Start with [the adoption guide](docs/adopting.md) and [a complete first mod test](examples/ModWithTests/README.md). Use [package setup](docs/getting-started.md) and the [example index](examples/README.md) for the next layer. Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually. Before a native run, read the [runtime hygiene and evidence checklist](docs/runtime-hygiene.md).
+Bringing your own mod? Start with [the adoption guide](docs/adopting.md) and [a complete first mod test](examples/ModWithTests/README.md). Use [package setup](docs/getting-started.md) and the [example index](examples/README.md) for the next layer. To investigate a load failure or mod conflict, use the [debugging guide](docs/debugging-mods.md). Existing mod tests stay in their own repository; shared helpers and lifecycle code are adopted gradually. Before a native run, read the [runtime hygiene and evidence checklist](docs/runtime-hygiene.md).
 
 Browse the [candidate API reference](https://tvongaza.github.io/ValheimTesting/) on GitHub Pages. It is generated from `main` and remains an inventory for the [stable-contract review](docs/reference/compatibility.md), not yet a 1.0 API promise.
 

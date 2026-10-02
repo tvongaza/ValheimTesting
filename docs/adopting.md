@@ -2,6 +2,8 @@
 
 Start in **your mod's repository** with one behavior you want to protect. You do not need to migrate your suite, install a test plugin, or operate a game server to get a first useful test.
 
+If the immediate problem is getting a mod or mod combination to load, use the [mod and conflict debugging guide](debugging-mods.md) first. Its disposable smoke runs separate setup failures from feature regressions.
+
 ## Choose your first layer
 
 | Your mod needs to test… | Use | First example | What still needs the game |

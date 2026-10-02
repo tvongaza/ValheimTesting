@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Valheim.Testing.Game;
 
 if (args.Length != 0 && args[0] == "server-load") return await ServerLoad.RunAsync(args[1..]);
+if (args.Length != 0 && args[0] == "server-load-ab") return await ServerLoadComparison.RunAsync(args[1..]);
 
 // The default path hosts a world in an owned client; server-load uses an owned dedicated server.
 if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))

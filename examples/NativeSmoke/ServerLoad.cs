@@ -18,7 +18,8 @@ internal static class ServerLoad
             return 2;
         }
         using var cancel = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); };
+        ConsoleCancelEventHandler onCancel = (_, press) => { press.Cancel = true; cancel.Cancel(); };
+        Console.CancelKeyPress += onCancel;
         var clock = Stopwatch.StartNew();
         try
         {
@@ -152,9 +153,10 @@ internal static class ServerLoad
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             return 3;
         }
+        finally { Console.CancelKeyPress -= onCancel; }
     }
 
-    private static bool TryRead(string[] args, out Dictionary<string, string>? options, out List<string>? mods,
+    internal static bool TryRead(string[] args, out Dictionary<string, string>? options, out List<string>? mods,
         out List<string>? roots, out List<string>? configs, out List<string>? pluginFiles,
         out List<string>? pluginDirectories, out List<string>? optional, out string error)
     {
