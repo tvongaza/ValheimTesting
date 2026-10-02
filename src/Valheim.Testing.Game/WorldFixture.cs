@@ -59,7 +59,7 @@ public sealed class WorldFixture : IDisposable
                 File.Copy(Path.Combine(source, item.Key), destination);
                 if (Hash(destination) != item.Value) throw new IOException("Fixture changed while copying: " + item.Key);
             }
-            File.WriteAllText(Path.Combine(target, "fixture-provenance.json"), JsonSerializer.Serialize(actual));
+            File.WriteAllText(Path.Combine(target, ProvenanceFile), JsonSerializer.Serialize(actual));
             return fixture;
         }
         catch { fixture.Dispose(); throw; }
@@ -109,10 +109,107 @@ public sealed class WorldFixture : IDisposable
         }
     }
     public static string Hash(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(); }
+
+    /// <summary>
+    /// Keeps what changed in the copy since it was made, then deletes the copy. Every file added, and every copied file whose
+    /// SHA256 changed, goes to <paramref name="keepIn"/> under its relative path (the logs, configs and caches a run wrote). A
+    /// file larger than <paramref name="maxFileBytes"/>, or past <paramref name="maxKeptBytes"/> in all, is listed with its
+    /// size and SHA256 instead; a link is listed and never followed. <c>changes.json</c> in <paramref name="keepIn"/> lists
+    /// the added, changed, missing and not-kept files. Every other file is the source's, by its hash in
+    /// <see cref="SourceHashes"/>, so nothing the run made is lost. Call it only once no process uses the copy. Refused after
+    /// <see cref="Dispose"/>. When the copy cannot be deleted, what was kept stays and the error says which copy remains.
+    /// </summary>
+    public RetiredCopy Retire(string keepIn, long maxFileBytes = 64L << 20, long maxKeptBytes = 256L << 20)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(WorldFixture), "The copy was already removed.");
+        keepIn = Path.GetFullPath(keepIn);
+        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (keepIn.Equals(DirectoryPath, pathComparison) || keepIn.StartsWith(DirectoryPath + Path.DirectorySeparatorChar, pathComparison))
+            throw new ArgumentException("Keep the changes outside the copy that is removed.", nameof(keepIn));
+        var added = new List<string>(); var changed = new List<string>(); var links = new List<string>(); var seen = new HashSet<string>(StringComparer.Ordinal);
+        long bytesFreed = 0;
+        void Walk(string directory)
+        {
+            foreach (string path in Directory.EnumerateFileSystemEntries(directory))
+            {
+                string relative = Path.GetRelativePath(DirectoryPath, path);
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.ReparsePoint) != 0) { links.Add(relative); continue; }
+                if ((attributes & FileAttributes.Directory) != 0) { Walk(path); continue; }
+                bytesFreed += new FileInfo(path).Length;
+                seen.Add(relative);
+                // The copy's own record, written over any source file of that name (a copy of a copy has one): never the run's.
+                if (relative == ProvenanceFile) continue;
+                if (!SourceHashes.TryGetValue(relative, out var source)) added.Add(relative);
+                else if (!Hash(path).Equals(source, StringComparison.OrdinalIgnoreCase)) changed.Add(relative);
+            }
+        }
+        Walk(DirectoryPath);
+        var missing = SourceHashes.Keys.Where(key => !seen.Contains(key)).Order(StringComparer.Ordinal).ToList();
+        var notKept = links.Order(StringComparer.Ordinal).Select(link => new NotKeptFile(link, null, null, "a link: listed, not followed")).ToList();
+        Directory.CreateDirectory(keepIn);
+        long kept = 0;
+        added.Sort(StringComparer.Ordinal); changed.Sort(StringComparer.Ordinal);
+        foreach (string relative in added.Concat(changed).Order(StringComparer.Ordinal))
+        {
+            string from = Path.Combine(DirectoryPath, relative);
+            long length = new FileInfo(from).Length;
+            if (length > maxFileBytes || kept + length > maxKeptBytes)
+            {
+                notKept.Add(new(relative, length, Hash(from), length > maxFileBytes ? $"larger than {DiskSpace.Format(maxFileBytes)}" : $"past {DiskSpace.Format(maxKeptBytes)} kept in all"));
+                continue;
+            }
+            string to = Path.Combine(keepIn, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+            File.Copy(from, to, overwrite: false);
+            kept += length;
+        }
+        var retired = new RetiredCopy(DirectoryPath, keepIn, added, changed, missing, notKept, kept, bytesFreed);
+        File.WriteAllText(Path.Combine(keepIn, "changes.json"), JsonSerializer.Serialize(retired, new JsonSerializerOptions { WriteIndented = true }));
+        try { DeleteTree(DirectoryPath); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Kept the run's changes in {keepIn}, but could not remove the copy {DirectoryPath} ({error.Message}). Delete it once no process uses it.", error);
+        }
+        _disposed = true;
+        return retired;
+    }
+    private const string ProvenanceFile = "fixture-provenance.json";
+
+    // Windows refuses to delete a read-only file, and File.Copy keeps the source's read-only attribute: clear it and retry.
+    // Links are removed, never followed.
+    private static void DeleteTree(string path)
+    {
+        try { Directory.Delete(path, recursive: true); }
+        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+        {
+            var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true };
+            foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", options))
+                if ((file.Attributes & FileAttributes.ReadOnly) != 0) file.Attributes &= ~FileAttributes.ReadOnly;
+            Directory.Delete(path, recursive: true);
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
-        if (!Preserve && Directory.Exists(DirectoryPath)) Directory.Delete(DirectoryPath, true);
+        if (!Preserve && Directory.Exists(DirectoryPath)) DeleteTree(DirectoryPath);
         _disposed = true;
     }
+}
+
+/// <summary>A file a run made or changed that <see cref="WorldFixture.Retire"/> listed instead of keeping: its size and SHA256 (none for a link), and why.</summary>
+public sealed record NotKeptFile(string Path, long? Bytes, string? Sha256, string Reason);
+
+/// <summary>
+/// What <see cref="WorldFixture.Retire"/> did: the removed copy, where the changes went, the files the run added or changed
+/// and those it removed (relative paths), what was listed and not kept, the bytes kept and the bytes the copy held.
+/// </summary>
+public sealed record RetiredCopy(string Copy, string KeptIn, IReadOnlyList<string> Added, IReadOnlyList<string> Changed,
+    IReadOnlyList<string> Missing, IReadOnlyList<NotKeptFile> NotKept, long KeptBytes, long BytesFreed)
+{
+    /// <summary>One line for a report: "removed &lt;copy&gt; (2.1 GB); kept 18 added or changed files (3 MB) in &lt;dir&gt;, 1 listed only, 0 missing (changes.json)".</summary>
+    public override string ToString() =>
+        $"removed {Copy} ({DiskSpace.Format(BytesFreed)}); kept {Added.Count + Changed.Count - NotKept.Count(file => file.Bytes != null)} added or changed files " +
+        $"({DiskSpace.Format(KeptBytes)}) in {KeptIn}, {NotKept.Count} listed only, {Missing.Count} missing (changes.json)";
 }

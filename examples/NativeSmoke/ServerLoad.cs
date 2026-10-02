@@ -48,6 +48,7 @@ internal static class ServerLoad
                 ? new[] { server, cliFiles, Path.GetFullPath(options["--client"]), steamUserdata! }
                 : [server, cliFiles]).Concat(new[] { serverLoader?.Root, clientLoader?.Root }.OfType<string>()).ToArray();
             SmokeOutput.RefuseInside(output, protectedRoots);
+            SmokeOutput.RequireSpace(output, server, joinClient ? Path.GetFullPath(options["--client"]) : null);
             foreach (string path in new[] { adapter, cliManifest }.OfType<string>().Concat(mods!.Select(Path.GetFullPath)))
                 if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
             var request = new NativeDependencyRequest
@@ -152,11 +153,14 @@ internal static class ServerLoad
             {
                 if (joinClient) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, previousPassword);
             }
+            // The staged copies are inputs, recorded by hash in the evidence: the run copied the server again for itself and
+            // removed or kept that copy as its report says.
+            clientRuntime?.Dispose(); runtime.Dispose();
             Console.WriteLine((result == 0 ? (joinClient ? "SERVER_JOIN_PASS" : "SERVER_LOAD_PASS") : "SERVER_LOAD_FAIL") +
                 $": {mods!.Count} selected mod(s), {clock.Elapsed.TotalSeconds:F1}s. " +
                 (result != 0 ? "See the private evidence for the failed check." :
                     joinClient ? "Clean client joined with selected server mods absent." : "A clean-client join has not run.") +
-                $" Private evidence in {output}");
+                $" Private evidence ({DiskSpace.Format(DiskSpace.DirectoryBytes(output))}) in {output}");
             return result;
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or HttpRequestException or OperationCanceledException)
