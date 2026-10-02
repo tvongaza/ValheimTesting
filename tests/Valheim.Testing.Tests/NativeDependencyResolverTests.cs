@@ -91,6 +91,54 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Empty(ambiguous.Plugins);
     }
 
+    [Fact] public void IdenticalHardPluginCopiesAcrossModFolderAndSearchRootAreOneChoice()
+    {
+        string besideMod = Path.Combine(_rig.Root, "parent", "Dependency.dll");
+        string searchRoot = Path.Combine(_rig.Root, "deps", "Dependency.dll");
+        File.Copy(searchRoot, besideMod);
+
+        var plan = NativeDependencyResolver.Resolve(Request(_rig.Parent));
+        Assert.True(plan.Ready, string.Join("; ", plan.Gaps.Select(gap => gap.Reason)));
+        var dependency = Assert.Single(plan.Plugins);
+        Assert.Equal(new[] { besideMod, searchRoot }.Order(StringComparer.Ordinal), dependency.SourcePaths);
+        Assert.Equal(dependency.SourcePaths[0], dependency.File);
+        string lockFile = Path.Combine(_rig.Root, "equivalent-lock.json");
+        plan.Write(lockFile);
+        Assert.Equal(dependency.SourcePaths, Assert.Single(NativeDependencyLock.ReadReady(lockFile).Plugins).SourcePaths);
+
+        _rig.Write("parent/Dependency.dll", RegressionRig.Assembly("Dependency", new("example.dependency", "1.4.0")));
+        var different = NativeDependencyResolver.Resolve(Request(_rig.Parent));
+        var gap = Assert.Single(different.Gaps);
+        Assert.Equal("plugin", gap.Kind);
+        Assert.Equal(2, gap.Candidates.Count);
+    }
+
+    [Fact] public void IdenticalReferencedLibraryWithAnotherFilenameIsOneChoice()
+    {
+        string mod = _rig.Write("uses/Uses.dll", RegressionRig.Assembly("Uses", new("example.uses"), reference: typeof(FactAttribute)));
+        string original = _rig.Write("library-one/xunit.core.dll", RegressionRig.Assembly("xunit.core", null));
+        string renamed = Path.Combine(_rig.Root, "library-two", "Renamed.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(renamed)!);
+        File.Copy(original, renamed);
+        var request = Request(mod);
+        request.SearchRoots = [Path.GetDirectoryName(original)!, Path.GetDirectoryName(renamed)!];
+
+        var plan = NativeDependencyResolver.Resolve(request);
+        Assert.True(plan.Ready, string.Join("; ", plan.Gaps.Select(gap => gap.Reason)));
+        var library = Assert.Single(plan.Plugins);
+        Assert.Equal(original, library.File); // Stage the assembly under its real name, not the renamed copy.
+        Assert.Equal(new[] { original, renamed }, library.SourcePaths);
+
+        _rig.Write("library-three/xunit.core.dll", RegressionRig.Assembly("xunit.core", null, marker: "different bytes"));
+        request.SearchRoots.Add(Path.Combine(_rig.Root, "library-three"));
+        var ambiguous = NativeDependencyResolver.Resolve(request);
+        var gap = Assert.Single(ambiguous.Gaps);
+        Assert.Equal("assembly", gap.Kind);
+        Assert.Equal(3, gap.Candidates.Count);
+        Assert.Contains(original, gap.Candidates);
+        Assert.Contains(renamed, gap.Candidates);
+    }
+
     [Fact] public void SoftReferenceRequiresExplicitConfirmationBeforeItCanBeOmitted()
     {
         string mod = _rig.Write("soft/Uses.dll", RegressionRig.Assembly("Uses", new("example.uses") { Soft = ["example.soft"] }, reference: typeof(FactAttribute)));

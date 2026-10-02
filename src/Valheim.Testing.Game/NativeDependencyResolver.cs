@@ -38,7 +38,11 @@ public sealed class NativeDependencyRequest
 }
 
 /// <summary>One selected DLL and the reason it belongs in the disposable game.</summary>
-public sealed record NativeDependencyFile(string File, string Sha256, string Reason);
+public sealed record NativeDependencyFile(string File, string Sha256, string Reason)
+{
+    /// <summary>All discovered paths with the same assembly/plugin identity and bytes, including <see cref="File"/>. Only File is staged.</summary>
+    public List<string> SourcePaths { get; init; } = [];
+}
 
 /// <summary>A choice the resolver cannot make safely. Candidate paths are suggestions, never staged automatically.</summary>
 public sealed record NativeDependencyGap(string Kind, string Name, string Reason, IReadOnlyList<string> Candidates);
@@ -199,6 +203,31 @@ public static class NativeDependencyResolver
                 catch (Exception error) when (error is BadImageFormatException or InvalidDataException) { return (Path: path, Metadata: (PluginAssembly?)null); }
             }).Where(item => item.Metadata != null).Select(item => (item.Path, Metadata: item.Metadata!)).ToList();
         var known = inventory.ToDictionary(item => item.Path, item => item.Metadata, StringComparer.Ordinal);
+        var equivalentSources = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        // A second path to the same bytes is provenance, not another build to choose from.
+        // Keep the choice explicit whenever either the metadata identity or bytes differ.
+        List<string> DistinctCandidates(IEnumerable<string> paths)
+        {
+            var groups = paths.GroupBy(candidate =>
+            {
+                var metadata = known[candidate];
+                string plugins = string.Join(";", metadata.Plugins
+                    .Select(plugin => plugin.Guid + "@" + plugin.Version).Order(StringComparer.Ordinal));
+                return metadata.AssemblyName + "|" + plugins + "|" + WorldFixture.Hash(candidate);
+            }, StringComparer.OrdinalIgnoreCase);
+            var choices = new List<string>();
+            foreach (var group in groups)
+            {
+                var sources = group.Order(StringComparer.Ordinal).ToList();
+                string expectedName = known[sources[0]].AssemblyName + ".dll";
+                string chosen = sources.OrderBy(source => Path.GetFileName(source).Equals(expectedName, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                    .ThenBy(source => source, StringComparer.Ordinal).First();
+                choices.Add(chosen);
+                equivalentSources[chosen] = sources;
+            }
+            return choices;
+        }
+        IEnumerable<string> AllSources(IEnumerable<string> choices) => choices.SelectMany(choice => equivalentSources[choice]);
         var selected = new Dictionary<string, string>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         void Add(string path, string reason)
@@ -257,10 +286,10 @@ public static class NativeDependencyResolver
                             Gap("plugin", dependency.Guid, $"{Path.GetFileName(path)} needs {dependency.Guid} >= {dependency.MinimumVersion}, but the selected {Path.GetFileName(already[0].candidate)} declares {already[0].p.Version}; select a compatible build instead of staging both.", []);
                         continue;
                     }
-                    var matches = inventory.Where(item => item.Metadata.Plugins.Any(p => p.Guid == dependency.Guid && AtLeast(p.Version, dependency.MinimumVersion)))
-                        .Select(item => item.Path).Where(candidate => !selected.ContainsKey(candidate)).ToList();
+                    var matches = DistinctCandidates(inventory.Where(item => item.Metadata.Plugins.Any(p => p.Guid == dependency.Guid && AtLeast(p.Version, dependency.MinimumVersion)))
+                        .Select(item => item.Path).Where(candidate => !selected.ContainsKey(candidate)));
                     if (matches.Count == 1) Add(matches[0], $"hard [BepInDependency] {dependency.Guid} of {Path.GetFileName(path)}");
-                    else Gap("plugin", dependency.Guid, $"{Path.GetFileName(path)} requires {dependency.Guid}{(dependency.MinimumVersion == null ? "" : " >= " + dependency.MinimumVersion)}; supply its plugin DLL in an explicit search root or choose among the candidates.", matches);
+                    else Gap("plugin", dependency.Guid, $"{Path.GetFileName(path)} requires {dependency.Guid}{(dependency.MinimumVersion == null ? "" : " >= " + dependency.MinimumVersion)}; supply its plugin DLL in an explicit search root or choose among the candidates.", AllSources(matches));
                 }
                 foreach (var dependency in plugin.Dependencies.Where(item => !item.Hard))
                     if (!result.OptionalCandidates.Contains(dependency.Guid, StringComparer.Ordinal)) result.OptionalCandidates.Add(dependency.Guid);
@@ -269,13 +298,13 @@ public static class NativeDependencyResolver
             {
                 if (provided.Contains(reference) || result.OptionalReferences.Contains(reference, StringComparer.OrdinalIgnoreCase)
                     || selected.Keys.Any(candidate => known[candidate].AssemblyName.Equals(reference, StringComparison.OrdinalIgnoreCase))) continue;
-                var matches = inventory.Where(item => item.Metadata.AssemblyName.Equals(reference, StringComparison.OrdinalIgnoreCase))
-                    .Select(item => item.Path).Where(candidate => !selected.ContainsKey(candidate)).ToList();
+                var matches = DistinctCandidates(inventory.Where(item => item.Metadata.AssemblyName.Equals(reference, StringComparison.OrdinalIgnoreCase))
+                    .Select(item => item.Path).Where(candidate => !selected.ContainsKey(candidate)));
                 bool soft = assembly.Plugins.SelectMany(plugin => plugin.Dependencies.Where(dep => !dep.Hard))
                     .Any(dep => matches.Any(candidate => known[candidate].Plugins.Any(p => p.Guid == dep.Guid)));
-                if (soft) Gap("optional-reference", reference, $"{Path.GetFileName(path)} references {reference}, which may be behind a soft dependency. Confirm optionalReferences explicitly or select its DLL; metadata alone cannot prove it is safe to omit.", matches);
+                if (soft) Gap("optional-reference", reference, $"{Path.GetFileName(path)} references {reference}, which may be behind a soft dependency. Confirm optionalReferences explicitly or select its DLL; metadata alone cannot prove it is safe to omit.", AllSources(matches));
                 else if (matches.Count == 1) Add(matches[0], $"assembly reference {reference} of {Path.GetFileName(path)}");
-                else Gap("assembly", reference, $"{Path.GetFileName(path)} references {reference}; supply its DLL in an explicit search root, or explicitly confirm optionalReferences if it is guarded.", matches);
+                else Gap("assembly", reference, $"{Path.GetFileName(path)} references {reference}; supply its DLL in an explicit search root, or explicitly confirm optionalReferences if it is guarded.", AllSources(matches));
             }
         }
         foreach (var group in selected.Keys.SelectMany(path => known[path].Plugins.Select(plugin => (Path: path, plugin.Guid)))
@@ -287,7 +316,8 @@ public static class NativeDependencyResolver
                     if (selected.Keys.Any(candidate => known[candidate].Plugins.Any(p => p.Guid == incompatible)))
                         Gap("incompatible-plugin", plugin.Guid, $"{plugin.Guid} declares [BepInIncompatibility] with selected {incompatible}; remove one mod.", [path]);
         foreach (var (path, reason) in selected)
-            if (!request.Mods.Contains(path, StringComparer.Ordinal) && !result.CliFiles.Any(file => file.File == path)) result.Plugins.Add(Pinned(path, reason));
+            if (!request.Mods.Contains(path, StringComparer.Ordinal) && !result.CliFiles.Any(file => file.File == path))
+                result.Plugins.Add(Pinned(path, reason) with { SourcePaths = equivalentSources.GetValueOrDefault(path) ?? [path] });
         result.Plugins.Sort((a, b) => StringComparer.Ordinal.Compare(a.File, b.File));
         result.OptionalCandidates.Sort(StringComparer.Ordinal);
         return result;
