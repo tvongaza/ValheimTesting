@@ -16,7 +16,7 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Compare client ground and support | [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md) | Human usability |
 | Compare loaded paint | [PaintCheck](../examples/PaintCheck/README.md) | Rendered appearance or every biome's alpha meaning |
 | A/B regression of one mod in the real game | [TargetedRegression](../examples/TargetedRegression/README.md): preflight without the game, then one hosted run per arm | Other mods, dedicated servers or restarts |
-| Load a mod or isolate a mod-set conflict | [Debugging mods](debugging-mods.md): single-mod, combined-set and remove-one-mod smoke checks | The mod's gameplay behavior or which mod owns a conflict |
+| Load a mod or isolate a mod-set conflict | [NativeSmoke](../examples/NativeSmoke/README.md) through [Debugging mods](debugging-mods.md): `valheim-test server-load`, `server-load-ab` or `start` | The mod's gameplay behavior or which mod owns a conflict |
 | Share a native regression's source and result | [RegressionBundle](../examples/RegressionBundle/README.md): a scrubbed directory for review, never published | That a ported runner's harness ran natively, or that no private detail outside its rules remains |
 | Exercise extension replacement | [ReloadCheck](../examples/ReloadCheck/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
 | Collect walking evidence | [WalkingReview](../examples/WalkingReview/README.md) | Acceptance without a separate human verdict |
@@ -29,6 +29,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 
 1. Read the local repository's instructions and check branch/worktree status. Keep other agents' edits and active sessions intact.
 2. Check [package ownership and setup](getting-started.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`. ValheimCLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
+   For a load check from otherwise unmodded game installs, [NativeSmoke](../examples/NativeSmoke/README.md#disposable-native-mod-load-smoke) accepts a reviewed loader package and a coherent ValheimCLI bundle. A server and clean client use separately pinned loader packages. These options are in this checkout's candidate tool until its next release; the currently published tool may not have them.
 3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
 
    ```sh

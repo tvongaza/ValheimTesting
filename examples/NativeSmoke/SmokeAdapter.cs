@@ -6,13 +6,14 @@ using Valheim.Testing.Game;
 internal static class SmokeAdapter
 {
     internal static async Task<string> BuildAsync(string server, NativeDependencyLock dependencies, string output,
-        CancellationToken cancellation)
+        CancellationToken cancellation, string? bepInExCore = null)
     {
         ServerLaunch.Detect(server);
         var cliCore = dependencies.CliFiles.Where(file => dependencies.CliManifest.Files.Any(entry =>
             entry.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase) &&
             entry.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal))).ToArray();
         if (cliCore.Length != 1) throw new InvalidDataException("Build the session adapter against exactly one pinned ValheimCLI core.");
+        bepInExCore ??= Path.Combine(server, InstallPins.CoreDirectory);
         string stage = Path.Combine(Path.GetTempPath(), "valheimtesting-smoke-adapter-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -26,7 +27,8 @@ internal static class SmokeAdapter
             start.Environment["NUGET_PACKAGES"] = packages;
             start.Environment["NUGET_HTTP_CACHE_PATH"] = httpCache;
             foreach (string argument in new[] { "restore", "NativeSmoke.SessionAdapter.csproj",
-                "--configfile", "NuGet.Config", "-p:ValheimPath=" + server, "-p:CliDll=" + cliCore[0].File })
+                "--configfile", "NuGet.Config", "-p:ValheimPath=" + server,
+                "-p:BepInExCore=" + bepInExCore, "-p:CliDll=" + cliCore[0].File })
                 start.ArgumentList.Add(argument);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("The .NET SDK could not start to build the test-only session adapter.");
             Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellation);
@@ -46,7 +48,8 @@ internal static class SmokeAdapter
             build.Environment["NUGET_PACKAGES"] = packages;
             build.Environment["NUGET_HTTP_CACHE_PATH"] = httpCache;
             foreach (string argument in new[] { "build", "NativeSmoke.SessionAdapter.csproj", "-c", "Release", "--no-restore",
-                "-p:ValheimPath=" + server, "-p:CliDll=" + cliCore[0].File }) build.ArgumentList.Add(argument);
+                "-p:ValheimPath=" + server, "-p:BepInExCore=" + bepInExCore,
+                "-p:CliDll=" + cliCore[0].File }) build.ArgumentList.Add(argument);
             using var compiler = Process.Start(build) ?? throw new InvalidOperationException("The .NET SDK could not compile the test-only session adapter.");
             Task<string> buildOutput = compiler.StandardOutput.ReadToEndAsync(cancellation);
             Task<string> buildError = compiler.StandardError.ReadToEndAsync(cancellation);

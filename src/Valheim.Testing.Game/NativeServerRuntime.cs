@@ -27,17 +27,22 @@ public sealed class NativeServerRuntime : IDisposable
     /// script, config and patcher folders. Refuses duplicate staged file names or plugin GUIDs before copying.
     /// The adapter must declare exactly one BepInEx plugin. Explicit config files are copied by filename into the
     /// disposable runtime only. Explicit plugin sidecars (non-DLL files and directories such as an asset manifest and
-    /// bundles) are copied beside the selected DLLs. The returned manifest pins every staged file.
+    /// bundles) are copied beside the selected DLLs. An optional reviewed loader package replaces loader files in the
+    /// copy after its old plugin and config folders are cleared. The returned manifest pins every staged file.
     /// </summary>
     public static NativeServerRuntime Prepare(string source, string outputParent, NativeDependencyLock dependencies,
         string adapter, int cliPort, IReadOnlyList<string>? configFiles = null,
-        IReadOnlyList<string>? pluginFiles = null, IReadOnlyList<string>? pluginDirectories = null)
+        IReadOnlyList<string>? pluginFiles = null, IReadOnlyList<string>? pluginDirectories = null,
+        BepInExLoaderPackage? loaderPackage = null)
     {
         ArgumentNullException.ThrowIfNull(dependencies);
         if (!dependencies.Ready || dependencies.Mods.Count == 0)
             throw new InvalidDataException("The native dependency lock must be ready and contain selected server mods.");
         if (cliPort is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(cliPort));
         source = Path.GetFullPath(source); adapter = Path.GetFullPath(adapter);
+        loaderPackage?.Validate();
+        if (loaderPackage != null && RegressionEnvironment.Inside(loaderPackage.Root, source))
+            throw new InvalidOperationException("The loader package must be an extracted, reviewed set outside the source server install.");
         var configs = (configFiles ?? []).Select(Path.GetFullPath).ToList();
         var sidecarFiles = (pluginFiles ?? []).Select(Path.GetFullPath).ToList();
         var sidecarDirectories = (pluginDirectories ?? []).Select(Path.GetFullPath).ToList();
@@ -108,6 +113,7 @@ public sealed class NativeServerRuntime : IDisposable
                 if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
                 Directory.CreateDirectory(folder);
             }
+            loaderPackage?.Apply(copy.DirectoryPath);
             string plugins = Path.Combine(bep, "plugins");
             foreach (string file in files)
             {

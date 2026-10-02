@@ -16,9 +16,10 @@ public sealed class NativeCleanClientRuntime : IDisposable
     private NativeCleanClientRuntime(WorldFixture copy, string manifest, Dictionary<string, string> pins, int cliPort)
     { Copy = copy; CliManifestFile = manifest; CliPins = pins; _cliPort = cliPort; }
 
-    /// <summary>Copies a prepared client install, clearing plugins, scripts, config and patchers only in the copy.</summary>
+    /// <summary>Copies a client install, clearing plugins, scripts, config and patchers only in the copy.
+    /// An optional reviewed loader package supplies the copy's loader files and BepInEx config.</summary>
     public static NativeCleanClientRuntime Prepare(string source, string outputParent, NativeDependencyLock dependencies,
-        int cliPort)
+        int cliPort, BepInExLoaderPackage? loaderPackage = null)
     {
         ArgumentNullException.ThrowIfNull(dependencies);
         if (!dependencies.Ready || dependencies.CliFiles.Count == 0)
@@ -26,6 +27,9 @@ public sealed class NativeCleanClientRuntime : IDisposable
         if (cliPort is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(cliPort));
         source = Path.GetFullPath(source);
         _ = ClientLaunch.Detect(source);
+        loaderPackage?.Validate();
+        if (loaderPackage != null && RegressionEnvironment.Inside(loaderPackage.Root, source))
+            throw new InvalidOperationException("The client loader package must be an extracted, reviewed set outside the source game install.");
         var files = dependencies.CliFiles.Select(file => file.File).ToList();
         var duplicate = files.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
         if (duplicate != null) throw new InvalidDataException("Two pinned ValheimCLI files share filename " + duplicate.Key + ".");
@@ -50,6 +54,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
                 if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
                 Directory.CreateDirectory(folder);
             }
+            loaderPackage?.Apply(copy.DirectoryPath);
             foreach (string file in files)
             {
                 string target = Path.Combine(bep, "plugins", Path.GetFileName(file));
