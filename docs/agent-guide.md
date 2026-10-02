@@ -13,6 +13,7 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Test driver failure/cleanup behavior | [Library tests](../tests/Valheim.Testing.Tests), controlled transports | Runtime Harmony/RPC timing |
 | Read a game sample | [GameObserve](../examples/GameObserve/README.md) | That the sampled value is independently correct |
 | Compare generator or loaded ground | [TerrainCheck](../examples/TerrainCheck/README.md) | Collider, paint or walking behavior |
+| Review a pinned dump as an overview plus fine zoom | [Terrain maps](terrain-maps.md) | The pictured interpolation or rendered colour being native gameplay evidence |
 | Compare client ground and support | [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md) | Human usability |
 | Compare loaded paint | [PaintCheck](../examples/PaintCheck/README.md) | Rendered appearance or every biome's alpha meaning |
 | A/B regression of one mod in the real game | [TargetedRegression](../examples/TargetedRegression/README.md): preflight without the game, then one hosted run per arm | Other mods, dedicated servers or restarts |
