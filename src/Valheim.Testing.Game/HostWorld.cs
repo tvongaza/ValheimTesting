@@ -127,6 +127,7 @@ public sealed class HostedWorld : IDisposable
                 if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true); else File.Delete(entry);
             throw;
         }
+        copy.Dispose(); // kept (Preserve) as evidence; nothing uses it after placement, so this process lets go of it
         return new HostedWorld(name, plan.WorldUid, worlds, copy.DirectoryPath, output);
     }
 

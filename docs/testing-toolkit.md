@@ -231,6 +231,19 @@ The runner then:
 
 **What the output keeps.** The evidence stays: `result.json`, `junit.xml`, the plan and input hashes, each boot's logs and recorded commands, and the world copy, which is the run's actual save. The runtime copy goes once its server has stopped, on a pass, a failure or `validate`. Apart from what the run wrote, it is the pinned runtime's own files, which the input hashes already record, and it is about 2 GB per run. Before it is removed, every file the run added or changed in it (BepInEx's log, configs, a mod's cache, Steam's logs) is kept in `runtime-changes/` under its relative path. `runtime-changes/changes.json` lists the added, changed and missing files. A file over 64 MB, or past 256 MB kept in all, is listed there with its size and SHA-256 instead (`WorldFixture.Retire`). `runtimeCopy` in the report says what was removed and kept, and `outputBytes` gives the output's final size, which the runner also prints. The copy stays when its server did not stop cleanly, because a process may still use it: the report names it, with its size, to delete by hand. To keep the whole copy for hands-on debugging, set `KeepRuntime` in the runner's options, or `VALHEIM_TESTING_KEEP_RUNTIME=1` for any runner. A run on a `--profile` host leaves its runtime copy on that host for now.
 
+**Copies left behind.** A run that was killed, one whose server did not stop, one kept on request, and every run before this change can leave game copies behind. `OwnedCopies.Find(root)` lists them and changes nothing; the NativeSmoke tool's `valheim-test copies ROOT` prints the same list (`--json` for a machine-readable one). A copy is recognised only by what the toolkit writes: a `valheim-test-` directory with 32 hex digits holding `fixture-provenance.json`. Nothing else under the root is listed, and links are never followed. Each entry has:
+- its kind (server runtime, client runtime, world or other) and size;
+- when it was made;
+- which running processes use it (any process whose executable is inside it);
+- the result of its run (the nearest `result.json`, in its own output or its `evidence/`).
+
+`OwnedCopies.Remove(path)`, or `valheim-test copies ROOT --remove COPY` repeated for each chosen copy, removes exactly the copies named, one at a time. It refuses:
+- a path that is not such a copy, or one outside ROOT;
+- a copy a running process uses;
+- a world copy, a run's save, unless `--allow-world` (`allowWorld`) is given.
+
+Before removing a copy, it keeps what that copy's run changed in it in `<copy>-changes` beside it, with the larger limits when the run did not pass. The listing suggests the command for each game copy no process uses; check each one's run first. There is no sweep.
+
 `run.OpenClient(plan.Client)` opens the plan's client and adds its logs to `run.Logs`: `ClientSession.Open` on this machine, or, with a profile that names clients, an owned client started in its host's desktop session (below).
 
 A clean test runtime is BepInEx core plus your plugins, with an empty `patchers` folder. Preloader patchers rewrite game assemblies before any plugin loads, so one a removed mod left behind breaks the whole run with a `TypeLoadException` on a game type; name a patcher in the plan only when the run needs it (for example a hook generator a dependency requires).

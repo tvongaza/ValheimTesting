@@ -23,6 +23,8 @@ public sealed class WorldFixture : IDisposable
     public bool Preserve { get; set; }
     private bool _disposed;
     private WorldFixture(string path, Dictionary<string, string> hashes) { DirectoryPath = path; SourceHashes = hashes; }
+    /// <summary>A copy an earlier process made, from its own manifest (<see cref="OwnedCopies.Remove"/>).</summary>
+    internal static WorldFixture Existing(string path, Dictionary<string, string> hashes) => new(path, hashes);
     /// <summary>Copies an exact, previously pinned fixture into a new directory owned by this instance.</summary>
     public static WorldFixture Copy(string source, string outputParent, IReadOnlyDictionary<string, string> expectedHashes)
     {
@@ -52,6 +54,7 @@ public sealed class WorldFixture : IDisposable
         var fixture = new WorldFixture(target, actual);
         try
         {
+            WriteOwner(target);
             foreach (string directory in directories) Directory.CreateDirectory(Path.Combine(target, Path.GetRelativePath(source, directory)));
             foreach (var item in actual)
             {
@@ -172,9 +175,23 @@ public sealed class WorldFixture : IDisposable
             throw new IOException($"Kept the run's changes in {keepIn}, but could not remove the copy {DirectoryPath} ({error.Message}). Delete it once no process uses it.", error);
         }
         _disposed = true;
+        ReleaseOwner();
         return retired;
     }
     private const string ProvenanceFile = "fixture-provenance.json";
+
+    /// <summary>
+    /// <c>&lt;copy&gt;.owner.json</c> beside a copy: the process holding this instance (its id and start time), so
+    /// <see cref="OwnedCopies"/> sees a copy a live run is still using even before any game runs from it. Removed when the
+    /// instance is disposed or retired; a process that ends without either leaves a record no live process matches.
+    /// </summary>
+    internal static string OwnerFile(string copy) => copy + ".owner.json";
+    private static void WriteOwner(string copy)
+    {
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        File.WriteAllText(OwnerFile(copy), JsonSerializer.Serialize(new CopyOwner(Environment.ProcessId, self.StartTime.ToUniversalTime())));
+    }
+    private void ReleaseOwner() { try { File.Delete(OwnerFile(DirectoryPath)); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { } }
 
     // Windows refuses to delete a read-only file, and File.Copy keeps the source's read-only attribute: clear it and retry.
     // Links are removed, never followed.
@@ -195,6 +212,7 @@ public sealed class WorldFixture : IDisposable
         if (_disposed) return;
         if (!Preserve && Directory.Exists(DirectoryPath)) DeleteTree(DirectoryPath);
         _disposed = true;
+        ReleaseOwner();
     }
 }
 
@@ -213,3 +231,6 @@ public sealed record RetiredCopy(string Copy, string KeptIn, IReadOnlyList<strin
         $"removed {Copy} ({DiskSpace.Format(BytesFreed)}); kept {Added.Count + Changed.Count - NotKept.Count(file => file.Bytes != null)} added or changed files " +
         $"({DiskSpace.Format(KeptBytes)}) in {KeptIn}, {NotKept.Count} listed only, {Missing.Count} missing (changes.json)";
 }
+
+/// <summary>Who holds a copy: <see cref="WorldFixture"/>'s owner record.</summary>
+internal sealed record CopyOwner(int Pid, DateTime StartedUtc);
