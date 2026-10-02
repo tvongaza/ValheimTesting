@@ -316,15 +316,19 @@ public partial class Object
         obj.DestroyNow();
     }
 
-    /// <summary>Destroys everything <see cref="Destroy"/> queued, as the end of Unity's frame does; returns how many went.</summary>
+    /// <summary>
+    /// Destroys everything <see cref="Destroy"/> queued, as the end of Unity's frame does; returns how many of the queued
+    /// objects went, whether directly or with their GameObject, so the count does not depend on the order. They go in the
+    /// order they were queued (reversed with <c>ValheimWorldScope.WithUnityOrder(UnityOrder.Reversed)</c>); Unity promises
+    /// no order.
+    /// </summary>
     public static int EndOfFrame()
     {
-        var due = s_pendingDestroy.ToArray();
+        var due = UnityOrdered(s_pendingDestroy);
         s_pendingDestroy.Clear();
-        int destroyed = 0;
-        foreach (var obj in due)
-            if (!obj.Destroyed) { obj.DestroyNow(); destroyed++; }
-        return destroyed;
+        due.RemoveAll(obj => obj.Destroyed);
+        foreach (var obj in due) obj.DestroyNow();
+        return due.Count;
     }
 
     private void DestroyNow()

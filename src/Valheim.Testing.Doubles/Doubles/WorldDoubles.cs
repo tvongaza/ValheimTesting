@@ -32,6 +32,28 @@ namespace Valheim.Testing.Doubles
     }
 
     /// <summary>
+    /// Where Unity promises no order, which order the doubles use (<see cref="ValheimWorldScope.WithUnityOrder"/>): Awake,
+    /// OnEnable and OnDisable across the objects of a hierarchy that is activated, deactivated or instantiated; each
+    /// phase of <c>Object.RunFrame</c> (Start, Update, coroutines and Invoke, LateUpdate, end-of-frame coroutines) across
+    /// behaviours; OnDestroy across the objects <c>EndOfFrame</c> destroys and within a destroyed hierarchy; and
+    /// <c>FindObjectsByType</c> with <c>FindObjectsSortMode.None</c> (so <c>FindAnyObjectByType</c>). What Unity does
+    /// promise is kept in both: one behaviour's own sequence (Awake, OnEnable, Start, Update, ...), a behaviour waking at
+    /// once in <c>AddComponent</c> on an active object, every behaviour finishing a frame phase before the next phase, and
+    /// <c>FindObjectsSortMode.InstanceID</c>. Unity's script execution order (<c>DefaultExecutionOrder</c>, the project
+    /// settings) is not modelled.
+    /// </summary>
+    public enum UnityOrder
+    {
+        /// <summary>The default: the order objects and components were made or queued in. Deterministic, which Unity is not.</summary>
+        Insertion = 0,
+        /// <summary>
+        /// The exact reverse of <see cref="Insertion"/>. Any two objects meet in the other order, so a test that passes in
+        /// both does not depend on which of two objects goes first; it says nothing about orders of three or more.
+        /// </summary>
+        Reversed = 1,
+    }
+
+    /// <summary>
     /// The game's process-wide singletons for one test. Created, it records which objects the singletons refer to
     /// (<c>WorldGenerator</c>, <c>ZDOMan</c>, <c>ZoneSystem</c>, <c>ZNetScene</c>, <c>ZNet</c>, <c>ZRoutedRpc</c>, Jotunn's <c>NetworkManager</c>, the
     /// loaded heightmaps, the log capture, the console commands and the local player) plus the server flag and the clock; disposed, it puts those references
@@ -61,6 +83,16 @@ namespace Valheim.Testing.Doubles
 
         public ValheimWorldScope WithWorld(WorldGenerator world) { WorldGenerator.instance = world; return this; }
         public ValheimWorldScope WithTerrain(ITerrain terrain) => WithWorld(new TerrainWorld(terrain));
+        /// <summary>
+        /// The order the Unity doubles call behaviours and objects where Unity promises none (restored on dispose): see
+        /// <see cref="UnityOrder"/>. Run a test that depends on two objects once in each order to find an order assumption.
+        /// </summary>
+        public ValheimWorldScope WithUnityOrder(UnityOrder order)
+        {
+            if (!System.Enum.IsDefined(typeof(UnityOrder), order)) throw new System.ArgumentOutOfRangeException(nameof(order));
+            UnityEngine.Object.s_unityReversedOrder = order == UnityOrder.Reversed;
+            return this;
+        }
         /// <summary>A new, empty ZDOMan (this session's id is 1).</summary>
         public ValheimWorldScope WithZdos() { ZDOMan.instance = new ZDOMan(); return this; }
         public ValheimWorldScope WithZoneSystem() { ZoneSystem.instance = new ZoneSystem(); return this; }

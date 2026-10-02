@@ -47,6 +47,18 @@ namespace UnityEngine
         /// <c>ValheimWorldScope.WithScene</c> gives a test its own.
         /// </summary>
         internal static List<GameObject> s_unityGameObjects = new();
+        /// <summary>
+        /// Reverses every order Unity does not promise and the doubles otherwise take from insertion: see
+        /// <c>ValheimWorldScope.WithUnityOrder</c>, which sets and restores it.
+        /// </summary>
+        internal static bool s_unityReversedOrder;
+        /// <summary>A copy of <paramref name="items"/> in the order the doubles call them: as stored, or reversed (<see cref="s_unityReversedOrder"/>).</summary>
+        internal static List<T> UnityOrdered<T>(IEnumerable<T> items)
+        {
+            var ordered = new List<T>(items);
+            if (s_unityReversedOrder) ordered.Reverse();
+            return ordered;
+        }
 
         /// <summary>
         /// As Unity 6's FindObjectsByType: every live GameObject, or component of type <typeparamref name="T"/>, in the
@@ -67,7 +79,7 @@ namespace UnityEngine
                 if (component is T match && component.m_gameObject is { Destroyed: false } owner && Found(owner))
                     found.Add(match);
             if (sortMode == FindObjectsSortMode.InstanceID) found.Sort((a, b) => a.GetInstanceID().CompareTo(b.GetInstanceID()));
-            return found.ToArray();
+            return (sortMode == FindObjectsSortMode.None ? UnityOrdered(found) : found).ToArray();
         }
         /// <summary>The found component with the lowest instance id, or null.</summary>
         public static T? FindFirstObjectByType<T>(FindObjectsInactive findObjectsInactive = FindObjectsInactive.Exclude) where T : Object
@@ -100,14 +112,17 @@ namespace UnityEngine
         /// <c>Start</c> on enabled behaviours that have not started, <c>Update</c> on every enabled behaviour of an active
         /// object, resumes coroutines and runs due <c>Invoke</c> calls, calls <c>LateUpdate</c>, resumes coroutines waiting
         /// for the end of the frame, and ends the frame (<see cref="EndOfFrame"/>). A behaviour added during a frame starts
-        /// in the next one.
+        /// in the next one. Each phase finishes for every behaviour before the next phase begins, as in Unity. Within a phase
+        /// the behaviours run in the order they were added, which is deterministic for tests but not a Unity guarantee:
+        /// Unity orders behaviours of different objects, or of equal script execution order, as it likes.
+        /// <c>ValheimWorldScope.WithUnityOrder(UnityOrder.Reversed)</c> runs them the other way round.
         /// </summary>
         public static void RunFrame(float deltaTime = 0.02f)
         {
             if (!(deltaTime >= 0f) || float.IsInfinity(deltaTime)) throw new ArgumentOutOfRangeException(nameof(deltaTime));
             Time.deltaTime = deltaTime; Time.time += deltaTime; Time.realtimeSinceStartup += deltaTime; Time.frameCount++;
             var behaviours = new List<MonoBehaviour>();
-            foreach (var component in s_unityComponents.ToArray()) if (component is MonoBehaviour behaviour && !behaviour.Destroyed) behaviours.Add(behaviour);
+            foreach (var component in UnityOrdered(s_unityComponents)) if (component is MonoBehaviour behaviour && !behaviour.Destroyed) behaviours.Add(behaviour);
             foreach (var behaviour in behaviours)
                 if (behaviour.UnityRunning && !behaviour.m_unityStarted) { behaviour.m_unityStarted = true; behaviour.UnityRunStart(); }
             foreach (var behaviour in behaviours) if (behaviour.UnityRunning) behaviour.UnitySendMessage("Update");
@@ -201,10 +216,12 @@ namespace UnityEngine
         internal bool UnityAlive => !Destroyed && m_unityAwoken && m_gameObject is { Destroyed: false } owner && owner.activeInHierarchy;
         internal bool UnityRunning => UnityAlive && m_behaviourEnabled;
 
+        // An earlier Awake or OnEnable in the same activation may have deactivated the hierarchy again: then this behaviour
+        // stays asleep (or disabled) until the object is next active, rather than waking on an inactive object.
         internal void UnityBecameActive()
         {
-            if (Destroyed) return;
-            if (!m_unityAwoken) { m_unityAwoken = true; UnitySendMessage("Awake"); if (Destroyed) return; }
+            if (Destroyed || m_gameObject is not { activeInHierarchy: true }) return;
+            if (!m_unityAwoken) { m_unityAwoken = true; UnitySendMessage("Awake"); if (Destroyed || m_gameObject is not { activeInHierarchy: true }) return; }
             if (m_behaviourEnabled && !m_unityEnableSent) { m_unityEnableSent = true; UnitySendMessage("OnEnable"); }
         }
         internal void UnityBecameInactive()
@@ -447,13 +464,23 @@ namespace UnityEngine
             if (activeInHierarchy != was) HierarchyActivityChanged(this, !was);
         }
 
+        // Each behaviour gets Awake then OnEnable (or OnDisable) before the next one, as in Unity. Across objects, and between
+        // a parent and its children, Unity promises no order; the doubles take the object's own components, then its
+        // children, in the order they were added, and with UnityOrder.Reversed the children last first, then the
+        // object's components last first: the exact reverse.
         internal static void HierarchyActivityChanged(GameObject go, bool active)
         {
-            foreach (var component in go.m_components.ToArray())
-                if (component is MonoBehaviour behaviour && !behaviour.Destroyed) { if (active) behaviour.UnityBecameActive(); else behaviour.UnityBecameInactive(); }
+            if (!s_unityReversedOrder) Components();
             if (go.m_transform is { } t)
-                foreach (var child in t.m_children.ToArray())
+                foreach (var child in UnityOrdered(t.m_children))
                     if (child.m_gameObject is { m_activeSelf: true } childObject && !childObject.Destroyed) HierarchyActivityChanged(childObject, active);
+            if (s_unityReversedOrder) Components();
+
+            void Components()
+            {
+                foreach (var component in UnityOrdered(go.m_components))
+                    if (component is MonoBehaviour behaviour && !behaviour.Destroyed) { if (active) behaviour.UnityBecameActive(); else behaviour.UnityBecameInactive(); }
+            }
         }
 
         /// <summary>Adds a new component of the type, as Unity's; a MonoBehaviour wakes at once if the object is active in its hierarchy.</summary>
@@ -566,17 +593,18 @@ namespace UnityEngine
         }
 
         // Destroying an object disables its hierarchy (OnDisable), then destroys its behaviours (OnDestroy) and children
-        // while they are still alive, and takes it out of its parent, as Unity does.
+        // while they are still alive, and takes it out of its parent, as Unity does. UnityOrder.Reversed destroys the
+        // children last first, then the behaviours last first.
         private protected override void UnityDestroying()
         {
             if (activeInHierarchy) HierarchyActivityChanged(this, false);
-            foreach (var component in m_components.ToArray()) DestroyImmediate(component);
+            if (!s_unityReversedOrder) Components();
             if (m_transform is { } t)
-            {
-                foreach (var child in t.m_children.ToArray()) if (child.m_gameObject is { } childObject) DestroyImmediate(childObject);
-                t.Detach();
-                DestroyImmediate(t);
-            }
+                foreach (var child in UnityOrdered(t.m_children)) if (child.m_gameObject is { } childObject) DestroyImmediate(childObject);
+            if (s_unityReversedOrder) Components();
+            if (m_transform is { } transform) { transform.Detach(); DestroyImmediate(transform); }
+
+            void Components() { foreach (var component in UnityOrdered(m_components)) DestroyImmediate(component); }
         }
 
         // Called by Clone (UnityDoubles.cs): copies the components, children and activation of this object into the copy,
