@@ -9,13 +9,18 @@
 using System.Diagnostics;
 using System.Formats.Tar;
 using System.Runtime.CompilerServices;
+using System.Security;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 string root = FindRoot();
+PrepareNuGetCaches(root);
 string? sourceArg = null;
 for (int i = 0; i < args.Length; i++)
 {
     if (args[i] == "--source" && i + 1 < args.Length) sourceArg = args[++i];
+    else if (args[i] == "--cache-preflight-only" && args.Length == 1) return 0;
     else { Console.Error.WriteLine("usage: dotnet run scripts/bootstrap-cli.cs [-- --source <git repository>]"); return 2; }
 }
 
@@ -133,5 +138,65 @@ static void DeleteTree(string path)
     catch (Exception e) when (e is IOException or UnauthorizedAccessException)
     {
         Console.Error.WriteLine($"warning: could not remove temporary directory {path}: {e.Message}");
+    }
+}
+
+// A real write probe catches sandbox restrictions that directory permissions do not show.
+// Keep both NuGet caches together if either configured location cannot be written.
+static void PrepareNuGetCaches(string root)
+{
+    string packages = CachePath("NUGET_PACKAGES", "global-packages");
+    string http = CachePath("NUGET_HTTP_CACHE_PATH", "http-cache");
+    if (CanWrite(packages) && CanWrite(http))
+    {
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", packages);
+        Environment.SetEnvironmentVariable("NUGET_HTTP_CACHE_PATH", http);
+        Console.WriteLine($"NuGet caches writable: packages={packages}; HTTP={http}");
+        return;
+    }
+
+    string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(root)))[..12].ToLowerInvariant();
+    string fallback = Path.Combine(Path.GetTempPath(), "valheimtesting-nuget", key);
+    string fallbackPackages = Path.Combine(fallback, "packages");
+    string fallbackHttp = Path.Combine(fallback, "http-cache");
+    if (!CanWrite(fallbackPackages) || !CanWrite(fallbackHttp))
+        throw new IOException($"NuGet caches are not writable at {packages} and {http}; fallback {fallback} is also not writable. Set NUGET_PACKAGES and NUGET_HTTP_CACHE_PATH to writable directories.");
+    Environment.SetEnvironmentVariable("NUGET_PACKAGES", fallbackPackages);
+    Environment.SetEnvironmentVariable("NUGET_HTTP_CACHE_PATH", fallbackHttp);
+    Console.WriteLine($"NuGet caches not writable at {packages} or {http}; using packages={fallbackPackages}; HTTP={fallbackHttp}");
+}
+
+static string CachePath(string variable, string kind)
+{
+    string? explicitPath = Environment.GetEnvironmentVariable(variable);
+    if (!string.IsNullOrWhiteSpace(explicitPath)) return Path.GetFullPath(explicitPath);
+    var info = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+    info.ArgumentList.Add("nuget");
+    info.ArgumentList.Add("locals");
+    info.ArgumentList.Add(kind);
+    info.ArgumentList.Add("--list");
+    using Process process = Process.Start(info) ?? throw new InvalidOperationException("Could not query NuGet's " + kind + " path.");
+    string output = process.StandardOutput.ReadToEnd();
+    string error = process.StandardError.ReadToEnd();
+    process.WaitForExit();
+    int separator = output.IndexOf(':');
+    if (process.ExitCode != 0 || separator < 0 || string.IsNullOrWhiteSpace(output[(separator + 1)..]))
+        throw new InvalidOperationException($"Could not query NuGet's {kind} path: {error.Trim()}");
+    return Path.GetFullPath(output[(separator + 1)..].Trim());
+}
+
+static bool CanWrite(string directory)
+{
+    try
+    {
+        Directory.CreateDirectory(directory);
+        string probe = Path.Combine(directory, ".valheimtesting-write-" + Guid.NewGuid().ToString("N"));
+        using (var file = new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
+            file.WriteByte(1);
+        return true;
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or SecurityException)
+    {
+        return false;
     }
 }
