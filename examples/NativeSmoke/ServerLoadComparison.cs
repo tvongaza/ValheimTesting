@@ -41,6 +41,14 @@ public static class ServerLoadComparison
             };
             var before = NativeDependencyResolver.Resolve(Request(mods));
             var after = NativeDependencyResolver.Resolve(Request(mods.Where(mod => !mod.Equals(removed, pathComparison)).ToList()));
+            if (!before.Ready || !after.Ready)
+            {
+                static string Gaps(NativeDependencyLock arm) => string.Join("; ", arm.Gaps.Select(gap =>
+                    gap.Kind + " " + gap.Name + ": " + gap.Reason));
+                throw new InvalidDataException("Dependency choices remain before launch: " +
+                    (before.Ready ? "before ready" : "before [" + Gaps(before) + "]") + "; " +
+                    (after.Ready ? "after ready" : "after [" + Gaps(after) + "]"));
+            }
             before.RequireSameExceptRemovedMod(after, removed);
 
             // Both arms receive identical arguments and the same packaged fixture; only the selected DLL is omitted.
