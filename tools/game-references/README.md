@@ -54,6 +54,54 @@ By default `assembly_valheim`, `assembly_utils`, `UnityEngine` and `UnityEngine.
 
 A DLL outside those two folders (Jötunn in `BepInEx/plugins`, say) is an ordinary `<Reference>` with a `HintPath`, or its NuGet package.
 
+### Publicized references at run time
+
+The `File` override above changes what the compiler sees. It does **not** make
+the member public in Valheim's original assembly, and `Private=false` keeps the
+publicized copy out of the mod's output. Compile against a publicized copy made
+from the same game build you will run; install only your mod and its normal
+dependencies beside the original game assemblies.
+
+If your mod directly calls a member that is private in the original assembly,
+verify that access in the game. In a Windows dedicated-server check with Valheim
+build 25527701, BepInExPack 5.4.2202 and Unity 6000.0.75.2503836, a net48
+test plugin compiled against a publicized `assembly_valheim.dll` read the
+original private `Game.m_timeScale` field as follows:
+
+| Plugin build | `valheim-bindings --fail-on-access` against original assembly | Native read |
+|---|---|---|
+| Ordinary build | Access warning; exit 1 | `FieldAccessException` |
+| `AllowUnsafeBlocks=true` | Access warning; exit 1 | Succeeded, even without an unsafe expression in the source |
+| `[assembly: IgnoresAccessChecksTo("assembly_valheim")]` only | Declared-access info; exit 0 | `FieldAccessException` |
+| Both settings | Declared-access info; exit 0 | Succeeded |
+
+The successful flag-only variant contained no unsafe expression; its test
+method simply returned `Game.m_timeScale`. The failed and passing builds used
+the same publicized compile reference and the same original server DLL. To
+apply that build setting to a mod project:
+
+```xml
+<PropertyGroup>
+  <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+</PropertyGroup>
+```
+
+The build flag's observed effect matches the [AssemblyPublicizer guidance](https://github.com/CabbageCrow/AssemblyPublicizer), but this is a result for this pinned game/Mono setup, not a promise for every runtime or private member. In particular, the assembly attribute marks *intent* for our offline checker; it did not grant access in this native run. The converse matters too: `--fail-on-access` rejected the working unsafe-enabled plugin because it lacked that declaration. Use the checker to detect missing or changed references and report access findings, then make a small native call to verify the access mode your mod ships with. Do not copy the publicized game DLL into a plugin release.
+
+For example, after building the plugin against the publicized reference, check
+it against the **original** assembly and exercise the method in a disposable
+game session:
+
+```sh
+valheim-bindings MyMod.dll \
+  --game-dir /path/to/original/valheim_server_Data/Managed \
+  --game-dir /path/to/original/BepInEx/core \
+  --fail-on-access
+# A finding here needs review; either exit code alone is not proof of runtime access.
+```
+
+See [the binding check's limits](../../docs/testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1) for the distinction between binding, declared access and actual execution.
+
 ## When something is missing
 
 Before assembly references are resolved, every listed file is checked. The build stops with one error that says what was looked for, where, and which property to set:
