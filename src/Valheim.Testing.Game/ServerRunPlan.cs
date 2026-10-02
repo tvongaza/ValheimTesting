@@ -55,7 +55,7 @@ public partial class ServerRunPlan
     public int CommandSeconds { get; set; } = 30;
     /// <summary>
     /// How long stopping the owned server (at teardown and for each restart) waits for it to quit after it is asked (SIGINT,
-    /// or Ctrl+C on Windows): the game saves the world and retires its crossplay lobby. Killed only after that. 0 kills at
+    /// or Ctrl+Break on Windows over SSH, Ctrl+C on other Windows hosts): the game can save the world and retire its crossplay lobby. Killed only after that. 0 kills at
     /// once, without the game's shutdown. Default 120, at most 1800.
     /// </summary>
     public int QuitSeconds { get; set; } = 120;
