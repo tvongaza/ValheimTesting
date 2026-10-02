@@ -54,5 +54,10 @@ string Run(string script, string packages, string http, bool noRestore)
     return output;
 }
 
-static string FindRoot([CallerFilePath] string source = "") =>
-    Path.GetFullPath(Path.Combine(Path.GetDirectoryName(source)!, ".."));
+static string FindRoot([CallerFilePath] string source = "")
+{
+    foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(source) ?? "" })
+        for (DirectoryInfo? dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "cli-dependency.json"))) return dir.FullName;
+    throw new InvalidOperationException("Run from inside the ValheimTesting repository.");
+}
