@@ -53,12 +53,13 @@ namespace Valheim.Testing.Doubles
     /// select screen has.</item>
     /// </list>
     /// <see cref="AddRemotePlayer"/> adds another peer's player. The scope also saves and restores ObjectDB, the Unity
-    /// component list, the registries' postfix hooks, Localization, ZInput, PlatformPrefs, the config disk, the player
+    /// component and GameObject lists, the registries' postfix hooks, Localization, ZInput, PlatformPrefs, the config disk, the player
     /// list, the heightmap builder and the clock.
     /// </summary>
     public sealed partial class ValheimWorldScope
     {
         private readonly List<UnityEngine.Component> _components = UnityEngine.Object.s_unityComponents;
+        private readonly List<UnityEngine.GameObject> _gameObjects = UnityEngine.Object.s_unityGameObjects;
         private readonly ObjectDB? _objectDB = ObjectDB.m_instance;
         private readonly Action<ObjectDB>? _objectDBAwake = ObjectDB.AwakePostfix, _objectDBCopy = ObjectDB.CopyOtherDBPostfix;
         private readonly Action<ZNetScene>? _sceneAwake = ZNetScene.AwakePostfix;
@@ -84,7 +85,7 @@ namespace Valheim.Testing.Doubles
 
         partial void RestorePresetState()
         {
-            UnityEngine.Object.s_unityComponents = _components;
+            UnityEngine.Object.s_unityComponents = _components; UnityEngine.Object.s_unityGameObjects = _gameObjects;
             ObjectDB.m_instance = _objectDB; ObjectDB.AwakePostfix = _objectDBAwake; ObjectDB.CopyOtherDBPostfix = _objectDBCopy;
             ZNetScene.AwakePostfix = _sceneAwake;
             Localization.Current = _localization; Localization.OnLanguageChange = _languageChange; ZInput.Current = _input;
@@ -132,7 +133,7 @@ namespace Valheim.Testing.Doubles
             ZNet.instance = null!; ZRoutedRpc.instance = null!;
             ZDOMan.instance = null; ZoneSystem.instance = null; ZNetScene.instance = null; WorldGenerator.instance = null;
             global::Heightmap.s_heightmaps = new List<global::Heightmap>(); _ownsHeightmaps = true;
-            UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>();
+            UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>(); UnityEngine.Object.s_unityGameObjects = new List<UnityEngine.GameObject>();
             Player.m_localPlayer = null;
             Player.s_players = new List<Player>();
             PreviewPlayer = new Player();

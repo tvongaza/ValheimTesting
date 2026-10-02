@@ -391,6 +391,13 @@ public partial class Component : Object
         ThrowIfDestroyed();
         return m_gameObject is { } owner ? owner.GetComponent<T>() : null!;
     }
+    /// <summary>The first live component of the type on this component's object, or null, as <see cref="GetComponent{T}"/>.</summary>
+    public Component GetComponent(System.Type type)
+    {
+        ThrowIfDestroyed();
+        GameObject.CheckComponentType(type);
+        return m_gameObject is { } owner ? owner.GetComponent(type) : null!;
+    }
 }
 
 /// <summary>Shim for UnityEngine.Behaviour.</summary>
@@ -409,7 +416,8 @@ public partial class GameObject : Object
     public float? Health;
     public ZNetView? View;
     public WearNTear? Wear;
-    public GameObject(string name) => this.name = name;
+    /// <summary>A new object in the scene, as Unity's: FindObjectsByType finds it, with or without components.</summary>
+    public GameObject(string name) { this.name = name; s_unityGameObjects.Add(this); }
 
     internal GameObject Clone(Vector3 position, Quaternion rotation)
     {
