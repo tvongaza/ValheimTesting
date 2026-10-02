@@ -45,7 +45,9 @@ public sealed class NativeServerRuntimeTests : IDisposable
             Assert.Equal(File.ReadAllBytes(bundle), File.ReadAllBytes(Path.Combine(plugins, "Bundles", "site1")));
             Assert.Contains("Port = 5588", File.ReadAllText(Path.Combine(staged, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
             Assert.Equal(File.ReadAllBytes(settings), File.ReadAllBytes(Path.Combine(staged, "BepInEx", "config", "example.mod.cfg")));
-            Assert.NotEmpty(runtime.Manifest());
+            var manifest = runtime.Manifest();
+            Assert.Contains(Path.Combine("BepInEx", "plugins", "assetBundleManifest_full"), manifest.Keys);
+            Assert.Contains(Path.Combine("BepInEx", "plugins", "Bundles", "site1"), manifest.Keys);
             var plan = runtime.Plan(worldRoot, 5588);
             Assert.Equal(DefaultSmokeWorld.Uid, plan.Pins["worlduid"]);
             Assert.Equal("example.mod", plan.Environment[NativeServerRuntime.SelectedGuidsVariable]);
