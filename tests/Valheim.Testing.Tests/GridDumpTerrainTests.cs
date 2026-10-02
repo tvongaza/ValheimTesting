@@ -3,7 +3,7 @@ using Xunit;
 
 public class GridDumpTerrainTests
 {
-    // A 3x2 grid in ValheimCLI's cli_world_dump layout, rows shuffled; base_height is ignored.
+    // A 3x2 grid in ValheimCLI's cli_world_dump layout, rows shuffled.
     //   z=12: x=-4 20 BlackForest | x=0 22 Swamp   | x=4 26 Mountain
     //   z=8:  x=-4 10 Ocean       | x=0 14 Meadows | x=4 30 AshLands (the game's spelling)
     private const string Dump =
@@ -25,6 +25,7 @@ public class GridDumpTerrainTests
         Assert.Equal((-4f, 8f, 4f, 3, 2), (grid.OriginX, grid.OriginZ, grid.Spacing, grid.CountX, grid.CountZ));
         Assert.Equal((4f, 12f), (grid.MaxX, grid.MaxZ));
         Assert.True(grid.HasBiome); Assert.True(grid.HasRiver);
+        Assert.True(grid.HasBaseHeight);
         Assert.Equal("test.csv", grid.Provenance);
     }
 
@@ -64,6 +65,21 @@ public class GridDumpTerrainTests
         Assert.Equal((.25f, 20f), (weight, width));    // (.5 + 0) / 2, (40 + 0) / 2
     }
 
+    [Fact]
+    public void BaseHeightIsTheUnitlessGeneratorSampleNotGroundMetres()
+    {
+        // Four adjacent rows from a disposable Valheim 1.0.16 cli_world_dump, with no world identity or game files.
+        var grid = Read("x,z,height,biome,river,river_width,base_height\n" +
+            "-955,-1085,22.9,Meadows,0.80,90.9,0.06027\n" +
+            "-950,-1085,24.1,Meadows,0.84,90.9,0.06609\n" +
+            "-955,-1080,22.2,Meadows,0.77,91.1,0.06090\n" +
+            "-950,-1080,23.2,Meadows,0.82,91.1,0.06655\n");
+        Assert.Equal(22.9f, grid.GetHeight(-955, -1085));
+        Assert.Equal(.06027f, grid.GetBaseHeight(-955, -1085));
+        Assert.Equal(.06655f, grid.GetBaseHeight(-950, -1080));
+        Assert.Equal((.06027f + .06609f + .06090f + .06655f) / 4, grid.GetBaseHeight(-952.5f, -1082.5f), 5);
+    }
+
     [Theory]
     [InlineData(-4.01f, 8)] [InlineData(4.01f, 12)] [InlineData(0, 7.99f)] [InlineData(0, 12.5f)] [InlineData(-100, -100)]
     public void QueriesOutsideTheGridAreRefused(float x, float z)
@@ -89,9 +105,11 @@ public class GridDumpTerrainTests
     {
         var grid = Read("x,z,height\n-8,-8,1\n0,-8,2\n-8,0,3\n0,0,4\n");
         Assert.False(grid.HasBiome); Assert.False(grid.HasRiver);
+        Assert.False(grid.HasBaseHeight);
         Assert.Equal(2.5f, grid.GetHeight(-4, -4));
         Assert.Throws<NotSupportedException>(() => grid.GetBiome(0, 0));
         Assert.Throws<NotSupportedException>(() => grid.GetRiverWeight(0, 0, out _, out _));
+        Assert.Throws<NotSupportedException>(() => grid.GetBaseHeight(0, 0));
     }
 
     [Fact]
@@ -117,6 +135,7 @@ public class GridDumpTerrainTests
     [InlineData("x,z,height,biome\n0,0,1,3\n", "unknown biome '3'")]
     [InlineData("x,z,height,biome\n0,0,1,Unknown\n", "unknown biome 'Unknown'")]
     [InlineData("x,z,height\n0,0,abc\n", "line 2 column 'height' is not a finite number")]
+    [InlineData("x,z,height,base_height\n0,0,1,NaN\n", "line 2 column 'base_height' is not a finite number")]
     [InlineData("x,z,height\n0,0,NaN\n", "is not a finite number")]
     [InlineData("x,z,height\n", "no samples after the header")]
     [InlineData("", "empty file")]

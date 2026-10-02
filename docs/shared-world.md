@@ -35,7 +35,7 @@ x,z,height,biome,river,river_width,base_height
 ...
 ```
 
-- A header row names the columns, in any order and any case. `x`, `z` and `height` (metres) are required. `biome` is optional and holds a biome name (`AshLands` and `Ashlands` both work; `None`, `Unknown` or a number are refused). `river` (weight) and `river_width` are optional but only together. Other columns, such as `base_height`, are ignored.
+- A header row names the columns, in any order and any case. `x`, `z` and `height` (metres) are required. `biome` is optional and holds a biome name (`AshLands` and `Ashlands` both work; `None`, `Unknown` or a number are refused). `river` (weight) and `river_width` are optional but only together. `base_height` is optional and is **Valheim's unitless generator value**, not elevation in metres. It is available through `GetBaseHeight` when present; a missing layer is refused.
 - One row per node, in any order. The nodes must fill one evenly spaced grid exactly once, with the same spacing on x and z. The origin is the smallest x and z. Numbers use the invariant culture; empty lines are skipped.
 - A row with the wrong number of cells, a missing or repeated node (a ragged grid), uneven or unequal spacing, a non-numeric or non-finite value or an unknown biome is refused with an `InvalidDataException` naming the line.
 
@@ -48,8 +48,11 @@ Queries follow a written rule, not a guess:
 | Biome anywhere inside | The nearest node's label, never an average; exactly halfway takes the node at larger x (or z) |
 | Outside the closed rectangle from the first to the last node | `ArgumentOutOfRangeException` naming the covered range; no clamping or extrapolation |
 | Biome or river when the file has no such column | `NotSupportedException` |
+| Base height when the file has no `base_height` column | `NotSupportedException`; no inferred value |
 
 The constructor declares a grid directly from row-major arrays (x fastest), which suits hand-written fixtures. `ReplayTerrain` stays exact lookup; use `GridDumpTerrain` when interpolation between regular samples is what the test means.
+
+For a **native ValheimCLI dump** used as a pinned offline input, use `WorldDumpContract.Verify(path, manifest)` rather than `GridDumpTerrain.Load` alone. The strict contract checks the exact seven-column native header, SHA-256, complete rectangular lattice, bounds, sample count and step against the `OK: WORLD_DUMP` reply. The manifest's world UID, seed and game build must come from a strict `cli_world` observation in the **same native session**; they are not embedded in the CSV and cannot be reconstructed from it. `RequireSameWorld` refuses layers with different declared identities. Retain the command, full reply and file hash as evidence. A later ValheimCLI or game build must recheck the native header and semantics before updating that contract; do not fill in an absent field or convert `base_height` to metres. See [the bounded dump capture procedure](world-dump-contract.md).
 
 ## Render a terrain for review
 
