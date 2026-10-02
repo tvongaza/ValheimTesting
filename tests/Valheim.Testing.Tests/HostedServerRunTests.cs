@@ -323,7 +323,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         }));
         Assert.Equal(0, code);
         Assert.Same(host, seenHost); Assert.Equal(RunDirectory + "/runtime", seenRuntime);
-        Assert.Equal(new[] { "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
+        Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
                 "copied runtime has the plan's server executable", "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());

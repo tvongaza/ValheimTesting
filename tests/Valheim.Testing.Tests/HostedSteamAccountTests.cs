@@ -42,7 +42,7 @@ public sealed partial class HostedServerRunTests
             return Task.CompletedTask;
         }, plain.Client, new ScriptedTransport())));
         // Today's steps, exactly: nothing is leased and no account is recorded.
-        Assert.Equal(new[] { "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
+        Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
                 "copied runtime has the plan's server executable", "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "close the CLI tunnel", "release client host linux-gpu's lock", "release the server host's lock", "scan run logs" }, StepNamesIn(plainOutput));

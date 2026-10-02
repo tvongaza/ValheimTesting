@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -34,6 +35,13 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public bool EnableDevcommands { get; init; } = true;
     /// <summary>The scenario for a launching mode, given the started, strictly pinned server.</summary>
     public required Func<PinnedServerRunContext<TPlan>, Task> Scenario { get; init; }
+    /// <summary>
+    /// Keeps the whole runtime copy after the run, for hands-on debugging in it. By default a run that stopped its server
+    /// keeps only what the run added or changed in the copy (<c>runtime-changes/</c>, see <see cref="WorldFixture.Retire"/>)
+    /// and removes the rest, which is the pinned runtime's own files. Setting the environment variable
+    /// <see cref="PinnedServerRun.KeepRuntimeVariable"/> to <c>1</c> does the same for any runner.
+    /// </summary>
+    public bool KeepRuntime { get; init; }
     /// <summary>Test seam: builds the owned session instead of launching the copied runtime.</summary>
     internal Func<PinnedServerRunContext<TPlan>, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>Test seam for <c>--profile</c> runs: fake hosts and transports.</summary>
@@ -163,6 +171,52 @@ public static class PinnedServerRun
     /// <summary>The option that names an environment profile; it comes before the mode.</summary>
     public const string ProfileOption = "--profile";
 
+    /// <summary>Set to <c>1</c> to keep a run's whole runtime copy (<see cref="PinnedServerRunOptions{TPlan}.KeepRuntime"/>).</summary>
+    public const string KeepRuntimeVariable = "VALHEIM_TESTING_KEEP_RUNTIME";
+
+    /// <summary>
+    /// How much of what a run wrote in its runtime copy is kept (per file, in all): 64 MB and 256 MB after a pass, and 1 GB
+    /// and 2 GB after a failure, where a large file the run wrote (a mod's cache, a dump) may be the evidence.
+    /// </summary>
+    internal static (long PerFile, long Total) RetainLimits(bool passed) => passed ? (64L << 20, 256L << 20) : (1L << 30, 2L << 30);
+
+    // The runtime copy is the pinned runtime plus what the run wrote in it. After a clean stop, keep what the run wrote and
+    // remove the rest; a copy whose server may still run, or one kept on request, stays, and the report says where and how big.
+    // validate launches nothing, so its copy holds nothing of the run's and goes without a comparison.
+    private static void RetireRuntime(ScenarioReport report, WorldFixture runtime, string output, bool stopped, bool keepRequested, bool launchedNothing)
+    {
+        string Kept(string why)
+        {
+            string line = $"kept {runtime.DirectoryPath} ({DiskSpace.Format(DiskSpace.DirectoryBytes(runtime.DirectoryPath))}): {why}";
+            report.Provenance["runtimeCopy"] = line;
+            return line;
+        }
+        if (keepRequested || Environment.GetEnvironmentVariable(KeepRuntimeVariable) == "1") { Kept($"kept on request ({KeepRuntimeVariable}=1 or KeepRuntime)"); return; }
+        if (!stopped)
+        {
+            Console.Error.WriteLine("Warning: " + Kept("the owned server did not stop cleanly and may still use it; delete it once no process does"));
+            return;
+        }
+        try
+        {
+            if (launchedNothing)
+            {
+                long bytes = DiskSpace.DirectoryBytes(runtime.DirectoryPath);
+                runtime.Preserve = false; runtime.Dispose();
+                report.Provenance["runtimeCopy"] = $"removed {runtime.DirectoryPath} ({DiskSpace.Format(bytes)}): nothing was launched";
+                return;
+            }
+            var (perFile, total) = RetainLimits(report.Passed);
+            report.Provenance["runtimeCopy"] = runtime.Retire(Path.Combine(output, "runtime-changes"), perFile, total).ToString();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // A cleanup problem is reported, never turned into a test failure: the run's result stands.
+            report.Provenance["runtimeCopy"] = "cleanup failed: " + error.Message;
+            Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message);
+        }
+    }
+
     public static async Task<int> MainAsync<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
     {
         string[] modes = ["validate", "run", .. options.PrepareModes];
@@ -182,6 +236,7 @@ public static class PinnedServerRun
         using var sigterm = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => { context.Cancel = true; cancellation.Cancel(); });
         var report = new ScenarioReport(options.Name);
         OwnedServerSession? session = null;
+        WorldFixture? runtime = null;
         PinnedServerRunContext<TPlan>? launched = null;
         HostedServerRun? hosted = null;
         string output = Path.GetFullPath(args[2]);
@@ -228,9 +283,17 @@ public static class PinnedServerRun
             report.Provenance["mode"] = mode;
             report.Provenance["serverPlatform"] = platform.ToString();
             report.Provenance["crossplay"] = plan.Crossplay ? "true" : "false";
-            // Never deleted automatically: a failed stop or partial save must stay inspectable.
+            // Never deleted automatically: a failed stop or partial save must stay inspectable. Only the runtime copy goes at
+            // the end, after a clean stop, keeping what the run changed in it.
             Directory.CreateDirectory(output); ownOutput = true;
-            WorldFixture? runtime = null, world = null;
+            // Before copying: a drive that fills part-way through a copy leaves a broken runtime behind.
+            report.Step("enough free disk space for the copies", () =>
+            {
+                long bytes = DiskSpace.DirectoryBytes(plan.World.Source) + (hosted == null ? DiskSpace.DirectoryBytes(plan.Runtime.Source) : 0);
+                if (DiskSpace.Require(output, bytes, hosted == null ? "this run's runtime and world copies" : "this run's world copy") is { } free)
+                    report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
+            });
+            WorldFixture? world = null;
             // Only an unpinned plan may leave out a manifest; its copy is then recorded as found.
             bool Verified(PinnedDirectory fixture) => pinned || fixture.Sha256.Count != 0;
             WorldFixture CopyOf(PinnedDirectory fixture) =>
@@ -310,7 +373,14 @@ public static class PinnedServerRun
             if (launched != null && launched.Logs.Count != 0 && !report.ScanLogs(launched.Logs, launched.Plan.LogScan) && unknown == null) definite = true;
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
-            if (ownOutput) report.Write(output);
+            if (runtime != null) RetireRuntime(report, runtime, output, stopped, options.KeepRuntime, launchedNothing: session == null);
+            if (ownOutput)
+            {
+                long bytes = DiskSpace.DirectoryBytes(output);
+                report.Provenance["outputBytes"] = bytes.ToString(CultureInfo.InvariantCulture);
+                report.Write(output);
+                Console.WriteLine($"Output: {DiskSpace.Format(bytes)} in {output}");
+            }
         }
         // Only `run` is an acceptance result: validate launches nothing, and preparing a fixture never passes a test.
         Console.WriteLine((unknownOutcome ? "UNKNOWN (a host operation's outcome could not be established; neither a pass nor a failure: " + unknown + ")"
