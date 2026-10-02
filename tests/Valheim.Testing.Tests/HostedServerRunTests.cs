@@ -57,6 +57,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostInstallScripts.BashPort) ? "port" :
         ReferenceEquals(script, HostServerScripts.Start) ? "start" :
         ReferenceEquals(script, HostServerScripts.Keep) ? "keep" :
+        ReferenceEquals(script, HostedRunScripts.Retire) ? "retire" :
+        ReferenceEquals(script, HostedRunScripts.DropKept) ? "drop-kept" :
         ReferenceEquals(script, CrossplayLibraryScripts.Check) ? "party" :
         ReferenceEquals(script, InteractiveScripts.LinuxWait) ? "wait" :
         ReferenceEquals(script, InteractiveScripts.LinuxStop) ? "stop" :
@@ -155,6 +157,35 @@ internal sealed class FakeServerHost : IGameHost
                 }
                 return Ok("VT-KEPT\n");
             }
+            case "retire":
+            {
+                // As the bash script: only <run>/runtime, listed files within the limits, then the copy goes.
+                string runtimePath = v["runtime"];
+                if (!runtimePath.EndsWith("/" + v["run"] + "/runtime", StringComparison.Ordinal)) return new HostResult(HostOutcome.Exited, 3, "", "", TimeSpan.Zero, false);
+                string runtime = Local(runtimePath), keep = Local(v["keep"]);
+                Directory.CreateDirectory(keep);
+                if (!Directory.Exists(runtime)) return Ok("VT-RETIRED 0 0\n");
+                long perFile = long.Parse(v["perfile"]), total = long.Parse(v["total"]), kept = 0;
+                var reply = new StringBuilder();
+                foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line)), source = Path.Combine(runtime, relative);
+                    if (!File.Exists(source)) { reply.Append($"VT-NOTKEPT {line} -1\n"); continue; }
+                    long size = new FileInfo(source).Length;
+                    if (size > perFile || kept + size > total) { reply.Append($"VT-NOTKEPT {line} {size}\n"); continue; }
+                    string target = Path.Combine(keep, relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    File.Copy(source, target);
+                    kept += size;
+                }
+                long bytes = Directory.EnumerateFiles(runtime, "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length);
+                Directory.Delete(runtime, recursive: true);
+                return Ok(reply.Append($"VT-RETIRED {bytes} {kept}\n").ToString());
+            }
+            case "drop-kept":
+                if (!v["keep"].EndsWith("/" + v["run"] + "/runtime-changes", StringComparison.Ordinal)) return new HostResult(HostOutcome.Exited, 3, "", "", TimeSpan.Zero, false);
+                if (Directory.Exists(Local(v["keep"]))) Directory.Delete(Local(v["keep"]), recursive: true);
+                return Ok("VT-DROPPED\n");
             case "client-keep":
             {
                 string dir = Local(v["dir"]);
@@ -310,6 +341,55 @@ public sealed partial class HostedServerRunTests : IDisposable
     private IReadOnlyList<string?> StepNames() => Result().GetProperty("Steps").EnumerateArray().Select(step => step.GetProperty("Name").GetString()).ToList();
     private JsonElement Step(string name) => Result().GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == name);
 
+    // #194: what the run wrote in the host's runtime copy is kept; a copy kept on request, or whose server may still run, stays on the host.
+    [Fact] public async Task TheHostRuntimeCopyKeepsWhatTheRunWroteAndStaysWhenItMustOrIsAskedTo()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        {
+            string cache = Path.Combine(host.Local(run.RuntimeDirectory), "BepInEx", "cache");
+            Directory.CreateDirectory(cache); File.WriteAllText(Path.Combine(cache, "audit.txt"), "written on the host");
+            return Task.CompletedTask;
+        })));
+        Assert.Equal("written on the host", File.ReadAllText(Path.Combine(Output, "runtime-changes", "BepInEx", "cache", "audit.txt")));
+        var changes = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "runtime-changes", "changes.json"))).RootElement;
+        Assert.Contains("BepInEx/cache/audit.txt", changes.GetProperty("Added").EnumerateArray().Select(e => e.GetString()));
+        Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime")));
+        Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime-changes"))); // fetched, so not kept twice
+
+        // A cleanup the host could not finish is reported; the run's result stands and the host's lock is released.
+        Directory.Delete(Output, true); Directory.Delete(host.Local(RunDirectory), true);
+        host.Failures["retire"] = new HostResult(HostOutcome.Exited, 3, "", "rm: cannot remove", TimeSpan.Zero, false);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.StartsWith("cleanup failed", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
+        Assert.Equal(host.Claims.Count, host.Releases.Count);
+        host.Failures.Remove("retire");
+
+        // Kept on request: no retire script, and the report names the copy.
+        Directory.Delete(Output, true); Directory.Delete(host.Local(RunDirectory), true);
+        var kept = Options(host, server); // the fake host launches through the server it was made with
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
+        {
+            Name = kept.Name, ReadPlan = kept.ReadPlan, SessionCapability = kept.SessionCapability, SessionTokenVariable = kept.SessionTokenVariable,
+            EnableDevcommands = false, Scenario = kept.Scenario, HostSeams = kept.HostSeams, KeepRuntime = true,
+        }));
+        Assert.True(Directory.Exists(host.Local(RunDirectory + "/runtime")));
+        Assert.Contains("kept on request", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
+    }
+    [Fact] public async Task AStagedRuntimeCannotStandInForAHostCopy()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host);
+        using var staged = WorldFixture.Copy(host.Local(Install), Path.Combine(_root, "staged"), WorldFixture.Manifest(host.Local(Install)));
+        var options = Options(host, server);
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
+        {
+            Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
+            EnableDevcommands = false, Scenario = options.Scenario, HostSeams = options.HostSeams, StagedRuntime = staged,
+        }));
+        Assert.DoesNotContain(host.Runs, run => run.Script == "copy");
+    }
     [Fact] public async Task ARemoteRunCopiesAndVerifiesOnTheHostReachesTheCliThroughTheTunnelAndStopsOnlyItsServer()
     {
         var server = NewServer(); var host = NewHost(server);
@@ -349,6 +429,13 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("fake boot 1", File.ReadAllText(Path.Combine(Output, "boot-1", "game-0.log")));
         Assert.Contains("fake boot 2", File.ReadAllText(Path.Combine(Output, "boot-2", "game-0.log")));
         Assert.True(File.Exists(Path.Combine(Output, "host-world", "worlds_local", "Test.db")));
+        // #194: the host's runtime copy went at teardown, under the lock; what the run changed in it came back.
+        Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime")));
+        Assert.True(Directory.Exists(host.Local(RunDirectory + "/world"))); Assert.True(Directory.Exists(host.Local(RunDirectory + "/boot-1")));
+        Assert.True(File.Exists(Path.Combine(Output, "runtime-changes", "changes.json")));
+        Assert.StartsWith("removed linux-box:" + RunDirectory + "/runtime", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
+        int retire = host.Runs.FindIndex(run => run.Script == "retire");
+        Assert.True(retire > host.Runs.FindLastIndex(run => run.Script == "stop") && retire < host.Runs.Count);
         var process = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "boot-1.process.json"))).RootElement;
         Assert.Equal(1, process.GetProperty("pid").GetInt32()); Assert.Equal("9001", process.GetProperty("startIdentity").GetString());
         Assert.Equal(RunDirectory + "/boot-1", process.GetProperty("bootDirectory").GetString());
@@ -462,7 +549,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("prepared only; no game launched", StepNames());
         Assert.DoesNotContain(host.Runs, run => run.Script is "port" or "tunnel" or "start" or "fetch");
         Assert.Equal(host.Claims, host.Releases); Assert.Single(host.Claims);
-        Assert.True(Directory.Exists(host.Local(RunDirectory + "/runtime")));
+        // Nothing was launched, so the host copy just goes (#194), with nothing to keep or fetch.
+        Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime")));
+        Assert.EndsWith("nothing was launched", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
     }
 
     [Fact] public async Task ARuntimeCopyThatDiffersOnTheHostFailsBeforeAnythingStarts()
@@ -640,5 +729,52 @@ public sealed partial class HostedServerRunTests : IDisposable
         }, clientHost, new ScriptedTransport())));
         Assert.Contains("architecture arm64 is for a macOS client launched in this runner's own session", Assert.IsType<ArgumentException>(refused).Message);
         Assert.Empty(clientHost.Claims); Assert.Empty(clientHost.Runs); Assert.Empty(clientHost.Tunnels);
+    }
+}
+
+// The retire script itself, in bash on this machine (Linux only: a hosted server's host runs Linux, with GNU stat and du).
+public sealed class HostedRetireScriptTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("hosted-retire-").FullName;
+    public void Dispose() { try { Directory.Delete(_root, true); } catch (IOException) { } }
+    private static string B64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+
+    [Fact] public async Task ItKeepsListedFilesWithinTheLimitsAndRemovesOnlyTheRunsRuntime()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        string run = Path.Combine(_root, "runs", "run-x"), runtime = Path.Combine(run, "runtime"), keep = Path.Combine(run, "runtime-changes");
+        Directory.CreateDirectory(Path.Combine(runtime, "sub"));
+        File.WriteAllText(Path.Combine(runtime, "a.txt"), "kept");
+        File.WriteAllText(Path.Combine(runtime, "sub", "b.cfg"), "kept too");
+        File.WriteAllBytes(Path.Combine(runtime, "big.bin"), new byte[2000]);
+        File.WriteAllText(Path.Combine(run, "outside.txt"), "never copied through ..");
+        string elsewhere = Path.Combine(_root, "elsewhere"); Directory.CreateDirectory(elsewhere); File.WriteAllText(Path.Combine(elsewhere, "secret.txt"), "outside the copy");
+        Directory.CreateSymbolicLink(Path.Combine(runtime, "linked"), elsewhere);
+        var host = new LocalGameHost("local-bash", HostShell.Bash);
+        var variables = new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["keep"] = keep, ["run"] = "run-x", ["perfile"] = "1000", ["total"] = "5000",
+            ["files"] = string.Join('\n', new[] { "a.txt", "sub/b.cfg", "big.bin", "../outside.txt", "missing.txt", "linked/secret.txt" }.Select(B64)),
+        };
+        var result = (await host.RunAsync(HostedRunScripts.Retire, variables, GameHostChecks.Generous)).EnsureSuccess("retire");
+        Assert.Contains("VT-RETIRED ", result.Stdout);
+        Assert.False(Directory.Exists(runtime));
+        Assert.Equal("kept", File.ReadAllText(Path.Combine(keep, "a.txt")));
+        Assert.Equal("kept too", File.ReadAllText(Path.Combine(keep, "sub", "b.cfg")));
+        Assert.False(File.Exists(Path.Combine(keep, "big.bin")));
+        Assert.Contains($"VT-NOTKEPT {B64("big.bin")} 2000", result.Stdout);
+        Assert.Contains($"VT-NOTKEPT {B64("../outside.txt")} -1", result.Stdout);
+        Assert.Contains($"VT-NOTKEPT {B64("missing.txt")} -1", result.Stdout);
+        Assert.Contains($"VT-NOTKEPT {B64("linked/secret.txt")} -1", result.Stdout); // through a linked directory: not the copy's
+        Assert.True(File.Exists(Path.Combine(elsewhere, "secret.txt"))); // removing the copy removed the link only
+        Assert.True(File.Exists(Path.Combine(run, "outside.txt")));
+
+        // Anything but <run>/runtime is refused and left alone.
+        string other = Path.Combine(run, "world"); Directory.CreateDirectory(other); File.WriteAllText(Path.Combine(other, "w.db"), "a save");
+        var refused = await host.RunAsync(HostedRunScripts.Retire, new Dictionary<string, string>(variables) { ["runtime"] = other, ["files"] = "" }, GameHostChecks.Generous);
+        Assert.Equal(3, refused.ExitCode);
+        Assert.True(File.Exists(Path.Combine(other, "w.db")));
+        var wrongRun = await host.RunAsync(HostedRunScripts.Retire, new Dictionary<string, string>(variables) { ["run"] = "another-run", ["files"] = "" }, GameHostChecks.Generous);
+        Assert.Equal(3, wrongRun.ExitCode);
     }
 }

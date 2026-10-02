@@ -42,6 +42,14 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// <see cref="PinnedServerRun.KeepRuntimeVariable"/> to <c>1</c> does the same for any runner.
     /// </summary>
     public bool KeepRuntime { get; init; }
+    /// <summary>
+    /// A runtime copy the runner already made and staged (<see cref="WorldFixture.Copy"/>, then its plugins), to run in place
+    /// of a second copy of it: the plan's runtime source must be this copy. The run verifies it against the plan's hashes,
+    /// runs the server from it and retires it at the end like its own copy, comparing against the staged state, so a run
+    /// needs room for one runtime, not two. The copy becomes the run's: the run sets its <see cref="WorldFixture.Preserve"/>, so
+    /// the caller's Dispose never removes one the run keeps. Not for a <c>--profile</c> run, whose runtime is copied on its host.
+    /// </summary>
+    public WorldFixture? StagedRuntime { get; init; }
     /// <summary>Test seam: builds the owned session instead of launching the copied runtime.</summary>
     internal Func<PinnedServerRunContext<TPlan>, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>Test seam for <c>--profile</c> runs: fake hosts and transports.</summary>
@@ -173,6 +181,7 @@ public static class PinnedServerRun
 
     /// <summary>Set to <c>1</c> to keep a run's whole runtime copy (<see cref="PinnedServerRunOptions{TPlan}.KeepRuntime"/>).</summary>
     public const string KeepRuntimeVariable = "VALHEIM_TESTING_KEEP_RUNTIME";
+    internal static bool KeepRequested(bool option) => option || Environment.GetEnvironmentVariable(KeepRuntimeVariable) == "1";
 
     /// <summary>
     /// How much of what a run wrote in its runtime copy is kept (per file, in all): 64 MB and 256 MB after a pass, and 1 GB
@@ -191,7 +200,7 @@ public static class PinnedServerRun
             report.Provenance["runtimeCopy"] = line;
             return line;
         }
-        if (keepRequested || Environment.GetEnvironmentVariable(KeepRuntimeVariable) == "1") { Kept($"kept on request ({KeepRuntimeVariable}=1 or KeepRuntime)"); return; }
+        if (KeepRequested(keepRequested)) { Kept($"kept on request ({KeepRuntimeVariable}=1 or KeepRuntime)"); return; }
         if (!stopped)
         {
             Console.Error.WriteLine("Warning: " + Kept("the owned server did not stop cleanly and may still use it; once no process does, remove it with " +
@@ -274,6 +283,7 @@ public static class PinnedServerRun
                 platform = ServerLaunch.Detect(plan.Runtime.Source); plan.CheckExecutable(platform);
                 if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);
             }
+            if (hosted != null && options.StagedRuntime != null) throw new ArgumentException("A --profile run copies its runtime on the server host; a staged local runtime copy cannot stand in for it.");
             plan.CheckModeScenario(mode, options.ModeScenarios);
             options.CheckMode?.Invoke(mode, plan);
             report.Provenance["planSha256"] = WorldFixture.Hash(args[1]);
@@ -290,7 +300,7 @@ public static class PinnedServerRun
             // Before copying: a drive that fills part-way through a copy leaves a broken runtime behind.
             report.Step("enough free disk space for the copies", () =>
             {
-                long bytes = DiskSpace.DirectoryBytes(plan.World.Source) + (hosted == null ? DiskSpace.DirectoryBytes(plan.Runtime.Source) : 0);
+                long bytes = DiskSpace.DirectoryBytes(plan.World.Source) + (hosted == null && options.StagedRuntime == null ? DiskSpace.DirectoryBytes(plan.Runtime.Source) : 0);
                 if (DiskSpace.Require(output, bytes, hosted == null ? "this run's runtime and world copies" : "this run's world copy") is { } free)
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
@@ -299,6 +309,19 @@ public static class PinnedServerRun
             WorldFixture CopyOf(PinnedDirectory fixture) =>
                 Verified(fixture) ? WorldFixture.Copy(fixture.Source, output, fixture.Sha256) : WorldFixture.CopyAsFound(fixture.Source, output);
             if (hosted != null) await hosted.LockAndCopyRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
+            else if (options.StagedRuntime is { } staged)
+                report.Step("verify the staged runtime copy", () =>
+                {
+                    var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                    if (!Path.GetFullPath(plan.Runtime.Source).TrimEnd(Path.DirectorySeparatorChar).Equals(staged.DirectoryPath, comparison))
+                        throw new ArgumentException($"The plan's runtime source {plan.Runtime.Source} is not the staged runtime copy {staged.DirectoryPath}.");
+                    if (Verified(plan.Runtime)) WorldFixture.Verify(staged.DirectoryPath, plan.Runtime.Sha256);
+                    // The copy is the run's now: the caller's Dispose must not remove one the run keeps (its server may still run).
+                    staged.Preserve = true;
+                    // Its state now is what the run is compared against at the end, so what staging added is not counted as the run's.
+                    runtime = WorldFixture.Existing(staged.DirectoryPath, new Dictionary<string, string>(Verified(plan.Runtime) ? plan.Runtime.Sha256 : WorldFixture.Manifest(staged.DirectoryPath), StringComparer.Ordinal));
+                    runtime.Preserve = true;
+                });
             else report.Step(Verified(plan.Runtime) ? "copy and verify pinned runtime" : "copy unpinned runtime as found", () => { runtime = CopyOf(plan.Runtime); runtime.Preserve = true; });
             report.Step(Verified(plan.World) ? "copy and verify pinned world" : "copy unpinned world as found", () => { world = CopyOf(plan.World); world.Preserve = true; });
             if (hosted != null) await hosted.ShipWorldAsync(report, world!.DirectoryPath, cancellation.Token).ConfigureAwait(false);
@@ -367,7 +390,7 @@ public static class PinnedServerRun
                     catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); definite = true; } // Recorded as its failed step.
             }
             if (hosted != null)
-                foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped).ConfigureAwait(false)) Classify(failure);
+                foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped, KeepRequested(options.KeepRuntime)).ConfigureAwait(false)) Classify(failure);
             // After the stop, which keeps each boot's logs; a client's were kept when the scenario closed it. Logs missing after
             // an unknown outcome are explained by it, so the scan then decides nothing on its own.
             if (launched != null && launched.Logs.Count != 0 && !report.ScanLogs(launched.Logs, launched.Plan.LogScan) && unknown == null) definite = true;

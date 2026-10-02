@@ -105,6 +105,7 @@ internal static class ServerLoad
                             return read;
                         },
                         SessionCapability = NativeServerRuntime.SessionCapability,
+                        StagedRuntime = runtime.Copy, // the run uses the staged copy itself: one server copy, not two
                         SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
                         EnableDevcommands = false,
                         Provenance = (_, record) =>
@@ -153,8 +154,7 @@ internal static class ServerLoad
             {
                 if (joinClient) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, previousPassword);
             }
-            // The staged copies are inputs, recorded by hash in the evidence: the run copied the server again for itself and
-            // removed or kept that copy as its report says.
+            // The run retired the staged server copy (or kept it, as its report says); the staged client is an input, recorded by hash.
             clientRuntime?.Dispose(); runtime.Dispose();
             Console.WriteLine((result == 0 ? (joinClient ? "SERVER_JOIN_PASS" : "SERVER_LOAD_PASS") : "SERVER_LOAD_FAIL") +
                 $": {mods!.Count} selected mod(s), {clock.Elapsed.TotalSeconds:F1}s. " +
