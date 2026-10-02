@@ -13,7 +13,7 @@ public static class ServerLoadComparison
                 .Select(index => (Key: args[index * 2], Value: args[index * 2 + 1])).ToList();
             var plain = pairs.Where(pair => pair.Key != "--remove-mod")
                 .SelectMany(pair => new[] { pair.Key, pair.Value }).ToArray();
-            if (!ServerLoad.TryRead(plain, out _, out _, out _, out _, out _, out _, out _, out string error))
+            if (!ServerLoad.TryRead(plain, out var options, out _, out _, out _, out _, out _, out _, out string error))
                 throw new ArgumentException(error);
             string One(string key) => pairs.Where(pair => pair.Key == key).Select(pair => pair.Value)
                 .SingleOrDefault() ?? throw new ArgumentException("Specify exactly one " + key + ".");
@@ -27,6 +27,10 @@ public static class ServerLoadComparison
             string server = Path.GetFullPath(One("--server"));
             string cliManifest = Path.GetFullPath(One("--cli-manifest"));
             string cliFiles = Path.GetFullPath(One("--cli-files"));
+            string[] protectedRoots = options!.TryGetValue("--client", out string? client)
+                ? [server, cliFiles, Path.GetFullPath(client), Path.GetFullPath(options["--steam-userdata"])]
+                : [server, cliFiles];
+            SmokeOutput.RefuseInside(output, protectedRoots);
             var roots = pairs.Where(pair => pair.Key == "--search-root").Select(pair => Path.GetFullPath(pair.Value)).ToList();
             var optional = pairs.Where(pair => pair.Key == "--optional-reference").Select(pair => pair.Value).ToList();
             var capabilities = pairs.Any(pair => pair.Key == "--client")

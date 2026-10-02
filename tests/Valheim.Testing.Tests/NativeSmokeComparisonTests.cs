@@ -6,6 +6,38 @@ public sealed class NativeSmokeComparisonTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [Fact] public async Task OutputInsidePreparedInstallIsRefusedBeforeCreatingEvidenceOrRunningAnArm()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Game, "comparison-evidence");
+        int calls = 0;
+        int result = await ServerLoadComparison.RunAsync(Arguments(output, _rig.Parent, companion), _ =>
+        {
+            calls++;
+            return Task.FromResult(0);
+        });
+        Assert.Equal(3, result);
+        Assert.Equal(0, calls);
+        Assert.False(Directory.Exists(output));
+    }
+
+    [Fact] public async Task OutputInsideSteamUserdataIsRefusedBeforeCreatingEvidenceOrRunningAnArm()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string steam = Path.Combine(_rig.Root, "steam-userdata");
+        string output = Path.Combine(steam, "comparison-evidence");
+        string[] args = [.. Arguments(output, _rig.Parent, companion), "--client", Path.Combine(_rig.Root, "client"), "--steam-userdata", steam];
+        int calls = 0;
+        int result = await ServerLoadComparison.RunAsync(args, _ =>
+        {
+            calls++;
+            return Task.FromResult(0);
+        });
+        Assert.Equal(3, result);
+        Assert.Equal(0, calls);
+        Assert.False(Directory.Exists(output));
+    }
+
     [Fact] public async Task IncompatiblePairStopsBeforeCreatingAnOwnedRun()
     {
         string clash = _rig.Write("clash/Clash.dll", RegressionRig.Assembly("Clash",
