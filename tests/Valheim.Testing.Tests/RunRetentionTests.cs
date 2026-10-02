@@ -153,8 +153,8 @@ public sealed class RunRetentionTests : IDisposable
         Assert.Equal("812 MB", DiskSpace.Format(812L << 20)); Assert.Equal("2.5 GB", DiskSpace.Format(5L << 29));
     }
 
-    // A server-load holds the staged server, the run's copy of it and the staged client at once.
-    [Fact] public void ANativeSmokeChecksRoomForTwoServerCopiesAndTheClient()
+    // A server-load holds the staged server (which the run runs from) and the staged client at once.
+    [Fact] public void ANativeSmokeChecksRoomForOneServerCopyAndTheClient()
     {
         string server = Path.Combine(_root, "server"), client = Path.Combine(_root, "client");
         Directory.CreateDirectory(server); Directory.CreateDirectory(client);
@@ -164,12 +164,12 @@ public sealed class RunRetentionTests : IDisposable
         DiskSpace.AvailableOverride = _ => needed;
         try
         {
-            needed = 2500 + DiskSpace.Headroom(2500) - 1;
-            Assert.Contains("the staged server, the run's copy of it and the staged clean client",
+            needed = 1500 + DiskSpace.Headroom(1500) - 1;
+            Assert.Contains("the staged server copy and the staged clean client",
                 Assert.Throws<IOException>(() => SmokeOutput.RequireSpace(Output, server, client)).Message);
             needed++;
             SmokeOutput.RequireSpace(Output, server, client);
-            needed = 2000 + DiskSpace.Headroom(2000);
+            needed = 1000 + DiskSpace.Headroom(1000);
             SmokeOutput.RequireSpace(Output, server, null);
         }
         finally { DiskSpace.AvailableOverride = null; }

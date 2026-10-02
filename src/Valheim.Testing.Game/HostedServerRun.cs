@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 namespace Valheim.Testing.Game;
@@ -54,7 +55,10 @@ internal sealed class HostedServerRun
     public HostProfile HostProfile { get; }
     public IGameHost Host { get; }
     public string RunId { get; }
-    /// <summary>This run's directory on the server host: <c>runtime</c>, <c>world</c> and <c>boot-N</c>. Never deleted automatically.</summary>
+    /// <summary>
+    /// This run's directory on the server host: <c>runtime</c>, <c>world</c> and <c>boot-N</c>. The world and boot logs stay
+    /// (both are fetched too); the runtime copy goes at teardown once the server has stopped (<see cref="TeardownAsync"/>).
+    /// </summary>
     public string RunDirectory { get; }
     public string RuntimeDirectory { get; }
     public string WorldDirectory { get; }
@@ -320,7 +324,7 @@ internal sealed class HostedServerRun
     /// step. With <paramref name="serverStopped"/> false the server host's lock is kept, because the server may still run there.
     /// Returns the failures; it never throws.
     /// </summary>
-    public async Task<IReadOnlyList<Exception>> TeardownAsync(ScenarioReport report, string output, bool launched, bool serverStopped)
+    public async Task<IReadOnlyList<Exception>> TeardownAsync(ScenarioReport report, string output, bool launched, bool serverStopped, bool keepRuntime = false)
     {
         serverStopped &= !_serverMayRun;
         var failures = new List<Exception>();
@@ -331,6 +335,7 @@ internal sealed class HostedServerRun
         }
         if (launched && _worldShipped && serverStopped)
             await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long)).ConfigureAwait(false);
+        if (_runtime != null) await RetireRuntimeAsync(report, output, launched, serverStopped, keepRuntime).ConfigureAwait(false);
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         foreach (var account in _accounts)
         {
@@ -355,6 +360,71 @@ internal sealed class HostedServerRun
                 : throw new HostLockException(new HostLockResult(HostLockState.Unknown, _lock.Owner,
                     $"Kept {_lock.Path} on {Host.Name}: the owned server there may still run. Remove {_lock.Path}/owner by hand once it has stopped."))).ConfigureAwait(false);
         return failures;
+    }
+
+    // As on this machine (PinnedServerRun.RetireRuntime): after a clean stop, keep what the run added or changed in the host's
+    // runtime copy (by its hashes against the listing made after copying) and remove the copy, which is about 2 GB of the
+    // host install's own files. A copy whose server may still run, or one kept on request, stays and the report says where.
+    // A cleanup problem is reported, never a test failure. Still under the server host's lock.
+    private async Task RetireRuntimeAsync(ScenarioReport report, string output, bool launched, bool serverStopped, bool keep)
+    {
+        string where = Host.Name + ":" + RuntimeDirectory;
+        if (keep) { report.Provenance["runtimeCopy"] = $"kept {where}: kept on request ({PinnedServerRun.KeepRuntimeVariable}=1 or KeepRuntime)"; return; }
+        if (!serverStopped)
+        {
+            report.Provenance["runtimeCopy"] = $"kept {where}: the owned server there may still run; remove the directory once it has stopped";
+            Console.Error.WriteLine("Warning: " + report.Provenance["runtimeCopy"]);
+            return;
+        }
+        try
+        {
+            var before = _runtime!.Files;
+            var after = launched ? (await HostInstall.ListAsync(Host, RuntimeDirectory, Long).ConfigureAwait(false)).Files : before;
+            var added = after.Keys.Where(name => !before.ContainsKey(name)).Order(StringComparer.Ordinal).ToList();
+            var changed = after.Where(file => before.TryGetValue(file.Key, out var hash) && !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase))
+                .Select(file => file.Key).Order(StringComparer.Ordinal).ToList();
+            var missing = before.Keys.Where(name => !after.ContainsKey(name)).Order(StringComparer.Ordinal).ToList();
+            // The failure limits: the run's own result is not final yet (its log scan comes after this teardown, which first keeps
+            // the logs of any client still open), so keep as much as a failed run would.
+            var (perFile, total) = PinnedServerRun.RetainLimits(passed: false);
+            string keepDirectory = HostInstall.Join(RunDirectory, "runtime-changes");
+            var result = (await Host.RunAsync(HostedRunScripts.Retire, new Dictionary<string, string>
+            {
+                ["runtime"] = RuntimeDirectory, ["keep"] = keepDirectory, ["run"] = RunId,
+                ["files"] = string.Join('\n', added.Concat(changed).Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name)))),
+                ["perfile"] = perFile.ToString(CultureInfo.InvariantCulture), ["total"] = total.ToString(CultureInfo.InvariantCulture),
+            }, Long).ConfigureAwait(false)).EnsureSuccess($"Removing the runtime copy {where}");
+            var done = InteractiveClient.Line(result.Stdout, "VT-RETIRED ")?.Split(' ');
+            if (done is not [var freed, var kept]) throw new HostOperationException($"Unexpected reply while removing the runtime copy {where}", result);
+            // "VT-NOTKEPT <base64 path> <bytes>", with -1 bytes for anything but a regular file inside the copy.
+            var notKept = new List<NotKeptFile>();
+            foreach (string line in result.Stdout.Split('\n'))
+            {
+                if (line.Split(' ') is not ["VT-NOTKEPT", var encoded, var size]) continue;
+                string name = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                long bytes = long.Parse(size, CultureInfo.InvariantCulture);
+                notKept.Add(bytes < 0 ? new(name, null, null, "not a regular file inside the copy")
+                    : new(name, bytes, after.GetValueOrDefault(name), $"past the size limits ({DiskSpace.Format(perFile)} per file, {DiskSpace.Format(total)} in all)"));
+            }
+            if (!launched)
+            {
+                report.Provenance["runtimeCopy"] = $"removed {where} ({DiskSpace.Format(long.Parse(freed, CultureInfo.InvariantCulture))}): nothing was launched";
+                return;
+            }
+            string local = Path.Combine(output, "runtime-changes");
+            await Host.FetchDirectoryAsync(keepDirectory, local, Long).ConfigureAwait(false);
+            // Fetched: the host's copy of the changes is not needed twice.
+            (await Host.RunAsync(HostedRunScripts.DropKept, new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = RunId }, Quick).ConfigureAwait(false))
+                .EnsureSuccess($"Removing {Host.Name}:{keepDirectory} after fetching it");
+            var retired = new RetiredCopy(where, local, added, changed, missing, notKept, long.Parse(kept, CultureInfo.InvariantCulture), long.Parse(freed, CultureInfo.InvariantCulture));
+            File.WriteAllText(Path.Combine(local, "changes.json"), JsonSerializer.Serialize(retired, new JsonSerializerOptions { WriteIndented = true }));
+            report.Provenance["runtimeCopy"] = retired.ToString();
+        }
+        catch (Exception error) when (error is HostOperationException or IOException or InvalidOperationException or FormatException or UnauthorizedAccessException)
+        {
+            report.Provenance["runtimeCopy"] = $"cleanup failed, {where} may remain: {error.Message}";
+            Console.Error.WriteLine("Warning: " + report.Provenance["runtimeCopy"]);
+        }
     }
 
     private static async Task ReleaseAsync(HostLock held)
@@ -474,5 +544,53 @@ internal static class HostedClientScripts
         Save-VtLog (Join-Path $install 'BepInEx\LogOutput.log') 'game-0.log'
         Save-VtLog (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'AppData\LocalLow\IronGate\Valheim\Player.log') 'game-1.log'
         'VT-KEPT'
+        """.ReplaceLineEndings("\n");
+}
+
+internal static class HostedRunScripts
+{
+    // Keeps the listed files (base64 relative paths, one per line) from a run's runtime copy in $keep, within the size
+    // limits, then removes the copy. Only a directory named runtime directly inside the run's own directory ($run) is
+    // ever removed; a path that leaves the copy, a link or anything but a regular file is listed, never copied.
+    public static readonly string Retire = """
+        set -u
+        case "$run" in ''|*/*|.|..) exit 3;; esac
+        [ "$(basename -- "$runtime")" = runtime ] || exit 3
+        [ "$(basename -- "$(dirname -- "$runtime")")" = "$run" ] || exit 3
+        [ "$(basename -- "$keep")" = runtime-changes ] || exit 3
+        [ "$(dirname -- "$keep")" = "$(dirname -- "$runtime")" ] || exit 3
+        # A reused or linked destination could overwrite evidence outside this run. Leave the runtime for review instead.
+        [ ! -e "$keep" ] && [ ! -L "$keep" ] || exit 3
+        if [ ! -d "$runtime" ] || [ -L "$runtime" ]; then mkdir -p -- "$keep" || exit 3; echo "VT-RETIRED 0 0"; exit 0; fi
+        mkdir -p -- "$keep" || exit 3
+        real=$(readlink -f -- "$runtime") || exit 3
+        kept=0
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            rel=$(printf '%s' "$line" | base64 -d) || exit 3
+            case "$rel" in /*|..|../*|*/../*|*/..) printf 'VT-NOTKEPT %s -1\n' "$line"; continue;; esac
+            src="$runtime/$rel"
+            if [ ! -f "$src" ] || [ -L "$src" ]; then printf 'VT-NOTKEPT %s -1\n' "$line"; continue; fi
+            # Never through a linked directory inside the copy: the file's real path must be inside the copy too.
+            case "$(readlink -f -- "$src")" in "$real"/*) ;; *) printf 'VT-NOTKEPT %s -1\n' "$line"; continue;; esac
+            size=$(stat -c %s -- "$src") || exit 3
+            if [ "$size" -gt "$perfile" ] || [ $((kept + size)) -gt "$total" ]; then printf 'VT-NOTKEPT %s %s\n' "$line" "$size"; continue; fi
+            mkdir -p -- "$(dirname -- "$keep/$rel")" && cp -p -- "$src" "$keep/$rel" || exit 3
+            kept=$((kept + size))
+        done <<< "$files"
+        bytes=$(du -sb -- "$runtime") || exit 3
+        bytes=${bytes%%$'\t'*}
+        rm -rf -- "$runtime" || exit 3
+        printf 'VT-RETIRED %s %s\n' "$bytes" "$kept"
+        """.ReplaceLineEndings("\n");
+
+    // Removes the run's runtime-changes directory on the host once it was fetched; only <run>/runtime-changes.
+    public static readonly string DropKept = """
+        set -u
+        case "$run" in ''|*/*|.|..) exit 3;; esac
+        [ "$(basename -- "$keep")" = runtime-changes ] || exit 3
+        [ "$(basename -- "$(dirname -- "$keep")")" = "$run" ] || exit 3
+        rm -rf -- "$keep" || exit 3
+        echo "VT-DROPPED"
         """.ReplaceLineEndings("\n");
 }

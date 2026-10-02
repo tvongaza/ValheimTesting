@@ -13,10 +13,10 @@ internal static class SmokeOutput
         }
     }
 
-    // A server-load copies the server twice (the staged runtime, then the run's own copy of it) and the client once,
-    // all inside --output. Refuse before the first copy when they do not fit.
+    // A server-load copies the server once (the staged runtime, which the run then runs from) and the client once, all
+    // inside --output. Refuse before the first copy when they do not fit.
     public static void RequireSpace(string output, string server, string? client) =>
         Valheim.Testing.Game.DiskSpace.Require(output,
-            2 * Valheim.Testing.Game.DiskSpace.DirectoryBytes(server) + (client == null ? 0 : Valheim.Testing.Game.DiskSpace.DirectoryBytes(client)),
-            client == null ? "the staged server and the run's copy of it" : "the staged server, the run's copy of it and the staged clean client");
+            Valheim.Testing.Game.DiskSpace.DirectoryBytes(server) + (client == null ? 0 : Valheim.Testing.Game.DiskSpace.DirectoryBytes(client)),
+            client == null ? "the staged server copy" : "the staged server copy and the staged clean client");
 }
