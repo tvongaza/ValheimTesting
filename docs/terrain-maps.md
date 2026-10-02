@@ -2,6 +2,10 @@
 
 `TerrainMapSvg` draws a terrain-only overview beside one fine window. It takes the same `WorldDumpLayerSpec` inputs as `LayeredDumpTerrain`, so every CSV is checked against its SHA-256, bounds, spacing, dump reply, world UID, seed, and game build **before** a pixel is drawn. Its zoom must fit completely within one layer finer than the designated base-height lattice. A malformed or mixed-world grid fails rather than filling a blank part of the map.
 
+![Terrain overview and fine Meadows window rendered from pinned Valheim 1.0.16 dumps of a disposable world](images/terrain-map-example.png)
+
+This example uses a native 128 m world dump and an 8 m dry Meadows window from the same disposable world. The image contains terrain only; it does not include roads, locations or player data.
+
 ```csharp
 using System.Text.Json;
 using Valheim.Testing;
