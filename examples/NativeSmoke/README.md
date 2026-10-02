@@ -2,6 +2,8 @@
 
 This command takes one or more selected client-side plugins into a new, disposable hosted Valheim world. It resolves their combined local BepInEx and assembly dependencies, chooses one pinned ValheimCLI build, stages a clean game-created world and character, launches an owned client with strict pins, and keeps private evidence. Success means that every selected plugin loaded and the client entered the fixture; it says nothing about a mod's reported gameplay bug.
 
+For a step-by-step single-mod and mod-conflict investigation, including how to read failed setup versus failed gameplay, see [Debug a mod load or mod conflict](../../docs/debugging-mods.md).
+
 ```sh
 dotnet run --project examples/NativeSmoke -c Release -- \
   --game /path/to/prepared/Valheim \
