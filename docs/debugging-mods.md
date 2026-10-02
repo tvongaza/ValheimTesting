@@ -68,7 +68,7 @@ dotnet run --project examples/NativeSmoke -c Release -- server-load \
 
 If each mod loads alone but the pair does not, compare the two `dependencies.lock.json` files with the pair's lock, then inspect the pair's `evidence/result.json` and retained BepInEx/Unity logs. This narrows the problem to a combined setup or runtime interaction; it does not by itself identify which mod's code is at fault. Record the exact plugin files, configs, assets, game build and ValheimCLI build before changing anything.
 
-For a controlled **remove-one-mod** check when the full set can complete, use `server-load-ab`:
+For a controlled **remove-one-mod** check, including a full set that fails during the game run, use `server-load-ab`:
 
 ```sh
 dotnet run --project examples/NativeSmoke -c Release -- server-load-ab \
@@ -81,7 +81,7 @@ dotnet run --project examples/NativeSmoke -c Release -- server-load-ab \
   --output /private/runs/remove-second
 ```
 
-The command resolves both sets first and compares their inputs, then runs the complete set in `before/` and the set without `SecondMod.dll` in `after/`. Shared files, configs, assets, CLI and runtime stay pinned; dependencies used only by the removed mod may leave with it. **It stops if `before/` fails.** To diagnose a failing complete set, run two separate `server-load` commands with distinct output directories, one with both `--mod` entries and one with only the surviving mod. Preserve both results and compare their inputs yourself. Do not report that as a controlled A/B unless you have established that the other inputs match.
+The command resolves both sets first and compares their inputs, then runs the complete set in `before/` and the set without `SecondMod.dll` in `after/`. Shared files, configs, assets, CLI and runtime stay pinned; dependencies used only by the removed mod may leave with it. A **native failure** in `before/` still runs `after/` so you can inspect both results. An input/setup refusal stops the comparison: first correct the missing or ambiguous dependency, pin or fixture, then rerun. A load difference narrows the interaction; it does not by itself show which mod's code is responsible.
 
 ## Read the result before changing the mod
 

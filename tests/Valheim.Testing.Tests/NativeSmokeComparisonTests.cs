@@ -25,6 +25,53 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.False(Directory.Exists(output));
     }
 
+    [Fact] public async Task FailedFullSetStillRunsTheRemovalArm()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "runtime-failure-comparison");
+        var arms = new List<string[]>();
+        int result = await ServerLoadComparison.RunAsync(Arguments(output, _rig.Parent, companion), args =>
+        {
+            arms.Add(args);
+            return Task.FromResult(arms.Count == 1 ? 1 : 0);
+        });
+        Assert.Equal(1, result);
+        Assert.Equal(2, arms.Count);
+        Assert.Contains(companion, arms[0]);
+        Assert.DoesNotContain(companion, arms[1]);
+        Assert.True(File.Exists(Path.Combine(output, "before-dependencies.lock.json")));
+        Assert.True(File.Exists(Path.Combine(output, "after-dependencies.lock.json")));
+    }
+
+    [Fact] public async Task RefusedFullSetDoesNotLaunchTheRemovalArm()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "refused-comparison");
+        int calls = 0;
+        int result = await ServerLoadComparison.RunAsync(Arguments(output, _rig.Parent, companion), _ =>
+        {
+            calls++;
+            return Task.FromResult(3);
+        });
+        Assert.Equal(3, result);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact] public async Task FailedFullSetCannotHideAChangedSurvivingMod()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "changed-after-failure");
+        int calls = 0;
+        int result = await ServerLoadComparison.RunAsync(Arguments(output, _rig.Parent, companion), _ =>
+        {
+            calls++;
+            File.AppendAllText(_rig.Parent, "changed");
+            return Task.FromResult(1);
+        });
+        Assert.Equal(3, result);
+        Assert.Equal(1, calls);
+    }
+
     private string[] Arguments(string output, string first, string second, bool searchRoot = true)
     {
         string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",

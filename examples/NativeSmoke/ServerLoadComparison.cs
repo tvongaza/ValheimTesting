@@ -3,8 +3,9 @@ using Valheim.Testing.Game;
 /// <summary>Runs the same disposable server smoke twice, removing exactly one selected mod in the second arm.</summary>
 public static class ServerLoadComparison
 {
-    public static async Task<int> RunAsync(string[] args)
+    public static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runArm = null)
     {
+        runArm ??= ServerLoad.RunAsync;
         try
         {
             if (args.Length % 2 != 0) throw new ArgumentException("Every option needs one value.");
@@ -71,19 +72,21 @@ public static class ServerLoadComparison
                     !(omit && pair.Key == "--mod" && Path.GetFullPath(pair.Value).Equals(removed, pathComparison)))
                 .SelectMany(pair => pair.Key == "--output" ? new[] { pair.Key, Path.Combine(output, name) }
                     : new[] { pair.Key, pair.Value }).ToArray();
-            int result = await ServerLoad.RunAsync(Arm("before", omit: false));
-            if (result != 0) return result;
+            int beforeResult = await runArm(Arm("before", omit: false));
+            // A native failure is precisely the case where removing one mod can be informative. An input refusal
+            // cannot establish a mod interaction, so do not launch another arm after one.
+            if (beforeResult != 0 && beforeResult != 1) return beforeResult;
             NativeDependencyLock.ReadReady(Path.Combine(output, "before-dependencies.lock.json"));
             NativeDependencyLock.ReadReady(Path.Combine(output, "after-dependencies.lock.json"));
             foreach (var (path, manifest) in directoryInputs) WorldFixture.Verify(path, manifest);
             foreach (var (path, hash) in fileInputs)
                 if (!WorldFixture.Hash(path).Equals(hash, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("A fixed A/B input changed after the first arm: " + path);
-            result = await ServerLoad.RunAsync(Arm("after", omit: true));
-            Console.WriteLine(result == 0
+            int afterResult = await runArm(Arm("after", omit: true));
+            Console.WriteLine(beforeResult == 0 && afterResult == 0
                 ? "SERVER_MODSET_AB_PASS: both arms loaded the same fixture with exactly one selected mod removed."
-                : "SERVER_MODSET_AB_FAIL: the second arm failed; inspect the private arm evidence.");
-            return result;
+                : $"SERVER_MODSET_AB_FAIL: full set exit {beforeResult}, removed-mod set exit {afterResult}; inspect both private arm results before attributing the difference.");
+            return beforeResult != 0 ? beforeResult : afterResult;
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException)
         {
