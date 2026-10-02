@@ -61,6 +61,8 @@ public sealed class RegressionEnvironment
         string Full(string value) => value.Length == 0 || Path.IsPathFullyQualified(value) ? value : Path.GetFullPath(Path.Combine(directory, value));
         Game = Full(Game); Install = Full(Install); Fixture.Root = Full(Fixture.Root);
         if (Client.SaveDirectory != null) Client.SaveDirectory = Full(Client.SaveDirectory);
+        if (Client.CharacterStore != null) Client.CharacterStore = Full(Client.CharacterStore);
+        if (Client.SteamUserDataDirectory != null) Client.SteamUserDataDirectory = Full(Client.SteamUserDataDirectory);
         foreach (var file in Files()) file.File = Full(file.File);
         foreach (var arm in Mod.Arms.Values) arm.File = Full(arm.File);
         foreach (string key in Configs.Keys.ToList()) Configs[key] = Full(Configs[key]);
@@ -129,6 +131,10 @@ public sealed class RegressionClient
     public int JoinSeconds { get; set; } = 180;
     /// <summary>The client's data directory (holds <c>worlds_local</c> and <c>characters_local</c>); default this user's.</summary>
     public string? SaveDirectory { get; set; }
+    /// <summary>Optional registered, game-created disposable character to stage for the owned hosted run.</summary>
+    public string? CharacterStore { get; set; }
+    /// <summary>Required with <see cref="CharacterStore"/> to refuse collisions with Steam Cloud characters.</summary>
+    public string? SteamUserDataDirectory { get; set; }
 
     public void Validate()
     {
@@ -136,6 +142,10 @@ public sealed class RegressionClient
         if (Character.Length == 0 || Character.Any(char.IsWhiteSpace) || Character.EndsWith(".fch", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("client.character: give the disposable local character's file name, without .fch.");
         if (SaveDirectory != null && !Path.IsPathFullyQualified(SaveDirectory)) throw new ArgumentException("client.saveDirectory: give a full path, or leave it out for this user's.");
+        if (CharacterStore != null && !Path.IsPathFullyQualified(CharacterStore)) throw new ArgumentException("client.characterStore: give the full path of a registered disposable character store.");
+        if (CharacterStore != null && (SteamUserDataDirectory == null || !Path.IsPathFullyQualified(SteamUserDataDirectory)))
+            throw new ArgumentException("client.steamUserDataDirectory: give Steam's full userdata path when staging a registered character.");
+        if (CharacterStore == null && SteamUserDataDirectory != null) throw new ArgumentException("client.steamUserDataDirectory is used only with client.characterStore.");
     }
 }
 
@@ -434,7 +444,8 @@ public sealed class TargetedRegression
         RequireReferences(install, staged);
         string saveDirectory = env.Client.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(install));
         string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
-        if (!File.Exists(character))
+        if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
+        else if (!File.Exists(character))
             throw new InvalidOperationException($"client.character: {env.Client.Character}.fch is not in {Path.GetDirectoryName(character)}. Stage the disposable local character (never a cloud one) before the run, or name the one that is staged.");
         var installPins = InstallPins.Of(install);
         var plan = new ClientRunPlan
@@ -478,10 +489,19 @@ public sealed class TargetedRegression
         var report = new ScenarioReport(scenario);
         report.Provenance["toolkit"] = ToolkitVersion; // A public bundle must not pin an older toolkit than this.
         var logs = new List<RunLog>();
+        CharacterStartStage? characterStage = null;
         try
         {
             if (Environment.LoaderPackage is { } loaderPath)
                 report.Provenance["bepInExPackage"] = BepInExLoaderPackage.Read(loaderPath).Identity;
+            if (Environment.Client.CharacterStore is { } store)
+            {
+                string save = Environment.Client.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(Environment.Game));
+                report.Step("stage only the registered disposable character", () => characterStage = CharacterStartStage.InstallRegistered(
+                    store, Environment.Client.Character, Path.Combine(save, "characters_local"),
+                    Environment.Client.SteamUserDataDirectory!, Environment.Client.Character));
+                report.Provenance["characterSource"] = "registered disposable store";
+            }
             StagedArm? stagedArm = null;
             report.Step($"stage arm {arm} from the allowlist and preflight it, before the game starts", () => stagedArm = Stage(arm));
             var staged = stagedArm!;
@@ -512,6 +532,9 @@ public sealed class TargetedRegression
         }
         finally
         {
+            if (characterStage != null)
+                try { report.Step("remove only the staged test character", characterStage.Dispose); }
+                catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure("character cleanup failed", error); }
             if (logs.Count != 0) report.ScanLogs(logs, Environment.LogScan);
             report.Provenance["disposableInstall"] = "kept for the next arm; remove it with TargetedRegression.Remove";
             report.Write(output);

@@ -40,6 +40,36 @@ public sealed class DisposableCharacterStoreTests : IDisposable
     }
 
     [Fact]
+    public void HostedSmokeStagesOnlyARegisteredCharacterAndRestoresTheFolder()
+    {
+        var store = DisposableCharacterStore.Create(StoreDirectory);
+        store.Register("tester", Local("seed", 11));
+        byte[] original = File.ReadAllBytes(Path.Combine(_local, "seed.fch"));
+        try
+        {
+            using var stage = CharacterStartStage.InstallRegistered(StoreDirectory, "tester", _local, _steam, "smoke-only");
+            Assert.Equal(original, File.ReadAllBytes(Path.Combine(_local, "smoke-only.fch")));
+            throw new InvalidOperationException("simulate a failing native scenario");
+        }
+        catch (InvalidOperationException error) when (error.Message == "simulate a failing native scenario") { }
+        Assert.False(File.Exists(Path.Combine(_local, "smoke-only.fch")));
+        Assert.Equal(original, File.ReadAllBytes(Path.Combine(_local, "seed.fch")));
+        Assert.Equal(new[] { "seed.fch" }, Directory.EnumerateFiles(_local).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public void HostedSmokeRefusesANameAlreadyPresentInSteamCloud()
+    {
+        var store = DisposableCharacterStore.Create(StoreDirectory);
+        store.Register("tester", Local("seed", 11));
+        string cloud = Path.Combine(_steam, "12345", "892970", "remote", "characters");
+        Directory.CreateDirectory(cloud);
+        File.WriteAllText(Path.Combine(cloud, "smoke-only.fch"), "someone else's character");
+        Assert.Throws<IOException>(() => CharacterStartStage.InstallRegistered(StoreDirectory, "tester", _local, _steam, "smoke-only"));
+        Assert.False(File.Exists(Path.Combine(_local, "smoke-only.fch")));
+    }
+
+    [Fact]
     public void AnUnregisteredPersonalCharacterCannotBeTakenOrStaged()
     {
         var store = DisposableCharacterStore.Create(StoreDirectory);

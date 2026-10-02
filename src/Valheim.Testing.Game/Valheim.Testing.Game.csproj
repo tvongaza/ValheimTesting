@@ -6,5 +6,11 @@
   </PropertyGroup>
   <ItemGroup><PackageReference Include="Valheim.Testing.Cli" Version="[0.1.0-preview.6]" /><ProjectReference Include="../Valheim.Testing/Valheim.Testing.csproj" /></ItemGroup>
   <ItemGroup><InternalsVisibleTo Include="Valheim.Testing.Tests" /></ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Fixtures/SmokeWorld/VTDefaultSmoke/*">
+      <LogicalName>Valheim.Testing.Game.SmokeWorld.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Fixtures/SmokeCharacter/vtseedclean.fch" LogicalName="Valheim.Testing.Game.SmokeCharacter.vtseedclean.fch" />
+  </ItemGroup>
   <ItemGroup><None Include="../../LICENSE" Pack="true" PackagePath="" /><None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" /><None Include="../../README.md" Pack="true" PackagePath="README.md" /></ItemGroup>
 </Project>
