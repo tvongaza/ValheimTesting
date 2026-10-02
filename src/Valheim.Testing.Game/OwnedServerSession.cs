@@ -298,24 +298,33 @@ public sealed class OwnedServerSession : IDisposable
     /// reports in <c>acceptingConnections</c> (Valheim.Testing.Adapter). The game opens its socket when world generation
     /// finishes, which on a first boot comes well after the world has loaded, so a join before it times out. Call it just
     /// before the first join rather than at startup, so the wait overlaps other work. The game offers no event for it: the
-    /// read-only observation is repeated every 250 ms until the timeout, which reports the last reading.
+    /// read-only observation is repeated until the timeout, which reports the last reading. A CLI command
+    /// that expired before the game thread started it is retried; a failed pin or started command is not.
     /// </summary>
     public static void WaitUntilJoinable(GameActor server, string sessionCapability, TimeSpan timeout, CancellationToken cancellation = default)
     {
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        var capability = server.RequireCapability(sessionCapability);
+        Capability? capability = null;
         var clock = Stopwatch.StartNew();
         string last = "none";
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
-            var reading = server.Observe(capability);
-            last = reading.Data.GetRawText();
-            if (!reading.Data.TryGetProperty("acceptingConnections", out var accepting) || accepting.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                throw new InvalidOperationException("The session capability does not report acceptingConnections; update the adapter to Valheim.Testing.Adapter's TestExtension.");
-            if (accepting.GetBoolean()) return;
+            try
+            {
+                capability ??= server.RequireCapability(sessionCapability);
+                var reading = server.Observe(capability);
+                last = reading.Data.GetRawText();
+                if (!reading.Data.TryGetProperty("acceptingConnections", out var accepting) || accepting.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new InvalidOperationException("The session capability does not report acceptingConnections; update the adapter to Valheim.Testing.Adapter's TestExtension.");
+                if (accepting.GetBoolean()) return;
+            }
+            catch (InvalidOperationException error) when (GameActor.IsUnstartedCommandTimeout(error))
+            {
+                last = "ValheimCLI readiness observation expired in its queue before execution; retrying after the game thread resumes";
+            }
             if (clock.Elapsed >= timeout) throw new WaitTimeoutException("server accepting game connections", clock.Elapsed, last);
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
+            cancellation.WaitHandle.WaitOne(TimeSpan.FromSeconds(1));
         }
     }
 
