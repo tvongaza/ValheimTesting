@@ -39,6 +39,7 @@ public sealed class LogScanTests : IDisposable
         { "missing-script", Boot + "[Warning: Unity Log] The referenced script on this Behaviour (Game Object 'BrokenPiece') is missing!\n", 3 },
         { "shader-unsupported", Boot + "[Warning: Unity Log] WARNING: Shader Unsupported: 'Custom/Piece' - All subshaders removed\n", 3 },
         { "macos-apple-plugin-missing", Boot + AppleGameKit, 3 },
+        { "headless-server-graphics", Boot + "[Error  : Unity Log] AsyncResourceUpload failed.\n", 3 },
         { LogScanner.UnityException, Boot + JotunnNre, 3 },
         { LogScanner.UnknownWarning, Boot + "[Warning:  My Mod] Config value out of range; using 5\n", 3 },
         { LogScanner.UnknownError, Boot + "[Error  :  My Mod] Could not open the cache file\nSystem.IO.IOException: Sharing violation\n", 3 },
@@ -174,6 +175,49 @@ public sealed class LogScanTests : IDisposable
             "ERROR: Shader Unlit/Color shader is not supported on this GPU (none of subshaders/fallbacks are suitable)\n", "Player.log", required: false));
         var count = Count(scan, "shader-unsupported");
         Assert.Equal(2, count.Count); Assert.Equal(1, count.FirstLine); Assert.Equal(LogSeverity.Warning, count.Severity);
+    }
+    // A Linux dedicated server's boot as the scheduled native checks logged it (#187: build 25527701, 2 Oct 2026): 13
+    // graphics errors from its null GPU device, which only warn; the same systems' other errors still fail.
+    private const string LinuxServerGraphics =
+        "[Error  : Unity Log] AsyncResourceUpload failed.\n" +
+        "[Error  : Unity Log] AsyncResourceUpload failed.\n" +
+        "[Info   : Unity Log] 10/02/2026 10:00:27: GPU Device: 0000:0000 (Unknown)\n\n" +
+        "[Error  : Unity Log] 10/02/2026 10:00:36: Failed to play intro cinematic\n\n" +
+        "[Warning: Unity Log] HDR Render Texture not supported, disabling HDR on reflection probe.\n" +
+        "[Error  : Unity Log] This custom render path shader needs to have at least 1 passes.\n" +
+        "[Error  : Unity Log] Could not find material Hidden/VideoDecode. Make sure the Video shaders are included in your build, in the Built-in Shader Settings section of the Graphics Settings.\n" +
+        "[Error  : Unity Log] Could not find video decode shader pass YCbCr_To_RGB1 in shader <not found>\n" +
+        "[Error  : Unity Log] Could not find video decode shader pass YCbCrA_To_RGBAFull in shader <not found>\n" +
+        "[Error  : Unity Log] Could not find video decode shader pass YCbCrA_To_RGBA in shader <not found>\n" +
+        "[Error  : Unity Log] Could not find video decode shader pass Flip_RGBA_To_RGBA in shader <not found>\n" +
+        "[Error  : Unity Log] Could not find video decode shader pass Flip_RGBASplit_To_RGBA in shader <not found>\n" +
+        "[Error  : Unity Log] This custom render path shader needs to have at least 1 passes.\n" +
+        "[Error  : Unity Log] Could not find material Hidden/VideoComposite. Make sure the Video shaders are included in your build, in the Built-in Shader Settings section of the Graphics Settings.\n" +
+        "[Error  : Unity Log] Could not find video decode shader pass Default in shader <not found>\n";
+    [Fact] public void ADedicatedServersGraphicsErrorsOnlyWarn()
+    {
+        var scan = LogScanner.Scan(Write(Boot + LinuxServerGraphics + Tail));
+        Assert.False(scan.Failed);
+        var count = Count(scan, "headless-server-graphics");
+        Assert.Equal((LogSeverity.Warning, 13, 3), (count.Severity, count.Count, count.FirstLine));
+        Assert.Equal(0, Count(scan, LogScanner.UnknownError).Count);
+        Assert.Equal(1, Count(scan, LogScanner.UnknownWarning).Count);
+        // The Windows server writes the same messages, without levels, only to its Unity log.
+        var windows = LogScanner.Scan(Write(string.Join("\n", LinuxServerGraphics.Split('\n').Select(line => line.Replace("[Error  : Unity Log] ", ""))), "server.unity.log", required: false));
+        Assert.Equal(13, Count(windows, "headless-server-graphics").Count);
+        Assert.False(windows.Failed);
+    }
+    [Theory]
+    [InlineData("[Error  : Unity Log] Could not find material MyMod/Glow. Make sure the Video shaders are included in your build, in the Built-in Shader Settings section of the Graphics Settings.")]
+    [InlineData("[Error  : Unity Log] AsyncResourceUpload failed. Retrying bundle mymod_assets")]
+    [InlineData("[Error  : Unity Log] Failed to play intro cinematic")]
+    [InlineData("[Error  :   My Mod] Could not find video decode shader pass Default in shader MyMod/Video")]
+    public void OtherErrorsFromTheSameSystemsStillFail(string line)
+    {
+        var scan = LogScanner.Scan(Write(Boot + LinuxServerGraphics + line + "\n" + Tail));
+        Assert.True(scan.Failed);
+        Assert.Equal(13, Count(scan, "headless-server-graphics").Count);
+        Assert.Equal((1, line), (Count(scan, LogScanner.UnknownError).Count, Count(scan, LogScanner.UnknownError).First));
     }
     [Fact] public void OrdinaryLinesMentioningTheWordsAreNotProblems()
     {

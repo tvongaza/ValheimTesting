@@ -57,7 +57,8 @@ public sealed record LogFileScan(string Role, string Path, bool Present, string?
 /// <summary>
 /// Scans a whole run's logs after its processes stopped, for problems that only warn or appear long after startup: a
 /// Harmony patch whose target is gone, a global unpatch, missing members after a game update, errors while objects unload,
-/// RPCs without a handler, objects whose prefab is not registered, missing scripts and shaders a GPU cannot run. Each known pattern is counted per log with its
+/// RPCs without a handler, objects whose prefab is not registered, missing scripts and shaders a GPU cannot run; a dedicated
+/// server's own graphics errors are known too. Each known pattern is counted per log with its
 /// first occurrence and has a default severity a run may change with a written reason. BepInEx warning and error lines
 /// that match no pattern are counted as <see cref="UnknownWarning"/> and <see cref="UnknownError"/>, never ignored.
 /// Unknown errors fail by default; a run can name an exact expected header line with a written reason. Unity's
@@ -117,6 +118,15 @@ public static class LogScanner
         // 2026 (Valheim 1.0.16, native arm64 and Rosetta, with or without mods). The game continues; they are the game's own,
         // so they do not count as UnityException.
         new("macos-apple-plugin-missing", LogSeverity.Warning, new(@"\bDllNotFoundException\b", Options), new(@"\bApple\.(?:GameKit|Core)\.", Options)),
+        // Unity's and the game's errors on a dedicated server's null graphics device ("GPU Device: 0000:0000"): no video
+        // shaders for the intro cinematic and no GPU for asset uploads. Every kept dedicated server boot from 26 Sep to 2 Oct
+        // 2026 (Valheim 1.0.16, Unity 6000.0.75f1; Windows, Linux and macOS, with or without mods) logged 12 to 14 of them, and
+        // no client log had one. Linux and macOS servers write them to the BepInEx log as Unity Log errors, which fail as
+        // unknown-error otherwise; the Windows server writes them only to its Unity log. Matched by their whole text, so
+        // another error from the same systems still counts.
+        new("headless-server-graphics", LogSeverity.Warning, new(@"(?:AsyncResourceUpload failed\.|This custom render path shader needs to have at least 1 passes\."
+            + @"|Could not find material Hidden/Video(?:Decode|Composite)\. Make sure the Video shaders are included in your build, in the Built-in Shader Settings section of the Graphics Settings\."
+            + @"|Could not find video decode shader pass \w+ in shader <not found>|\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}: Failed to play intro cinematic)$", Options)),
     ];
 
     /// <summary>Every name a classification may use: the patterns, <see cref="UnityException"/>, <see cref="UnknownWarning"/> and <see cref="UnknownError"/>.</summary>
