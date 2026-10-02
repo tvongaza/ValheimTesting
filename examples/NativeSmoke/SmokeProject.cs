@@ -7,7 +7,7 @@ using System.Net;
 /// </summary>
 internal static class SmokeProject
 {
-    internal const string GameVersion = "0.1.0-preview.19";
+    internal const string GameVersion = "0.1.0-preview.20";
     private const string Feed = "https://api.nuget.org/v3/index.json";
 
     internal static async Task<int> InitAsync(string[] args)
