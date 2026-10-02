@@ -6,7 +6,8 @@ namespace Valheim.Testing.Game;
 /// Prepares a positioned copy of a registered disposable test character (<see cref="DisposableCharacterStore"/>). Only a
 /// character taken from a store is accepted, never a path, so a personal character cannot be prepared by pointing at its
 /// file. This refuses Valheim character directories as output; a runner must stage the resulting file separately while
-/// the game is stopped and verify arrival after joining. The character must already have visited the requested world.
+/// the game is stopped and verify arrival after joining. <see cref="Prepare"/> updates a visited world's logout point;
+/// <see cref="PrepareForNewWorld"/> explicitly adds the first entry for an unvisited world.
 /// </summary>
 /// <example>
 /// Start with a game-created character registered in <see cref="DisposableCharacterStore"/>. Prepare a fresh file in an
@@ -19,7 +20,8 @@ namespace Valheim.Testing.Game;
 ///     character, prepared, worldUid, 125f, 45f, -380f);
 /// </code>
 /// Set the owned-client plan's character name to <c>tester-run-001</c>, and its character-start fields to the prepared
-/// file, SHA256, and store directory. The evidence directory must already exist. <c>Prepare</c> does not install the
+/// file, SHA256, and store directory. For a clean character that has never visited the fixture world, call
+/// <see cref="PrepareForNewWorld"/> instead. The evidence directory must already exist. <c>Prepare</c> does not install the
 /// copy or launch the game; see the
 /// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/README.md#optional-character-start-at-the-first-site-preview">owned-client example</see>
 /// for staging and verifying the actual arrival. This is a position-only edit, not character creation or customization.
@@ -35,6 +37,18 @@ public static class CharacterStartCopy
     /// destination must not exist, and neither may be a live character directory. This does not create a new player ID.
     /// </remarks>
     public static string Prepare(DisposableCharacter character, string destination, long worldUid, float x, float y, float z)
+        => PrepareCore(character, destination, worldUid, x, y, z, addWorld: false);
+
+    /// <summary>
+    /// Prepares a registered disposable character for its first visit to <paramref name="worldUid"/>. The character must
+    /// have completed its first spawn but have no entry for this world. An explicit new-world operation prevents a typo in
+    /// <see cref="Prepare"/>'s UID from silently adding an entry. The game still decides the final grounded spawn; verify
+    /// client support after joining. This format-gated edit is for Valheim 1.0.16 only.
+    /// </summary>
+    public static string PrepareForNewWorld(DisposableCharacter character, string destination, long worldUid, float x, float y, float z)
+        => PrepareCore(character, destination, worldUid, x, y, z, addWorld: true);
+
+    private static string PrepareCore(DisposableCharacter character, string destination, long worldUid, float x, float y, float z, bool addWorld)
     {
         ArgumentNullException.ThrowIfNull(character);
         if (!Path.IsPathFullyQualified(destination))
@@ -50,7 +64,8 @@ public static class CharacterStartCopy
             throw new DirectoryNotFoundException("Create a new evidence directory for the prepared character first.");
 
         byte[] source = character.Store.Read(character);
-        byte[] changed = CharacterSavePosition.AtWorld(source, worldUid, x, y, z);
+        byte[] changed = addWorld ? CharacterSavePosition.AtNewWorld(source, worldUid, x, y, z)
+                                  : CharacterSavePosition.AtWorld(source, worldUid, x, y, z);
         using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
             try
