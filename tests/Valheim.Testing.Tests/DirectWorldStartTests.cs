@@ -26,7 +26,9 @@ public sealed class DirectWorldStartTests
             Assert.Contains("passwordVariable=VT_SECRET\n", text);
             Assert.Contains("devcommands=true\n", text);
             Assert.DoesNotContain("the-secret", text);
-            Assert.Throws<IOException>(() => DirectWorldStart.Write(plan, output)); // Never overwrite a request or evidence.
+            string second = DirectWorldStart.Write(plan, output);
+            Assert.NotEqual(file, second);
+            Assert.Equal(text, File.ReadAllText(second)); // A second owned launch keeps the first request as evidence.
         }
         finally { Directory.Delete(output, recursive: true); }
     }

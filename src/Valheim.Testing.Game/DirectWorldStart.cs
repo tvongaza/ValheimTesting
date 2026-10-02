@@ -18,7 +18,9 @@ internal static class DirectWorldStart
             (variable.Length == 0 || !(char.IsLetter(variable[0]) || variable[0] == '_') ||
              variable.Any(c => !(char.IsLetterOrDigit(c) || c == '_'))))
             throw new ArgumentException("The direct-start passwordVariable must name an environment variable, not contain a password.");
-        string path = Path.GetFullPath(Path.Combine(output, "client-direct-start.txt"));
+        // A run can restart its owned client. Keep each launch's request as separate evidence; a later launch must
+        // never overwrite the first request or inherit its in-process claimed marker.
+        string path = Path.GetFullPath(Path.Combine(output, $"client-direct-start-{Guid.NewGuid():N}.txt"));
         // The character, address and fixture name have already passed the plan's token validation. The file carries
         // neither the password nor its value, only the variable the owned game process inherits from the runner.
         var lines = new List<string> { "version=1", "mode=" + mode, "character=" + plan.Character,

@@ -12,8 +12,9 @@ public static class CharacterFixture
     public const string RegisterMode = "register-character";
     public const string RefreshMode = "refresh-character";
     public const string PrepareMode = "prepare-character";
+    public const string PrepareNewWorldMode = "prepare-character-new-world";
 
-    public static bool Handles(string mode) => mode is RegisterMode or RefreshMode or PrepareMode;
+    public static bool Handles(string mode) => mode is RegisterMode or RefreshMode or PrepareMode or PrepareNewWorldMode;
 
     public static int Run(string[] args)
     {
@@ -35,14 +36,16 @@ public static class CharacterFixture
                     Console.WriteLine($"REFRESHED {character.Name} sha256={character.Sha256}");
                     return 0;
                 }
-                case [PrepareMode, var store, var name, var worldUid, var x, var y, var z, var output]
+                case [PrepareMode or PrepareNewWorldMode, var store, var name, var worldUid, var x, var y, var z, var output]
                     when long.TryParse(worldUid, NumberStyles.Integer, CultureInfo.InvariantCulture, out long uid) &&
                          float.TryParse(x, NumberStyles.Float, CultureInfo.InvariantCulture, out float px) &&
                          float.TryParse(y, NumberStyles.Float, CultureInfo.InvariantCulture, out float py) &&
                          float.TryParse(z, NumberStyles.Float, CultureInfo.InvariantCulture, out float pz):
                 {
                     var character = DisposableCharacterStore.Open(store).Get(name);
-                    string sha256 = CharacterStartCopy.Prepare(character, output, uid, px, py, pz);
+                    string sha256 = args[0] == PrepareNewWorldMode
+                        ? CharacterStartCopy.PrepareForNewWorld(character, output, uid, px, py, pz)
+                        : CharacterStartCopy.Prepare(character, output, uid, px, py, pz);
                     Console.WriteLine($"PREPARED {output} sha256={sha256} (copy only; not staged or joined)");
                     return 0;
                 }
@@ -50,6 +53,7 @@ public static class CharacterFixture
             Console.Error.WriteLine("Usage: mymod-system-test register-character <store-dir> <name> <characters_local/character.fch>");
             Console.Error.WriteLine("       mymod-system-test refresh-character <store-dir> <name> <characters_local/character.fch>");
             Console.Error.WriteLine("       mymod-system-test prepare-character <store-dir> <name> <world-uid> <x> <y> <z> <new-output-file.fch>");
+            Console.Error.WriteLine("       mymod-system-test prepare-character-new-world <store-dir> <name> <world-uid> <x> <y> <z> <new-output-file.fch>");
             return 2;
         }
         catch (Exception error) when (error is ArgumentException or IOException or InvalidDataException or NotSupportedException or

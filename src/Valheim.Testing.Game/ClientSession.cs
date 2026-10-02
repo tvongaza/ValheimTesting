@@ -181,8 +181,11 @@ public sealed class ClientSession : IDisposable
                 try
                 {
                     string worldUid = plan.HostWorld?.WorldUid ?? plan.DirectStartWorldUid;
-                    new SessionControl(session.Actor).WaitForWorld(worldUid, TimeSpan.FromSeconds(plan.JoinSeconds), cancellation);
+                    // The scenario decides whether the player should be protected. A client-only probe may need to
+                    // observe combat or aggro, and ClientRounds/HostRounds protect once when their policy asks for it.
+                    new SessionControl(session.Actor).WaitForWorld(worldUid, TimeSpan.FromSeconds(plan.JoinSeconds), cancellation, protectPlayer: false);
                     session.Actor.VerifyEnvironment(plan.WorldExpectations(worldUid));
+                    CliCapabilities.RequireDirectStartClaimed(session.Actor);
                 }
                 catch { session.Dispose(); throw; }
             }

@@ -61,7 +61,28 @@ Replace those sample coordinates and UID with the pinned plan's values. The comm
 }
 ```
 
-The runner checks the prepared bytes, world UID, exact arrival point, hash and that the store registers its player **before launch**, refuses a same-named local or Steam Cloud character, stages the copy, requires ValheimCLI to report `(<filename>, Local)` at selection, and removes only that copy and its game-made backups after stopping the owned client. This preview option requires a locally launched owned client; attached, hosted and remote-profile clients are refused until they have an equivalent owned staging boundary. The first round then checks the client's own support reading at `arrival`, without a teleport or fallback; a wrong start fails. Later rounds and zone-cycle movements still use teleports.
+The runner checks the prepared bytes, world UID, exact arrival point, hash and that the store registers its player **before launch**, refuses a same-named local or Steam Cloud character, stages the copy, requires ValheimCLI to report `(<filename>, Local)` at selection, and removes only that copy and its game-made backups after stopping the owned client. This preview option requires a locally launched owned client; attached and remote-profile clients are refused until they have an equivalent owned staging boundary. A hosted fixture can use it with `directStart` and a declared dry `arrival` point. The first round checks the client's own support reading at `arrival`, without a teleport or fallback; a wrong start fails. Later rounds and zone-cycle movements still use teleports.
+
+### Directly start a prepared client in its fixture world
+
+For a clean registered test character that has **not** visited the fixture, use `prepare-character-new-world` with the fixture's verified UID and dry arrival coordinates in the command above. For a character that has already visited it, keep using `prepare-character`; the new-world command refuses an existing entry. Neither command creates a character or edits its original. In the owned client's plan, set `directStart: true` alongside `startAtCharacterSave: true` and the `characterStart` block. A dedicated-server run also sets `directStartWorldUid` to the server fixture UID. The runner waits for the server to accept joins *before* launching this client.
+
+For the [hosted sample plan](MyMod.SystemTests/sample-plan-hosted.json), add an `arrival` site and set `client.hostWorld.local: true` for a local-only run (or leave it false for a listen server):
+
+```json
+{
+  "arrival": { "x": 125, "z": -380, "ground": 45.2 },
+  "client": {
+    "directStart": true,
+    "startAtCharacterSave": true,
+    "character": "mymod-test-001",
+    "characterStart": { "preparedFile": "/absolute/evidence/mymod-test-001.fch", "sha256": "<prepared SHA256>", "charactersLocalDirectory": "/absolute/client-save/characters_local", "steamUserDataDirectory": "/absolute/Steam/userdata", "characterStore": "/absolute/test-character-store" },
+    "hostWorld": { "local": true }
+  }
+}
+```
+
+Those are additions to the full pinned plan, not a complete plan by themselves. Run `validate-host` first, then `host` with a fresh evidence directory. The owned client inherits a password variable if a dedicated join uses one; the startup request file holds only its *name*. The new ValheimCLI Standard pack must advertise `valheim.session/direct-start`, and the runner verifies that this process consumed its one-use request. A native local-world smoke on Valheim 1.0.16 established world UID and player readiness; a Toolkit-driven hosted/joined run and a measured A/B are still required before treating this path as fully validated.
 
 This path passed a bounded [native Windows 1.0.16 joined-client check](https://github.com/tvongaza/ValheimTesting/pull/94#issuecomment-5912134571): prepared local copies started grounded at two dry points 1.9 km apart with no first-round teleport; copies whose saved point differed from the plan were refused before launch. The normal teleport flow also passed. The test does not establish other game versions or hosted, attached, or remote-profile clients. Use only a disposable local character, never a personal or Steam Cloud character, and rely on the client's support observation rather than the prepared file alone as arrival evidence.
 
