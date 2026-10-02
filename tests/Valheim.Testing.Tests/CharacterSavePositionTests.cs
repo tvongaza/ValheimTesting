@@ -103,11 +103,11 @@ public class CharacterSavePositionTests
     }
 
     [Fact]
-    public void HostedAndAttachedPlansCannotClaimAPreparedCharacterStart()
+    public void HostedWithoutDirectStartAndAttachedPlansCannotClaimAPreparedCharacterStart()
     {
         var hosted = new ClientRunPlan { Mode = "attach", HostWorld = new HostWorldPlan(), Port = 5556,
             Character = "fresh", StartAtCharacterSave = true, Pinning = "none" };
-        Assert.Contains("hosted worlds", Assert.Throws<ArgumentException>(() => hosted.Validate()).Message);
+        Assert.Contains("requires directStart", Assert.Throws<ArgumentException>(() => hosted.Validate()).Message);
         var attached = new ClientRunPlan { Mode = "attach", Join = "127.0.0.1:2456", Port = 5556,
             Character = "fresh", StartAtCharacterSave = true, Pinning = "none" };
         Assert.Contains("owned client", Assert.Throws<ArgumentException>(() => attached.Validate()).Message);

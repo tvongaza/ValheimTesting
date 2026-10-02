@@ -11,6 +11,8 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public static class CliCapabilities
 {
+    /// <summary>The Standard-pack capability that advertises startup-file support.</summary>
+    public const string DirectStart = "valheim.session/direct-start";
     /// <summary>What <see cref="HostRounds"/> uses on the host: its session state, a confirmed save and the leave to its menu.</summary>
     public static readonly IReadOnlyList<string> HostedRounds = ["valheim.session/state", "valheim.session/save", "valheim.session/leave"];
 

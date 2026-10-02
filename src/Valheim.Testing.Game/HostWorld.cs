@@ -7,7 +7,8 @@ namespace Valheim.Testing.Game;
 
 /// <summary>
 /// The <c>hostWorld</c> section of a <see cref="ClientRunPlan"/>: the client hosts this fixture world from its menu (a
-/// listen server) instead of joining a server. A host's world is the client's own local world, so the runner copies the
+/// listen server), or starts it locally when <see cref="Local"/> is true, instead of joining a dedicated server. The world
+/// is the client's own local world, so the runner copies the
 /// pinned fixture into the client's local worlds for the run (<see cref="HostedWorld"/>) and never uses a world already
 /// there. Unknown fields are refused with the rest of the plan.
 /// </summary>
@@ -26,6 +27,8 @@ public sealed class HostWorldPlan
     public string WorldUid { get; set; } = "";
     /// <summary>Hosts a crossplay world (the game's PlayFab backend, <c>--crossplay true</c>).</summary>
     public bool Crossplay { get; set; }
+    /// <summary>Start the fixture as a local world instead of opening a listen server. Crossplay must be false.</summary>
+    public bool Local { get; set; }
     /// <summary>
     /// The client's data directory, which holds <c>worlds_local</c>. Default: this user's Valheim data directory for the
     /// client's platform (<see cref="HostedWorld.DefaultSaveDirectory"/>); set it when the client runs as another user.
@@ -41,6 +44,7 @@ public sealed class HostWorldPlan
     /// </summary>
     public void Validate(bool pinned)
     {
+        if (Local && Crossplay) throw new ArgumentException("A local fixture world cannot also host crossplay.");
         World.Validate(pinned);
         if (World.Sha256.Count != 0) _ = HostedWorld.NameOf(World.Sha256.Keys);
         if (!long.TryParse(WorldUid, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
@@ -241,11 +245,20 @@ public static class HostWorlds
         string crossplay = world.Crossplay ? "true" : "false";
         try
         {
-            var reply = host.Execute($"cli_start_host_world {worldName} --public false --crossplay {crossplay}", requireSuccess: false); // Exactly once.
-            string? line = reply.Output.FirstOrDefault(l => l.StartsWith("OK: Starting hosted world '", StringComparison.Ordinal));
-            string ending = $"; open=true, public=False, crossplay={(world.Crossplay ? "True" : "False")}, backend={(world.Crossplay ? "PlayFab" : "Steamworks")}, passwordSet=False";
-            if (line == null || !line.StartsWith($"OK: Starting hosted world '{worldName}' using ", StringComparison.Ordinal) || !line.EndsWith(ending, StringComparison.Ordinal))
-                throw new InvalidOperationException("The hosted world did not start as planned: " + (line ?? string.Join(" | ", reply.Output)));
+            var reply = host.Execute(world.Local ? $"cli_start_local_world {worldName}" :
+                $"cli_start_host_world {worldName} --public false --crossplay {crossplay}", requireSuccess: false); // Exactly once.
+            string? line = reply.Output.FirstOrDefault(l => l.StartsWith(world.Local ? "OK: Starting local world '" : "OK: Starting hosted world '", StringComparison.Ordinal));
+            if (world.Local)
+            {
+                if (line == null || !line.StartsWith($"OK: Starting local world '{worldName}' using ", StringComparison.Ordinal))
+                    throw new InvalidOperationException("The local world did not start as planned: " + (line ?? string.Join(" | ", reply.Output)));
+            }
+            else
+            {
+                string ending = $"; open=true, public=False, crossplay={(world.Crossplay ? "True" : "False")}, backend={(world.Crossplay ? "PlayFab" : "Steamworks")}, passwordSet=False";
+                if (line == null || !line.StartsWith($"OK: Starting hosted world '{worldName}' using ", StringComparison.Ordinal) || !line.EndsWith(ending, StringComparison.Ordinal))
+                    throw new InvalidOperationException("The hosted world did not start as planned: " + (line ?? string.Join(" | ", reply.Output)));
+            }
         }
         finally { host.InvalidateEnvironment(); } // A start that may have begun changes the world.
         try
@@ -310,6 +323,8 @@ public sealed class HostRounds
     public required ClientRunPlan Client { get; init; }
     public required ScenarioReport Report { get; init; }
     public required string Output { get; init; }
+    /// <summary>Required for direct start: a dry point matching the prepared character's logout point.</summary>
+    public HeightExpectation? Arrival { get; init; }
     /// <summary>The client's opening step's name; the default says whether it is launched or attached, with plugins pinned.</summary>
     public string? OpenStep { get; init; }
     /// <summary>The rounds' names, which prefix their steps and evidence files: letters, digits, <c>-</c> and <c>_</c>, all different.</summary>
@@ -321,7 +336,10 @@ public sealed class HostRounds
     {
         var plan = Client.HostWorld ?? throw new ArgumentException("Client: the plan has no hostWorld section; a client that joins a server runs with ClientRounds.");
         ClientRounds.CheckRoundNames(Rounds);
+        if (Client.DirectStart && (Arrival == null || !Client.StartAtCharacterSave || Client.CharacterStart == null))
+            throw new ArgumentException("A direct-start hosted world needs an arrival point and staged prepared character.");
         Report.Provenance["role"] = "host";
+        Report.Provenance["hostMode"] = plan.Local ? "local" : "listen";
         Report.Provenance["hostCrossplay"] = plan.Crossplay ? "true" : "false";
         Report.Provenance["hostRounds"] = string.Join(",", Rounds);
         Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
@@ -329,6 +347,7 @@ public sealed class HostRounds
         var completed = new List<string>();
         HostedWorld? world = null;
         ClientSession? session = null;
+        CharacterStartStage? stage = null;
         bool passed = false;
         try
         {
@@ -338,14 +357,28 @@ public sealed class HostRounds
             Report.Step("place the disposable fixture world in the client's local worlds", () => world = HostedWorld.Place(plan, saveDirectory, Output, Client.Pinned));
             var placed = world!;
             Report.Provenance["hostWorld"] = placed.Name;
-            Report.Step(OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
+            if (Client.DirectStart)
+                Report.Step("stage the pinned disposable local character", () => stage = CharacterStartStage.Install(
+                    Client.CharacterStart!, Client.Character, long.Parse(placed.WorldUid, CultureInfo.InvariantCulture), Arrival!));
+            Report.Step(OpenStep ?? (Client.DirectStart ? "launch the owned client directly into its pinned fixture" :
+                Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
                 () => session = openClient());
             var host = session!.Actor;
             Report.Step("the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(host, CliCapabilities.HostedRounds));
             for (int i = 0; i < Rounds.Count; i++)
             {
                 var round = new ClientRound(Rounds[i], i, i == Rounds.Count - 1, host, host, Report, Output);
-                round.Step(i == 0 ? "host the fixture world with the disposable character, protected" : "restart the hosted world, protected",
+                if (i == 0 && Client.DirectStart)
+                {
+                    round.Step("verify the direct-start fixture and player", () =>
+                    {
+                        host.VerifyEnvironment(Client.WorldExpectations(placed.WorldUid));
+                        new SessionControl(host).WaitForWorld(placed.WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
+                    });
+                    round.Step("verify prepared character start at the measurement point", () =>
+                        round.Write("arrival", PlayerPlacement.ObserveArrival(host, Arrival!, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation)));
+                }
+                else round.Step(i == 0 ? "host the fixture world with the disposable character, protected" : "restart the hosted world, protected",
                     () => HostWorlds.Start(host, Client, placed.Name, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation));
                 measure(round);
                 if (!round.Last)
@@ -369,6 +402,9 @@ public sealed class HostRounds
                 try { Report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); released |= session.Owned; }
                 catch (Exception error) { teardown = error; } // Recorded as its own failed step.
                 finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
+            if (stage != null)
+                try { Report.Step("remove only the staged character and its game-made backups", stage.Dispose); }
+                catch (Exception error) { teardown ??= error; }
             if (world != null)
             {
                 if (!released) Report.Provenance["hostWorldLeftInPlace"] = world.WorldsDirectory + " (" + world.Name + ")";

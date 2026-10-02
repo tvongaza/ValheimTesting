@@ -59,6 +59,11 @@ public sealed class HostRoundsTests : IDisposable
                     Hosting = true; Readings = 0;
                     return ScriptedTransport.Ok($"OK: Starting hosted world '{words[1]}' using character 'Tester' (tester, Local); open=true, public=False, crossplay={(crossplay ? "True" : "False")}, backend={(crossplay ? "PlayFab" : "Steamworks")}, passwordSet=False");
                 })
+                .OnPrefix("cli_start_local_world ", command =>
+                {
+                    Hosting = true; Readings = 0;
+                    return ScriptedTransport.Ok($"OK: Starting local world '{command.Split(' ')[1]}' using character 'Tester' (tester, Local)");
+                })
                 .Extension("valheim.session", "state", _ =>
                 {
                     int reading = Hosting ? ++Readings : 0;
@@ -159,6 +164,17 @@ public sealed class HostRoundsTests : IDisposable
         Assert.Equal(0, _opens); Assert.Empty(game.Transport.Commands);
         Assert.Equal("the user's own", File.ReadAllText(Path.Combine(Worlds, existing)));
         Assert.Equal(new[] { existing }, Directory.EnumerateFiles(Worlds).Select(Path.GetFileName).Where(f => !f!.StartsWith("MyWorld", StringComparison.Ordinal)));
+    }
+
+    [Fact] public void LocalFixtureUsesTheLocalStartCommandAcrossRounds()
+    {
+        var plan = Plan(); plan.HostWorld!.Local = true;
+        var game = new Game(Worlds); var report = new ScenarioReport("local");
+        Rounds(report, plan).Run(Open(plan, game), Measure());
+        Assert.True(report.Passed);
+        Assert.Equal(2, game.Transport.Count("cli_start_local_world"));
+        Assert.Equal(0, game.Transport.Count("cli_start_host_world"));
+        Assert.Equal("local", report.Provenance["hostMode"]);
     }
 
     [Fact] public void AHostStartTheGameRefusesStopsBeforeAnyWaitAndStillCleansUp()
