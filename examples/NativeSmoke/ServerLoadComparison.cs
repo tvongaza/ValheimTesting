@@ -6,6 +6,9 @@ public static class ServerLoadComparison
     public static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runArm = null)
     {
         runArm ??= ServerLoad.RunAsync;
+        using var cancel = new CancellationTokenSource();
+        ConsoleCancelEventHandler onCancel = (_, press) => { press.Cancel = true; cancel.Cancel(); };
+        Console.CancelKeyPress += onCancel;
         try
         {
             if (args.Length % 2 != 0) throw new ArgumentException("Every option needs one value.");
@@ -25,10 +28,10 @@ public static class ServerLoadComparison
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
                 throw new ArgumentException("--remove-mod must name exactly one of at least two selected --mod DLLs.");
             string server = Path.GetFullPath(One("--server"));
-            string cliManifest = Path.GetFullPath(One("--cli-manifest"));
-            string cliFiles = Path.GetFullPath(One("--cli-files"));
+            var (cliManifest, cliFiles) = SmokeInputs.Cli(options!, server);
+            string? steamUserdata = options!.ContainsKey("--client") ? SmokeInputs.SteamUserdata(options) : null;
             string[] protectedRoots = options!.TryGetValue("--client", out string? client)
-                ? [server, cliFiles, Path.GetFullPath(client), Path.GetFullPath(options["--steam-userdata"])]
+                ? [server, cliFiles, Path.GetFullPath(client), steamUserdata!]
                 : [server, cliFiles];
             SmokeOutput.RefuseInside(output, protectedRoots);
             var roots = pairs.Where(pair => pair.Key == "--search-root").Select(pair => Path.GetFullPath(pair.Value)).ToList();
@@ -56,6 +59,11 @@ public static class ServerLoadComparison
             }
             before.RequireSameExceptRemovedMod(after, removed);
 
+            Directory.CreateDirectory(output);
+            string adapter = options.TryGetValue("--adapter", out string? chosenAdapter)
+                ? Path.GetFullPath(chosenAdapter)
+                : await SmokeAdapter.BuildAsync(server, before, output, cancel.Token);
+
             // Both arms receive identical arguments and the same packaged fixture; only the selected DLL is omitted.
             // Pin the source installs and explicit assets as well as dependency files before launching either arm.
             var directoryInputs = new[] { server, cliFiles }
@@ -63,19 +71,23 @@ public static class ServerLoadComparison
                     .Select(pair => Path.GetFullPath(pair.Value)))
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Manifest, StringComparer.Ordinal);
-            var fileInputs = new[] { cliManifest, Path.GetFullPath(One("--adapter")) }
+            var fileInputs = new[] { cliManifest, adapter }
                 .Concat(pairs.Where(pair => pair.Key is "--config" or "--plugin-file")
                     .Select(pair => Path.GetFullPath(pair.Value)))
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Hash, StringComparer.Ordinal);
-            Directory.CreateDirectory(output);
             before.Write(Path.Combine(output, "before-dependencies.lock.json"));
             after.Write(Path.Combine(output, "after-dependencies.lock.json"));
 
             string[] Arm(string name, bool omit) => pairs.Where(pair => pair.Key != "--remove-mod" &&
                     !(omit && pair.Key == "--mod" && Path.GetFullPath(pair.Value).Equals(removed, pathComparison)))
                 .SelectMany(pair => pair.Key == "--output" ? new[] { pair.Key, Path.Combine(output, name) }
-                    : new[] { pair.Key, pair.Value }).ToArray();
+                    : new[] { pair.Key, pair.Value })
+                .Concat(options.ContainsKey("--cli-manifest") ? [] : ["--cli-manifest", cliManifest])
+                .Concat(options.ContainsKey("--cli-files") ? [] : ["--cli-files", cliFiles])
+                .Concat(steamUserdata == null || options.ContainsKey("--steam-userdata") ? [] : ["--steam-userdata", steamUserdata])
+                .Concat(options.ContainsKey("--adapter") ? [] : ["--adapter", adapter])
+                .ToArray();
             int beforeResult = await runArm(Arm("before", omit: false));
             // A native failure is precisely the case where removing one mod can be informative. An input refusal
             // cannot establish a mod interaction, so do not launch another arm after one.
@@ -92,10 +104,11 @@ public static class ServerLoadComparison
                 : $"SERVER_MODSET_AB_FAIL: full set exit {beforeResult}, removed-mod set exit {afterResult}; inspect both private arm results before attributing the difference.");
             return beforeResult != 0 ? beforeResult : afterResult;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or HttpRequestException or OperationCanceledException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             return 3;
         }
+        finally { Console.CancelKeyPress -= onCancel; }
     }
 }

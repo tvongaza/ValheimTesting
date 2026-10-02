@@ -5,50 +5,39 @@ Use the smallest run that can answer the question. A load smoke checks setup and
 ## Prepare once
 
 - Use a **prepared copy** of the game or dedicated server, not a live save. The runner copies that install again and uses its packaged game-created world and character. Give each run a new, private output directory.
-- Build the mod DLLs and the [NativeSmoke server adapter](../examples/NativeSmoke/SessionAdapter/README.md) against the matching game and ValheimCLI core. Supply one reviewed ValheimCLI capability manifest and its matching files. Do not put test-library packages in `BepInEx/plugins`.
+- Build the mod DLLs against the matching game. The native-smoke tool builds its [test-only server adapter](../examples/NativeSmoke/SessionAdapter/README.md) against the selected game and ValheimCLI core. Keep one coherent ValheimCLI capability manifest and its matching files available; supply its location if discovery finds none or several. Do not put test-library packages in `BepInEx/plugins`.
 - Keep the initial check cheap. If expensive world generation is irrelevant to loading, supply a known test config with `--config`. Use a small fixture plugin when checking the runner itself; run the real mod when investigating a real failure.
 - Run one native campaign at a time per game install, Steam account and fixture character. The output may contain a server password, account identifiers and machine paths. Keep it private.
 
-The commands are shown from the ValheimTesting repository root. Replace the example paths with prepared installs and built artifacts. `--output` **must name a directory that does not exist yet**.
+Install the published preview tool with `dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease`. The commands below work from any directory; no ValheimTesting checkout is needed. Replace the example paths with prepared installs and built artifacts. `--output` **must name a directory that does not exist yet**. If CLI discovery is ambiguous, add `--cli-manifest FILE --cli-files DIR` from one build; if the Steam account root is not found uniquely, add `--steam-userdata DIR`.
 
 ## First, prove each server mod loads alone
 
 ```sh
-dotnet run --project examples/NativeSmoke -c Release -- server-load \
+valheim-test server-load \
   --server /path/to/prepared/server \
   --mod /path/to/FirstMod.dll \
-  --adapter /path/to/NativeSmoke.SessionAdapter.dll \
-  --cli-manifest /path/to/cli-capabilities.json \
-  --cli-files /path/to/cli-build \
   --output /private/runs/first-alone
 ```
 
 Repeat with `SecondMod.dll` and a new output directory. `SERVER_LOAD_PASS` establishes that the selected server plugins loaded, the packaged world identity matched and the server accepted a game connection. It **does not** establish that a client joined. To test a claim of vanilla-compatible server-only loading, add a prepared client and Steam userdata directory:
 
 ```sh
-dotnet run --project examples/NativeSmoke -c Release -- server-load \
+valheim-test server-load \
   --server /path/to/prepared/server \
   --mod /path/to/FirstMod.dll \
-  --adapter /path/to/NativeSmoke.SessionAdapter.dll \
   --client /path/to/prepared/client \
-  --steam-userdata /path/to/Steam/userdata \
-  --cli-manifest /path/to/cli-capabilities.json \
-  --cli-files /path/to/cli-build \
   --output /private/runs/first-with-clean-client
 ```
 
 `SERVER_JOIN_PASS` adds evidence that a client with ValheimCLI but without the selected server mods entered the world. The runner pins the selected mods absent on that client. Use this path only when their absence is the compatibility claim; a mod required on both peers needs a different scenario.
 
-For a **client-side** pair, omit `server-load`, use `--game` and `--steam-userdata`, and repeat `--mod`:
+For a **client-side** pair, use `start` with `--game` and repeat `--mod`:
 
 ```sh
-dotnet run --project examples/NativeSmoke -c Release -- \
+valheim-test start \
   --game /path/to/prepared/Valheim \
   --mod /path/to/FirstMod.dll --mod /path/to/SecondMod.dll \
-  --source source-commit \
-  --cli-manifest /path/to/cli-capabilities.json \
-  --cli-files /path/to/cli-build \
-  --steam-userdata /path/to/Steam/userdata \
   --output /private/runs/client-pair
 ```
 
@@ -57,12 +46,9 @@ dotnet run --project examples/NativeSmoke -c Release -- \
 Select both server mods in one run. Supply their required external assets with `--plugin-file` or `--plugin-dir`, and explicit dependency search locations with `--search-root`; repeat each option as needed. The runner resolves the **combined** dependency set before it launches either process.
 
 ```sh
-dotnet run --project examples/NativeSmoke -c Release -- server-load \
+valheim-test server-load \
   --server /path/to/prepared/server \
   --mod /path/to/FirstMod.dll --mod /path/to/SecondMod.dll \
-  --adapter /path/to/NativeSmoke.SessionAdapter.dll \
-  --cli-manifest /path/to/cli-capabilities.json \
-  --cli-files /path/to/cli-build \
   --output /private/runs/pair
 ```
 
@@ -71,13 +57,10 @@ If each mod loads alone but the pair does not, compare the two `dependencies.loc
 For a controlled **remove-one-mod** check, including a full set that fails during the game run, use `server-load-ab`:
 
 ```sh
-dotnet run --project examples/NativeSmoke -c Release -- server-load-ab \
+valheim-test server-load-ab \
   --server /path/to/prepared/server \
   --mod /path/to/FirstMod.dll --mod /path/to/SecondMod.dll \
   --remove-mod /path/to/SecondMod.dll \
-  --adapter /path/to/NativeSmoke.SessionAdapter.dll \
-  --cli-manifest /path/to/cli-capabilities.json \
-  --cli-files /path/to/cli-build \
   --output /private/runs/remove-second
 ```
 

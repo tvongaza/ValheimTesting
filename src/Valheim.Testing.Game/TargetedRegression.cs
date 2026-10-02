@@ -479,8 +479,11 @@ public sealed class TargetedRegression
     /// <paramref name="rounds"/> and <paramref name="measure"/>, refusing a changed install right before the launch and
     /// requiring the scenario's capabilities live before its first round. Scans the client's logs and writes
     /// <c>result.json</c> and <c>junit.xml</c> in every outcome. <paramref name="output"/> must not exist yet.
+    /// <paramref name="afterPinnedClientOpened"/> runs once the owned client has reached its menu with the selected
+    /// plugins verified; a caller can record cold-start timing there without treating later world entry as plugin load.
     /// </summary>
-    public ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure, CancellationToken cancellation = default)
+    public ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure,
+        CancellationToken cancellation = default, Action<ScenarioReport>? afterPinnedClientOpened = null)
     {
         ArgumentNullException.ThrowIfNull(measure);
         output = Path.GetFullPath(output);
@@ -516,6 +519,7 @@ public sealed class TargetedRegression
                     MarkLoaderSmoke(staged.Plan.Install);
                     report.Provenance["bepInExMenuSmoke"] = "passed: fresh BepInEx log, pinned plugins and main menu";
                 }
+                afterPinnedClientOpened?.Invoke(report);
                 return client;
             }, round =>
             {

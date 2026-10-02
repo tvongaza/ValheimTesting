@@ -28,10 +28,11 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 | `Valheim.Testing.Doubles` | Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, compiled into your test project; every type is partial | source (C# 10) |
 | `Valheim.Testing.Bindings` | Offline check that a built mod's references into the game assemblies still bind (Mono.Cecil); missing members fail, access changes are reported separately | netstandard2.0 |
 | `Valheim.Testing.Bindings.Tool` | The same check as the `valheim-bindings` .NET tool, for a mod's CI before any native run | net10.0 |
+| `Valheim.Testing.NativeSmoke` | `valheim-test`: one-command disposable mod-load checks and an editable NuGet-only consumer project | .NET 10 tool |
 
 The dependency goes **ValheimTesting → ValheimCLI**, never the reverse. Game-side extension API and observers stay in ValheimCLI. Roads and MWL own their optional adapters and scenarios. No test package belongs in an ordinary player's plugin folder.
 
-Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. All four packages are on NuGet.org: [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing), [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli), [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) and [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles). ValheimTesting publishes the transport as `Valheim.Testing.Cli` so it is clearly this toolkit's packaging, not an official ValheimCLI release; upstream's own project is `Valheim.Cli.Testing`. Bootstrap builds it from tracked source at the pinned commit into an ignored local feed; it does not compile or launch the game plugin.
+Until upstream merges the required transport/API changes, `cli-dependency.json` pins our ValheimCLI fork by full commit and exact package version. The packages, including the [native-smoke tool](https://www.nuget.org/packages/Valheim.Testing.NativeSmoke), are published on NuGet.org as releases become available. ValheimTesting publishes the transport as `Valheim.Testing.Cli` so it is clearly this toolkit's packaging, not an official ValheimCLI release; upstream's own project is `Valheim.Cli.Testing`. Bootstrap builds it from tracked source at the pinned commit into an ignored local feed; it does not compile or launch the game plugin.
 
 ## Validate or develop the framework (no game)
 
