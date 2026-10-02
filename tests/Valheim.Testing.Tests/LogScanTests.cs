@@ -211,6 +211,8 @@ public sealed class LogScanTests : IDisposable
     [InlineData("[Error  : Unity Log] Could not find material MyMod/Glow. Make sure the Video shaders are included in your build, in the Built-in Shader Settings section of the Graphics Settings.")]
     [InlineData("[Error  : Unity Log] AsyncResourceUpload failed. Retrying bundle mymod_assets")]
     [InlineData("[Error  : Unity Log] Failed to play intro cinematic")]
+    [InlineData("[Error  :   My Mod] AsyncResourceUpload failed.")]
+    [InlineData("[Error  : Unity Log] Mod renderer: AsyncResourceUpload failed.")]
     [InlineData("[Error  :   My Mod] Could not find video decode shader pass Default in shader MyMod/Video")]
     public void OtherErrorsFromTheSameSystemsStillFail(string line)
     {

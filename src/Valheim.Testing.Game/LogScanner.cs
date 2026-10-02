@@ -123,8 +123,9 @@ public static class LogScanner
         // 2026 (Valheim 1.0.16, Unity 6000.0.75f1; Windows, Linux and macOS, with or without mods) logged 12 to 14 of them, and
         // no client log had one. Linux and macOS servers write them to the BepInEx log as Unity Log errors, which fail as
         // unknown-error otherwise; the Windows server writes them only to its Unity log. Matched by their whole text, so
-        // another error from the same systems still counts.
-        new("headless-server-graphics", LogSeverity.Warning, new(@"(?:AsyncResourceUpload failed\.|This custom render path shader needs to have at least 1 passes\."
+        // another error from the same systems still counts. Only an unprefixed Unity line or a Unity Log error record
+        // may match; a mod's own BepInEx error ending in the same words remains unknown-error.
+        new("headless-server-graphics", LogSeverity.Warning, new(@"^(?:\[Error\s+:\s*Unity Log\]\s*)?(?:AsyncResourceUpload failed\.|This custom render path shader needs to have at least 1 passes\."
             + @"|Could not find material Hidden/Video(?:Decode|Composite)\. Make sure the Video shaders are included in your build, in the Built-in Shader Settings section of the Graphics Settings\."
             + @"|Could not find video decode shader pass \w+ in shader <not found>|\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}: Failed to play intro cinematic)$", Options)),
     ];
