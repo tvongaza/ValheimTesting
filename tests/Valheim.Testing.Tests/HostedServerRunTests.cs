@@ -776,5 +776,27 @@ public sealed class HostedRetireScriptTests : IDisposable
         Assert.True(File.Exists(Path.Combine(other, "w.db")));
         var wrongRun = await host.RunAsync(HostedRunScripts.Retire, new Dictionary<string, string>(variables) { ["run"] = "another-run", ["files"] = "" }, GameHostChecks.Generous);
         Assert.Equal(3, wrongRun.ExitCode);
+
+        // The keep destination is as constrained as the directory being removed.
+        string second = Path.Combine(run, "runtime"); Directory.CreateDirectory(second);
+        File.WriteAllText(Path.Combine(second, "a.txt"), "kept");
+        string unrelated = Path.Combine(_root, "unrelated"); Directory.CreateDirectory(unrelated);
+        var wrongKeep = await host.RunAsync(HostedRunScripts.Retire,
+            new Dictionary<string, string>(variables) { ["keep"] = unrelated, ["files"] = B64("a.txt") }, GameHostChecks.Generous);
+        Assert.Equal(3, wrongKeep.ExitCode);
+        Assert.True(File.Exists(Path.Combine(second, "a.txt")));
+        Assert.False(File.Exists(Path.Combine(unrelated, "a.txt")));
+
+        var existingKeep = await host.RunAsync(HostedRunScripts.Retire,
+            new Dictionary<string, string>(variables) { ["files"] = B64("a.txt") }, GameHostChecks.Generous);
+        Assert.Equal(3, existingKeep.ExitCode);
+        Assert.True(File.Exists(Path.Combine(second, "a.txt")));
+        Directory.Delete(keep, recursive: true);
+        Directory.CreateSymbolicLink(keep, unrelated);
+        var linkedKeep = await host.RunAsync(HostedRunScripts.Retire,
+            new Dictionary<string, string>(variables) { ["files"] = B64("a.txt") }, GameHostChecks.Generous);
+        Assert.Equal(3, linkedKeep.ExitCode);
+        Assert.True(File.Exists(Path.Combine(second, "a.txt")));
+        Assert.False(File.Exists(Path.Combine(unrelated, "a.txt")));
     }
 }

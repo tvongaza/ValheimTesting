@@ -557,6 +557,10 @@ internal static class HostedRunScripts
         case "$run" in ''|*/*|.|..) exit 3;; esac
         [ "$(basename -- "$runtime")" = runtime ] || exit 3
         [ "$(basename -- "$(dirname -- "$runtime")")" = "$run" ] || exit 3
+        [ "$(basename -- "$keep")" = runtime-changes ] || exit 3
+        [ "$(dirname -- "$keep")" = "$(dirname -- "$runtime")" ] || exit 3
+        # A reused or linked destination could overwrite evidence outside this run. Leave the runtime for review instead.
+        [ ! -e "$keep" ] && [ ! -L "$keep" ] || exit 3
         if [ ! -d "$runtime" ] || [ -L "$runtime" ]; then mkdir -p -- "$keep" || exit 3; echo "VT-RETIRED 0 0"; exit 0; fi
         mkdir -p -- "$keep" || exit 3
         real=$(readlink -f -- "$runtime") || exit 3
@@ -574,7 +578,8 @@ internal static class HostedRunScripts
             mkdir -p -- "$(dirname -- "$keep/$rel")" && cp -p -- "$src" "$keep/$rel" || exit 3
             kept=$((kept + size))
         done <<< "$files"
-        bytes=$(du -sb -- "$runtime" | cut -f1)
+        bytes=$(du -sb -- "$runtime") || exit 3
+        bytes=${bytes%%$'\t'*}
         rm -rf -- "$runtime" || exit 3
         printf 'VT-RETIRED %s %s\n' "$bytes" "$kept"
         """.ReplaceLineEndings("\n");
