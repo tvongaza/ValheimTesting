@@ -103,6 +103,25 @@ public sealed class ClientRoundsTests : IDisposable
     private static string[] Failed(ScenarioReport report) => report.Steps.Where(s => !s.Passed).Select(s => s.Name).ToArray();
     private bool Wrote(string name) => File.Exists(Path.Combine(_output, name));
 
+    [Fact]
+    public void LoadOnlyJoinCanLeaveProtectionOffWithoutSkippingWorldAndPluginChecks()
+    {
+        var plan = Plan();
+        var report = new ScenarioReport("load-only");
+        new ClientRounds
+        {
+            Client = plan, WorldUid = WorldUid, Report = report, Output = _output,
+            WaitUntilJoinable = server => OwnedServerSession.WaitUntilJoinable(server, "test.mod/session", TimeSpan.FromSeconds(5)),
+            RestartServer = Server, Rounds = ["first"], ProtectPlayer = false,
+        }.Run(Server(), Open(plan), Measure());
+
+        Assert.True(report.Passed);
+        Assert.Equal(0, _client.Count("cli_set_player_safety true"));
+        Assert.Equal(1, _client.Count("cli_extension valheim.session/join"));
+        Assert.Equal(1, _client.Count("cli_extension valheim.session/leave"));
+        Assert.Equal(1, _process.Stops);
+    }
+
     [Fact] public void TwoRoundsJoinMeasureSaveRestartRejoinAndStopTheOwnedClientOnce()
     {
         var report = new ScenarioReport("rounds");

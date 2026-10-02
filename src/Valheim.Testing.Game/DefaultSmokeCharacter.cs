@@ -45,6 +45,19 @@ public static class DefaultSmokeCharacter
     }
 
     /// <summary>
+    /// Stages this registered fixture under its exact local filename for one owned client run. Dispose the returned
+    /// scope only after the client has stopped; it removes only that filename and its game-made backups. A collision
+    /// with an existing local or Steam Cloud character is refused before writing anything.
+    /// </summary>
+    public static IDisposable StageForRun(DisposableCharacterStore store, string charactersLocalDirectory,
+        string steamUserDataDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        return CharacterStartStage.InstallRegistered(store.Root, Name, charactersLocalDirectory,
+            steamUserDataDirectory, Name);
+    }
+
+    /// <summary>
     /// Reuses a valid store or repairs a missing/changed copy in a directory previously made by <see cref="Prepare"/>.
     /// It refuses an unfamiliar directory or any extra file; it never repairs a live or personal character folder.
     /// </summary>

@@ -35,4 +35,20 @@ public sealed class DefaultSmokeWorldTests : IDisposable
         using (var stream = new FileStream(data, FileMode.Append)) stream.WriteByte(1);
         Assert.Throws<InvalidOperationException>(() => WorldFixture.Verify(fixture, hashes));
     }
+
+    [Fact]
+    public void DedicatedSaveRootContainsOnlyTheVerifiedWorldInWorldsLocal()
+    {
+        string root = Path.Combine(_root, "dedicated");
+        var identity = DefaultSmokeWorld.PrepareServerSaveRoot(root);
+        Assert.Equal(DefaultSmokeWorld.Uid, identity.UidText);
+        Assert.Equal(new[] { "worlds_local" }, Directory.GetDirectories(root).Select(Path.GetFileName));
+        string world = Path.Combine(root, "worlds_local", DefaultSmokeWorld.Name);
+        Assert.Equal(5, Directory.GetFiles(world).Length);
+        string hosted = Path.Combine(_root, "hosted");
+        DefaultSmokeWorld.Prepare(hosted);
+        Assert.Equal(WorldFixture.Manifest(hosted).Values.Order(StringComparer.Ordinal),
+            WorldFixture.Manifest(root).Values.Order(StringComparer.Ordinal));
+        Assert.Throws<IOException>(() => DefaultSmokeWorld.PrepareServerSaveRoot(root));
+    }
 }

@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
+using valheim_cli.Testing;
 using Xunit;
 
 public class JoinableTests
@@ -38,5 +39,46 @@ public class JoinableTests
         using var server = Server(_ => new { source = "owned-test-session", complete = true, acceptingConnections = false }, out _);
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
         Assert.ThrowsAny<OperationCanceledException>(() => OwnedServerSession.WaitUntilJoinable(server, "my.mod/session", TimeSpan.FromSeconds(30), cancel.Token));
+    }
+
+    [Fact] public void AReadinessPinCommandThatNeverStartedIsRetriedWithFreshPins()
+    {
+        int checks = 0;
+        using var transport = new ScriptedTransport()
+            .Extension("my.mod", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = true })
+            .OnPrefix("cli_expect", _ => ++checks == 2
+                ? new CommandResult { Ok = false, ErrorCode = "command_failed", Message = "ERROR: code=command_timeout message=Command #2 had not started and will not run." }
+                : ScriptedTransport.Ok("OK: EXPECT"));
+        using var server = transport.Actor();
+        OwnedServerSession.WaitUntilJoinable(server, "my.mod/session", TimeSpan.FromSeconds(5));
+        Assert.Equal(4, checks);
+        Assert.Equal(1, transport.Count("cli_extension my.mod/session"));
+    }
+
+    [Fact] public void AReadinessObservationThatNeverStartedIsRetried()
+    {
+        int reads = 0;
+        using var transport = new ScriptedTransport().Extension("my.mod", "session", _ =>
+            new { source = "owned-test-session", complete = true, acceptingConnections = true })
+            .OnPrefix("cli_extension my.mod/session", _ => ++reads == 1
+                ? new CommandResult { Ok = false, ErrorCode = "command_failed", Message = "ERROR: code=command_timeout message=Command #4 had not started and will not run." }
+                : ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("my.mod", new { source = "owned-test-session", complete = true, acceptingConnections = true })));
+        using var server = transport.Actor();
+        OwnedServerSession.WaitUntilJoinable(server, "my.mod/session", TimeSpan.FromSeconds(5));
+        Assert.Equal(2, reads);
+    }
+
+    [Fact] public void AFailedReadinessPinIsNotTreatedAsWorldLoading()
+    {
+        int checks = 0;
+        using var transport = new ScriptedTransport()
+            .Extension("my.mod", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = true })
+            .OnPrefix("cli_expect", _ => ++checks == 2
+                ? new CommandResult { Ok = false, ErrorCode = "command_failed", Message = "ERROR: code=expectation_mismatch mismatches=1" }
+                : ScriptedTransport.Ok("OK: EXPECT"));
+        using var server = transport.Actor();
+        Assert.Contains("expectation_mismatch", Assert.Throws<InvalidOperationException>(() =>
+            OwnedServerSession.WaitUntilJoinable(server, "my.mod/session", TimeSpan.FromSeconds(5))).Message);
+        Assert.Equal(2, checks);
     }
 }

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Test-only server plugin. Build against the exact Valheim and ValheimCLI used by the disposable runtime. -->
+  <Import Project="../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>10</LangVersion>
+    <Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>NativeSmoke.SessionAdapter</AssemblyName>
+    <Version>0.1.0</Version>
+    <UseValheimCli>true</UseValheimCli>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/Valheim.Testing.Adapter/Adapter/TestExtension.cs" Link="ValheimTestingAdapter/TestExtension.cs" />
+    <Compile Include="../../../src/Valheim.Testing.Adapter/Adapter/Members.cs" Link="ValheimTestingAdapter/Members.cs" />
+  </ItemGroup>
+  <Import Project="../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>

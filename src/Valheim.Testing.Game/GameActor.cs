@@ -94,8 +94,14 @@ public sealed class GameActor : IDisposable
             if (_pinned)
             {
                 _verified = false;
-                CheckEnvironment();
-                _verified = true;
+                try { CheckEnvironment(); _verified = true; }
+                catch (InvalidOperationException error) when (IsUnstartedCommandTimeout(error))
+                {
+                    // The CLI explicitly says the pin check never ran. Permit a later read-only retry,
+                    // which will issue a fresh pin check before observing anything.
+                    _verified = true;
+                    throw;
+                }
             }
             CommandResult result = _transport.Execute(command, CommandTimeout);
             if (requireSuccess) RequireSuccess(result);
@@ -155,6 +161,9 @@ public sealed class GameActor : IDisposable
     }
     private static void RequireSuccess(CommandResult result)
     { if (!result.Ok) throw new InvalidOperationException($"{result.ErrorCode}: {result.Message}"); }
+    internal static bool IsUnstartedCommandTimeout(InvalidOperationException error) =>
+        error.Message.StartsWith("command_failed: ERROR: code=command_timeout ", StringComparison.Ordinal) &&
+        error.Message.Contains("had not started and will not run", StringComparison.Ordinal);
     public Capability RequireCapability(string path, int schemaVersion = 1)
     {
         var reply = CliCapabilities.ListingReply(this); // An old ValheimCLI without cli_extensions is named as one.
