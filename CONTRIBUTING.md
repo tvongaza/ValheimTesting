@@ -35,7 +35,7 @@ dotnet run scripts/api-docs.cs
 ```
 
 Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game examples and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout.
-On Windows use `pwsh -File scripts/run.ps1 bootstrap` and `pwsh -File scripts/run.ps1 validate`. The launchers check both NuGet caches before the .NET SDK's first restore and select a writable temporary cache if necessary.
+On Windows use `pwsh -File scripts/run.ps1 bootstrap` and `pwsh -File scripts/run.ps1 validate`. The launchers check both NuGet caches before the .NET SDK's first restore and select a writable temporary cache if necessary. If the SDK's file-based app state directory is not writable, they run the script as a converted project in `artifacts/runfile`.
 
 For a quick iteration before the full local check:
 

@@ -1,4 +1,5 @@
-// Run after bootstrap-cli.cs and validate.cs; checks cache selection and the first script restore.
+// Run after bootstrap-cli.cs and validate.cs; checks cache selection, the first script restore and the launchers'
+// project fallback when the SDK's file-based app state directory is not writable (#210).
 //   dotnet run scripts/test-nuget-cache-preflight.cs
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -46,11 +47,32 @@ try
         if (!explicitCache.Contains("NuGet caches writable before dotnet run: packages=" + packages) ||
             !explicitCache.Contains("HTTP=" + http))
             throw new InvalidOperationException(task + " launcher did not preserve writable explicit caches: " + explicitCache);
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string stateLine = explicitCache.Split('\n').FirstOrDefault(line => line.StartsWith("File-based app state writable: ")) ??
+            throw new InvalidOperationException(task + " launcher did not report the file-based app state directory: " + explicitCache);
+        if (home.Length > 1 && stateLine.Contains(home, StringComparison.OrdinalIgnoreCase) ||
+            OperatingSystem.IsWindows() && !stateLine.Contains("%TEMP%"))
+            throw new InvalidOperationException(task + " launcher printed the home directory: " + stateLine);
+        // Block only the SDK's state directory; both runs must build the script as a workspace project, the second
+        // reusing the first's project files.
+        string project = Path.Combine(fresh, "artifacts", "runfile", task == "bootstrap" ? "bootstrap-cli" : "validate");
+        DateTime? converted = null;
+        for (int run = 0; run < 2; run++)
+        {
+            string blockedState = RunLauncher(fresh, task, packages, http, blockState: true);
+            if (!blockedState.Contains("File-based app state not writable: ") || !blockedState.Contains("as the project artifacts/runfile/") ||
+                !blockedState.Contains("NuGet caches writable"))
+                throw new InvalidOperationException(task + " launcher did not fall back to a project: " + blockedState);
+            DateTime written = File.GetLastWriteTimeUtc(Directory.GetFiles(project, "*.csproj").Single());
+            if (converted is { } first && first != written)
+                throw new InvalidOperationException(task + " launcher rewrote an unchanged project, so its build is not reused.");
+            converted = written;
+        }
     }
     if (Directory.EnumerateFiles(packages, ".valheimtesting-write-*", SearchOption.AllDirectories).Any() ||
         Directory.EnumerateFiles(http, ".valheimtesting-write-*", SearchOption.AllDirectories).Any())
         throw new InvalidOperationException("The write probe left a file in a NuGet cache.");
-    Console.WriteLine("NuGet cache preflight passed for both scripts.");
+    Console.WriteLine("NuGet cache and file-based app state preflight passed for both scripts.");
 }
 finally
 {
@@ -58,12 +80,13 @@ finally
 }
 return 0;
 
-string RunLauncher(string fresh, string task, string packages, string http)
+string RunLauncher(string fresh, string task, string packages, string http, bool blockState = false)
 {
     var info = new ProcessStartInfo(OperatingSystem.IsWindows() ? "pwsh" : "bash")
     {
         WorkingDirectory = fresh, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true
     };
+    if (blockState) BlockFileBasedAppState(info);
     info.ArgumentList.Add(Path.Combine(fresh, "scripts", OperatingSystem.IsWindows() ? "run.ps1" : "run.sh"));
     info.ArgumentList.Add(task);
     info.ArgumentList.Add("--cache-preflight-only");
@@ -75,6 +98,31 @@ string RunLauncher(string fresh, string task, string packages, string http)
     process.WaitForExit();
     if (process.ExitCode != 0) throw new InvalidOperationException(task + " launcher failed: " + error + output);
     return output;
+}
+
+// The SDK keeps file-based app state in dotnet/runfile under the temporary directory on Windows and LocalApplicationData
+// elsewhere. Windows and Linux read those from the environment, so point them where dotnet/runfile is a file. macOS reads
+// the account's home, so deny writes beneath the real directory instead, as a restricted workspace does.
+void BlockFileBasedAppState(ProcessStartInfo info)
+{
+    string state = Path.Combine(test, "state");
+    Directory.CreateDirectory(Path.Combine(state, "dotnet"));
+    File.WriteAllText(Path.Combine(state, "dotnet", "runfile"), "not a directory");
+    if (OperatingSystem.IsWindows())
+    {
+        info.Environment["TMP"] = state;
+        info.Environment["TEMP"] = state;
+    }
+    else if (OperatingSystem.IsMacOS())
+    {
+        string runfile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "dotnet", "runfile");
+        string shell = info.FileName;
+        info.FileName = "/usr/bin/sandbox-exec";
+        info.ArgumentList.Add("-p");
+        info.ArgumentList.Add("(version 1)(allow default)(deny file-write* (subpath \"" + runfile.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"))");
+        info.ArgumentList.Add(shell);
+    }
+    else info.Environment["XDG_DATA_HOME"] = state;
 }
 
 string Run(string script, string packages, string http, bool noRestore)

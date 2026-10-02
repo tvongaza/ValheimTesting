@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check NuGet's caches before dotnet run restores a file-based script.
+# Check NuGet's caches and the SDK's file-based app state before dotnet run restores a file-based script.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -51,5 +51,58 @@ else
   printf 'NuGet caches blocked before dotnet run; using packages=%s; HTTP=%s\n' "$packages" "$http"
 fi
 
-dotnet restore "scripts/$script" --force
-exec dotnet run "scripts/$script" --no-restore -- "$@"
+# The SDK builds a file-based script under a per-user directory that no setting moves (#210): the temporary directory
+# on Windows, LocalApplicationData elsewhere. .NET reads that on macOS from the account, not $HOME; on Linux it honours
+# an absolute XDG_DATA_HOME, then HOME, then the account's home.
+home=${HOME:-}
+if [[ "$(uname -s)" == Darwin || -z "$home" ]]; then
+  user=$(id -un)
+  [[ "$user" =~ ^[A-Za-z0-9._-]+$ ]] && eval "home=~$user"
+fi
+if [[ "$(uname -s)" == Darwin ]]; then
+  runfile="$home/Library/Application Support/dotnet/runfile"
+elif [[ "${XDG_DATA_HOME:-}" == /* ]]; then
+  runfile=$XDG_DATA_HOME/dotnet/runfile
+else
+  runfile=$home/.local/share/dotnet/runfile
+fi
+shown=$runfile
+[[ -n "$home" && "$runfile" == "$home"/* ]] && shown="~${runfile#"$home"}"
+
+# The SDK creates one owner-only directory per script there.
+can_create_directory() {
+  local directory=$1 probe
+  (umask 077 && mkdir -p "$directory") 2>/dev/null || return 1
+  probe=$(mktemp -d "$directory/.valheimtesting-write-XXXXXXXX" 2>/dev/null) || return 1
+  rmdir "$probe"
+}
+
+if can_create_directory "$runfile"; then
+  printf 'File-based app state writable: %s\n' "$shown"
+  dotnet restore "scripts/$script" --force
+  exec dotnet run "scripts/$script" --no-restore -- "$@"
+fi
+
+# Run the script as the project the SDK converts it to: that builds in the workspace instead. Project files are
+# replaced only when the conversion changes, so its build is reused across runs.
+name=${script%.cs}
+project=artifacts/runfile/$name
+printf 'File-based app state not writable: %s; running scripts/%s as the project %s\n' "$shown" "$script" "$project"
+mkdir -p "$project"
+converted=$(mktemp -d "$project.new-XXXXXXXX")
+trap 'rm -rf "$converted"' EXIT
+rmdir "$converted"
+if ! dotnet project convert "scripts/$script" --output "$converted" >/dev/null; then
+  printf 'Could not convert scripts/%s to a project. Grant write access to %s; no SDK setting moves it.\n' "$script" "$shown" >&2
+  exit 1
+fi
+for file in "$project"/*; do
+  if [[ -f "$file" && ! -e "$converted/${file##*/}" ]]; then rm "$file"; fi
+done
+for file in "$converted"/*; do
+  cmp -s "$file" "$project/${file##*/}" || cp "$file" "$project/"
+done
+rm -rf "$converted"
+trap - EXIT
+dotnet restore "$project/$name.csproj" --force
+exec dotnet run --project "$project/$name.csproj" --no-restore -- "$@"
