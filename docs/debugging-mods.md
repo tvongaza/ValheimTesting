@@ -4,12 +4,14 @@ Use the smallest run that can answer the question. A load smoke checks setup and
 
 ## Prepare once
 
-- Use a **prepared copy** of the game or dedicated server, not a live save. The runner copies that install again and uses its packaged game-created world and character. Give each run a new, private output directory.
+- Use a compatible game or dedicated-server install, not a live save. The runner copies that install and uses its packaged game-created world and character. An unmodded install can receive an explicit [reviewed BepInEx/Doorstop package](bepinex-loader-package.md) in its disposable copy: `--loader-package` for the server and, with `--client`, `--client-loader-package` for a different client package. Give each run a new, private output directory.
 - Build the mod DLLs against the matching game. The native-smoke tool builds its [test-only server adapter](../examples/NativeSmoke/SessionAdapter/README.md) against the selected game and ValheimCLI core. Keep one coherent ValheimCLI capability manifest and its matching files available; supply its location if discovery finds none or several. Do not put test-library packages in `BepInEx/plugins`.
 - Keep the initial check cheap. If expensive world generation is irrelevant to loading, supply a known test config with `--config`. Use a small fixture plugin when checking the runner itself; run the real mod when investigating a real failure.
 - Run one native campaign at a time per game install, Steam account and fixture character. The output may contain a server password, account identifiers and machine paths. Keep it private.
 
 Install the published preview tool with `dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease`. The commands below work from any directory; no ValheimTesting checkout is needed. Replace the example paths with prepared installs and built artifacts. `--output` **must name a directory that does not exist yet**. If CLI discovery is ambiguous, add `--cli-manifest FILE --cli-files DIR` from one build; if the Steam account root is not found uniquely, add `--steam-userdata DIR`.
+
+The loader-package options are part of this checkout's candidate tool until its next release. To try them before publication, bootstrap this checkout and run `dotnet run --project examples/NativeSmoke -- server-load ...` in place of `valheim-test server-load ...`; the [NativeSmoke example](../examples/NativeSmoke/README.md#disposable-native-mod-load-smoke) shows the complete option set. Check the installed tool's help after release rather than assuming an older preview supports these options.
 
 ## First, prove each server mod loads alone
 

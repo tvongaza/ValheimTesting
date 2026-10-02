@@ -28,11 +28,15 @@ public static class ServerLoadComparison
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
                 throw new ArgumentException("--remove-mod must name exactly one of at least two selected --mod DLLs.");
             string server = Path.GetFullPath(One("--server"));
+            var serverLoader = options!.TryGetValue("--loader-package", out string? loaderFile)
+                ? BepInExLoaderPackage.Read(loaderFile) : null;
+            var clientLoader = options.TryGetValue("--client-loader-package", out string? clientLoaderFile)
+                ? BepInExLoaderPackage.Read(clientLoaderFile) : null;
             var (cliManifest, cliFiles) = SmokeInputs.Cli(options!, server);
             string? steamUserdata = options!.ContainsKey("--client") ? SmokeInputs.SteamUserdata(options) : null;
-            string[] protectedRoots = options!.TryGetValue("--client", out string? client)
-                ? [server, cliFiles, Path.GetFullPath(client), steamUserdata!]
-                : [server, cliFiles];
+            string[] protectedRoots = (options.TryGetValue("--client", out string? client)
+                ? new[] { server, cliFiles, Path.GetFullPath(client), steamUserdata! }
+                : [server, cliFiles]).Concat(new[] { serverLoader?.Root, clientLoader?.Root }.OfType<string>()).ToArray();
             SmokeOutput.RefuseInside(output, protectedRoots);
             var roots = pairs.Where(pair => pair.Key == "--search-root").Select(pair => Path.GetFullPath(pair.Value)).ToList();
             var optional = pairs.Where(pair => pair.Key == "--optional-reference").Select(pair => pair.Value).ToList();
@@ -43,7 +47,7 @@ public static class ServerLoadComparison
             {
                 Mods = selected, SearchRoots = roots,
                 GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(server))!,
-                BepInExCore = Path.Combine(server, InstallPins.CoreDirectory),
+                BepInExCore = Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory),
                 CliManifest = cliManifest, CliFiles = cliFiles,
                 Capabilities = capabilities, OptionalReferences = optional,
             };
@@ -62,17 +66,17 @@ public static class ServerLoadComparison
             Directory.CreateDirectory(output);
             string adapter = options.TryGetValue("--adapter", out string? chosenAdapter)
                 ? Path.GetFullPath(chosenAdapter)
-                : await SmokeAdapter.BuildAsync(server, before, output, cancel.Token);
+                : await SmokeAdapter.BuildAsync(server, before, output, cancel.Token, Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory));
 
             // Both arms receive identical arguments and the same packaged fixture; only the selected DLL is omitted.
             // Pin the source installs and explicit assets as well as dependency files before launching either arm.
-            var directoryInputs = new[] { server, cliFiles }
+            var directoryInputs = new[] { server, cliFiles }.Concat(new[] { serverLoader?.Root, clientLoader?.Root }.OfType<string>())
                 .Concat(pairs.Where(pair => pair.Key is "--client" or "--plugin-dir")
                     .Select(pair => Path.GetFullPath(pair.Value)))
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Manifest, StringComparer.Ordinal);
             var fileInputs = new[] { cliManifest, adapter }
-                .Concat(pairs.Where(pair => pair.Key is "--config" or "--plugin-file")
+                .Concat(pairs.Where(pair => pair.Key is "--config" or "--plugin-file" or "--loader-package" or "--client-loader-package")
                     .Select(pair => Path.GetFullPath(pair.Value)))
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Hash, StringComparer.Ordinal);

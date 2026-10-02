@@ -7,6 +7,7 @@ using System.Net;
 /// </summary>
 internal static class SmokeProject
 {
+    // The generated consumer only uses the already published runner API; keep its independent known-good pin.
     internal const string GameVersion = "0.1.0-preview.20";
     private const string Feed = "https://api.nuget.org/v3/index.json";
 

@@ -14,7 +14,7 @@ valheim-test start \
   --output /path/to/a/new/private-run
 ```
 
-The selected game must already have a coherent BepInEx/Doorstop loader and one ValheimCLI core-and-pack bundle. The tool discovers a single capability manifest under `BepInEx/plugins` or `BepInEx/scripts`; use `VALHEIMCLI_BUNDLE` or `--cli-manifest` with `--cli-files` if several are present. It never silently downloads or mixes plugin builds. It selects the platform's Steam userdata directory only when that choice is unique; otherwise give `--steam-userdata`. On Homebrew macOS installs, a global .NET tool may need `DOTNET_ROOT` set to the directory reported by `dotnet --info` before its apphost launches. The tool requires the .NET 10 SDK for its generated project.
+The selected game must already have a coherent BepInEx/Doorstop loader, or use `--loader-package` with a [reviewed extracted loader set](../../docs/bepinex-loader-package.md). It also needs one ValheimCLI core-and-pack bundle: the tool discovers a single capability manifest under `BepInEx/plugins` or `BepInEx/scripts`; use `VALHEIMCLI_BUNDLE` or `--cli-manifest` with `--cli-files` if none or several are present. It never silently downloads or mixes plugin builds. It selects the platform's Steam userdata directory only when that choice is unique; otherwise give `--steam-userdata`. On Homebrew macOS installs, a global .NET tool may need `DOTNET_ROOT` set to the directory reported by `dotnet --info` before its apphost launches. The tool requires the .NET 10 SDK for its generated project.
 
 `valheim-test init --output NEW_DIR` creates the hosted consumer alone; `valheim-test init server --output NEW_DIR` creates the server consumer. A successful run also places `consumer/` beside its private plan and evidence, ready for focused assertions. The tool refuses an unpublished Game API before writing a consumer project.
 
@@ -31,6 +31,22 @@ valheim-test server-load \
   --client /path/to/prepared/client \
   --output /path/to/a/new/private-server-run
 ```
+
+The source server and client may instead be unmodded installs. Supply reviewed, extracted loader manifests for each platform and one coherent ValheimCLI bundle explicitly:
+
+```sh
+valheim-test server-load \
+  --server /path/to/unmodded/dedicated-server \
+  --client /path/to/unmodded/client \
+  --loader-package /private/server-loader.json \
+  --client-loader-package /private/client-loader.json \
+  --cli-manifest /private/ValheimCLI/cli-capabilities.json \
+  --cli-files /private/ValheimCLI \
+  --mod /path/to/ServerMod.dll \
+  --output /private/runs/server-load-1
+```
+
+`--loader-package` selects the server's BepInEx core for dependency resolution and adapter compilation. The client package is separate because a dedicated server's loader files are not assumed to work in the client. Both packages are pinned and applied only to the disposable copies; the result records their identities. The command still needs a compatible game build and local, reviewed loader and ValheimCLI files. It does not download or choose those for you. `server-load-ab` accepts the same options and holds both packages fixed between arms.
 
 The command builds its [test-only adapter](SessionAdapter/README.md) from source embedded in the tool against the exact game and ValheimCLI core it selected. `--adapter DLL` can override this when an independently built adapter is required. The command copies the dedicated runtime, clears plugins, scripts, configs and patchers **in the copy**, then stages the selected mods, their resolved dependencies, ValheimCLI and the adapter. With `--client`, it copies a separate client install containing ValheimCLI alone, stages the clean local character for that run, and requires the client to join with every selected server plugin pinned absent. Both owned processes and the staged character are cleaned up on success or failure. Without `--client`, it only checks server load and socket readiness, printing `SERVER_LOAD_PASS` rather than a client-join pass. This load smoke does not request admin-only player protection. Its disposable server plan waits at most 20 seconds to quit before a recorded kill; it makes no save-on-quit or crossplay-retirement claim. Use the full server runner and its shutdown assertions for those claims.
 

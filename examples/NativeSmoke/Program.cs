@@ -4,8 +4,8 @@ using Valheim.Testing.Game;
 if (args is ["help" or "--help"])
 {
     Console.WriteLine("valheim-test start --game DIR --mod DLL [--mod DLL ...] --output NEW_DIR [setup options]");
-    Console.WriteLine("valheim-test server-load --server DIR --mod DLL [--mod DLL ...] --output NEW_DIR [setup options]");
-    Console.WriteLine("valheim-test server-load-ab --server DIR --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [setup options]");
+    Console.WriteLine("valheim-test server-load --server DIR --mod DLL [--mod DLL ...] --output NEW_DIR [--client DIR] [--loader-package FILE] [--client-loader-package FILE] [setup options]");
+    Console.WriteLine("valheim-test server-load-ab --server DIR --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [--client DIR] [--loader-package FILE] [--client-loader-package FILE] [setup options]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
     return 0;
 }
