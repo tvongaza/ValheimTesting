@@ -41,8 +41,9 @@ public static class OwnedCopies
         var found = new List<OwnedCopy>();
         void Walk(string directory)
         {
-            IEnumerable<string> children;
-            try { children = Directory.EnumerateDirectories(directory); }
+            string[] children;
+            // EnumerateDirectories is lazy: the read must happen inside the catch for an inaccessible subtree.
+            try { children = Directory.GetDirectories(directory); }
             catch (Exception error) when (error is UnauthorizedAccessException or IOException) { return; }
             foreach (string child in children)
             {
@@ -71,6 +72,8 @@ public static class OwnedCopies
             throw new InvalidOperationException($"{path} is a world copy, a run's save: kept unless removing worlds is asked for explicitly.");
         var hashes = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(System.IO.Path.Combine(path, Provenance)))
             ?? throw new InvalidDataException("Empty manifest: " + System.IO.Path.Combine(path, Provenance));
+        if (hashes.Count == 0 || hashes.Values.Any(hash => hash is null || hash.Length != 64 || !hash.All(Uri.IsHexDigit)))
+            throw new InvalidDataException("Invalid or empty copy manifest: " + System.IO.Path.Combine(path, Provenance));
         var (perFile, total) = PinnedServerRun.RetainLimits(copy.Passed == true);
         // A retry after a removal that could not finish keeps its changes in a new folder beside the first.
         string keep = path + "-changes";

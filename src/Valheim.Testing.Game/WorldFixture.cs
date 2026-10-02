@@ -52,9 +52,9 @@ public sealed class WorldFixture : IDisposable
         else if (actual.Count == 0) throw new InvalidOperationException("Fixture source has no files: " + source);
         string target = Path.Combine(outputParent, "valheim-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(target);
         var fixture = new WorldFixture(target, actual);
-        WriteOwner(target);
         try
         {
+            WriteOwner(target);
             foreach (string directory in directories) Directory.CreateDirectory(Path.Combine(target, Path.GetRelativePath(source, directory)));
             foreach (var item in actual)
             {

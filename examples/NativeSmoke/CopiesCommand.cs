@@ -36,7 +36,20 @@ internal static class CopiesCommand
         {
             if (!path.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, comparison))
             { error.WriteLine($"REFUSED {path}: not under {root}"); refused++; continue; }
-            try { output.WriteLine("REMOVED " + OwnedCopies.Remove(path, allowWorld)); }
+            try
+            {
+                // A path can be lexically under ROOT while a linked directory below ROOT leads somewhere else.
+                // ROOT itself may be an intentional alias (for example /var on macOS); reject links after it.
+                string current = root;
+                string[] parts = Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar);
+                foreach (string part in parts[..^1])
+                {
+                    current = Path.Combine(current, part);
+                    if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidOperationException($"Path traverses a link below the selected root: {current}");
+                }
+                output.WriteLine("REMOVED " + OwnedCopies.Remove(path, allowWorld));
+            }
             catch (Exception failure) when (failure is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
             { error.WriteLine($"REFUSED {path}: {failure.Message}"); refused++; }
         }

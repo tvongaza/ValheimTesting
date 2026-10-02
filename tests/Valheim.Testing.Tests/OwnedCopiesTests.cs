@@ -102,6 +102,34 @@ public sealed class OwnedCopiesTests : IDisposable
         Assert.Equal(3, CopiesCommand.Run([Path.Combine(_root, "missing")], new StringWriter(), new StringWriter()));
     }
 
+    [Fact] public void TheCommandDoesNotFollowALinkOutOfTheSelectedRootToRemoveACopy()
+    {
+        string outside = Copy(Source("external", ServerLaunch.WindowsExecutable), Path.Combine(_root, "outside"));
+        Directory.CreateDirectory(Runs);
+        string link = Path.Combine(Runs, "linked");
+        try { Directory.CreateSymbolicLink(link, Path.GetDirectoryName(outside)!); }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException) { return; } // Windows without link privilege
+
+        string throughLink = Path.Combine(link, Path.GetFileName(outside));
+        var message = new StringWriter();
+        Assert.Equal(3, CopiesCommand.Run([Runs, "--remove", throughLink], new StringWriter(), message));
+        Assert.Contains("traverses a link", message.ToString());
+        Assert.True(Directory.Exists(outside));
+    }
+
+    [Fact] public void AnEmptyOrCorruptProvenanceCannotAuthorizeRemoval()
+    {
+        string copy = Copy(Source("server", ServerLaunch.WindowsExecutable), Runs);
+        string provenance = Path.Combine(copy, "fixture-provenance.json");
+        File.WriteAllText(provenance, "{}");
+        Assert.Throws<InvalidDataException>(() => OwnedCopies.Remove(copy));
+        File.WriteAllText(provenance, "{\"valheim_server.exe\":\"not-a-sha256\"}");
+        Assert.Throws<InvalidDataException>(() => OwnedCopies.Remove(copy));
+        File.WriteAllText(provenance, "{\"valheim_server.exe\":null}");
+        Assert.Throws<InvalidDataException>(() => OwnedCopies.Remove(copy));
+        Assert.True(Directory.Exists(copy));
+    }
+
     // A copy a live run holds is in use before any game runs from it; once the holder lets go, or has ended, it is not.
     [Fact] public void TheRunThatMadeACopyHoldsItUntilItLetsGoOrEnds()
     {
