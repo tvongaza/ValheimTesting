@@ -37,11 +37,18 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet --info
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - run: bash scripts/run.sh bootstrap
+        if: runner.os != 'Windows'
+      - run: pwsh -File scripts/run.ps1 bootstrap
+        if: runner.os == 'Windows'
       # validate.cs stops a command at its own 10-minute deadline, with a process table; the step timeout is the backstop if
       # the script itself stops answering. Normal runs take 2-5 minutes. Its transcript and test results are kept when the
       # step fails or is cancelled (#171).
-      - run: dotnet run scripts/validate.cs
+      - run: bash scripts/run.sh validate
+        if: runner.os != 'Windows'
+        timeout-minutes: 20
+      - run: pwsh -File scripts/run.ps1 validate
+        if: runner.os == 'Windows'
         timeout-minutes: 20
       - name: Keep the validation transcript
         if: failure() || cancelled()

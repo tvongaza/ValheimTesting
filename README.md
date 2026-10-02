@@ -40,16 +40,16 @@ Consumers of published packages can restore directly from NuGet.org; see [the ad
 Requires only the .NET 10 SDK and Git; the bootstrap and validation scripts are .NET file-based C# programs. The pure library targets netstandard2.0; the game library and examples target net10.0 and allow a newer runtime. The ValheimCLI transport package is built for net10.0 from the pinned ValheimCLI source, so .NET 10 is the only modern runtime needed.
 
 ```sh
-dotnet run scripts/bootstrap-cli.cs
+bash scripts/run.sh bootstrap
 # Or use a local CLI clone; the script exports only the pinned commit:
-# dotnet run scripts/bootstrap-cli.cs -- --source /path/to/valheimCLI
-dotnet run scripts/validate.cs
+# bash scripts/run.sh bootstrap --source /path/to/valheimCLI
+bash scripts/run.sh validate
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
 `validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Choose the packages in [getting started](docs/getting-started.md#package-versions-and-feeds): its exact versions are known-good example pins, while the linked NuGet pages show current releases. Pin the versions your mod tests actually use; a newly published package does not silently change a passing test. Use the local feed only to try a build that is not yet published.
 
-Both scripts test actual write access to NuGet's package and HTTP caches before restoring packages. If either cache is blocked by a sandbox, they use a writable cache under the system temporary directory and print the selected paths. If that fallback is also blocked, set `NUGET_PACKAGES` and `NUGET_HTTP_CACHE_PATH` to writable directories before running the scripts. An invalid explicit cache path can prevent `dotnet run` from compiling the script itself, before this check runs.
+Use `pwsh -File scripts/run.ps1 bootstrap` and `pwsh -File scripts/run.ps1 validate` on Windows. These launchers test actual write access to NuGet's package and HTTP caches **before** `dotnet run` compiles its file-based script. If either cache is blocked by a sandbox, both use a writable cache under the system temporary directory and print the selected paths. If the fallback is also blocked, set `NUGET_PACKAGES` and `NUGET_HTTP_CACHE_PATH` to writable directories. Direct `dotnet run scripts/*.cs` still checks caches before child restores, but may fail during its own first restore; use the launchers for a fresh checkout.
 
 ## Platforms
 
