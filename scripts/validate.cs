@@ -1,6 +1,6 @@
 // Local test-pyramid layers only; never launches Valheim. Run bootstrap-cli.cs first.
 //
-//   dotnet run scripts/validate.cs
+//   bash scripts/run.sh validate                 (pwsh -File scripts/run.ps1 validate on Windows)
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example,
 // executes the two no-game examples, runs the package-consuming mod tests, packs the libraries into the local feed and

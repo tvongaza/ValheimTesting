@@ -1,8 +1,8 @@
 // Build the exact pinned ValheimCLI transport into the local feed as Valheim.Testing.Cli.
 // Needs only the .NET 10 SDK and Git; never needs a game install.
 //
-//   dotnet run scripts/bootstrap-cli.cs
-//   dotnet run scripts/bootstrap-cli.cs -- --source /path/to/valheimCLI
+//   bash scripts/run.sh bootstrap               (pwsh -File scripts/run.ps1 bootstrap on Windows)
+//   bash scripts/run.sh bootstrap --source /path/to/valheimCLI
 //
 // --source uses an existing Git repository, but exports the pinned commit
 // only, never its working tree.

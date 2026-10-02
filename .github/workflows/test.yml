@@ -37,8 +37,14 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet --info
-      - run: dotnet run scripts/bootstrap-cli.cs
-      - run: dotnet run scripts/validate.cs
+      - run: bash scripts/run.sh bootstrap
+        if: runner.os != 'Windows'
+      - run: pwsh -File scripts/run.ps1 bootstrap
+        if: runner.os == 'Windows'
+      - run: bash scripts/run.sh validate
+        if: runner.os != 'Windows'
+      - run: pwsh -File scripts/run.ps1 validate
+        if: runner.os == 'Windows'
       - run: dotnet run scripts/test-nuget-cache-preflight.cs
       - name: Build targeted regression from NuGet.org only
         run: dotnet run scripts/targeted-consumer.cs
