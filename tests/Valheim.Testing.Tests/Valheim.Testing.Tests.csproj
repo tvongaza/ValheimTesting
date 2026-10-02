@@ -7,6 +7,7 @@
     <!-- The adapter package's helpers that use no game types; the rest of its source compiles in Valheim.Testing.Adapter.CompileCheck. -->
     <Compile Include="../../src/Valheim.Testing.Adapter/Adapter/Members.cs;../../src/Valheim.Testing.Adapter/Adapter/KeyValueReply.cs;../../src/Valheim.Testing.Adapter/Adapter/FixtureGate.cs" LinkBase="Adapter" />
     <Compile Include="../../examples/NativeSmoke/SmokeOutput.cs" Link="NativeSmoke/SmokeOutput.cs" />
+    <Compile Include="../../examples/NativeSmoke/CopiesCommand.cs" Link="NativeSmoke/CopiesCommand.cs" />
     <Compile Include="../../examples/NativeSmoke/SmokeInputs.cs" Link="NativeSmoke/SmokeInputs.cs" />
     <Compile Include="../../examples/NativeSmoke/SmokeProject.cs" Link="NativeSmoke/SmokeProject.cs" />
     <!-- Compiles small ValheimCLI-shaped assemblies at test time for the capability manifest tests; none is committed. -->

@@ -194,7 +194,8 @@ public static class PinnedServerRun
         if (keepRequested || Environment.GetEnvironmentVariable(KeepRuntimeVariable) == "1") { Kept($"kept on request ({KeepRuntimeVariable}=1 or KeepRuntime)"); return; }
         if (!stopped)
         {
-            Console.Error.WriteLine("Warning: " + Kept("the owned server did not stop cleanly and may still use it; delete it once no process does"));
+            Console.Error.WriteLine("Warning: " + Kept("the owned server did not stop cleanly and may still use it; once no process does, remove it with " +
+                $"OwnedCopies.Remove or: valheim-test copies \"{output}\" --remove \"{runtime.DirectoryPath}\""));
             return;
         }
         try
@@ -236,7 +237,7 @@ public static class PinnedServerRun
         using var sigterm = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => { context.Cancel = true; cancellation.Cancel(); });
         var report = new ScenarioReport(options.Name);
         OwnedServerSession? session = null;
-        WorldFixture? runtime = null;
+        WorldFixture? runtime = null, world = null;
         PinnedServerRunContext<TPlan>? launched = null;
         HostedServerRun? hosted = null;
         string output = Path.GetFullPath(args[2]);
@@ -293,7 +294,6 @@ public static class PinnedServerRun
                 if (DiskSpace.Require(output, bytes, hosted == null ? "this run's runtime and world copies" : "this run's world copy") is { } free)
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
-            WorldFixture? world = null;
             // Only an unpinned plan may leave out a manifest; its copy is then recorded as found.
             bool Verified(PinnedDirectory fixture) => pinned || fixture.Sha256.Count != 0;
             WorldFixture CopyOf(PinnedDirectory fixture) =>
@@ -374,6 +374,8 @@ public static class PinnedServerRun
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
             if (runtime != null) RetireRuntime(report, runtime, output, stopped, options.KeepRuntime, launchedNothing: session == null);
+            // The run ends here: it no longer holds the copies it keeps (their owner records go; see OwnedCopies).
+            runtime?.Dispose(); world?.Dispose();
             if (ownOutput)
             {
                 long bytes = DiskSpace.DirectoryBytes(output);

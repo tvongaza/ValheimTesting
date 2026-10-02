@@ -7,9 +7,11 @@ if (args is ["help" or "--help"])
     Console.WriteLine("valheim-test server-load --server DIR --mod DLL [--mod DLL ...] --output NEW_DIR [--client DIR] [--loader-package FILE] [--client-loader-package FILE] [setup options]");
     Console.WriteLine("valheim-test server-load-ab --server DIR --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [--client DIR] [--loader-package FILE] [--client-loader-package FILE] [setup options]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
+    Console.WriteLine(CopiesCommand.Usage + " (list, then remove chosen game copies runs left behind)");
     return 0;
 }
 if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(args[1..]);
+if (args.Length != 0 && args[0] == "copies") return CopiesCommand.Run(args[1..]);
 if (args.Length != 0 && args[0] == "start") args = args[1..];
 if (args.Length != 0 && args[0] == "server-load") return await ServerLoad.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "server-load-ab") return await ServerLoadComparison.RunAsync(args[1..]);
