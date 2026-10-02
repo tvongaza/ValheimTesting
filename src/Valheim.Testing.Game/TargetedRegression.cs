@@ -14,7 +14,7 @@ public sealed class RegressionEnvironment
 {
     /// <summary>A short name for the run: letters, digits, <c>-</c> and <c>_</c>.</summary>
     public string Name { get; set; } = "";
-    /// <summary>A prepared Valheim install with BepInEx (its <c>BepInEx/core</c> and Doorstop loader), only ever read.</summary>
+    /// <summary>A Valheim install, only ever read; it needs BepInEx unless <see cref="LoaderPackage"/> supplies a pinned loader set.</summary>
     public string Game { get; set; } = "";
     /// <summary>The disposable install <see cref="TargetedRegression"/> creates from <see cref="Game"/> and owns; never a valued one.</summary>
     public string Install { get; set; } = "";
@@ -36,6 +36,8 @@ public sealed class RegressionEnvironment
     public Dictionary<string, LogClassification> LogScan { get; set; } = [];
     /// <summary>Optional: the game build and BepInEx core <see cref="Game"/> must have (<see cref="InstallPins"/>; its patchers value is not compared).</summary>
     public InstallPins? GamePins { get; set; }
+    /// <summary>Optional extracted BepInEx/UnityDoorstop package manifest; its pinned loader and core replace the copied game's loader in the disposable install.</summary>
+    public string? LoaderPackage { get; set; }
 
     private static readonly Regex Token = new(@"^[A-Za-z0-9][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant);
 
@@ -63,6 +65,7 @@ public sealed class RegressionEnvironment
         foreach (var arm in Mod.Arms.Values) arm.File = Full(arm.File);
         foreach (string key in Configs.Keys.ToList()) Configs[key] = Full(Configs[key]);
         if (Cli.Manifest != null) Cli.Manifest = Full(Cli.Manifest);
+        if (LoaderPackage != null) LoaderPackage = Full(LoaderPackage);
     }
 
     private IEnumerable<RegressionFile> Files() =>
@@ -87,6 +90,8 @@ public sealed class RegressionEnvironment
         {
             if (name.Length == 0 || name != Path.GetFileName(name) || !name.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"configs: \"{name}\" is not a BepInEx config file name (<plugin guid>.cfg, no folder).");
+            if (LoaderPackage != null && name.Equals("BepInEx.cfg", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"configs.{name}: the selected loader package pins BepInEx.cfg; edit and recapture that package instead of overriding its configuration during staging.");
             if (!Path.IsPathFullyQualified(source)) throw new ArgumentException($"configs.{name}: give the file to copy.");
         }
         foreach (string reference in OptionalReferences)
@@ -94,6 +99,7 @@ public sealed class RegressionEnvironment
                 throw new ArgumentException($"optionalReferences: \"{reference}\" is not an assembly name (no .dll).");
         LogScanner.CheckClassifications(LogScan);
         GamePins?.Validate("game");
+        if (LoaderPackage != null && !Path.IsPathFullyQualified(LoaderPackage)) throw new ArgumentException("loaderPackage: give the extracted package manifest's full path.");
         var names = Files().Where(file => !Patchers.Contains(file)).Select(file => Path.GetFileName(file.File)).Append(Mod.InstallAs)
             .GroupBy(name => name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
         if (names != null) throw new ArgumentException($"Two staged plugins are both named {names.Key} in BepInEx/plugins; rename one copy, or list the file once.");
@@ -474,6 +480,8 @@ public sealed class TargetedRegression
         var logs = new List<RunLog>();
         try
         {
+            if (Environment.LoaderPackage is { } loaderPath)
+                report.Provenance["bepInExPackage"] = BepInExLoaderPackage.Read(loaderPath).Identity;
             StagedArm? stagedArm = null;
             report.Step($"stage arm {arm} from the allowlist and preflight it, before the game starts", () => stagedArm = Stage(arm));
             var staged = stagedArm!;
@@ -482,7 +490,13 @@ public sealed class TargetedRegression
             new HostRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
             {
                 staged.Verify();
-                return ClientSession.Open(staged.Plan, output, logs, cancellation);
+                var client = ClientSession.Open(staged.Plan, output, logs, cancellation);
+                if (Environment.LoaderPackage != null)
+                {
+                    MarkLoaderSmoke(staged.Plan.Install);
+                    report.Provenance["bepInExMenuSmoke"] = "passed: fresh BepInEx log, pinned plugins and main menu";
+                }
+                return client;
             }, round =>
             {
                 // ValheimCLI's own commands were required when the client answered; a probe's are live once it registered them.
@@ -524,30 +538,54 @@ public sealed class TargetedRegression
     // ---- the disposable install ----
 
     private sealed record Marker(string Tool, string GameSha256, string BepInExCoreSha256, string? Arm,
-        Dictionary<string, string>? Tree, Dictionary<string, string>? LoaderFiles);
+        Dictionary<string, string>? Tree, Dictionary<string, string>? LoaderFiles, string? LoaderPackage = null, bool LoaderSmoke = false);
 
     // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build, core and loader are the game's.
     private string PrepareInstall()
     {
         var env = Environment;
         string game = Path.GetFullPath(env.Game), install = Path.GetFullPath(env.Install);
-        if (!Directory.Exists(game)) throw new DirectoryNotFoundException($"game: {game} does not exist. Give the prepared Valheim install with BepInEx.");
-        if (!Directory.Exists(Path.Combine(game, InstallPins.CoreDirectory)))
+        if (!Directory.Exists(game)) throw new DirectoryNotFoundException($"game: {game} does not exist. Give the Valheim install to copy into the disposable run.");
+        var package = env.LoaderPackage == null ? null : BepInExLoaderPackage.Read(env.LoaderPackage);
+        if (package != null && (RegressionEnvironment.Inside(package.Root, game) || RegressionEnvironment.Inside(game, package.Root)))
+            throw new InvalidOperationException($"The pinned BepInEx package {package.Root} overlaps the game {game}; extract one reviewed loader set outside the live game before staging.");
+        if (package != null && (RegressionEnvironment.Inside(package.Root, install) || RegressionEnvironment.Inside(install, package.Root)))
+            throw new InvalidOperationException($"The disposable install {install} overlaps the pinned BepInEx package {package.Root}; keep the package outside the install so cleanup cannot delete it.");
+        if (package == null && !Directory.Exists(Path.Combine(game, InstallPins.CoreDirectory)))
             throw new InvalidOperationException($"game: {game} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first; the disposable install is copied from it.");
-        var pins = InstallPins.Of(game);
+        var pins = package == null ? InstallPins.Of(game) : new InstallPins
+        {
+            Game = InstallPins.GameHash(game),
+            BepInExCore = InstallPins.DirectoryHash(Path.Combine(package.Root, InstallPins.CoreDirectory)),
+            Patchers = InstallPins.DirectoryHash(Path.Combine(game, BepInExLoader.Patchers)),
+        };
+        string expectedCore = package == null ? pins.BepInExCore : InstallPins.DirectoryHash(Path.Combine(package.Root, InstallPins.CoreDirectory));
         if (env.GamePins != null)
-            env.GamePins.Compare(new InstallPins { Game = pins.Game, BepInExCore = pins.BepInExCore, Patchers = env.GamePins.Patchers }, "prepared game", "Managed");
+            env.GamePins.Compare(new InstallPins { Game = pins.Game, BepInExCore = expectedCore, Patchers = env.GamePins.Patchers }, "prepared game and selected loader package", "Managed");
         if (Directory.Exists(install))
         {
             var marker = RequireOwned(install);
-            bool current = marker.GameSha256 == pins.Game && marker.BepInExCoreSha256 == pins.BepInExCore && Directory.Exists(Path.Combine(install, InstallPins.CoreDirectory)) &&
-                InstallPins.Of(install) is var found && found.Game == pins.Game && found.BepInExCore == pins.BepInExCore && LoaderCopied(game, install, marker.LoaderFiles);
+            bool current = marker.GameSha256 == pins.Game && marker.BepInExCoreSha256 == expectedCore && marker.LoaderPackage == package?.Identity &&
+                Directory.Exists(Path.Combine(install, InstallPins.CoreDirectory)) &&
+                InstallPins.Of(install) is var found && found.Game == pins.Game && found.BepInExCore == expectedCore &&
+                (package == null ? LoaderCopied(game, install, marker.LoaderFiles) : package.Matches(install));
             if (!current) Directory.Delete(install, recursive: true);
         }
         if (!Directory.Exists(install))
         {
-            Copy(game, install, game);
-            WriteMarker(install, null, null, pins, LoaderFiles(game));
+            try
+            {
+                Copy(game, install, game);
+                package?.Apply(install);
+                WriteMarker(install, null, null, InstallPins.Of(install), LoaderFiles(install), package?.Identity);
+            }
+            catch
+            {
+                // This run just created the install. A failed copy must not strand an unmarked partial install that a
+                // retry would correctly refuse to touch.
+                if (Directory.Exists(install)) Directory.Delete(install, recursive: true);
+                throw;
+            }
         }
         foreach (string folder in StagedFolders.Append("cache"))
         {
@@ -555,11 +593,12 @@ public sealed class TargetedRegression
             if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
         }
         foreach (string folder in new[] { "plugins", "patchers", "config" }) Directory.CreateDirectory(Path.Combine(install, "BepInEx", folder));
-        string settings = Path.Combine(game, "BepInEx", "config", BepInExConfig);
+        string settings = package == null ? Path.Combine(game, "BepInEx", "config", BepInExConfig)
+            : Path.Combine(package.Root, "BepInEx", "config", BepInExConfig);
         if (File.Exists(settings)) File.Copy(settings, Path.Combine(install, "BepInEx", "config", BepInExConfig));
         var copied = InstallPins.Of(install);
-        if (copied.Game != pins.Game || copied.BepInExCore != pins.BepInExCore)
-            throw new InvalidOperationException($"The disposable install {install} does not match the prepared game after copying (game {copied.Game} vs {pins.Game}, core {copied.BepInExCore} vs {pins.BepInExCore}). Remove it and stage again.");
+        if (copied.Game != pins.Game || copied.BepInExCore != expectedCore)
+            throw new InvalidOperationException($"The disposable install {install} does not match the selected game and loader after copying (game {copied.Game} vs {pins.Game}, core {copied.BepInExCore} vs {expectedCore}). Remove it and stage again.");
         return install;
     }
 
@@ -614,12 +653,18 @@ public sealed class TargetedRegression
     }
 
     private static void WriteMarker(string install, string? arm, Dictionary<string, string>? tree, InstallPins? pins = null,
-        Dictionary<string, string>? loaderFiles = null)
+        Dictionary<string, string>? loaderFiles = null, string? loaderPackage = null)
     {
         var previous = pins == null ? RequireOwned(install) : null;
         var marker = new Marker(nameof(TargetedRegression), pins?.Game ?? previous!.GameSha256, pins?.BepInExCore ?? previous!.BepInExCoreSha256,
-            arm, tree, loaderFiles ?? previous?.LoaderFiles);
+            arm, tree, loaderFiles ?? previous?.LoaderFiles, loaderPackage ?? previous?.LoaderPackage, previous?.LoaderSmoke ?? false);
         File.WriteAllText(Path.Combine(install, MarkerFile), JsonSerializer.Serialize(marker, ManifestJson));
+    }
+
+    private static void MarkLoaderSmoke(string install)
+    {
+        var marker = RequireOwned(install);
+        File.WriteAllText(Path.Combine(install, MarkerFile), JsonSerializer.Serialize(marker with { LoaderSmoke = true }, ManifestJson));
     }
 
     /// <summary>Every file under the install's <c>BepInEx/plugins</c>, <c>patchers</c>, <c>config</c> and <c>scripts</c>, by relative path and SHA256.</summary>

@@ -49,6 +49,8 @@ dotnet run --project examples/NoGameTerrain -c Release
 
 `validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Choose the packages in [getting started](docs/getting-started.md#package-versions-and-feeds): its exact versions are known-good example pins, while the linked NuGet pages show current releases. Pin the versions your mod tests actually use; a newly published package does not silently change a passing test. Use the local feed only to try a build that is not yet published.
 
+Both scripts test actual write access to NuGet's package and HTTP caches before restoring packages. If either cache is blocked by a sandbox, they use a writable cache under the system temporary directory and print the selected paths. If that fallback is also blocked, set `NUGET_PACKAGES` and `NUGET_HTTP_CACHE_PATH` to writable directories before running the scripts. An invalid explicit cache path can prevent `dotnet run` from compiling the script itself, before this check runs.
+
 ## Platforms
 
 | Host | Toolkit and tests | Game client (`ClientLaunch`, driven by ValheimCLI) | Dedicated server (native) | Server in a container | Remote server host |

@@ -15,10 +15,15 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 string root = FindRoot();
+PrepareNuGetCaches(root);
+if (args is ["--cache-preflight-only"]) return 0;
+if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/validate.cs [-- --cache-preflight-only]");
 string results = Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
@@ -263,5 +268,65 @@ static string Capture(string file, params string[] arguments)
     catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
     {
         return $"({file}: {e.Message})";
+    }
+}
+
+// NuGet can fail in a sandbox even when the directory's mode and owner look writable.
+// Probe an actual file before the first restore, then move both caches together if either is denied.
+static void PrepareNuGetCaches(string root)
+{
+    string packages = CachePath("NUGET_PACKAGES", "global-packages");
+    string http = CachePath("NUGET_HTTP_CACHE_PATH", "http-cache");
+    if (CanWrite(packages) && CanWrite(http))
+    {
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", packages);
+        Environment.SetEnvironmentVariable("NUGET_HTTP_CACHE_PATH", http);
+        Console.WriteLine($"NuGet caches writable: packages={packages}; HTTP={http}");
+        return;
+    }
+
+    string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(root)))[..12].ToLowerInvariant();
+    string fallback = Path.Combine(Path.GetTempPath(), "valheimtesting-nuget", key);
+    string fallbackPackages = Path.Combine(fallback, "packages");
+    string fallbackHttp = Path.Combine(fallback, "http-cache");
+    if (!CanWrite(fallbackPackages) || !CanWrite(fallbackHttp))
+        throw new IOException($"NuGet caches are not writable at {packages} and {http}; fallback {fallback} is also not writable. Set NUGET_PACKAGES and NUGET_HTTP_CACHE_PATH to writable directories.");
+    Environment.SetEnvironmentVariable("NUGET_PACKAGES", fallbackPackages);
+    Environment.SetEnvironmentVariable("NUGET_HTTP_CACHE_PATH", fallbackHttp);
+    Console.WriteLine($"NuGet caches not writable at {packages} or {http}; using packages={fallbackPackages}; HTTP={fallbackHttp}");
+}
+
+static string CachePath(string variable, string kind)
+{
+    string? explicitPath = Environment.GetEnvironmentVariable(variable);
+    if (!string.IsNullOrWhiteSpace(explicitPath)) return Path.GetFullPath(explicitPath);
+    var info = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+    info.ArgumentList.Add("nuget");
+    info.ArgumentList.Add("locals");
+    info.ArgumentList.Add(kind);
+    info.ArgumentList.Add("--list");
+    using Process process = Process.Start(info) ?? throw new InvalidOperationException("Could not query NuGet's " + kind + " path.");
+    string output = process.StandardOutput.ReadToEnd();
+    string error = process.StandardError.ReadToEnd();
+    process.WaitForExit();
+    int separator = output.IndexOf(':');
+    if (process.ExitCode != 0 || separator < 0 || string.IsNullOrWhiteSpace(output[(separator + 1)..]))
+        throw new InvalidOperationException($"Could not query NuGet's {kind} path: {error.Trim()}");
+    return Path.GetFullPath(output[(separator + 1)..].Trim());
+}
+
+static bool CanWrite(string directory)
+{
+    try
+    {
+        Directory.CreateDirectory(directory);
+        string probe = Path.Combine(directory, ".valheimtesting-write-" + Guid.NewGuid().ToString("N"));
+        using (var file = new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
+            file.WriteByte(1);
+        return true;
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or SecurityException)
+    {
+        return false;
     }
 }

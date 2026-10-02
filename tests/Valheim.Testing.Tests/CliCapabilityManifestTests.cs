@@ -48,6 +48,23 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("declares no [BepInPlugin]", Assert.Throws<InvalidDataException>(() => CliCapabilityManifest.Generate("x", Write(builds, "stub", ("BepInEx.dll", builds.BepInEx)))).Message);
     }
 
+    [Fact] public void RequiredCommandsSelectOnlyTheirProvidingPacksFromOneBuild()
+    {
+        var builds = new Builds();
+        var source = CliCapabilityManifest.Generate("pinned build", Write(builds, "select", (Core, builds.Core), (Standard, builds.Standard), (WorldTools, builds.WorldTools)));
+        var selected = source.ForCapabilities(["valheim.world/terrain"]);
+        Assert.Equal(new[] { Core, WorldTools }, selected.Files.Select(file => file.File));
+        Assert.Equal("pinned build", selected.Build);
+        Assert.Equal(source.Files[2].Sha256, selected.Files[1].Sha256);
+
+        var hosted = source.ForCapabilities(["valheim.session/state", "valheim.world/terrain"]);
+        Assert.Equal(new[] { Core, Standard, WorldTools }, hosted.Files.Select(file => file.File));
+        Assert.Contains("valheim.world/missing", Assert.Throws<InvalidOperationException>(() => source.ForCapabilities(["valheim.world/missing"])).Message);
+        var future = CliCapabilityManifest.Generate("future", Write(builds, "select-future", (Core, builds.Core),
+            (WorldTools, Builds.Compile(OptimizationLevel.Release, "Valheim.Cli.WorldTools", Builds.WorldToolsSource(gridVersion: 2), builds.BepInEx, builds.Core))));
+        Assert.Contains("result version 2", Assert.Throws<InvalidOperationException>(() => future.ForCapabilities(["valheim.world/terrain-grid"])).Message);
+    }
+
     [Fact] public void TheLiveListingOfAClientThatLoadedTheSetConfirmsTheManifest()
     {
         var builds = new Builds();

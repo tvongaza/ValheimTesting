@@ -116,6 +116,33 @@ public sealed class CliCapabilityManifest
         return manifest;
     }
 
+    /// <summary>
+    /// Selects the core and only the packs that provide <paramref name="capabilities"/> from this pinned build. Each
+    /// command must have result schema 1, which is what the native runner consumes. The selected manifest can be written
+    /// beside an environment lock and checked against the staged files before launch; no DLL from another build is used.
+    /// </summary>
+    public CliCapabilityManifest ForCapabilities(IEnumerable<string> capabilities)
+    {
+        ArgumentNullException.ThrowIfNull(capabilities);
+        Validate();
+        var wanted = capabilities.Distinct(StringComparer.Ordinal).ToList();
+        if (wanted.Any(path => path == null || path.Split('/') is not [{ Length: > 0 } owner, { Length: > 0 } command] || !ValidName(owner) || !ValidName(command)))
+            throw new ArgumentException("Name each capability as owner/command.", nameof(capabilities));
+        var core = Files.Where(file => file.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal)).ToList();
+        if (core.Count != 1) throw new InvalidOperationException($"The ValheimCLI build {Build} needs exactly one core declaring valheimCLI.valheimCLI; found {core.Count}.");
+        var providers = Files.SelectMany(file => file.Commands().Select(command => (File: file, command.Path, command.Version)))
+            .ToDictionary(entry => entry.Path, entry => (entry.File, entry.Version), StringComparer.Ordinal);
+        var missing = wanted.Where(path => !providers.ContainsKey(path)).ToList();
+        if (missing.Count != 0) throw new InvalidOperationException($"The ValheimCLI build {Build} lacks {string.Join(", ", missing)}. Supply one coherent core and pack set that provides those commands.");
+        var wrongSchema = wanted.Where(path => providers[path].Version != 1).ToList();
+        if (wrongSchema.Count != 0) throw new InvalidOperationException($"The ValheimCLI build {Build} provides {string.Join(", ", wrongSchema.Select(path => path + " with result version " + providers[path].Version))}; the runner needs result version 1.");
+        var selected = new HashSet<CliManifestFile>(core);
+        foreach (string path in wanted) selected.Add(providers[path].File);
+        var result = new CliCapabilityManifest { Build = Build, Files = Files.Where(selected.Contains).ToList() };
+        result.Validate();
+        return result;
+    }
+
     // The game's own listing must agree with every owner the files register.
     private void RequireListing(string listing)
     {
