@@ -15,6 +15,7 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Compare generator or loaded ground | [TerrainCheck](../examples/TerrainCheck/README.md) | Collider, paint or walking behavior |
 | Compare client ground and support | [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md) | Human usability |
 | Compare loaded paint | [PaintCheck](../examples/PaintCheck/README.md) | Rendered appearance or every biome's alpha meaning |
+| Capture a named loaded-terrain site before/after or on failure | [Terrain site snapshots](terrain-site-snapshots.md) | Generator height, ZDO state or human usability |
 | A/B regression of one mod in the real game | [TargetedRegression](../examples/TargetedRegression/README.md): preflight without the game, then one hosted run per arm | Other mods, dedicated servers or restarts |
 | Load a mod or isolate a mod-set conflict | [NativeSmoke](../examples/NativeSmoke/README.md) through [Debugging mods](debugging-mods.md): `valheim-test server-load`, `server-load-ab` or `start` | The mod's gameplay behavior or which mod owns a conflict |
 | Share a native regression's source and result | [RegressionBundle](../examples/RegressionBundle/README.md): a scrubbed directory for review, never published | That a ported runner's harness ran natively, or that no private detail outside its rules remains |
