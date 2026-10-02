@@ -101,8 +101,8 @@ jobs:
           done
   consumer:
     name: consumer (NuGet.org only)
-    # NuGet.org validates a new version for several minutes before it serves it; the script waits up to 30 minutes and
-    # reports a version still missing then as pending, which fails the job. Rerun it later rather than calling the release checked.
+    # NuGet.org can serve the package file before its tool-install registration entry is ready. The script waits
+    # up to 30 minutes for both, then reports a missing version as pending. Rerun later rather than calling it checked.
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 50

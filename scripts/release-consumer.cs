@@ -16,7 +16,8 @@
 // Valheim.Testing.Game and Valheim.Testing.Bindings, runs a copy of ModWithTests pinned to the Doubles version, compiles
 // the Adapter source package as a net48 game-side adapter against tests/Valheim.Testing.Adapter.CompileCheck's reference
 // stubs, and installs the Bindings tool and runs it. Every Valheim.Testing* package must have been restored from
-// NuGet.org at exactly the manifest version.
+// NuGet.org at exactly the manifest version. For tools, wait for registration as well as the package file:
+// dotnet tool install consults registration, which can lag behind the flat-container URL.
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -84,13 +85,20 @@ async Task<int> Consumer()
         ?? throw new InvalidOperationException("cli-dependency.json has no packageVersion.");
     foreach (var (id, version) in manifest.OrderBy(p => p.Key, StringComparer.Ordinal)) Console.WriteLine($"manifest: {id} {version}");
 
-    // A new version is served by its exact URL within minutes of the push; the search index can take longer and is not consulted.
+    // The exact package URL usually appears first. Tool installation also needs NuGet's registration entry,
+    // which can lag behind the package URL; neither check depends on the slower search index.
     DateTime deadline = DateTime.UtcNow.AddMinutes(waitMinutes);
     var pending = manifest.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
     while (true)
     {
         foreach (var (id, version) in pending.ToList())
-            if (await Served(id, version)) { Console.WriteLine($"served: {id} {version}"); pending.Remove(id); }
+        {
+            if (!await Served(id, version)) continue;
+            if (id is "Valheim.Testing.Bindings.Tool" or "Valheim.Testing.NativeSmoke" &&
+                !await ToolRegistered(id, version)) continue;
+            Console.WriteLine($"served: {id} {version}");
+            pending.Remove(id);
+        }
         if (pending.Count == 0) break;
         if (DateTime.UtcNow >= deadline)
         {
@@ -303,6 +311,26 @@ async Task<bool> Served(string id, string version)
     catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
     {
         Console.Error.WriteLine($"{id} {version}: {e.Message}; retrying.");
+    }
+    return false;
+}
+
+async Task<bool> ToolRegistered(string id, string version)
+{
+    // NuGet's v3 service index advertises this semver2 registration base. A published .nupkg can
+    // return 200 while this entry is still 404, and dotnet tool install then says "not found".
+    string url = $"https://api.nuget.org/v3/registration5-gz-semver2/{id.ToLowerInvariant()}/{version.ToLowerInvariant()}.json";
+    using var request = new HttpRequestMessage(HttpMethod.Head, url);
+    try
+    {
+        using HttpResponseMessage response = await http.SendAsync(request);
+        if (response.IsSuccessStatusCode) return true;
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
+        Console.Error.WriteLine($"{id} {version}: registration HTTP {(int)response.StatusCode}; retrying.");
+    }
+    catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+    {
+        Console.Error.WriteLine($"{id} {version}: registration {e.Message}; retrying.");
     }
     return false;
 }
