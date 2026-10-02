@@ -54,6 +54,18 @@ The constructor declares a grid directly from row-major arrays (x fastest), whic
 
 For a **native ValheimCLI dump** used as a pinned offline input, use `WorldDumpContract.Verify(path, manifest)` rather than `GridDumpTerrain.Load` alone. The strict contract checks the exact seven-column native header, SHA-256, complete rectangular lattice, bounds, sample count and step against the `OK: WORLD_DUMP` reply. The manifest's world UID, seed and game build must come from a strict `cli_world` observation in the **same native session**; they are not embedded in the CSV and cannot be reconstructed from it. `RequireSameWorld` refuses layers with different declared identities. Retain the command, full reply and file hash as evidence. A later ValheimCLI or game build must recheck the native header and semantics before updating that contract; do not fill in an absent field or convert `base_height` to metres. See [the bounded dump capture procedure](world-dump-contract.md).
 
+For a coarse world layer plus fine windows, use `LayeredDumpTerrain.Load(specs, baseHeightLayer: "coarse")`. Each `WorldDumpLayerSpec` names a CSV and its verified `WorldDumpManifest`; all must have the same declared world UID, seed and game build. Normal height, biome and river queries take the **finest containing grid**, even at its closed edge; equal-spacing grids that overlap are refused. `GetBaseHeight` uses **only** the named base-height lattice, so a fine height window cannot silently become its source. `SourceAt` and `BaseHeightSourceAt` name the selected layer and report whether the query landed on an exact CSV node. Outside every layer, or outside the designated base lattice for base-height queries, the reader throws. A node retains the file's rounded value; between nodes height, river and base height are bilinear approximations and biome comes from the nearest selected node. The layer choice is deterministic and independent of the order of the specs.
+
+```csharp
+var terrain = LayeredDumpTerrain.Load(new[] {
+    new WorldDumpLayerSpec("coarse", "coarse.csv", coarseManifest),
+    new WorldDumpLayerSpec("fine", "fine.csv", fineManifest)
+}, baseHeightLayer: "coarse");
+float ground = terrain.GetHeight(siteX, siteZ); // finest containing layer
+float baseValue = terrain.GetBaseHeight(siteX, siteZ); // designated coarse lattice, unitless
+WorldDumpSource source = terrain.SourceAt(siteX, siteZ);
+```
+
 ## Render a terrain for review
 
 `TerrainRenderer` draws any `ITerrain` over a `TerrainArea` at a chosen metres per pixel (the area must be a whole number of pixels, at most 8192 a side). +x points right and +z up. Each pixel samples its centre once. Colour by `TerrainColoring.Height` (blue below `WaterLevel`, default 30; green, brown, white from there to `HighHeight`) or `TerrainColoring.Biome` (one fixed colour per biome). `Polyline` and `Point` overlays are drawn in world coordinates and clipped at the edge; polylines first, then points.

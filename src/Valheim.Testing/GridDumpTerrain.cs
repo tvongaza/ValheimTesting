@@ -83,6 +83,11 @@ public sealed class GridDumpTerrain : ITerrain
     /// <summary>Whether a query at this coordinate is answered rather than refused.</summary>
     public bool Contains(float x, float z) => Cell(x, OriginX, CountX, out _) && Cell(z, OriginZ, CountZ, out _);
 
+    /// <summary>Whether both coordinates land on stored nodes (within the reader's 1e-4-cell snap tolerance).</summary>
+    public bool IsSampleNode(float x, float z) =>
+        Cell(x, OriginX, CountX, out double fx) && Cell(z, OriginZ, CountZ, out double fz) &&
+        fx == Math.Round(fx) && fz == Math.Round(fz);
+
     public float GetHeight(float x, float z) => Sample(_heights, x, z);
 
     /// <summary>
