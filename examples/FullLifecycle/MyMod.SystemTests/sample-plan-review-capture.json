@@ -1,0 +1,69 @@
+{
+  "scenario": "review-capture",
+  "runtime": {
+    "source": "<full path of the server runtime>",
+    "sha256": { "valheim_server.exe": "<sha256 of every file, from WorldFixture.Manifest>" }
+  },
+  "world": {
+    "source": "<full path of the fixture world>",
+    "sha256": {
+      "worlds_local/Fixture.db": "<sha256>",
+      "worlds_local/Fixture.fwl": "<sha256>",
+      "adminlist.txt": "<sha256>"
+    }
+  },
+  "arguments": [
+    "-batchmode", "-nographics", "-name", "MyModReview", "-port", "2456",
+    "-world", "Fixture", "-password", "<fixture password>",
+    "-savedir", "{world}", "-public", "0", "-logFile", "{runtime}/toolkit-unity.log"
+  ],
+  "environment": {},
+  "patchers": [],
+  "pins": {
+    "worlduid": "<the fixture world's UID>",
+    "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",
+    "valheimCLI.standard": "<md5 of the runtime's Valheim.Cli.Standard.dll>",
+    "valheimCLI.worldtools": "<md5 of the runtime's Valheim.Cli.WorldTools.dll>",
+    "example.mymod": "<md5 of MyMod.dll>",
+    "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+  },
+  "runtimePins": {
+    "game": "<InstallPins.Of(runtime).Game>",
+    "bepinexCore": "<InstallPins.Of(runtime).BepInExCore>",
+    "patchers": "<InstallPins.Of(runtime).Patchers>"
+  },
+  "port": 5577,
+  "arrival": { "x": -1500, "z": -2005, "ground": 34.9 },
+  "capture": {
+    "gameBuild": "1.0.16",
+    "weather": "Clear",
+    "timeOfDay": 0.45,
+    "cameraDistance": 24,
+    "cameraHeight": 12,
+    "cameraAzimuthDegrees": 225,
+    "mistOff": true,
+    "clutterOff": false,
+    "supersize": 1
+  },
+  "client": {
+    "mode": "owned",
+    "install": "<full path of the client install>",
+    "launchArguments": ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"],
+    "port": 5556,
+    "pins": {
+      "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
+      "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
+      "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
+      "example.mymod": "<md5 of MyMod.dll>",
+      "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+    },
+    "installPins": {
+      "game": "<InstallPins.Of(install).Game>",
+      "bepinexCore": "<InstallPins.Of(install).BepInExCore>",
+      "patchers": "<InstallPins.Of(install).Patchers>"
+    },
+    "join": "127.0.0.1:2456",
+    "character": "mymodtester",
+    "passwordVariable": "MYMOD_TEST_PASSWORD"
+  }
+}

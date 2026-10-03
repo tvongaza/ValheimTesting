@@ -34,6 +34,8 @@ public sealed class CampaignRun
     public required Action<GameActor> WaitUntilJoinable { get; init; }
     public required ScenarioReport Report { get; init; }
     public required string Output { get; init; }
+    /// <summary>The pinned runner's environment profile, when a client is hosted elsewhere.</summary>
+    public EnvironmentProfile? Profile { get; init; }
     /// <summary>The owned server's live BepInEx log for this boot, or null when this runner cannot read it.</summary>
     public Func<string?> ServerLog { get; init; } = () => null;
     /// <summary>A client's live BepInEx log, when it is owned on this machine; null for an attached client.</summary>
@@ -62,6 +64,7 @@ public static class CampaignScenarios
                 case LifecyclePlan.SyncedConfigScenario: SyncedConfigScenario.Run(run); break;
                 case LifecyclePlan.RefusedJoinScenario: RefusedJoinScenario.Run(run); break;
                 case LifecyclePlan.ContentCensusScenario: ContentCensusScenario.Run(run); break;
+                case LifecyclePlan.ReviewCaptureScenarioName: ReviewCaptureScenario.Run(run); break;
                 case LifecyclePlan.CrossplayScenario:
                     // The dry-site lifecycle, joined through each boot's crossplay lobby instead of the server's address.
                     DrySiteScenario.Run(plan, run.Server, run.RestartServer, () => run.OpenClient(plan.Client!, null), run.WaitUntilJoinable,

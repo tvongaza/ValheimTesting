@@ -49,7 +49,8 @@ public sealed class Plugin : BaseUnityPlugin
         UnresolvedPrefabs.Command(),                                // unresolved-prefabs [radius]: a client without MyMod (#33)
         DungeonRooms.Command(),                                     // dungeon-rooms <x> <z> [radius]: server (#24)
         ContentCensus.Command(),                                    // content-census <owner> <prefix> ...: either side (#91)
+        ReviewState.BeginCommand(), ReviewState.MistOffCommand(), ReviewState.ClutterOffCommand(), ReviewState.RestoreCommand(), // owned visual-state lease (#78)
         MarkerObservation.Command());                               // markers <x> <z> [radius]: the mod's own
     private void OnApplicationQuit() => QuitLogFlush.Quitting("MyMod.TestAdapter OnApplicationQuit");
-    private void OnDestroy() => _registration?.Dispose();
+    private void OnDestroy() { ReviewState.RestoreOnUnload(); _registration?.Dispose(); }
 }
