@@ -35,6 +35,7 @@ internal sealed class FakeServerHost : IGameHost
     public Dictionary<string, HostResult> Failures { get; } = [];
     public Exception? TunnelFailure { get; set; }
     public bool PortBusy { get; set; }
+    public bool GameActive { get; set; }
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
     public bool IgnoreQuit { get; set; }
     public bool ClientWritesBepInExLog { get; set; } = true;
@@ -46,6 +47,8 @@ internal sealed class FakeServerHost : IGameHost
     public List<FakeForward> Tunnels { get; } = [];
     /// <summary>What the copy does to the runtime after copying, for example editing a file.</summary>
     public Action<string>? AfterCopy { get; set; }
+    /// <summary>Controlled delay for tests that prove independent actors prepare concurrently.</summary>
+    public Func<Task>? BeforeShip { get; set; }
     public List<(string Game, string Start)> Stops { get; } = [];
     public IReadOnlyList<string> Scripts { get { lock (_sync) return Runs.Select(run => run.Script).ToList(); } }
 
@@ -69,6 +72,18 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostedRunScripts.WindowsRetire) ? "retire" :
         ReferenceEquals(script, HostedRunScripts.DropKept) ? "drop-kept" :
         ReferenceEquals(script, HostedRunScripts.WindowsDropKept) ? "drop-kept" :
+        ReferenceEquals(script, HostedRuntimeStage.WindowsApply) ? "apply-stage" :
+        ReferenceEquals(script, HostedRuntimeStage.BashApply) ? "apply-stage" :
+        ReferenceEquals(script, HostedRuntimeStage.WindowsCleanup) ? "cleanup-stage" :
+        ReferenceEquals(script, HostedRuntimeStage.BashCleanup) ? "cleanup-stage" :
+        ReferenceEquals(script, HostedCharacterStage.WindowsInstall) ? "character-install" :
+        ReferenceEquals(script, HostedCharacterStage.BashInstall) ? "character-install" :
+        ReferenceEquals(script, HostedCharacterStage.WindowsRetire) ? "character-retire" :
+        ReferenceEquals(script, HostedCharacterStage.BashRetire) ? "character-retire" :
+        ReferenceEquals(script, HostedCharacterStage.WindowsDropStage) ? "character-drop" :
+        ReferenceEquals(script, HostedCharacterStage.BashDropStage) ? "character-drop" :
+        ReferenceEquals(script, HostedRuntimeStage.WindowsProcessCheck) ? "game-process" :
+        ReferenceEquals(script, HostedRuntimeStage.BashProcessCheck) ? "game-process" :
         ReferenceEquals(script, CrossplayLibraryScripts.Check) ? "party" :
         ReferenceEquals(script, InteractiveScripts.LinuxWait) ? "wait" :
         ReferenceEquals(script, InteractiveScripts.WindowsWait) ? "wait" :
@@ -79,6 +94,7 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostedClientScripts.BashMoveAside) ? "move-aside" :
         ReferenceEquals(script, HostClientPreflight.BashRead) ? "preflight-read" :
         ReferenceEquals(script, HostClientPreflight.PowerShellRead) ? "preflight-read" :
+        ReferenceEquals(script, SteamSignedInUsers.PowerShell) ? "steam-user" :
         ReferenceEquals(script, SteamSignedInUsers.Bash) ? "steam-user" : "other";
 
     public async Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default)
@@ -89,6 +105,7 @@ internal sealed class FakeServerHost : IGameHost
         if (Failures.TryGetValue(name, out var failure)) return failure;
         switch (name)
         {
+            case "game-process": return Ok(GameActive ? "VT-GAME busy\n" : "VT-GAME idle\n");
             case "preflight-read":
             {
                 string file = Local(v["path"]);
@@ -100,6 +117,62 @@ internal sealed class FakeServerHost : IGameHost
                 CopyDirectory(Local(v["source"]), Local(v["dest"]));
                 AfterCopy?.Invoke(Local(v["dest"]));
                 return Ok("VT-COPY copied\n");
+            case "apply-stage":
+            {
+                string runtime = Local(v["runtime"]), stage = Local(v["stage"]);
+                foreach (string folder in new[] { "plugins", "scripts", "config", "patchers" })
+                {
+                    string directory = Path.Combine(runtime, "BepInEx", folder);
+                    if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+                    Directory.CreateDirectory(directory);
+                }
+                if (v.TryGetValue("replaceLoader", out var replace) && replace == "true")
+                {
+                    foreach (string file in new[] { "winhttp.dll", "doorstop_config.ini", "libdoorstop.dylib" })
+                        File.Delete(Path.Combine(runtime, file));
+                    foreach (string dir in new[] { "BepInEx/core", "doorstop_libs" })
+                        if (Directory.Exists(Path.Combine(runtime, dir))) Directory.Delete(Path.Combine(runtime, dir), true);
+                }
+                foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line));
+                    string target = Path.Combine(runtime, relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    File.Copy(Path.Combine(stage, relative), target, overwrite: true);
+                }
+                Directory.Delete(stage, recursive: true);
+                return Ok("VT-STAGED selected files only\n");
+            }
+            case "cleanup-stage":
+                foreach (string path in new[] { v["runtime"], v["stage"] }.Where(path => path.Length != 0))
+                    if (Directory.Exists(Local(path))) Directory.Delete(Local(path), recursive: true);
+                if (v.TryGetValue("parent", out string? parent) && Directory.Exists(Local(parent)) && !Directory.EnumerateFileSystemEntries(Local(parent)).Any())
+                    Directory.Delete(Local(parent));
+                return Ok("VT-STAGE-CLEANED\n");
+            case "character-install":
+            {
+                string characters = Local(v["characters"]), userdata = Local(v["userdata"]);
+                if (!Directory.Exists(characters) || !Directory.Exists(userdata)) return Ok("VT-CHAR missing-directory\n");
+                string file = v["name"] + ".fch";
+                string cloud = Path.Combine(Directory.GetParent(characters)!.FullName, "characters");
+                var folders = new[] { characters, cloud }.Concat(Directory.GetDirectories(userdata)
+                    .Select(account => Path.Combine(account, "892970", "remote", "characters")));
+                if (folders.Where(Directory.Exists).SelectMany(folder => Directory.GetFiles(folder))
+                    .Any(path => Path.GetFileName(path).Equals(file, StringComparison.OrdinalIgnoreCase))) return Ok("VT-CHAR collision\n");
+                File.Copy(Path.Combine(Local(v["stage"]), file), Path.Combine(characters, file));
+                return Ok("VT-CHAR staged\n");
+            }
+            case "character-retire":
+            {
+                string characters = Local(v["characters"]);
+                if (Directory.Exists(characters))
+                    foreach (string file in Directory.GetFiles(characters).Where(path =>
+                        Path.GetFileName(path).Equals(v["name"] + ".fch", StringComparison.OrdinalIgnoreCase))) File.Delete(file);
+                return Ok("VT-CHAR-RETIRED\n");
+            }
+            case "character-drop":
+                if (Directory.Exists(Local(v["stage"]))) Directory.Delete(Local(v["stage"]), recursive: true);
+                return Ok("VT-CHAR-STAGE-DROPPED\n");
             case "list":
             {
                 string root = Local(v["root"]);
@@ -189,6 +262,13 @@ internal sealed class FakeServerHost : IGameHost
                 if (!Directory.Exists(runtime)) return Ok("VT-RETIRED 0 0\n");
                 long perFile = long.Parse(v["perfile"]), total = long.Parse(v["total"]), kept = 0;
                 var reply = new StringBuilder();
+                if (v.TryGetValue("replaceLoader", out var replace) && replace == "true")
+                {
+                    foreach (string file in new[] { "winhttp.dll", "doorstop_config.ini", "libdoorstop.dylib" })
+                        File.Delete(Path.Combine(runtime, file));
+                    foreach (string dir in new[] { "BepInEx/core", "doorstop_libs" })
+                        if (Directory.Exists(Path.Combine(runtime, dir))) Directory.Delete(Path.Combine(runtime, dir), true);
+                }
                 foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
                 {
                     string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line)), source = Path.Combine(runtime, relative);
@@ -246,12 +326,13 @@ internal sealed class FakeServerHost : IGameHost
         return Task.FromResult(new HostLockResult(HostLockState.Released, null, "released"));
     }
     public Task<Shipment> ShipRevisionAsync(string repository, string revision, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
-    public Task<Shipment> ShipFilesAsync(string localDirectory, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default)
+    public async Task<Shipment> ShipFilesAsync(string localDirectory, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default)
     {
+        if (BeforeShip != null) await BeforeShip().ConfigureAwait(false);
         lock (_sync) Runs.Add(("ship", new Dictionary<string, string> { ["dest"] = hostDirectory }));
         CopyDirectory(localDirectory, Local(hostDirectory));
         File.WriteAllText(Path.Combine(Local(hostDirectory), "SOURCE.txt"), "files=world\n");
-        return Task.FromResult(new Shipment(hostDirectory, new string('a', 64), 1, null, null));
+        return new Shipment(hostDirectory, new string('a', 64), 1, null, null);
     }
     public Task<long> LogOffsetAsync(string logPath, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
     public Task<HostLogResult> WaitForLogAsync(string logPath, long fromOffset, Regex success, IReadOnlyList<Regex>? failures, TimeSpan timeout, CancellationToken cancellation = default)
@@ -300,6 +381,11 @@ public sealed partial class HostedServerRunTests : IDisposable
 
     private FakeServerHost NewHost(FakeOwnedServer? server = null) => new("linux-box", Mirror, server);
     private FakeOwnedServer NewServer() => new("test.mod", saveRoot: RunDirectory + "/world");
+    private static void StageLoader(string root)
+    {
+        File.WriteAllText(Path.Combine(root, "winhttp.dll"), "unknown proxy version");
+        File.WriteAllText(Path.Combine(root, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+    }
 
     [Fact] public void WindowsPowerShellDedicatedServerProfileIsAcceptedBeforeAnyHostOperation()
     {
@@ -325,6 +411,146 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("fetch", host.Scripts);
         Assert.False(Directory.Exists(host.Local(windowsRuns + @"\run-test\runtime")));
         Assert.Contains("fake boot", File.ReadAllText(Path.Combine(Output, "boot-1", "game-0.log")));
+    }
+
+    [Fact] public async Task OneHostedPreparationCopiesOnlySelectedFilesWithoutChangingTheSource()
+    {
+        var host = new FakeServerHost("windows-server", Mirror, windows: true);
+        const string source = @"C:\game\server", runtime = @"C:\runs\one\runtime", staging = @"C:\runs\one\staging";
+        string install = host.Local(source);
+        FakeInstalls.Server(install);
+        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        StageLoader(install);
+        string old = Path.Combine(install, "BepInEx", "plugins", "unrelated.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(old)!);
+        File.WriteAllText(old, "unrelated");
+        string chosen = Path.Combine(_root, "chosen.dll");
+        File.WriteAllText(chosen, "selected plugin");
+        var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen.dll")], TimeSpan.FromSeconds(30));
+        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/chosen.dll"]);
+        Assert.True(File.Exists(old));
+        Assert.False(File.Exists(Path.Combine(host.Local(runtime), "BepInEx", "plugins", "unrelated.dll")));
+        Assert.False(Directory.Exists(host.Local(staging)));
+        Assert.Contains("apply-stage", host.Scripts);
+        Assert.Contains("copy", host.Scripts);
+    }
+
+    [Fact] public async Task ReviewedLoaderReplacesAnIncoherentSourceOnlyInTheDisposableRuntime()
+    {
+        var host = new FakeServerHost("windows-client", Mirror, windows: true);
+        const string source = @"C:\game\client", runtime = @"C:\runs\loader\runtime", staging = @"C:\runs\loader\staging";
+        string install = host.Local(source);
+        FakeInstalls.Client(install);
+        File.WriteAllText(Path.Combine(install, ClientLaunch.WindowsExecutable), "client");
+        StageLoader(install);
+        string packageRoot = Path.Combine(_root, "approved-loader");
+        Directory.CreateDirectory(Path.Combine(packageRoot, "BepInEx/core"));
+        File.WriteAllText(Path.Combine(packageRoot, BepInExLoader.Core), "core");
+        File.WriteAllText(Path.Combine(packageRoot, BepInExLoader.Preloader), "preloader");
+        StageLoader(packageRoot);
+        var package = BepInExLoaderPackage.Capture(packageRoot, "test-loader", "1");
+        File.WriteAllText(Path.Combine(install, "winhttp.dll"), "target_assembly");
+        File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), "[General]\nenabled=true\ntargetAssembly=BepInEx/core/BepInEx.Preloader.dll\n");
+        File.WriteAllText(Path.Combine(install, "BepInEx/core/stale.dll"), "must disappear");
+        var before = WorldFixture.Manifest(install);
+        string plugin = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(plugin, "plugin");
+        var files = new[] { new HostedRuntimeFile(plugin, "BepInEx/plugins/selected.dll") };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => HostedRuntimeStage.PrepareAsync(host,
+            HostedRuntimeKind.Client, source, runtime, staging, files, TimeSpan.FromSeconds(30)));
+        Assert.DoesNotContain("copy", host.Scripts);
+        var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
+            files, TimeSpan.FromSeconds(30), loaderPackage: package);
+        foreach (var file in package.Files) Assert.Equal(file.Value, listing.Files[file.Key]);
+        Assert.False(listing.Files.ContainsKey("BepInEx/core/stale.dll"));
+        WorldFixture.Verify(install, before);
+        Assert.Equal(before.Count, WorldFixture.Manifest(install).Count);
+    }
+
+    [Fact] public async Task ClientPreparationRefusesAServerAndLeavesItsSourceAlone()
+    {
+        var host = new FakeServerHost("windows-client", Mirror, windows: true);
+        const string source = @"C:\game\client", runtime = @"C:\runs\client\runtime", staging = @"C:\runs\client\staging";
+        string install = host.Local(source);
+        FakeInstalls.Client(install);
+        File.WriteAllText(Path.Combine(install, ClientLaunch.WindowsExecutable), "client");
+        StageLoader(install);
+        string old = Path.Combine(install, "BepInEx", "plugins", "unrelated.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(old)!);
+        File.WriteAllText(old, "unrelated");
+        string chosen = Path.Combine(_root, "cli.dll");
+        File.WriteAllText(chosen, "selected CLI");
+        var files = new[] { new HostedRuntimeFile(chosen, "BepInEx/plugins/cli.dll") };
+        var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging, files, TimeSpan.FromSeconds(30));
+        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/cli.dll"]);
+        Assert.False(listing.Files.ContainsKey("BepInEx/plugins/unrelated.dll"));
+        Assert.True(File.Exists(old));
+        Assert.False(Directory.Exists(host.Local(staging)));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source,
+            @"C:\runs\server\runtime", @"C:\runs\server\staging", files, TimeSpan.FromSeconds(30)));
+    }
+
+    [Fact] public async Task MacClientBundleCanBePreparedFromItsContainingInstall()
+    {
+        var host = new FakeServerHost("mac-client", Mirror);
+        const string source = "/game/client", runtime = "/runs/vt-one/runtime", staging = "/runs/vt-one/staging";
+        string install = host.Local(source);
+        string managed = Path.Combine(install, "Valheim.app", "Contents", "Resources", "Data", "Managed");
+        Directory.CreateDirectory(managed);
+        File.WriteAllText(Path.Combine(managed, InstallPins.GameAssemblyName), "mac game");
+        string executable = Path.Combine(install, "Valheim.app", "Contents", "MacOS", "Valheim");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        File.WriteAllText(executable, "mac executable");
+        string core = Path.Combine(install, "BepInEx", "core", "BepInEx.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(core)!);
+        File.WriteAllText(core, "core");
+        string chosen = Path.Combine(_root, "mac-cli.dll");
+        File.WriteAllText(chosen, "selected CLI");
+        var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/mac-cli.dll")], TimeSpan.FromSeconds(30));
+        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/mac-cli.dll"]);
+        Assert.True(File.Exists(executable));
+    }
+
+    [Fact] public async Task PreparationRejectsMixedLoaderFilesAndSourceNestedStagingBeforeShipping()
+    {
+        var host = new FakeServerHost("windows-server", Mirror, windows: true);
+        const string source = @"C:\game\server", runtime = @"C:\game\server\runs\one\runtime", staging = @"C:\game\server\runs\one\staging";
+        string install = host.Local(source);
+        FakeInstalls.Server(install);
+        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        StageLoader(install);
+        string chosen = Path.Combine(_root, "chosen.dll");
+        File.WriteAllText(chosen, "selected");
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen.dll")], TimeSpan.FromSeconds(30)));
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source,
+            @"C:\runs\one\runtime", @"C:\runs\one\staging",
+            [new HostedRuntimeFile(chosen, "winhttp.dll")], TimeSpan.FromSeconds(30)));
+        Assert.DoesNotContain("copy", host.Scripts);
+    }
+
+    [Fact] public async Task FailedPreparationRetiresOnlyItsNewCopyAndStaging()
+    {
+        var host = new FakeServerHost("windows-server", Mirror, windows: true);
+        const string source = @"C:\game\server", runtime = @"C:\runs\failed\runtime", staging = @"C:\runs\failed\staging";
+        string install = host.Local(source);
+        FakeInstalls.Server(install);
+        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        StageLoader(install);
+        string unrelated = Path.Combine(install, "BepInEx", "plugins", "unrelated.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(unrelated)!);
+        File.WriteAllText(unrelated, "keep me");
+        string chosen = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(chosen, "selected");
+        host.Failures["apply-stage"] = FakeServerHost.TransportFailure;
+        await Assert.ThrowsAsync<HostOperationException>(() => HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30)));
+        Assert.True(File.Exists(unrelated));
+        Assert.False(Directory.Exists(host.Local(runtime)));
+        Assert.False(Directory.Exists(host.Local(staging)));
+        Assert.Contains("cleanup-stage", host.Scripts);
     }
 
     // The host's install (the runtime the plan pins) and a local world; returns the plan and the profile.

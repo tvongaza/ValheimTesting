@@ -35,6 +35,8 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
     /// <summary>Turns devcommands on through the session capability's <c>devcommands</c> field before the scenario.</summary>
     public bool EnableDevcommands { get; init; } = true;
+    /// <summary>Opt in to verified cheat access on the owned disposable server before the scenario. Requires cli_access.</summary>
+    public bool AcknowledgeCheats { get; init; }
     /// <summary>The scenario for a launching mode, given the started, strictly pinned server.</summary>
     public required Func<PinnedServerRunContext<TPlan>, Task> Scenario { get; init; }
     /// <summary>
@@ -109,8 +111,8 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
                 : throw new ArgumentException($"The environment profile names clients {string.Join(", ", clients)}; say which one opens.", nameof(profileClient)));
             // A startup that fails after the client started still kept its logs: they are scanned and listed like an opened client's.
             try { session = client.Owned ? Hosted.OpenClient(Report, Output, client, name, Cancellation) : Hosted.AttachClient(Report, Output, client, name, Cancellation); }
-            catch (Exception error) { Logs.AddRange(ClientSession.KeptLogs(error)); throw; }
-            Logs.AddRange(session.Logs); // Scanned with the server's at teardown, after the scenario closes the client.
+            catch (Exception error) { lock (Logs) Logs.AddRange(ClientSession.KeptLogs(error)); throw; }
+            lock (Logs) Logs.AddRange(session.Logs); // Scanned at teardown, after all parallel client opens settle.
             return session;
         }
         if (profileClient != null) throw new ArgumentException("A profile client opens only for an owned client in a run with an environment profile that names clients.", nameof(profileClient));
@@ -443,7 +445,9 @@ public static class PinnedServerRun
             launched = context;
             session = context.Session = options.SessionOverride?.Invoke(context) ?? hosted?.Session(context, options) ?? OwnedSession(context, options);
             report.Step("start and verify owned dedicated fixture", () => context.Server = session.Start());
-            if (options.EnableDevcommands)
+            if (options.AcknowledgeCheats)
+                report.Step("verify test access on the disposable server", () => TestAccess.Ensure(context.Server, TestActorRole.DedicatedServer));
+            else if (options.EnableDevcommands)
                 report.Step("enable test devcommands", () =>
                 {
                     var capability = context.Server.RequireCapability(options.SessionCapability);

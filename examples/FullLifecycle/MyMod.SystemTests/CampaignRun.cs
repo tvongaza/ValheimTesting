@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Concurrent;
 using Valheim.Testing.Game;
 
 namespace MyMod.SystemTests;
@@ -35,6 +36,28 @@ public sealed class CampaignRun
     /// <summary>Opens one named profile client on its own host and Steam lease; used while both clients remain connected.</summary>
     public Func<ClientRunPlan, string, ClientSession> OpenProfileClient { get; init; } = (_, _) =>
         throw new ArgumentException("This run has no named client profile.");
+    /// <summary>
+    /// Set up any number of named profile clients concurrently. Each role has its own host, Steam lease,
+    /// runtime and character. All opens finish before the caller advances past its menu checkpoint. If
+    /// one open fails, every successful session is closed before the original failure is rethrown.
+    /// </summary>
+    public IReadOnlyDictionary<string, ClientSession> OpenProfileClientsParallel(IReadOnlyDictionary<string, ClientRunPlan> clients)
+    {
+        if (clients.Count == 0) throw new ArgumentException("Name at least one client.", nameof(clients));
+        var opened = new ConcurrentDictionary<string, ClientSession>(StringComparer.Ordinal);
+        var tasks = clients.Select(pair => Task.Run(() =>
+        {
+            Cancellation.ThrowIfCancellationRequested();
+            opened[pair.Key] = OpenProfileClient(pair.Value, pair.Key);
+        }, Cancellation)).ToArray();
+        try { Task.WhenAll(tasks).GetAwaiter().GetResult(); }
+        catch
+        {
+            foreach (var session in opened.Values) try { session.Dispose(); } catch { /* teardown still owns the failed run */ }
+            throw;
+        }
+        return opened;
+    }
     /// <summary>Waits until the given server accepts game connections.</summary>
     public required Action<GameActor> WaitUntilJoinable { get; init; }
     public required ScenarioReport Report { get; init; }
@@ -72,6 +95,7 @@ public static class CampaignScenarios
                 case LifecyclePlan.ReviewCaptureScenarioName: ReviewCaptureScenario.Run(run); break;
                 case LifecyclePlan.AreaObjectsScenarioName: AreaObjectsScenario.Run(run); break;
                 case LifecyclePlan.OwnershipHandoffScenario: OwnershipHandoffScenario.Run(run); break;
+                case LifecyclePlan.ThreeActorScenario: ThreeActorSmokeScenario.Run(run); break;
                 case LifecyclePlan.CrossplayScenario:
                     // The dry-site lifecycle, joined through each boot's crossplay lobby instead of the server's address.
                     DrySiteScenario.Run(plan, run.Server, run.RestartServer, () => run.OpenClient(plan.Client!, null), run.WaitUntilJoinable,
@@ -93,9 +117,7 @@ public static class CampaignSteps
     /// <summary>Mark only a staged disposable local character as cheated before CLI cheat-classified checks.</summary>
     public static void AcknowledgeLocalCheats(GameActor client)
     {
-        var reply = client.Execute("cli_acknowledge_local_cheats");
-        if (!reply.Output.Contains("OK: localCharacterCheated=True"))
-            throw new InvalidOperationException("The disposable client's cheat acknowledgement did not take effect: " + string.Join(" | ", reply.Output));
+        TestAccess.Ensure(client, TestActorRole.ClientInWorld, clientMutations: true);
     }
 
     /// <summary>Every patch MyMod declares is applied on the server (the adapter's census).</summary>

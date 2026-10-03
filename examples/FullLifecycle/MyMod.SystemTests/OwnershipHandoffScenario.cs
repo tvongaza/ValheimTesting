@@ -24,6 +24,14 @@ public static class OwnershipHandoffScenario
         var report = run.Report;
         ClientSession? a = null, b = null;
         Exception? failure = null;
+        report.Step("fixture arrival heights are dry and measured before either client starts", () =>
+        {
+            var samples = new[] { CampaignSteps.At(plan.Arrival), CampaignSteps.At(plan.SecondArrival!) };
+            var measured = TerrainProbe.Compare(run.Server, "generator", "declared fixture arrival points", samples, 0.5f);
+            report.Provenance["arrival-height-check"] = JsonSerializer.Serialize(measured);
+            if (!measured.Passed || measured.Samples.Any(sample => sample.Actual < 31.5f))
+                throw new InvalidOperationException("Fixture arrivals are not confirmed dry: " + JsonSerializer.Serialize(measured));
+        });
         CampaignSteps.MarkSites(plan, run.Server, report);
         try
         {
@@ -93,14 +101,40 @@ public static class OwnershipHandoffScenario
             var joined = session.Read(); // One identity/readiness check, not an external polling loop.
             if (!joined.WorldReady || joined.WorldUid != run.Plan.WorldUid || !joined.LocalPlayer)
                 throw new InvalidOperationException($"{name} joined without a ready player in world {run.Plan.WorldUid}: {joined}.");
-            PlayerPlacement.Protect(actor);
-            CampaignSteps.AcknowledgeLocalCheats(actor); // The plan uses disposable local characters.
+            CampaignSteps.AcknowledgeLocalCheats(actor);
+            PlayerPlacement.Protect(actor); // The plan uses disposable local characters.
         });
         run.Report.Step($"{name} arrives on dry ground by game-side signals", () =>
-            ArriveSelf(actor, CampaignSteps.At(site), TimeSpan.FromSeconds(plan.ArrivalSeconds), run.Cancellation));
+        {
+            var point = CampaignSteps.At(site);
+            try { ArriveSelf(actor, point, TimeSpan.FromSeconds(plan.ArrivalSeconds), run.Cancellation, run.Report, name); }
+            catch
+            {
+                // Read-only diagnostics before teardown: never retry a teleport or replace its failure.
+                if (!run.Cancellation.IsCancellationRequested)
+                {
+                    var previous = actor.CommandTimeout;
+                    try
+                    {
+                        actor.CommandTimeout = TimeSpan.FromSeconds(5);
+                        Capture("support", () => actor.Observe(actor.RequireCapability("valheim.world/player-support")).Data.GetRawText());
+                        Capture("ground", () => JsonSerializer.Serialize(TerrainProbe.Compare(actor, "loaded-ground",
+                            "declared fixture arrival", new[] { point }, .3f)));
+                    }
+                    finally { actor.CommandTimeout = previous; }
+                }
+                throw;
+            }
+            void Capture(string kind, Func<string> read)
+            {
+                string key = $"arrival-{name}-{kind}";
+                try { run.Report.Provenance[key] = read(); }
+                catch (Exception error) { run.Report.Provenance[key] = "Diagnostic unavailable: " + error.Message; }
+            }
+        });
     }
 
-    private static void ArriveSelf(GameActor actor, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation)
+    private static void ArriveSelf(GameActor actor, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation, ScenarioReport report, string name)
     {
         var clock = Stopwatch.StartNew();
         PlayerPlacement.SkipIntro(actor, TimeSpan.FromSeconds(Math.Min(60, timeout.TotalSeconds)));
@@ -117,6 +151,13 @@ public static class OwnershipHandoffScenario
         string trace = "";
         WithDeadline(actor, timeout - clock.Elapsed, () => trace = RequireLine(actor.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}"), "OK: TELEPORT_TRACE "));
         if (!trace.Contains("floorAtDone=True", StringComparison.Ordinal)) throw new InvalidOperationException("Teleport ended without a ready floor: " + trace);
+        // This scenario tests ownership, not terrain generation. Native site levelling can differ from the
+        // generator used to choose the initial target. Once its floor is ready, measure the actual loaded ground
+        // as a placement input; the independent player-support observation still has to satisfy the same limits.
+        var ground = TerrainProbe.Compare(actor, "loaded-ground", "generator placement input", new[] { point }, .3f);
+        report.Provenance[$"arrival-{name}-ground"] = JsonSerializer.Serialize(ground);
+        if (ground.Samples[0].Actual < 31.5f) throw new InvalidOperationException("Loaded arrival ground is not dry.");
+        point = point with { Height = ground.Samples[0].Actual };
         Observation support = null!;
         WithDeadline(actor, timeout - clock.Elapsed, () => support = actor.Observe(actor.RequireCapability("valheim.world/player-support-wait"),
             point.X.ToString("R", CultureInfo.InvariantCulture), point.Height.ToString("R", CultureInfo.InvariantCulture),

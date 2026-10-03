@@ -1,7 +1,7 @@
 # Check NuGet's caches and the SDK's file-based app state before dotnet run restores a file-based script.
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('bootstrap', 'validate', 'api-docs')]
+    [ValidateSet('bootstrap', 'validate', 'api-docs', 'campaign')]
     [string]$Task,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$TaskArgs
@@ -13,6 +13,7 @@ $script = switch ($Task) {
     'bootstrap' { 'bootstrap-cli.cs' }
     'validate' { 'validate.cs' }
     'api-docs' { 'api-docs.cs' }
+    'campaign' { 'campaign' }
 }
 
 function Get-CachePath([string]$variable, [string]$kind) {
@@ -54,6 +55,14 @@ else {
 }
 $env:NUGET_PACKAGES = $packages
 $env:NUGET_HTTP_CACHE_PATH = $http
+if ($Task -eq 'campaign') {
+    Push-Location $root
+    try {
+        & dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign @TaskArgs
+        exit $LASTEXITCODE
+    }
+    finally { Pop-Location }
+}
 
 # The SDK builds a file-based script under a per-user directory that no setting moves (#210): the temporary directory
 # on Windows, LocalApplicationData elsewhere. It creates one owner-only directory per script there.

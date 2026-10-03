@@ -10,11 +10,12 @@ using Valheim.Testing.Game;
 if (args.Length > 0 && args[0] == ServerFixture.Mode) return ServerFixture.Run(args);
 if (args.Length > 0 && CharacterFixture.Handles(args[0])) return CharacterFixture.Run(args);
 if (args.Length > 0 && args[0] is HostedRun.RunMode or HostedRun.ValidateMode) return HostedRun.Run(args);
-return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<LifecyclePlan>
+var options = new PinnedServerRunOptions<LifecyclePlan>
 {
     Name = "mymod-system-test",
     ReadPlan = LifecyclePlan.ReadValidated,
     SessionCapability = "mymod.testing/session",
+    AcknowledgeCheats = true,
     SessionTokenVariable = LifecyclePlan.SessionTokenVariable,
     CheckMode = (mode, plan) =>
     {
@@ -77,4 +78,6 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
         });
         return Task.CompletedTask;
     },
-});
+};
+if (ThreeActorCampaign.Handles(args)) return await ThreeActorCampaign.RunAsync(args, options);
+return await PinnedServerRun.MainAsync(args, options);

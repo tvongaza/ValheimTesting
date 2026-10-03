@@ -332,6 +332,7 @@ public sealed class ClientSession : IDisposable
     private ClientSession Using(SteamAccountHold? account)
     {
         if (account == null) return this;
+        if (account.CheckSignedIn) account.CheckGameIdentity(Actor);
         Account = account;
         _accountLost = account.Lost.Register(StopForLostAccount);
         return this;

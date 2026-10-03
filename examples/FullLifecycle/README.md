@@ -213,7 +213,7 @@ Six more scenarios, and a hosted run, take the toolkit's lifecycle steps and wor
 | [crossplay](MyMod.SystemTests/sample-plan-crossplay.json) | `crossplay` | MyMod, adapter; `"crossplay": true`, an explicit `-port`, no `-password` | MyMod `absent`, `"crossplay": true` | #32 the dry-site lifecycle joined through each boot's PlayFab lobby; the report records `crossplay` and `clientJoin` |
 | [hosted](MyMod.SystemTests/sample-plan-hosted.json) | `hosted` (its own mode) | none | MyMod, adapter, `hostWorld` | #31 MyMod's feature on a host (mark, refuse, saved objects, persistence across the host's restart) and MyMod's broadcast handler running in the host's own process |
 | [content-census](MyMod.SystemTests/sample-plan-content-census.json) | `content-census` | MyMod, adapter | MyMod, adapter (the server's builds) | #91/#114 in each round (first, after restart and rejoin) each side observes MyMod's declared item, prefabs, recipe, Hammer-table piece and status effect ([content-expectations.json](MyMod.SystemTests/content-expectations.json)); dependencies resolve, no undeclared content appears in scope, and the observation comes from that side's pinned MyMod build. The #114 additions passed a native run. |
-| [ownership-handoff](MyMod.SystemTests/sample-plan-ownership-handoff.json) | `ownership-handoff` | MyMod, adapter | Two simultaneous owned clients, each with MyMod and adapter on a different host and Steam account | #211 A explicitly claims the marker; B sees A's owner; A leaves; B explicitly claims it; server and B agree on one owner. This tests orchestration, not automatic ownership of every Valheim object. Native run pending |
+| [ownership-handoff](MyMod.SystemTests/sample-plan-ownership-handoff.json) | `ownership-handoff` | MyMod, adapter | Two simultaneous owned clients, each with MyMod and adapter on a different host and Steam account | #211 A explicitly claims the marker; B sees A's owner; A leaves; B explicitly claims it; server and B agree on one owner. This tests orchestration, not automatic ownership of every Valheim object. Native Windows dedicated server + macOS/Windows clients passed 47/47 steps (Valheim 1.0.16) |
 
 For `ownership-handoff`, pass `--profile` to the runner. The private environment profile names `client-a` and `client-b` on different hosts, gives each a different `steamAccount` from the pool, and maps their `cliPort` values to the sample plan's `client.port` and `secondClient.port`. Each host has its own game install and disposable local character. The relevant part of the profile looks like this (see [account leases](../../docs/testing-toolkit.md#a-runs-client-accounts-from-an-environment-profile) for the full host and pool format):
 
@@ -228,6 +228,8 @@ For `ownership-handoff`, pass `--profile` to the runner. The private environment
 ```
 
 Run `validate` first: a missing profile, shared account or host, ambiguous port or character, missing capability, or wrong plugin pin is refused before a fixture copy or launch. Then run the scenario with the same plan and profile. The profile stays private; the [sample plan](MyMod.SystemTests/sample-plan-ownership-handoff.json) uses placeholder file hashes and a documentation-only server address. The named joins are game-side waits: ValheimCLI returns after each player is ready, and the runner makes one world-identity check rather than repeatedly querying state.
+
+Give the clients separate landing points at least 3 m apart, each beside the marker rather than on it. Before either client launches, the server checks the declared heights against the fixture's generator and refuses wet targets. After each teleport's floor-ready signal, the client measures loaded terrain at its target, which may include location levelling absent from the raw generator. That measured height is a placement input, not a terrain-correctness assertion; a separate player-support observation must still confirm proximity, grounding and low speed. Failed arrival keeps a bounded read-only support/ground diagnostic before teardown.
 
 The runner issues each join, local teleport and ownership claim once. Both clients require `eventDrivenArrival: true`; the runner refuses `fastTestTeleports` because joined-client cold hops have not passed the [timing check](https://github.com/tvongaza/ValheimTesting/issues/216). ValheimCLI's game-side teleport waits and the adapter's marker-owner notification wait complete those transitions; a lost action reply is not retried. The adapter records the marker's ZDO owner and the observing process's ZDO session ID, so the server and B can agree on the same owner rather than infer it from peer order. The ownership hook is test-only and belongs in this example adapter; shared doubles do not model Valheim's ownership rules. A listen-server version needs a separate host plan because one host is also a player; this example covers a dedicated server. Before a native run, verify the required Standard CLI commands in the pinned build too; [#217](https://github.com/tvongaza/ValheimTesting/issues/217) tracks making that preflight automatic.
 
@@ -255,6 +257,68 @@ The control is the `-p:ProbeUnpatch=Other` build as `revisionA` with `"expectOth
 The integration tests ([CampaignScenarioTests](MyMod.IntegrationTests/CampaignScenarioTests.cs), [HostedScenarioTests](MyMod.IntegrationTests/HostedScenarioTests.cs), [CampaignPlanTests](MyMod.IntegrationTests/CampaignPlanTests.cs)) run every scenario, each control's expected failure, each control whose check would pass, and every plan refusal against scripted replies; they read the sample plans too.
 
 ### Prepare the campaign
+
+For a short server plus two-client setup smoke, use the runnable
+[`ThreeActorSmokeScenario.cs`](MyMod.SystemTests/ThreeActorSmokeScenario.cs),
+[`sample-plan-three-actor-smoke.json`](MyMod.SystemTests/sample-plan-three-actor-smoke.json) and
+[`sample-three-actor-campaign.json`](MyMod.SystemTests/sample-three-actor-campaign.json). The scenario owns one
+dedicated server and two clients, joins both clients to the same pinned world, verifies their plugins and world identity,
+then checks that the server sees two peers. Its named checkpoints require both clients at their menus, both joined,
+client B back at its menu while A stays in the world, and both joined again. Each transition is requested once and
+the next checkpoint reads the resulting state; a failed or uncertain transition is not retried. This tests setup and
+rejoin, not marker ownership or gameplay. The underlying
+`HostedCampaignPreparation` accepts any number of named clients beside one dedicated server: each role is a separate
+profile/lock/character object, and `ApplyTo` binds a dictionary of client plans by name. The example binds only
+`client-a` and `client-b` because its assertion expects two peers. A different mod can bind three or more without
+changing preparation. Simultaneous clients need different Steam account leases, hosts and registered character player IDs.
+
+The server and every client prepare their runtime in parallel, with one claim per host. After the server's ready
+checkpoint, `OpenProfileClientsParallel` launches the named clients concurrently and waits for all of them at the
+menu checkpoint. The join and rejoin checkpoints are explicit so a test can pause one actor while the others stay in
+the world. A failed client start closes the other successful starts before teardown; it does not advance the test.
+
+Copy the two sample JSON files to a private test directory. In the campaign manifest, name the private environment
+profile, fixture world, direct-join address, and a reviewed dependency lock for each role. Create each lock from an
+explicit `NativeDependencyRequest` with `dotnet run scripts/native-dependencies.cs -- resolve request.json lock.json`;
+the lock selects the mod, its hard dependencies and one coherent ValheimCLI core and packs. The server lock must include
+WorldTools because the two-peer checkpoint calls `cli_peers`; `campaign check` refuses a lock without it before the
+game starts. If the source install's loader is unsuitable, set `loaderPackage` on that campaign role to a reviewed
+`BepInExLoaderPackage` manifest. The existing package API captures and validates its files and hashes; campaign preparation
+applies them only to the disposable copy. Do not repair the live source install or copy individual Doorstop files by hand.
+A nested `BepInEx/core/core` can make the preloader load Harmony twice and abort before writing its main log.
+
+Campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool. Preparation
+matches each host's account before copying; launch repeats that check under the account lease, then verifies the game's
+own identity. Unix's remembered Steam login alone is not proof of the running game's account. Identity values are redacted
+from the recorded identity reply. The FullLifecycle runner opts into `TestAccess.Ensure`: dedicated servers acknowledge
+cheats locally, and clients acknowledge their disposable character after joining. `AllowOnServerClients` must already be
+set in the staged configuration for client mutations; the helper never grants it at runtime. Register two clean, distinct
+test characters with `DisposableCharacterStore`; one seed copied twice is still one player. Set the server password and
+client password variable in the private plan/environment as for any owned-server run. The sample paths and password are
+placeholders, never defaults that the runner guesses.
+
+From the repository root, these are the preparation check and the complete run:
+
+```sh
+bash scripts/run.sh campaign check /private/test/campaign.json /private/test/three-actor-plan.json
+bash scripts/run.sh campaign run /private/test/campaign.json /private/test/three-actor-plan.json /private/test/runs/first
+```
+
+`check` reviews local locks, characters, fixture metadata and the host/account profile without touching a host. `run`
+starts with the repository launcher's NuGet cache write check, so an unwritable user cache is replaced before .NET
+tries to restore packages. On Windows the same entry point is `./scripts/run.ps1 campaign ...`. The run then
+takes one lock per host, checks for conflicting client or owned-runtime processes, and prepares all named actors concurrently, even when a server and
+client share a host. Each actor gets its own clean install copy, selected mod and ValheimCLI files, and the clients get
+separate registered character names. The runner waits for every preparation to settle before it starts the server;
+on failure it retires every copy whose ownership was established. It then derives strict pins and calls the usual
+`PinnedServerRun`. The campaign also copies the manifest's one-world fixture into the dedicated server's
+`worlds_local` layout. The original fixture stays read-only; this layout matters because Valheim silently creates a
+new world when a world of the requested name is absent from `-savedir/worlds_local`.
+It attempts to retire the prepared copies after the runner stops. If a process is still active or a stop cannot be
+established, the guarded cleanup refuses to remove its character or install and names what remains for inspection.
+The output holds the generated plan, role-specific CLI manifests, normal `result.json` and JUnit evidence, plus
+`campaign-times.json` with preparation, scenario and cleanup seconds. No game
+startup is part of the `check` result.
 
 1. **Builds.** Build MyMod twice: normally, and with `-p:MyModNetVersion=2` into another folder (`-o`), for the refused client; for the two content-census controls, build separate copies with `-p:MyModOmit=recipe` and `-p:MyModOmit=status-effect`. Build the adapter and the controls you run (FieldOnlyState needs `-p:CliDll=`, as the adapter does). Pin every DLL by MD5 in the plans.
 2. **The server runtime** as in [Prepare the native run](#prepare-the-native-run), with ValheimCLI's core, Standard and WorldTools packs, MyMod and the adapter; pin all five in `pins`. A control run adds the control plugin to `BepInEx/plugins` and to `pins`.

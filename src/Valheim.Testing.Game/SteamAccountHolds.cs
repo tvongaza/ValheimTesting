@@ -131,6 +131,17 @@ public sealed class SteamAccountHold : IAsyncDisposable
         }
     }
 
+    /// <summary>Confirms the running game's Steam identity against the leased account, including on Unix where preflight reads a remembered login.</summary>
+    public void CheckGameIdentity(GameActor actor)
+    {
+        ThrowIfLost();
+        var reply = actor.Execute("cli_multiplayer_identity");
+        var ids = reply.Output.SelectMany(line => System.Text.RegularExpressions.Regex.Matches(line,
+            @"\bsteamId=([0-9]{17})(?=,|\s|$)").Select(match => match.Groups[1].Value)).ToArray();
+        if (ids.Length != 1 || ids[0] != _account.SteamId)
+            throw new InvalidOperationException($"The running client {Client} did not confirm the leased Steam identity for {Account}; setup is refused.");
+    }
+
     /// <summary>Throws when the lease was lost or released: the client must not start, or must stop, on this account.</summary>
     public void ThrowIfLost()
     {

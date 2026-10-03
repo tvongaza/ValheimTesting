@@ -1,5 +1,5 @@
 {
-  "scenario": "ownership-handoff",
+  "scenario": "three-actor-smoke",
   "runtime": {
     "source": "<full path of the server runtime>",
     "sha256": {
@@ -48,21 +48,6 @@
     "patchers": "<InstallPins.Of(runtime).Patchers>"
   },
   "port": 5577,
-  "drySite": {
-    "x": 120,
-    "z": -380,
-    "ground": 45.2
-  },
-  "wetSite": {
-    "x": 900,
-    "z": 150,
-    "ground": 18.4
-  },
-  "arrival": {
-    "x": 125,
-    "z": -380,
-    "ground": 45.0
-  },
   "client": {
     "mode": "owned",
     "install": "<full path of client A install>",
@@ -75,11 +60,10 @@
       "720"
     ],
     "port": 5556,
-    "eventDrivenArrival": true,
+    "eventDrivenArrival": false,
     "pins": {
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
-      "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
       "example.mymod": "<md5 of MyMod.dll>",
       "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
     },
@@ -92,12 +76,7 @@
     "character": "handoffA",
     "passwordVariable": "MYMOD_TEST_PASSWORD",
     "capabilities": [
-      "mymod.testing/markers",
-      "mymod.testing/marker-owner",
-      "mymod.testing/marker-owner-wait",
-      "mymod.testing/marker-owner-claim",
-      "valheim.world/terrain",
-      "valheim.world/player-support-wait"
+      "mymod.testing/markers"
     ]
   },
   "secondClient": {
@@ -112,11 +91,10 @@
       "720"
     ],
     "port": 5557,
-    "eventDrivenArrival": true,
+    "eventDrivenArrival": false,
     "pins": {
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
-      "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
       "example.mymod": "<md5 of MyMod.dll>",
       "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
     },
@@ -129,17 +107,7 @@
     "character": "handoffB",
     "passwordVariable": "MYMOD_TEST_PASSWORD",
     "capabilities": [
-      "mymod.testing/markers",
-      "mymod.testing/marker-owner",
-      "mymod.testing/marker-owner-wait",
-      "mymod.testing/marker-owner-claim",
-      "valheim.world/terrain",
-      "valheim.world/player-support-wait"
+      "mymod.testing/markers"
     ]
-  },
-  "secondArrival": {
-    "x": 120,
-    "z": -372,
-    "ground": 45.0
   }
 }

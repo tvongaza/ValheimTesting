@@ -27,7 +27,9 @@ public sealed partial class LifecyclePlan
     public const string AreaObjectsScenarioName = "area-objects";
     /// <summary>Two simultaneous clients observe an explicit marker ownership handoff.</summary>
     public const string OwnershipHandoffScenario = "ownership-handoff";
-    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario, ContentCensusScenario, ReviewCaptureScenarioName, AreaObjectsScenarioName, OwnershipHandoffScenario];
+    /// <summary>A small three-actor setup smoke: server and two clients join one world with strict pins.</summary>
+    public const string ThreeActorScenario = "three-actor-smoke";
+    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario, ContentCensusScenario, ReviewCaptureScenarioName, AreaObjectsScenarioName, OwnershipHandoffScenario, ThreeActorScenario];
     /// <summary>The adapter's fixture commands (the global-key change) run only when the server starts with this set to 1.</summary>
     public const string FixturesVariable = "MYMOD_TEST_FIXTURES";
     private static readonly Regex Word = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
@@ -60,7 +62,7 @@ public sealed partial class LifecyclePlan
     public CaptureSettings? Capture { get; set; }
 
     [JsonIgnore] public bool MarksSites => Scenario is LifecycleScenario or ServerScenario or WorldScenario or VanillaClientScenario or CrossplayScenario or OwnershipHandoffScenario;
-    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario or ContentCensusScenario or ReviewCaptureScenarioName or AreaObjectsScenarioName or OwnershipHandoffScenario;
+    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario or ContentCensusScenario or ReviewCaptureScenarioName or AreaObjectsScenarioName or OwnershipHandoffScenario or ThreeActorScenario;
     [JsonIgnore] public ControlPlugin? Control => ControlPlugins.Named(ExpectFailure);
     [JsonIgnore] public GameConnectionStatus RefusalStatus => ExpectedRefusal == null ? GameConnectionStatus.ErrorVersion : ConnectionStatusReading.ParseStatus(ExpectedRefusal);
 
@@ -69,7 +71,9 @@ public sealed partial class LifecyclePlan
         OnlyForScenario("away, globalKey, dungeon and logout", Away != null || GlobalKey != null || Dungeon != null || Logout != null, WorldScenario);
         OnlyForScenario("newGreeting", NewGreeting != null, SyncedConfigScenario);
         OnlyForScenario("refusedClient and expectedRefusal", RefusedClient != null || ExpectedRefusal != null, RefusedJoinScenario);
-        OnlyForScenario("secondClient and secondArrival", SecondClient != null || SecondArrival != null, OwnershipHandoffScenario);
+        if (SecondClient != null && Scenario is not (OwnershipHandoffScenario or ThreeActorScenario))
+            throw new ArgumentException("secondClient belongs to a two-client scenario.");
+        OnlyForScenario("secondArrival", SecondArrival != null, OwnershipHandoffScenario);
         OnlyForScenario("crossplay", Crossplay, CrossplayScenario);
         OnlyForScenario("patchReload", PatchReload != null, ServerScenario);
         OnlyForScenario("capture", Capture != null, ReviewCaptureScenarioName);
@@ -126,6 +130,9 @@ public sealed partial class LifecyclePlan
             case OwnershipHandoffScenario:
                 CheckOwnershipHandoff(client);
                 break;
+            case ThreeActorScenario:
+                CheckThreeActorSmoke(client);
+                break;
             case CrossplayScenario:
                 if (!Crossplay || !client.Crossplay) throw new ArgumentException("The crossplay scenario needs \"crossplay\": true in the plan and in its client section.");
                 if (Arguments.Any(argument => argument.Equals("-password", StringComparison.OrdinalIgnoreCase)))
@@ -141,7 +148,7 @@ public sealed partial class LifecyclePlan
         SameBuildsAs(first, "client A"); SameBuildsAs(second, "client B");
         foreach (var (client, name) in new[] { (first, "client A"), (second, "client B") })
             foreach (string capability in new[] { Capabilities.Markers, Capabilities.MarkerOwner, Capabilities.MarkerOwnerWait,
-                         Capabilities.MarkerOwnerClaim, "valheim.world/player-support-wait" })
+                         Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait" })
                 if (!client.Capabilities.Contains(capability, StringComparer.Ordinal))
                     throw new ArgumentException($"The {name} must require {capability} before gameplay.");
         if (!first.Owned || !second.Owned) throw new ArgumentException("The handoff uses two owned, disposable clients; attached personal clients are refused.");
@@ -160,15 +167,28 @@ public sealed partial class LifecyclePlan
             throw new ArgumentException("Give the two clients separate installs; one Steam session runs one game client.");
         var secondArrival = SecondArrival ?? throw new ArgumentException("Add secondArrival on dry ground beside the marker.");
         secondArrival.Validate("second arrival", requireGround: true);
+        float betweenPlayers = MathF.Sqrt(MathF.Pow(secondArrival.X - Arrival.X, 2) + MathF.Pow(secondArrival.Z - Arrival.Z, 2));
+        if (betweenPlayers < 3) throw new ArgumentException("Keep arrival and secondArrival at least 3 m apart so players cannot stack at the landing points.");
         if (secondArrival.Ground < WaterLevel + Clearance) throw new ArgumentException("The second arrival must be dry ground.");
         float fromMarker = MathF.Sqrt(MathF.Pow(secondArrival.X - DrySite.X, 2) + MathF.Pow(secondArrival.Z - DrySite.Z, 2));
         if (fromMarker is < 3 or > 20) throw new ArgumentException("Put secondArrival 3 to 20 m from the dry-site marker.");
     }
 
+    private void CheckThreeActorSmoke(ClientRunPlan first)
+    {
+        var second = SecondClient ?? throw new ArgumentException("Add secondClient for the three-actor smoke.");
+        SameBuildsAs(first, "client A"); SameBuildsAs(second, "client B");
+        if (!first.Owned || !second.Owned || first.Crossplay || second.Crossplay || first.HostWorld != null || second.HostWorld != null)
+            throw new ArgumentException("The three-actor smoke needs two owned clients joining one dedicated server.");
+        if (first.Join != second.Join || first.Port == second.Port || first.Character == second.Character ||
+            first.Install.Equals(second.Install, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Give the two clients one join address and distinct CLI ports, characters and installs.");
+    }
+
     /// <summary>Two named profile clients and two different leased accounts are required before fixtures are copied.</summary>
     public void CheckHandoffEnvironment(EnvironmentProfile? profile)
     {
-        if (Scenario != OwnershipHandoffScenario) return;
+        if (Scenario is not (OwnershipHandoffScenario or ThreeActorScenario)) return;
         if (profile == null) throw new ArgumentException("The ownership handoff needs --profile with two client hosts and Steam account leases.");
         if (!profile.Clients.TryGetValue("client-a", out var a) || !profile.Clients.TryGetValue("client-b", out var b))
             throw new ArgumentException("The profile must name client-a and client-b.");

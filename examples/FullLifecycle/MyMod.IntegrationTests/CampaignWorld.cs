@@ -131,6 +131,11 @@ internal sealed class CampaignWorld : IDisposable
     {
         bool devcommands = true;
         var transport = new ScriptedTransport()
+            .Extension("valheim.world", "terrain", args => new {
+                source = "generator", complete = true, units = "metres",
+                x = float.Parse(args[0], CultureInfo.InvariantCulture), z = float.Parse(args[1], CultureInfo.InvariantCulture),
+                height = args[0] == "105" ? 42.3f : 42.4f,
+            })
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
             .OnPrefix("mymod_mark ", command =>
             {
@@ -199,9 +204,14 @@ internal sealed class CampaignWorld : IDisposable
     /// <summary>A client; a refused one runs another MyMod build, so the server refuses its join.</summary>
     public ScriptedTransport Client(bool refused = false)
     {
+        bool acknowledged = false;
         bool devcommands = false, refusedOnce = false;
         var transport = new ScriptedTransport()
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .On("cli_access", _ => ScriptedTransport.Ok("ACCESS " + JsonSerializer.Serialize(new { schemaVersion = 1, complete = true,
+                devcommands, cheatsAcknowledged = acknowledged, allowOnServerClients = true, server = false, dedicated = false,
+                joinedClient = _joined && !false, localPlayer = _joined, profileAvailable = _joined })))
+            .On("cli_acknowledge_local_cheats", _ => { acknowledged = true; return ScriptedTransport.Ok("OK: localCharacterCheated=True"); })
             .OnPrefix("cli_extension valheim.session/join ", _ =>
             {
                 if (refused && !RefusalSucceeds)

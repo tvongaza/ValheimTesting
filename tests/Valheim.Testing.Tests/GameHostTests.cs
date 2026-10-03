@@ -287,6 +287,66 @@ public class GameHostTests
         Assert.Contains("BepInEx/plugins/MyMod.dll", names);
     }
 
+    [Fact] public async Task WindowsSshShipsAnArchiveWithScpBeforeRunningTheHashCheckedExtraction()
+    {
+        using var source = new TempDirectory();
+        File.WriteAllText(Path.Combine(source.Path, "payload.txt"), "a test payload");
+        string? hash = null;
+        var fake = new FakeLauncher()
+            .Reply(call =>
+            {
+                Assert.Equal("scp", call.Executable);
+                Assert.Null(call.Upload);
+                string archive = call.Arguments[^2];
+                Assert.EndsWith(".tar", archive);
+                Assert.Matches(@"tester@box\.example:vt-upload-[0-9a-f]{32}\.tar$", call.Arguments[^1]);
+                hash = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(archive)));
+                return FakeLauncher.Exit(0);
+            })
+            .Reply(call =>
+            {
+                Assert.Equal("ssh", call.Executable);
+                Assert.Null(call.Upload);
+                string script = FakeLauncher.Script(call);
+                Assert.Contains("Get-VtSha256 $archive", script);
+                Assert.Contains("Join-Path $HOME $uploadName", script);
+                Assert.Contains("Remove-Item -LiteralPath $archive", script);
+                Assert.Contains("$uploadName = 'vt-upload-", script);
+                return FakeLauncher.Exit(0, "VT-SHIP shipped " + hash + "\n", FakeLauncher.Report(0));
+            });
+        var shipment = await Host("ssh", fake, HostShell.WindowsPowerShell)
+            .ShipFilesAsync(source.Path, "C:\\pcstage\\runtime", Timeout);
+        Assert.Equal(hash, shipment.Sha256);
+        Assert.Equal(2, fake.Calls.Count);
+    }
+
+    [Fact] public async Task WindowsSshDoesNotExtractWhenTheArchiveTransferFails()
+    {
+        using var source = new TempDirectory();
+        File.WriteAllText(Path.Combine(source.Path, "payload.txt"), "a test payload");
+        var fake = new FakeLauncher().Exits(1, "", "transfer failed");
+        var error = await Assert.ThrowsAsync<IOException>(() => Host("ssh", fake, HostShell.WindowsPowerShell)
+            .ShipFilesAsync(source.Path, "C:\\pcstage\\runtime", Timeout));
+        Assert.Contains("not proven", error.Message);
+        Assert.Single(fake.Calls);
+    }
+
+    [Fact] public async Task WindowsSshUriUsesTheSameHostAndPortForScp()
+    {
+        using var source = new TempDirectory();
+        string archive = Path.Combine(source.Path, "archive.tar");
+        File.WriteAllText(archive, "test");
+        var fake = new FakeLauncher().Exits(0);
+        var host = new SshGameHost("box", "ssh://tester@box.example:2222", HostShell.WindowsPowerShell,
+            0, null, null, "ssh", fake);
+        await host.UploadArchiveAsync(archive, "vt-upload-" + new string('a', 32) + ".tar", Timeout, default);
+        Assert.Equal("scp", fake.Calls[0].Executable);
+        int portAt = fake.Calls[0].Arguments.ToList().IndexOf("-P");
+        Assert.True(portAt >= 0);
+        Assert.Equal("2222", fake.Calls[0].Arguments[portAt + 1]);
+        Assert.Equal("tester@box.example:vt-upload-" + new string('a', 32) + ".tar", fake.Calls[0].Arguments[^1]);
+    }
+
     [Fact] public void AShipVerdictOtherThanTheSentHashIsRefused()
     {
         HostResult Ok(string stdout) => new(HostOutcome.Exited, 0, stdout, "", TimeSpan.Zero, false);

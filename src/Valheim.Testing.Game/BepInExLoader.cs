@@ -23,6 +23,10 @@ internal static class BepInExLoader
     {
         RequireFile(root, Preloader, "BepInEx is not installed in the " + kind);
         RequireFile(root, Core, "BepInEx is not installed in the " + kind);
+        // Copying an extracted BepInEx/core directory into an existing core can create core/core.
+        // The preloader walks it and loads 0Harmony20 twice, then exits before writing LogOutput.log.
+        if (Directory.Exists(Path.Combine(root, "BepInEx", "core", "core")))
+            throw new InvalidOperationException($"The {kind} has a nested BepInEx/core/core. Replace the loader as one coherent tree; do not copy core into an existing core directory.");
     }
     /// <summary>The winhttp.dll proxy and a doorstop_config.ini that enables Doorstop and targets BepInEx's preloader.</summary>
     internal static void RequireWindowsLoader(string root, string kind)
@@ -133,8 +137,10 @@ internal static class BepInExLoader
             throw new InvalidOperationException($"{WindowsConfig} names no [General] target_assembly or [UnityDoorstop] targetAssembly; set it to {WindowsPreloader}.");
         string expected = Normalize(root, WindowsPreloader);
         foreach (var (targetSection, target) in stated)
+        {
             if (!string.Equals(Normalize(root, target), expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"{WindowsConfig} [{targetSection}] targets {target}, not BepInEx's preloader; set it to {WindowsPreloader}, or the game starts without BepInEx.");
+        }
         RequireMatchingProxy(proxy, kind, sections, enabled, stated);
     }
 

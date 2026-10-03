@@ -37,6 +37,8 @@ internal sealed class HostedServerRun
     internal const string BepInExLog = "BepInEx/LogOutput.log", UnityLog = "toolkit-unity.log";
     private static readonly TimeSpan Quick = TimeSpan.FromSeconds(60), Long = TimeSpan.FromMinutes(15);
     private readonly HostedSeams _seams;
+    private readonly object _clientState = new();
+    private readonly SemaphoreSlim _clientLockGate = new(1, 1);
     private readonly string _owner;
     private readonly List<(string Host, HostLock Lock)> _clientLocks = [];
     private readonly List<(string Host, IServerProcess Process)> _localMacProcesses = [];
@@ -281,12 +283,17 @@ internal sealed class HostedServerRun
         ClientAccount? held = null;
         await report.StepAsync($"lease a Steam account for client {name}", async () =>
         {
-            _leaseHost ??= section.LeaseHost == Role.Host ? Host : _seams.Host?.Invoke(section.LeaseHost) ?? Profile.CreateHost(section.LeaseHost);
-            var hold = await SteamAccountHold.AcquireAsync(Profile, name, _owner + " client " + name, _leaseHost, Quick, _seams.SteamLeaseTime, _seams.SteamRenewEvery,
+            IGameHost leaseHost;
+            lock (_clientState)
+                leaseHost = _leaseHost ??= section.LeaseHost == Role.Host ? Host : _seams.Host?.Invoke(section.LeaseHost) ?? Profile.CreateHost(section.LeaseHost);
+            var hold = await SteamAccountHold.AcquireAsync(Profile, name, _owner + " client " + name, leaseHost, Quick, _seams.SteamLeaseTime, _seams.SteamRenewEvery,
                 cancellation).ConfigureAwait(false);
-            _accounts.Add(held = new ClientAccount(name, hold));
+            lock (_clientState)
+            {
+                _accounts.Add(held = new ClientAccount(name, hold));
+                hold.Record(report);
+            }
             hold.Lost.Register(() => AccountLost?.Invoke());
-            hold.Record(report);
         }).ConfigureAwait(false);
         if (section.CheckSignedIn)
             await report.StepAsync($"client {name}'s host is signed in to Steam account {held!.Hold.Account} (signed-in check)",
@@ -309,9 +316,17 @@ internal sealed class HostedServerRun
         var host = ClientHost(role);
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
         // The server's lock covers its own host; another client host is locked for the rest of the run.
-        if (role.Host != Role.Host && !_clientLocks.Any(held => held.Host == role.Host))
-            _clientLocks.Add((role.Host, await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)));
-        int n = ++_clients;
+        if (role.Host != Role.Host)
+        {
+            await _clientLockGate.WaitAsync(cancellation).ConfigureAwait(false);
+            try
+            {
+                if (!_clientLocks.Any(held => held.Host == role.Host))
+                    _clientLocks.Add((role.Host, await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)));
+            }
+            finally { _clientLockGate.Release(); }
+        }
+        int n = Interlocked.Increment(ref _clients);
         string runDirectory = HostInstall.Join(role.Runtime, RunId), launchDirectory = HostInstall.Join(runDirectory, "client-" + n);
         string log = HostInstall.Join(role.Install, BepInExLog);
         var listing = await HostInstall.ListAsync(host, role.Install, Long, ["*_Data/Managed", "BepInEx/core", "BepInEx/patchers"], cancellation).ConfigureAwait(false);
@@ -385,19 +400,29 @@ internal sealed class HostedServerRun
         if (host.Kind != GameHostKind.Local)
             throw new PlatformNotSupportedException($"Profile client '{name}' must use a local host; a remote process cannot enter this runner's GUI session.");
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
-        if (role.Host != Role.Host && !_clientLocks.Any(held => held.Host == role.Host))
-            _clientLocks.Add((role.Host, await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)));
+        if (role.Host != Role.Host)
+        {
+            await _clientLockGate.WaitAsync(cancellation).ConfigureAwait(false);
+            try
+            {
+                if (!_clientLocks.Any(held => held.Host == role.Host))
+                    _clientLocks.Add((role.Host, await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)));
+            }
+            finally { _clientLockGate.Release(); }
+        }
         // ClientSession owns the direct child process and its logs. No SSH-launched GUI process or remote task is involved.
         ClientSession session;
         Action<IServerProcess> processStarted = process =>
         {
-            _localMacProcesses.Add((role.Host, process));
+            lock (_clientState) _localMacProcesses.Add((role.Host, process));
             if (account != null) account.Process = process;
         };
         session = _seams.LocalMacLaunch?.Invoke(plan, output, account?.Hold, cancellation, processStarted)
             ?? ClientSession.Launch(plan, output, account?.Hold, cancellation, processStarted);
-        if (session.OwnedProcess is { } owned && !_localMacProcesses.Any(item => ReferenceEquals(item.Process, owned)))
-            _localMacProcesses.Add((role.Host, owned));
+        if (session.OwnedProcess is { } owned)
+            lock (_clientState)
+                if (!_localMacProcesses.Any(item => ReferenceEquals(item.Process, owned)))
+                    _localMacProcesses.Add((role.Host, owned));
         if (account != null) { account.Process = session.OwnedProcess; account.Session = session; }
         return session;
     }

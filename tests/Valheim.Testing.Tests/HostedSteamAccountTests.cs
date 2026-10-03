@@ -27,6 +27,9 @@ public sealed partial class HostedServerRunTests
         return (host, fixture, client, plan, profile);
     }
 
+    private static ScriptedTransport SignedInClientTransport(string id = LeaseBox.SteamId) =>
+        new ScriptedTransport().On("cli_multiplayer_identity", _ => ScriptedTransport.Ok("OK: steamId=" + id + ", playFabLoginState=NotLoggedIn, playFabId=none, backend=Steam, gameState=main_menu, connectionStatus=None, isServer=False, isOpenServer=False, server="));
+
     private ClientRunPlan OwnedClient() => new() { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
 
     private static JsonElement ResultIn(string output) => JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
@@ -185,7 +188,7 @@ public sealed partial class HostedServerRunTests
         {
             using (context.OpenClient(OwnedClient())) { }
             return Task.CompletedTask;
-        }, run.Client, new ScriptedTransport(), LeaseBox.Host()));
+        }, run.Client, SignedInClientTransport(), LeaseBox.Host()));
         var check = Step("client player's host is signed in to Steam account vt_client_one (signed-in check)");
         Assert.Equal("steam-user", run.Client.Runs[0].Script); // Before anything else on the client's host.
         if (refusal == null)
@@ -203,6 +206,28 @@ public sealed partial class HostedServerRunTests
         Assert.DoesNotContain("7656119", File.ReadAllText(Path.Combine(Output, "result.json")));
         Assert.True(Step("release client player's Steam account lease").GetProperty("Passed").GetBoolean());
         Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(PoolFile)).State);
+    }
+
+    [Theory]
+    [InlineData("76561197960265730")]
+    [InlineData("none")]
+    public async Task RunningIdentityMismatchStopsTheOwnedClientBeforeTheScenario(string gameId)
+    {
+        LeaseBox.WritePool(_root, Leases);
+        var run = WithClient(Accounts(check: true));
+        run.Client.SteamUserReply = "VT-STEAMUSER id " + LeaseBox.SteamId + "\n";
+        bool exercised = false;
+        int code = await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, context =>
+        {
+            using var session = context.OpenClient(OwnedClient());
+            exercised = true;
+            return Task.CompletedTask;
+        }, run.Client, SignedInClientTransport(gameId), LeaseBox.Host()));
+        Assert.Equal(1, code);
+        Assert.False(exercised);
+        Assert.Contains(run.Client.Runs, entry => entry.Script == "stop");
+        Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(PoolFile)).State);
+        Assert.DoesNotContain("7656119", File.ReadAllText(Path.Combine(Output, "result.json")));
     }
 
     [Fact] public async Task AnAttachedProfileClientLeasesItsAccountAndIsNeverStarted()
@@ -242,7 +267,7 @@ public sealed partial class HostedServerRunTests
             {
                 using (context.OpenClient(OwnedClient())) { }
                 return Task.CompletedTask;
-            }, run.Client, new ScriptedTransport(), LeaseBox.Host())));
+            }, run.Client, SignedInClientTransport(), LeaseBox.Host())));
             var seen = Seen(Output, run);
             Assert.Contains(seen, text => text.Contains(LeaseBox.Account, StringComparison.Ordinal));
             foreach (string text in seen) { Assert.DoesNotContain(canary, text); Assert.DoesNotContain(LeaseBox.SteamId, text); }
@@ -254,7 +279,7 @@ public sealed partial class HostedServerRunTests
             {
                 using (context.OpenClient(OwnedClient())) { }
                 return Task.CompletedTask;
-            }, control.Client, new ScriptedTransport(), LeaseBox.Host(), name: "toolkit-" + canary)));
+            }, control.Client, SignedInClientTransport(), LeaseBox.Host(), name: "toolkit-" + canary)));
             Assert.Contains(Seen(controlOutput, control), text => text.Contains(canary, StringComparison.Ordinal));
         }
         finally { Environment.SetEnvironmentVariable(variable, null); }
