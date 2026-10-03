@@ -131,6 +131,57 @@ public sealed class ReviewClipTests
     }
 
     [Fact]
+    public async Task CancellationOfInFlightCaptureWaitsForHandlerCleanupBeforeRestoring()
+    {
+        string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
+        using var cancel = new CancellationTokenSource();
+        var (transport, client) = Client();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool handlerCleaned = false;
+        transport.OnCancellable(async (command, token) =>
+        {
+            Assert.Contains("review-clip-frames", command);
+            started.SetResult();
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+            finally { handlerCleaned = true; }
+            throw new InvalidOperationException("Unreachable after cancellation.");
+        });
+        using (client)
+        {
+            Task<ReviewClipReceipt> capture = ReviewClip.CaptureCoreAsync(client, Plan(output), Fetch, cancel.Token);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => capture);
+            Assert.True(handlerCleaned);
+            Assert.False(Directory.Exists(output));
+            Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
+            Assert.Equal("cli_extension mymod.testing/review-restore motion-1", transport.Commands.Last());
+        }
+    }
+
+    [Fact]
+    public async Task DriftOnTheSeparateCommandConnectionRefusesCapture()
+    {
+        string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
+        var (transport, client) = Client();
+        using (client)
+        {
+            transport.OnCancellable((_, _) => throw new InvalidOperationException("The frame command must not run."));
+            // The actor was verified before the drift. The second connection must still check the same pins.
+            bool refused = false;
+            transport.OnPrefix("cli_expect ", _ => {
+                if (!refused && transport.Count("cli_extension mymod.testing/review-begin") > 0)
+                { refused = true; return ScriptedTransport.Failed("MISMATCH worlduid: wrong fixture"); }
+                return ScriptedTransport.Ok("OK: EXPECT");
+            });
+            await Assert.ThrowsAsync<InvalidOperationException>(() => ReviewClip.CaptureCoreAsync(client, Plan(output), Fetch, CancellationToken.None));
+            Assert.True(refused);
+            Assert.Equal(0, transport.Count("cli_extension mymod.testing/review-clip-frames"));
+            Assert.False(Directory.Exists(output));
+        }
+    }
+
+    [Fact]
     public void CorruptedFrameDigestIsRefused()
     {
         string dir = Directory.CreateTempSubdirectory("vt-bad-frame-").FullName;

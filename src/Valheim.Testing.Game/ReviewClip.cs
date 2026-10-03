@@ -57,9 +57,9 @@ public static class ReviewClip
             try
             {
                 client.CommandTimeout = TimeSpan.FromSeconds(Math.Max(30, plan.Frames / (double)plan.FramesPerSecond + 20));
-                result = client.Invoke(clip, plan.Id, hostFrames,
+                result = await client.InvokeCancelableAsync(clip, cancellation, plan.Id, hostFrames,
                     plan.Width.ToString(CultureInfo.InvariantCulture), plan.Height.ToString(CultureInfo.InvariantCulture),
-                    plan.FramesPerSecond.ToString(CultureInfo.InvariantCulture), plan.Frames.ToString(CultureInfo.InvariantCulture));
+                    plan.FramesPerSecond.ToString(CultureInfo.InvariantCulture), plan.Frames.ToString(CultureInfo.InvariantCulture)).ConfigureAwait(false);
             }
             finally { client.CommandTimeout = previousTimeout; }
             if (result.GetProperty("source").GetString() != "scene-only-frames" ||
