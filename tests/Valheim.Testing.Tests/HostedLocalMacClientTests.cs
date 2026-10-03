@@ -45,6 +45,7 @@ public sealed partial class HostedServerRunTests
     [Fact]
     public async Task LocalMacProfileLaunchKeepsTheExactProcessAndReleasesItsHostLock()
     {
+        if (!OperatingSystem.IsMacOS()) return; // A local macOS role needs macOS path and desktop semantics.
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
         client.Architecture = "arm64";
@@ -75,6 +76,7 @@ public sealed partial class HostedServerRunTests
     [InlineData(true, true)]
     public void RemoteOrLockedMacRefusesBeforeClientHostIsTouched(bool local, bool locked)
     {
+        if (!OperatingSystem.IsMacOS()) return;
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost, local);
         bool launched = false;
@@ -95,6 +97,7 @@ public sealed partial class HostedServerRunTests
     [InlineData("host")]
     public void LocalMacRoleAndPlanMustDescribeTheSameOwnedClient(string mismatch)
     {
+        if (!OperatingSystem.IsMacOS()) return;
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
         if (mismatch == "install") client.Install = Path.Combine(_root, "some-other-install");
@@ -115,6 +118,7 @@ public sealed partial class HostedServerRunTests
     [Fact]
     public async Task WrongSignedInAccountRefusesBeforeTheMacClientLaunchesAndReleasesItsLease()
     {
+        if (!OperatingSystem.IsMacOS()) return;
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
         profile.SteamAccounts = new SteamAccountsProfile
@@ -150,6 +154,7 @@ public sealed partial class HostedServerRunTests
     [Fact]
     public async Task UnprovenLocalMacStopKeepsTheClientHostLock()
     {
+        if (!OperatingSystem.IsMacOS()) return;
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
         var process = new MacProcess { StopIsUnproven = true };
@@ -177,6 +182,7 @@ public sealed partial class HostedServerRunTests
     [Fact]
     public async Task FailedLocalMacStartupReleasesTheLockOnlyAfterItsProcessIsProvenStopped()
     {
+        if (!OperatingSystem.IsMacOS()) return;
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
         var process = new MacProcess();
