@@ -8,11 +8,19 @@ public interface IGameTransport : IDisposable
 {
     CommandResult Execute(string command, TimeSpan timeout);
 }
-public sealed class CliTransport : IGameTransport
+/// <summary>A separate command connection that can be closed on cancellation without losing the actor's control connection.</summary>
+public interface ICancellableGameTransport : IGameTransport
 {
+    Task<CommandResult> ExecuteCancelableAsync(string expectations, string command, TimeSpan timeout, CancellationToken cancellation);
+}
+public sealed class CliTransport : ICancellableGameTransport
+{
+    private readonly string _host;
+    private readonly int _port;
     private readonly ValheimClient _client;
     public CliTransport(string host, int port)
     {
+        _host = host; _port = port;
         _client = new ValheimClient(host, port);
         if (!_client.Connect()) { _client.Dispose(); throw new IOException("CLI connection failed."); }
         if (!_client.SupportsCompletion) { _client.Dispose(); throw new IOException("Tests require command completion support."); }
@@ -21,6 +29,28 @@ public sealed class CliTransport : IGameTransport
     {
         _client.CommandTimeout = timeout;
         return _client.ExecuteCommand(command);
+    }
+    public Task<CommandResult> ExecuteCancelableAsync(string expectations, string command, TimeSpan timeout, CancellationToken cancellation)
+    {
+        cancellation.ThrowIfCancellationRequested();
+        // Use a second socket so closing an in-flight request cannot strand the control connection needed for cleanup.
+        return Task.Run(() =>
+        {
+            cancellation.ThrowIfCancellationRequested();
+            using var request = new ValheimClient(_host, _port);
+            if (!request.Connect()) throw new IOException("CLI command connection failed.");
+            if (!request.SupportsCompletion) throw new IOException("Tests require command completion support.");
+            request.CommandTimeout = timeout;
+            using var stop = cancellation.Register(request.Disconnect);
+            cancellation.ThrowIfCancellationRequested();
+            var pins = request.ExecuteCommand(expectations);
+            cancellation.ThrowIfCancellationRequested();
+            if (!pins.Ok || !PlanExpectations.Judge(new ExpectationSource { From = "actor", Strict = true }, pins.Output).Held)
+                throw new InvalidOperationException("Game did not confirm the strict environment pins on the command connection.");
+            var result = request.ExecuteCommand(command);
+            cancellation.ThrowIfCancellationRequested();
+            return result;
+        }, CancellationToken.None);
     }
     public void Dispose() => _client.Dispose(); // Attachment never owns the game's process.
 }
@@ -185,6 +215,34 @@ public sealed class GameActor : IDisposable
     {
         if (arguments.Any(x => x.Any(char.IsWhiteSpace) || x.Length == 0)) throw new ArgumentException("Extension arguments must be single tokens in preview 1.");
         var reply = Execute("cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments)));
+        return ParseInvocation(command, reply);
+    }
+    /// <summary>
+    /// Issue one extension mutation on a fresh, strictly pinned CLI connection. Cancellation closes that socket, which
+    /// asks the game to abandon the request; the actor's original connection remains available for cleanup commands.
+    /// This requires a transport that can interrupt its own in-flight command.
+    /// </summary>
+    public async Task<JsonElement> InvokeCancelableAsync(Capability command, CancellationToken cancellation, params string[] arguments)
+    {
+        if (arguments.Any(x => x.Any(char.IsWhiteSpace) || x.Length == 0)) throw new ArgumentException("Extension arguments must be single tokens in preview 1.");
+        if (_transport is not ICancellableGameTransport transport)
+            throw new NotSupportedException("This transport cannot cancel an in-flight extension command.");
+        string expectations;
+        TimeSpan timeout;
+        lock (_sync)
+        {
+            if (!_verified || !_pinned) throw new InvalidOperationException("Verify strict world and plugin pins before issuing a cancellable command.");
+            expectations = _expectations;
+            timeout = CommandTimeout;
+        }
+        string text = "cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments));
+        var reply = await transport.ExecuteCancelableAsync(expectations, text, timeout, cancellation).ConfigureAwait(false);
+        cancellation.ThrowIfCancellationRequested();
+        return ParseInvocation(command, reply);
+    }
+    private static JsonElement ParseInvocation(Capability command, CommandResult reply)
+    {
+        RequireSuccess(reply);
         using var document = ParseLine(reply, "EXTENSION_RESULT "); var root = document.RootElement;
         if (!root.GetProperty("ok").GetBoolean()) throw new InvalidOperationException("Extension returned an error.");
         if (root.GetProperty("schemaVersion").GetInt32() != command.SchemaVersion || root.GetProperty("instance").GetString() != command.Instance ||

@@ -50,7 +50,8 @@ public sealed class Plugin : BaseUnityPlugin
         DungeonRooms.Command(),                                     // dungeon-rooms <x> <z> [radius]: server (#24)
         ContentCensus.Command(),                                    // content-census <owner> <prefix> ...: either side (#91)
         ReviewState.BeginCommand(), ReviewState.MistOffCommand(), ReviewState.ClutterOffCommand(), ReviewState.RestoreCommand(), // owned visual-state lease (#78)
+        ReviewClipFrames.Command(),                                  // bounded, scene-only motion evidence (#212)
         MarkerObservation.Command());                               // markers <x> <z> [radius]: the mod's own
     private void OnApplicationQuit() => QuitLogFlush.Quitting("MyMod.TestAdapter OnApplicationQuit");
-    private void OnDestroy() { ReviewState.RestoreOnUnload(); _registration?.Dispose(); }
+    private void OnDestroy() { ReviewClipFrames.AbortOnUnload(); ReviewState.RestoreOnUnload(); _registration?.Dispose(); }
 }

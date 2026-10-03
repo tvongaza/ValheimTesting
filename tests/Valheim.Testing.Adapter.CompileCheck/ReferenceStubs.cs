@@ -13,6 +13,7 @@ namespace UnityEngine
         public string name { get => throw null; set => throw null; }
         public static T Instantiate<T>(T original, Vector3 position, Quaternion rotation) where T : Object => throw null;
         public static void DestroyImmediate(Object obj) => throw null;
+        public static void Destroy(Object obj) => throw null;
         public static T[] FindObjectsByType<T>(FindObjectsInactive inactive, FindObjectsSortMode sort) where T : Object => throw null;
         public static bool operator ==(Object x, Object y) => throw null;
         public static bool operator !=(Object x, Object y) => throw null;
@@ -31,13 +32,46 @@ namespace UnityEngine
     public class ScriptableObject : Object { }
     public sealed class GameObject : Object
     {
+        public GameObject(string name) { }
         public Transform transform => throw null;
+        public int layer => throw null;
         public bool activeSelf => throw null;
+        public T AddComponent<T>() where T : Component => throw null;
         public void SetActive(bool active) => throw null;
         public T GetComponent<T>() => throw null;
         public T GetComponentInChildren<T>() => throw null;
     }
-    public class Transform : Component { public Vector3 position { get => throw null; set => throw null; } }
+    public class Transform : Component
+    {
+        public Vector3 position { get => throw null; set => throw null; }
+        public Quaternion rotation { get => throw null; set => throw null; }
+    }
+    public class Camera : Behaviour
+    {
+        public bool enabled { get => throw null; set => throw null; }
+        public int cullingMask { get => throw null; set => throw null; }
+        public RenderTexture targetTexture { get => throw null; set => throw null; }
+        public void CopyFrom(Camera other) => throw null;
+        public void Render() => throw null;
+    }
+    public class Canvas : Behaviour { public RenderMode renderMode => throw null; }
+    public enum RenderMode { ScreenSpaceOverlay, ScreenSpaceCamera, WorldSpace }
+    public static class LayerMask { public static int GetMask(params string[] layerNames) => throw null; }
+    public class Texture2D : Object
+    {
+        public Texture2D(int width, int height, TextureFormat format, bool mipChain) { }
+        public void ReadPixels(Rect source, int x, int y) => throw null;
+        public void Apply(bool updateMipmaps) => throw null;
+        public byte[] EncodeToPNG() => throw null;
+    }
+    public enum TextureFormat { RGB24 }
+    public class RenderTexture : Object
+    {
+        public RenderTexture(int width, int height, int depth) { }
+        public static RenderTexture active { get => throw null; set => throw null; }
+    }
+    public struct Rect { public Rect(float x, float y, float width, float height) { } }
+    public sealed class WaitForSecondsRealtime { public WaitForSecondsRealtime(float time) { } }
     public class Collider : Component { public bool Raycast(Ray ray, out RaycastHit hitInfo, float maxDistance) => throw null; }
     public sealed class MeshCollider : Collider { }
     public struct Vector3

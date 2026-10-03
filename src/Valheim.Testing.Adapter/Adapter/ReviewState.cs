@@ -38,6 +38,9 @@ namespace Valheim.Testing.Adapter
         private static Snapshot? _active;
         private static string? _lastRestored;
 
+        /// <summary>Whether a visual capture still owns this client's review-state lease.</summary>
+        public static bool Owns(string id) => _active != null && _active.Id == id;
+
         /// <summary>Read the client's starting visual and safety state: <c>review-begin &lt;run-id&gt;</c>.</summary>
         public static ExtensionCommand BeginCommand(string name = "review-begin") =>
             new ExtensionCommand(name, "Snapshot the owned client's review state: <run-id>", Begin,

@@ -451,7 +451,7 @@ public sealed class DirectServerProcess : IServerProcess
 }
 
 // Local evidence only. Review before publishing: world names/positions and IDs may appear.
-public sealed class RecordingTransport : IGameTransport
+public sealed class RecordingTransport : ICancellableGameTransport
 {
     private readonly IGameTransport _inner;
     private readonly StreamWriter _writer;
@@ -481,6 +481,22 @@ public sealed class RecordingTransport : IGameTransport
         catch (Exception error)
         {
             _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, command, error = error.Message })); throw;
+        }
+    }
+    public async Task<CommandResult> ExecuteCancelableAsync(string expectations, string command, TimeSpan timeout, CancellationToken cancellation)
+    {
+        if (_inner is not ICancellableGameTransport interruptible)
+            throw new NotSupportedException("The recorded game transport cannot interrupt an in-flight command.");
+        try
+        {
+            var reply = await interruptible.ExecuteCancelableAsync(expectations, command, timeout, cancellation).ConfigureAwait(false);
+            _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, command, reply }));
+            return reply;
+        }
+        catch (Exception error)
+        {
+            _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, command, error = error.Message }));
+            throw;
         }
     }
     public void Dispose() { try { _inner.Dispose(); } finally { _writer.Dispose(); } }

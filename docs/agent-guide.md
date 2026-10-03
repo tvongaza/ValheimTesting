@@ -23,6 +23,7 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Share a native regression's source and result | [RegressionBundle](../examples/RegressionBundle/README.md): a scrubbed directory for review, never published | That a ported runner's harness ran natively, or that no private detail outside its rules remains |
 | Exercise extension replacement | [ReloadCheck](../examples/ReloadCheck/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
 | Collect walking evidence | [WalkingReview](../examples/WalkingReview/README.md) | Acceptance without a separate human verdict |
+| Collect a short world-only motion clip | [FullLifecycle human review](../examples/FullLifecycle/README.md#bounded-motion-evidence) | UI implemented on an unexpected scene layer, or a visual verdict without watching the clip |
 
 Use an existing mod-owned scenario when one fits. [Roads scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) cover empty saves, pending bridge respawn, terrain and paint. [MWL scenarios](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) cover full-mode port probes; their bounded full-mode payment/delivery/ownership gate now passes. Server-only MWL cannot validate ports.
 
