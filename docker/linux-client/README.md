@@ -70,6 +70,7 @@ instance list; unproven teardown fails the campaign even if its assertions passe
 python3 docker/linux-client/host/vm-campaign.py \
   --vast /path/to/credential-safe-vast-wrapper \
   --gpu 'RTX 2060S' --max-price 0.10 \
+  --disk-gb 48 \
   --image 'ghcr.io/<owner>/valheim-linux-client@sha256:<digest>' \
   --ssh-key /path/to/dedicated-vm-identity \
   --run-script /path/to/private-native-check.sh \

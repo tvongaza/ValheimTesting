@@ -175,6 +175,8 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--gpu must be an exact GPU name")
     if not re.fullmatch(r"[A-Za-z0-9_./:@-]+", args.image):
         raise ValueError("--image must be a container image reference")
+    if args.disk_gb < 40 or args.disk_gb > 200:
+        raise ValueError("--disk-gb must be between 40 and 200")
     if not args.ssh_key.is_file():
         raise ValueError("SSH identity file is missing")
     evidence = args.evidence.resolve()
@@ -188,7 +190,7 @@ def run(args: argparse.Namespace) -> None:
     command([args.vast, "--help"], timeout=10)
     offer_query = ("vms_enabled=true verified=true rentable=true num_gpus=1 "
                    f"dph<={args.max_price} inet_down>=500 reliability>=0.98 "
-                   "disk_space>=60 cpu_ram>=16")
+                   f"disk_space>={args.disk_gb} cpu_ram>=16")
     offer_id = select_offer(provider(args.vast, "search", "offers", offer_query, "--raw"),
                             args.gpu, args.max_price)
     # Check the exact frozen bootstrap before a paid resource exists.
@@ -208,7 +210,7 @@ def run(args: argparse.Namespace) -> None:
 
     try:
         created = provider(args.vast, "create", "instance", offer_id, "--image", args.vm_image,
-                           "--disk", "60", "--ssh", "--direct", "--label", label, "--raw")
+                           "--disk", str(args.disk_gb), "--ssh", "--direct", "--label", label, "--raw")
         instance_id = str(created.get("new_contract", "")) if isinstance(created, dict) else ""
         if not instance_id.isdecimal():
             instance_id = None
@@ -324,6 +326,7 @@ def main() -> int:
     parser.add_argument("--vast", required=True, help="Vast CLI or credential-safe wrapper")
     parser.add_argument("--gpu", required=True, help="exact Vast GPU name, for example RTX 2060S")
     parser.add_argument("--max-price", required=True, type=float, help="USD per hour ceiling")
+    parser.add_argument("--disk-gb", type=int, default=60, help="VM disk GB; default 60, minimum 40")
     parser.add_argument("--ssh-key", required=True, type=Path)
     parser.add_argument("--bootstrap", type=Path, default=Path(__file__).with_name("vm-bootstrap.sh"))
     parser.add_argument("--run-script", required=True, type=Path, help="local test body, snapshotted before rent")

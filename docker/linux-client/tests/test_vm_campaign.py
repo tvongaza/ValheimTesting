@@ -27,7 +27,7 @@ class CampaignTests(unittest.TestCase):
         self.key = root / "identity"
         self.key.write_text("fake private key\n")
         self.evidence = root / "evidence"
-        self.args = argparse.Namespace(max_price=.10, gpu="RTX 2060S", ssh_key=self.key,
+        self.args = argparse.Namespace(max_price=.10, disk_gb=48, gpu="RTX 2060S", ssh_key=self.key,
                                        evidence=self.evidence, bootstrap=self.bootstrap,
                                        run_script=self.test, asset=[], vast="fake-vast", image="test/image:1",
                                        vm_image="test/vm:1", vm_timeout=1, key_timeout=1,
@@ -90,6 +90,16 @@ class CampaignTests(unittest.TestCase):
                 campaign.run(self.args)
         self.assertTrue(json.loads((self.evidence / "result.json").read_text())["destroyed"])
         self.assertNotIn("pinned-ssh-and-docker", json.loads((self.evidence / "result.json").read_text())["phases"])
+
+    def test_disk_request_is_explicit_and_bounded(self):
+        self.patches()
+        campaign.run(self.args)
+        create = next(args for args in self.states if args[:2] == ("create", "instance"))
+        self.assertEqual("48", create[create.index("--disk") + 1])
+        self.args.disk_gb = 39
+        self.args.evidence = Path(self.temp.name) / "second-evidence"
+        with self.assertRaisesRegex(ValueError, "--disk-gb"):
+            campaign.run(self.args)
 
     def test_modified_snapshot_is_refused(self):
         directory = Path(self.temp.name) / "snap"
