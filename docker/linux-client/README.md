@@ -55,6 +55,50 @@ SSH and opens its **own SSH loopback tunnel** to ValheimCLI. The game port, if t
 the VM provider's explicit UDP mapping. Pin the VM's SSH host key in an SSH config alias; do not open the Docker API or
 ValheimCLI on a public interface. The default bridge-network recipe above remains for manual checks.
 
+### Bounded rented-VM campaign
+
+Use `host/vm-campaign.py` to rent, bootstrap, test and destroy a Vast VM in one command. It takes an **exact GPU name** and
+hourly price cap. It checks both the offer and the VM's actual billed rate after the disk is added; an over-cap rental is
+destroyed before bootstrap. It copies itself, `vm-bootstrap.sh` and your test script into a new private evidence directory *before*
+renting; the copies' SHA-256 values are recorded and the copied test bytes run. Do not edit the active run. SSH uses two
+matching, nonempty ED25519 host-key scans and a pinned private alias. Driver and container-runtime checks run before the
+client image is pulled. It also tests whether the controller's Docker CLI can speak to the VM daemon, pinning that daemon's
+API version only inside the run. The campaign destroys the VM on success, failure and interruption and separately checks the provider's
+instance list; unproven teardown fails the campaign even if its assertions passed.
+
+```sh
+python3 docker/linux-client/host/vm-campaign.py \
+  --vast /path/to/credential-safe-vast-wrapper \
+  --gpu 'RTX 2060S' --max-price 0.10 \
+  --disk-gb 48 \
+  --image 'ghcr.io/<owner>/valheim-linux-client@sha256:<digest>' \
+  --ssh-key /path/to/dedicated-vm-identity \
+  --run-script /path/to/private-native-check.sh \
+  --asset /path/to/pinned-fixture.tar.gz \
+  --evidence /private/new-run-directory
+```
+
+The wrapper must accept standard Vast CLI arguments and emit its `--raw` JSON without exposing credentials. The test script
+receives `VT_VM_SSH_CONFIG`, `VT_VM_ALIAS` (`vt-campaign`), `VT_VM_CONTAINER` (`vt`), `VT_VM_EVIDENCE`, and
+`VT_VM_SNAPSHOT_DIR` (the read-only numbered copies of all inputs, including repeated `--asset` files). It must use
+`ssh -F "$VT_VM_SSH_CONFIG" "$VT_VM_ALIAS"` for host commands; a `remote-container` environment profile should use that
+same alias for Docker and its owned ValheimCLI tunnel. The campaign puts a pinned `ssh` wrapper first on the test script's
+`PATH`, so Docker and the runner inherit the same identity without changing the operator's SSH config. The test script and
+bootstrap and any explicit `--asset` files are the only copied inputs, so keep run-specific fixtures there or pin and fetch
+them with verified hashes. The campaign does not log in
+to Steam or stage a game itself; the test script owns those steps and keeps its evidence under `VT_VM_EVIDENCE`.
+After its assertions pass, the script must write `{"status":"passed"}` to `$VT_VM_EVIDENCE/check-result.json`. A zero shell
+exit without this artifact is a failure; it does not prove that the intended assertions ran. The test script is executed from
+its read-only snapshot with stdin closed, so an SSH command cannot consume the rest of the script.
+
+The evidence directory is private because its SSH configuration names the VM endpoint and test logs may contain account
+details. Review and redact before sharing. Test without renting via
+`python3 -m unittest discover -s docker/linux-client/tests -p 'test_vm_campaign.py' -v`.
+
+For a native client run, the test script must select the intended Steam authenticator/account explicitly and hold that
+account's lease before renting. Do not rely on an authenticator's default first account: a correct QR approval for the
+wrong account can interrupt a game already running elsewhere. The campaign manages the VM, not Steam account ownership.
+
 Then, inside the container (`docker exec vt ...`):
 
 1. **Download the client.** As `steam`: `DepotDownloader -app 892970 -os linux -dir /home/steam/valheim -qr -remember-password`. It prints a login QR code; `vt-qr-url` turns it into a link that any Steam authenticator can approve (the Steam Mobile app, or for example `steamguard qr-login --url <link>` from steamguard-cli on a machine you trust).

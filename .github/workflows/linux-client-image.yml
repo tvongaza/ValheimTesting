@@ -29,6 +29,8 @@ jobs:
           persist-credentials: false
       - name: GPU host preflight controls (no GPU required)
         run: bash docker/linux-client/tests/gpu-preflight.sh
+      - name: VM campaign controls (no VM required)
+        run: python3 -m unittest discover -s docker/linux-client/tests -p 'test_vm_campaign.py' -v
       - name: Build
         run: docker build --pull --label "org.opencontainers.image.revision=${GITHUB_SHA}" -t "$IMAGE:ci" docker/linux-client
       - name: Check contents
