@@ -2,6 +2,7 @@
 # Prepare a fresh Ubuntu VM with an NVIDIA GPU (for example a rented cloud VM) and start the client container `vt`.
 #   bash vm-bootstrap.sh <image>        e.g. ghcr.io/<owner>/valheim-linux-client:latest
 #   bash vm-bootstrap.sh --preflight-gpu  check the host before staging a game or container
+#   VT_HOST_NETWORK=1 bash vm-bootstrap.sh <image>  for a remote-container profile with an SSH-only CLI tunnel
 # Installs the NVIDIA container toolkit, then runs the image with the GPU and the security options Steam needs
 # (user namespaces and its /proc-mounting sandbox), with --init so exited processes are reaped, and starts headless
 # Xorg. Idempotent.
@@ -52,6 +53,7 @@ IMAGE="${1:?usage: vm-bootstrap.sh <image>}"
 # Detect a rented host whose NVIDIA driver has not loaded before package installation or image download.
 # The campaign owns VM destruction after a failed preflight; this host script never destroys its caller's VM.
 gpu_ready
+case "${VT_HOST_NETWORK:-0}" in 0) NETWORK=();; 1) NETWORK=(--network host);; *) echo 'VT_HOST_NETWORK must be 0 or 1' >&2; exit 2;; esac
 export DEBIAN_FRONTEND=noninteractive
 # A throwaway VM must not change under a run: package upgrades reload systemd, and a reload makes containers that got
 # the GPU through --gpus lose it ("Failed to initialize NVML: Unknown Error"; games then fail in GLX setup).
@@ -69,13 +71,18 @@ if ! command -v nvidia-ctk >/dev/null; then
 fi
 runtime_ready
 docker pull -q "$IMAGE" > /dev/null
+DEV=()
 if ! docker ps --format '{{.Names}}' | grep -qx vt; then
     docker rm -f vt > /dev/null 2>&1 || true
     # Every NVIDIA device node explicitly as well: explicit device rules are not dropped by a systemd reload.
-    DEV=(); for d in /dev/nvidia*; do [ -c "$d" ] && DEV+=(--device "$d"); done
-    docker run -d --init --name vt --gpus all "${DEV[@]}" \
+    for d in /dev/nvidia*; do [ -c "$d" ] && DEV+=(--device "$d"); done
+    docker run -d --init --name vt --gpus all "${DEV[@]}" "${NETWORK[@]}" \
       --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined \
       -e NVIDIA_DRIVER_CAPABILITIES=all --shm-size=2g "$IMAGE" sleep infinity > /dev/null
+fi
+if [ "${VT_HOST_NETWORK:-0}" = 1 ] && [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' vt)" != host ]; then
+    echo 'vm-bootstrap: vt already exists without host networking; stop the owned container before retrying' >&2
+    exit 2
 fi
 docker exec vt bash -c 'runuser -u steam -- unshare -Ur true && echo "vm-bootstrap: user namespaces OK"'
 docker exec vt vt-start-x

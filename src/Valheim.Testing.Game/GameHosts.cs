@@ -231,10 +231,10 @@ public sealed class SshGameHost : ScriptedGameHost
 }
 
 /// <summary>
-/// A running container on this machine's Docker daemon, driven with <c>docker exec -i</c>. Scripts run as the given user in the
-/// container's shell. A Docker error, or a shell the container lacks, without the host's exit report is a transport failure.
-/// The container's ValheimCLI is reachable only when the container shares this machine's network (<c>--network host</c>, Linux):
-/// a published port reaches the container's own interface, never its loopback, and the CLI must not listen anywhere else.
+/// A running container on this machine's Docker daemon, or on a remote daemon reached through SSH, driven with
+/// <c>docker exec -i</c>. Scripts run as the given user in the container's shell. A Docker error, or a shell the container
+/// lacks, without the host's exit report is a transport failure. The container must use the Docker host's network
+/// (<c>--network host</c>, Linux) for its loopback ValheimCLI; a published port reaches a different interface.
 /// </summary>
 public sealed class ContainerGameHost : ScriptedGameHost
 {
@@ -242,24 +242,42 @@ public sealed class ContainerGameHost : ScriptedGameHost
     private static readonly Regex UserName = new("^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$", RegexOptions.CultureInvariant);
     private static readonly string[] DockerErrors = ["Error response from daemon", "No such container", "is not running", "Cannot connect to the Docker daemon"];
     private readonly string _docker;
+    private readonly SshGameHost? _remote;
 
     /// <param name="container">The container's name or id.</param>
     /// <param name="user">The user scripts run as (<c>docker exec --user</c>); the container's default when null.</param>
     /// <param name="dockerExecutable">The Docker CLI; <c>docker</c> from PATH by default.</param>
     public ContainerGameHost(string name, string container, HostShell shell, string? user = null, string dockerExecutable = "docker")
-        : this(name, container, shell, user, dockerExecutable, SystemProcessLauncher.Instance) { }
+        : this(name, container, shell, user, dockerExecutable, null, SystemProcessLauncher.Instance) { }
 
-    internal ContainerGameHost(string name, string container, HostShell shell, string? user, string dockerExecutable, IProcessLauncher launcher) : base(name, shell, launcher)
+    /// <summary>
+    /// A container on a remote Docker engine reached over SSH. <paramref name="sshDestination"/> is an SSH config alias or
+    /// an ssh:// destination; its host key and key authentication must already be configured. Docker and the CLI tunnel use
+    /// that same SSH identity. The container must share the VM's network so its loopback CLI can be reached by the tunnel.
+    /// </summary>
+    public ContainerGameHost(string name, string container, HostShell shell, string? user, string sshDestination, string dockerExecutable)
+        : this(name, container, shell, user, dockerExecutable, sshDestination, SystemProcessLauncher.Instance) { }
+
+    internal ContainerGameHost(string name, string container, HostShell shell, string? user, string dockerExecutable, IProcessLauncher launcher)
+        : this(name, container, shell, user, dockerExecutable, null, launcher) { }
+
+    internal ContainerGameHost(string name, string container, HostShell shell, string? user, string dockerExecutable, string? sshDestination, IProcessLauncher launcher) : base(name, shell, launcher)
     {
         if (!ContainerName.IsMatch(container ?? "")) throw new ArgumentException("A container is a Docker name or id.", nameof(container));
         if (user != null && !UserName.IsMatch(user)) throw new ArgumentException("A container user is name or name:group.", nameof(user));
         ArgumentException.ThrowIfNullOrWhiteSpace(dockerExecutable);
         Container = container!; User = user; _docker = dockerExecutable;
+        if (sshDestination != null)
+            _remote = new SshGameHost(name + "-docker-vm", sshDestination, HostShell.Bash, 0, null, null, "ssh", launcher);
     }
 
     public override GameHostKind Kind => GameHostKind.Container;
     public string Container { get; }
     public string? User { get; }
+    public string? SshDestination => _remote?.Destination;
+
+    private IReadOnlyList<string> DockerArguments(params string[] command) => _remote == null
+        ? command : ["--host", _remote.Destination.StartsWith("ssh://", StringComparison.Ordinal) ? _remote.Destination : "ssh://" + _remote.Destination, .. command];
 
     internal override (string Executable, IReadOnlyList<string> Arguments) WrapperCommand()
     {
@@ -269,31 +287,36 @@ public sealed class ContainerGameHost : ScriptedGameHost
         if (Shell.Kind == HostShellKind.PowerShell) arguments.AddRange(["-e", NoStartupJitProfile.Key + "=" + NoStartupJitProfile.Value]);
         arguments.AddRange([Container, Shell.Executable]);
         arguments.AddRange(WrapperArguments(Shell));
-        return (_docker, arguments);
+        return (_docker, DockerArguments([.. arguments]));
     }
 
     // docker exec reports its own failures with 125, and a shell it cannot start with 126 or 127.
     internal override bool IsTransportFailure(ProcessExit exit) =>
-        exit.ExitCode is 125 or 126 or 127 || DockerErrors.Any(error => exit.Stderr.Contains(error, StringComparison.Ordinal));
+        exit.ExitCode is 125 or 126 or 127 || (_remote != null && exit.ExitCode == 255)
+        || DockerErrors.Any(error => exit.Stderr.Contains(error, StringComparison.Ordinal));
 
     /// <summary>
-    /// Returns the ValheimCLI port itself when the container uses the host network; otherwise refuses with
-    /// <see cref="NotSupportedException"/> rather than suggesting a CLI that listens beyond loopback.
+    /// Returns the ValheimCLI port itself for a local host-network container, or opens an owned SSH loopback tunnel to a remote
+    /// host-network container. Other network modes are refused rather than suggesting a CLI listener beyond loopback.
     /// </summary>
     public override async Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default)
     {
         GameHostPorts.Check(hostPort, nameof(hostPort));
         WaitText.RequireTimeout(readyTimeout);
-        if (localPort != 0 && localPort != hostPort)
+        if (_remote == null && localPort != 0 && localPort != hostPort)
             throw new ArgumentException($"A host-network container's ValheimCLI is reached on its own port {hostPort}; nothing forwards {localPort}.", nameof(localPort));
-        var exit = await Launcher.RunAsync(new ProcessCall(_docker, ["inspect", "--format", "{{.HostConfig.NetworkMode}}", Container], [], null, null, null, readyTimeout), cancellation).ConfigureAwait(false);
+        var exit = await Launcher.RunAsync(new ProcessCall(_docker, DockerArguments("inspect", "--format", "{{.State.Running}}|{{.HostConfig.NetworkMode}}", Container), [], null, null, null, readyTimeout), cancellation).ConfigureAwait(false);
         if (exit.End != ProcessEnd.Exited || exit.ExitCode != 0)
             throw new InvalidOperationException($"Could not read the network mode of container {Container} ({(exit.End == ProcessEnd.Exited ? "exit " + exit.ExitCode : exit.End.ToString())}): {exit.Stderr.Trim()}");
-        string mode = exit.Stdout.Trim();
+        string[] state = exit.Stdout.Trim().Split('|', 2);
+        if (state.Length != 2 || state[0] != "true")
+            throw new InvalidOperationException($"Container {Container} is not running; refusing to open its ValheimCLI tunnel.");
+        string mode = state[1];
         if (mode != "host")
             throw new NotSupportedException($"Container {Container} uses network mode '{mode}'. Its ValheimCLI listens on the container's own loopback, which a published port cannot reach; " +
-                "run the container with --network host on a Linux Docker host, or reach the Docker host over SSH.");
-        return new CliTunnel(null, hostPort, hostPort);
+                "run the container with --network host on a Linux Docker host.");
+        return _remote == null ? new CliTunnel(null, hostPort, hostPort)
+            : await _remote.OpenCliTunnelAsync(hostPort, readyTimeout, localPort, cancellation).ConfigureAwait(false);
     }
 }
 
