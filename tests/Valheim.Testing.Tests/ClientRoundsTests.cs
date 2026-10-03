@@ -162,6 +162,7 @@ public sealed class ClientRoundsTests : IDisposable
         plan.EventDrivenArrival = true;
         plan.FastTestTeleports = true;
         _client.On("cli_teleport_test_mode on", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True"))
+            .On("cli_teleport_test_mode off", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=False"))
             .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
             .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
             .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 floorAtDone=True doneMs=3500"))
@@ -176,6 +177,8 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(2, _client.Count("cli_wait_teleportable"));
         Assert.Equal(2, _client.Count("cli_teleport_trace_wait"));
         Assert.Equal(2, _client.Count("cli_extension valheim.world/player-support-wait"));
+        Assert.Equal(2, _client.Count("cli_teleport_test_mode on"));
+        Assert.Equal(2, _client.Count("cli_teleport_test_mode off"));
         Assert.Equal(0, _client.Count("cli_extension valheim.world/player-support"));
         Assert.True(Wrote("first-teleport-trace.json"));
         Assert.True(Wrote("after-restart-teleport-trace.json"));

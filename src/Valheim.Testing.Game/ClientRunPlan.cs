@@ -72,7 +72,9 @@ public sealed class ClientRunPlan
     /// <summary>
     /// Owned, strictly pinned test clients only: allow ValheimCLI to complete a distant teleport once the game's
     /// area and floor checks pass after its initial movement. The test launch sets its opt-in environment marker;
-    /// the runner enables the mode after joining. This does not preload terrain or bypass support checks.
+    /// the runner switches the mode on for each arrival hop and off once it lands. This does not preload terrain or
+    /// bypass support checks. On a joined client the game's area check covers only objects the server has already
+    /// sent, so a fast hop to a cold site may finish before the destination arrives; this is unproven there.
     /// </summary>
     public bool FastTestTeleports { get; set; }
     /// <summary>Required with <see cref="StartAtCharacterSave"/>: the prepared copy and the owned client's character folders.</summary>
