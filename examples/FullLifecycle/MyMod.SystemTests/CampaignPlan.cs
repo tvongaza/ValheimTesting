@@ -23,7 +23,9 @@ public sealed partial class LifecyclePlan
     public const string ContentCensusScenario = "content-census";
     /// <summary>Two stills of one spot under the same conditions, for human comparison; neither image is an automated assertion.</summary>
     public const string ReviewCaptureScenarioName = "review-capture";
-    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario, ContentCensusScenario, ReviewCaptureScenarioName];
+    /// <summary>Read-only server and joined-client census of saved objects and loaded structures at one site.</summary>
+    public const string AreaObjectsScenarioName = "area-objects";
+    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario, ContentCensusScenario, ReviewCaptureScenarioName, AreaObjectsScenarioName];
     /// <summary>The adapter's fixture commands (the global-key change) run only when the server starts with this set to 1.</summary>
     public const string FixturesVariable = "MYMOD_TEST_FIXTURES";
     private static readonly Regex Word = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
@@ -52,7 +54,7 @@ public sealed partial class LifecyclePlan
     public CaptureSettings? Capture { get; set; }
 
     [JsonIgnore] public bool MarksSites => Scenario is LifecycleScenario or ServerScenario or WorldScenario or VanillaClientScenario or CrossplayScenario;
-    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario or ContentCensusScenario or ReviewCaptureScenarioName;
+    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario or ContentCensusScenario or ReviewCaptureScenarioName or AreaObjectsScenarioName;
     [JsonIgnore] public ControlPlugin? Control => ControlPlugins.Named(ExpectFailure);
     [JsonIgnore] public GameConnectionStatus RefusalStatus => ExpectedRefusal == null ? GameConnectionStatus.ErrorVersion : ConnectionStatusReading.ParseStatus(ExpectedRefusal);
 
@@ -69,7 +71,7 @@ public sealed partial class LifecyclePlan
         if (!IsCampaign) return;
         if (Review.Enabled) throw new ArgumentException($"review is for the {LifecycleScenario} scenario; remove it from this plan.");
         if (!MarksSites && (float.IsFinite(DrySite.Ground) || float.IsFinite(WetSite.Ground) ||
-            Scenario != ReviewCaptureScenarioName && float.IsFinite(Arrival.Ground)))
+            Scenario is not (ReviewCaptureScenarioName or AreaObjectsScenarioName) && float.IsFinite(Arrival.Ground)))
             throw new ArgumentException($"The {Scenario} scenario marks nothing: remove drySite, wetSite and arrival.");
         var client = Client ?? throw new ArgumentException($"The {Scenario} scenario looks from a client: add the client section.");
         if (client.HostWorld != null) throw new ArgumentException("A hosting client runs with the host mode and a hosted plan, not on the owned server.");
@@ -99,6 +101,13 @@ public sealed partial class LifecyclePlan
                 Arrival.Validate("review arrival", requireGround: true);
                 if (Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("Review arrival must be dry ground.");
                 (Capture ?? throw new ArgumentException("Add capture conditions to the review-capture plan.")).Validate();
+                break;
+            case AreaObjectsScenarioName:
+                SameBuildsAs(client, "client");
+                Arrival.Validate("object snapshot arrival", requireGround: true);
+                if (Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("Object snapshot arrival must be dry ground.");
+                if (Arrival.X != MathF.Truncate(Arrival.X) || Arrival.Z != MathF.Truncate(Arrival.Z))
+                    throw new ArgumentException("Object snapshot arrival uses whole-metre coordinates so the selected area is unambiguous.");
                 break;
             case SyncedConfigScenario:
                 SameBuildsAs(client, "client");

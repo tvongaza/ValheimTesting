@@ -46,6 +46,8 @@ public sealed class CampaignPlanTests : IDisposable
             plan["wetSite"] = new JsonObject { ["x"] = 400, ["z"] = 300, ["ground"] = 22 };
             plan["arrival"] = new JsonObject { ["x"] = 105, ["z"] = -40, ["ground"] = 42.3 };
         }
+        if (scenario == LifecyclePlan.AreaObjectsScenarioName)
+            plan["arrival"] = new JsonObject { ["x"] = 105, ["z"] = -40, ["ground"] = 42.3 };
         switch (scenario)
         {
             case LifecyclePlan.WorldScenario:
@@ -81,14 +83,22 @@ public sealed class CampaignPlanTests : IDisposable
     [Theory]
     [InlineData(LifecyclePlan.WorldScenario)] [InlineData(LifecyclePlan.VanillaClientScenario)] [InlineData(LifecyclePlan.SyncedConfigScenario)]
     [InlineData(LifecyclePlan.RefusedJoinScenario)] [InlineData(LifecyclePlan.CrossplayScenario)] [InlineData(LifecyclePlan.ContentCensusScenario)]
+    [InlineData(LifecyclePlan.AreaObjectsScenarioName)]
     public void EachScenariosValidPlanIsRead(string scenario) => Assert.Equal(scenario, Read(Plan(scenario)).Scenario);
+
+    [Fact] public void ObjectSnapshotPlanRefusesAnAmbiguousCentreBeforeLaunch()
+    {
+        var plan = Plan(LifecyclePlan.AreaObjectsScenarioName);
+        plan["arrival"]!["x"] = 105.5f;
+        Refused(plan, "whole-metre coordinates");
+    }
 
     [Fact] public void TheSamplePlansAreValidPlans()
     {
         // The samples beside sample-plan.json have placeholders for hashes and paths; with those filled in, each reads.
         string samples = Path.Combine(AppContext.BaseDirectory, "samples");
         var files = Directory.GetFiles(samples, "sample-plan-*.json").Where(file => !file.EndsWith("-hosted.json", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(7, files.Length);
+        Assert.Equal(8, files.Length);
         foreach (string file in files)
         {
             var plan = JsonNode.Parse(Fill(File.ReadAllText(file)))!.AsObject();
