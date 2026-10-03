@@ -6,6 +6,7 @@ using System.Xml.Linq;
 namespace Valheim.Testing.Game;
 public sealed record StepResult(string Name, bool Passed, double Seconds, string Error);
 public sealed record TerrainSnapshotReference(string Site, string WorldUid, string File, string Sha256);
+public sealed record AreaObjectSnapshotReference(string Site, string WorldUid, string File, string Sha256);
 public sealed class ScenarioReport
 {
     public string Name { get; }
@@ -16,6 +17,9 @@ public sealed class ScenarioReport
     /// <summary>Bounded read-only terrain evidence written beside this report.</summary>
     public List<TerrainSnapshotReference> TerrainSnapshots { get; } = new();
     private readonly List<TerrainSiteSnapshot> _terrainCaptures = new();
+    /// <summary>Optional saved-object and loaded-structure evidence, separate from terrain samples.</summary>
+    public List<AreaObjectSnapshotReference> AreaObjectSnapshots { get; } = new();
+    private readonly List<AreaObjectSnapshot> _areaObjectCaptures = new();
     public bool Passed => Steps.Count > 0 && Steps.All(x => x.Passed);
     /// <summary><c>strict</c>, or <c>none</c> once <see cref="MarkNotPinned"/> recorded an explicit opt-out.</summary>
     public string Pinning { get; private set; } = EnvironmentPinning.Strict;
@@ -41,6 +45,23 @@ public sealed class ScenarioReport
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         _terrainCaptures.Add(snapshot);
+    }
+    /// <summary>Attach a complete area-object capture to the next <see cref="Write"/>.</summary>
+    public void AttachAreaObjectSnapshot(AreaObjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _areaObjectCaptures.Add(snapshot);
+    }
+    /// <summary>Keep the original assertion failure and attach area-object evidence if capture succeeds.</summary>
+    public void StepWithAreaObjectsOnFailure(string name, Action assertion, Func<AreaObjectSnapshot> capture)
+    {
+        try { Step(name, assertion); }
+        catch
+        {
+            try { AttachAreaObjectSnapshot(capture()); }
+            catch (Exception error) { RecordFailure("capture area objects after " + name, error); }
+            throw;
+        }
     }
     /// <summary>Run an assertion, optionally capturing the site if it fails. A failed capture is recorded separately;
     /// the original assertion failure remains the thrown exception.</summary>
@@ -104,6 +125,7 @@ public sealed class ScenarioReport
     {
         Directory.CreateDirectory(directory);
         TerrainSnapshots.Clear();
+        AreaObjectSnapshots.Clear();
         if (_terrainCaptures.Count > 0)
         {
             string captures = Path.Combine(directory, "terrain-snapshots");
@@ -115,6 +137,19 @@ public sealed class ScenarioReport
                 string content = JsonSerializer.Serialize(_terrainCaptures[i], new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(path, content);
                 TerrainSnapshots.Add(new(_terrainCaptures[i].Site, _terrainCaptures[i].WorldUid, file,
+                    Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant()));
+            }
+        }
+        if (_areaObjectCaptures.Count > 0)
+        {
+            string captures = Path.Combine(directory, "area-object-snapshots");
+            Directory.CreateDirectory(captures);
+            for (int i = 0; i < _areaObjectCaptures.Count; i++)
+            {
+                string file = $"area-object-snapshots/site-{i + 1:D3}.json";
+                string path = Path.Combine(directory, file);
+                File.WriteAllText(path, JsonSerializer.Serialize(_areaObjectCaptures[i], new JsonSerializerOptions { WriteIndented = true }));
+                AreaObjectSnapshots.Add(new(_areaObjectCaptures[i].Site, _areaObjectCaptures[i].WorldUid, file,
                     Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant()));
             }
         }
