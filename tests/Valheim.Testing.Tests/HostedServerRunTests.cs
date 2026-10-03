@@ -18,13 +18,14 @@ internal sealed class FakeServerHost : IGameHost
     private readonly Dictionary<int, (string Start, Func<CancellationToken, Task<int>> Exit, Action Stop)> _processes = [];
     private int _nextClient = 77;
 
-    public FakeServerHost(string name, string mirror, FakeOwnedServer? server = null, int tunnelPort = 15577, GameHostKind kind = GameHostKind.Ssh)
+    public FakeServerHost(string name, string mirror, FakeOwnedServer? server = null, int tunnelPort = 15577, GameHostKind kind = GameHostKind.Ssh, bool windows = false)
     {
-        Name = name; _mirror = mirror; _server = server; TunnelPort = tunnelPort; _kind = kind;
+        Name = name; _mirror = mirror; _server = server; TunnelPort = tunnelPort; _kind = kind; Windows = windows;
     }
     public string Name { get; }
     public GameHostKind Kind => _kind;
-    public HostShell Shell => HostShell.Bash;
+    public bool Windows { get; }
+    public HostShell Shell => Windows ? HostShell.WindowsPowerShell : HostShell.Bash;
     public int TunnelPort { get; }
     public List<(string Script, IReadOnlyDictionary<string, string> Variables)> Runs { get; } = [];
     public List<string> Claims { get; } = [];
@@ -48,26 +49,36 @@ internal sealed class FakeServerHost : IGameHost
     public List<(string Game, string Start)> Stops { get; } = [];
     public IReadOnlyList<string> Scripts { get { lock (_sync) return Runs.Select(run => run.Script).ToList(); } }
 
-    public string Local(string hostPath) => Path.Combine([_mirror, .. hostPath.Split('/', StringSplitOptions.RemoveEmptyEntries)]);
+    public string Local(string hostPath) => Path.Combine([_mirror, .. hostPath.Replace(':', '/').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)]);
 
     private static HostResult Ok(string stdout) => new(HostOutcome.Exited, 0, stdout, "", TimeSpan.FromMilliseconds(3), false);
     public static HostResult TransportFailure => new(HostOutcome.TransportFailed, null, "", "ssh: connect to host test port 22: Connection refused", TimeSpan.FromMilliseconds(3), false);
 
     private static string ScriptName(string script) =>
         ReferenceEquals(script, HostInstallScripts.Copy) ? "copy" :
+        ReferenceEquals(script, HostInstallScripts.PowerShellCopy) ? "copy" :
         ReferenceEquals(script, HostInstallScripts.BashList) ? "list" :
+        ReferenceEquals(script, HostInstallScripts.PowerShellList) ? "list" :
         ReferenceEquals(script, HostInstallScripts.BashPort) ? "port" :
+        ReferenceEquals(script, HostInstallScripts.PowerShellPort) ? "port" :
         ReferenceEquals(script, HostServerScripts.Start) ? "start" :
+        ReferenceEquals(script, HostServerScripts.WindowsStart) ? "start" :
         ReferenceEquals(script, HostServerScripts.Keep) ? "keep" :
+        ReferenceEquals(script, HostServerScripts.WindowsKeep) ? "keep" :
         ReferenceEquals(script, HostedRunScripts.Retire) ? "retire" :
+        ReferenceEquals(script, HostedRunScripts.WindowsRetire) ? "retire" :
         ReferenceEquals(script, HostedRunScripts.DropKept) ? "drop-kept" :
+        ReferenceEquals(script, HostedRunScripts.WindowsDropKept) ? "drop-kept" :
         ReferenceEquals(script, CrossplayLibraryScripts.Check) ? "party" :
         ReferenceEquals(script, InteractiveScripts.LinuxWait) ? "wait" :
+        ReferenceEquals(script, InteractiveScripts.WindowsWait) ? "wait" :
         ReferenceEquals(script, InteractiveScripts.LinuxStop) ? "stop" :
+        ReferenceEquals(script, HostServerScripts.WindowsStop) ? "stop" :
         ReferenceEquals(script, InteractiveScripts.LinuxStart) ? "client-start" :
         ReferenceEquals(script, HostedClientScripts.BashKeep) ? "client-keep" :
         ReferenceEquals(script, HostedClientScripts.BashMoveAside) ? "move-aside" :
         ReferenceEquals(script, HostClientPreflight.BashRead) ? "preflight-read" :
+        ReferenceEquals(script, HostClientPreflight.PowerShellRead) ? "preflight-read" :
         ReferenceEquals(script, SteamSignedInUsers.Bash) ? "steam-user" : "other";
 
     public async Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default)
@@ -172,7 +183,7 @@ internal sealed class FakeServerHost : IGameHost
             {
                 // As the bash script: only <run>/runtime, listed files within the limits, then the copy goes.
                 string runtimePath = v["runtime"];
-                if (!runtimePath.EndsWith("/" + v["run"] + "/runtime", StringComparison.Ordinal)) return new HostResult(HostOutcome.Exited, 3, "", "", TimeSpan.Zero, false);
+                if (!runtimePath.Replace('\\', '/').EndsWith("/" + v["run"] + "/runtime", StringComparison.Ordinal)) return new HostResult(HostOutcome.Exited, 3, "", "", TimeSpan.Zero, false);
                 string runtime = Local(runtimePath), keep = Local(v["keep"]);
                 Directory.CreateDirectory(keep);
                 if (!Directory.Exists(runtime)) return Ok("VT-RETIRED 0 0\n");
@@ -194,7 +205,7 @@ internal sealed class FakeServerHost : IGameHost
                 return Ok(reply.Append($"VT-RETIRED {bytes} {kept}\n").ToString());
             }
             case "drop-kept":
-                if (!v["keep"].EndsWith("/" + v["run"] + "/runtime-changes", StringComparison.Ordinal)) return new HostResult(HostOutcome.Exited, 3, "", "", TimeSpan.Zero, false);
+                if (!v["keep"].Replace('\\', '/').EndsWith("/" + v["run"] + "/runtime-changes", StringComparison.Ordinal)) return new HostResult(HostOutcome.Exited, 3, "", "", TimeSpan.Zero, false);
                 if (Directory.Exists(Local(v["keep"]))) Directory.Delete(Local(v["keep"]), recursive: true);
                 return Ok("VT-DROPPED\n");
             case "client-keep":
@@ -300,14 +311,39 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Runs);
     }
 
+    [Fact] public async Task WindowsPowerShellProfileRunsTheWholeServerLifecycleAndKeepsOnlyItsEvidence()
+    {
+        const string windowsRuns = @"C:\vt\runs";
+        var server = new FakeOwnedServer("test.mod", saveRoot: windowsRuns + @"\run-test\world");
+        var host = new FakeServerHost("windows-server", Mirror, server, windows: true);
+        var (plan, profile) = Write(host, hostPlatform: "windows", hostShell: "powershell");
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(host.Claims, host.Releases);
+        Assert.Contains("start", host.Scripts);
+        Assert.Contains("stop", host.Scripts);
+        Assert.Contains("keep", host.Scripts);
+        Assert.Contains("fetch", host.Scripts);
+        Assert.False(Directory.Exists(host.Local(windowsRuns + @"\run-test\runtime")));
+        Assert.Contains("fake boot", File.ReadAllText(Path.Combine(Output, "boot-1", "game-0.log")));
+    }
+
     // The host's install (the runtime the plan pins) and a local world; returns the plan and the profile.
     private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false, bool unpinned = false,
         bool crossplay = false, string portOption = "-port", string gamePort = "2456", object? steamAccounts = null, string? steamAccount = null)
     {
-        string install = host.Local(Install);
+        bool windows = hostPlatform == "windows";
+        string hostInstall = windows ? @"C:\valheim\server" : Install;
+        string install = host.Local(hostInstall);
         Directory.CreateDirectory(install);
-        File.WriteAllText(Path.Combine(install, ServerLaunch.LinuxExecutable), "server");
         FakeInstalls.Server(install);
+        if (windows)
+        {
+            File.Delete(Path.Combine(install, ServerLaunch.LinuxExecutable));
+            File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+            File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
+            File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        }
+        else File.WriteAllText(Path.Combine(install, ServerLaunch.LinuxExecutable), "server");
         File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.Preloader.dll"), "preloader");
         string world = Path.Combine(_root, "world");
         Directory.CreateDirectory(Path.Combine(world, "worlds_local"));
