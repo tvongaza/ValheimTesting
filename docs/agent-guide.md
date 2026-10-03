@@ -39,6 +39,10 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
    bash scripts/run.sh validate
    ```
 
+   For a public API or reference change, also run `dotnet tool restore` and `bash scripts/run.sh api-docs`
+   (`pwsh -File scripts/run.ps1 api-docs` on Windows). This uses the same writable-cache and SDK app-state fallback as
+   bootstrap and validation, and checks the rendered pages for machine-local paths.
+
    On Windows use `pwsh -File scripts/run.ps1 bootstrap` and `pwsh -File scripts/run.ps1 validate`. These check NuGet cache write access before the .NET SDK first compiles the file-based scripts, and fall back to a converted project in `artifacts/runfile` when the SDK's own file-based app state directory is blocked. This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
 4. If the task is satisfied by local tests, stop there. Otherwise prepare a bounded native test plan with explicit independent expectations and a negative control where useful. Do not invent a whole new runner for a check an example already performs.
 

@@ -36,12 +36,13 @@ try
     string fresh = Path.Combine(test, "fresh checkout");
     Directory.CreateDirectory(Path.Combine(fresh, "scripts"));
     File.WriteAllText(Path.Combine(fresh, "cli-dependency.json"), "{}");
-    foreach (string name in new[] { "bootstrap-cli.cs", "validate.cs", OperatingSystem.IsWindows() ? "run.ps1" : "run.sh" })
+    foreach (string name in new[] { "bootstrap-cli.cs", "validate.cs", "api-docs.cs", OperatingSystem.IsWindows() ? "run.ps1" : "run.sh" })
         File.Copy(Path.Combine(root, "scripts", name), Path.Combine(fresh, "scripts", name));
-    foreach (string task in new[] { "bootstrap", "validate" })
+    foreach (string task in new[] { "bootstrap", "validate", "api-docs" })
     {
+        string reached = task == "api-docs" ? "API docs script reached after launcher preflight." : "NuGet caches writable";
         string output = RunLauncher(fresh, task, blocked, blocked);
-        if (!output.Contains("NuGet caches blocked before dotnet run") || !output.Contains("NuGet caches writable"))
+        if (!output.Contains("NuGet caches blocked before dotnet run") || !output.Contains(reached))
             throw new InvalidOperationException(task + " launcher did not protect first restore: " + output);
         string explicitCache = RunLauncher(fresh, task, packages, http);
         if (!explicitCache.Contains("NuGet caches writable before dotnet run: packages=" + packages) ||
@@ -55,13 +56,13 @@ try
             throw new InvalidOperationException(task + " launcher printed the home directory: " + stateLine);
         // Block only the SDK's state directory; both runs must build the script as a workspace project, the second
         // reusing the first's project files.
-        string project = Path.Combine(fresh, "artifacts", "runfile", task == "bootstrap" ? "bootstrap-cli" : "validate");
+        string project = Path.Combine(fresh, "artifacts", "runfile", task == "bootstrap" ? "bootstrap-cli" : task == "validate" ? "validate" : "api-docs");
         DateTime? converted = null;
         for (int run = 0; run < 2; run++)
         {
             string blockedState = RunLauncher(fresh, task, packages, http, blockState: true);
             if (!blockedState.Contains("File-based app state not writable: ") || !blockedState.Contains("as the project artifacts/runfile/") ||
-                !blockedState.Contains("NuGet caches writable"))
+                !blockedState.Contains(reached))
                 throw new InvalidOperationException(task + " launcher did not fall back to a project: " + blockedState);
             DateTime written = File.GetLastWriteTimeUtc(Directory.GetFiles(project, "*.csproj").Single());
             if (converted is { } first && first != written)
@@ -72,7 +73,7 @@ try
     if (Directory.EnumerateFiles(packages, ".valheimtesting-write-*", SearchOption.AllDirectories).Any() ||
         Directory.EnumerateFiles(http, ".valheimtesting-write-*", SearchOption.AllDirectories).Any())
         throw new InvalidOperationException("The write probe left a file in a NuGet cache.");
-    Console.WriteLine("NuGet cache and file-based app state preflight passed for both scripts.");
+    Console.WriteLine("NuGet cache and file-based app state preflight passed for all three launchers.");
 }
 finally
 {

@@ -93,7 +93,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           dotnet tool restore
-          dotnet run scripts/api-docs.cs
+          bash scripts/run.sh api-docs
       - name: Save the NuGet package cache
         if: steps.nuget-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
