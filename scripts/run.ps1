@@ -1,7 +1,7 @@
 # Check NuGet's caches and the SDK's file-based app state before dotnet run restores a file-based script.
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('bootstrap', 'validate')]
+    [ValidateSet('bootstrap', 'validate', 'api-docs')]
     [string]$Task,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$TaskArgs
@@ -9,7 +9,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$script = if ($Task -eq 'bootstrap') { 'bootstrap-cli.cs' } else { 'validate.cs' }
+$script = switch ($Task) {
+    'bootstrap' { 'bootstrap-cli.cs' }
+    'validate' { 'validate.cs' }
+    'api-docs' { 'api-docs.cs' }
+}
 
 function Get-CachePath([string]$variable, [string]$kind) {
     $explicit = [Environment]::GetEnvironmentVariable($variable)

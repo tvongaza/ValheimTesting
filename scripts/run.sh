@@ -6,7 +6,8 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 case "${1:-}" in
   bootstrap) script=bootstrap-cli.cs ;;
   validate) script=validate.cs ;;
-  *) printf 'usage: %s {bootstrap|validate} [script arguments]\n' "$0" >&2; exit 2 ;;
+  api-docs) script=api-docs.cs ;;
+  *) printf 'usage: %s {bootstrap|validate|api-docs} [script arguments]\n' "$0" >&2; exit 2 ;;
 esac
 shift
 cd "$root"
