@@ -54,7 +54,7 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
         CampaignScenarios.Run(new CampaignRun
         {
             Plan = run.Plan, Server = run.Server, RestartServer = run.Session.Restart, WaitUntilJoinable = joinable, Report = run.Report,
-            Output = run.Output, Cancellation = run.Cancellation,
+            Output = run.Output, Cancellation = run.Cancellation, Profile = run.Profile,
             OpenClient = (client, directory) =>
             {
                 if (directory == null) return run.OpenClient(client); // Its logs join the teardown scan.

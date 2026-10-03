@@ -21,7 +21,9 @@ public sealed partial class LifecyclePlan
     public const string CrossplayScenario = "crossplay";
     /// <summary>MyMod's registered items, recipes and prefabs on the server and a joined client (<see cref="ContentCensusScenario"/>).</summary>
     public const string ContentCensusScenario = "content-census";
-    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario, ContentCensusScenario];
+    /// <summary>Two stills of one spot under the same conditions, for human comparison; neither image is an automated assertion.</summary>
+    public const string ReviewCaptureScenarioName = "review-capture";
+    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario, ContentCensusScenario, ReviewCaptureScenarioName];
     /// <summary>The adapter's fixture commands (the global-key change) run only when the server starts with this set to 1.</summary>
     public const string FixturesVariable = "MYMOD_TEST_FIXTURES";
     private static readonly Regex Word = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
@@ -46,9 +48,11 @@ public sealed partial class LifecyclePlan
     /// for its named reason. The run passes only then. A control plugin in the pins without this is refused.
     /// </summary>
     public string? ExpectFailure { get; set; }
+    /// <summary>Declared capture conditions for the review-capture scenario.</summary>
+    public CaptureSettings? Capture { get; set; }
 
     [JsonIgnore] public bool MarksSites => Scenario is LifecycleScenario or ServerScenario or WorldScenario or VanillaClientScenario or CrossplayScenario;
-    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario or ContentCensusScenario;
+    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario or ContentCensusScenario or ReviewCaptureScenarioName;
     [JsonIgnore] public ControlPlugin? Control => ControlPlugins.Named(ExpectFailure);
     [JsonIgnore] public GameConnectionStatus RefusalStatus => ExpectedRefusal == null ? GameConnectionStatus.ErrorVersion : ConnectionStatusReading.ParseStatus(ExpectedRefusal);
 
@@ -59,11 +63,13 @@ public sealed partial class LifecyclePlan
         OnlyForScenario("refusedClient and expectedRefusal", RefusedClient != null || ExpectedRefusal != null, RefusedJoinScenario);
         OnlyForScenario("crossplay", Crossplay, CrossplayScenario);
         OnlyForScenario("patchReload", PatchReload != null, ServerScenario);
+        OnlyForScenario("capture", Capture != null, ReviewCaptureScenarioName);
         PatchReload?.Validate(this);
         CheckControls();
         if (!IsCampaign) return;
         if (Review.Enabled) throw new ArgumentException($"review is for the {LifecycleScenario} scenario; remove it from this plan.");
-        if (!MarksSites && (float.IsFinite(DrySite.Ground) || float.IsFinite(WetSite.Ground) || float.IsFinite(Arrival.Ground)))
+        if (!MarksSites && (float.IsFinite(DrySite.Ground) || float.IsFinite(WetSite.Ground) ||
+            Scenario != ReviewCaptureScenarioName && float.IsFinite(Arrival.Ground)))
             throw new ArgumentException($"The {Scenario} scenario marks nothing: remove drySite, wetSite and arrival.");
         var client = Client ?? throw new ArgumentException($"The {Scenario} scenario looks from a client: add the client section.");
         if (client.HostWorld != null) throw new ArgumentException("A hosting client runs with the host mode and a hosted plan, not on the owned server.");
@@ -86,6 +92,13 @@ public sealed partial class LifecyclePlan
             case ContentCensusScenario:
                 // The client's registries are its own: the census needs the server's MyMod build there too.
                 SameBuildsAs(client, "client");
+                break;
+            case ReviewCaptureScenarioName:
+                SameBuildsAs(client, "client");
+                if (!client.Owned) throw new ArgumentException("A review capture needs an owned client whose screenshot can be fetched.");
+                Arrival.Validate("review arrival", requireGround: true);
+                if (Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("Review arrival must be dry ground.");
+                (Capture ?? throw new ArgumentException("Add capture conditions to the review-capture plan.")).Validate();
                 break;
             case SyncedConfigScenario:
                 SameBuildsAs(client, "client");

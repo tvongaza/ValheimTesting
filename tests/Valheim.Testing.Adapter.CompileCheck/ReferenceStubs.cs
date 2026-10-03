@@ -13,6 +13,7 @@ namespace UnityEngine
         public string name { get => throw null; set => throw null; }
         public static T Instantiate<T>(T original, Vector3 position, Quaternion rotation) where T : Object => throw null;
         public static void DestroyImmediate(Object obj) => throw null;
+        public static T[] FindObjectsByType<T>(FindObjectsInactive inactive, FindObjectsSortMode sort) where T : Object => throw null;
         public static bool operator ==(Object x, Object y) => throw null;
         public static bool operator !=(Object x, Object y) => throw null;
         public override bool Equals(object other) => throw null;
@@ -31,6 +32,8 @@ namespace UnityEngine
     public sealed class GameObject : Object
     {
         public Transform transform => throw null;
+        public bool activeSelf => throw null;
+        public void SetActive(bool active) => throw null;
         public T GetComponent<T>() => throw null;
         public T GetComponentInChildren<T>() => throw null;
     }
@@ -51,6 +54,8 @@ namespace UnityEngine
     public struct Ray { public Ray(Vector3 origin, Vector3 direction) => throw null; }
     public struct RaycastHit { public Vector3 point => throw null; }
     public sealed class Time { public static float realtimeSinceStartup => throw null; }
+    public enum FindObjectsInactive { Include, Exclude }
+    public enum FindObjectsSortMode { None, InstanceID }
     public sealed class Application { public static event System.Action quitting { add => throw null; remove => throw null; } }
 }
 
@@ -242,7 +247,35 @@ public class ZNetView : UnityEngine.MonoBehaviour
 public class Player : UnityEngine.MonoBehaviour
 {
     public static Player m_localPlayer;
+    public static bool m_debugMode;
     public System.Collections.Generic.Dictionary<string, string> m_customData;
+    public bool InGodMode() => throw null;
+    public bool InGhostMode() => throw null;
+    public bool InDebugFlyMode() => throw null;
+    public void SetGodMode(bool value) => throw null;
+    public void SetGhostMode(bool value) => throw null;
+    public void ToggleDebugFly() => throw null;
+}
+public class EnvMan : UnityEngine.MonoBehaviour
+{
+    public static EnvMan instance;
+    public bool m_debugTimeOfDay;
+    public float m_debugTime;
+    public string m_debugEnv;
+}
+public class GameCamera : UnityEngine.MonoBehaviour
+{
+    public static GameCamera instance;
+    public bool m_freeFly;
+    public void ToggleFreeFly() => throw null;
+}
+public class Mister : UnityEngine.MonoBehaviour { }
+public class ClutterSystem : UnityEngine.MonoBehaviour
+{
+    public static ClutterSystem instance;
+    public class Clutter { public bool m_enabled; }
+    public System.Collections.Generic.List<Clutter> m_clutter;
+    public void ClearAll() => throw null;
 }
 public class PlayerProfile
 {
@@ -292,7 +325,7 @@ public abstract class Terminal : UnityEngine.MonoBehaviour
     }
     public void AddString(string text) => throw null;
 }
-public class Console : Terminal { public static Console instance => throw null; }
+public class Console : Terminal { public static Console instance => throw null; public void updateCommandList() => throw null; }
 
 namespace valheimCLI
 {

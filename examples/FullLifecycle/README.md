@@ -160,6 +160,19 @@ What the runner does not and cannot clean up:
 
 With `"review": { "enabled": true, "seconds": 600 }`, after the automated checks of the second round the runner leaves the player beside the marker, prints `REVIEW:` with what to look at, and waits for you to write `review.json` in the output directory: `{"verdict":"pass","notes":"..."}`. The verdict is recorded in `result.json` as `humanReview`; it never adds a step, so the automated result cannot change because of it, and a missing verdict is recorded as such. Walking and appearance are for people to judge; the runner judges only what it measured.
 
+### Repeatable review stills
+
+[`sample-plan-review-capture.json`](MyMod.SystemTests/sample-plan-review-capture.json) shows a separate `review-capture` run. It starts one pinned dedicated server and one owned, joined client, protects the disposable character, arrives at the declared dry point, and captures two stills with the same declared weather, time, camera distance, height, azimuth, mist and clutter settings. Change `cameraAzimuthDegrees` if a tree blocks the subject; the two images in a single run always use the same value. It writes `review-first/first.png` and `review-second/second.png` with JSON sidecars recording those conditions, the world UID, game build, plugin pins and each image's SHA-256. `ReviewCapture.CaptureAsync` restores the client's prior safety, cheats, weather, time, mist, clutter and camera state after each image, including when capture or transfer fails. The adapter also attempts restoration on unload.
+
+Run it with the normal pinned runner after replacing the sample's paths and hashes:
+
+```sh
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -- validate review-plan.json new-review-output
+dotnet run --project examples/FullLifecycle/MyMod.SystemTests -- run review-plan.json new-review-output
+```
+
+The client must run on the runner's machine for this example. For a remote client, use its `IGameHost` with `ReviewCapture.CaptureAsync` in your own scenario. The capture is **evidence for human review**, never an assertion that the scene looks correct. Review the PNGs yourself and record a verdict separately. Use a fresh output directory and an empty no-space host capture directory for each run. The example keeps the original host PNGs under `capture-host-*` beside the fetched copies for audit; remove the run directory when you have archived the evidence. A failed or interrupted run can leave a host image, but cannot turn it into a passing review result.
+
 ## Native campaign
 
 Six more scenarios, and a hosted run, take the toolkit's lifecycle steps and world observations through one native campaign: a real dedicated server owned by the runner (as above, or on another host with `--profile`) and a real Windows client. Each plan runs one scenario; together they prove the native acceptance items of issues #20, #23, #24, #26, #30, #31, #32, #33, #34 and #35 that a game can prove, and #91's content census once its native run is done (below). The dry-site feature is unchanged. What the campaign adds is small and kept apart:

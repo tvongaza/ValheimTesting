@@ -88,7 +88,7 @@ public sealed class CampaignPlanTests : IDisposable
         // The samples beside sample-plan.json have placeholders for hashes and paths; with those filled in, each reads.
         string samples = Path.Combine(AppContext.BaseDirectory, "samples");
         var files = Directory.GetFiles(samples, "sample-plan-*.json").Where(file => !file.EndsWith("-hosted.json", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(6, files.Length);
+        Assert.Equal(7, files.Length);
         foreach (string file in files)
         {
             var plan = JsonNode.Parse(Fill(File.ReadAllText(file)))!.AsObject();
