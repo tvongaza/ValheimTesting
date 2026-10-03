@@ -186,6 +186,15 @@ public sealed class OwnedCopiesTests : IDisposable
     }
 
     // The real process list: a program running from inside a copy makes it in use, on every platform.
+    // The real scan, not the seam: this test host is a running process, so its own executable must be listed, in the form
+    // the runtime reports it (Windows and Linux ask for the image path alone; macOS reads MainModule).
+    [Fact] public void TheScanNamesThisProcessOwnExecutable()
+    {
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var own = OwnedCopies.Processes().Where(process => process.Pid == Environment.ProcessId).ToList();
+        Assert.Equal(OwnedCopies.Resolved(Environment.ProcessPath!), OwnedCopies.Resolved(Assert.Single(own).Executable), comparer);
+    }
+
     [Fact] public void AProgramRunningFromACopyMakesItInUse()
     {
         string copy = Path.Combine(_root, "valheim-test-" + new string('b', 32));
