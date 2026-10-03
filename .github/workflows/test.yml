@@ -36,6 +36,19 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
+      # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
+      # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
+      # an image ever refuses the change.
+      - name: Stop real-time scanning on this throwaway Windows runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try
+          {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+            "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
+          }
+          catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
       - run: dotnet --info
       - run: bash scripts/run.sh bootstrap
         if: runner.os != 'Windows'
@@ -85,6 +98,19 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
+      # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
+      # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
+      # an image ever refuses the change.
+      - name: Stop real-time scanning on this throwaway Windows runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try
+          {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+            "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
+          }
+          catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
       - run: dotnet run scripts/test-nuget-cache-preflight.cs
   mod-example:
     name: mod example (published packages)
@@ -220,6 +246,19 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
+      # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
+      # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
+      # an image ever refuses the change.
+      - name: Stop real-time scanning on this throwaway Windows runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try
+          {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+            "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
+          }
+          catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
       # Hosted Linux and macOS images carry no Mono. On Ubuntu, mono-devel is the smallest package set that runs the net48
       # leg: mono-runtime alone lacks the System.Runtime and netstandard facades the console runner loads. Its archives
       # are cached because the mirror's speed, not their size, decides the install time: the same 52 MB took 6 s or
