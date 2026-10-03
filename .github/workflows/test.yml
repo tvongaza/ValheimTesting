@@ -28,6 +28,11 @@ jobs:
       # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
       # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
       VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+      # The NuGet package cache's paths (see "Restore the NuGet package cache"), shared by its restore and save.
+      VT_NUGET_CACHE_PATHS: |
+        ~/.nuget/packages
+        !~/.nuget/packages/valheim.testing*
+        !~/.nuget/packages/valheim.cli*
     steps:
       - uses: actions/checkout@v7
         with:
@@ -36,6 +41,30 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
+      # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
+      # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
+      # an image ever refuses the change.
+      - name: Stop real-time scanning on this throwaway Windows runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try
+          {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+            "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
+          }
+          catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
+      # Packages from NuGet.org, reused across runs. Never this repository's own packages (Valheim.Testing*, and the CLI
+      # transport bootstrap builds): validate packs those at versions it reuses and checks that consumers restore exactly what
+      # it packed, which a cached copy of an earlier build would defeat. A restored entry is trusted as NuGet's global
+      # packages folder trusts its own files; only this repository's workflows can write the cache, a pull request only for itself.
+      - name: Restore the NuGet package cache
+        id: nuget-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VT_NUGET_CACHE_PATHS }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-
       - run: dotnet --info
       - run: bash scripts/run.sh bootstrap
         if: runner.os != 'Windows'
@@ -58,7 +87,6 @@ jobs:
           path: artifacts/validate
           if-no-files-found: ignore
           retention-days: 14
-      - run: dotnet run scripts/test-nuget-cache-preflight.cs
       - name: Build targeted regression from NuGet.org only
         run: dotnet run scripts/targeted-consumer.cs
       - name: Build candidate API reference
@@ -66,6 +94,46 @@ jobs:
         run: |
           dotnet tool restore
           dotnet run scripts/api-docs.cs
+      - name: Save the NuGet package cache
+        if: steps.nuget-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.VT_NUGET_CACHE_PATHS }}
+          key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
+  cache-preflight:
+    name: cache preflight (${{ matrix.os }})
+    # The launchers' NuGet cache and file-based app state checks (#210). They need only the SDK and the scripts, so they run
+    # beside the test job instead of after it: on Windows they took 50 s of the longest job.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
+      # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
+      # an image ever refuses the change.
+      - name: Stop real-time scanning on this throwaway Windows runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try
+          {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+            "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
+          }
+          catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
+      - run: dotnet run scripts/test-nuget-cache-preflight.cs
   mod-example:
     name: mod example (published packages)
     # Keep in step with examples/ModWithTests/.github/workflows/tests.yml. A copy outside the checkout leaves this
@@ -200,6 +268,19 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
+      # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
+      # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
+      # an image ever refuses the change.
+      - name: Stop real-time scanning on this throwaway Windows runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          try
+          {
+            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+            "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
+          }
+          catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
       # Hosted Linux and macOS images carry no Mono. On Ubuntu, mono-devel is the smallest package set that runs the net48
       # leg: mono-runtime alone lacks the System.Runtime and netstandard facades the console runner loads. Its archives
       # are cached because the mirror's speed, not their size, decides the install time: the same 52 MB took 6 s or
