@@ -73,7 +73,7 @@ The supported Mac workflows are a Mac game client (launched through ValheimCLI, 
 
 ## Scheduled checks in CI
 
-[`native-server-checks.yml`](../../.github/workflows/native-server-checks.yml) builds this image on a GitHub-hosted runner and runs two checks in fresh containers of it:
+[`native-server-checks.yml`](../../.github/workflows/native-server-checks.yml) builds this image on a GitHub-hosted runner and runs two checks in fresh containers of it. Before that, the runner builds the transport package `cli-dependency.json` pins into the checkout's local feed (`scripts/bootstrap-cli.cs`), which the containers copy with the checkout, so the checks restore the version `main` pins even before it is released to NuGet.org:
 
 1. [LinuxServerSmoke](../../examples/LinuxServerSmoke/README.md): the server starts, loads BepInEx and creates a new world.
 2. The [FullLifecycle](../../examples/FullLifecycle/README.md#the-server-half-alone) example's server half: ValheimCLI (core, Standard and WorldTools, from the commit in `cli-dependency.json`), the example mod and its adapter are built against this server's own assemblies; `prepare-server` creates a new world and picks a dry and a wet site from its generator heights; the pinned `dry-site-server` run then has the mod mark one and refuse the other, confirms a save, restarts only its server and finds the marker again.
