@@ -33,7 +33,7 @@ public sealed partial class LifecyclePlan : ServerRunPlan
     {
         var plan = Read<LifecyclePlan>(path);
         // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
-        if (!plan.Pinned || plan.Client is { Pinned: false } || plan.RefusedClient is { Pinned: false })
+        if (!plan.Pinned || plan.Client is { Pinned: false } || plan.RefusedClient is { Pinned: false } || plan.SecondClient is { Pinned: false })
             throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
         plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
         plan.RequireScenario(Scenarios);

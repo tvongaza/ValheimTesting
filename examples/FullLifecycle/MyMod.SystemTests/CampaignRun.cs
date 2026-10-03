@@ -10,6 +10,8 @@ public static class Capabilities
         GlobalKeys = "mymod.testing/globalkeys", GlobalKeyChange = "mymod.testing/globalkey", Config = "mymod.testing/config",
         UnresolvedPrefabs = "mymod.testing/unresolved-prefabs", DungeonRooms = "mymod.testing/dungeon-rooms", Markers = "mymod.testing/markers",
         ContentCensus = "mymod.testing/content-census";
+    public const string MarkerOwner = "mymod.testing/marker-owner", MarkerOwnerWait = "mymod.testing/marker-owner-wait",
+        MarkerOwnerClaim = "mymod.testing/marker-owner-claim";
     /// <summary>The field-only-state control's own commands (Controls/FieldOnlyState).</summary>
     public const string FieldStateSet = "mymodcontrol.fieldstate/set", FieldStateRead = "mymodcontrol.fieldstate/read";
 }
@@ -30,6 +32,9 @@ public sealed class CampaignRun
     /// in one run never overwrites the first one's evidence.
     /// </summary>
     public required Func<ClientRunPlan, string?, ClientSession> OpenClient { get; init; }
+    /// <summary>Opens one named profile client on its own host and Steam lease; used while both clients remain connected.</summary>
+    public Func<ClientRunPlan, string, ClientSession> OpenProfileClient { get; init; } = (_, _) =>
+        throw new ArgumentException("This run has no named client profile.");
     /// <summary>Waits until the given server accepts game connections.</summary>
     public required Action<GameActor> WaitUntilJoinable { get; init; }
     public required ScenarioReport Report { get; init; }
@@ -66,6 +71,7 @@ public static class CampaignScenarios
                 case LifecyclePlan.ContentCensusScenario: ContentCensusScenario.Run(run); break;
                 case LifecyclePlan.ReviewCaptureScenarioName: ReviewCaptureScenario.Run(run); break;
                 case LifecyclePlan.AreaObjectsScenarioName: AreaObjectsScenario.Run(run); break;
+                case LifecyclePlan.OwnershipHandoffScenario: OwnershipHandoffScenario.Run(run); break;
                 case LifecyclePlan.CrossplayScenario:
                     // The dry-site lifecycle, joined through each boot's crossplay lobby instead of the server's address.
                     DrySiteScenario.Run(plan, run.Server, run.RestartServer, () => run.OpenClient(plan.Client!, null), run.WaitUntilJoinable,

@@ -21,6 +21,7 @@ internal sealed class CampaignWorld : IDisposable
     public static readonly Site Dry = new() { X = 100, Z = -40, Ground = 42.5f }, Wet = new() { X = 400, Z = 300, Ground = 22f },
         Arrival = new() { X = 105, Z = -40, Ground = 42.3f }, Away = new() { X = 420, Z = -40, Ground = 36f };
     public readonly string Root = Directory.CreateTempSubdirectory("mymod-campaign-").FullName;
+    public void MoveClient(float x, float y, float z) { _x = x; _y = y; _z = z; }
     public string Output => Path.Combine(Root, "out");
     public string Characters => Path.Combine(Root, "characters_local");
     public string ProfileFile => Path.Combine(Characters, "tester.fch");
@@ -106,7 +107,8 @@ internal sealed class CampaignWorld : IDisposable
     }
 
     /// <summary>A campaign run over this world: attached clients, the refused plan's client refused, evidence in <see cref="Output"/>.</summary>
-    public CampaignRun Run(LifecyclePlan plan, ScenarioReport report, bool clientLog = false)
+    public CampaignRun Run(LifecyclePlan plan, ScenarioReport report, bool clientLog = false,
+        Func<ClientRunPlan, string, ClientSession>? profileClient = null)
     {
         WriteServerLog();
         return new()
@@ -118,6 +120,7 @@ internal sealed class CampaignWorld : IDisposable
                 string output = directory == null ? Output : Directory.CreateDirectory(Path.Combine(Output, directory)).FullName;
                 return ClientSession.Attach(client, output, Client(refused: client == plan.RefusedClient));
             },
+            OpenProfileClient = profileClient ?? ((_, _) => throw new InvalidOperationException("No profile client was supplied.")),
             ServerLog = () => ServerLog,
             ClientLog = _ => clientLog ? ClientLog : null,
             Lobby = server => CrossplayServer.WaitForLobby(server, ServerLog, TimeSpan.FromSeconds(5)),
