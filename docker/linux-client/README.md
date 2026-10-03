@@ -72,16 +72,18 @@ python3 docker/linux-client/host/vm-campaign.py \
   --image 'ghcr.io/<owner>/valheim-linux-client@sha256:<digest>' \
   --ssh-key /path/to/dedicated-vm-identity \
   --run-script /path/to/private-native-check.sh \
+  --asset /path/to/pinned-fixture.tar.gz \
   --evidence /private/new-run-directory
 ```
 
 The wrapper must accept standard Vast CLI arguments and emit its `--raw` JSON without exposing credentials. The test script
-receives `VT_VM_SSH_CONFIG`, `VT_VM_ALIAS` (`vt-campaign`), `VT_VM_CONTAINER` (`vt`), and `VT_VM_EVIDENCE`. It must use
+receives `VT_VM_SSH_CONFIG`, `VT_VM_ALIAS` (`vt-campaign`), `VT_VM_CONTAINER` (`vt`), `VT_VM_EVIDENCE`, and
+`VT_VM_SNAPSHOT_DIR` (the read-only numbered copies of all inputs, including repeated `--asset` files). It must use
 `ssh -F "$VT_VM_SSH_CONFIG" "$VT_VM_ALIAS"` for host commands; a `remote-container` environment profile should use that
 same alias for Docker and its owned ValheimCLI tunnel. The campaign puts a pinned `ssh` wrapper first on the test script's
 `PATH`, so Docker and the runner inherit the same identity without changing the operator's SSH config. The test script and
-bootstrap are the only copied inputs, so keep any
-run-specific fixture declarations in the test script or pin and fetch them with verified hashes. The campaign does not log in
+bootstrap and any explicit `--asset` files are the only copied inputs, so keep run-specific fixtures there or pin and fetch
+them with verified hashes. The campaign does not log in
 to Steam or stage a game itself; the test script owns those steps and keeps its evidence under `VT_VM_EVIDENCE`.
 After its assertions pass, the script must write `{"status":"passed"}` to `$VT_VM_EVIDENCE/check-result.json`. A zero shell
 exit without this artifact is a failure; it does not prove that the intended assertions ran. The test script is executed from

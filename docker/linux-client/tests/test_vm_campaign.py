@@ -29,7 +29,7 @@ class CampaignTests(unittest.TestCase):
         self.evidence = root / "evidence"
         self.args = argparse.Namespace(max_price=.10, gpu="RTX 2060S", ssh_key=self.key,
                                        evidence=self.evidence, bootstrap=self.bootstrap,
-                                       run_script=self.test, vast="fake-vast", image="test/image:1",
+                                       run_script=self.test, asset=[], vast="fake-vast", image="test/image:1",
                                        vm_image="test/vm:1", vm_timeout=1, key_timeout=1,
                                        docker_timeout=1, bootstrap_timeout=1, run_timeout=1)
         self.commands = []
@@ -134,6 +134,9 @@ class CampaignTests(unittest.TestCase):
 
     def test_success_executes_only_snapshotted_test_and_confirms_destroy(self):
         self.test_original = self.test.read_bytes()
+        asset = Path(self.temp.name) / "fixture.tar.gz"
+        asset.write_bytes(b"pinned fixture")
+        self.args.asset = [asset]
         self.patches()
         campaign.run(self.args)
         report = json.loads((self.evidence / "result.json").read_text())
@@ -141,6 +144,7 @@ class CampaignTests(unittest.TestCase):
         self.assertTrue(report["destroyed"])
         self.assertEqual("1.43", report["dockerServerApi"])
         self.assertEqual(self.test_original, (self.evidence / "snapshot" / "2-test.sh").read_bytes())
+        self.assertEqual(b"pinned fixture", (self.evidence / "snapshot" / "3-fixture.tar.gz").read_bytes())
         wrapper = (self.evidence / "ssh-bin" / "ssh").read_text()
         self.assertIn("-F", wrapper)
         self.assertIn(str(self.evidence / "ssh_config"), wrapper)

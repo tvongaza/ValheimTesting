@@ -167,7 +167,8 @@ def run(args: argparse.Namespace) -> None:
         raise FileExistsError("evidence directory already exists; choose a new run")
     evidence.mkdir(mode=0o700, parents=True)
     source = evidence / "snapshot"
-    hashes = snapshot([Path(__file__).resolve(), args.bootstrap.resolve(), args.run_script.resolve()], source)
+    hashes = snapshot([Path(__file__).resolve(), args.bootstrap.resolve(), args.run_script.resolve(),
+                       *(asset.resolve() for asset in args.asset)], source)
     # A failed snapshot or invalid setup cannot rent a VM.
     command([args.vast, "--help"], timeout=10)
     offer_query = ("vms_enabled=true verified=true rentable=true num_gpus=1 "
@@ -220,7 +221,8 @@ def run(args: argparse.Namespace) -> None:
         env = os.environ.copy()
         env.update(VT_VM_SSH_CONFIG=str(config), VT_VM_ALIAS="vt-campaign",
                    VT_VM_INSTANCE_ID=instance_id, VT_VM_EVIDENCE=str(evidence),
-                   VT_VM_CONTAINER="vt", PATH=str(ssh_bin) + os.pathsep + env.get("PATH", ""))
+                   VT_VM_CONTAINER="vt", VT_VM_SNAPSHOT_DIR=str(source),
+                   PATH=str(ssh_bin) + os.pathsep + env.get("PATH", ""))
         wait_for_docker(ssh, args.docker_timeout)
         phase("pinned-ssh-and-docker")
         # A new controller CLI can outrun a rented host's older Docker Engine.
@@ -261,6 +263,8 @@ def run(args: argparse.Namespace) -> None:
             raise RuntimeError(f"campaign test exited {completed.returncode}")
         if frozen(source, f"2-{args.run_script.name}", hashes[f"2-{args.run_script.name}"]) != test:
             raise RuntimeError("campaign test snapshot changed while running")
+        for name, expected in hashes.items():
+            frozen(source, name, expected)
         marker = evidence / "check-result.json"
         if not marker.is_file() or json.loads(marker.read_text()).get("status") != "passed":
             raise RuntimeError("campaign test ended without an explicit passing check-result.json")
@@ -306,6 +310,8 @@ def main() -> int:
     parser.add_argument("--ssh-key", required=True, type=Path)
     parser.add_argument("--bootstrap", type=Path, default=Path(__file__).with_name("vm-bootstrap.sh"))
     parser.add_argument("--run-script", required=True, type=Path, help="local test body, snapshotted before rent")
+    parser.add_argument("--asset", action="append", default=[], type=Path,
+                        help="additional file to snapshot before renting; may be repeated")
     parser.add_argument("--evidence", required=True, type=Path, help="new private evidence directory")
     parser.add_argument("--image", required=True, help="identified client image (prefer an immutable digest)")
     parser.add_argument("--vm-image", default="docker.io/vastai/kvm:ubuntu_terminal")
