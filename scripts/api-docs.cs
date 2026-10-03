@@ -43,7 +43,8 @@ string errors = standardError.GetAwaiter().GetResult();
 Console.Write(output);
 Console.Error.Write(errors);
 if (process.ExitCode != 0) throw new InvalidOperationException($"DocFX failed with exit code {process.ExitCode}.");
-string transcript = output + "\n" + errors;
+// DocFX colours its summary on some CI hosts even when output is redirected; inspect the same text without ANSI SGR.
+string transcript = Regex.Replace(output + "\n" + errors, "\u001b\\[[0-9;]*m", "");
 if (!Regex.IsMatch(transcript, @"(?m)^\s*0 warning\(s\)\s*$") ||
     Regex.IsMatch(transcript, @"(?im)^\s*warning:"))
     throw new InvalidOperationException("DocFX reported a warning or omitted its zero-warning summary.");
