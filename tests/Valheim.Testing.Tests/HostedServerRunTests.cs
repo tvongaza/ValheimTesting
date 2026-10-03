@@ -731,6 +731,23 @@ public sealed partial class HostedServerRunTests : IDisposable
         await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default);
     }
 
+    [Fact] public async Task WindowsPowerShellReadsTheRemoteLoaderFilesForPreflight()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string install = Path.Combine(_root, "windows-client");
+        Directory.CreateDirectory(install);
+        File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
+        string config = Path.Combine(install, "doorstop_config.ini");
+        File.WriteAllText(config, "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var host = new LocalGameHost("windows-client", HostShell.WindowsPowerShell);
+        var plan = new ClientRunPlan { Mode = "owned", Pinning = "none" };
+        await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(30), default);
+        File.WriteAllText(config, "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(30), default));
+        Assert.Contains("Doorstop 4", error.Message);
+    }
+
     // A client that started but never reached its menu (here its pins do not hold) is stopped; its fetched logs are still scanned.
     [Fact] public async Task AProfileClientWhoseStartupFailsStillHasItsLogsScannedAndListed()
     {
