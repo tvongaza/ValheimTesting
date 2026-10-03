@@ -31,6 +31,7 @@ public sealed class ClientSession : IDisposable
     public bool Owned => _process != null;
     /// <summary>The owned client's process ID, or null for an attached client.</summary>
     public int? ProcessId => _process?.Id;
+    internal IServerProcess? OwnedProcess => _process;
     /// <summary>
     /// The slice the owned client was launched as (<see cref="ClientRunPlan.Architecture"/>; x64 unless the plan asked for arm64),
     /// or null for an attached client, whose operator chose it.
@@ -136,6 +137,12 @@ public sealed class ClientSession : IDisposable
     /// the lease later stops the client.
     /// </summary>
     public static ClientSession Launch(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation = default)
+        => Launch(plan, output, account, cancellation, null);
+
+    // The profile owner records the exact process as soon as it exists. If startup then fails and its stop is unproven,
+    // the Steam account lease remains held instead of being released while that client might still run.
+    internal static ClientSession Launch(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation,
+        Action<IServerProcess>? processStarted)
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
         plan.CheckTestTeleportOptions();
@@ -168,7 +175,9 @@ public sealed class ClientSession : IDisposable
                 () =>
                 {
                     cliLog = new LogWait(log); // Opened before the launch: an earlier run's lines never count.
-                    return new DirectServerProcess(start, prefix, log, playerLog) { Quit = QuitRequest.CloseWindow };
+                    var process = new DirectServerProcess(start, prefix, log, playerLog) { Quit = QuitRequest.CloseWindow };
+                    processStarted?.Invoke(process);
+                    return process;
                 },
                 () => new CliTransport(plan.Host, plan.Port),
                 async (left, token) =>

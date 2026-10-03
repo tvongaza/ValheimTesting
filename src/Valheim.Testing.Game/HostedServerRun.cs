@@ -18,13 +18,18 @@ internal sealed class HostedSeams
     /// <summary>Shorter Steam account leases and renewals than the pool's, so a test sees them lapse.</summary>
     public TimeSpan? SteamLeaseTime { get; init; }
     public TimeSpan? SteamRenewEvery { get; init; }
+    /// <summary>Overrides the local macOS GUI-session probe in controlled tests.</summary>
+    public Action? RequireMacGui { get; init; }
+    /// <summary>Starts a local macOS client without opening the real game in controlled tests.</summary>
+    public Func<ClientRunPlan, string, SteamAccountHold?, CancellationToken, Action<IServerProcess>?, ClientSession>? LocalMacLaunch { get; init; }
 }
 
 /// <summary>
 /// The parts of a <see cref="PinnedServerRun"/> that differ when its dedicated server runs on the environment profile's server
 /// host (<c>--profile</c>): the host lock, the runtime copied from the host's install and verified there, the world copy
 /// shipped and verified there, the port check, the loopback CLI tunnel, the owned session through <see cref="HostServer"/>,
-/// clients through <see cref="InteractiveClient"/>, each client's Steam account lease when the profile has a pool, and the teardown
+/// remote clients through <see cref="InteractiveClient"/> and a local macOS GUI client through <see cref="ClientSession"/>,
+/// each client's Steam account lease when the profile has a pool, and the teardown
 /// that fetches evidence, closes the tunnel and releases the leases and locks.
 /// </summary>
 internal sealed class HostedServerRun
@@ -34,6 +39,7 @@ internal sealed class HostedServerRun
     private readonly HostedSeams _seams;
     private readonly string _owner;
     private readonly List<(string Host, HostLock Lock)> _clientLocks = [];
+    private readonly List<(string Host, IServerProcess Process)> _localMacProcesses = [];
     private readonly List<ClientAccount> _accounts = [];
     private IGameHost? _leaseHost;
     private HostLock? _lock;
@@ -261,12 +267,14 @@ internal sealed class HostedServerRun
     private async Task<ClientSession> OpenClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation)
     {
         if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment profile.", nameof(name));
-        // A profile client host runs Windows or Linux (HostClientLaunch refuses macOS), whose clients are x64 only.
-        if (plan.LaunchArchitecture != ClientArchitecture.X64)
-            throw new ArgumentException($"Profile client '{name}' starts in a remote host's desktop session, where only x64 Windows and Linux clients run; " +
-                "architecture arm64 is for a macOS client launched in this runner's own session (ClientSession.Launch). Leave architecture out.");
         var hostProfile = Profile.Hosts[role.Host];
         var platform = hostProfile.Platform switch { "windows" => ClientPlatform.Windows, "linux" => ClientPlatform.Linux, _ => ClientPlatform.MacOS };
+        if (platform == ClientPlatform.MacOS)
+            return await OpenLocalMacClientAsync(report, output, plan, name, role, hostProfile, cancellation).ConfigureAwait(false);
+        // Remote Windows and Linux clients are x64 only.
+        if (plan.LaunchArchitecture != ClientArchitecture.X64)
+            throw new ArgumentException($"Profile client '{name}' starts in a remote host's desktop session, where only x64 Windows and Linux clients run; " +
+                "architecture arm64 is for a macOS client launched locally in this runner's GUI session. Leave architecture out.");
         var launch = HostClientLaunch.Create(platform, role.Install, plan.LaunchArguments, secretVariables: plan.PasswordVariable is { } password ? new[] { password } : null);
         var host = ClientHost(role);
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
@@ -319,6 +327,37 @@ internal sealed class HostedServerRun
         catch { tunnel.Dispose(); throw; }
     }
 
+    private async Task<ClientSession> OpenLocalMacClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name,
+        GameRole role, HostProfile hostProfile, CancellationToken cancellation)
+    {
+        if (hostProfile.Kind != "local" || (!OperatingSystem.IsMacOS() && _seams.LocalMacLaunch == null))
+            throw new PlatformNotSupportedException($"Profile client '{name}' needs a local macOS host in this runner's logged-in GUI session; SSH cannot launch it there.");
+        if (!plan.Owned) throw new ArgumentException($"Profile client '{name}' must be an owned client for local macOS launch.");
+        if (Path.GetFullPath(plan.Install) != Path.GetFullPath(role.Install) || plan.Port != role.CliPort ||
+            plan.Host is not ("127.0.0.1" or "localhost" or "::1"))
+            throw new ArgumentException($"Profile client '{name}' must pin the local role's exact install and CLI port on loopback.");
+        (_seams.RequireMacGui ?? MacGuiSession.Require)();
+        var host = ClientHost(role);
+        if (host.Kind != GameHostKind.Local)
+            throw new PlatformNotSupportedException($"Profile client '{name}' must use a local host; a remote process cannot enter this runner's GUI session.");
+        var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
+        if (role.Host != Role.Host && !_clientLocks.Any(held => held.Host == role.Host))
+            _clientLocks.Add((role.Host, await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)));
+        // ClientSession owns the direct child process and its logs. No SSH-launched GUI process or remote task is involved.
+        ClientSession session;
+        Action<IServerProcess> processStarted = process =>
+        {
+            _localMacProcesses.Add((role.Host, process));
+            if (account != null) account.Process = process;
+        };
+        session = _seams.LocalMacLaunch?.Invoke(plan, output, account?.Hold, cancellation, processStarted)
+            ?? ClientSession.Launch(plan, output, account?.Hold, cancellation, processStarted);
+        if (session.OwnedProcess is { } owned && !_localMacProcesses.Any(item => ReferenceEquals(item.Process, owned)))
+            _localMacProcesses.Add((role.Host, owned));
+        if (account != null) { account.Process = session.OwnedProcess; account.Session = session; }
+        return session;
+    }
+
     /// <summary>
     /// After the owned server stopped: fetches the host's world copy, closes the tunnel and releases the locks, each as its own
     /// step. With <paramref name="serverStopped"/> false the server host's lock is kept, because the server may still run there.
@@ -354,7 +393,11 @@ internal sealed class HostedServerRun
                 await account.Hold.ReleaseAsync().ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
-        foreach (var (name, held) in _clientLocks) await Try($"release client host {name}'s lock", () => ReleaseAsync(held)).ConfigureAwait(false);
+        foreach (var (name, held) in _clientLocks) await Try($"release client host {name}'s lock", () =>
+            _localMacProcesses.Any(item => item.Host == name && !item.Process.HasExited)
+                ? throw new HostLockException(new HostLockResult(HostLockState.Unknown, held.Owner,
+                    $"Kept {held.Path} on {name}: an owned local Mac client may still run. Confirm its recorded process has stopped before releasing this lock."))
+                : ReleaseAsync(held)).ConfigureAwait(false);
         if (_lock != null)
             await Try("release the server host's lock", () => serverStopped ? ReleaseAsync(_lock)
                 : throw new HostLockException(new HostLockResult(HostLockState.Unknown, _lock.Owner,
