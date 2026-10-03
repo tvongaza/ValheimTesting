@@ -187,6 +187,10 @@ jobs:
       VALHEIM_TESTING_SSH_PORT: '2222'
       VALHEIM_TESTING_SSH_SHELLS: bash,pwsh
       VALHEIM_TESTING_CONTAINER: vt-game-host
+      VALHEIM_TESTING_REQUIRE_REMOTE_CONTAINER: '1'
+      VALHEIM_TESTING_REMOTE_CONTAINER: vt-game-host
+      VALHEIM_TESTING_REMOTE_CONTAINER_SSH: vt-ci-container
+      VALHEIM_TESTING_REMOTE_CONTAINER_USER: root
     steps:
       - uses: actions/checkout@v7
         with:
@@ -213,6 +217,20 @@ jobs:
           sudo mkdir -p /run/sshd
           sudo /usr/sbin/sshd -f "$d/sshd_config" -E "$d/sshd.log"
           echo "[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$d/host_key.pub")" > "$k/known_hosts"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          cat >> "$HOME/.ssh/config" <<EOF
+          Host vt-ci-container
+            HostName 127.0.0.1
+            User $(id -un)
+            Port 2222
+            IdentityFile "$k/client_key"
+            IdentitiesOnly yes
+            UserKnownHostsFile "$k/known_hosts"
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          ssh -G vt-ci-container > /dev/null
           echo "VALHEIM_TESTING_SSH_DESTINATION=$(id -un)@127.0.0.1" >> "$GITHUB_ENV"
           {
             echo "VALHEIM_TESTING_SSH_OPTIONS<<VT_OPTIONS"
@@ -226,7 +244,7 @@ jobs:
           ssh -o BatchMode=yes -o "IdentityFile=\"$k/client_key\"" -o IdentitiesOnly=yes -o "UserKnownHostsFile=\"$k/known_hosts\"" \
             -o StrictHostKeyChecking=yes -p 2222 "$(id -un)@127.0.0.1" 'echo "ssh to localhost works; pwsh: $(command -v pwsh)"'
       - name: Start a throwaway container on the host network
-        run: docker run -d --rm --name vt-game-host --network host ubuntu:24.04 sleep 1800
+        run: docker run -d --rm --name vt-game-host --network host python:3.12-slim sleep 1800
       - name: Start a virtual X display for the interactive client checks
         run: |
           set -euo pipefail
@@ -245,6 +263,7 @@ jobs:
           if [ -f "$RUNNER_TEMP/sshd/sshd.pid" ]; then sudo kill "$(cat "$RUNNER_TEMP/sshd/sshd.pid")" || true; fi
           cat "$RUNNER_TEMP/sshd/sshd.log" 2>/dev/null || true
           rm -rf "$RUNNER_TEMP/sshd" "$RUNNER_TEMP/vt client key"
+          sed -i '/^Host vt-ci-container$/,/^  BatchMode yes$/d' "$HOME/.ssh/config" || true
   test-runners:
     name: test runners (${{ matrix.os }})
     # tools/test-runners for real: a copy of ModWithTests that also targets net48 (the two changes its README

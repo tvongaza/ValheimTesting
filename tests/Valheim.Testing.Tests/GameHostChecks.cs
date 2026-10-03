@@ -271,6 +271,17 @@ public sealed class ContainerTheoryAttribute : TheoryAttribute
     public ContainerTheoryAttribute() { if (Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER") is null or "") Skip = "Set VALHEIM_TESTING_CONTAINER to a running container"; }
 }
 
+/// <summary>Runs only when a test VM's SSH config alias and host-network container are supplied.</summary>
+public sealed class RemoteContainerFactAttribute : FactAttribute
+{
+    public RemoteContainerFactAttribute()
+    {
+        if (Environment.GetEnvironmentVariable("VALHEIM_TESTING_REMOTE_CONTAINER_SSH") is null or ""
+            || Environment.GetEnvironmentVariable("VALHEIM_TESTING_REMOTE_CONTAINER") is null or "")
+            Skip = "Set VALHEIM_TESTING_REMOTE_CONTAINER_SSH and VALHEIM_TESTING_REMOTE_CONTAINER for a remote Docker host";
+    }
+}
+
 [Trait("Category", "GameHosts")]
 public class SshGameHostIntegrationTests
 {
@@ -333,6 +344,62 @@ public class ContainerGameHostIntegrationTests
     }
 }
 
+[Trait("Category", "GameHosts")]
+public class RemoteContainerGameHostIntegrationTests
+{
+    private static IGameHost Host() => new ContainerGameHost("remote-vm", Environment.GetEnvironmentVariable("VALHEIM_TESTING_REMOTE_CONTAINER")!,
+        HostShell.Bash, Environment.GetEnvironmentVariable("VALHEIM_TESTING_REMOTE_CONTAINER_USER") ?? "steam",
+        Environment.GetEnvironmentVariable("VALHEIM_TESTING_REMOTE_CONTAINER_SSH")!, "docker");
+
+    [RemoteContainerFact] public Task RunPassesValuesLiterallyAndReportsTheExitCode() => GameHostChecks.RunPassesValuesLiterallyAndReportsTheExitCode(Host());
+    [RemoteContainerFact] public Task TwoRunsNeverShareTheLock() => GameHostChecks.TwoRunsNeverShareTheLock(Host(), "/tmp");
+    [RemoteContainerFact] public Task ShippedFilesComeBackAsEvidence() => GameHostChecks.ShippedFilesComeBackAsEvidence(Host(), "/tmp");
+    [RemoteContainerFact] public Task ALogWaitSeesOnlyLinesFromItsOffset() => GameHostChecks.ALogWaitSeesOnlyLinesFromItsOffset(Host(), "/tmp");
+
+    [RemoteContainerFact] public async Task TheTunnelReachesOnlyTheRemoteContainersLoopbackAndIsDisposed()
+    {
+        var host = Host();
+        await GameHostChecks.WithRootAsync(host, "/tmp", async root =>
+        {
+            string start = """
+                mkdir -p -- "$root"
+                nohup python3 -u -c '
+                import socket, sys
+                s = socket.socket()
+                s.bind(("127.0.0.1", 0))
+                s.listen()
+                with open(sys.argv[1], "w") as f:
+                    f.write(str(s.getsockname()[1]) + "\n")
+                while True:
+                    c, _ = s.accept()
+                    with c:
+                        c.sendall(b"VT-REMOTE-LOOPBACK\n")
+                ' "$root/port" > "$root/server.log" 2>&1 < /dev/null &
+                echo $! > "$root/pid"
+                """;
+            try
+            {
+                (await host.RunAsync(start, new Dictionary<string, string> { ["root"] = root }, GameHostChecks.Generous)).EnsureSuccess("Starting remote loopback stand-in");
+                var ready = await host.WaitForLogAsync(root + "/port", 0, new Regex("^[0-9]+$"), null, GameHostChecks.Generous);
+                int port = int.Parse(ready.EnsureMatched());
+                using var tunnel = await host.OpenCliTunnelAsync(port, GameHostChecks.Generous);
+                Assert.True(tunnel.Forwarded);
+                using var client = new TcpClient();
+                await client.ConnectAsync(IPAddress.Loopback, tunnel.LocalPort);
+                using var reader = new StreamReader(client.GetStream());
+                Assert.Equal("VT-REMOTE-LOOPBACK", await reader.ReadLineAsync().WaitAsync(GameHostChecks.Generous));
+                tunnel.Dispose();
+                Assert.True(tunnel.HasExited);
+            }
+            finally
+            {
+                (await host.RunAsync("if test -f \"$root/pid\"; then kill \"$(cat \"$root/pid\")\" 2>/dev/null || true; fi",
+                    new Dictionary<string, string> { ["root"] = root }, GameHostChecks.Generous)).EnsureSuccess("Stopping remote loopback stand-in");
+            }
+        });
+    }
+}
+
 // The game-hosts CI job sets VALHEIM_TESTING_REQUIRE_HOSTS=1, so a lost variable fails the job instead of skipping every check.
 [Trait("Category", "GameHosts")]
 public class GameHostIntegrationSetupTests
@@ -342,5 +409,10 @@ public class GameHostIntegrationSetupTests
         if (Environment.GetEnvironmentVariable("VALHEIM_TESTING_REQUIRE_HOSTS") != "1") return;
         Assert.False(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_DESTINATION")), "VALHEIM_TESTING_SSH_DESTINATION is not set");
         Assert.False(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER")), "VALHEIM_TESTING_CONTAINER is not set");
+        if (Environment.GetEnvironmentVariable("VALHEIM_TESTING_REQUIRE_REMOTE_CONTAINER") == "1")
+        {
+            Assert.False(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VALHEIM_TESTING_REMOTE_CONTAINER")), "VALHEIM_TESTING_REMOTE_CONTAINER is not set");
+            Assert.False(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VALHEIM_TESTING_REMOTE_CONTAINER_SSH")), "VALHEIM_TESTING_REMOTE_CONTAINER_SSH is not set");
+        }
     }
 }

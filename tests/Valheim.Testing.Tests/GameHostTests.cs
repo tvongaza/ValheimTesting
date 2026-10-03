@@ -86,6 +86,74 @@ public class GameHostTests
         Assert.Throws<ArgumentException>(() => new ContainerGameHost("ctr", "vt", HostShell.Bash, "root;id", "docker", fake));
     }
 
+    [Fact] public async Task ARemoteContainerUsesOneSshIdentityForDockerAndItsOwnedCliTunnel()
+    {
+        FakeForward? forward = null;
+        var fake = new FakeLauncher { OnStart = arguments => forward = new FakeForward(arguments) }
+            .Exits(0, "", FakeLauncher.Report(0))
+            .Exits(0, "true|host\n")
+            .Exits(0, "user root\nhostname vm.example\nport 2222\n");
+        var host = new ContainerGameHost("vm", "vt", HostShell.Bash, "steam", "docker", "vast-vm", fake);
+        Assert.Equal("vast-vm", host.SshDestination);
+        Assert.True((await host.RunAsync("true", null, Timeout)).Succeeded);
+        Assert.Equal("docker", fake.Calls[0].Executable);
+        Assert.Equal(new[] { "--host", "ssh://vast-vm", "exec", "-i", "--user", "steam", "vt", "bash", "-c", HostScripts.BashWrapper }, fake.Calls[0].Arguments);
+
+        using (var tunnel = await host.OpenCliTunnelAsync(5577, Timeout, 15577))
+        {
+            Assert.Equal(new[] { "--host", "ssh://vast-vm", "inspect", "--format", "{{.State.Running}}|{{.HostConfig.NetworkMode}}", "vt" }, fake.Calls[1].Arguments);
+            Assert.Equal("ssh", fake.Calls[2].Executable);
+            Assert.Contains("-G", fake.Calls[2].Arguments);
+            Assert.Contains("vast-vm", fake.Started.Single().Arguments);
+            Assert.True(tunnel.Forwarded);
+            Assert.Equal(15577, tunnel.LocalPort);
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, tunnel.LocalPort);
+        }
+        Assert.True(forward!.Stopped); Assert.True(forward.Disposed);
+    }
+
+    [Fact] public async Task ARemoteContainerRefusesBridgeNetworkingBeforeOpeningAnyTunnel()
+    {
+        var fake = new FakeLauncher { OnStart = _ => throw new Exception("should not start ssh") }.Exits(0, "true|bridge\n");
+        var host = new ContainerGameHost("vm", "vt", HostShell.Bash, "steam", "docker", "vast-vm", fake);
+        var error = await Assert.ThrowsAsync<NotSupportedException>(() => host.OpenCliTunnelAsync(5577, Timeout));
+        Assert.Contains("--network host", error.Message);
+        Assert.Empty(fake.Started);
+    }
+
+    [Fact] public async Task AStoppedRemoteContainerIsRefusedBeforeOpeningATunnel()
+    {
+        var fake = new FakeLauncher { OnStart = _ => throw new Exception("should not start ssh") }.Exits(0, "false|host\n");
+        var host = new ContainerGameHost("vm", "vt", HostShell.Bash, "steam", "docker", "vast-vm", fake);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => host.OpenCliTunnelAsync(5577, Timeout));
+        Assert.Contains("not running", error.Message);
+        Assert.Empty(fake.Started);
+    }
+
+    [Fact] public async Task ARemoteContainerRefusesAnOccupiedLocalPortAndAMissingContainer()
+    {
+        using var occupied = new TcpListener(IPAddress.Loopback, 0);
+        occupied.Start();
+        int port = ((IPEndPoint)occupied.LocalEndpoint).Port;
+        var fake = new FakeLauncher { OnStart = _ => throw new Exception("should not start ssh") }
+            .Exits(0, "true|host\n")
+            .Exits(1, "", "Error response from daemon: No such container: vt");
+        var host = new ContainerGameHost("vm", "vt", HostShell.Bash, "steam", "docker", "vast-vm", fake);
+        Assert.Contains("already in use", (await Assert.ThrowsAsync<InvalidOperationException>(() => host.OpenCliTunnelAsync(5577, Timeout, port))).Message);
+        Assert.Contains("Could not read the network mode", (await Assert.ThrowsAsync<InvalidOperationException>(() => host.OpenCliTunnelAsync(5577, Timeout))).Message);
+        Assert.Empty(fake.Started);
+    }
+
+    [Fact] public async Task ARemoteContainerReportsLostDockerSshAsTransportFailure()
+    {
+        var fake = new FakeLauncher().Exits(255, "", "ssh: connection closed\n");
+        var host = new ContainerGameHost("vm", "vt", HostShell.Bash, "steam", "docker", "vast-vm", fake);
+        var result = await host.RunAsync("true", null, Timeout);
+        Assert.Equal(HostOutcome.TransportFailed, result.Outcome);
+        Assert.False(result.Succeeded);
+    }
+
     [Theory, MemberData(nameof(Kinds))] public async Task TheHostsExitReportIsTheScriptsExitCode(string kind)
     {
         // A Windows login shell may turn any failure into 1 (or ssh into 255); the report still carries the real code.
@@ -385,10 +453,10 @@ public class GameHostTests
         Assert.Equal(5577, local.LocalPort); Assert.False(local.Forwarded);
         await Assert.ThrowsAsync<ArgumentException>(() => Host("local", new FakeLauncher()).OpenCliTunnelAsync(5577, Timeout, 6000));
 
-        var fake = new FakeLauncher().Exits(0, "host\n").Exits(0, "bridge\n");
+        var fake = new FakeLauncher().Exits(0, "true|host\n").Exits(0, "true|bridge\n");
         var direct = await Host("container", fake).OpenCliTunnelAsync(5577, Timeout);
         Assert.Equal(5577, direct.LocalPort);
-        Assert.Equal(new[] { "inspect", "--format", "{{.HostConfig.NetworkMode}}", "vt-server" }, fake.Calls[0].Arguments);
+        Assert.Equal(new[] { "inspect", "--format", "{{.State.Running}}|{{.HostConfig.NetworkMode}}", "vt-server" }, fake.Calls[0].Arguments);
         var error = await Assert.ThrowsAsync<NotSupportedException>(() => Host("container", fake).OpenCliTunnelAsync(5577, Timeout));
         Assert.Contains("--network host", error.Message);
     }
@@ -431,6 +499,20 @@ public class EnvironmentProfileTests
         var container = Assert.IsType<ContainerGameHost>(profile.CreateHost("server-ctr"));
         Assert.Equal("valheim-server", container.Container); Assert.Equal("valheim", container.User);
         Assert.Equal(15578, profile.Clients["player"].LocalCliPort);
+    }
+
+    [Fact] public void ARemoteContainerProfileRequiresAnSshIdentityAndReservesItsLocalTunnelPort()
+    {
+        string remote = "\"remote-vm\": { \"kind\": \"remote-container\", \"platform\": \"linux\", \"shell\": \"bash\", \"destination\": \"vast-vm\", \"container\": \"vt\", \"user\": \"steam\", \"lock\": \"/home/steam/vt.lock\" }";
+        string json = Sample.Replace("\"server-ctr\":", remote + ", \"server-ctr\":")
+            .Replace("\"player\": {", "\"second\": { \"host\": \"remote-vm\", \"install\": \"/home/steam/valheim\", \"runtime\": \"/home/steam/runs\", \"cliPort\": 5580, \"localCliPort\": 15580 }, \"player\": {");
+        var profile = EnvironmentProfile.Parse(json);
+        var host = Assert.IsType<ContainerGameHost>(profile.CreateClientHost("second"));
+        Assert.Equal("vast-vm", host.SshDestination);
+        Assert.Equal(15580, profile.Clients["second"].LocalCliPort);
+        Assert.Contains("would all be reached on local port 15578", Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json.Replace("15580", "15578"))).Message);
+        Assert.Contains("needs an SSH destination", Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json.Replace("\"destination\": \"vast-vm\", ", ""))).Message);
+        Assert.Contains("through an SSH config alias", Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json.Replace("\"remote-container\", \"platform\"", "\"remote-container\", \"port\": 2222, \"platform\""))).Message);
     }
 
     [Fact] public void ALocalHostMustBeThisMachinesPlatform()

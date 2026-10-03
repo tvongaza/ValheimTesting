@@ -49,6 +49,12 @@ host verdict. After installing the toolkit, bootstrap also checks `nvidia-contai
 `bash host/vm-bootstrap.sh --preflight-runtime` checks an already-installed runtime alone. These checks need no Steam login or
 game files. The inert success, failure and late-readiness controls run in CI.
 
+For a toolkit run that owns the client through an environment profile from a different machine, start this disposable VM's
+container with `VT_HOST_NETWORK=1 bash host/vm-bootstrap.sh <image>`. A `remote-container` profile then drives Docker over
+SSH and opens its **own SSH loopback tunnel** to ValheimCLI. The game port, if this VM also hosts the test server, still needs
+the VM provider's explicit UDP mapping. Pin the VM's SSH host key in an SSH config alias; do not open the Docker API or
+ValheimCLI on a public interface. The default bridge-network recipe above remains for manual checks.
+
 Then, inside the container (`docker exec vt ...`):
 
 1. **Download the client.** As `steam`: `DepotDownloader -app 892970 -os linux -dir /home/steam/valheim -qr -remember-password`. It prints a login QR code; `vt-qr-url` turns it into a link that any Steam authenticator can approve (the Steam Mobile app, or for example `steamguard qr-login --url <link>` from steamguard-cli on a machine you trust).

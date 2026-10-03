@@ -107,6 +107,7 @@ public sealed class EnvironmentProfile
             "local" => host.Platform == HostProfile.CurrentPlatform ? new LocalGameHost(name, shell)
                 : throw new PlatformNotSupportedException($"Host '{name}' is a local {host.Platform} host, but this machine is {HostProfile.CurrentPlatform}."),
             "ssh" => new SshGameHost(name, host.Destination!, shell, host.Port, host.SshOptions, TimeSpan.FromSeconds(host.ConnectSeconds), host.Ssh),
+            "remote-container" => new ContainerGameHost(name, host.Container!, shell, host.User, host.Destination!, host.Docker),
             _ => new ContainerGameHost(name, host.Container!, shell, host.User, host.Docker),
         };
     }
@@ -117,7 +118,7 @@ public sealed class EnvironmentProfile
         CreateHost(Clients.TryGetValue(client, out var role) ? role.Host : throw new ArgumentException($"No client '{client}' in the profile.", nameof(client)));
 }
 
-/// <summary>One machine or container. <see cref="Kind"/> is <c>local</c>, <c>ssh</c> or <c>container</c>.</summary>
+/// <summary>One machine or container. <see cref="Kind"/> is <c>local</c>, <c>ssh</c>, <c>container</c> or <c>remote-container</c>.</summary>
 public sealed class HostProfile
 {
     internal static string CurrentPlatform => OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
@@ -129,7 +130,7 @@ public sealed class HostProfile
     public string Shell { get; set; } = "";
     /// <summary>The host lock's directory, an absolute path on the host. Every run takes it before touching the host.</summary>
     public string Lock { get; set; } = "";
-    /// <summary>ssh: <c>user@host</c>, <c>ssh://user@host:port</c> or an ssh-config alias.</summary>
+    /// <summary>ssh or remote-container: <c>user@host</c>, <c>ssh://user@host:port</c> or an ssh-config alias. A remote container uses the same configured identity for Docker and its CLI tunnel.</summary>
     public string? Destination { get; set; }
     /// <summary>ssh: the port; 0 leaves it to the destination or the ssh config.</summary>
     public int Port { get; set; }
@@ -138,7 +139,7 @@ public sealed class HostProfile
     public int ConnectSeconds { get; set; } = 10;
     /// <summary>ssh: the OpenSSH client executable.</summary>
     public string Ssh { get; set; } = "ssh";
-    /// <summary>container: its name or id on this machine's Docker daemon.</summary>
+    /// <summary>container or remote-container: its name or id on the selected Docker daemon.</summary>
     public string? Container { get; set; }
     /// <summary>container: the user scripts run as.</summary>
     public string? User { get; set; }
@@ -148,20 +149,25 @@ public sealed class HostProfile
     internal void Validate(string name, List<string> errors)
     {
         string where = $"Host '{name}'";
-        if (Kind is not ("local" or "ssh" or "container")) errors.Add($"{where}: kind must be local, ssh or container.");
+        if (Kind is not ("local" or "ssh" or "container" or "remote-container")) errors.Add($"{where}: kind must be local, ssh, container or remote-container.");
         if (Platform is not ("windows" or "linux" or "macos")) errors.Add($"{where}: platform must be windows, linux or macos.");
         if (Shell is not ("bash" or "pwsh" or "powershell")) errors.Add($"{where}: shell must be bash, pwsh or powershell.");
         else if (Shell == "powershell" && Platform != "windows") errors.Add($"{where}: Windows PowerShell (powershell) runs only on Windows; use pwsh.");
         else if (Shell == "bash" && Platform == "windows") errors.Add($"{where}: bash on Windows (WSL or Git Bash) sees other paths and tools; use powershell or pwsh.");
-        if (Kind == "container" && Platform != "linux") errors.Add($"{where}: a container host's platform is linux.");
-        if ((Kind == "ssh") == string.IsNullOrWhiteSpace(Destination)) errors.Add($"{where}: " + (Kind == "ssh" ? "an ssh host needs a destination." : "only an ssh host has a destination."));
-        if ((Kind == "container") == string.IsNullOrWhiteSpace(Container)) errors.Add($"{where}: " + (Kind == "container" ? "a container host needs a container." : "only a container host has a container."));
-        if (Kind != "ssh" && (Port != 0 || SshOptions.Length != 0)) errors.Add($"{where}: port and sshOptions belong to an ssh host.");
-        if (Kind != "container" && User != null) errors.Add($"{where}: user belongs to a container host.");
-        if (Port is < 0 or > 65535) errors.Add($"{where}: port must be 0 to 65535.");
-        if (Kind == "ssh" && !string.IsNullOrWhiteSpace(Destination))
+        if ((Kind is "container" or "remote-container") && Platform != "linux") errors.Add($"{where}: a container host's platform is linux.");
+        if ((Kind is "ssh" or "remote-container") == string.IsNullOrWhiteSpace(Destination)) errors.Add($"{where}: " + (Kind switch
         {
-            if (Port != 0 && Destination.StartsWith("ssh://", StringComparison.Ordinal)) errors.Add($"{where}: give the port once, in the ssh:// destination or as port.");
+            "ssh" => "an ssh host needs a destination.",
+            "remote-container" => "a remote container needs an SSH destination.",
+            _ => "only an ssh-backed host has a destination.",
+        }));
+        if ((Kind is "container" or "remote-container") == string.IsNullOrWhiteSpace(Container)) errors.Add($"{where}: " + (Kind is "container" or "remote-container" ? "a container host needs a container." : "only a container host has a container."));
+        if (Kind != "ssh" && (Port != 0 || SshOptions.Length != 0)) errors.Add($"{where}: port and sshOptions belong to an ssh host; configure a remote container through an SSH config alias.");
+        if (Kind is not ("container" or "remote-container") && User != null) errors.Add($"{where}: user belongs to a container host.");
+        if (Port is < 0 or > 65535) errors.Add($"{where}: port must be 0 to 65535.");
+        if ((Kind is "ssh" or "remote-container") && !string.IsNullOrWhiteSpace(Destination))
+        {
+            if (Kind == "ssh" && Port != 0 && Destination.StartsWith("ssh://", StringComparison.Ordinal)) errors.Add($"{where}: give the port once, in the ssh:// destination or as port.");
             Collect(errors, where, () => SshGameHost.CheckDestination(Destination));
             foreach (string option in SshOptions ?? []) Collect(errors, where, () => SshGameHost.CheckOption(option));
         }
