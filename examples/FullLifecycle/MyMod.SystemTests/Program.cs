@@ -21,6 +21,7 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
         if (mode == "run" && plan.Client == null && !plan.ServerOnly)
             throw new ArgumentException($"A run looks from a client: add the client section, or use the {LifecyclePlan.ServerScenario} scenario for the server half alone.");
     },
+    CheckEnvironment = (plan, profile) => plan.CheckHandoffEnvironment(profile),
     Provenance = (plan, provenance) =>
     {
         provenance["clientMode"] = plan.Client?.Mode ?? "none";
@@ -63,6 +64,7 @@ return await PinnedServerRun.MainAsync(args, new PinnedServerRunOptions<Lifecycl
                 Directory.CreateDirectory(own);
                 return ClientSession.Open(client, own, run.Logs, run.Cancellation);
             },
+            OpenProfileClient = (client, name) => run.OpenClient(client, name),
             ServerLog = () => local ? Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log") : null,
             ClientLog = client => local && client.Owned ? Path.Combine(client.Install, "BepInEx", "LogOutput.log") : null,
             // The lobby line is in the log the game writes to: the -logFile file when the plan passes one (the Windows server's

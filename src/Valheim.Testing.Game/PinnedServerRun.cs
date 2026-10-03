@@ -29,6 +29,8 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public IReadOnlyDictionary<string, string[]> ModeScenarios { get; init; } = new Dictionary<string, string[]>();
     /// <summary>Refuses a mode and plan that do not belong together (throw <see cref="ArgumentException"/>).</summary>
     public Action<string, TPlan>? CheckMode { get; init; }
+    /// <summary>Checks a plan against its optional host profile before the runner copies fixtures or starts a process.</summary>
+    public Action<TPlan, EnvironmentProfile?>? CheckEnvironment { get; init; }
     /// <summary>Adds the mod's provenance (scenario details) to the report.</summary>
     public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
     /// <summary>Turns devcommands on through the session capability's <c>devcommands</c> field before the scenario.</summary>
@@ -266,11 +268,13 @@ public static class PinnedServerRun
                 report.MarkNotPinned("the plan sets pinning \"none\"");
             }
             ServerPlatform platform;
+            EnvironmentProfile? environment = null;
             if (profilePath != null)
             {
                 // The runtime is the server host's install, copied and checked there; nothing local is read for it.
-                var profile = EnvironmentProfile.Read(profilePath);
-                hosted = HostedServerRun.Create(profile, plan, options.Name, options.HostSeams);
+                environment = EnvironmentProfile.Read(profilePath);
+                options.CheckEnvironment?.Invoke(plan, environment);
+                hosted = HostedServerRun.Create(environment, plan, options.Name, options.HostSeams);
                 // A client's lost Steam account lease stops that client, then the run, as Ctrl+C would.
                 hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };
                 report.Provenance["profileSha256"] = WorldFixture.Hash(profilePath);
@@ -279,6 +283,7 @@ public static class PinnedServerRun
             }
             else
             {
+                options.CheckEnvironment?.Invoke(plan, null);
                 // The runtime's contents decide its platform; checked on the pinned source so a wrong host fails before copying.
                 platform = ServerLaunch.Detect(plan.Runtime.Source); plan.CheckExecutable(platform);
                 if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);

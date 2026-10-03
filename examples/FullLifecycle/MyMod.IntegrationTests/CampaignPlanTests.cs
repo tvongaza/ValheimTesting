@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Runtime.CompilerServices;
 using MyMod.SystemTests;
 using Xunit;
 
@@ -26,6 +27,16 @@ public sealed class CampaignPlanTests : IDisposable
         return client;
     }
 
+    private JsonObject Owned(JsonObject client, string name)
+    {
+        client["mode"] = "owned";
+        client["eventDrivenArrival"] = true;
+        client["character"] = name;
+        client["install"] = Path.Combine(_directory, "install-" + name);
+        client["installPins"] = new JsonObject { ["game"] = new string('a', 64), ["bepinexCore"] = new string('b', 64), ["patchers"] = new string('c', 64) };
+        return client;
+    }
+
     // A valid plan of the scenario, as the sample plans have it; tests change one thing each.
     private JsonObject Plan(string scenario)
     {
@@ -40,7 +51,7 @@ public sealed class CampaignPlanTests : IDisposable
             ["runtimePins"] = new JsonObject { ["game"] = new string('c', 64), ["bepinexCore"] = new string('d', 64), ["patchers"] = new string('e', 64) },
             ["client"] = Client(),
         };
-        if (scenario is LifecyclePlan.WorldScenario or LifecyclePlan.VanillaClientScenario or LifecyclePlan.CrossplayScenario)
+        if (scenario is LifecyclePlan.WorldScenario or LifecyclePlan.VanillaClientScenario or LifecyclePlan.CrossplayScenario or LifecyclePlan.OwnershipHandoffScenario)
         {
             plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
             plan["wetSite"] = new JsonObject { ["x"] = 400, ["z"] = 300, ["ground"] = 22 };
@@ -64,6 +75,14 @@ public sealed class CampaignPlanTests : IDisposable
                 plan["crossplay"] = true;
                 plan["client"] = Client("absent", crossplay: true);
                 break;
+            case LifecyclePlan.OwnershipHandoffScenario:
+                plan["client"] = Owned(Client(port: 5556), "ClientA");
+                plan["secondClient"] = Owned(Client(port: 5557), "ClientB");
+                foreach (var entry in new[] { plan["client"]!, plan["secondClient"]! })
+                    entry["capabilities"] = new JsonArray(Capabilities.Markers, Capabilities.MarkerOwner,
+                        Capabilities.MarkerOwnerWait, Capabilities.MarkerOwnerClaim, "valheim.world/player-support-wait");
+                plan["secondArrival"] = new JsonObject { ["x"] = 100, ["z"] = -32, ["ground"] = 42.4 };
+                break;
         }
         return plan;
     }
@@ -83,7 +102,7 @@ public sealed class CampaignPlanTests : IDisposable
     [Theory]
     [InlineData(LifecyclePlan.WorldScenario)] [InlineData(LifecyclePlan.VanillaClientScenario)] [InlineData(LifecyclePlan.SyncedConfigScenario)]
     [InlineData(LifecyclePlan.RefusedJoinScenario)] [InlineData(LifecyclePlan.CrossplayScenario)] [InlineData(LifecyclePlan.ContentCensusScenario)]
-    [InlineData(LifecyclePlan.AreaObjectsScenarioName)]
+    [InlineData(LifecyclePlan.AreaObjectsScenarioName)] [InlineData(LifecyclePlan.OwnershipHandoffScenario)]
     public void EachScenariosValidPlanIsRead(string scenario) => Assert.Equal(scenario, Read(Plan(scenario)).Scenario);
 
     [Fact] public void ObjectSnapshotPlanRefusesAnAmbiguousCentreBeforeLaunch()
@@ -93,14 +112,63 @@ public sealed class CampaignPlanTests : IDisposable
         Refused(plan, "whole-metre coordinates");
     }
 
+    [Fact] public void OwnershipHandoffRejectsAmbiguousClientsAndRequiresTwoAccountHosts()
+    {
+        var valid = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        var plan = Read(valid);
+        Assert.Throws<ArgumentException>(() => plan.CheckHandoffEnvironment(null));
+        var profile = new Valheim.Testing.Game.EnvironmentProfile
+        {
+            Clients = new()
+            {
+                ["client-a"] = new() { Host = "machine-a", CliPort = 5556, SteamAccount = "account-a", Install = plan.Client!.Install },
+                ["client-b"] = new() { Host = "machine-b", CliPort = 5557, SteamAccount = "account-b", Install = plan.SecondClient!.Install },
+            },
+            SteamAccounts = new(),
+        };
+        plan.CheckHandoffEnvironment(profile);
+        profile.Clients["client-b"].SteamAccount = "account-a";
+        Assert.Contains("two distinct Steam accounts", Assert.Throws<ArgumentException>(() => plan.CheckHandoffEnvironment(profile)).Message);
+        profile.Clients["client-b"].SteamAccount = "account-b";
+        profile.Clients["client-b"].Host = "MACHINE-A";
+        Assert.Contains("separate hosts", Assert.Throws<ArgumentException>(() => plan.CheckHandoffEnvironment(profile)).Message);
+        profile.Clients["client-b"].Host = "machine-b";
+        profile.Clients["client-b"].CliPort = 5556;
+        Assert.Contains("ports must match", Assert.Throws<ArgumentException>(() => plan.CheckHandoffEnvironment(profile)).Message);
+
+        var duplicateCharacter = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        duplicateCharacter["secondClient"]!["character"] = "ClientA";
+        Refused(duplicateCharacter, "distinct disposable character");
+        var duplicatePort = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        duplicatePort["secondClient"]!["port"] = 5556;
+        Refused(duplicatePort, "distinct ValheimCLI ports");
+        var missingCapability = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        missingCapability["secondClient"]!["pins"]!.AsObject().Remove(LifecyclePlan.AdapterPlugin);
+        Refused(missingCapability, "Pin " + LifecyclePlan.AdapterPlugin);
+    }
+
+    [Fact] public void OwnershipHandoffRequiresEventDrivenArrivalAtNormalTeleportTiming()
+    {
+        var missingSignalWait = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        missingSignalWait["secondClient"]!["eventDrivenArrival"] = false;
+        Refused(missingSignalWait, "eventDrivenArrival");
+
+        var unverifiedFastTiming = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        unverifiedFastTiming["client"]!["fastTestTeleports"] = true;
+        Refused(unverifiedFastTiming, "fastTestTeleports");
+    }
+
     [Fact] public void TheSamplePlansAreValidPlans()
     {
         // The samples beside sample-plan.json have placeholders for hashes and paths; with those filled in, each reads.
         string samples = Path.Combine(AppContext.BaseDirectory, "samples");
-        var files = Directory.GetFiles(samples, "sample-plan-*.json").Where(file => !file.EndsWith("-hosted.json", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(8, files.Length);
-        foreach (string file in files)
+        // Discover the source inventory, not arbitrary files left in bin/ from an older build.
+        var names = Directory.GetFiles(SourceSamples(), "sample-plan-*.json")
+            .Select(path => Path.GetFileName(path)!).Where(name => name != "sample-plan-hosted.json").ToArray();
+        Assert.Equal(9, names.Length);
+        foreach (string name in names)
         {
+            string file = Path.Combine(samples, name);
             var plan = JsonNode.Parse(Fill(File.ReadAllText(file)))!.AsObject();
             Assert.Equal(plan["scenario"]!.GetValue<string>(), Read(plan).Scenario);
         }
@@ -108,6 +176,9 @@ public sealed class CampaignPlanTests : IDisposable
         File.WriteAllText(hosted, Fill(File.ReadAllText(Path.Combine(samples, "sample-plan-hosted.json"))));
         Assert.Equal(HostedPlan.HostedScenarioName, HostedPlan.ReadValidated(hosted).Scenario);
     }
+
+    private static string SourceSamples([CallerFilePath] string sourceFile = "") =>
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "../MyMod.SystemTests"));
 
     // Puts full paths, hashes and MD5s where the samples have placeholders ("<...>"); the builds the client runs are the server's.
     private string Fill(string text) => System.Text.RegularExpressions.Regex.Replace(text, "\"<([^\"]*)>\"", match =>

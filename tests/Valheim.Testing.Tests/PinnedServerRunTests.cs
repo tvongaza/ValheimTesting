@@ -89,6 +89,23 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal("strict", result.GetProperty("Pinning").GetString());
         Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json"))); Assert.True(File.Exists(Path.Combine(Output, "junit.xml")));
     }
+    [Fact] public async Task ModEnvironmentRulesRefuseBeforeCopyingFixtures()
+    {
+        string plan = WritePlan(linux: HostRunsLinux);
+        var options = new PinnedServerRunOptions<ServerRunPlan>
+        {
+            Name = "toolkit-smoke", ReadPlan = Options().ReadPlan,
+            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+            CheckEnvironment = (_, profile) =>
+            {
+                Assert.Null(profile);
+                throw new ArgumentException("two clients need a profile");
+            },
+            Scenario = _ => Task.CompletedTask,
+        };
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], options));
+        Assert.False(Directory.Exists(Output));
+    }
     // The launch's architecture check runs when the plan is read: validate refuses the plan, and run refuses it before the server starts.
     [Fact] public async Task AnArm64ClientWithoutTheNativeCoreIsRefusedAtValidateAndBeforeTheServerStarts()
     {
