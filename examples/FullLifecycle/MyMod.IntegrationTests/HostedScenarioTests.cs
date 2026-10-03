@@ -126,7 +126,7 @@ public sealed class HostedScenarioTests : IDisposable
     {
         var report = new ScenarioReport("mymod-hosted-test");
         var host = Host();
-        try { HostedScenario.Run(plan, () => ClientSession.Attach(plan.Client, Output, host), report, Output, hostLog); }
+        try { HostedScenario.Run(plan, () => ClientSession.Attach(plan.Client, Output, host), report, Output, hostLog, simulatedClient: true); }
         catch (Exception) { Assert.False(report.Passed); }
         return report;
     }

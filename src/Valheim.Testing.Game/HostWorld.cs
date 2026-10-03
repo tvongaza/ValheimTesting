@@ -31,7 +31,8 @@ public sealed class HostWorldPlan
     public bool Local { get; set; }
     /// <summary>
     /// The client's data directory, which holds <c>worlds_local</c>. Default: this user's Valheim data directory for the
-    /// client's platform (<see cref="HostedWorld.DefaultSaveDirectory"/>); set it when the client runs as another user.
+    /// client's platform (<see cref="HostedWorld.DefaultSaveDirectory"/>). Set it when a Windows or Linux client runs as
+    /// another user. A native macOS hosted client must use its signed-in user's default; Valheim 1.0.16 ignored -savedir.
     /// </summary>
     public string? SaveDirectory { get; set; }
     /// <summary>The confirmed save's timeout between rounds, 1 to 600 seconds.</summary>
@@ -175,6 +176,22 @@ public sealed class HostedWorld : IDisposable
 
     /// <summary>This machine's platform, for an attached client (whose install the runner does not read).</summary>
     public static ClientPlatform CurrentPlatform => OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
+
+    // Valheim 1.0.16 on macOS ignored -savedir for a hosted client and read worlds_local from the signed-in user's
+    // default data directory. Check before Place creates or copies anything; a world with the same name can have another UID.
+    internal static void RequireNativeSaveDirectory(ClientPlatform platform, string? requested, IEnumerable<string> launchArguments,
+        string defaultDirectory)
+    {
+        if (platform != ClientPlatform.MacOS) return;
+        if (launchArguments.Any(argument => argument.Equals("-savedir", StringComparison.OrdinalIgnoreCase) ||
+            argument.Equals("--savedir", StringComparison.OrdinalIgnoreCase) ||
+            argument.StartsWith("-savedir=", StringComparison.OrdinalIgnoreCase) ||
+            argument.StartsWith("--savedir=", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("A native macOS hosted client cannot use -savedir: Valheim 1.0.16 ignored it and read the signed-in user's default worlds_local. Remove that launch argument before staging the fixture.");
+        if (requested != null && !Path.GetFullPath(requested).TrimEnd(Path.DirectorySeparatorChar)
+                .Equals(Path.GetFullPath(defaultDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal))
+            throw new InvalidOperationException("hostWorld.saveDirectory is not the signed-in Mac user's default Valheim data directory. Valheim 1.0.16 ignored a custom -savedir for hosted worlds; omit saveDirectory and stage only a disposable, pinned fixture in the default worlds_local.");
+    }
 
     /// <summary>
     /// Moves every entry named for the world out of the client's worlds into <c>host-world</c> (then <c>host-world-2</c>
@@ -323,6 +340,11 @@ public sealed class HostRounds
     public required ClientRunPlan Client { get; init; }
     public required ScenarioReport Report { get; init; }
     public required string Output { get; init; }
+    /// <summary>
+    /// For a controlled test whose <c>openClient</c> is scripted rather than a game process. It permits a private synthetic
+    /// save directory on a Mac test host. Native runs leave this false so the Mac save-location check runs before placement.
+    /// </summary>
+    public bool SimulatedClient { get; init; }
     /// <summary>Required for direct start: a dry point matching the prepared character's logout point.</summary>
     public HeightExpectation? Arrival { get; init; }
     /// <summary>The client's opening step's name; the default says whether it is launched or attached, with plugins pinned.</summary>
@@ -353,7 +375,12 @@ public sealed class HostRounds
         {
             Report.Step(Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
                 () => Client.Preflight(CliCapabilities.HostedRounds));
-            string saveDirectory = plan.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(Client.Owned ? ClientLaunch.Detect(Client.Install) : HostedWorld.CurrentPlatform);
+            var platform = Client.Owned ? ClientLaunch.Detect(Client.Install) : HostedWorld.CurrentPlatform;
+            string defaultSaveDirectory = HostedWorld.DefaultSaveDirectory(platform);
+            if (!SimulatedClient)
+                Report.Step("preflight the native client's hosted-world save directory", () =>
+                    HostedWorld.RequireNativeSaveDirectory(platform, plan.SaveDirectory, Client.LaunchArguments, defaultSaveDirectory));
+            string saveDirectory = plan.SaveDirectory ?? defaultSaveDirectory;
             Report.Step("place the disposable fixture world in the client's local worlds", () => world = HostedWorld.Place(plan, saveDirectory, Output, Client.Pinned));
             var placed = world!;
             Report.Provenance["hostWorld"] = placed.Name;

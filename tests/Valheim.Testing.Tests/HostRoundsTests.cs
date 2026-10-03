@@ -86,7 +86,7 @@ public sealed class HostRoundsTests : IDisposable
         }
     }
 
-    private HostRounds Rounds(ScenarioReport report, ClientRunPlan plan) => new() { Client = plan, Report = report, Output = Output };
+    private HostRounds Rounds(ScenarioReport report, ClientRunPlan plan) => new() { Client = plan, Report = report, Output = Output, SimulatedClient = true };
     private Func<ClientSession> Open(ClientRunPlan plan, Game game) => () =>
     {
         _opens++;
@@ -266,6 +266,37 @@ public sealed class HostRoundsTests : IDisposable
         Assert.Equal(0, _opens); Assert.Empty(game.Transport.Commands);
         Assert.Empty(OurWorldFiles()); Assert.Empty(Directory.GetDirectories(Output, "valheim-test-*"));
         // Negative control: the fixture's own UID passes (the first test).
+    }
+
+    [Theory] [InlineData("attach")] [InlineData("owned")]
+    public void ARealMacHostRefusesACustomWorldDirectoryBeforePlacement(string mode)
+    {
+        if (!OperatingSystem.IsMacOS()) return; // The helper below covers the platform decision on every CI host.
+        var plan = Plan(mode);
+        var game = new Game(Worlds); var report = new ScenarioReport("host");
+        var rounds = new HostRounds { Client = plan, Report = report, Output = Output };
+        var error = Assert.Throws<InvalidOperationException>(() => rounds.Run(Open(plan, game), Measure()));
+        Assert.Contains("hostWorld.saveDirectory", error.Message);
+        Assert.Equal(0, _opens);
+        Assert.Empty(OurWorldFiles());
+        Assert.Empty(game.Transport.Commands);
+        Assert.Equal("preflight the native client's hosted-world save directory", report.Steps[^1].Name);
+    }
+
+    [Fact] public void MacNativeSavePreflightRefusesCustomPathsAndSavedirArguments()
+    {
+        string defaultPath = Path.Combine(_root, "default-client-data");
+        string customPath = Path.Combine(_root, "custom-client-data");
+        Assert.Contains("hostWorld.saveDirectory", Assert.Throws<InvalidOperationException>(() =>
+            HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, customPath, [], defaultPath)).Message);
+        Assert.Contains("-savedir", Assert.Throws<InvalidOperationException>(() =>
+            HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, null, ["-savedir", customPath], defaultPath)).Message);
+        Assert.Contains("-savedir", Assert.Throws<InvalidOperationException>(() =>
+            HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, null, ["--savedir=" + customPath], defaultPath)).Message);
+        HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, null, [], defaultPath);
+        HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, defaultPath, [], defaultPath);
+        HostedWorld.RequireNativeSaveDirectory(ClientPlatform.Windows, customPath, ["-savedir", customPath], defaultPath);
+        HostedWorld.RequireNativeSaveDirectory(ClientPlatform.Linux, customPath, [], defaultPath);
     }
 
     [Fact] public void AnInstallThatFailsThePreflightStopsBeforeTheFixtureIsCopied()

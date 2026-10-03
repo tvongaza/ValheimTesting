@@ -71,11 +71,12 @@ public sealed class HostedPlan
 /// </summary>
 public static class HostedScenario
 {
-    public static void Run(HostedPlan plan, Func<ClientSession> openClient, ScenarioReport report, string output, string? hostLog, CancellationToken cancellation = default)
+    public static void Run(HostedPlan plan, Func<ClientSession> openClient, ScenarioReport report, string output, string? hostLog, CancellationToken cancellation = default,
+        bool simulatedClient = false)
     {
         var timeout = TimeSpan.FromSeconds(plan.Client.JoinSeconds);
         report.Provenance["hostBroadcast"] = hostLog == null ? "not observed: an attached host's log is its operator's" : "the owned host's live BepInEx log";
-        new HostRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation,
+        new HostRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation, SimulatedClient = simulatedClient,
             Arrival = plan.Arrival == null ? null : new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground) }.Run(openClient, round =>
         {
             var host = round.Server; // The same actor as round.Client.
