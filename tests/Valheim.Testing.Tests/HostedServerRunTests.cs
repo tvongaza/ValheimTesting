@@ -290,6 +290,16 @@ public sealed partial class HostedServerRunTests : IDisposable
     private FakeServerHost NewHost(FakeOwnedServer? server = null) => new("linux-box", Mirror, server);
     private FakeOwnedServer NewServer() => new("test.mod", saveRoot: RunDirectory + "/world");
 
+    [Fact] public void WindowsPowerShellDedicatedServerProfileIsAcceptedBeforeAnyHostOperation()
+    {
+        var host = NewHost();
+        var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "powershell");
+        var profile = EnvironmentProfile.Read(profilePath);
+        var hosted = HostedServerRun.Create(profile, ServerRunPlan.Read<ServerRunPlan>(planPath), "test", new HostedSeams { Host = _ => host, RunId = RunId });
+        Assert.Equal("windows", hosted.HostProfile.Platform);
+        Assert.Empty(host.Runs);
+    }
+
     // The host's install (the runtime the plan pins) and a local world; returns the plan and the profile.
     private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false, bool unpinned = false,
         bool crossplay = false, string portOption = "-port", string gamePort = "2456", object? steamAccounts = null, string? steamAccount = null)
@@ -656,9 +666,6 @@ public sealed partial class HostedServerRunTests : IDisposable
         var (plan, profile) = Write(host, planPort: 5590);
         Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, null)));
         Assert.False(Directory.Exists(Output)); Assert.Empty(host.Runs);
-        (plan, profile) = Write(host, hostPlatform: "windows", hostShell: "powershell");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, null)));
-        Assert.False(Directory.Exists(Output)); Assert.Empty(host.Runs);
         Assert.Equal(2, await PinnedServerRun.MainAsync(["--profile", profile], Options(host, null)));
     }
 
@@ -821,6 +828,7 @@ public sealed class HostedRetireScriptTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("hosted-retire-").FullName;
     public void Dispose() { try { Directory.Delete(_root, true); } catch (IOException) { } }
+
     private static string B64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
 
     [Fact] public async Task ItKeepsListedFilesWithinTheLimitsAndRemovesOnlyTheRunsRuntime()

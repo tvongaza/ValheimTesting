@@ -221,6 +221,140 @@ public class SshHostServerIntegrationTests
 }
 
 [Trait("Category", "GameHosts")]
+public class WindowsSshServerIntegrationTests
+{
+    // Opt-in on an owned Windows test host. Uses only a temporary copy of Windows' ping.exe as a stand-in server;
+    // it never launches a game or touches the live install. The station claim is held outside this test.
+    [Fact] public async Task AHeadlessServerSurvivesSshAndStopsByExactIdentity()
+    {
+        string? destination = Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_DESTINATION");
+        string? parent = Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_RUNS");
+        if (destination == null || parent == null) return;
+        string[] options = (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_OPTIONS") ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var host = new SshGameHost("windows-server", destination, HostShell.WindowsPowerShell, sshOptions: options);
+        string root = HostInstall.Join(parent, "windows-host-check-" + Guid.NewGuid().ToString("N"));
+        string install = HostInstall.Join(root, "install"), runtime = HostInstall.Join(root, "run", "runtime");
+        bool stopped = false;
+        try
+        {
+            var setup = await host.RunAsync("""
+                [void][IO.Directory]::CreateDirectory($install)
+                [IO.File]::Copy((Join-Path ([Environment]::SystemDirectory) 'PING.EXE'), (Join-Path $install 'valheim_server.exe'))
+                foreach ($file in @('BepInEx/core/BepInEx.Preloader.dll', 'BepInEx/core/BepInEx.dll', 'winhttp.dll', 'doorstop_config.ini')) {
+                    $path = Join-Path $install $file
+                    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
+                    [IO.File]::WriteAllText($path, 'test-only placeholder')
+                }
+                'VT-TEST prepared'
+                """, new Dictionary<string, string> { ["install"] = install }, TimeSpan.FromSeconds(30));
+            Assert.True(setup.Succeeded, setup.Describe() + " " + setup.Stderr);
+            await HostInstall.CopyAsync(host, install, runtime, TimeSpan.FromSeconds(45));
+            var listing = await HostInstall.ListAsync(host, runtime, TimeSpan.FromSeconds(45));
+            Assert.Equal(ServerPlatform.Windows, HostInstall.DetectServer(listing));
+            var launch = HostServerLaunch.CreateWindows(runtime, ["-n", "60", "127.0.0.1"]);
+            var process = await HostServer.StartAsync(host, launch, HostInstall.Join(root, "run", "boot-1"), TimeSpan.FromSeconds(90));
+            try
+            {
+                var status = await host.RunAsync("""
+                    $p = [Diagnostics.Process]::GetProcessById([int]$game)
+                    if ([string]$p.StartTime.ToFileTimeUtc() -cne $start -or $p.HasExited) { exit 3 }
+                    'VT-TEST alive'
+                    """, new Dictionary<string, string> { ["game"] = process.Id.ToString(), ["start"] = process.StartIdentity }, TimeSpan.FromSeconds(30));
+                Assert.True(status.Succeeded, status.Describe() + " " + status.Stderr);
+                Assert.Contains("VT-TEST alive", status.Stdout);
+            }
+            finally { Assert.Equal(HostServerStop.Stopped, await process.StopAsync(TimeSpan.FromSeconds(15))); stopped = true; }
+        }
+        finally
+        {
+            // Only the unique test root is removed. An unknown server stop keeps its evidence and runtime for inspection.
+            if (stopped)
+            {
+                var check = await host.RunAsync("""
+                if ($root -notmatch 'windows-host-check-[0-9a-f]{32}$') { exit 3 }
+                if ([IO.Directory]::Exists($root)) { [IO.Directory]::Delete($root, $true) }
+                'VT-TEST removed'
+                """, new Dictionary<string, string> { ["root"] = root }, TimeSpan.FromSeconds(30));
+                Assert.True(check.Succeeded, check.Describe() + " " + check.Stderr);
+            }
+        }
+    }
+
+    [Fact] public async Task ADisposableGameServerLoadsBepInExAndQuitsCleanlyOverSsh()
+    {
+        string? destination = Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_DESTINATION");
+        string? parent = Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_RUNS");
+        string? install = Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_GAME_INSTALL");
+        if (destination == null || parent == null || install == null) return;
+        string[] options = (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_OPTIONS") ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var host = new SshGameHost("windows-server", destination, HostShell.WindowsPowerShell, sshOptions: options);
+        string root = HostInstall.Join(parent, "windows-game-check-" + Guid.NewGuid().ToString("N"));
+        string runtime = HostInstall.Join(root, "runtime"), boot = HostInstall.Join(root, "boot-1");
+        bool stopped = false;
+        try
+        {
+            await HostInstall.CopyAsync(host, install, runtime, TimeSpan.FromMinutes(8));
+            // This smoke checks the host launch, not other mods' world-generation behavior. Prune only the disposable copy.
+            var prune = await host.RunAsync("""
+                $plugins = Join-Path $runtime 'BepInEx\plugins'
+                foreach ($entry in [IO.Directory]::GetFileSystemEntries($plugins)) {
+                    if ([IO.Path]::GetFileName($entry) -ieq 'ScriptEngine.dll') { continue }
+                    if ([IO.Directory]::Exists($entry)) { [IO.Directory]::Delete($entry, $true) }
+                    else { [IO.File]::Delete($entry) }
+                }
+                $config = Join-Path $runtime 'BepInEx\config\valheimCLI.valheimCLI.cfg'
+                if ([IO.File]::Exists($config)) {
+                    $text = [IO.File]::ReadAllText($config)
+                    $text = [Text.RegularExpressions.Regex]::Replace($text, '(?m)^File = .*$', 'File = ')
+                    $text = [Text.RegularExpressions.Regex]::Replace($text, '(?m)^Strict = .*$', 'Strict = false')
+                    [IO.File]::WriteAllText($config, $text)
+                }
+                'VT-TEST prepared'
+                """, new Dictionary<string, string> { ["runtime"] = runtime }, TimeSpan.FromMinutes(2));
+            Assert.True(prune.Succeeded, prune.Describe() + " " + prune.Stderr);
+            var launch = HostServerLaunch.CreateWindows(runtime,
+                ["-batchmode", "-nographics", "-name", "VT Windows host check", "-port", "2486", "-world", "VT249" + Guid.NewGuid().ToString("N")[..8],
+                 "-password", "throwaway249", "-public", "0", "-savedir", HostInstall.Join(root, "world"), "-logFile", HostInstall.Join(runtime, "toolkit-unity.log")]);
+            var process = await HostServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(90), ["BepInEx/LogOutput.log", "toolkit-unity.log"]);
+            try
+            {
+                string bepinex = HostInstall.Join(runtime, "BepInEx", "LogOutput.log");
+                (await host.WaitForLogAsync(bepinex, 0, new System.Text.RegularExpressions.Regex("Chainloader startup complete", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+                    StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
+                // The same run must reach a live CLI listener through an SSH loopback tunnel.
+                (await host.WaitForLogAsync(bepinex, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
+                using var tunnel = await host.OpenCliTunnelAsync(5557, TimeSpan.FromSeconds(20));
+                using var tcp = new TcpClient();
+                await tcp.ConnectAsync(tunnel.Address, tunnel.LocalPort);
+                Assert.True(tcp.Connected);
+                (await host.WaitForLogAsync(HostInstall.Join(runtime, "toolkit-unity.log"), 0,
+                    new System.Text.RegularExpressions.Regex("Opened Steam server", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+                    StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
+                Assert.Equal(HostServerStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(15)));
+                stopped = true;
+            }
+            finally { if (!stopped) { try { await process.StopAsync(TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(15)); stopped = true; } catch { } } }
+            string? evidence = Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_EVIDENCE");
+            if (evidence != null) await host.FetchDirectoryAsync(boot, evidence, TimeSpan.FromMinutes(2));
+        }
+        finally
+        {
+            if (stopped)
+            {
+                var cleanup = await host.RunAsync("""
+                    if ($root -notmatch 'windows-game-check-[0-9a-f]{32}$') { exit 3 }
+                    if ([IO.Directory]::Exists($root)) { [IO.Directory]::Delete($root, $true) }
+                    'VT-TEST removed'
+                    """, new Dictionary<string, string> { ["root"] = root }, TimeSpan.FromMinutes(2));
+                Assert.True(cleanup.Succeeded, cleanup.Describe() + " " + cleanup.Stderr);
+            }
+        }
+    }
+}
+
+[Trait("Category", "GameHosts")]
 public class ContainerHostServerIntegrationTests
 {
     public static TheoryData<string> Shells => new() { "bash" };

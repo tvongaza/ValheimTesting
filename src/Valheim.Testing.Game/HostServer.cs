@@ -17,15 +17,16 @@ public sealed class HostServerLaunch
 {
     private static readonly Regex VariableName = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
 
-    private HostServerLaunch(string runtime, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended)
+    private HostServerLaunch(string runtime, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended, bool windows = false)
     {
-        Runtime = runtime; Arguments = arguments; Environment = environment; Prepended = prepended;
+        Runtime = runtime; Arguments = arguments; Environment = environment; Prepended = prepended; Windows = windows;
     }
 
     /// <summary>The runtime directory on the host; also the server's working directory.</summary>
     public string Runtime { get; }
     /// <summary>The server executable's full path on the host.</summary>
-    public string Executable => Runtime + "/" + ServerLaunch.LinuxExecutable;
+    public string Executable => Windows ? HostInstall.Join(Runtime, ServerLaunch.WindowsExecutable) : Runtime + "/" + ServerLaunch.LinuxExecutable;
+    public bool Windows { get; }
     public IReadOnlyList<string> Arguments { get; }
     /// <summary>Variables set for the server, the caller's first.</summary>
     public IReadOnlyDictionary<string, string> Environment { get; }
@@ -36,21 +37,44 @@ public sealed class HostServerLaunch
     /// <summary>True when the arguments hold <c>-crossplay</c> (in any case, as the game reads it): the start then refuses a host whose <c>libparty.so</c> cannot load.</summary>
     public bool Crossplay => Arguments.Any(argument => argument.Equals("-crossplay", StringComparison.OrdinalIgnoreCase));
     /// <summary>Files, relative to <see cref="Runtime"/>, the host must have before anything starts.</summary>
-    public IReadOnlyList<string> RequiredFiles { get; } =
-        [ServerLaunch.LinuxExecutable, "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "doorstop_libs/libdoorstop_x64.so"];
+    public IReadOnlyList<string> RequiredFiles => Windows
+        ? [ServerLaunch.WindowsExecutable, "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "winhttp.dll", "doorstop_config.ini"]
+        : [ServerLaunch.LinuxExecutable, "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "doorstop_libs/libdoorstop_x64.so"];
+
+    /// <summary>A Windows dedicated-server launch on a PowerShell host. The server has its own console and is independent of the SSH session.</summary>
+    public static HostServerLaunch CreateWindows(string runtime, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtime);
+        if (!Regex.IsMatch(runtime, @"^[A-Za-z]:[\\/]") || runtime.Any(char.IsControl))
+            throw new ArgumentException("The runtime must be an absolute Windows drive path on the host.", nameof(runtime));
+        string root = runtime.TrimEnd('\\', '/');
+        environment ??= new Dictionary<string, string>();
+        var passed = BepInExLoader.RefuseOverrides(environment, arguments, StringComparer.OrdinalIgnoreCase, nameof(HostServerLaunch));
+        if (passed.Any(arg => arg.Contains('\0') || arg.Any(ch => ch is '\n' or '\r')))
+            throw new ArgumentException("A launch argument cannot contain NUL or a line break.", nameof(arguments));
+        var set = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in environment)
+        {
+            if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a variable name.", nameof(environment));
+            ArgumentNullException.ThrowIfNull(value, name);
+            if (value.Contains('\0')) throw new ArgumentException($"{name} cannot contain NUL.", nameof(environment));
+            set[name!] = value;
+        }
+        if (!set.ContainsKey("SteamAppId")) set["SteamAppId"] = ServerLaunch.DedicatedServerSteamAppId;
+        return new HostServerLaunch(root, passed, set, new Dictionary<string, string>(), windows: true);
+    }
 
     /// <summary>
     /// A launch of the Linux dedicated server in <paramref name="runtime"/>, an absolute path on a Linux host (without ':', ';'
-    /// or '=', which the loader's search lists and <c>env</c> cannot hold). A Windows runtime is refused: on a Windows host,
-    /// run the runner there (<see cref="ServerLaunch"/>).
+    /// or '=', which the loader's search lists and <c>env</c> cannot hold). Use <see cref="CreateWindows"/> for a Windows host.
     /// </summary>
     public static HostServerLaunch Create(string runtime, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentException.ThrowIfNullOrWhiteSpace(runtime);
         if (Regex.IsMatch(runtime, @"^([A-Za-z]:|\\\\)"))
-            throw new PlatformNotSupportedException("A dedicated server on another host runs on Linux (over SSH, in a container or on this Linux machine). " +
-                "For a Windows server, run the runner on that Windows machine, which launches it with ServerLaunch.");
+            throw new PlatformNotSupportedException("A Windows runtime needs HostServerLaunch.CreateWindows on a PowerShell host.");
         if (!runtime.StartsWith('/') || runtime.Any(char.IsControl)) throw new ArgumentException("The runtime must be an absolute Linux path on the host.", nameof(runtime));
         if (runtime.IndexOfAny([':', ';', '=']) >= 0) throw new ArgumentException("A Linux runtime path cannot contain ':', ';' or '='.", nameof(runtime));
         string root = runtime.Length > 1 ? runtime.TrimEnd('/') : runtime;
@@ -90,14 +114,24 @@ public sealed class HostServerLaunch
         foreach (string argument in Arguments) Line("arg", argument);
         return text.ToString();
     }
+
+    internal string WindowsSpec()
+    {
+        var text = new StringBuilder();
+        void Line(string kind, string value) => text.Append(kind).Append(' ').Append(InteractiveClient.Base64(value)).Append('\n');
+        Line("exe", Executable);
+        Line("dir", Runtime);
+        Line("args", WindowsCommandLine.Join(Arguments));
+        foreach (var (name, value) in Environment.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)) Line("env", name + "=" + value);
+        return text.ToString();
+    }
 }
 
 /// <summary>
-/// Starts an owned dedicated server on a Linux host (a <see cref="SshGameHost"/>, a <see cref="ContainerGameHost"/> or a local
-/// bash host) and returns it identified by process ID and start time, the identity an owned session checks against its
-/// adapter's reported process ID. The server runs in its own session (<c>setsid</c>) under a small recorder that writes its
-/// process ID and later its exit code, so the end of the SSH session does not reach it; its standard output and error go to
-/// <c>stdout.log</c> and <c>stderr.log</c> in the boot directory.
+/// Starts an owned dedicated server on a Linux/bash or Windows/PowerShell host and returns it identified by process ID
+/// and start time, the identity an owned session checks against its adapter's reported process ID. Linux uses a
+/// <c>setsid</c> recorder and keeps stdout and stderr in the boot directory. Windows uses a short-lived headless task
+/// to start the server independently of SSH, then removes that task.
 /// </summary>
 public static class HostServer
 {
@@ -116,23 +150,24 @@ public static class HostServer
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
         if (timeout < TimeSpan.FromSeconds(15)) throw new ArgumentOutOfRangeException(nameof(timeout), "Allow a server start at least 15 s.");
-        if (host.Shell.Kind != HostShellKind.Bash)
-            throw new PlatformNotSupportedException($"A dedicated server on a host starts through a bash host on Linux; {host.Name} runs {host.Shell}.");
+        if ((host.Shell.Kind == HostShellKind.PowerShell) != launch.Windows)
+            throw new PlatformNotSupportedException($"The dedicated server launch and {host.Name}'s shell must use the same operating system.");
         HostInstall.RequireHostPath(host, bootDirectory, nameof(bootDirectory));
-        string directory = bootDirectory.TrimEnd('/');
+        string directory = bootDirectory.TrimEnd('/', '\\');
         if (directory.Length == 0) throw new ArgumentException("The boot directory cannot be a root.", nameof(bootDirectory));
         List<string> kept = logs?.ToList() ?? [];
         foreach (string log in kept)
-            if (string.IsNullOrWhiteSpace(log) || log.Any(char.IsControl) || log.StartsWith('/') || log.Split('/').Contains(".."))
+            if (string.IsNullOrWhiteSpace(log) || log.Any(char.IsControl) || log.StartsWith('/') || log.StartsWith('\\') || log.Contains(':') || log.Split('/', '\\').Contains(".."))
                 throw new ArgumentException($"'{log}' is not a path inside the runtime.", nameof(logs));
         if (evidence != null && (Directory.Exists(evidence) || File.Exists(evidence))) throw new ArgumentException("The evidence directory must be new: " + evidence, nameof(evidence));
 
-        var result = await host.RunAsync(HostServerScripts.Start, new Dictionary<string, string>
+        var result = await host.RunAsync(launch.Windows ? HostServerScripts.WindowsStart : HostServerScripts.Start, new Dictionary<string, string>
         {
-            ["runtime"] = launch.Runtime, ["exe"] = ServerLaunch.LinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
-            ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
+            ["runtime"] = launch.Runtime, ["exe"] = launch.Windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
+            ["spec"] = launch.Windows ? launch.WindowsSpec() : launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
+            ["task"] = "VT-Server-" + Guid.NewGuid().ToString("N"), ["launcher"] = HostServerScripts.WindowsLauncher,
         }, timeout, cancellation).ConfigureAwait(false);
         if (!result.Succeeded)
             throw new HostOperationException($"Starting the dedicated server on {host.Name} (boot directory {directory}); a server may have started, see {directory}/pid", result);
@@ -209,7 +244,8 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
     {
         while (true)
         {
-            var result = (await _host.RunAsync(InteractiveScripts.LinuxWait, Variables(("seconds", "600")), TimeSpan.FromSeconds(660), cancellation).ConfigureAwait(false))
+            var result = (await _host.RunAsync(_host.Shell.Kind == HostShellKind.PowerShell ? InteractiveScripts.WindowsWait : InteractiveScripts.LinuxWait,
+                Variables(("seconds", "600")), TimeSpan.FromSeconds(660), cancellation).ConfigureAwait(false))
                 .EnsureSuccess($"Waiting for server process {Id} on {HostName}");
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-WAIT ");
             if (verdict == "running") continue;
@@ -245,7 +281,8 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
             {
                 string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
                 string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
-                var result = (await _host.RunAsync(InteractiveScripts.LinuxStop, Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "INT")),
+                var result = (await _host.RunAsync(_host.Shell.Kind == HostShellKind.PowerShell ? HostServerScripts.WindowsStop : InteractiveScripts.LinuxStop,
+                    Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "INT"), ("quitHelper", ProcessQuit.WindowsConsoleControlScript)),
                     quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping server process {Id} on {HostName}");
                 outcome = InteractiveClient.Line(result.Stdout, "VT-STOP ") switch
                 {
@@ -259,7 +296,8 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
             }
             if (!_kept)
             {
-                var kept = (await _host.RunAsync(HostServerScripts.Keep, new Dictionary<string, string> { ["runtime"] = Runtime, ["dir"] = BootDirectory, ["logs"] = string.Join('\n', _logs) },
+                var kept = (await _host.RunAsync(_host.Shell.Kind == HostShellKind.PowerShell ? HostServerScripts.WindowsKeep : HostServerScripts.Keep,
+                    new Dictionary<string, string> { ["runtime"] = Runtime, ["dir"] = BootDirectory, ["logs"] = string.Join('\n', _logs) },
                     TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the logs of server process {Id} on {HostName}");
                 if (InteractiveClient.Line(kept.Stdout, "VT-KEPT") == null) throw new HostOperationException($"Unexpected reply while keeping the logs of server process {Id} on {HostName}", kept);
                 if (EvidenceDirectory != null) await _host.FetchDirectoryAsync(BootDirectory, EvidenceDirectory, EvidenceTimeout, cancellation).ConfigureAwait(false);
@@ -279,8 +317,8 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
         var clock = System.Diagnostics.Stopwatch.StartNew();
         return StopAsync(quit, kill).GetAwaiter().GetResult() switch
         {
-            HostServerStop.Quit => new(StopOutcome.Clean, null, clock.Elapsed, "SIGINT"),
-            HostServerStop.Stopped => new(StopOutcome.Killed, null, clock.Elapsed, quit > TimeSpan.Zero ? $"SIGINT; no exit within {WaitText.Seconds(quit)}" : "not asked to quit"),
+            HostServerStop.Quit => new(StopOutcome.Clean, null, clock.Elapsed, _host.Shell.Kind == HostShellKind.PowerShell ? "Ctrl+Break" : "SIGINT"),
+            HostServerStop.Stopped => new(StopOutcome.Killed, null, clock.Elapsed, quit > TimeSpan.Zero ? $"{(_host.Shell.Kind == HostShellKind.PowerShell ? "Ctrl+Break" : "SIGINT")}; no exit within {WaitText.Seconds(quit)}" : "not asked to quit"),
             _ => new(StopOutcome.AlreadyExited, null, clock.Elapsed, "not asked: it had exited"),
         };
     }
@@ -310,6 +348,137 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
 // with one verdict line. The wait and stop are InteractiveScripts' Linux ones (same recorder files, same identity rule).
 internal static class HostServerScripts
 {
+    // Variables: game, start, quit, seconds, quitHelper. Identity is checked before either the console event or kill.
+    // The Ctrl+Break helper attaches only to the target console. A failed event falls through to the bounded kill.
+    public static readonly string WindowsStop = """
+        $process = $null
+        try { $process = [Diagnostics.Process]::GetProcessById([int]$game) } catch { }
+        if ($null -eq $process) { 'VT-STOP gone'; exit 0 }
+        try { $identity = [string]$process.StartTime.ToFileTimeUtc() } catch { if ($process.HasExited) { 'VT-STOP gone'; exit 0 }; throw }
+        if ($identity -cne $start) { 'VT-STOP gone'; exit 0 }
+        if ([int]$quit -gt 0) {
+            $env:VT_QUIT_PID = $game
+            $env:VT_QUIT_EVENT = '1'
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($quitHelper))
+            & (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded | Out-Null
+            if ($LASTEXITCODE -eq 0 -and $process.WaitForExit([int]$quit * 1000)) { 'VT-STOP quit'; exit 0 }
+        }
+        try { $process.Kill() } catch { if (-not $process.HasExited) { throw } }
+        if ($process.WaitForExit([int]$seconds * 1000)) { 'VT-STOP stopped' } else { 'VT-STOP running' }
+        """.ReplaceLineEndings("\n");
+
+    // A task with an S4U token starts the headless server in session 0, independent of the SSH session. The task and
+    // launch specification are removed after the child reports its PID. No desktop or Steam client is required.
+    // Variables: runtime, files, dir, spec, logs, seconds, task, launcher.
+    public static readonly string WindowsStart = """
+        $utf8 = New-Object Text.UTF8Encoding $false
+        foreach ($file in ($files -split "`n")) {
+            if ($file -and -not [IO.File]::Exists((Join-Path $runtime $file))) { 'VT-SERVER missing ' + $file; exit 0 }
+        }
+        if ([IO.Directory]::Exists($dir) -or [IO.File]::Exists($dir)) { 'VT-SERVER exists'; exit 0 }
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dir))
+        [void][IO.Directory]::CreateDirectory($dir)
+        $index = 0
+        foreach ($log in ($logs -split "`n")) {
+            if ($log) {
+                $old = Join-Path $runtime $log
+                if ([IO.File]::Exists($old)) { [IO.File]::Move($old, (Join-Path $dir ('previous-' + $index + '.log'))) }
+            }
+            $index++
+        }
+        $specFile = Join-Path $dir 'spec.txt'
+        $launcherFile = Join-Path $dir 'launcher.ps1'
+        $pidFile = Join-Path $dir 'pid'
+        $errorFile = Join-Path $dir 'launcher-error.txt'
+        $verdict = $null
+        try {
+            [IO.File]::WriteAllText($specFile, $spec, $utf8)
+            [IO.File]::WriteAllText($launcherFile, $launcher, (New-Object Text.UTF8Encoding $true))
+            $service = New-Object -ComObject Schedule.Service
+            $service.Connect()
+            $folder = $service.GetFolder('\')
+            $definition = $service.NewTask(0)
+            $definition.RegistrationInfo.Description = 'ValheimTesting: starts one owned headless dedicated server; removed after launch.'
+            $definition.Principal.UserId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $definition.Principal.LogonType = 2 # S4U: no desktop or password
+            $definition.Principal.RunLevel = 0
+            $definition.Settings.Enabled = $true
+            $definition.Settings.AllowDemandStart = $true
+            $definition.Settings.DisallowStartIfOnBatteries = $false
+            $definition.Settings.StopIfGoingOnBatteries = $false
+            $definition.Settings.ExecutionTimeLimit = 'PT5M'
+            $action = $definition.Actions.Create(0)
+            $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+            $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $launcherFile + '" "' + $dir + '"'
+            $action.WorkingDirectory = $dir
+            $registered = $folder.RegisterTaskDefinition($task, $definition, 2, $definition.Principal.UserId, $null, 2)
+            try {
+                [void]$registered.Run($null)
+                $deadline = [DateTime]::UtcNow.AddSeconds([double]$seconds)
+                $watcher = New-Object IO.FileSystemWatcher -ArgumentList $dir
+                try {
+                    while ($null -eq $verdict) {
+                        if ([IO.File]::Exists($pidFile)) { $verdict = 'VT-SERVER started ' + [IO.File]::ReadAllText($pidFile, $utf8).Trim(); break }
+                        if ([IO.File]::Exists($errorFile)) { $verdict = 'VT-SERVER failed ' + ([IO.File]::ReadAllText($errorFile, $utf8) -replace '\s+', ' ').Trim(); break }
+                        if ([DateTime]::UtcNow -ge $deadline) { $verdict = 'VT-SERVER failed no process within ' + $seconds + ' s'; break }
+                        [void]$watcher.WaitForChanged([IO.WatcherChangeTypes]::All, 500)
+                    }
+                } finally { $watcher.Dispose() }
+            } finally {
+                try { $folder.DeleteTask($task, 0) } catch { }
+            }
+        } finally {
+            if ([IO.File]::Exists($specFile)) { [IO.File]::Delete($specFile) }
+        }
+        $verdict
+        """.ReplaceLineEndings("\n");
+
+    public static readonly string WindowsLauncher = """
+        param([string]$dir)
+        $ErrorActionPreference = 'Stop'
+        $utf8 = New-Object Text.UTF8Encoding $false
+        try {
+            $start = New-Object Diagnostics.ProcessStartInfo
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $false
+            foreach ($line in [IO.File]::ReadAllLines((Join-Path $dir 'spec.txt'), $utf8)) {
+                if (-not $line) { continue }
+                $kind, $value = $line.Split([char[]]@(' '), 2)
+                $text = $utf8.GetString([Convert]::FromBase64String($value))
+                if ($kind -ceq 'exe') { $start.FileName = $text }
+                elseif ($kind -ceq 'dir') { $start.WorkingDirectory = $text }
+                elseif ($kind -ceq 'args') { $start.Arguments = $text }
+                elseif ($kind -ceq 'env') { $at = $text.IndexOf('='); $start.Environment[$text.Substring(0, $at)] = $text.Substring($at + 1) }
+            }
+            [IO.File]::Delete((Join-Path $dir 'spec.txt'))
+            foreach ($key in @($start.Environment.Keys)) { if ($key -like 'DOORSTOP_*') { [void]$start.Environment.Remove($key) } }
+            $game = [Diagnostics.Process]::Start($start)
+            $temporary = Join-Path $dir 'pid.tmp'
+            [IO.File]::WriteAllText($temporary, [string]$game.Id + ' ' + $game.StartTime.ToFileTimeUtc(), $utf8)
+            [IO.File]::Move($temporary, (Join-Path $dir 'pid'))
+        } catch {
+            $temporary = Join-Path $dir 'launcher-error.tmp'
+            [IO.File]::WriteAllText($temporary, $_.Exception.Message, $utf8)
+            [IO.File]::Move($temporary, (Join-Path $dir 'launcher-error.txt'))
+            exit 1
+        }
+        """.ReplaceLineEndings("\n");
+
+    public static readonly string WindowsKeep = """
+        if (-not [IO.Directory]::Exists($dir)) { exit 3 }
+        $index = 0
+        foreach ($log in ($logs -split "`n")) {
+            if ($log) {
+                $source = Join-Path $runtime $log
+                $target = Join-Path $dir ('game-' + $index + '.log')
+                if ([IO.File]::Exists($source)) { [IO.File]::Move($source, $target) }
+                elseif (-not [IO.File]::Exists($target)) { [IO.File]::WriteAllText($target + '.absent', 'Game did not create this log: ' + $source) }
+            }
+            $index++
+        }
+        'VT-KEPT'
+        """.ReplaceLineEndings("\n");
+
     // A process's start time in clock ticks after boot (field 22 of /proc/PID/stat, counted after the name); empty for a
     // zombie or a missing process.
     private const string Started = """
