@@ -10,10 +10,10 @@ public class ContentCensusTests
     private const string Owner = "example.mymod", Path = "mymod.testing/content-census", Md5 = "0123456789abcdef0123456789abcdef", OtherMd5 = "fedcba9876543210fedcba9876543210";
     private const string Item = "MyMod_Stake", RecipeName = "Recipe_MyMod_Stake";
 
-    private static ContentExpectations Expectations(string extra = "") => ContentExpectations.Parse($$"""
+    private static ContentExpectations Expectations(string extra = "", string extraPrefab = "") => ContentExpectations.Parse($$"""
         { "owner": "{{Owner}}", "scope": ["MyMod_", "Recipe_MyMod_"],
           "items": [{ "name": "{{Item}}", "sides": ["server", "client"] }],
-          "prefabs": [{ "name": "{{Item}}", "sides": ["server", "client"] }],
+          "prefabs": [{ "name": "{{Item}}", "sides": ["server", "client"] }{{extraPrefab}}],
           "recipes": [{ "name": "{{RecipeName}}", "sides": ["server", "client"], "item": "{{Item}}", "station": "piece_workbench", "resources": ["Wood"] }]{{extra}} }
         """);
 
@@ -25,16 +25,25 @@ public class ContentCensusTests
         name, enabled = true, amount = 1, item = Reference(item, itemLookup), station = Reference(station, stationLookup), minStationLevel = 1,
         resources = resources ?? [Reference("Wood", "resolved", 2)],
     };
+    private static object Piece(string name = "MyMod_Post", string tool = "Hammer", int listed = 1, string? resolves = "", string stationLookup = "resolved", object[]? resources = null,
+        bool hasComponent = true, bool enabled = true) => new
+    {
+        name, hash = StableHash.Of(name), tool, table = "_HammerPieceTable", listed, resolves = resolves == "" ? name : resolves,
+        hasComponent, enabled, station = Reference("piece_workbench", stationLookup),
+        resources = resources ?? [Reference("Wood", "resolved", 2)],
+    };
 
     // A complete census as the adapter replies; each test changes what it is about.
     private static Dictionary<string, object?> Census(string side = "server", string? md5 = Md5, object[]? items = null, object[]? prefabs = null, object[]? recipes = null,
-        object[]? collisions = null, int totalItems = 900, string[]? scope = null) => new()
+        object[]? collisions = null, int totalItems = 900, string[]? scope = null, object[]? statusEffects = null, object[]? pieces = null) => new()
     {
         ["source"] = "content-census", ["complete"] = true, ["ready"] = true, ["reason"] = null, ["side"] = side, ["dedicated"] = side == "server",
         ["owner"] = new { guid = Owner, installed = md5 != null, version = md5 == null ? null : "0.1.0", md5 },
         ["scope"] = scope ?? ["MyMod_", "Recipe_MyMod_"],
         ["totals"] = new { items = totalItems, itemIndex = totalItems, recipes = 400, prefabs = totalItems == 0 ? 0 : 3000, prefabIndex = totalItems == 0 ? 0 : 3000 },
         ["items"] = items ?? [Entry(Item)], ["prefabs"] = prefabs ?? [Entry(Item)], ["recipes"] = recipes ?? [Recipe()],
+        ["statusEffects"] = statusEffects ?? [],
+        ["pieces"] = pieces ?? [],
         ["collisions"] = collisions ?? [],
     };
 
@@ -172,9 +181,10 @@ public class ContentCensusTests
 
     [Fact] public void AnUnsupportedCheckIsNeverAPass()
     {
-        // Pieces are declared in the same format but not observed by this census yet.
-        var expectations = Expectations(""", "pieces": [{ "name": "MyMod_Post", "sides": ["server"] }]""");
-        var report = Reconcile(expectations, Observed(Census()), Observed(Census("client")));
+        // A legacy adapter without the pieces field cannot claim this check is missing or present.
+        var expectations = Expectations(""", "pieces": [{ "name": "MyMod_Post", "tool": "Hammer", "sides": ["server"] }]""");
+        var legacy = Census(); legacy.Remove("pieces");
+        var report = Reconcile(expectations, Observed(legacy), Observed(Census("client")));
         var piece = Line(report, CensusSide.Server, "piece", "MyMod_Post");
         Assert.Equal(CensusState.Unsupported, piece.State);
         Assert.Equal(1, report.Entries.Count(e => e.State != CensusState.Present));
@@ -185,6 +195,80 @@ public class ContentCensusTests
         var unnamed = Reconcile(Expectations(), Observed(Census(recipes: [Recipe(resources: [Reference("Wood", "unsupported", 2)])])), Observed(Census("client")));
         Assert.Equal(CensusState.Unsupported, Line(unnamed, CensusSide.Server, "recipe-resource", RecipeName + "/Wood").State);
         Assert.False(unnamed.Passed);
+    }
+
+    [Fact] public void PieceMustBeInTheDeclaredToolsTableAndResolveThroughTheScene()
+    {
+        var expected = Expectations(""", "pieces": [{ "name": "MyMod_Post", "tool": "Hammer", "sides": ["server"], "station": "piece_workbench", "resources": ["Wood"] }]""",
+            """, { "name": "MyMod_Post", "sides": ["server"] }""");
+        var good = Reconcile(expected, Observed(Census(prefabs: [Entry(Item), Entry("MyMod_Post")], pieces: [Piece()])), Observed(Census("client")));
+        good.RequirePassed();
+        Assert.Equal(CensusState.Present, Line(good, CensusSide.Server, "piece", "MyMod_Post").State);
+        Assert.Equal(CensusState.Present, Line(good, CensusSide.Server, "piece-resource", "MyMod_Post/Wood").State);
+
+        var prefabOnly = Reconcile(expected, Observed(Census(prefabs: [Entry(Item), Entry("MyMod_Post")], pieces: [])), Observed(Census("client")));
+        Assert.Equal(CensusState.Unresolved, Line(prefabOnly, CensusSide.Server, "piece", "MyMod_Post").State);
+        var fullyMissing = Reconcile(expected, Observed(Census(pieces: [])), Observed(Census("client")));
+        Assert.Equal(CensusState.Missing, Line(fullyMissing, CensusSide.Server, "piece", "MyMod_Post").State);
+        var wrongTool = Reconcile(expected, Observed(Census(prefabs: [Entry(Item), Entry("MyMod_Post")], pieces: [Piece(tool: "Hoe")])), Observed(Census("client")));
+        Assert.Equal(CensusState.Unresolved, Line(wrongTool, CensusSide.Server, "piece", "MyMod_Post").State);
+        var unregistered = Reconcile(expected, Observed(Census(pieces: [Piece()])), Observed(Census("client")));
+        Assert.Equal(CensusState.Unresolved, Line(unregistered, CensusSide.Server, "piece", "MyMod_Post").State);
+    }
+
+    [Fact] public void PieceDependenciesAndDuplicatesAreJudged()
+    {
+        var expected = Expectations(""", "pieces": [{ "name": "MyMod_Post", "tool": "Hammer", "sides": ["server"], "station": "piece_workbench", "resources": ["Wood"] }]""",
+            """, { "name": "MyMod_Post", "sides": ["server"] }""");
+        var bad = Reconcile(expected, Observed(Census(prefabs: [Entry(Item), Entry("MyMod_Post")],
+            pieces: [Piece(stationLookup: "unresolved", resources: [Reference("Wood", "unresolved")])])), Observed(Census("client")));
+        Assert.Equal(CensusState.Unresolved, Line(bad, CensusSide.Server, "piece-station", "MyMod_Post/piece_workbench").State);
+        Assert.Equal(CensusState.Unresolved, Line(bad, CensusSide.Server, "piece-resource", "MyMod_Post/Wood").State);
+        var duplicate = Reconcile(expected, Observed(Census(prefabs: [Entry(Item), Entry("MyMod_Post")], pieces: [Piece(listed: 2)])), Observed(Census("client")));
+        Assert.Equal(CensusState.Duplicate, Line(duplicate, CensusSide.Server, "piece", "MyMod_Post").State);
+        var noComponent = Reconcile(expected, Observed(Census(prefabs: [Entry(Item), Entry("MyMod_Post")], pieces: [Piece(hasComponent: false)])), Observed(Census("client")));
+        Assert.Equal(CensusState.Unresolved, Line(noComponent, CensusSide.Server, "piece", "MyMod_Post").State);
+        var disabled = Reconcile(expected, Observed(Census(prefabs: [Entry(Item), Entry("MyMod_Post")], pieces: [Piece(enabled: false)])), Observed(Census("client")));
+        Assert.Equal(CensusState.Unresolved, Line(disabled, CensusSide.Server, "piece", "MyMod_Post").State);
+    }
+
+    [Fact] public void StatusEffectsResolveByHashOnTheirOwnSideAndMissingIsNotPresent()
+    {
+        var expected = Expectations(""", "statusEffects": [{ "name": "MyMod_Blessing", "sides": ["server", "client"] }]""");
+        var server = Observed(Census(statusEffects: [Entry("MyMod_Blessing")]));
+        var client = Observed(Census("client", statusEffects: [Entry("MyMod_Blessing")]));
+        var report = Reconcile(expected, server, client);
+        report.RequirePassed();
+        Assert.Equal(StableHash.Of("MyMod_Blessing"), Line(report, CensusSide.Server, "statusEffect", "MyMod_Blessing").Hash);
+
+        var missing = Reconcile(expected, server, Observed(Census("client")));
+        Assert.Equal(CensusState.Missing, Line(missing, CensusSide.Client, "statusEffect", "MyMod_Blessing").State);
+        Assert.Equal(CensusState.Present, Line(missing, CensusSide.Server, "statusEffect", "MyMod_Blessing").State);
+        Assert.False(missing.Passed);
+    }
+
+    [Fact] public void StatusEffectDuplicatesAndUnexpectedNamesFail()
+    {
+        var expected = Expectations(""", "statusEffects": [{ "name": "MyMod_Blessing", "sides": ["server"] }]""");
+        var collision = new { registry = "statusEffects", hash = StableHash.Of("MyMod_Blessing"),
+            names = new[] { "MyMod_Blessing", "OtherMod_Clash" }, indexed = "OtherMod_Clash" };
+        var collisionReport = Reconcile(expected,
+            Observed(Census(statusEffects: [Entry("MyMod_Blessing", resolves: "OtherMod_Clash")], collisions: [collision])),
+            Observed(Census("client")));
+        Assert.Equal(CensusState.Duplicate, Line(collisionReport, CensusSide.Server, "statusEffect", "MyMod_Blessing").State);
+
+        var twice = Reconcile(expected, Observed(Census(statusEffects: [Entry("MyMod_Blessing", listed: 2), Entry("MyMod_Extra")])), Observed(Census("client")));
+        Assert.Equal(CensusState.Duplicate, Line(twice, CensusSide.Server, "statusEffect", "MyMod_Blessing").State);
+        Assert.Equal(CensusState.Unexpected, Line(twice, CensusSide.Server, "statusEffect", "MyMod_Extra").State);
+    }
+
+    [Fact] public void OldAdapterCannotClaimStatusEffectsAreMissing()
+    {
+        var expected = Expectations(""", "statusEffects": [{ "name": "MyMod_Blessing", "sides": ["server"] }]""");
+        var old = Census(); old.Remove("statusEffects");
+        var report = Reconcile(expected, Observed(old), Observed(Census("client")));
+        Assert.Equal(CensusState.Unsupported, Line(report, CensusSide.Server, "statusEffect", "MyMod_Blessing").State);
+        Assert.False(report.Passed);
     }
 
     [Fact] public void OnlyContentInTheDeclaredScopeCanBeUnexpected()

@@ -239,6 +239,7 @@ public partial class ItemDrop : MonoBehaviour
         public partial class SharedData
         {
             public string m_name = "";
+            public PieceTable? m_buildPieces;
             public string m_description = "";
             public ItemType m_itemType;
             public int m_maxStackSize;
@@ -312,6 +313,12 @@ public partial class Piece : MonoBehaviour
             return (int)Math.Floor(steps * m_amountPerLevel + (float)baseAmount);
         }
     }
+}
+
+/// <summary>A tool's buildable prefabs, kept separately from scene registration as in the game.</summary>
+public partial class PieceTable : MonoBehaviour
+{
+    public List<GameObject> m_pieces = new();
 }
 
 /// <summary>A crafting station, known by name.</summary>

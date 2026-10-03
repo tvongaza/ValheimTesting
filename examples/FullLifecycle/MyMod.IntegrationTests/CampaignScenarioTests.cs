@@ -330,7 +330,7 @@ public sealed class CampaignScenarioTests : IDisposable
         using var evidence = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(_world.Output, "first-content-census.json")));
         Assert.Equal("server", evidence.RootElement.GetProperty("server").GetProperty("Side").GetString());
         Assert.Equal("client", evidence.RootElement.GetProperty("client").GetProperty("Side").GetString());
-        Assert.Equal(12, evidence.RootElement.GetProperty("report").GetProperty("Entries").GetArrayLength());
+        Assert.Equal(22, evidence.RootElement.GetProperty("report").GetProperty("Entries").GetArrayLength());
         Assert.Contains("recipe Recipe_MyMod_SurveyStake (server+client)", report.Provenance["contentExpectations"]);
         Assert.Equal(1, _world.Restarts);
         Assert.Equal(0, _world.MarkCommands);
@@ -372,6 +372,22 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.StartsWith("omitted-recipe: failed its check as expected", report.Provenance["control"]);
         Assert.True(Evidence("first-content-census.json"));
         Assert.Equal(0, _world.Restarts); // The run ends at the control's check.
+    }
+
+    [Fact] public void AnOmittedStatusEffectControlFailsOnlyOnThatEffect()
+    {
+        _world.OmitStatusEffect = true;
+        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedStatusEffect));
+        Assert.True(report.Passed, Explain(report));
+        Assert.Contains(ContentCensusScenario.OnlyTheOmittedStatusEffect, report.Provenance["controlFailure"]);
+        Assert.Contains("server: missing statusEffect MyMod_SurveyBlessing", report.Provenance["controlFailure"]);
+        Assert.Contains("client: missing statusEffect MyMod_SurveyBlessing", report.Provenance["controlFailure"]);
+    }
+
+    [Fact] public void AnOmittedStatusEffectControlFailsIfTheEffectIsPresent()
+    {
+        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedStatusEffect));
+        Assert.Equal(new[] { $"first: control omitted-status-effect: {CensusStep} fails for the named reason" }, Failed(report));
     }
 
     [Fact] public void AnOmittedRecipeControlWhoseRecipeIsThereFailsTheRun()

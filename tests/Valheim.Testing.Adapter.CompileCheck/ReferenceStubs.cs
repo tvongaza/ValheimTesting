@@ -173,10 +173,13 @@ public class ObjectDB : UnityEngine.MonoBehaviour
     public static ObjectDB instance => throw null;
     public System.Collections.Generic.List<UnityEngine.GameObject> m_items;
     public System.Collections.Generic.List<Recipe> m_recipes;
+    public System.Collections.Generic.List<StatusEffect> m_StatusEffects;
+    public StatusEffect GetStatusEffect(int hash) => throw null;
     public UnityEngine.GameObject GetItemPrefab(string name) => throw null;
     public UnityEngine.GameObject GetItemPrefab(int hash) => throw null;
     public UnityEngine.GameObject GetItemPrefab(ItemDrop.ItemData.SharedData sharedData) => throw null;
 }
+public class StatusEffect : UnityEngine.ScriptableObject { public int NameHash() => throw null; }
 public class Recipe : UnityEngine.ScriptableObject
 {
     public ItemDrop m_item;
@@ -192,17 +195,21 @@ public class ItemDrop : UnityEngine.MonoBehaviour
     public class ItemData
     {
         public SharedData m_shared;
-        public class SharedData { public string m_name; }
+        public class SharedData { public string m_name; public PieceTable m_buildPieces; }
     }
 }
 public class Piece : UnityEngine.MonoBehaviour
 {
+    public bool m_enabled;
+    public CraftingStation m_craftingStation;
+    public Requirement[] m_resources;
     public class Requirement
     {
         public ItemDrop m_resItem;
         public int m_amount = 1;
     }
 }
+public class PieceTable : UnityEngine.MonoBehaviour { public System.Collections.Generic.List<UnityEngine.GameObject> m_pieces; }
 public class CraftingStation : UnityEngine.MonoBehaviour { public string m_name = ""; }
 public struct ZDOID { }
 public class ZDO

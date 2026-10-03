@@ -16,7 +16,8 @@ public sealed record ControlPlugin(string Name, string Guid, bool OnServer, stri
 public static class ControlPlugins
 {
     public const string MissingHarmonyTarget = "missing-harmony-target", ServerOnlyPrefab = "server-only-prefab",
-        FieldOnlyState = "field-only-state", SuppressedProfileSave = "suppressed-profile-save", OmittedRecipe = "omitted-recipe";
+        FieldOnlyState = "field-only-state", SuppressedProfileSave = "suppressed-profile-save", OmittedRecipe = "omitted-recipe",
+        OmittedStatusEffect = "omitted-status-effect";
     /// <summary>The prefab only the server-only-prefab control registers.</summary>
     public const string ServerOnlyPrefabName = "MyModControl_ServerOnly";
     /// <summary>The missing-harmony-target control's patch, on a method the game does not have.</summary>
@@ -45,13 +46,15 @@ public static class ControlPlugins
     ];
 
     /// <summary>
-    /// The build controls: <c>omitted-recipe</c> is MyMod built with <c>-p:MyModOmit=recipe</c> on the server and the
-    /// client, and the content census must fail on that recipe alone (#91).
+    /// The build controls omit the recipe or status effect from MyMod on both sides; the content census must identify
+    /// exactly that omission (#91/#114).
     /// </summary>
     public static readonly IReadOnlyList<ControlPlugin> Builds =
     [
         new(OmittedRecipe, LifecyclePlan.ModPlugin, OnServer: true, LifecyclePlan.ContentCensusScenario,
             ContentCensusScenario.Check, ContentCensusScenario.OnlyTheOmittedRecipe, Build: true),
+        new(OmittedStatusEffect, LifecyclePlan.ModPlugin, OnServer: true, LifecyclePlan.ContentCensusScenario,
+            ContentCensusScenario.Check, ContentCensusScenario.OnlyTheOmittedStatusEffect, Build: true),
     ];
 
     /// <summary>Every control, plugins and builds, by name.</summary>
