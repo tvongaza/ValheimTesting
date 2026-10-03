@@ -173,6 +173,25 @@ dotnet run --project examples/FullLifecycle/MyMod.SystemTests -- run review-plan
 
 The client must run on the runner's machine for this example. For a remote client, use its `IGameHost` with `ReviewCapture.CaptureAsync` in your own scenario. The capture is **evidence for human review**, never an assertion that the scene looks correct. Review the PNGs yourself and record a verdict separately. Use a fresh output directory and an empty no-space host capture directory for each run. The example keeps the original host PNGs under `capture-host-*` beside the fetched copies for audit; remove the run directory when you have archived the evidence. A failed or interrupted run can leave a host image, but cannot turn it into a passing review result.
 
+### Bounded motion evidence
+
+`ReviewClip.CaptureAsync` records a short, opt-in scene-only sequence from a ready, strictly pinned client. The adapter renders a second world camera into a private off-screen texture; it does not record the desktop, account screens, chat or screen-space UI. UI layers and layers used by world-space canvases are excluded, so a mod that places ordinary scenery on a UI layer may leave it out of the clip. Check an actual frame before using the result as evidence. The native 1.0.16 check captured 15 frames at 320×180 and 5 fps in a disposable local world; the inspected frames showed the world without the screen UI. It does not establish that every mod's custom UI is excluded.
+
+The game-side frame source is opt-in: define `VALHEIM_TESTING_REVIEW_CLIP` in the adapter project and reference the game's `UnityEngine.UIModule` and `UnityEngine.ImageConversionModule`, as this example does. Other adapters compiling the source package do not gain new Unity references. After the client is in the intended world and its player is ready, with ValheimCLI devcommands enabled, register `ReviewClipFrames.Command()` beside `ReviewState.BeginCommand()` and `ReviewState.RestoreCommand()`. Pass its owned client host and the same exact world and plugin pins used for the run:
+
+```csharp
+var plan = new ReviewClipPlan(
+    Id: "approach-01", ExtensionId: "mymod.testing",
+    HostDirectory: @"C:\test-runs\my-run\capture", EvidenceDirectory: evidencePath,
+    WorldUid: expectedWorldUid, GameBuild: expectedGameBuild,
+    PluginPins: expectedPluginPins, Width: 320, Height: 180,
+    FramesPerSecond: 5, Frames: 15);
+ReviewClipReceipt clip = await ReviewClip.CaptureAsync(client, clientHost, plan,
+    fetchTimeout: TimeSpan.FromSeconds(30), cancellation);
+```
+
+The result is a local `.apng` that plays once, its source PNG frames and timestamps, and a JSON sidecar with actual duration and frame rate, world/build/plugin pins and SHA-256. Each call needs a fresh host directory and local evidence directory; the 10-second, 60-frame, 640×360 and 24 MiB ceilings reject unbounded requests. A failed capture or transfer leaves no passing local evidence. The capture restores its review-state lease and the adapter also restores on unload. The host's owned run directory may retain complete source frames for audit; remove it with the rest of that disposable run. The sidecar starts with `visualVerdict: "not asserted"`; watch the clip and record the human verdict separately. Animated PNG can be opened in a browser that supports APNG, and every source frame remains a normal PNG for inspection.
+
 ## Native campaign
 
 ### Read-only objects at a joined site
