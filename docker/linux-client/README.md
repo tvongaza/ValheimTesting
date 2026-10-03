@@ -42,6 +42,12 @@ bash host/vm-bootstrap.sh ghcr.io/<owner>/valheim-linux-client:latest
 ```
 
 It installs the NVIDIA container toolkit, starts the container `vt` with the GPU and the options above, checks user namespaces and the GPU inside the container, and starts Xorg.
+Before installing packages or pulling the image, it gives the host driver up to 60 seconds to expose an NVIDIA GPU. A host
+that never becomes ready fails with the last `nvidia-smi` error; the VM campaign must then destroy that unsuitable instance.
+Use `bash host/vm-bootstrap.sh --preflight-gpu` for this bounded check alone, or set `VT_GPU_READY_SECONDS=0` for an immediate
+host verdict. After installing the toolkit, bootstrap also checks `nvidia-container-cli info` before pulling the client image;
+`bash host/vm-bootstrap.sh --preflight-runtime` checks an already-installed runtime alone. These checks need no Steam login or
+game files. The inert success, failure and late-readiness controls run in CI.
 
 Then, inside the container (`docker exec vt ...`):
 
