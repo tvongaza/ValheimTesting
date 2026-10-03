@@ -28,8 +28,13 @@ internal static class BepInExLoader
     internal static void RequireWindowsLoader(string root, string kind)
     {
         RequireFile(root, WindowsProxy, "BepInEx's Doorstop loader is missing from the " + kind);
-        RequireConfig(root, kind);
+        string path = Path.Combine(root, WindowsConfig);
+        if (!File.Exists(path)) throw new FileNotFoundException($"BepInEx's Doorstop configuration is missing from the {kind}: " + WindowsConfig, path);
+        RequireWindowsLoader(File.ReadAllBytes(Path.Combine(root, WindowsProxy)), File.ReadAllText(path), root, kind);
     }
+    // Shared by the local install and a remote profile client's bounded file read. Only the input transport differs.
+    internal static void RequireWindowsLoader(byte[] proxy, string config, string root, string kind) =>
+        RequireConfig(root, kind, config.Split('\n'), proxy);
     internal static readonly string Patchers = Path.Combine("BepInEx", "patchers");
     /// <summary>
     /// Refuses a runtime whose <c>BepInEx/patchers</c> holds an entry (file or directory) that <paramref name="named"/> does
@@ -100,15 +105,13 @@ internal static class BepInExLoader
     // The proxy reads only its own version's section, so when winhttp.dll shows which version it is, the configuration
     // must be written for that version (RequireMatchingProxy).
     private static readonly (string Section, string Target)[] Sections = [("General", "target_assembly"), ("UnityDoorstop", "targetAssembly")];
-    private static void RequireConfig(string root, string kind)
+    private static void RequireConfig(string root, string kind, IEnumerable<string> lines, byte[] proxy)
     {
-        string path = Path.Combine(root, WindowsConfig);
-        if (!File.Exists(path)) throw new FileNotFoundException($"BepInEx's Doorstop configuration is missing from the {kind}: " + WindowsConfig, path);
         string? section = null;
         var enabled = new List<(string Section, string Value)>();
         var targets = new List<(string Section, string Value)>();
         var sections = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string raw in File.ReadLines(path))
+        foreach (string raw in lines)
         {
             string line = raw.Trim();
             if (line.Length == 0 || line[0] is '#' or ';') continue;
@@ -132,16 +135,15 @@ internal static class BepInExLoader
         foreach (var (targetSection, target) in stated)
             if (!string.Equals(Normalize(root, target), expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"{WindowsConfig} [{targetSection}] targets {target}, not BepInEx's preloader; set it to {WindowsPreloader}, or the game starts without BepInEx.");
-        RequireMatchingProxy(root, kind, sections, enabled, stated);
+        RequireMatchingProxy(proxy, kind, sections, enabled, stated);
     }
 
     // A Doorstop 4 winhttp.dll beside BepInExPack's older Doorstop 3 doorstop_config.ini (a mod manager's launch copies
     // its own proxy into the game folder) started the Windows client without BepInEx: no BepInEx log, the game at its menu.
     // Adding a [General] section to that file did not make it load. So a proxy that shows its version needs a file written
     // for that version: Doorstop 4 its [General] keys and no [UnityDoorstop] section, Doorstop 3 its [UnityDoorstop] keys.
-    private static void RequireMatchingProxy(string root, string kind, HashSet<string> sections, List<(string Section, string Value)> enabled, List<(string Section, string Value)> targets)
+    private static void RequireMatchingProxy(byte[] proxy, string kind, HashSet<string> sections, List<(string Section, string Value)> enabled, List<(string Section, string Value)> targets)
     {
-        byte[] proxy = File.ReadAllBytes(Path.Combine(root, WindowsProxy));
         int? major = ProxyDoorstopMajor(proxy);
         if (major == null) return;
         string own = major == 4 ? "General" : "UnityDoorstop", other = major == 4 ? "UnityDoorstop" : "General";

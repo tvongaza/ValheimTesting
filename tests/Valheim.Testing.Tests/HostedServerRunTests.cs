@@ -36,6 +36,7 @@ internal sealed class FakeServerHost : IGameHost
     public bool PortBusy { get; set; }
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
     public bool IgnoreQuit { get; set; }
+    public bool ClientWritesBepInExLog { get; set; } = true;
     /// <summary>The crossplay library check's reply: by default libparty.so loads.</summary>
     public string PartyReply { get; set; } = "VT-LDD \tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 0\n";
     /// <summary>The signed-in Steam user check's reply.</summary>
@@ -66,6 +67,7 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, InteractiveScripts.LinuxStart) ? "client-start" :
         ReferenceEquals(script, HostedClientScripts.BashKeep) ? "client-keep" :
         ReferenceEquals(script, HostedClientScripts.BashMoveAside) ? "move-aside" :
+        ReferenceEquals(script, HostClientPreflight.BashRead) ? "preflight-read" :
         ReferenceEquals(script, SteamSignedInUsers.Bash) ? "steam-user" : "other";
 
     public async Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default)
@@ -76,6 +78,13 @@ internal sealed class FakeServerHost : IGameHost
         if (Failures.TryGetValue(name, out var failure)) return failure;
         switch (name)
         {
+            case "preflight-read":
+            {
+                string file = Local(v["path"]);
+                if (!File.Exists(file)) return Ok("VT-PREFLIGHT missing\n");
+                var bytes = File.ReadAllBytes(file);
+                return Ok(bytes.Length > 4194304 ? "VT-PREFLIGHT too-large\n" : "VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
+            }
             case "copy":
                 CopyDirectory(Local(v["source"]), Local(v["dest"]));
                 AfterCopy?.Invoke(Local(v["dest"]));
@@ -117,7 +126,8 @@ internal sealed class FakeServerHost : IGameHost
                 var exit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
                 int id; lock (_sync) id = _nextClient++;
                 Directory.CreateDirectory(Local(v["dir"]));
-                File.WriteAllText(Path.Combine(Local(v["install"]), "BepInEx", "LogOutput.log"), "[Info   :valheimCLI] Command server listening on 127.0.0.1:5578\n");
+                if (ClientWritesBepInExLog)
+                    File.WriteAllText(Path.Combine(Local(v["install"]), "BepInEx", "LogOutput.log"), "[Info   :valheimCLI] Command server listening on 127.0.0.1:5578\n");
                 lock (_sync) _processes[id] = ("555", ct => exit.Task.WaitAsync(ct), () => exit.TrySetResult(137));
                 return Ok($"VT-INTERACTIVE started {id} 555\n");
             }
@@ -190,7 +200,9 @@ internal sealed class FakeServerHost : IGameHost
             case "client-keep":
             {
                 string dir = Local(v["dir"]);
-                File.Copy(Path.Combine(Local(v["install"]), "BepInEx", "LogOutput.log"), Path.Combine(dir, "game-0.log"));
+                string source = Path.Combine(Local(v["install"]), "BepInEx", "LogOutput.log");
+                if (File.Exists(source)) File.Copy(source, Path.Combine(dir, "game-0.log"));
+                else File.WriteAllText(Path.Combine(dir, "game-0.log.absent"), "absent");
                 File.WriteAllText(Path.Combine(dir, "game-1.log.absent"), "absent");
                 return Ok("VT-KEPT\n");
             }
@@ -677,7 +689,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains(FakeServerHost.Spec(start.Variables["spec"]), line => line.Kind == "arg" && line.Text == "+connect");
         // The earlier log moved aside first, the new one was awaited from its start; only that client was stopped.
         Assert.Equal("/home/tester/runs/" + RunId + "/client-1.previous-LogOutput.log", Assert.Single(clientHost.Runs, run => run.Script == "move-aside").Variables["to"]);
-        Assert.Equal("0", Assert.Single(clientHost.Runs, run => run.Script == "follow").Variables["offset"]);
+        Assert.Equal(2, clientHost.Runs.Count(run => run.Script == "follow")); // fresh BepInEx line, then ValheimCLI listening
+        Assert.All(clientHost.Runs.Where(run => run.Script == "follow"), run => Assert.Equal("0", run.Variables["offset"]));
         Assert.Equal(new[] { ("77", "555") }, clientHost.Stops);
         Assert.Contains("listening on 127.0.0.1:5578", File.ReadAllText(Path.Combine(Output, "client-1", "game-0.log")));
         Assert.True(Assert.Single(clientHost.Tunnels).Stopped);
@@ -685,6 +698,54 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(clientHost.Claims, clientHost.Releases); Assert.Single(clientHost.Claims);
         Assert.Contains("release client host linux-gpu's lock", StepNames());
         Assert.Contains(Result().GetProperty("Logs").EnumerateArray(), log => log.GetProperty("Role").GetString() == "client-1 BepInEx log");
+    }
+
+    [Fact] public async Task ARemoteWindowsClientRefusesMixedLoaderAndInheritedStandingPinsBeforeLaunch()
+    {
+        var host = new FakeServerHost("windows-client", Path.Combine(_root, "remote-client"));
+        const string install = "/client/valheim";
+        string local = host.Local(install);
+        Directory.CreateDirectory(Path.Combine(local, "BepInEx", "config"));
+        File.WriteAllText(Path.Combine(local, "winhttp.dll"), "MZ target_assembly"); // Doorstop 4 signature
+        File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var plan = new ClientRunPlan { Mode = "owned", Pinning = "none", Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) } };
+        var mismatch = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default));
+        Assert.Contains("Doorstop 4", mismatch.Message);
+        Assert.DoesNotContain(host.Runs, run => run.Script == "client-start");
+
+        File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        string config = Path.Combine(local, "BepInEx", "config", OwnedClientPreflight.CliConfig);
+        File.WriteAllText(config, "[Expectations]\nFile = C:\\Users\\Public\\station\\expect-client.txt\nStrict = true\n");
+        var global = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default));
+        Assert.Contains("host-global standing file", global.Message);
+
+        File.WriteAllText(config, "[Expectations]\nFile = expect.txt\nStrict = true\n");
+        string standing = Path.Combine(local, "BepInEx", "config", "expect.txt");
+        File.WriteAllText(standing, $"valheimCLI.valheimCLI={new string('a', 32)}\ncom.bepis.bepinex.scriptengine=any\nworld=any\n");
+        var unrelated = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default));
+        Assert.Contains("plugin the plan does not pin", unrelated.Message);
+        File.WriteAllText(standing, $"valheimCLI.valheimCLI={new string('a', 32)}\nworld=any\n");
+        await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default);
+    }
+
+    [Fact] public async Task WindowsPowerShellReadsTheRemoteLoaderFilesForPreflight()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string install = Path.Combine(_root, "windows-client");
+        Directory.CreateDirectory(install);
+        File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
+        string config = Path.Combine(install, "doorstop_config.ini");
+        File.WriteAllText(config, "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var host = new LocalGameHost("windows-client", HostShell.WindowsPowerShell);
+        var plan = new ClientRunPlan { Mode = "owned", Pinning = "none" };
+        await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(30), default);
+        File.WriteAllText(config, "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(30), default));
+        Assert.Contains("Doorstop 4", error.Message);
     }
 
     // A client that started but never reached its menu (here its pins do not hold) is stopped; its fetched logs are still scanned.
@@ -714,6 +775,28 @@ public sealed partial class HostedServerRunTests : IDisposable
         var roles = Result().GetProperty("Logs").EnumerateArray().Select(log => log.GetProperty("Role").GetString()).ToList();
         Assert.Contains("client-1 BepInEx log", roles);
         Assert.Contains("client-1 Player.log", roles);
+    }
+
+    [Fact] public async Task AProfileClientWithoutAFreshBepInExLogFailsAtTheLoaderDeadline()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { ClientWritesBepInExLog = false };
+        string clientInstall = clientHost.Local("/home/tester/valheim");
+        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
+        FakeInstalls.Client(clientInstall);
+        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        var (plan, profile) = Write(host, withClient: true);
+        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
+        Exception? failure = null;
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        {
+            failure = Record.Exception(() => run.OpenClient(client));
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport())));
+        Assert.Contains("BepInEx wrote no fresh log line", failure?.ToString());
+        Assert.Contains("within 30s", failure?.ToString());
+        Assert.Single(clientHost.Stops);
+        Assert.DoesNotContain(clientHost.Runs, run => run.Script == "follow" && run.Variables["offset"] != "0");
     }
 
     [Fact] public async Task AnArm64ProfileClientIsRefusedBeforeItsHostIsLockedOrAnythingStarts()
