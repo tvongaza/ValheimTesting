@@ -45,7 +45,9 @@ It installs the NVIDIA container toolkit, starts the container `vt` with the GPU
 Before installing packages or pulling the image, it gives the host driver up to 60 seconds to expose an NVIDIA GPU. A host
 that never becomes ready fails with the last `nvidia-smi` error; the VM campaign must then destroy that unsuitable instance.
 Use `bash host/vm-bootstrap.sh --preflight-gpu` for this bounded check alone, or set `VT_GPU_READY_SECONDS=0` for an immediate
-host verdict. This step needs no Steam login or game files. The inert success, failure and late-readiness controls run in CI.
+host verdict. After installing the toolkit, bootstrap also checks `nvidia-container-cli info` before pulling the client image;
+`bash host/vm-bootstrap.sh --preflight-runtime` checks an already-installed runtime alone. These checks need no Steam login or
+game files. The inert success, failure and late-readiness controls run in CI.
 
 Then, inside the container (`docker exec vt ...`):
 

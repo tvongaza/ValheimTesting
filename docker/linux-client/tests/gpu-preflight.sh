@@ -18,6 +18,16 @@ case "$VT_TEST_GPU_STATE" in
 esac
 EOF
 chmod +x "$tmp/bin/nvidia-smi"
+cat > "$tmp/bin/nvidia-container-cli" <<'EOF'
+#!/usr/bin/env bash
+test "$1" = info || exit 2
+if [[ ${VT_TEST_RUNTIME_STATE:-ready} == unavailable ]]; then
+  echo 'runtime driver unavailable' >&2
+  exit 1
+fi
+echo 'test runtime ready'
+EOF
+chmod +x "$tmp/bin/nvidia-container-cli"
 export PATH="$tmp/bin:$PATH"
 
 VT_TEST_GPU_STATE=ready VT_GPU_READY_SECONDS=0 bash "$root/host/vm-bootstrap.sh" --preflight-gpu > "$tmp/ready.log"
@@ -37,4 +47,11 @@ if VT_TEST_GPU_STATE=ready VT_GPU_READY_SECONDS=invalid bash "$root/host/vm-boot
     echo 'invalid readiness budget was accepted' >&2; exit 1
 fi
 grep -q 'VT_GPU_READY_SECONDS must be 0 to 300' "$tmp/invalid.log"
+VT_TEST_RUNTIME_STATE=ready bash "$root/host/vm-bootstrap.sh" --preflight-runtime > "$tmp/runtime-ready.log"
+grep -q 'NVIDIA container runtime ready' "$tmp/runtime-ready.log"
+if VT_TEST_RUNTIME_STATE=unavailable bash "$root/host/vm-bootstrap.sh" --preflight-runtime > "$tmp/runtime-unavailable.log" 2>&1; then
+    echo 'unavailable runtime was accepted' >&2; exit 1
+fi
+grep -q 'runtime driver unavailable' "$tmp/runtime-unavailable.log"
+grep -q 'stopped before pulling the client image' "$tmp/runtime-unavailable.log"
 echo 'GPU readiness checks pass'

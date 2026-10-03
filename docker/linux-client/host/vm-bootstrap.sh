@@ -33,9 +33,21 @@ gpu_ready() {
         sleep 2
     done
 }
+runtime_ready() {
+    command -v nvidia-container-cli >/dev/null || {
+        echo 'vm-bootstrap: nvidia-container-cli is missing after toolkit installation' >&2; return 1;
+    }
+    local output
+    if ! output=$(nvidia-container-cli info 2>&1); then
+        echo "vm-bootstrap: NVIDIA container runtime is unavailable (${output##*$'\n'}); stopped before pulling the client image" >&2
+        return 1
+    fi
+    echo 'vm-bootstrap: NVIDIA container runtime ready'
+}
 
 # A bounded, game-free host check for campaigns and the negative-control tests.
 if [[ ${1:-} == --preflight-gpu ]]; then gpu_ready; exit; fi
+if [[ ${1:-} == --preflight-runtime ]]; then runtime_ready; exit; fi
 IMAGE="${1:?usage: vm-bootstrap.sh <image>}"
 # Detect a rented host whose NVIDIA driver has not loaded before package installation or image download.
 # The campaign owns VM destruction after a failed preflight; this host script never destroys its caller's VM.
@@ -55,6 +67,7 @@ if ! command -v nvidia-ctk >/dev/null; then
     python3 -c 'import json; p="/etc/docker/daemon.json"; d=json.load(open(p)); d["exec-opts"]=["native.cgroupdriver=cgroupfs"]; json.dump(d, open(p,"w"), indent=2)'
     systemctl restart docker
 fi
+runtime_ready
 docker pull -q "$IMAGE" > /dev/null
 if ! docker ps --format '{{.Names}}' | grep -qx vt; then
     docker rm -f vt > /dev/null 2>&1 || true
