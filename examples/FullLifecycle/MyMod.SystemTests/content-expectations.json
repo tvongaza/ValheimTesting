@@ -5,7 +5,14 @@
     { "name": "MyMod_SurveyStake", "sides": ["server", "client"] }
   ],
   "prefabs": [
-    { "name": "MyMod_SurveyStake", "sides": ["server", "client"] }
+    { "name": "MyMod_SurveyStake", "sides": ["server", "client"] },
+    { "name": "MyMod_SurveyPost", "sides": ["server", "client"] }
+  ],
+  "pieces": [
+    { "name": "MyMod_SurveyPost", "tool": "Hammer", "sides": ["server", "client"], "station": "none", "resources": ["Wood"] }
+  ],
+  "statusEffects": [
+    { "name": "MyMod_SurveyBlessing", "sides": ["server", "client"] }
   ],
   "recipes": [
     {

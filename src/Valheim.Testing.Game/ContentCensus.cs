@@ -14,7 +14,7 @@ public enum CensusSide { Server, Client }
 [JsonConverter(typeof(CamelCaseEnum<CensusState>))]
 public enum CensusState
 {
-    /// <summary>Registered once, and the game's own lookup by its hash returns it; a recipe's declared dependencies resolve.</summary>
+    /// <summary>Registered once, and the game's own lookup by its hash returns it; declared recipe or piece dependencies resolve.</summary>
     Present,
     /// <summary>Not registered on that side, not observed there, or listed but not found by the game's lookup.</summary>
     Missing,
@@ -22,9 +22,9 @@ public enum CensusState
     Unexpected,
     /// <summary>Registered more than once by name, or its hash is shared with another name.</summary>
     Duplicate,
-    /// <summary>A recipe's item, crafting station or resource that the game's lookup does not find, or not the declared one.</summary>
+    /// <summary>A recipe or piece dependency the game cannot resolve, or a piece missing from its declared tool's build table.</summary>
     Unresolved,
-    /// <summary>A check the census cannot answer reliably (a kind it does not observe, a duplicated recipe's dependencies).</summary>
+    /// <summary>A check the census cannot answer reliably (an older adapter, a duplicated recipe's dependencies).</summary>
     Unsupported,
 }
 
@@ -33,11 +33,12 @@ public sealed class CamelCaseEnum<T>() : JsonStringEnumConverter<T>(JsonNamingPo
 
 /// <summary>
 /// One piece of content a mod declares by stable identity: its <see cref="Kind"/> (<c>item</c>, <c>prefab</c>,
-/// <c>recipe</c>; <c>piece</c> and <c>statusEffect</c> are accepted and always <see cref="CensusState.Unsupported"/> in this
-/// preview), its <see cref="Name"/> (the prefab or recipe object's name; items and prefabs are identified by the game's
+/// <c>recipe</c>, <c>statusEffect</c> or <c>piece</c>),
+/// its <see cref="Name"/> (the prefab or recipe object's name; items and prefabs are identified by the game's
 /// stable hash of it) and the <see cref="Sides"/> that must have it. A recipe may also declare the <see cref="Item"/> it
 /// crafts, its <see cref="Station"/> (a crafting station's prefab name, or <c>none</c> for crafting by hand) and its
-/// <see cref="Resources"/> (item prefab names); a dependency left null is not checked.
+/// <see cref="Resources"/> (item prefab names). A piece must name the <see cref="Tool"/> whose build table should contain
+/// it, and may also declare its station and resources. An optional dependency left null is not checked.
 /// </summary>
 public sealed record ExpectedContent
 {
@@ -45,6 +46,7 @@ public sealed record ExpectedContent
     public required string Name { get; init; }
     public required IReadOnlyList<CensusSide> Sides { get; init; }
     public string? Item { get; init; }
+    public string? Tool { get; init; }
     public string? Station { get; init; }
     public IReadOnlyList<string>? Resources { get; init; }
     /// <summary>The game's hash of the name (<see cref="StableHash.Of"/>), by which it looks items and prefabs up.</summary>
@@ -61,7 +63,10 @@ public sealed record ExpectedContent
 ///   "items":   [{ "name": "MyMod_SurveyStake", "sides": ["server", "client"] }],
 ///   "prefabs": [{ "name": "MyMod_SurveyStake", "sides": ["server", "client"] }],
 ///   "recipes": [{ "name": "Recipe_MyMod_SurveyStake", "sides": ["server", "client"],
-///                 "item": "MyMod_SurveyStake", "station": "piece_workbench", "resources": ["Wood"] }] }
+///                 "item": "MyMod_SurveyStake", "station": "piece_workbench", "resources": ["Wood"] }],
+///   "pieces": [{ "name": "MyMod_SurveyPost", "tool": "Hammer", "sides": ["server", "client"],
+///                "station": "none", "resources": ["Wood"] }],
+///   "statusEffects": [{ "name": "MyMod_SurveyBlessing", "sides": ["server", "client"] }] }
 /// </code>
 /// Anything else in the file (another key, a side other than <c>server</c> or <c>client</c>, a name twice, a name outside
 /// the scope) is refused. Derive it from the mod's design, never from a census: a census copied into its own expectations
@@ -69,10 +74,10 @@ public sealed record ExpectedContent
 /// </summary>
 public sealed class ContentExpectations
 {
-    /// <summary>The kinds this census observes; the others are declared in the same format and reported unsupported.</summary>
-    public static readonly IReadOnlyList<string> ObservedKinds = ["item", "prefab", "recipe"];
-    /// <summary>Kinds the format accepts that a later census will observe: always <see cref="CensusState.Unsupported"/> for now.</summary>
-    public static readonly IReadOnlyList<string> LaterKinds = ["piece", "statusEffect"];
+    /// <summary>The kinds this census observes. An older adapter that omits a kind reports it unsupported.</summary>
+    public static readonly IReadOnlyList<string> ObservedKinds = ["item", "prefab", "recipe", "piece", "statusEffect"];
+    /// <summary>Reserved for format kinds without an observer; empty now that pieces and effects are observed.</summary>
+    public static readonly IReadOnlyList<string> LaterKinds = [];
     private static readonly Dictionary<string, string> Sections = new(StringComparer.Ordinal)
     {
         ["items"] = "item", ["prefabs"] = "prefab", ["recipes"] = "recipe", ["pieces"] = "piece", ["statusEffects"] = "statusEffect",
@@ -133,7 +138,7 @@ public sealed class ContentExpectations
     private static ExpectedContent Entry(string kind, JsonElement element)
     {
         if (element.ValueKind != JsonValueKind.Object) throw new ArgumentException($"Each {kind} is an object.");
-        string? name = null, item = null, station = null;
+        string? name = null, item = null, station = null, tool = null;
         List<CensusSide>? sides = null;
         List<string>? resources = null;
         foreach (var property in element.EnumerateObject())
@@ -150,33 +155,38 @@ public sealed class ContentExpectations
                     }).ToList();
                     break;
                 case "item" when kind == "recipe": item = Text(property.Value, "item"); break;
-                case "station" when kind == "recipe": station = Text(property.Value, "station"); break;
-                case "resources" when kind == "recipe": resources = Strings(property.Value, "resources"); break;
-                default: throw new ArgumentException($"Unknown key \"{property.Name}\" in a {kind}; a {kind} has name and sides{(kind == "recipe" ? ", and optionally item, station and resources" : "")}.");
+                case "tool" when kind == "piece": tool = Text(property.Value, "tool"); break;
+                case "station" when kind is "recipe" or "piece": station = Text(property.Value, "station"); break;
+                case "resources" when kind is "recipe" or "piece": resources = Strings(property.Value, "resources"); break;
+                default: throw new ArgumentException($"Unknown key \"{property.Name}\" in a {kind}; a {kind} has name and sides{(kind is "recipe" or "piece" ? ", and optional dependency fields" : "")}.");
             }
         }
         return new ExpectedContent
         {
             Kind = kind, Name = name ?? throw new ArgumentException($"A {kind} without a name."),
             Sides = sides ?? throw new ArgumentException($"Say which sides must have the {kind} {name} (\"sides\": [\"server\", \"client\"])."),
-            Item = item, Station = station, Resources = resources,
+            Item = item, Tool = tool, Station = station, Resources = resources,
         };
     }
 
     private void Validate(ExpectedContent entry)
     {
-        if (!ObservedKinds.Contains(entry.Kind) && !LaterKinds.Contains(entry.Kind))
-            throw new ArgumentException($"Unknown kind \"{entry.Kind}\"; use {string.Join(", ", ObservedKinds.Concat(LaterKinds))}.");
+        if (!ObservedKinds.Contains(entry.Kind))
+            throw new ArgumentException($"Unknown kind \"{entry.Kind}\"; use {string.Join(", ", ObservedKinds)}.");
         if (string.IsNullOrEmpty(entry.Name) || entry.Name.Any(char.IsWhiteSpace)) throw new ArgumentException($"A {entry.Kind}'s name is one word: \"{entry.Name}\".");
         if (!InScope(entry.Name)) throw new ArgumentException($"The {entry.Kind} {entry.Name} is outside the scope [{string.Join(", ", Scope)}]: add its prefix, so the census lists it.");
         if (entry.Sides == null || entry.Sides.Count == 0 || entry.Sides.Distinct().Count() != entry.Sides.Count)
             throw new ArgumentException($"Name each side that must have the {entry.Kind} {entry.Name} once.");
-        if (entry.Kind != "recipe" && (entry.Item != null || entry.Station != null || entry.Resources != null))
-            throw new ArgumentException($"Only a recipe declares item, station or resources ({entry.Kind} {entry.Name}).");
+        if ((entry.Kind != "recipe" && entry.Item != null) || (entry.Kind is not ("recipe" or "piece") && (entry.Station != null || entry.Resources != null)))
+            throw new ArgumentException($"Only recipes and pieces declare dependencies ({entry.Kind} {entry.Name}).");
+        if (entry.Kind == "piece" && entry.Tool == null)
+            throw new ArgumentException($"The piece {entry.Name} must name the tool whose PieceTable should contain it.");
+        if (entry.Kind != "piece" && entry.Tool != null)
+            throw new ArgumentException($"Only a piece declares its tool ({entry.Kind} {entry.Name}).");
         static bool Word(string? name) => name == null || (name.Length > 0 && !name.Any(char.IsWhiteSpace));
-        if (!Word(entry.Item) || !Word(entry.Station) ||
+        if (!Word(entry.Item) || !Word(entry.Tool) || !Word(entry.Station) ||
             entry.Resources is { } list && (list.Count == 0 || !list.All(r => r != null && Word(r)) || list.Distinct(StringComparer.Ordinal).Count() != list.Count))
-            throw new ArgumentException($"The recipe {entry.Name}'s item, station and resources are prefab names, each resource once.");
+            throw new ArgumentException($"The {entry.Kind} {entry.Name}'s dependencies are prefab names, each resource once.");
     }
 
     private static string Text(JsonElement element, string what) =>
@@ -187,8 +197,8 @@ public sealed class ContentExpectations
 
 /// <summary>The owner plugin as the observing process has it: loaded or not, its version and the MD5 of its file.</summary>
 public sealed record CensusOwner(string Guid, bool Installed, string? Version, string? Md5);
-/// <summary>The sizes of the observing process's whole registries: list and index of ObjectDB's items, its recipes, ZNetScene's prefabs.</summary>
-public sealed record CensusTotals(int Items, int ItemIndex, int Recipes, int Prefabs, int PrefabIndex);
+/// <summary>The sizes of the observing process's whole registries and its in-scope build-table entries.</summary>
+public sealed record CensusTotals(int Items, int ItemIndex, int Recipes, int Prefabs, int PrefabIndex, int? StatusEffects = null, int? Pieces = null);
 /// <summary>
 /// An item or prefab in scope: the game's hash of its name, how many times its registry's list holds it (0: only in the
 /// index) and the name of what the game's lookup by that hash returns (null: nothing).
@@ -197,16 +207,21 @@ public sealed record ObservedContent(string Name, int Hash, int Listed, string? 
 /// <summary>A recipe's item, station or resource: its prefab name (null for no reference) and the game's lookup of it.</summary>
 public sealed record ObservedReference(string? Name, string Lookup, int Amount = 0);
 public sealed record ObservedRecipe(string Name, bool Enabled, int Amount, ObservedReference Item, ObservedReference Station, int MinStationLevel, IReadOnlyList<ObservedReference> Resources);
+/// <summary>A prefab found through a build tool's PieceTable, with the dependencies of its Piece component.</summary>
+public sealed record ObservedPiece(string Name, int Hash, string Tool, string Table, int Listed, string? Resolves, bool HasComponent, bool Enabled,
+    ObservedReference Station, IReadOnlyList<ObservedReference> Resources);
 /// <summary>A hash two different names share in a registry (<c>items</c> or <c>prefabs</c>), and the name its index holds.</summary>
 public sealed record CensusCollision(string Registry, int Hash, IReadOnlyList<string> Names, string? Indexed);
 
 /// <summary>
 /// One process's content census (the adapter's <c>ContentCensus.Command()</c> in Valheim.Testing.Adapter): which side it
-/// reports being, its owner plugin's build, the whole registries' sizes, and the items, prefabs and recipes in scope with
-/// every shared hash. Read with <see cref="ContentCensus.Read"/>.
+/// reports being, its owner plugin's build, the whole registries' sizes, and the registered content in scope with
+/// every shared hash. An older adapter may omit <see cref="StatusEffects"/> or <see cref="Pieces"/>; those checks then
+/// report unsupported, never missing or present. Read with <see cref="ContentCensus.Read"/>.
 /// </summary>
 public sealed record ContentObservation(CensusSide Side, bool Dedicated, CensusOwner Owner, IReadOnlyList<string> Scope, CensusTotals Totals,
-    IReadOnlyList<ObservedContent> Items, IReadOnlyList<ObservedContent> Prefabs, IReadOnlyList<ObservedRecipe> Recipes, IReadOnlyList<CensusCollision> Collisions);
+    IReadOnlyList<ObservedContent> Items, IReadOnlyList<ObservedContent> Prefabs, IReadOnlyList<ObservedRecipe> Recipes, IReadOnlyList<CensusCollision> Collisions,
+    IReadOnlyList<ObservedContent>? StatusEffects = null, IReadOnlyList<ObservedPiece>? Pieces = null);
 
 /// <summary>
 /// The observation one side supplies, and the build its owner plugin is pinned to there (the plan's MD5 for that side, or
@@ -314,7 +329,9 @@ public static class ContentCensus
             [.. data.GetProperty("scope").EnumerateArray().Select(prefix => prefix.GetString() is { Length: > 0 } text ? text : throw new InvalidOperationException("A census scope with an empty prefix."))],
             Totals(data.GetProperty("totals")), Contents(data, "items"), Contents(data, "prefabs"),
             [.. data.GetProperty("recipes").EnumerateArray().Select(ParseRecipe)],
-            [.. data.GetProperty("collisions").EnumerateArray().Select(Collision)]);
+            [.. data.GetProperty("collisions").EnumerateArray().Select(Collision)],
+            data.TryGetProperty("statusEffects", out _) ? Contents(data, "statusEffects") : null,
+            data.TryGetProperty("pieces", out var pieces) ? [.. pieces.EnumerateArray().Select(ParsePiece)] : null);
         // A registry without anything, not even the game's own content, was not read from a loaded world.
         if (census.Totals.Items == 0 || census.Totals.ItemIndex == 0 || census.Totals.Prefabs == 0 || census.Totals.PrefabIndex == 0)
             throw new InvalidOperationException($"An empty registry is not a census: {census.Totals}.");
@@ -385,10 +402,15 @@ public static class ContentCensus
                 case "item": yield return Registered(side, entry, census.Items, census.Collisions, "items", "ObjectDB"); break;
                 case "prefab": yield return Registered(side, entry, census.Prefabs, census.Collisions, "prefabs", "ZNetScene"); break;
                 case "recipe": foreach (var line in JudgeRecipe(side, entry, census.Recipes)) yield return line; break;
+                case "statusEffect": yield return census.StatusEffects == null
+                    ? new CensusEntry(side, entry.Kind, entry.Name, entry.Hash, CensusState.Unsupported, "this adapter does not observe status effects")
+                    : Registered(side, entry, census.StatusEffects, census.Collisions, "statusEffects", "ObjectDB status effects"); break;
+                case "piece": foreach (var line in JudgePiece(side, entry, census)) yield return line; break;
                 default: yield return new CensusEntry(side, entry.Kind, entry.Name, null, CensusState.Unsupported, $"this census does not observe {entry.Kind} registrations yet"); break;
             }
         }
-        foreach (var (kind, names) in new[] { ("item", census.Items.Select(i => i.Name)), ("prefab", census.Prefabs.Select(p => p.Name)), ("recipe", census.Recipes.Select(r => r.Name)) })
+        foreach (var (kind, names) in new[] { ("item", census.Items.Select(i => i.Name)), ("prefab", census.Prefabs.Select(p => p.Name)), ("recipe", census.Recipes.Select(r => r.Name)),
+                     ("statusEffect", census.StatusEffects?.Select(e => e.Name) ?? []), ("piece", census.Pieces?.Select(e => e.Name) ?? []) })
             foreach (string name in names.Distinct(StringComparer.Ordinal))
                 if (expectations.InScope(name) && !wanted.Any(e => e.Kind == kind && e.Name == name))
                     yield return new CensusEntry(side, kind, name, kind == "recipe" ? null : StableHash.Of(name), CensusState.Unexpected, $"registered on the {Name(side)} in the declared scope, not expected there");
@@ -456,6 +478,71 @@ public static class ContentCensus
         }
     }
 
+    private static IEnumerable<CensusEntry> JudgePiece(CensusSide side, ExpectedContent entry, ContentObservation census)
+    {
+        CensusEntry Line(string kind, string name, CensusState state, string detail) => new(side, kind, name, kind == "piece" ? entry.Hash : null, state, detail);
+        if (census.Pieces == null)
+        {
+            yield return Line("piece", entry.Name, CensusState.Unsupported, "this adapter does not observe build tables");
+            yield break;
+        }
+        var found = census.Pieces.Where(piece => piece.Name == entry.Name && piece.Tool == entry.Tool).ToList();
+        if (found.Count == 0)
+        {
+            bool prefabOnly = census.Prefabs.Any(prefab => prefab.Name == entry.Name);
+            yield return Line("piece", entry.Name, prefabOnly ? CensusState.Unresolved : CensusState.Missing,
+                prefabOnly ? $"prefab exists, but {entry.Tool}'s PieceTable does not contain it" : $"not in {entry.Tool}'s PieceTable or ZNetScene");
+            yield break;
+        }
+        if (found.Count > 1 || found[0].Listed > 1)
+        {
+            yield return Line("piece", entry.Name, CensusState.Duplicate, $"{entry.Tool}'s PieceTable lists it more than once");
+            yield break;
+        }
+        var piece = found[0];
+        if (census.Collisions.Any(collision => collision.Registry == "prefabs" && collision.Hash == entry.Hash && collision.Names.Contains(entry.Name)))
+        {
+            yield return Line("piece", entry.Name, CensusState.Duplicate, "its prefab hash is shared with another name in ZNetScene");
+            yield break;
+        }
+        if (!piece.HasComponent || !piece.Enabled)
+        {
+            yield return Line("piece", entry.Name, CensusState.Unresolved, !piece.HasComponent ? "build table entry lacks a Piece component" : "the Piece component is disabled");
+            yield break;
+        }
+        if (piece.Resolves != entry.Name || !census.Prefabs.Any(prefab => prefab.Name == entry.Name && prefab.Resolves == entry.Name))
+        {
+            yield return Line("piece", entry.Name, CensusState.Unresolved, "build table has it, but ZNetScene does not resolve its prefab");
+            yield break;
+        }
+        yield return Line("piece", entry.Name, CensusState.Present, $"in {entry.Tool}'s {piece.Table}");
+        if (entry.Station != null)
+        {
+            string name = entry.Name + "/" + entry.Station;
+            if (entry.Station == "none")
+                yield return piece.Station.Lookup == "none" ? Line("piece-station", name, CensusState.Present, "no crafting station")
+                    : Line("piece-station", name, CensusState.Unresolved, $"needs {piece.Station.Name ?? "an unnamed station"}, declared none");
+            else if (piece.Station.Lookup == "none")
+                yield return Line("piece-station", name, CensusState.Unresolved, $"has no station, declared to need {entry.Station}");
+            else yield return Dependency(side, entry.Name, "piece-station", entry.Station, piece.Station, "needs");
+        }
+        if (entry.Resources != null)
+        {
+            foreach (string resource in entry.Resources)
+            {
+                var matches = piece.Resources.Where(r => r.Name == resource).ToList();
+                yield return matches.Count switch
+                {
+                    0 => Line("piece-resource", entry.Name + "/" + resource, CensusState.Unresolved, "not among its resources"),
+                    1 => Dependency(side, entry.Name, "piece-resource", resource, matches[0], "uses"),
+                    _ => Line("piece-resource", entry.Name + "/" + resource, CensusState.Duplicate, "resource listed more than once"),
+                };
+            }
+            foreach (var extra in piece.Resources.Where(r => r.Name == null || !entry.Resources.Contains(r.Name)))
+                yield return Line("piece-resource", entry.Name + "/" + (extra.Name ?? "none"), CensusState.Unexpected, "undeclared resource");
+        }
+    }
+
     private static CensusEntry Dependency(CensusSide side, string recipe, string kind, string declared, ObservedReference observed, string verb)
     {
         string name = recipe + "/" + declared;
@@ -470,14 +557,17 @@ public static class ContentCensus
         };
     }
 
-    private static int? Hashed(ExpectedContent entry) => entry.Kind is "item" or "prefab" ? entry.Hash : null;
+    private static int? Hashed(ExpectedContent entry) => entry.Kind is "item" or "prefab" or "piece" or "statusEffect" ? entry.Hash : null;
     private static string Name(CensusSide side) => side == CensusSide.Server ? "server" : "client";
 
     private static CensusTotals Totals(JsonElement totals)
     {
         var values = new CensusTotals(totals.GetProperty("items").GetInt32(), totals.GetProperty("itemIndex").GetInt32(), totals.GetProperty("recipes").GetInt32(),
-            totals.GetProperty("prefabs").GetInt32(), totals.GetProperty("prefabIndex").GetInt32());
-        if (values.Items < 0 || values.ItemIndex < 0 || values.Recipes < 0 || values.Prefabs < 0 || values.PrefabIndex < 0) throw new InvalidOperationException("Negative census totals.");
+            totals.GetProperty("prefabs").GetInt32(), totals.GetProperty("prefabIndex").GetInt32(),
+            totals.TryGetProperty("statusEffects", out var status) ? status.GetInt32() : null,
+            totals.TryGetProperty("pieces", out var pieces) ? pieces.GetInt32() : null);
+        if (values.Items < 0 || values.ItemIndex < 0 || values.Recipes < 0 || values.Prefabs < 0 || values.PrefabIndex < 0 || values.StatusEffects < 0 || values.Pieces < 0)
+            throw new InvalidOperationException("Negative census totals.");
         return values;
     }
 
@@ -502,6 +592,18 @@ public static class ContentCensus
         Reference(recipe.GetProperty("item")), Reference(recipe.GetProperty("station")), recipe.GetProperty("minStationLevel").GetInt32(),
         [.. recipe.GetProperty("resources").EnumerateArray().Select(Reference)]);
 
+    private static ObservedPiece ParsePiece(JsonElement piece)
+    {
+        string name = Text(piece, "name");
+        int hash = piece.GetProperty("hash").GetInt32();
+        if (hash != StableHash.Of(name)) throw new InvalidOperationException($"The game hashes {name} to {hash}; StableHash.Of gives {StableHash.Of(name)}.");
+        int listed = piece.GetProperty("listed").GetInt32();
+        if (listed < 1) throw new InvalidOperationException($"A build table lists {name} {listed} times.");
+        return new ObservedPiece(name, hash, Text(piece, "tool"), Text(piece, "table"), listed, Optional(piece, "resolves"), piece.GetProperty("hasComponent").GetBoolean(),
+            piece.GetProperty("enabled").GetBoolean(), Reference(piece.GetProperty("station")),
+            [.. piece.GetProperty("resources").EnumerateArray().Select(Reference)]);
+    }
+
     private static ObservedReference Reference(JsonElement reference)
     {
         string lookup = Text(reference, "lookup");
@@ -512,7 +614,7 @@ public static class ContentCensus
     private static CensusCollision Collision(JsonElement collision)
     {
         string registry = Text(collision, "registry");
-        if (registry is not ("items" or "prefabs")) throw new InvalidOperationException($"Unknown registry \"{registry}\".");
+        if (registry is not ("items" or "prefabs" or "statusEffects")) throw new InvalidOperationException($"Unknown registry \"{registry}\".");
         string[] names = [.. collision.GetProperty("names").EnumerateArray().Select(n => n.GetString() ?? throw new InvalidOperationException("A collision with a null name."))];
         if (names.Length < 2) throw new InvalidOperationException("A collision needs two names.");
         return new CensusCollision(registry, collision.GetProperty("hash").GetInt32(), names, Optional(collision, "indexed"));

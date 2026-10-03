@@ -14,7 +14,7 @@ using valheimCLI.Extensions;
 namespace Valheim.Testing.Adapter
 {
     /// <summary>
-    /// The items, recipes and network prefabs this process has registered, by stable identity, for the runner's
+    /// The items, recipes, build-table pieces, status effects and network prefabs this process has registered, by stable identity, for the runner's
     /// <c>ContentCensus</c> in Valheim.Testing.Game. It lists the entries whose names start with one of the declared prefixes
     /// (a mod's own content; vanilla content is never listed), each with the hash the game computes for its name, how
     /// often its registry's list holds it and what the game's own lookup by that hash returns; every hash two different
@@ -50,7 +50,7 @@ namespace Valheim.Testing.Adapter
         /// replies <see cref="Observe"/>'s data.
         /// </summary>
         public static ExtensionCommand Command(string name = "content-census") =>
-            new ExtensionCommand(name, "List registered items, recipes and prefabs whose names start with a prefix: <owner-guid> <prefix> [<prefix> ...]",
+            new ExtensionCommand(name, "List registered items, recipes, pieces, status effects and prefabs whose names start with a prefix: <owner-guid> <prefix> [<prefix> ...]",
                 Run, readOnly: true, needsWorld: true);
 
         private static IEnumerator Run(ExtensionContext context)
@@ -63,7 +63,8 @@ namespace Valheim.Testing.Adapter
 
         /// <summary>
         /// <c>{source, complete, ready, reason, side, dedicated, owner: {guid, installed, version, md5}, scope,
-        /// totals: {items, itemIndex, recipes, prefabs, prefabIndex}, items: [entry], prefabs: [entry], recipes: [recipe],
+        /// totals: {items, itemIndex, recipes, prefabs, prefabIndex, pieces, statusEffects}, items: [entry],
+        /// prefabs: [entry], recipes: [recipe], pieces: [piece], statusEffects: [entry],
         /// collisions: [{registry, hash, names, indexed}]}</c>. An entry is <c>{name, hash, listed, resolves}</c>: the hash of
         /// its name as the game computes it, how many times the registry's list holds it (<c>ObjectDB.m_items</c>;
         /// <c>ZNetScene.m_prefabs</c> and <c>m_nonNetViewPrefabs</c>; 0 for an entry only in the index), and the name of what
@@ -91,6 +92,7 @@ namespace Valheim.Testing.Adapter
 
             var items = Entries(database.m_items, itemIndex, InScope, hash => database.GetItemPrefab(hash), "items");
             var prefabs = Entries(prefabList, prefabIndex, InScope, hash => scene.GetPrefab(hash), "prefabs");
+            var pieces = Pieces(database, scene, InScope);
             var recipes = new List<(string Name, Dictionary<string, object?> Data)>();
             foreach (Recipe recipe in database.m_recipes)
             {
@@ -100,7 +102,9 @@ namespace Valheim.Testing.Adapter
                 if (recipes.Count >= MaxEntries) throw new InvalidOperationException($"More than {MaxEntries} recipes in scope; nothing is returned rather than a partial census.");
                 recipes.Add((recipe.name, DescribeRecipe(recipe, database, scene)));
             }
-            var collisions = Collisions(database.m_items, itemIndex, "items").Concat(Collisions(prefabList, prefabIndex, "prefabs")).ToList();
+            var collisions = Collisions(database.m_items, itemIndex, "items")
+                .Concat(Collisions(prefabList, prefabIndex, "prefabs"))
+                .Concat(StatusCollisions(database)).ToList();
             if (collisions.Count > MaxCollisions) throw new InvalidOperationException($"More than {MaxCollisions} shared hashes; nothing is returned rather than a partial census.");
 
             return new Dictionary<string, object?>
@@ -112,8 +116,12 @@ namespace Valheim.Testing.Adapter
                 {
                     ["items"] = database.m_items.Count, ["itemIndex"] = itemIndex.Count, ["recipes"] = database.m_recipes.Count,
                     ["prefabs"] = prefabList.Count, ["prefabIndex"] = prefabIndex.Count,
+                    ["statusEffects"] = database.m_StatusEffects.Count,
+                    ["pieces"] = pieces.Count,
                 },
                 ["items"] = items, ["prefabs"] = prefabs,
+                ["statusEffects"] = StatusEffects(database, InScope),
+                ["pieces"] = pieces.ToArray(),
                 ["recipes"] = recipes.OrderBy(r => r.Name, StringComparer.Ordinal).Select(r => r.Data).ToArray(),
                 ["collisions"] = collisions.ToArray(),
             };
@@ -155,6 +163,56 @@ namespace Valheim.Testing.Adapter
             }).ToArray();
         }
 
+        private static object[] StatusEffects(ObjectDB database, Func<string?, bool> inScope)
+        {
+            var listed = database.m_StatusEffects.Where(effect => effect != null && inScope(effect.name))
+                .GroupBy(effect => effect.name, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal).ToList();
+            if (listed.Count > MaxEntries) throw new InvalidOperationException($"More than {MaxEntries} status effects in scope; nothing is returned rather than a partial census.");
+            return listed.Select(group =>
+            {
+                int hash = group.First().NameHash();
+                var found = database.GetStatusEffect(hash);
+                return (object)new Dictionary<string, object?>
+                {
+                    ["name"] = group.Key, ["hash"] = hash, ["listed"] = group.Count(), ["resolves"] = found == null ? null : found.name,
+                };
+            }).ToArray();
+        }
+
+        private static List<object> Pieces(ObjectDB database, ZNetScene scene, Func<string?, bool> inScope)
+        {
+            var result = new List<object>();
+            foreach (var tool in database.m_items)
+            {
+                if (tool == null) continue;
+                var table = tool.GetComponent<ItemDrop>()?.m_itemData?.m_shared?.m_buildPieces;
+                if (table == null) continue;
+                foreach (var group in table.m_pieces.Where(piece => piece != null && inScope(piece.name))
+                    .GroupBy(piece => piece.name, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal))
+                {
+                    if (result.Count >= MaxEntries) throw new InvalidOperationException($"More than {MaxEntries} pieces in scope; nothing is returned rather than a partial census.");
+                    var piece = group.First().GetComponent<Piece>();
+                    var found = scene.GetPrefab(group.Key.GetStableHashCode());
+                    result.Add(new Dictionary<string, object?>
+                    {
+                        ["name"] = group.Key, ["hash"] = group.Key.GetStableHashCode(), ["tool"] = tool.name,
+                        ["table"] = table.gameObject.name, ["listed"] = group.Count(),
+                        ["resolves"] = found == null ? null : found.name,
+                        ["hasComponent"] = piece != null,
+                        ["enabled"] = piece?.m_enabled ?? false,
+                        ["station"] = piece == null ? Dependency(null, "unsupported") : Station(piece.m_craftingStation, scene),
+                        ["resources"] = piece == null ? Array.Empty<object>() : (piece.m_resources ?? new Piece.Requirement[0]).Select(requirement =>
+                        {
+                            var resource = Item(requirement?.m_resItem, database);
+                            resource["amount"] = requirement?.m_amount ?? 0;
+                            return (object)resource;
+                        }).ToArray(),
+                    });
+                }
+            }
+            return result;
+        }
+
         // Every hash that two different names share in the list or the index, and what the index holds for it: the game's
         // indexes use Dictionary.Add, so the second name of a shared hash either threw at indexing or was never indexed.
         private static IEnumerable<Dictionary<string, object?>> Collisions(IEnumerable<GameObject> list, Dictionary<int, GameObject> index, string registry)
@@ -174,6 +232,20 @@ namespace Valheim.Testing.Adapter
                     ["registry"] = registry, ["hash"] = entry.Key, ["names"] = entry.Value.ToArray(),
                     ["indexed"] = index.TryGetValue(entry.Key, out var held) && held != null ? held.name : null,
                 };
+        }
+
+        private static IEnumerable<Dictionary<string, object?>> StatusCollisions(ObjectDB database)
+        {
+            foreach (var group in database.m_StatusEffects.Where(effect => effect != null).GroupBy(effect => effect.NameHash()))
+            {
+                var names = group.Select(effect => effect.name).Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+                if (names.Length < 2) continue;
+                yield return new Dictionary<string, object?>
+                {
+                    ["registry"] = "statusEffects", ["hash"] = group.Key, ["names"] = names,
+                    ["indexed"] = database.GetStatusEffect(group.Key)?.name,
+                };
+            }
         }
 
         private static Dictionary<string, object?> DescribeRecipe(Recipe recipe, ObjectDB database, ZNetScene scene) => new Dictionary<string, object?>

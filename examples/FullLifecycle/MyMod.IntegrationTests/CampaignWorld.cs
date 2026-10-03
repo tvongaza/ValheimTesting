@@ -34,7 +34,7 @@ internal sealed class CampaignWorld : IDisposable
     public string RefusalStatus = "ErrorVersion";
     // The content census: MyMod built without its recipe (on both sides, as the control's build), an undeclared item of
     // MyMod's, and a client that reports being the server.
-    public bool OmitRecipe, ExtraItem, ClientCensusSaysServer;
+    public bool OmitRecipe, OmitStatusEffect, ExtraItem, ClientCensusSaysServer;
 
     private readonly List<(float X, float Z, string Label)> _markers = [], _savedMarkers = [];
     private readonly List<(float X, float Z)> _controlObjects = [];
@@ -361,7 +361,15 @@ internal sealed class CampaignWorld : IDisposable
             owner = new { guid = args[0], installed, version = installed ? "0.1.0" : null, md5 = installed ? Md5Mod : null },
             scope = args.Skip(1).ToArray(),
             totals = new { items = 900, itemIndex = 900, recipes = 400, prefabs = 3000, prefabIndex = 3000 },
-            items, prefabs = installed ? new[] { Entry(ContentCensusScenario.ItemName) } : [], recipes, collisions = Array.Empty<object>(),
+            items, prefabs = installed ? new[] { Entry(ContentCensusScenario.ItemName), Entry(ContentCensusScenario.PieceName) } : [], recipes,
+            pieces = installed ? new object[] { new
+            {
+                name = ContentCensusScenario.PieceName, hash = StableHash.Of(ContentCensusScenario.PieceName), tool = "Hammer", table = "_HammerPieceTable",
+                listed = 1, resolves = ContentCensusScenario.PieceName, hasComponent = true, enabled = true,
+                station = new { name = (string?)null, lookup = "none", amount = 0 }, resources = new[] { Reference("Wood", 2) },
+            } } : [],
+            statusEffects = installed && !OmitStatusEffect ? new[] { Entry(ContentCensusScenario.StatusName) } : [],
+            collisions = Array.Empty<object>(),
         };
     }
 

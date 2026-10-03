@@ -3,7 +3,8 @@ using Valheim.Testing.Game;
 namespace MyMod.SystemTests;
 
 /// <summary>
-/// <c>content-census</c> (#91): MyMod registers one item, its network prefab and one recipe (MyMod's <c>Content.cs</c>),
+/// <c>content-census</c> (#91/#114): MyMod registers one item, its network prefabs, a recipe, a build piece and a status effect
+/// (MyMod's <c>Content.cs</c>),
 /// and <see cref="ExpectationsResource"/> declares them for the server and the client. A client running the server's MyMod
 /// and adapter builds joins; in each round (<c>first</c>, and <c>after-restart</c>, when both processes have loaded a world
 /// again) the adapter's content census is read on the server and on the client, each through its own pinned actor, and
@@ -11,8 +12,7 @@ namespace MyMod.SystemTests;
 /// the recipe's item, workbench and wood resolved by the game's own lookups, and nothing undeclared in scope. The census and
 /// its report are written to <c>{round}-content-census.json</c> before the check.
 /// <para>
-/// With <c>"expectFailure": "omitted-recipe"</c> both sides run MyMod built with <c>-p:MyModOmit=recipe</c>, and the run
-/// passes only when the census fails on that recipe alone, on both sides.
+/// The omitted-recipe and omitted-status-effect builds each pass only when the census fails on that entry alone, on both sides.
 /// </para>
 /// </summary>
 public static class ContentCensusScenario
@@ -20,11 +20,13 @@ public static class ContentCensusScenario
     /// <summary>MyMod's declared content, embedded from <c>content-expectations.json</c>.</summary>
     public const string ExpectationsResource = "MyMod.SystemTests.content-expectations.json";
     /// <summary>The names MyMod's <c>Content.cs</c> registers.</summary>
-    public const string ItemName = "MyMod_SurveyStake", RecipeName = "Recipe_MyMod_SurveyStake";
+    public const string ItemName = "MyMod_SurveyStake", RecipeName = "Recipe_MyMod_SurveyStake",
+        PieceName = "MyMod_SurveyPost", StatusName = "MyMod_SurveyBlessing";
     /// <summary>The check's step within a round.</summary>
     public const string Check = "the declared content is registered on the server and the client";
     /// <summary>What the omitted-recipe control's failure must say: nothing but the recipe is missing, on each side.</summary>
     public const string OnlyTheOmittedRecipe = "the census fails only on the omitted recipe";
+    public const string OnlyTheOmittedStatusEffect = "the census fails only on the omitted status effect";
 
     /// <summary>MyMod's content expectations, as the file declares them.</summary>
     public static ContentExpectations Expectations()
@@ -56,7 +58,11 @@ public static class ContentCensusScenario
                 new SideObservation(CensusSide.Client, client.Pins[LifecyclePlan.ModPlugin], joined));
             round.Write("content-census", new { expectations = expectations.Entries, server, client = joined, report = census });
             if (control == null) { round.Step(Check, census.RequirePassed); return; }
-            ControlPlugins.ExpectFailure(report, control, () => RequireOnlyOmittedRecipe(census), round.Name + ": ");
+            ControlPlugins.ExpectFailure(report, control, () =>
+            {
+                if (control.Name == ControlPlugins.OmittedStatusEffect) RequireOnlyOmittedStatusEffect(census);
+                else RequireOnlyOmittedRecipe(census);
+            }, round.Name + ": ");
             throw new ControlConcluded(control);
         });
     }
@@ -74,6 +80,17 @@ public static class ContentCensusScenario
             wrong.All(e => e.Kind == "recipe" && e.Name == RecipeName && e.State == CensusState.Missing) &&
             wrong.Select(e => e.Side).Distinct().Count() == 2;
         if (only) throw new InvalidOperationException($"{OnlyTheOmittedRecipe}: {string.Join("; ", census.Failures)}.");
+        census.RequirePassed();
+    }
+
+    public static void RequireOnlyOmittedStatusEffect(ContentCensusReport census)
+    {
+        if (census.Passed) return;
+        var wrong = census.Entries.Where(e => e.State != CensusState.Present).ToList();
+        bool only = census.Sides.All(s => s.Problem == null) && wrong.Count == 2 &&
+            wrong.All(e => e.Kind == "statusEffect" && e.Name == StatusName && e.State == CensusState.Missing) &&
+            wrong.Select(e => e.Side).Distinct().Count() == 2;
+        if (only) throw new InvalidOperationException($"{OnlyTheOmittedStatusEffect}: {string.Join("; ", census.Failures)}.");
         census.RequirePassed();
     }
 }
