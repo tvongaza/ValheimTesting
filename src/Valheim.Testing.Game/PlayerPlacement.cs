@@ -14,6 +14,79 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public static class PlayerPlacement
 {
+    /// <summary>A single teleport's game-reported phase times and the client's supported landing.</summary>
+    public sealed record TeleportArrival(JsonElement Support, string Trace);
+
+    /// <summary>
+    /// Arrives using one bounded in-game wait at each transition. The runner does not poll the remote player:
+    /// ValheimCLI observes readiness and support on game frames and returns once each condition holds.
+    /// The server requests the teleport exactly once. Test timing is an explicit opt-in and still uses the game's
+    /// own area and floor checks. <paramref name="timeout"/> is the overall deadline; each CLI wait is capped
+    /// at 120 seconds, so a phase that takes longer fails without issuing another request or teleport.
+    /// </summary>
+    public static TeleportArrival ArriveOnSignals(GameActor server, GameActor client, HeightExpectation point,
+        TimeSpan timeout, bool fastTestTiming = false, CancellationToken cancellation = default, bool skipIntro = true)
+    {
+        if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(600)) throw new ArgumentOutOfRangeException(nameof(timeout));
+        TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
+        var support = client.RequireCapability("valheim.world/player-support-wait");
+        var clock = Stopwatch.StartNew();
+        if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
+        if (fastTestTiming)
+        {
+            var mode = client.Execute("cli_teleport_test_mode on");
+            RequireLine(mode, "OK: testFastTeleport enabled=True", "Test teleport timing was not enabled");
+        }
+        cancellation.ThrowIfCancellationRequested();
+        string ready = SecondsLeft(clock, timeout);
+        WithTimeout(client, timeout - clock.Elapsed, () =>
+            RequireLine(client.Execute($"cli_wait_teleportable {ready} 0 {!skipIntro}"), "OK: TELEPORTABLE ",
+                "The client never became ready for a teleport"));
+        cancellation.ThrowIfCancellationRequested();
+        var arm = client.Execute("cli_teleport_trace_arm");
+        string armed = RequireLine(arm, "OK: TELEPORT_TRACE_ARM id=", "The client did not arm a teleport trace");
+        if (!int.TryParse(armed["OK: TELEPORT_TRACE_ARM id=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int id) || id < 1)
+            throw new InvalidOperationException("The client returned an invalid teleport trace id: " + armed);
+        int peer = OnlyPeer(server);
+        string at = string.Join(" ", new[] { point.X, point.Height + .5f, point.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
+        var reply = server.Execute($"cli_teleport_peer {peer} {at}");
+        RequireLine(reply, "OK: asked peer", "The server did not accept the teleport");
+        cancellation.ThrowIfCancellationRequested();
+        string trace = "";
+        WithTimeout(client, timeout - clock.Elapsed, () =>
+            trace = RequireLine(client.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}"),
+                "OK: TELEPORT_TRACE ", "The client did not complete its teleport"));
+        if (!trace.Contains("floorAtDone=True", StringComparison.Ordinal))
+            throw new InvalidOperationException("The game ended its teleport without a ready floor: " + trace);
+        cancellation.ThrowIfCancellationRequested();
+        Observation landed = null!;
+        WithTimeout(client, timeout - clock.Elapsed, () => landed = client.Observe(support,
+            point.X.ToString("R", CultureInfo.InvariantCulture), point.Height.ToString("R", CultureInfo.InvariantCulture),
+            point.Z.ToString("R", CultureInfo.InvariantCulture), SecondsLeft(clock, timeout)));
+        if (!SurfaceProbe.Supported(landed, point))
+            throw new InvalidOperationException("The client wait ended without supported arrival: " + landed.Data.GetRawText());
+        return new TeleportArrival(landed.Data.Clone(), trace);
+    }
+
+    private static string SecondsLeft(Stopwatch clock, TimeSpan timeout)
+    {
+        double left = (timeout - clock.Elapsed).TotalSeconds;
+        if (left <= 0) throw new TimeoutException("The one-hop arrival deadline expired; the teleport was not repeated.");
+        return Math.Min(120, left).ToString("R", CultureInfo.InvariantCulture);
+    }
+
+    private static void WithTimeout(GameActor actor, TimeSpan remaining, Action action)
+    {
+        if (remaining <= TimeSpan.Zero) throw new TimeoutException("The one-hop arrival deadline expired; the teleport was not repeated.");
+        var previous = actor.CommandTimeout;
+        try { actor.CommandTimeout = remaining + TimeSpan.FromSeconds(10); action(); }
+        finally { actor.CommandTimeout = previous; }
+    }
+
+    private static string RequireLine(CommandResult result, string prefix, string failure)
+        => result.Output.FirstOrDefault(line => line.StartsWith(prefix, StringComparison.Ordinal))
+            ?? throw new InvalidOperationException(failure + ": " + string.Join(" | ", result.Output));
+
     /// <summary>
     /// Verifies that a character staged at a world's logout point actually arrived at <paramref name="point"/>.
     /// Reads only the client's support capability; never teleports or falls back to a teleport on failure.

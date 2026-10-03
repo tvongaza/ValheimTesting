@@ -63,6 +63,18 @@ public sealed class ClientRunPlan
     /// and zone-cycle movements still use <see cref="PlayerPlacement.Arrive"/>. A wrong or missing start fails the run.
     /// </summary>
     public bool StartAtCharacterSave { get; set; }
+    /// <summary>
+    /// Use ValheimCLI's bounded, game-side teleport readiness and support waits for arrival instead of repeated
+    /// remote observations. Requires the current Standard and World Tools packs. The ordinary game teleport timing
+    /// remains in force unless <see cref="FastTestTeleports"/> is also selected.
+    /// </summary>
+    public bool EventDrivenArrival { get; set; }
+    /// <summary>
+    /// Owned, strictly pinned test clients only: allow ValheimCLI to complete a distant teleport once the game's
+    /// area and floor checks pass after its initial movement. The test launch sets its opt-in environment marker;
+    /// the runner enables the mode after joining. This does not preload terrain or bypass support checks.
+    /// </summary>
+    public bool FastTestTeleports { get; set; }
     /// <summary>Required with <see cref="StartAtCharacterSave"/>: the prepared copy and the owned client's character folders.</summary>
     public CharacterStartPlan? CharacterStart { get; set; }
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
@@ -140,6 +152,7 @@ public sealed class ClientRunPlan
     {
         bool pinned = Pinned;
         if (Mode is not ("owned" or "attach")) throw new ArgumentException("Client mode is owned or attach.");
+        CheckTestTeleportOptions();
         // The install is a path on the client's machine, which with an environment profile is not this one (a Windows
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
@@ -244,6 +257,12 @@ public sealed class ClientRunPlan
     /// </summary>
     public void Preflight() => Preflight([]);
 
+    internal void CheckTestTeleportOptions()
+    {
+        if (FastTestTeleports && (!EventDrivenArrival || !Owned || !Pinned))
+            throw new ArgumentException("fastTestTeleports requires eventDrivenArrival and an owned, strictly pinned test client.");
+    }
+
     /// <summary>
     /// <see cref="Preflight()"/>, with <paramref name="capabilities"/> (<c>owner/command</c>) that the runner itself uses
     /// added to <see cref="Capabilities"/> for the manifest check (<see cref="HostRounds"/> passes <see cref="CliCapabilities.HostedRounds"/>).
@@ -280,7 +299,8 @@ public sealed class ClientRunPlan
         if (!Owned || CliManifest == null) return null;
         var manifest = CliCapabilityManifest.Read(CliManifest);
         return manifest.Check(Install, Capabilities.Concat(capabilities ?? [])
-            .Concat(DirectStart ? [CliCapabilities.DirectStart] : []));
+            .Concat(DirectStart ? [CliCapabilities.DirectStart] : [])
+            .Concat(EventDrivenArrival ? ["valheim.world/player-support-wait"] : []));
     }
 
     /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>
