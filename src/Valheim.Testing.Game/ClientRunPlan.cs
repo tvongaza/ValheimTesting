@@ -73,8 +73,9 @@ public sealed class ClientRunPlan
     /// Owned, strictly pinned test clients only: allow ValheimCLI to complete a distant teleport once the game's
     /// area and floor checks pass after its initial movement. The test launch sets its opt-in environment marker;
     /// the runner switches the mode on for each arrival hop and off once it lands. This does not preload terrain or
-    /// bypass support checks. On a joined client the game's area check covers only objects the server has already
-    /// sent, so a fast hop to a cold site may finish before the destination arrives; this is unproven there.
+    /// bypass support checks. Only a client running its own local fixture world may use it. A joined client's area
+    /// check covers only objects the server has already sent: a native cold hop finished while its site marker had
+    /// not arrived, so joined clients are refused before launch.
     /// </summary>
     public bool FastTestTeleports { get; set; }
     /// <summary>Required with <see cref="StartAtCharacterSave"/>: the prepared copy and the owned client's character folders.</summary>
@@ -263,6 +264,8 @@ public sealed class ClientRunPlan
     {
         if (FastTestTeleports && (!EventDrivenArrival || !Owned || !Pinned))
             throw new ArgumentException("fastTestTeleports requires eventDrivenArrival and an owned, strictly pinned test client.");
+        if (FastTestTeleports && HostWorld?.Local != true)
+            throw new ArgumentException("fastTestTeleports requires hostWorld.local: a joined client's cold destination can arrive after fast teleport completion. Use ordinary teleport timing for joined clients.");
     }
 
     /// <summary>Everything the launch and arrival code needs from the pinned ValheimCLI set.</summary>
@@ -277,6 +280,7 @@ public sealed class ClientRunPlan
     public void Preflight(IEnumerable<string> capabilities)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
+        CheckTestTeleportOptions();
         var identity = HostWorld?.Preflight();
         if (Owned) CheckOwnedInstall(identity?.Name, capabilities);
     }

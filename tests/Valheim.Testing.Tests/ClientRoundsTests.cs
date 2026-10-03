@@ -157,11 +157,10 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("x64", report.Provenance["clientArchitecture"]);
     }
 
-    [Fact] public void EventDrivenRoundsKeepOneWaitAndTracePerHop()
+    [Fact] public void JoinedEventDrivenRoundsKeepOneWaitAndTracePerHopWithoutFastMode()
     {
         var plan = Plan();
         plan.EventDrivenArrival = true;
-        plan.FastTestTeleports = true;
         _client.On("cli_teleport_test_mode on", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True"))
             .On("cli_teleport_test_mode off", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=False"))
             .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
@@ -178,8 +177,8 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(2, _client.Count("cli_wait_teleportable"));
         Assert.Equal(2, _client.Count("cli_teleport_trace_wait"));
         Assert.Equal(2, _client.Count("cli_extension valheim.world/player-support-wait"));
-        Assert.Equal(2, _client.Count("cli_teleport_test_mode on"));
-        Assert.Equal(2, _client.Count("cli_teleport_test_mode off"));
+        Assert.Equal(0, _client.Count("cli_teleport_test_mode on"));
+        Assert.Equal(0, _client.Count("cli_teleport_test_mode off"));
         Assert.Equal(0, _client.Count("cli_extension valheim.world/player-support"));
         Assert.True(Wrote("first-teleport-trace.json"));
         Assert.True(Wrote("after-restart-teleport-trace.json"));
@@ -189,7 +188,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(3450, trace.RootElement.GetProperty("FloorReadyMs").GetInt64());
         Assert.Equal(3500, trace.RootElement.GetProperty("DoneMs").GetInt64());
         Assert.Equal("game-side signal", report.Provenance["arrivalWait"]);
-        Assert.Equal("True", report.Provenance["testFastTeleport"]);
+        Assert.Equal("False", report.Provenance["testFastTeleport"]);
     }
 
     [Fact] public void FastTeleportRequiresAnOwnedPinnedSignalRun()
@@ -205,6 +204,17 @@ public sealed class ClientRoundsTests : IDisposable
         plan.Install = Path.GetFullPath("client-install");
         plan.Pinning = "none";
         Assert.Contains("strictly pinned", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+    }
+
+    [Fact] public void AJoinedFastTeleportIsRefusedBeforeOpeningTheClientOrMovingThePlayer()
+    {
+        var plan = Plan();
+        plan.EventDrivenArrival = true;
+        plan.FastTestTeleports = true;
+        Assert.Contains("hostWorld.local", Assert.Throws<ArgumentException>(() =>
+            Rounds(new ScenarioReport("guard"), plan).Run(Server(), Open(plan), Measure())).Message);
+        Assert.Equal(0, _opens);
+        Assert.Equal(0, _servers.Sum(server => server.Count("cli_teleport_peer")));
     }
 
     [Fact] public void DirectRoundCallCannotBypassFastTeleportPlanGuard()

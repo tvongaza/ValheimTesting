@@ -44,6 +44,35 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Empty(transport.Commands);
     }
 
+    [Fact] public void FastTeleportIsLimitedToAnOwnedLocalFixtureBeforeLaunch()
+    {
+        var joined = Plan(); joined.EventDrivenArrival = joined.FastTestTeleports = true;
+        Assert.Contains("hostWorld.local", Assert.Throws<ArgumentException>(() => joined.Validate()).Message);
+        Assert.Contains("hostWorld.local", Assert.Throws<ArgumentException>(() => joined.Preflight()).Message);
+        bool started = false;
+        Assert.Contains("hostWorld.local", Assert.Throws<ArgumentException>(() =>
+            ClientSession.Launch(joined, _output, () => { started = true; return new Process(); },
+                () => new ScriptedTransport(), (_, _) => Task.CompletedTask)).Message);
+        Assert.False(started);
+
+        var crossplay = Plan(); crossplay.Join = ""; crossplay.Crossplay = true;
+        crossplay.EventDrivenArrival = crossplay.FastTestTeleports = true;
+        Assert.Contains("hostWorld.local", Assert.Throws<ArgumentException>(() => crossplay.Validate()).Message);
+
+        var hosted = Plan(); hosted.Join = ""; hosted.EventDrivenArrival = hosted.FastTestTeleports = true;
+        hosted.HostWorld = new()
+        {
+            World = new() { Source = Path.GetFullPath("fixture"), Sha256 = new()
+            {
+                ["fixture.fwl"] = new string('f', 64), ["fixture.db"] = new string('f', 64),
+            } },
+            WorldUid = "4242",
+        };
+        Assert.Contains("hostWorld.local", Assert.Throws<ArgumentException>(() => hosted.Validate()).Message);
+        hosted.HostWorld.Local = true;
+        hosted.Validate();
+    }
+
     // With an environment profile the client runs on another machine: a Windows install is validated from macOS or Linux too.
     [Theory]
     [InlineData(@"C:\Program Files (x86)\Steam\steamapps\common\Valheim", true)]
