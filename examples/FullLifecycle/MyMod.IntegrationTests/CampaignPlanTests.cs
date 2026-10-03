@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Runtime.CompilerServices;
 using MyMod.SystemTests;
 using Xunit;
 
@@ -161,10 +162,13 @@ public sealed class CampaignPlanTests : IDisposable
     {
         // The samples beside sample-plan.json have placeholders for hashes and paths; with those filled in, each reads.
         string samples = Path.Combine(AppContext.BaseDirectory, "samples");
-        var files = Directory.GetFiles(samples, "sample-plan-*.json").Where(file => !file.EndsWith("-hosted.json", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(9, files.Length);
-        foreach (string file in files)
+        // Discover the source inventory, not arbitrary files left in bin/ from an older build.
+        var names = Directory.GetFiles(SourceSamples(), "sample-plan-*.json")
+            .Select(path => Path.GetFileName(path)!).Where(name => name != "sample-plan-hosted.json").ToArray();
+        Assert.Equal(9, names.Length);
+        foreach (string name in names)
         {
+            string file = Path.Combine(samples, name);
             var plan = JsonNode.Parse(Fill(File.ReadAllText(file)))!.AsObject();
             Assert.Equal(plan["scenario"]!.GetValue<string>(), Read(plan).Scenario);
         }
@@ -172,6 +176,9 @@ public sealed class CampaignPlanTests : IDisposable
         File.WriteAllText(hosted, Fill(File.ReadAllText(Path.Combine(samples, "sample-plan-hosted.json"))));
         Assert.Equal(HostedPlan.HostedScenarioName, HostedPlan.ReadValidated(hosted).Scenario);
     }
+
+    private static string SourceSamples([CallerFilePath] string sourceFile = "") =>
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "../MyMod.SystemTests"));
 
     // Puts full paths, hashes and MD5s where the samples have placeholders ("<...>"); the builds the client runs are the server's.
     private string Fill(string text) => System.Text.RegularExpressions.Regex.Replace(text, "\"<([^\"]*)>\"", match =>
