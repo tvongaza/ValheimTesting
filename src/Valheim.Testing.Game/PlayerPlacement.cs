@@ -15,7 +15,7 @@ namespace Valheim.Testing.Game;
 public static class PlayerPlacement
 {
     /// <summary>A single teleport's game-reported phase times and the client's supported landing.</summary>
-    public sealed record TeleportArrival(JsonElement Support, string Trace);
+    public sealed record TeleportArrival(JsonElement Support, string Trace, TeleportTrace Timing);
 
     /// <summary>
     /// Arrives using one bounded in-game wait at each transition. The runner does not poll the remote player:
@@ -83,7 +83,8 @@ public static class PlayerPlacement
         WithTimeout(client, timeout - clock.Elapsed, () =>
             trace = RequireLine(client.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}"),
                 "OK: TELEPORT_TRACE ", "The client did not complete its teleport"));
-        if (!trace.Contains("floorAtDone=True", StringComparison.Ordinal))
+        var timing = TeleportTrace.Parse(trace, id);
+        if (!timing.FloorAtDone)
             throw new InvalidOperationException("The game ended its teleport without a ready floor: " + trace);
         cancellation.ThrowIfCancellationRequested();
         Observation landed = null!;
@@ -92,7 +93,7 @@ public static class PlayerPlacement
             point.Z.ToString("R", CultureInfo.InvariantCulture), SecondsLeft(clock, timeout)));
         if (!SurfaceProbe.Supported(landed, point))
             throw new InvalidOperationException("The client wait ended without supported arrival: " + landed.Data.GetRawText());
-        return new TeleportArrival(landed.Data.Clone(), trace);
+        return new TeleportArrival(landed.Data.Clone(), trace, timing);
     }
 
     // The hop's own failure is the one reported. A client that stopped answering would hold the full command

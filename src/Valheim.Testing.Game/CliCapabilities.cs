@@ -13,6 +13,8 @@ public static class CliCapabilities
 {
     /// <summary>The Standard-pack capability that advertises startup-file support.</summary>
     public const string DirectStart = "valheim.session/direct-start";
+    /// <summary>The Standard pack's manifest-visible contract for the bounded teleport commands used by signal arrival.</summary>
+    public const string TeleportSignals = "valheim.session/teleport-signals";
     /// <summary>Requires the Standard pack to confirm that this process consumed its one-use startup request.</summary>
     internal static void RequireDirectStartClaimed(GameActor actor)
     {

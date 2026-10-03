@@ -265,6 +265,11 @@ public sealed class ClientRunPlan
             throw new ArgumentException("fastTestTeleports requires eventDrivenArrival and an owned, strictly pinned test client.");
     }
 
+    /// <summary>Everything the launch and arrival code needs from the pinned ValheimCLI set.</summary>
+    internal IEnumerable<string> RequiredCliCapabilities => Capabilities
+        .Concat(DirectStart ? [CliCapabilities.DirectStart] : [])
+        .Concat(EventDrivenArrival ? ["valheim.world/player-support-wait", CliCapabilities.TeleportSignals] : []);
+
     /// <summary>
     /// <see cref="Preflight()"/>, with <paramref name="capabilities"/> (<c>owner/command</c>) that the runner itself uses
     /// added to <see cref="Capabilities"/> for the manifest check (<see cref="HostRounds"/> passes <see cref="CliCapabilities.HostedRounds"/>).
@@ -300,9 +305,7 @@ public sealed class ClientRunPlan
     {
         if (!Owned || CliManifest == null) return null;
         var manifest = CliCapabilityManifest.Read(CliManifest);
-        return manifest.Check(Install, Capabilities.Concat(capabilities ?? [])
-            .Concat(DirectStart ? [CliCapabilities.DirectStart] : [])
-            .Concat(EventDrivenArrival ? ["valheim.world/player-support-wait"] : []));
+        return manifest.Check(Install, RequiredCliCapabilities.Concat(capabilities ?? []));
     }
 
     /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>

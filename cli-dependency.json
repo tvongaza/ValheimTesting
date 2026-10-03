@@ -1,10 +1,10 @@
 {
   "repository": "https://github.com/tvongaza/valheimCLI.git",
-  "commit": "5c0aef02ddf15cdbf6faa152c6b75881fce7f134",
+  "commit": "6880ba24a3af6fec463b043aa8c091384073964d",
   "package": "Valheim.Cli.Testing",
   "publishedAs": "Valheim.Testing.Cli",
   "version": "0.1.0-preview.4",
-  "packageVersion": "0.1.0-preview.6",
+  "packageVersion": "0.1.0-preview.7",
   "targetFramework": "net10.0",
   "status": "fork preview; upstream merge pending; ValheimTesting publishes this transport as Valheim.Testing.Cli"
 }

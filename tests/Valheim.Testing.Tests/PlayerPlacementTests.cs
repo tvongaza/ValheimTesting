@@ -14,6 +14,7 @@ public class PlayerPlacementTests
 
     private const string Peers = "PEER 1 character position=0.0,40.00,0.0 zone=0,0";
     private const string TraceOk = "OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3500 floorReadyMs=3600 doneMs=3620 floorAtDone=True final=100,42.5,-40";
+    private const string TraceNoFloor = "OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3500 floorReadyMs=-1 doneMs=3620 floorAtDone=False final=100,42.5,-40";
 
     // A server that moves its one peer once, and a client that answers every signal-arrival phase; the trace and the
     // test-mode switch-off replies are the parts a test varies.
@@ -45,6 +46,10 @@ public class PlayerPlacementTests
         var result = PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(seconds), fast);
         Assert.True(result.Support.GetProperty("grounded").GetBoolean());
         Assert.Contains("floorAtDone=True", result.Trace);
+        Assert.Equal(2000, result.Timing.MovedMs);
+        Assert.Equal(3500, result.Timing.AreaReadyMs);
+        Assert.Equal(3600, result.Timing.FloorReadyMs);
+        Assert.Equal(3620, result.Timing.DoneMs);
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
         Assert.Equal(1, clientTransport.Count("cli_wait_teleportable"));
         Assert.Equal(1, clientTransport.Count("cli_teleport_trace_wait"));
@@ -62,7 +67,7 @@ public class PlayerPlacementTests
     [Fact]
     public void SignalArrivalRefusesACompletionWithoutFloorAndNeverRetries()
     {
-        var (serverTransport, clientTransport) = SignalTransports("OK: TELEPORT_TRACE id=7 floorAtDone=False");
+        var (serverTransport, clientTransport) = SignalTransports(TraceNoFloor);
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         Assert.Contains("without a ready floor", Assert.Throws<InvalidOperationException>(() =>
             PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30))).Message);
@@ -77,7 +82,7 @@ public class PlayerPlacementTests
     [InlineData(false)]
     public void FastTimingIsSwitchedOffWhenTheHopFails(bool offAnswers)
     {
-        var (serverTransport, clientTransport) = SignalTransports("OK: TELEPORT_TRACE id=7 floorAtDone=False",
+        var (serverTransport, clientTransport) = SignalTransports(TraceNoFloor,
             off: _ => offAnswers ? ScriptedTransport.Ok("OK: testFastTeleport enabled=False") : throw new TimeoutException("no reply"));
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         var before = client.CommandTimeout;

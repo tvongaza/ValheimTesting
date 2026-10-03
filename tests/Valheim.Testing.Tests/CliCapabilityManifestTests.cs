@@ -30,8 +30,8 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Empty(manifest.Files[0].Extensions); // The core's own module host passes its id as an argument: nothing claimed.
         Assert.Equal(new[] { "valheimCLI.standard" }, manifest.Files[1].Plugins);
         // The console module (cli.standard/commands) is not a literal registration of the pack: not claimed either.
-        Assert.Equal(new[] { "valheim.session/join", "valheim.session/leave", "valheim.session/save", "valheim.session/state" }, manifest.Files[1].Commands().Select(c => c.Path).Order(StringComparer.Ordinal));
-        Assert.Equal(new Dictionary<string, int> { ["valheim.world/player-support"] = 1, ["valheim.world/terrain"] = 1, ["valheim.world/terrain-grid"] = 1 },
+        Assert.Equal(new[] { "valheim.session/join", "valheim.session/leave", "valheim.session/save", "valheim.session/state", "valheim.session/teleport-signals" }, manifest.Files[1].Commands().Select(c => c.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(new Dictionary<string, int> { ["valheim.world/player-support"] = 1, ["valheim.world/player-support-wait"] = 1, ["valheim.world/terrain"] = 1, ["valheim.world/terrain-grid"] = 1 },
             manifest.Files[2].Commands().ToDictionary(c => c.Path, c => c.Version));
         Assert.Equal(Hash(builds.Standard), manifest.Files[1].Sha256);
 
@@ -65,17 +65,36 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("result version 2", Assert.Throws<InvalidOperationException>(() => future.ForCapabilities(["valheim.world/terrain-grid"])).Message);
     }
 
+    [Fact] public void SignalArrivalRefusesAPreviousStandardPackBeforeLaunch()
+    {
+        var builds = new Builds();
+        using var current = Staged(builds, (Core, builds.Core), (Standard, builds.Standard), (WorldTools, builds.WorldTools));
+        var plan = PlanFor(current, Manifest(builds));
+        plan.EventDrivenArrival = true;
+        var checkedSet = plan.CheckCliManifest()!;
+        Assert.Contains(CliCapabilities.TeleportSignals, checkedSet.Capabilities);
+        Assert.Contains("valheim.world/player-support-wait", checkedSet.Capabilities);
+
+        using var previous = Staged(builds, (Core, builds.Core), (Standard, builds.PreviousStandard), (WorldTools, builds.WorldTools));
+        var previousPlan = PlanFor(previous, Manifest(builds, "previous Standard", (Core, builds.Core),
+            (Standard, builds.PreviousStandard), (WorldTools, builds.WorldTools)));
+        previousPlan.EventDrivenArrival = true;
+        Assert.Contains(CliCapabilities.TeleportSignals,
+            Assert.Throws<InvalidOperationException>(() => previousPlan.CheckCliManifest()).Message);
+    }
+
     [Fact] public void TheLiveListingOfAClientThatLoadedTheSetConfirmsTheManifest()
     {
         var builds = new Builds();
         var files = Write(builds, "build", (Core, builds.Core), (Standard, builds.Standard), (WorldTools, builds.WorldTools));
         var live = new ScriptedTransport()
             .Extension("valheim.session", "state", _ => new { }).Extension("valheim.session", "join", _ => new { }).Extension("valheim.session", "leave", _ => new { }).Extension("valheim.session", "save", _ => new { })
+            .Extension("valheim.session", "teleport-signals", _ => new { })
             .Extension("cli.standard", "commands", _ => new { }).Extension("mymod.testing", "session", _ => new { }) // Owners the files do not register are not compared.
-            .Extension("valheim.world", "terrain", _ => new { }).Extension("valheim.world", "player-support", _ => new { }).Extension("valheim.world", "terrain-grid", _ => new { });
+            .Extension("valheim.world", "terrain", _ => new { }).Extension("valheim.world", "player-support", _ => new { }).Extension("valheim.world", "player-support-wait", _ => new { }).Extension("valheim.world", "terrain-grid", _ => new { });
         string listing = live.Execute("cli_extensions", TimeSpan.FromSeconds(1)).Output[0];
         Assert.StartsWith("EXTENSIONS ", listing);
-        Assert.Equal(7, CliCapabilityManifest.Generate("checked build", files, listing).Capabilities.Count);
+        Assert.Equal(9, CliCapabilityManifest.Generate("checked build", files, listing).Capabilities.Count);
         // A listing from another set: the game lacks a command the IL registers.
         var other = new ScriptedTransport().Extension("valheim.session", "state", _ => new { })
             .Extension("valheim.world", "terrain", _ => new { }).Extension("valheim.world", "player-support", _ => new { }).Extension("valheim.world", "terrain-grid", _ => new { }, resultVersion: 2);
@@ -258,6 +277,17 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("lacks valheim.session/save, valheim.session/leave", Assert.Throws<InvalidOperationException>(() => ClientSession.Attach(plan, _root, older)).Message);
         var current = new ScriptedTransport().Extension("valheim.session", "state", _ => new { }).Extension("valheim.session", "save", _ => new { }).Extension("valheim.session", "leave", _ => new { });
         using (ClientSession.Attach(plan, _root, current)) { }
+        plan.EventDrivenArrival = true;
+        var missingSignal = new ScriptedTransport().Extension("valheim.session", "state", _ => new { })
+            .Extension("valheim.session", "save", _ => new { }).Extension("valheim.session", "leave", _ => new { })
+            .Extension("valheim.world", "player-support-wait", _ => new { });
+        Assert.Contains(CliCapabilities.TeleportSignals,
+            Assert.Throws<InvalidOperationException>(() => ClientSession.Attach(plan, _root, missingSignal)).Message);
+        var signal = new ScriptedTransport().Extension("valheim.session", "state", _ => new { })
+            .Extension("valheim.session", "save", _ => new { }).Extension("valheim.session", "leave", _ => new { })
+            .Extension("valheim.world", "player-support-wait", _ => new { })
+            .Extension("valheim.session", "teleport-signals", _ => new { });
+        using (ClientSession.Attach(plan, _root, signal)) { }
         plan.CliManifest = Path.Combine(_root, "manifest.json");
         Assert.Contains("leave out cliManifest", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
     }
@@ -371,6 +401,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         public byte[] Core { get; }
         public byte[] OlderCore { get; }
         public byte[] Standard { get; }
+        public byte[] PreviousStandard { get; }
         public byte[] OlderStandard { get; }
         public byte[] WorldTools { get; }
         public byte[] Monolithic { get; }
@@ -389,6 +420,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
             Core = Compile(level, "valheimCLI", CoreSource("1.1.0"), BepInEx);
             OlderCore = Compile(level, "valheimCLI", CoreSource("1.0.9"), BepInEx);
             Standard = Compile(level, "Valheim.Cli.Standard", StandardSource(session: true), BepInEx, Core);
+            PreviousStandard = Compile(level, "Valheim.Cli.Standard", StandardSource(session: true, signals: false), BepInEx, Core);
             OlderStandard = Compile(level, "Valheim.Cli.Standard", StandardSource(session: false), BepInEx, OlderCore);
             WorldTools = Compile(level, "Valheim.Cli.WorldTools", WorldToolsSource(gridVersion: 1), BepInEx, Core);
             Monolithic = Compile(level, "valheimCLI", """
@@ -447,13 +479,13 @@ public sealed class CliCapabilityManifestTests : IDisposable
             """;
 
         // The older pack has no session capabilities at all, only its console module.
-        private static string StandardSource(bool session) => $$"""
+        private static string StandardSource(bool session, bool signals = true) => $$"""
             using System.Collections;
             using BepInEx;
             using valheimCLI.Extensions;
             namespace valheimCLI
             {
-            {{(session ? SessionSource : "")}}
+            {{(session ? signals ? SessionSource : SessionSource.Replace(TeleportCommand, "", StringComparison.Ordinal) : "")}}
                 [BepInPlugin("valheimCLI.standard", "CLI Standard Commands", "0.1.0")]
                 [BepInDependency("valheimCLI.valheimCLI", "1.1.0")]
                 public sealed class StandardPack : BaseUnityPlugin
@@ -468,15 +500,18 @@ public sealed class CliCapabilityManifestTests : IDisposable
             }
             """;
 
+        private const string TeleportCommand = "new ExtensionCommand(\"teleport-signals\", \"Report bounded teleport commands\", Signals, readOnly: true),";
         private const string SessionSource = """
                 internal static class SessionCapabilities
                 {
                     internal static ExtensionRegistration Register(ExtensionRegistry registry) => registry.Register("valheim.session", "0.1.0", 1,
                         new ExtensionCommand("state", "Read session facts; mod readiness must be checked separately", State, readOnly: true),
+                        new ExtensionCommand("teleport-signals", "Report bounded teleport commands", Signals, readOnly: true),
                         new ExtensionCommand("join", "Join from menu: <host:port> <character> [password-environment-variable]", Join),
                         new ExtensionCommand("leave", "Save the local character and return to the menu", Leave, role: ExtensionRole.Client, needsWorld: true),
                         new ExtensionCommand("save", "Confirm a server world save: [timeout-seconds, 1..600]", Save, role: ExtensionRole.Server, needsWorld: true));
                     private static IEnumerator State(ExtensionContext context) { yield break; }
+                    private static IEnumerator Signals(ExtensionContext context) { yield break; }
                     private static IEnumerator Join(ExtensionContext context) { yield break; }
                     private static IEnumerator Leave(ExtensionContext context) { yield break; }
                     private static IEnumerator Save(ExtensionContext context) { yield break; }
@@ -494,6 +529,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
                     internal static ExtensionRegistration Register(ExtensionRegistry registry) => registry.Register("valheim.world", "0.1.0", 1,
                         new ExtensionCommand("terrain-grid", "Capture a bounded terrain grid", Read, readOnly: true, needsWorld: true, resultVersion: {{gridVersion}}),
                         new ExtensionCommand("player-support", "Read local player position, motion and grounded state", Read, readOnly: true, role: ExtensionRole.Client, needsWorld: true),
+                        new ExtensionCommand("player-support-wait", "Wait for supported arrival", Read, readOnly: true, role: ExtensionRole.Client, needsWorld: true),
                         new ExtensionCommand("terrain", "terrain <x> <z> <generator|loaded-ground>", context => Read(context), readOnly: true, needsWorld: true));
                     private static IEnumerator Read(ExtensionContext context) { yield break; }
                 }
