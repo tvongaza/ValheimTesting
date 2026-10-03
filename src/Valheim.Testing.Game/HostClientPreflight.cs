@@ -42,7 +42,7 @@ internal static class HostClientPreflight
         await Read(host, path, timeout, cancellation).ConfigureAwait(false) ??
         throw new FileNotFoundException($"The profile client on {host.Name} lacks {path}; install a coherent BepInExPack before launch.", path);
 
-    private static async Task<byte[]?> Read(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation)
+    internal static async Task<byte[]?> Read(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation)
     {
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? PowerShellRead : BashRead,
             new Dictionary<string, string> { ["path"] = path }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Reading client preflight file on {host.Name}");

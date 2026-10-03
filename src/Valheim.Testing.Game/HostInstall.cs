@@ -94,17 +94,16 @@ public static class HostInstall
     }
 
     /// <summary>
-    /// Copies <paramref name="source"/> into <paramref name="destination"/> on a bash host (<c>cp -a</c>: modes and times kept),
+    /// Copies <paramref name="source"/> into <paramref name="destination"/> on the host,
     /// which must not exist yet; a directory this call created is removed again if the copy fails. Verify the copy with
     /// <see cref="ListAsync"/> before using it.
     /// </summary>
     public static async Task CopyAsync(IGameHost host, string source, string destination, TimeSpan timeout, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(host);
-        if (host.Shell.Kind != HostShellKind.Bash) throw new NotSupportedException($"Copying on a host runs in bash; {host.Name} runs {host.Shell}.");
         RequireHostPath(host, source, nameof(source));
         RequireHostPath(host, destination, nameof(destination));
-        var result = (await host.RunAsync(HostInstallScripts.Copy, new Dictionary<string, string> { ["source"] = source, ["dest"] = destination }, timeout, cancellation).ConfigureAwait(false))
+        var result = (await host.RunAsync(HostInstallScripts.CopyFor(host.Shell.Kind), new Dictionary<string, string> { ["source"] = source, ["dest"] = destination }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Copying {source} to {destination} on {host.Name}");
         switch (InteractiveClient.Line(result.Stdout, "VT-COPY "))
         {
@@ -252,6 +251,7 @@ public static class HostInstall
 // The fixed scripts of HostInstall. Values arrive as variables (ScriptedGameHost.Compose); each script ends with its verdict.
 internal static class HostInstallScripts
 {
+    public static string CopyFor(HostShellKind kind) => kind == HostShellKind.Bash ? Copy : PowerShellCopy;
     public static string List(HostShellKind kind) => kind == HostShellKind.Bash ? BashList : PowerShellList;
     public static string Port(HostShellKind kind) => kind == HostShellKind.Bash ? BashPort : PowerShellPort;
 
@@ -343,6 +343,31 @@ internal static class HostInstallScripts
         mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" || exit 3
         if ! cp -a -- "$source/." "$dest/"; then rm -rf -- "$dest"; exit 3; fi
         echo "VT-COPY copied"
+        """.ReplaceLineEndings("\n");
+
+    // Variables: source, dest. The source may be a game install; only a new destination can be written.
+    public static readonly string PowerShellCopy = """
+        if (-not [IO.Directory]::Exists($source)) { 'VT-COPY missing'; exit 0 }
+        if ([IO.Directory]::Exists($dest) -or [IO.File]::Exists($dest)) { 'VT-COPY exists'; exit 0 }
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dest))
+        [void][IO.Directory]::CreateDirectory($dest)
+        try {
+            $pending = New-Object 'Collections.Generic.Stack[string]'
+            $pending.Push($source)
+            while ($pending.Count -gt 0) {
+                $from = $pending.Pop()
+                $relative = $from.Substring($source.TrimEnd('\', '/').Length).TrimStart('\', '/')
+                $to = if ($relative) { Join-Path $dest $relative } else { $dest }
+                [void][IO.Directory]::CreateDirectory($to)
+                foreach ($entry in [IO.Directory]::GetFileSystemEntries($from)) {
+                    $attributes = [IO.File]::GetAttributes($entry)
+                    if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('Refusing link in runtime: ' + $entry) }
+                    if ($attributes -band [IO.FileAttributes]::Directory) { $pending.Push($entry) }
+                    else { [IO.File]::Copy($entry, (Join-Path $to ([IO.Path]::GetFileName($entry)))) }
+                }
+            }
+        } catch { [IO.Directory]::Delete($dest, $true); throw }
+        'VT-COPY copied'
         """.ReplaceLineEndings("\n");
 
     // Variables: port. A listening socket is state 0A; the local address's port is the hex after its last colon.
