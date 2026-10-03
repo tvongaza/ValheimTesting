@@ -88,6 +88,21 @@ def select_offer(offers: object, gpu: str, max_price: float) -> str:
     return offer_id
 
 
+def billed_price(state: object, max_price: float) -> float:
+    """Refuse a rental whose actual price (including disk) exceeds the cap."""
+    if not isinstance(state, dict):
+        raise RuntimeError("rented VM did not report its billed price")
+    try:
+        price = float(state["dph_total"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("rented VM did not report its billed price") from error
+    if not math.isfinite(price) or price < 0:
+        raise RuntimeError("rented VM reported an invalid billed price")
+    if price > max_price:
+        raise RuntimeError(f"rented VM bills ${price:.3f}/hour above the ${max_price:.3f}/hour cap")
+    return price
+
+
 def endpoint(state: object) -> tuple[str, int] | None:
     if not isinstance(state, dict) or state.get("actual_status") != "running":
         return None
@@ -200,6 +215,8 @@ def run(args: argparse.Namespace) -> None:
             raise RuntimeError("provider did not return a numeric instance id")
         result["instanceId"] = instance_id
         phase("rented")
+        result["billedHourlyUsd"] = billed_price(provider(args.vast, "show", "instance", instance_id, "--raw"),
+                                                  args.max_price)
         host, port = wait_for_endpoint(args.vast, instance_id, args.vm_timeout)
         key = stable_host_key(host, port, args.key_timeout)
         (evidence / "known_hosts").write_bytes(key)

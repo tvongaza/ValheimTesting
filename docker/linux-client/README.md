@@ -58,7 +58,8 @@ ValheimCLI on a public interface. The default bridge-network recipe above remain
 ### Bounded rented-VM campaign
 
 Use `host/vm-campaign.py` to rent, bootstrap, test and destroy a Vast VM in one command. It takes an **exact GPU name** and
-hourly price cap. It copies itself, `vm-bootstrap.sh` and your test script into a new private evidence directory *before*
+hourly price cap. It checks both the offer and the VM's actual billed rate after the disk is added; an over-cap rental is
+destroyed before bootstrap. It copies itself, `vm-bootstrap.sh` and your test script into a new private evidence directory *before*
 renting; the copies' SHA-256 values are recorded and the copied test bytes run. Do not edit the active run. SSH uses two
 matching, nonempty ED25519 host-key scans and a pinned private alias. Driver and container-runtime checks run before the
 client image is pulled. It also tests whether the controller's Docker CLI can speak to the VM daemon, pinning that daemon's

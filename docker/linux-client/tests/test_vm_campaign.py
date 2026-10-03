@@ -42,6 +42,8 @@ class CampaignTests(unittest.TestCase):
                     {"id": 5, "gpu_name": "RTX 2060S", "dph": .11, "reliability": .999}]
         if args[:2] == ("create", "instance"):
             return {"new_contract": 42}
+        if args[:2] == ("show", "instance"):
+            return {"id": 42, "dph_total": .09}
         if args[:2] == ("show", "instances"):
             return []
         raise AssertionError(args)
@@ -73,6 +75,21 @@ class CampaignTests(unittest.TestCase):
             campaign.select_offer(offers, "RTX 3070", .10)
         with self.assertRaisesRegex(RuntimeError, "no verified"):
             campaign.select_offer(offers, "RTX 2060S", .05)
+
+    def test_actual_billed_price_including_disk_is_capped_before_bootstrap(self):
+        self.patches()
+        old = self.provider
+
+        def expensive(binary, *args):
+            if args[:2] == ("show", "instance"):
+                return {"id": 42, "dph_total": .109}
+            return old(binary, *args)
+
+        with mock.patch.object(campaign, "provider", side_effect=expensive):
+            with self.assertRaisesRegex(RuntimeError, "above the .* cap"):
+                campaign.run(self.args)
+        self.assertTrue(json.loads((self.evidence / "result.json").read_text())["destroyed"])
+        self.assertNotIn("pinned-ssh-and-docker", json.loads((self.evidence / "result.json").read_text())["phases"])
 
     def test_modified_snapshot_is_refused(self):
         directory = Path(self.temp.name) / "snap"
