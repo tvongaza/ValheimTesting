@@ -27,6 +27,7 @@ public sealed class ClientRoundsTests : IDisposable
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Test character' (tester-copy, Local)"))
             .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
             .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
+            .Extension("valheim.session", "teleport-signals", _ => new { source = "teleport-signals", complete = true })
             .Extension("valheim.session", "state", _ => new
             {
                 source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? WorldUid : null, worldPresent = joined,
@@ -165,7 +166,7 @@ public sealed class ClientRoundsTests : IDisposable
             .On("cli_teleport_test_mode off", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=False"))
             .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
             .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
-            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 floorAtDone=True doneMs=3500"))
+            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3400 floorReadyMs=3450 doneMs=3500 floorAtDone=True final=100,42.5,-40"))
             .Extension("valheim.world", "player-support-wait", _ => new
             {
                 source = "local-player-support", complete = true, x = Point.X, y = Point.Height, z = Point.Z, speed = 0f,
@@ -182,6 +183,11 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(0, _client.Count("cli_extension valheim.world/player-support"));
         Assert.True(Wrote("first-teleport-trace.json"));
         Assert.True(Wrote("after-restart-teleport-trace.json"));
+        using var trace = JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "first-teleport-trace.json")));
+        Assert.Equal(2000, trace.RootElement.GetProperty("MovedMs").GetInt64());
+        Assert.Equal(3400, trace.RootElement.GetProperty("AreaReadyMs").GetInt64());
+        Assert.Equal(3450, trace.RootElement.GetProperty("FloorReadyMs").GetInt64());
+        Assert.Equal(3500, trace.RootElement.GetProperty("DoneMs").GetInt64());
         Assert.Equal("game-side signal", report.Provenance["arrivalWait"]);
         Assert.Equal("True", report.Provenance["testFastTeleport"]);
     }

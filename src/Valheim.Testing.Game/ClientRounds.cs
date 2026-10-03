@@ -183,7 +183,7 @@ public sealed class ClientRounds
                     var result = PlayerPlacement.ArriveOnSignals(round.Server, round.Client, point,
                         TimeSpan.FromSeconds(Client.ArrivalSeconds), Client.FastTestTeleports, Cancellation);
                     round.Write("arrival", result.Support);
-                    round.Write("teleport-trace", result.Trace);
+                    round.Write("teleport-trace", result.Timing);
                 }
                 else round.Write("arrival", PlayerPlacement.Arrive(round.Server, round.Client, point,
                     TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor));

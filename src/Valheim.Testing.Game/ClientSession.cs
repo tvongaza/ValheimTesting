@@ -102,7 +102,7 @@ public sealed class ClientSession : IDisposable
         try
         {
             actor.VerifyEnvironment(plan.MenuExpectations);
-            if (plan.Capabilities.Length != 0) CliCapabilities.Require(actor, plan.Capabilities); // The only capability check an attached client gets.
+            if (plan.RequiredCliCapabilities.Any()) CliCapabilities.Require(actor, plan.RequiredCliCapabilities); // The only capability check an attached client gets.
             return new ClientSession(actor, null).Using(account);
         }
         catch { actor.Dispose(); throw; }
@@ -257,8 +257,8 @@ public sealed class ClientSession : IDisposable
             try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
             catch { transport.Dispose(); throw; }
             actor.VerifyEnvironment(plan.DirectStart ? plan.WorldExpectations(plan.HostWorld?.WorldUid ?? plan.DirectStartWorldUid) : plan.MenuExpectations);
-            if (plan.Capabilities.Length != 0 || plan.DirectStart)
-                CliCapabilities.Require(actor, plan.Capabilities.Concat(plan.DirectStart ? [CliCapabilities.DirectStart] : [])); // Live, after any static manifest check.
+            if (plan.RequiredCliCapabilities.Any())
+                CliCapabilities.Require(actor, plan.RequiredCliCapabilities); // Live, after any static manifest check.
             // A lease lost during startup: this client must not run on the account.
             account?.ThrowIfLost();
             return new ClientSession(actor, process, logs, architecture).Using(account);
