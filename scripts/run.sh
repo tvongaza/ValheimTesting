@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check NuGet's caches and the SDK's file-based app state before dotnet run restores a file-based script.
+# Check NuGet's caches before any dotnet run; file-based scripts also need the SDK's app state.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -7,7 +7,8 @@ case "${1:-}" in
   bootstrap) script=bootstrap-cli.cs ;;
   validate) script=validate.cs ;;
   api-docs) script=api-docs.cs ;;
-  *) printf 'usage: %s {bootstrap|validate|api-docs} [script arguments]\n' "$0" >&2; exit 2 ;;
+  campaign) script=campaign ;;
+  *) printf 'usage: %s {bootstrap|validate|api-docs|campaign} [script arguments]\n' "$0" >&2; exit 2 ;;
 esac
 shift
 cd "$root"
@@ -50,6 +51,10 @@ else
   fi
   export NUGET_PACKAGES=$packages NUGET_HTTP_CACHE_PATH=$http
   printf 'NuGet caches blocked before dotnet run; using packages=%s; HTTP=%s\n' "$packages" "$http"
+fi
+
+if [[ "$script" == campaign ]]; then
+  exec dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign "$@"
 fi
 
 # The SDK builds a file-based script under a per-user directory that no setting moves (#210): the temporary directory

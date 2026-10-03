@@ -1,0 +1,69 @@
+using Valheim.Testing.Game;
+using System.Diagnostics;
+using Xunit;
+
+public sealed class HostedRuntimeStageTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("host-stage-").FullName;
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    [Theory]
+    [InlineData("valheim_server", "", true, "VT-GAME idle")]
+    [InlineData("valheim_server", "/owned", false, "VT-GAME unknown")]
+    [InlineData("/other/valheim_server.x86_64", "/owned", true, "VT-GAME idle")]
+    [InlineData("/owned/valheim_server.x86_64", "/owned", false, "VT-GAME busy")]
+    [InlineData("/tmp/Valheim.app/Contents/MacOS/Valheim", "", true, "VT-GAME busy")]
+    [InlineData("ordinary-helper", "/owned", true, "VT-GAME idle")]
+    public async Task BashProcessCheckRefusesConflictingUse(string process, string runtime, bool clientSession, string expected)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string bin = Path.Combine(_root, "bin");
+        Directory.CreateDirectory(bin);
+        string ps = Path.Combine(bin, "ps");
+        File.WriteAllText(ps, "#!/bin/sh\nprintf '%s\\n' '" + process + "'\n");
+        File.SetUnixFileMode(ps, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var start = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add(HostedRuntimeStage.BashProcessCheck);
+        start.Environment["runtime"] = runtime;
+        start.Environment["clientSession"] = clientSession ? "true" : "false";
+        start.Environment["PATH"] = bin + ":" + start.Environment["PATH"];
+        using var child = Process.Start(start)!;
+        string output = await child.StandardOutput.ReadToEndAsync();
+        string errors = await child.StandardError.ReadToEndAsync();
+        await child.WaitForExitAsync();
+        Assert.Equal(0, child.ExitCode);
+        Assert.Contains(expected, output);
+        Assert.Empty(errors);
+    }
+
+    // Executes the actual bash copy, shipment, listing and apply scripts on macOS. A fake host cannot catch BSD-tool
+    // option mismatches, which have repeatedly consumed native-test setup time.
+    [Fact] public async Task MacShellStagesASelectedClientWithoutRunningTheGame()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var host = new LocalGameHost("local-mac", HostShell.Bash);
+        string source = Path.Combine(_root, "source");
+        string executable = Path.Combine(source, "Valheim.app", "Contents", "MacOS", "Valheim");
+        string managed = Path.Combine(source, "Valheim.app", "Contents", "Resources", "Data", "Managed", InstallPins.GameAssemblyName);
+        string core = Path.Combine(source, "BepInEx", "core", "BepInEx.dll");
+        foreach (string path in new[] { executable, managed, core })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, Path.GetFileName(path));
+        }
+        string old = Path.Combine(source, "BepInEx", "plugins", "old.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(old)!);
+        File.WriteAllText(old, "old plugin");
+        string chosen = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(chosen, "selected plugin");
+        string run = Path.Combine(_root, "vt-one");
+        var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source,
+            Path.Combine(run, "runtime"), Path.Combine(run, "staging"),
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30));
+        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/selected.dll"]);
+        Assert.False(listing.Files.ContainsKey("BepInEx/plugins/old.dll"));
+        Assert.True(File.Exists(old));
+        Assert.False(Directory.Exists(Path.Combine(run, "staging")));
+    }
+}

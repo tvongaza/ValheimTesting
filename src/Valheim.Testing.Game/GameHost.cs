@@ -463,9 +463,21 @@ public abstract class ScriptedGameHost : IGameHost
         string sha256 = await Sha256Async(archive, cancellation).ConfigureAwait(false);
         long bytes = new FileInfo(archive).Length;
         HostResult result;
-        await using (var upload = File.OpenRead(archive))
-            result = await RunCoreAsync(HostScripts.Ship(Shell.Kind), new Dictionary<string, string>
-                { ["dest"] = hostDirectory, ["sha256"] = sha256, ["record"] = record }, upload, null, timeout, cancellation).ConfigureAwait(false);
+        var variables = new Dictionary<string, string> { ["dest"] = hostDirectory, ["sha256"] = sha256, ["record"] = record };
+        if (this is SshGameHost ssh && Shell.Kind == HostShellKind.PowerShell)
+        {
+            // Windows OpenSSH can leave a PowerShell child waiting for EOF partway through a binary stdin upload.
+            // Move the archive with SFTP/SCP, then run the same hash-checked extraction with only a short script on stdin.
+            string remoteName = "vt-upload-" + Guid.NewGuid().ToString("N") + ".tar";
+            await ssh.UploadArchiveAsync(archive, remoteName, timeout, cancellation).ConfigureAwait(false);
+            variables["uploadName"] = remoteName;
+            result = await RunCoreAsync(HostScripts.PowerShellShipFile, variables, null, null, timeout, cancellation).ConfigureAwait(false);
+        }
+        else
+        {
+            await using var upload = File.OpenRead(archive);
+            result = await RunCoreAsync(HostScripts.Ship(Shell.Kind), variables, upload, null, timeout, cancellation).ConfigureAwait(false);
+        }
         return ReadShipVerdict(result, hostDirectory, sha256, bytes, commit, tree);
     }
 

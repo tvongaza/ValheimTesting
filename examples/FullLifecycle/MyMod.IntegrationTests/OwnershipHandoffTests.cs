@@ -8,6 +8,30 @@ namespace MyMod.IntegrationTests;
 
 public sealed class OwnershipHandoffTests
 {
+    [Fact] public void NamedClientSetupsOverlapAndAFailedSetupClosesTheOtherActor()
+    {
+        using var world = new CampaignWorld();
+        var plan = world.Plan(LifecyclePlan.ThreeActorScenario);
+        var report = new ScenarioReport("parallel-client-setup");
+        using var bothStarted = new CountdownEvent(2);
+        ClientSession? first = null;
+        var run = world.Run(plan, report, profileClient: (requested, name) =>
+        {
+            bothStarted.Signal();
+            if (!bothStarted.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("Named actors did not start concurrently.");
+            if (name == "client-b") throw new InvalidOperationException("B's loader failed");
+            return first = ClientSession.Attach(requested, Directory.CreateDirectory(Path.Combine(world.Output, name)).FullName,
+                new ScriptedTransport());
+        });
+        var failure = Assert.Throws<InvalidOperationException>(() => run.OpenProfileClientsParallel(new Dictionary<string, ClientRunPlan>
+        {
+            ["client-a"] = CampaignWorld.ClientPlan(), ["client-b"] = CampaignWorld.ClientPlan(port: 5557),
+        }));
+        Assert.Contains("loader failed", failure.Message);
+        Assert.NotNull(first);
+        Assert.True(first.Closed);
+    }
+
     private static JsonElement Data(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     [Fact] public void ACompleteReadingNamesOneExpectedOwnerAndOneLocalVerdict()
@@ -76,7 +100,10 @@ public sealed class OwnershipHandoffTests
         Assert.Equal(1, process.Stops);
     }
 
-    [Fact] public void FailedFirstClientObservationClosesItBeforeSecondClientOpens()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FailedFirstClientObservationClosesItBeforeSecondClientOpens(bool loadedGroundIsWet)
     {
         using var world = new CampaignWorld();
         var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
@@ -85,11 +112,16 @@ public sealed class OwnershipHandoffTests
         var report = new ScenarioReport("ownership-first-failure");
         var first = ReadyClient(world, plan);
         // This is the client's own settled support reading, not a server-side inference.
-        first.Extension("valheim.world", "player-support-wait", _ => new
+        first.OnPrefix("cli_extension valheim.world/player-support-wait ", _ => ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.world", new
         {
             source = "local-player-support", complete = false, x = plan.Arrival.X, y = plan.Arrival.Ground, z = plan.Arrival.Z,
             speed = 0f, grounded = false, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
-        });
+        })));
+        if (loadedGroundIsWet)
+            first.OnPrefix("cli_extension valheim.world/terrain ", _ => ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.world", new
+            {
+                source = "loaded-ground", complete = true, units = "metres", x = plan.Arrival.X, z = plan.Arrival.Z, height = 20f,
+            })));
         bool openedB = false;
         var run = world.Run(plan, report, profileClient: (_, name) =>
         {
@@ -97,16 +129,21 @@ public sealed class OwnershipHandoffTests
             return ClientSession.Attach(CampaignWorld.ClientPlan(), world.Output, first);
         });
 
-        Assert.ThrowsAny<Exception>(() => OwnershipHandoffScenario.Run(run));
+        var error = Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run));
+        Assert.Equal(loadedGroundIsWet ? "Loaded arrival ground is not dry." : "Incomplete observation or wrong observation layer.", error.Message);
+        Assert.Equal(loadedGroundIsWet ? 0 : 1, first.Count("cli_extension valheim.world/player-support-wait"));
+        Assert.True(report.Provenance.ContainsKey("arrival-A-support"), error.ToString());
+        Assert.Contains("arrival-A-ground", report.Provenance.Keys);
         Assert.False(openedB);
         Assert.True(first.Disposed);
         Assert.Contains(report.Steps, step => step.Name == "stop only owned client A before lease teardown" && step.Passed);
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void TwoClientsHandoffOnceAndRejectTheWrongObservedOwner(bool wrongOwner)
+    [InlineData(false, 0f)]
+    [InlineData(true, 0f)]
+    [InlineData(false, -1f)]
+    public void TwoClientsHandoffOnceAndRejectTheWrongObservedOwner(bool wrongOwner, float loadedOffset)
     {
         using var world = new CampaignWorld();
         var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
@@ -114,7 +151,7 @@ public sealed class OwnershipHandoffTests
         plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
         var report = new ScenarioReport("ownership-handoff");
         var first = ReadyClient(world, plan);
-        var second = ReadySecond(plan, wrongOwner);
+        var second = ReadySecond(plan, wrongOwner, loadedOffset);
         var run = world.Run(plan, report, profileClient: (_, name) =>
             ClientSession.Attach(CampaignWorld.ClientPlan(port: name == "client-a" ? 5556 : 5557), world.Output,
                 name == "client-a" ? first : second));
@@ -140,11 +177,14 @@ public sealed class OwnershipHandoffTests
     }
 
     private static ScriptedTransport ReadyClient(CampaignWorld world, LifecyclePlan plan) => world.Client()
-            .On("cli_acknowledge_local_cheats", _ => ScriptedTransport.Ok("OK: localCharacterCheated=True"))
             .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=1"))
             .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=1"))
             .OnPrefix("cli_teleport ", _ => { world.MoveClient(plan.Arrival.X, plan.Arrival.Ground, plan.Arrival.Z); return ScriptedTransport.Ok("OK: Teleported to test point"); })
             .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=1 floorAtDone=True"))
+            .Extension("valheim.world", "terrain", _ => new
+            {
+                source = "loaded-ground", complete = true, units = "metres", x = plan.Arrival.X, z = plan.Arrival.Z, height = plan.Arrival.Ground,
+            })
             .Extension("valheim.world", "player-support-wait", _ => new
             {
                 source = "local-player-support", complete = true, x = plan.Arrival.X, y = plan.Arrival.Ground, z = plan.Arrival.Z,
@@ -155,9 +195,9 @@ public sealed class OwnershipHandoffTests
                 source = "mymod-marker-owner", complete = true, id = "1:2", owner = "101", self = "101", ownedHere = true, instance = true,
             }, readOnly: false);
 
-    private static ScriptedTransport ReadySecond(LifecyclePlan plan, bool wrongOwner)
+    private static ScriptedTransport ReadySecond(LifecyclePlan plan, bool wrongOwner, float loadedOffset = 0)
     {
-        bool joined = false, devcommands = false, claimed = false;
+        bool joined = false, devcommands = false, claimed = false, acknowledged = false;
         return new ScriptedTransport()
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
             .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
@@ -168,16 +208,25 @@ public sealed class OwnershipHandoffTests
                 saving = false, loadError = false, connectionStatus = joined ? "Connected" : "None",
             })
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
-            .On("cli_acknowledge_local_cheats", _ => ScriptedTransport.Ok("OK: localCharacterCheated=True"))
+            .On("cli_acknowledge_local_cheats", _ => { acknowledged = true; return ScriptedTransport.Ok("OK: localCharacterCheated=True"); })
+            .On("cli_access", _ => ScriptedTransport.Ok("ACCESS " + JsonSerializer.Serialize(new { schemaVersion = 1, complete = true, devcommands, cheatsAcknowledged = acknowledged, allowOnServerClients = true, server = false, dedicated = false, joinedClient = joined, localPlayer = joined, profileAvailable = joined })))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=1"))
             .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=2"))
             .OnPrefix("cli_teleport ", _ => ScriptedTransport.Ok("OK: Teleported to test point"))
             .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=2 floorAtDone=True"))
-            .Extension("valheim.world", "player-support-wait", _ => new
+            .Extension("valheim.world", "terrain", _ => new
             {
-                source = "local-player-support", complete = true, x = plan.SecondArrival!.X, y = plan.SecondArrival.Ground, z = plan.SecondArrival.Z,
-                speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+                source = "loaded-ground", complete = true, units = "metres", x = plan.SecondArrival!.X, z = plan.SecondArrival.Z, height = plan.SecondArrival.Ground + loadedOffset,
+            })
+            .Extension("valheim.world", "player-support-wait", args =>
+            {
+                Assert.Equal(plan.SecondArrival!.Ground + loadedOffset, float.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture));
+                return new
+                {
+                    source = "local-player-support", complete = true, x = plan.SecondArrival.X, y = plan.SecondArrival.Ground + loadedOffset, z = plan.SecondArrival.Z,
+                    speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+                };
             })
             .Extension("mymod.testing", "markers", _ => new
             {

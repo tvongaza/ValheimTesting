@@ -9,6 +9,7 @@ public sealed record TerrainSnapshotReference(string Site, string WorldUid, stri
 public sealed record AreaObjectSnapshotReference(string Site, string WorldUid, string File, string Sha256);
 public sealed class ScenarioReport
 {
+    private readonly object _stepGate = new();
     public string Name { get; }
     public Dictionary<string, string> Provenance { get; } = new();
     public List<StepResult> Steps { get; } = new();
@@ -37,8 +38,8 @@ public sealed class ScenarioReport
     public void Step(string name, Action action)
     {
         var clock = Stopwatch.StartNew();
-        try { action(); Steps.Add(new(name, true, clock.Elapsed.TotalSeconds, "")); }
-        catch (Exception error) { Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, error.Message)); throw; }
+        try { action(); lock (_stepGate) Steps.Add(new(name, true, clock.Elapsed.TotalSeconds, "")); }
+        catch (Exception error) { lock (_stepGate) Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, error.Message)); throw; }
     }
     /// <summary>Attach a site capture to the next <see cref="Write"/>. The capture retains exact ValheimCLI replies.</summary>
     public void AttachTerrainSnapshot(TerrainSiteSnapshot snapshot)
@@ -83,17 +84,17 @@ public sealed class ScenarioReport
     public async Task StepAsync(string name, Func<Task> action, string? failure = null)
     {
         var clock = Stopwatch.StartNew();
-        try { await action().ConfigureAwait(false); Steps.Add(new(name, true, clock.Elapsed.TotalSeconds, "")); }
+        try { await action().ConfigureAwait(false); lock (_stepGate) Steps.Add(new(name, true, clock.Elapsed.TotalSeconds, "")); }
         catch (Exception error)
         {
-            if (failure == null || error is OperationCanceledException) { Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, error.Message)); throw; }
+            if (failure == null || error is OperationCanceledException) { lock (_stepGate) Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, error.Message)); throw; }
             var wrapped = new InvalidOperationException(failure, error);
-            Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, failure + " " + error.Message));
+            lock (_stepGate) Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, failure + " " + error.Message));
             throw wrapped;
         }
     }
     /// <summary>Records a failure outside any step (for example in the runner around the scenario), so the report cannot pass.</summary>
-    public void RecordFailure(string name, Exception error) => Steps.Add(new(name, false, 0, error.Message));
+    public void RecordFailure(string name, Exception error) { lock (_stepGate) Steps.Add(new(name, false, 0, error.Message)); }
     /// <summary>
     /// Scans a run's logs after its processes stopped (<see cref="LogScanner"/>) and records a <c>scan run logs</c> step:
     /// it fails when a failure pattern matched or a required log is missing, and names each with its first occurrence.

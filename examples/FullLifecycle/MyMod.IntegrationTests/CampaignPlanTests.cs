@@ -80,8 +80,14 @@ public sealed class CampaignPlanTests : IDisposable
                 plan["secondClient"] = Owned(Client(port: 5557), "ClientB");
                 foreach (var entry in new[] { plan["client"]!, plan["secondClient"]! })
                     entry["capabilities"] = new JsonArray(Capabilities.Markers, Capabilities.MarkerOwner,
-                        Capabilities.MarkerOwnerWait, Capabilities.MarkerOwnerClaim, "valheim.world/player-support-wait");
+                        Capabilities.MarkerOwnerWait, Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait");
                 plan["secondArrival"] = new JsonObject { ["x"] = 100, ["z"] = -32, ["ground"] = 42.4 };
+                break;
+            case LifecyclePlan.ThreeActorScenario:
+                plan["client"] = Owned(Client(port: 5556), "ClientA");
+                plan["secondClient"] = Owned(Client(port: 5557), "ClientB");
+                plan["client"]!["capabilities"] = new JsonArray(Capabilities.Markers);
+                plan["secondClient"]!["capabilities"] = new JsonArray(Capabilities.Markers);
                 break;
         }
         return plan;
@@ -102,8 +108,18 @@ public sealed class CampaignPlanTests : IDisposable
     [Theory]
     [InlineData(LifecyclePlan.WorldScenario)] [InlineData(LifecyclePlan.VanillaClientScenario)] [InlineData(LifecyclePlan.SyncedConfigScenario)]
     [InlineData(LifecyclePlan.RefusedJoinScenario)] [InlineData(LifecyclePlan.CrossplayScenario)] [InlineData(LifecyclePlan.ContentCensusScenario)]
-    [InlineData(LifecyclePlan.AreaObjectsScenarioName)] [InlineData(LifecyclePlan.OwnershipHandoffScenario)]
+    [InlineData(LifecyclePlan.AreaObjectsScenarioName)] [InlineData(LifecyclePlan.OwnershipHandoffScenario)] [InlineData(LifecyclePlan.ThreeActorScenario)]
     public void EachScenariosValidPlanIsRead(string scenario) => Assert.Equal(scenario, Read(Plan(scenario)).Scenario);
+
+    [Theory]
+    [InlineData(105)]
+    [InlineData(106)]
+    public void HandoffRefusesOverlappingLandingPoints(float secondX)
+    {
+        var plan = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        plan["secondArrival"] = new JsonObject { ["x"] = secondX, ["z"] = -40, ["ground"] = 42.3 };
+        Refused(plan, "at least 3 m apart");
+    }
 
     [Fact] public void ObjectSnapshotPlanRefusesAnAmbiguousCentreBeforeLaunch()
     {
@@ -165,7 +181,7 @@ public sealed class CampaignPlanTests : IDisposable
         // Discover the source inventory, not arbitrary files left in bin/ from an older build.
         var names = Directory.GetFiles(SourceSamples(), "sample-plan-*.json")
             .Select(path => Path.GetFileName(path)!).Where(name => name != "sample-plan-hosted.json").ToArray();
-        Assert.Equal(9, names.Length);
+        Assert.Equal(10, names.Length);
         foreach (string name in names)
         {
             string file = Path.Combine(samples, name);

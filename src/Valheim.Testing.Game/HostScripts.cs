@@ -188,6 +188,44 @@ internal static class HostScripts
         'VT-SHIP shipped ' + $got
         """).ReplaceLineEndings("\n");
 
+    // Windows SSH uses SFTP/SCP for the archive: some Win32-OpenSSH PowerShell sessions stop consuming binary stdin
+    // partway through a larger upload. The script receives only a generated basename, verifies the archive hash and
+    // removes that basename even when extraction fails. The source archive is never an extraction target.
+    public static readonly string PowerShellShipFile = (PowerShellSha256 + """
+
+        if ($uploadName -cnotmatch '^vt-upload-[0-9a-f]{32}\.tar$') { throw 'Invalid archive name' }
+        # SCP's relative destination lands in the SSH user's home on Windows and Unix.
+        $archive = Join-Path $HOME $uploadName
+        if (-not [IO.File]::Exists($archive)) { throw 'The uploaded archive is missing' }
+        try {
+            if (Test-Path -LiteralPath $dest) { 'VT-SHIP exists' }
+            else {
+                $got = Get-VtSha256 $archive
+                if ($got -cne $sha256) { 'VT-SHIP hash ' + $got }
+                else {
+                    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $dest))
+                    [void](New-Item -ItemType Directory -Path $dest)
+                    try {
+                        $system = [Environment]::SystemDirectory
+                        $tar = if ($system -and [IO.File]::Exists((Join-Path $system 'tar.exe'))) { Join-Path $system 'tar.exe' } else { 'tar' }
+                        & $tar -xf $archive -C $dest
+                        if ($LASTEXITCODE -ne 0) { throw ('tar exited with ' + $LASTEXITCODE) }
+                        if (Test-Path -LiteralPath (Join-Path $dest 'SOURCE.txt')) {
+                            'VT-SHIP source-txt'
+                            [IO.Directory]::Delete($dest, $true)
+                        } else {
+                            [IO.File]::WriteAllText((Join-Path $dest 'SOURCE.txt'), $record + 'sha256=' + $sha256 + "`n", (New-Object Text.UTF8Encoding $false))
+                            'VT-SHIP shipped ' + $got
+                        }
+                    } catch {
+                        if ([IO.Directory]::Exists($dest)) { [IO.Directory]::Delete($dest, $true) }
+                        throw
+                    }
+                }
+            }
+        } finally { Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue }
+        """).ReplaceLineEndings("\n");
+
     private static readonly string BashSize = """
         set -u
         if [ -e "$log" ]; then n=$(wc -c < "$log") || exit 3; echo "VT-SIZE $((n))"; else echo "VT-SIZE 0"; fi

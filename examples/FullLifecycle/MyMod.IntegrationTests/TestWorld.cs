@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Globalization;
 using MyMod.SystemTests;
 using Valheim.Testing.Game;
@@ -79,10 +80,15 @@ internal sealed class TestWorld
 
     public ScriptedTransport Client(LifecyclePlan plan)
     {
+        bool acknowledged = false;
         bool devcommands = false, joined = false;
         var arrival = plan.Arrival;
         return ClientTransport = new ScriptedTransport()
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .On("cli_access", _ => ScriptedTransport.Ok("ACCESS " + JsonSerializer.Serialize(new { schemaVersion = 1, complete = true,
+                devcommands, cheatsAcknowledged = acknowledged, allowOnServerClients = true, server = false, dedicated = false,
+                joinedClient = joined && !false, localPlayer = joined, profileAvailable = joined })))
+            .On("cli_acknowledge_local_cheats", _ => { acknowledged = true; return ScriptedTransport.Ok("OK: localCharacterCheated=True"); })
             .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
             .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
             .Extension("valheim.session", "state", _ => new

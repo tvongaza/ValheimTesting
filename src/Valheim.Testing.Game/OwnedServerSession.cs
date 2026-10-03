@@ -492,7 +492,7 @@ public sealed class RecordingTransport : ICancellableGameTransport
         try
         {
             var reply = _inner.Execute(command, timeout);
-            _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, command, reply }));
+            WriteReply(command, reply);
             return reply;
         }
         catch (Exception error)
@@ -507,7 +507,7 @@ public sealed class RecordingTransport : ICancellableGameTransport
         try
         {
             var reply = await interruptible.ExecuteCancelableAsync(expectations, command, timeout, cancellation).ConfigureAwait(false);
-            _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, command, reply }));
+            WriteReply(command, reply);
             return reply;
         }
         catch (Exception error)
@@ -515,6 +515,17 @@ public sealed class RecordingTransport : ICancellableGameTransport
             _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, command, error = error.Message }));
             throw;
         }
+    }
+    private void WriteReply(string command, CommandResult reply)
+    {
+        string record = JsonSerializer.Serialize(new { utc = DateTime.UtcNow, command, reply });
+        // Account verification uses the original reply. Its Steam identities are not public test evidence.
+        if (command is "cli_multiplayer_identity" or "cli_connection_status")
+        {
+            record = System.Text.RegularExpressions.Regex.Replace(record, @"(?<![0-9])[0-9]{17}(?![0-9])", "[steam-id]");
+            record = System.Text.RegularExpressions.Regex.Replace(record, """playFabId=[^,\\"]*""", "playFabId=[redacted]");
+        }
+        _writer.WriteLine(record);
     }
     public void Dispose() { try { _inner.Dispose(); } finally { _writer.Dispose(); } }
 }
