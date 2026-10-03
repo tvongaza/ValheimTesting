@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using BepInEx;
 using BepInEx.Bootstrap;
+using HarmonyLib;
 using Valheim.Testing.Adapter;
 using valheimCLI.Extensions;
 
@@ -30,11 +31,14 @@ public sealed class Plugin : BaseUnityPlugin
     /// <summary>Set to 1 to leave BepInEx's disk log as it is at quit: the negative control for QuitLogFlush (#99).</summary>
     public const string NoQuitFlushVariable = "MYMOD_TEST_NO_QUIT_FLUSH";
     private ExtensionRegistration? _registration;
+    private Harmony? _ownershipPatch;
 
     // Lines plugins log while the game quits reach the kept BepInEx log, for the teardown log scan (#99).
     private void Awake()
     {
         if (Environment.GetEnvironmentVariable(NoQuitFlushVariable) != "1") QuitLogFlush.Enable();
+        _ownershipPatch = new Harmony("example.mymod.testadapter.marker-owner");
+        MarkerOwnership.Patch(_ownershipPatch);
     }
 
     // The session is complete once the world is up and the mod itself is loaded.
@@ -49,7 +53,8 @@ public sealed class Plugin : BaseUnityPlugin
         UnresolvedPrefabs.Command(),                                // unresolved-prefabs [radius]: a client without MyMod (#33)
         DungeonRooms.Command(),                                     // dungeon-rooms <x> <z> [radius]: server (#24)
         ContentCensus.Command(),                                    // content-census <owner> <prefix> ...: either side (#91)
-        MarkerObservation.Command());                               // markers <x> <z> [radius]: the mod's own
+        MarkerObservation.Command(),                                // markers <x> <z> [radius]: the mod's own
+        MarkerOwnership.SnapshotCommand(), MarkerOwnership.WaitCommand(), MarkerOwnership.ClaimCommand());
     private void OnApplicationQuit() => QuitLogFlush.Quitting("MyMod.TestAdapter OnApplicationQuit");
-    private void OnDestroy() => _registration?.Dispose();
+    private void OnDestroy() { _registration?.Dispose(); _ownershipPatch?.UnpatchSelf(); }
 }

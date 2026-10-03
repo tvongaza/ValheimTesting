@@ -1,0 +1,228 @@
+using System.Text.Json;
+using MyMod.SystemTests;
+using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
+using Xunit;
+
+namespace MyMod.IntegrationTests;
+
+public sealed class OwnershipHandoffTests
+{
+    private static JsonElement Data(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    [Fact] public void ACompleteReadingNamesOneExpectedOwnerAndOneLocalVerdict()
+    {
+        var reading = Data("""{"source":"mymod-marker-owner","complete":true,"owner":"101","self":"202","ownedHere":false,"instance":true}""");
+        OwnershipHandoffScenario.RequireOwnerReading(reading, "101", ownedHere: false);
+        Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.RequireOwnerReading(reading, "202", ownedHere: false));
+        Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.RequireOwnerReading(reading, "101", ownedHere: true));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"source\":\"mymod-marker-owner\",\"complete\":false,\"owner\":\"101\",\"ownedHere\":false,\"instance\":true}")]
+    [InlineData("{\"source\":\"mymod-marker-owner\",\"complete\":true,\"ownedHere\":false,\"instance\":true}")]
+    [InlineData("{\"source\":\"mymod-marker-owner\",\"complete\":true,\"owner\":\"101\",\"instance\":true}")]
+    [InlineData("{\"source\":\"mymod-marker-owner\",\"complete\":true,\"owner\":\"101\",\"ownedHere\":false,\"instance\":false}")]
+    public void IncompleteOwnershipCannotPass(string json) =>
+        Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.RequireOwnerReading(Data(json), "101", ownedHere: false));
+
+    [Fact] public void FailureOpeningSecondClientDisposesFirstWithoutRetryingActions()
+    {
+        using var world = new CampaignWorld();
+        var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
+        plan.SecondClient = CampaignWorld.ClientPlan(port: 5557);
+        plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
+        var report = new ScenarioReport("ownership-startup-failure");
+        var client = ReadyClient(world, plan);
+        var opened = new List<string>();
+        var run = world.Run(plan, report, profileClient: (requested, name) =>
+        {
+            opened.Add(name);
+            if (name == "client-b") throw new InvalidOperationException("Second account lease lost during startup.");
+            return ClientSession.Attach(CampaignWorld.ClientPlan(), world.Output, client);
+        });
+        ServerOwnership(world);
+
+        Assert.Contains("Second account lease lost", Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run)).Message);
+        Assert.Equal(new[] { "client-a", "client-b" }, opened);
+        Assert.True(client.Disposed);
+        Assert.Equal(1, client.Count("cli_extension valheim.session/join"));
+        Assert.Equal(1, client.Count("cli_teleport"));
+        Assert.Equal(1, client.Count("cli_extension valheim.world/player-support-wait"));
+        Assert.Contains(report.Steps, step => step.Name == "stop only owned client A before lease teardown" && step.Passed);
+    }
+
+    [Fact] public void FailedSecondStartupDoesNotHideAnUnprovenFirstClientStop()
+    {
+        using var world = new CampaignWorld();
+        var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
+        plan.Client!.Mode = "owned";
+        plan.Client.Install = Path.Combine(world.Root, "client-a-install");
+        plan.SecondClient = CampaignWorld.ClientPlan(port: 5557);
+        plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
+        var report = new ScenarioReport("ownership-unknown-stop");
+        var client = ReadyClient(world, plan);
+        var process = new UnprovenStop();
+        var run = world.Run(plan, report, profileClient: (requested, name) => name == "client-b"
+            ? throw new InvalidOperationException("B startup failed")
+            : ClientSession.Launch(requested, world.Output, () => process, () => client, (_, _) => Task.CompletedTask));
+        ServerOwnership(world);
+
+        var error = Assert.Throws<AggregateException>(() => OwnershipHandoffScenario.Run(run));
+        Assert.Contains(error.InnerExceptions, inner => inner.Message == "B startup failed");
+        Assert.Contains(error.InnerExceptions, inner => inner.Message == "A process stop was unproven");
+        Assert.Contains(report.Steps, step => step.Name == "stop only owned client A before lease teardown" && !step.Passed);
+        Assert.Equal(1, process.Stops);
+    }
+
+    [Fact] public void FailedFirstClientObservationClosesItBeforeSecondClientOpens()
+    {
+        using var world = new CampaignWorld();
+        var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
+        plan.SecondClient = CampaignWorld.ClientPlan(port: 5557);
+        plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
+        var report = new ScenarioReport("ownership-first-failure");
+        var first = ReadyClient(world, plan);
+        // This is the client's own settled support reading, not a server-side inference.
+        first.Extension("valheim.world", "player-support-wait", _ => new
+        {
+            source = "local-player-support", complete = false, x = plan.Arrival.X, y = plan.Arrival.Ground, z = plan.Arrival.Z,
+            speed = 0f, grounded = false, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+        });
+        bool openedB = false;
+        var run = world.Run(plan, report, profileClient: (_, name) =>
+        {
+            if (name == "client-b") { openedB = true; throw new InvalidOperationException("B must not open"); }
+            return ClientSession.Attach(CampaignWorld.ClientPlan(), world.Output, first);
+        });
+
+        Assert.ThrowsAny<Exception>(() => OwnershipHandoffScenario.Run(run));
+        Assert.False(openedB);
+        Assert.True(first.Disposed);
+        Assert.Contains(report.Steps, step => step.Name == "stop only owned client A before lease teardown" && step.Passed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TwoClientsHandoffOnceAndRejectTheWrongObservedOwner(bool wrongOwner)
+    {
+        using var world = new CampaignWorld();
+        var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
+        plan.SecondClient = CampaignWorld.ClientPlan(port: 5557);
+        plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
+        var report = new ScenarioReport("ownership-handoff");
+        var first = ReadyClient(world, plan);
+        var second = ReadySecond(plan, wrongOwner);
+        var run = world.Run(plan, report, profileClient: (_, name) =>
+            ClientSession.Attach(CampaignWorld.ClientPlan(port: name == "client-a" ? 5556 : 5557), world.Output,
+                name == "client-a" ? first : second));
+        ServerOwnership(world);
+
+        if (wrongOwner)
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run));
+            Assert.Contains("wrong session", error.Message);
+            Assert.False(report.Passed);
+        }
+        else
+        {
+            OwnershipHandoffScenario.Run(run);
+            Assert.True(report.Passed, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Error)));
+            Assert.Equal("202", JsonDocument.Parse(report.Provenance["server-owner-b"]).RootElement.GetProperty("owner").GetString());
+        }
+        Assert.True(first.Disposed);
+        Assert.True(second.Disposed);
+        Assert.Equal(1, first.Count("cli_extension valheim.session/join"));
+        Assert.Equal(1, second.Count("cli_extension valheim.session/join"));
+        Assert.Equal(wrongOwner ? 0 : 1, second.Count("cli_extension mymod.testing/marker-owner-claim"));
+    }
+
+    private static ScriptedTransport ReadyClient(CampaignWorld world, LifecyclePlan plan) => world.Client()
+            .On("cli_acknowledge_local_cheats", _ => ScriptedTransport.Ok("OK: localCharacterCheated=True"))
+            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=1"))
+            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=1"))
+            .OnPrefix("cli_teleport ", _ => { world.MoveClient(plan.Arrival.X, plan.Arrival.Ground, plan.Arrival.Z); return ScriptedTransport.Ok("OK: Teleported to test point"); })
+            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=1 floorAtDone=True"))
+            .Extension("valheim.world", "player-support-wait", _ => new
+            {
+                source = "local-player-support", complete = true, x = plan.Arrival.X, y = plan.Arrival.Ground, z = plan.Arrival.Z,
+                speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })
+            .Extension("mymod.testing", "marker-owner-claim", _ => new
+            {
+                source = "mymod-marker-owner", complete = true, id = "1:2", owner = "101", self = "101", ownedHere = true, instance = true,
+            }, readOnly: false);
+
+    private static ScriptedTransport ReadySecond(LifecyclePlan plan, bool wrongOwner)
+    {
+        bool joined = false, devcommands = false, claimed = false;
+        return new ScriptedTransport()
+            .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
+            .Extension("valheim.session", "state", _ => new
+            {
+                source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? CampaignWorld.WorldUid : null,
+                worldPresent = joined, worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined,
+                saving = false, loadError = false, connectionStatus = joined ? "Connected" : "None",
+            })
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
+            .On("cli_acknowledge_local_cheats", _ => ScriptedTransport.Ok("OK: localCharacterCheated=True"))
+            .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
+            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=1"))
+            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=2"))
+            .OnPrefix("cli_teleport ", _ => ScriptedTransport.Ok("OK: Teleported to test point"))
+            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=2 floorAtDone=True"))
+            .Extension("valheim.world", "player-support-wait", _ => new
+            {
+                source = "local-player-support", complete = true, x = plan.SecondArrival!.X, y = plan.SecondArrival.Ground, z = plan.SecondArrival.Z,
+                speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })
+            .Extension("mymod.testing", "markers", _ => new
+            {
+                source = "mymod-markers", complete = true,
+                markers = new[] { new { x = plan.DrySite.X, z = plan.DrySite.Z, label = CampaignSteps.DryLabel, instance = true } },
+            })
+            .Extension("mymod.testing", "marker-owner-wait", _ => new
+            {
+                source = "mymod-marker-owner", complete = true, owner = wrongOwner ? "102" : "101", self = "202", ownedHere = false, instance = true,
+            })
+            .Extension("mymod.testing", "marker-owner-claim", _ =>
+            {
+                claimed = true;
+                return new { source = "mymod-marker-owner", complete = true, owner = "202", self = "202", ownedHere = true, instance = true };
+            }, readOnly: false)
+            .Extension("mymod.testing", "marker-owner", _ => new
+            {
+                source = "mymod-marker-owner", complete = true, owner = claimed ? "202" : "101", self = "202", ownedHere = claimed, instance = true,
+            });
+    }
+
+    private static void ServerOwnership(CampaignWorld world)
+    {
+        string Owner() => world.Leaves == 0 ? "101" : "202";
+        world.Servers.Last()
+        .On("cli_peers", _ => world.Leaves == 0
+            ? ScriptedTransport.Ok("OK: 2 peer(s)", "PEER 1 character A", "PEER 2 character B")
+            : ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character B"))
+        .Extension("mymod.testing", "marker-owner-wait", _ => new
+        {
+            source = "mymod-marker-owner", complete = true, id = "1:2", owner = Owner(), self = "99", ownedHere = false, instance = false,
+        })
+        .Extension("mymod.testing", "marker-owner", _ => new
+        {
+            source = "mymod-marker-owner", complete = true, id = "1:2", owner = Owner(), self = "99", ownedHere = false, instance = false,
+        });
+    }
+
+    private sealed class UnprovenStop : IServerProcess
+    {
+        public int Stops;
+        public int Id => 101;
+        public bool HasExited => false;
+        public Task<int> WaitForExitAsync(CancellationToken cancellation) => Task.Delay(Timeout.Infinite, cancellation).ContinueWith(_ => 0, cancellation);
+        public void Stop(TimeSpan timeout) { Stops++; throw new IOException("A process stop was unproven"); }
+        public void Dispose() { }
+    }
+}
