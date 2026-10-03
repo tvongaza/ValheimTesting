@@ -63,11 +63,13 @@ A capability includes its owner instance. After a reload, reverify environment p
 | `GameActor.Execute` returns | Transport succeeded; inspect the command's documented output/effect |
 | Structured `ok=false`, wrong instance/schema, or `complete=false` | Failure/incomplete evidence, not a passing empty result |
 | Save request says `Saving..` | Not enough; require the command's completed-save result before stopping |
-| ValheimCLI cannot execute due to game cheat confirmation | Record the refusal; do not bypass the gate or call it success |
+| ValheimCLI cannot execute due to game cheat confirmation | On an owned disposable character, explicitly acknowledge local cheats, then retry the read-only observation; otherwise record the refusal, never call it success |
 | Roads runner mode `validate` or `prepare-*` succeeds | Plan/preparation passed, not native scenario acceptance |
 | WalkingReview exits 0 | Trace qualifies for human review; verdict still starts `not-reviewed` |
 
 Terrain uses horizontal **x/z** and vertical **y**, in metres. Generator height, loaded ground, a heightmap's own collider, player support and RGBA masks are distinct layers. A black out-of-range texel or missing map must remain incomplete. Do not switch to generator height when a loaded-ground assertion cannot be sampled.
+
+Assume a native ValheimCLI test may need cheat access, even for a read-only command the game classifies as a cheat. Use a staged, disposable local character and `cli_acknowledge_local_cheats` before those commands. This permanently marks that character's profile. Vanilla `confirmcheats` may execute on the dedicated server while leaving the joined client's local profile unmarked; do not infer client access from its server reply. Never acknowledge cheats on an attached or personal character. The [full-lifecycle example](../examples/FullLifecycle/README.md) shows the owned-client setup.
 
 ## Bounded paint/reload recipe
 

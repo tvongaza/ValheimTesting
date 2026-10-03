@@ -8,7 +8,8 @@ namespace Valheim.Testing.Game;
 /// after a restart, with the evidence written in the same shape each time. <see cref="Run"/> opens the client, then for
 /// each of <see cref="Rounds"/>:
 /// <list type="number">
-/// <item>waits until the server accepts game connections (before opening a direct-start client, otherwise before each join);</item>
+/// <item>waits until the server accepts game connections (before opening a client with a prepared character start,
+/// otherwise before each join);</item>
 /// <item>joins with the plan's disposable character (devcommands first, exactly once), verifies the client's world pins and
 /// waits for the world; a <see cref="ClientRunPlan.Crossplay"/> client first reads the server's lobby (<see cref="Lobby"/>)
 /// and joins it (<see cref="SessionControl.JoinCrossplay"/>);</item>
@@ -85,10 +86,10 @@ public sealed class ClientRounds
             if (Client.StartAtCharacterSave)
                 Report.Step("stage the pinned disposable local character", () => stage = CharacterStartStage.Install(
                     Client.CharacterStart!, Client.Character, long.Parse(WorldUid, System.Globalization.CultureInfo.InvariantCulture), Arrival!));
-            // A direct-start client joins as part of opening. The server must accept connections before that launch,
-            // not only when Join runs after the client has already entered (or failed to enter) the world.
-            if (Client.DirectStart)
-                Report.Step("the server accepts connections before direct client launch", () => WaitUntilJoinable(server));
+            // A direct-start client joins as part of opening. Prepare the menu-start comparison under the same
+            // ready-server condition, so its startup timing does not include a different readiness wait.
+            if (Client.DirectStart || Client.StartAtCharacterSave)
+                Report.Step("the server accepts connections before client launch", () => WaitUntilJoinable(server));
             Report.Step(OpenStep ?? (Client.DirectStart ? "launch the owned client directly into its pinned world" :
                 Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
                 () => session = openClient());
@@ -133,7 +134,8 @@ public sealed class ClientRounds
     {
         var session = new SessionControl(round.Client);
         bool directFirst = Client.DirectStart && round.Index == 0;
-        if (!directFirst) round.Step("the server accepts game connections", () => WaitUntilJoinable(round.Server));
+        if (!(round.Index == 0 && (Client.DirectStart || Client.StartAtCharacterSave)))
+            round.Step("the server accepts game connections", () => WaitUntilJoinable(round.Server));
         bool preparedStart = Client.StartAtCharacterSave && round.Index == 0;
         if (directFirst)
         {

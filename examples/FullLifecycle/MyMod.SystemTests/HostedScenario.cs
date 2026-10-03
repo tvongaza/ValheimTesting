@@ -87,7 +87,7 @@ public static class HostedScenario
             // A clean character needs explicit acknowledgement before Terminal will run this mod's cheat commands.
             // Only the direct-start plan has a prepared disposable character and copied fixture owned by this run.
             if (plan.Client.DirectStart)
-                round.Step("acknowledge cheat use on the disposable character and fixture", () => host.Execute("confirmcheats"));
+                round.Step("acknowledge cheat use on the disposable character and fixture", () => CampaignSteps.AcknowledgeLocalCheats(host));
             round.Step("host: the mod's Harmony patches are applied", () =>
                 HarmonyCensus.Read(host, Capabilities.Harmony, LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied());
             round.Step("no marker at either site before the mod acts", () => RequireMarkers(host, plan, dry: 0));
