@@ -19,12 +19,14 @@ public sealed class CliTransportCancelTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
                 throw new InvalidOperationException("Unreachable");
             });
-            using var wrapper = new RecordingTransport(inner, log);
-            using var cancel = new CancellationTokenSource();
-            Task<CommandResult> pending = wrapper.ExecuteCancelableAsync("cli_expect worlduid=7", "cli_extension example/capture",
-                TimeSpan.FromSeconds(30), cancel.Token);
-            cancel.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            using (var wrapper = new RecordingTransport(inner, log))
+            using (var cancel = new CancellationTokenSource())
+            {
+                Task<CommandResult> pending = wrapper.ExecuteCancelableAsync("cli_expect worlduid=7", "cli_extension example/capture",
+                    TimeSpan.FromSeconds(30), cancel.Token);
+                cancel.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            }
             Assert.Contains("cli_extension example/capture", File.ReadAllText(log));
         }
         finally { if (File.Exists(log)) File.Delete(log); }
