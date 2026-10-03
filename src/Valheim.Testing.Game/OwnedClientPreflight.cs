@@ -181,11 +181,20 @@ internal static class OwnedClientPreflight
         // As ValheimCLI resolves it (Expectations.ResolvePath): a relative path is relative to BepInEx/config.
         string path = Path.IsPathRooted(configured) ? configured : Path.Combine(install, Config, configured);
         string where = $"ValheimCLI's standing expectations file {path} ([Expectations] File in {Slash(Config)}/{CliConfig})";
+        string relative = Path.GetRelativePath(install, Path.GetFullPath(path));
+        if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            throw new InvalidOperationException($"{where} is outside this disposable client install. Use a per-run file under BepInEx/config derived from the staged plugins and world UID; a host-global standing file can require unrelated mods.");
         if (!File.Exists(path))
             throw new InvalidOperationException($"{where} does not exist, and ValheimCLI refuses every command but its diagnostics until it does. Write it (StandingPins.Write) or clear the setting.");
         IReadOnlyList<KeyValuePair<string, string>> standing;
         try { standing = StandingPins.Read(path); }
         catch (ArgumentException error) { throw new InvalidOperationException($"{where} is malformed, so the game would refuse every command: {error.Message}", error); }
+        RequireStandingPins(standing, pins, worldUid, worldName, strict, where);
+    }
+
+    internal static void RequireStandingPins(IReadOnlyList<KeyValuePair<string, string>> standing, IReadOnlyDictionary<string, string> pins,
+        string? worldUid, string? worldName, bool strict, string where)
+    {
         var problems = new List<string>();
         if (strict && !standing.Any(pin => pin.Key is "world" or "worlduid"))
             problems.Add("it is strict (Strict = true) but names no world, so every command is refused once a world loads; add world=any (the toolkit's actor still pins the exact world UID) or the exact worlduid=");
@@ -195,6 +204,8 @@ internal static class OwnedClientPreflight
             else if (key == "world" && value != "any" && worldName != null && !Same(value, worldName)) problems.Add($"world={value}, but the plan hosts {worldName}");
             else if (pins.FirstOrDefault(p => Same(p.Key, key)) is { Key: not null } planned && Contradicts(value, planned.Value.ToLowerInvariant()))
                 problems.Add($"{key}={value}, but the plan pins {planned.Key}={planned.Value}");
+            else if (key is not ("world" or "worlduid" or "seed" or "worldfiles") && value != "absent" && !pins.Keys.Any(p => Same(p, key)))
+                problems.Add($"{key}={value} requires a plugin the plan does not pin; make the per-run standing file from the staged plugins");
         }
         if (problems.Count != 0)
             throw new InvalidOperationException($"{where} would refuse this run: {string.Join("; ", problems)}.");
@@ -209,10 +220,11 @@ internal static class OwnedClientPreflight
     private static string Slash(string relative) => relative.Replace('\\', '/');
 
     /// <summary>A BepInEx .cfg / .ini value: <c>key = value</c> in <c>[section]</c>, comments (<c>#</c>, <c>;</c>) skipped; null when absent.</summary>
-    internal static string? IniValue(string path, string section, string key)
+    internal static string? IniValue(string path, string section, string key) => IniValue(File.ReadLines(path), section, key);
+    internal static string? IniValue(IEnumerable<string> lines, string section, string key)
     {
         string? current = null, found = null;
-        foreach (string raw in File.ReadLines(path))
+        foreach (string raw in lines)
         {
             string line = raw.Trim();
             if (line.Length == 0 || line[0] is '#' or ';') continue;
