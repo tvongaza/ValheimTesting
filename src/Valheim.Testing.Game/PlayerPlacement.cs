@@ -21,7 +21,8 @@ public static class PlayerPlacement
     /// Arrives using one bounded in-game wait at each transition. The runner does not poll the remote player:
     /// ValheimCLI observes readiness and support on game frames and returns once each condition holds.
     /// The server requests the teleport exactly once. Test timing is an explicit opt-in and still uses the game's
-    /// own area and floor checks. <paramref name="timeout"/> is the overall deadline; each CLI wait is capped
+    /// own area and floor checks; it is switched off again after the hop, so later movements in the session use
+    /// the game's ordinary timing. <paramref name="timeout"/> is the overall deadline; each CLI wait is capped
     /// at 120 seconds, so a phase that takes longer fails without issuing another request or teleport.
     /// </summary>
     public static TeleportArrival ArriveOnSignals(GameActor server, GameActor client, HeightExpectation point,
@@ -32,11 +33,37 @@ public static class PlayerPlacement
         var support = client.RequireCapability("valheim.world/player-support-wait");
         var clock = Stopwatch.StartNew();
         if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
-        if (fastTestTiming)
+        if (!fastTestTiming) return Hop(server, client, point, support, clock, timeout, cancellation, skipIntro);
+        bool onAttempted = false, offAttempted = false;
+        try
         {
-            var mode = client.Execute("cli_teleport_test_mode on");
+            onAttempted = true; // The reply can be lost after the game applied the mode.
+            var mode = client.Execute("cli_teleport_test_mode on", requireSuccess: false);
             RequireLine(mode, "OK: testFastTeleport enabled=True", "Test teleport timing was not enabled");
+            var arrival = Hop(server, client, point, support, clock, timeout, cancellation, skipIntro);
+            offAttempted = true; // Never repeat an uncertain off request.
+            try
+            {
+                RequireLine(client.Execute("cli_teleport_test_mode off", requireSuccess: false), "OK: testFastTeleport enabled=False",
+                    "Test teleport timing was not switched off after a supported landing");
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException("Test teleport timing was not switched off after a supported landing (trace: " + arrival.Trace + ")", error);
+            }
+            return arrival;
         }
+        catch (Exception error)
+        {
+            if (onAttempted && !offAttempted && error is not OperationCanceledException)
+                TryTestTimingOff(client); // A cancelled run is torn down at once.
+            throw;
+        }
+    }
+
+    private static TeleportArrival Hop(GameActor server, GameActor client, HeightExpectation point, Capability support,
+        Stopwatch clock, TimeSpan timeout, CancellationToken cancellation, bool skipIntro)
+    {
         cancellation.ThrowIfCancellationRequested();
         string ready = SecondsLeft(clock, timeout);
         WithTimeout(client, timeout - clock.Elapsed, () =>
@@ -66,6 +93,21 @@ public static class PlayerPlacement
         if (!SurfaceProbe.Supported(landed, point))
             throw new InvalidOperationException("The client wait ended without supported arrival: " + landed.Data.GetRawText());
         return new TeleportArrival(landed.Data.Clone(), trace);
+    }
+
+    // The hop's own failure is the one reported. A client that stopped answering would hold the full command
+    // timeout again, so each call (the strict pin check, then the switch) gets 10 s; a client that is gone or
+    // leaves the world takes the mode with it.
+    private static void TryTestTimingOff(GameActor client)
+    {
+        var previous = client.CommandTimeout;
+        try
+        {
+            client.CommandTimeout = TimeSpan.FromSeconds(10);
+            client.Execute("cli_teleport_test_mode off", requireSuccess: false);
+        }
+        catch (Exception) { }
+        finally { client.CommandTimeout = previous; }
     }
 
     private static string SecondsLeft(Stopwatch clock, TimeSpan timeout)

@@ -1,3 +1,4 @@
+using valheim_cli.Testing;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
@@ -11,22 +12,36 @@ public class PlayerPlacementTests
     private static ScriptedTransport NoIntro() =>
         new ScriptedTransport().OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0.6,33.7,2.8 ms=4"));
 
+    private const string Peers = "PEER 1 character position=0.0,40.00,0.0 zone=0,0";
+    private const string TraceOk = "OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3500 floorReadyMs=3600 doneMs=3620 floorAtDone=True final=100,42.5,-40";
+
+    // A server that moves its one peer once, and a client that answers every signal-arrival phase; the trace and the
+    // test-mode switch-off replies are the parts a test varies.
+    private static (ScriptedTransport Server, ScriptedTransport Client) SignalTransports(string trace = TraceOk,
+        Func<string, CommandResult>? off = null, Func<string, CommandResult>? teleportable = null)
+    {
+        var server = new ScriptedTransport()
+            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", Peers))
+            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport"));
+        var client = NoIntro()
+            .OnPrefix("cli_wait_teleportable ", teleportable ?? (_ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500 stillMs=0 cooldownSeconds=2.00 grounded=True position=0,40,0")))
+            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
+            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok(trace))
+            .On("cli_teleport_test_mode on", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True gameChecks=area,floor minMoveSeconds=2 cooldownSeconds=0.5"))
+            .On("cli_teleport_test_mode off", off ?? (_ => ScriptedTransport.Ok("OK: testFastTeleport enabled=False gameChecks=area,floor minMoveSeconds=2 cooldownSeconds=0.5")))
+            .Extension("valheim.world", "player-support-wait", _ => Standing());
+        return (server, client);
+    }
+
     [Theory]
     [InlineData(false, 30)]
     [InlineData(true, 30)]
     [InlineData(true, 180)]
     public void SignalArrivalMakesOneWaitPerPhaseAndOneTeleport(bool fast, int seconds)
     {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport"));
-        var clientTransport = NoIntro()
-            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500 stillMs=0 cooldownSeconds=2.00 grounded=True position=0,40,0"))
-            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
-            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3500 floorReadyMs=3600 doneMs=3620 floorAtDone=True final=100,42.5,-40"))
-            .On("cli_teleport_test_mode on", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True gameChecks=area,floor minMoveSeconds=2 cooldownSeconds=0.5"))
-            .Extension("valheim.world", "player-support-wait", _ => Standing());
+        var (serverTransport, clientTransport) = SignalTransports();
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        var before = client.CommandTimeout;
         var result = PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(seconds), fast);
         Assert.True(result.Support.GetProperty("grounded").GetBoolean());
         Assert.Contains("floorAtDone=True", result.Trace);
@@ -35,27 +50,93 @@ public class PlayerPlacementTests
         Assert.Equal(1, clientTransport.Count("cli_teleport_trace_wait"));
         Assert.Equal(1, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
         Assert.Equal(fast ? 1 : 0, clientTransport.Count("cli_teleport_test_mode on"));
+        Assert.Equal(fast ? 1 : 0, clientTransport.Count("cli_teleport_test_mode off"));
+        if (fast) // Off only once the landing is established, so the whole hop ran with the test timing.
+            Assert.Equal("cli_teleport_test_mode off", clientTransport.Commands.Last(command => !command.StartsWith("cli_expect", StringComparison.Ordinal)));
         Assert.Equal(0, clientTransport.Count("cli_extension valheim.world/player-support"));
         if (seconds > 120)
             Assert.Contains(clientTransport.Commands, command => command.StartsWith("cli_wait_teleportable 120 ", StringComparison.Ordinal));
+        Assert.Equal(before, client.CommandTimeout);
     }
 
     [Fact]
     public void SignalArrivalRefusesACompletionWithoutFloorAndNeverRetries()
     {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport"));
-        var clientTransport = NoIntro()
-            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
-            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
-            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 floorAtDone=False"))
-            .Extension("valheim.world", "player-support-wait", _ => Standing());
+        var (serverTransport, clientTransport) = SignalTransports("OK: TELEPORT_TRACE id=7 floorAtDone=False");
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         Assert.Contains("without a ready floor", Assert.Throws<InvalidOperationException>(() =>
             PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30))).Message);
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
         Assert.Equal(0, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
+    }
+
+    // A failed hop still switches the test timing off (best effort), and its own failure is the one reported,
+    // even when the client does not answer the switch.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void FastTimingIsSwitchedOffWhenTheHopFails(bool offAnswers)
+    {
+        var (serverTransport, clientTransport) = SignalTransports("OK: TELEPORT_TRACE id=7 floorAtDone=False",
+            off: _ => offAnswers ? ScriptedTransport.Ok("OK: testFastTeleport enabled=False") : throw new TimeoutException("no reply"));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        var before = client.CommandTimeout;
+        Assert.Contains("without a ready floor", Assert.Throws<InvalidOperationException>(() =>
+            PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30), fastTestTiming: true)).Message);
+        Assert.Equal(1, clientTransport.Count("cli_teleport_test_mode off"));
+        Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
+        Assert.Equal(before, client.CommandTimeout);
+    }
+
+    [Fact]
+    public void ALandingWithTheTestTimingStillOnFailsAndKeepsItsTrace()
+    {
+        var (serverTransport, clientTransport) = SignalTransports(off: _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True"));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        string message = Assert.Throws<InvalidOperationException>(() =>
+            PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30), fastTestTiming: true)).Message;
+        Assert.Contains("not switched off", message);
+        Assert.Contains("areaReadyMs=3500", message);
+        Assert.Equal(1, clientTransport.Count("cli_teleport_test_mode off"));
+    }
+
+    [Fact]
+    public void ARejectedSwitchOffKeepsTheCompletedHopsTraceWithoutRepeatingTheRequest()
+    {
+        var (serverTransport, clientTransport) = SignalTransports(off: _ => ScriptedTransport.Failed("ERROR: mode unavailable"));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30), fastTestTiming: true));
+        Assert.Contains("areaReadyMs=3500", error.Message);
+        Assert.Contains("mode unavailable", error.InnerException?.Message);
+        Assert.Equal(1, clientTransport.Count("cli_teleport_test_mode off"));
+    }
+
+    [Fact]
+    public void AnUncertainSwitchOnReplyMakesOneBestEffortSwitchOffBeforeAnyTeleport()
+    {
+        var (serverTransport, clientTransport) = SignalTransports();
+        clientTransport.On("cli_teleport_test_mode on", _ => ScriptedTransport.Failed("ERROR: lost on reply"));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.ThrowsAny<Exception>(() => PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30), fastTestTiming: true));
+        Assert.Equal(1, clientTransport.Count("cli_teleport_test_mode off"));
+        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+    }
+
+    [Fact]
+    public void ACancelledFastHopIsNotHeldUpBySwitchingOff()
+    {
+        using var cancel = new CancellationTokenSource();
+        var (serverTransport, clientTransport) = SignalTransports(teleportable: _ =>
+        {
+            cancel.Cancel();
+            return ScriptedTransport.Ok("OK: TELEPORTABLE ms=500");
+        });
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30), fastTestTiming: true, cancel.Token));
+        Assert.Equal(0, clientTransport.Count("cli_teleport_test_mode off"));
+        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
     }
 
     [Fact] public void ProtectionMustBeReadBack()
