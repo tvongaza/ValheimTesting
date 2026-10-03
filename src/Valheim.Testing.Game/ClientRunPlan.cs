@@ -168,6 +168,7 @@ public sealed class ClientRunPlan
         if (DirectStart)
         {
             if (!Owned || Crossplay) throw new ArgumentException("directStart requires an owned client joining by address or hosting a local fixture; crossplay lobby discovery is not available at launch.");
+            if (Character.Contains('=')) throw new ArgumentException("A direct-start character filename cannot contain '='; the startup request uses one key=value per line.");
             if (HostWorld == null && (string.IsNullOrWhiteSpace(Join) ||
                 !long.TryParse(DirectStartWorldUid, System.Globalization.NumberStyles.Integer,
                     System.Globalization.CultureInfo.InvariantCulture, out _)))

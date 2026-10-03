@@ -46,6 +46,14 @@ public sealed class DirectWorldStartTests
         Assert.Contains("directStartWorldUid", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
     }
 
+    [Fact]
+    public void DirectStartRejectsACharacterNameTheStartupSpecCannotParse()
+    {
+        var plan = Plan(Path.GetFullPath("direct-start-evidence"));
+        plan.Character = "fresh=other";
+        Assert.Contains("key=value", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+    }
+
     private static ClientRunPlan Plan(string output) => new()
     {
         Mode = "owned", Install = output, Port = 5556, Join = "127.0.0.1:2456", Character = "fresh",
