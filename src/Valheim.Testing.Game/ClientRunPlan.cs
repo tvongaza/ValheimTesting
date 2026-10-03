@@ -152,8 +152,7 @@ public sealed class ClientRunPlan
     {
         bool pinned = Pinned;
         if (Mode is not ("owned" or "attach")) throw new ArgumentException("Client mode is owned or attach.");
-        if (FastTestTeleports && (!EventDrivenArrival || !Owned || !pinned))
-            throw new ArgumentException("fastTestTeleports requires eventDrivenArrival and an owned, strictly pinned test client.");
+        CheckTestTeleportOptions();
         // The install is a path on the client's machine, which with an environment profile is not this one (a Windows
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
@@ -257,6 +256,12 @@ public sealed class ClientRunPlan
     /// runs the install part itself; <see cref="HostRounds"/> runs all of it before it places the fixture.
     /// </summary>
     public void Preflight() => Preflight([]);
+
+    internal void CheckTestTeleportOptions()
+    {
+        if (FastTestTeleports && (!EventDrivenArrival || !Owned || !Pinned))
+            throw new ArgumentException("fastTestTeleports requires eventDrivenArrival and an owned, strictly pinned test client.");
+    }
 
     /// <summary>
     /// <see cref="Preflight()"/>, with <paramref name="capabilities"/> (<c>owner/command</c>) that the runner itself uses

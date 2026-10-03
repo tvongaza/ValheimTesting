@@ -198,6 +198,16 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Contains("strictly pinned", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
     }
 
+    [Fact] public void DirectRoundCallCannotBypassFastTeleportPlanGuard()
+    {
+        var plan = Plan();
+        plan.FastTestTeleports = true;
+        Assert.Contains("eventDrivenArrival", Assert.Throws<ArgumentException>(() =>
+            Rounds(new ScenarioReport("guard"), plan).Run(Server(), Open(plan), Measure())).Message);
+        Assert.Equal(0, _opens);
+        Assert.Equal(0, _servers.Sum(server => server.Count("cli_teleport_peer")));
+    }
+
     [Theory] [InlineData("owned", "arm64", "arm64")] [InlineData("owned", "x64", "x64")] [InlineData("attach", "", "attached")]
     public void TheReportRecordsTheClientsArchitecture(string mode, string architecture, string recorded)
     {

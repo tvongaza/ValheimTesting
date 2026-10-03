@@ -198,6 +198,7 @@ public sealed class ClientRounds
     private void Check()
     {
         CheckRoundNames(Rounds);
+        Client.CheckTestTeleportOptions();
         if (Client.StartAtCharacterSave && Arrival == null)
             throw new ArgumentException("startAtCharacterSave needs an arrival point to verify on the client.");
         if (Client.StartAtCharacterSave && (!Client.Owned || Client.CharacterStart == null))

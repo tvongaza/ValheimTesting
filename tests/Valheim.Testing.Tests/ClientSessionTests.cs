@@ -29,6 +29,21 @@ public sealed class ClientSessionTests : IDisposable
         public void Dispose() => Disposals++;
     }
 
+    [Fact] public void DirectClientEntryPointsCannotBypassFastTeleportPlanGuard()
+    {
+        var owned = Plan(); owned.FastTestTeleports = true;
+        bool started = false;
+        Assert.Contains("eventDrivenArrival", Assert.Throws<ArgumentException>(() =>
+            ClientSession.Launch(owned, _output, () => { started = true; return new Process(); },
+                () => new ScriptedTransport(), (_, _) => Task.CompletedTask)).Message);
+        Assert.False(started);
+
+        var attached = Plan("attach"); attached.FastTestTeleports = true; attached.EventDrivenArrival = true;
+        var transport = new ScriptedTransport();
+        Assert.Contains("owned", Assert.Throws<ArgumentException>(() => ClientSession.Attach(attached, _output, transport)).Message);
+        Assert.Empty(transport.Commands);
+    }
+
     // With an environment profile the client runs on another machine: a Windows install is validated from macOS or Linux too.
     [Theory]
     [InlineData(@"C:\Program Files (x86)\Steam\steamapps\common\Valheim", true)]

@@ -92,6 +92,7 @@ public sealed class ClientSession : IDisposable
     /// </summary>
     public static ClientSession Attach(ClientRunPlan plan, string output, SteamAccountHold? account, IGameTransport? transport = null)
     {
+        plan.CheckTestTeleportOptions();
         if (plan.Owned) throw new ArgumentException("This plan's client is owned: launch it instead.");
         account?.RequireReady(null); // Before the session assumes the client.
         transport ??= new CliTransport(plan.Host, plan.Port);
@@ -137,6 +138,7 @@ public sealed class ClientSession : IDisposable
     public static ClientSession Launch(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation = default)
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
+        plan.CheckTestTeleportOptions();
         account?.RequireReady(null);
         var start = plan.CheckOwnedInstall(); // Patchers, install pins, loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
@@ -226,6 +228,7 @@ public sealed class ClientSession : IDisposable
     internal static ClientSession Launch(ClientRunPlan plan, string output, Func<IServerProcess> start, Func<IGameTransport> connect,
         Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, SteamAccountHold? account = null)
     {
+        plan.CheckTestTeleportOptions();
         if (plan.PasswordVariable is { } variable && Environment.GetEnvironmentVariable(variable) == null)
             throw new InvalidOperationException($"Set {variable} in this runner's environment; the launched client inherits it for the join.");
         account?.RequireReady(null);
