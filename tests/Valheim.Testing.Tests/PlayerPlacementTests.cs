@@ -101,6 +101,29 @@ public class PlayerPlacementTests
     }
 
     [Fact]
+    public void ARejectedSwitchOffKeepsTheCompletedHopsTraceWithoutRepeatingTheRequest()
+    {
+        var (serverTransport, clientTransport) = SignalTransports(off: _ => ScriptedTransport.Failed("ERROR: mode unavailable"));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30), fastTestTiming: true));
+        Assert.Contains("areaReadyMs=3500", error.Message);
+        Assert.Contains("mode unavailable", error.InnerException?.Message);
+        Assert.Equal(1, clientTransport.Count("cli_teleport_test_mode off"));
+    }
+
+    [Fact]
+    public void AnUncertainSwitchOnReplyMakesOneBestEffortSwitchOffBeforeAnyTeleport()
+    {
+        var (serverTransport, clientTransport) = SignalTransports();
+        clientTransport.On("cli_teleport_test_mode on", _ => ScriptedTransport.Failed("ERROR: lost on reply"));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.ThrowsAny<Exception>(() => PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30), fastTestTiming: true));
+        Assert.Equal(1, clientTransport.Count("cli_teleport_test_mode off"));
+        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+    }
+
+    [Fact]
     public void ACancelledFastHopIsNotHeldUpBySwitchingOff()
     {
         using var cancel = new CancellationTokenSource();

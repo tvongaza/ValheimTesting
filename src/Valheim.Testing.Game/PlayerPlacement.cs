@@ -34,19 +34,31 @@ public static class PlayerPlacement
         var clock = Stopwatch.StartNew();
         if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
         if (!fastTestTiming) return Hop(server, client, point, support, clock, timeout, cancellation, skipIntro);
-        var mode = client.Execute("cli_teleport_test_mode on");
-        RequireLine(mode, "OK: testFastTeleport enabled=True", "Test teleport timing was not enabled");
-        TeleportArrival arrival;
-        try { arrival = Hop(server, client, point, support, clock, timeout, cancellation, skipIntro); }
+        bool onAttempted = false, offAttempted = false;
+        try
+        {
+            onAttempted = true; // The reply can be lost after the game applied the mode.
+            var mode = client.Execute("cli_teleport_test_mode on", requireSuccess: false);
+            RequireLine(mode, "OK: testFastTeleport enabled=True", "Test teleport timing was not enabled");
+            var arrival = Hop(server, client, point, support, clock, timeout, cancellation, skipIntro);
+            offAttempted = true; // Never repeat an uncertain off request.
+            try
+            {
+                RequireLine(client.Execute("cli_teleport_test_mode off", requireSuccess: false), "OK: testFastTeleport enabled=False",
+                    "Test teleport timing was not switched off after a supported landing");
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException("Test teleport timing was not switched off after a supported landing (trace: " + arrival.Trace + ")", error);
+            }
+            return arrival;
+        }
         catch (Exception error)
         {
-            if (error is not OperationCanceledException) TryTestTimingOff(client); // A cancelled run is torn down at once.
+            if (onAttempted && !offAttempted && error is not OperationCanceledException)
+                TryTestTimingOff(client); // A cancelled run is torn down at once.
             throw;
         }
-        // The landing happened: a failure here keeps its trace in the message, as the round writes no evidence.
-        RequireLine(client.Execute("cli_teleport_test_mode off"), "OK: testFastTeleport enabled=False",
-            "Test teleport timing was not switched off after a supported landing (trace: " + arrival.Trace + ")");
-        return arrival;
     }
 
     private static TeleportArrival Hop(GameActor server, GameActor client, HeightExpectation point, Capability support,
