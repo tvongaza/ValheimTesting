@@ -28,6 +28,11 @@ jobs:
       # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
       # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
       VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+      # The NuGet package cache's paths (see "Restore the NuGet package cache"), shared by its restore and save.
+      VT_NUGET_CACHE_PATHS: |
+        ~/.nuget/packages
+        !~/.nuget/packages/valheim.testing*
+        !~/.nuget/packages/valheim.cli*
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,6 +54,17 @@ jobs:
             "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
           }
           catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
+      # Packages from NuGet.org, reused across runs. Never this repository's own packages (Valheim.Testing*, and the CLI
+      # transport bootstrap builds): validate packs those at versions it reuses and checks that consumers restore exactly what
+      # it packed, which a cached copy of an earlier build would defeat. A restored entry is trusted as NuGet's global
+      # packages folder trusts its own files; only this repository's workflows can write the cache, a pull request only for itself.
+      - name: Restore the NuGet package cache
+        id: nuget-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VT_NUGET_CACHE_PATHS }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-
       - run: dotnet --info
       - run: bash scripts/run.sh bootstrap
         if: runner.os != 'Windows'
@@ -78,6 +94,12 @@ jobs:
         run: |
           dotnet tool restore
           dotnet run scripts/api-docs.cs
+      - name: Save the NuGet package cache
+        if: steps.nuget-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.VT_NUGET_CACHE_PATHS }}
+          key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
   cache-preflight:
     name: cache preflight (${{ matrix.os }})
     # The launchers' NuGet cache and file-based app state checks (#210). They need only the SDK and the scripts, so they run
