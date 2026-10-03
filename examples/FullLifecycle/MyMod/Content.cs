@@ -24,7 +24,7 @@ internal static class Content
 {
     public const string ItemName = "MyMod_SurveyStake", RecipeName = "Recipe_MyMod_SurveyStake";
     public const string PieceName = "MyMod_SurveyPost", StatusName = "MyMod_SurveyBlessing";
-    private const string Source = "Wood", Workbench = "piece_workbench", Hammer = "Hammer", WoodWall = "wood_wall";
+    private const string Source = "Wood", Workbench = "piece_workbench", Hammer = "Hammer", WoodWall = "woodwall";
     private static GameObject? _prefab;
     private static GameObject? _piece;
 #if !MYMOD_OMIT_STATUS_EFFECT
@@ -110,7 +110,7 @@ internal static class Content
             var original = __instance.GetPrefab(WoodWall);
             if (table == null || wood == null || original == null)
             {
-                Plugin.Log.LogError($"MyMod content: no {Hammer} build table, {Source} item or {WoodWall} prefab for the survey post");
+                Plugin.Log.LogError($"MyMod content: survey post dependencies missing: {Hammer} table={table != null}, {Source} item={wood != null}, {WoodWall} prefab={original != null}");
                 return;
             }
             if (_piece == null)
