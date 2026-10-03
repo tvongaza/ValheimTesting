@@ -175,6 +175,11 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(new[] { 0, 1 }, _servers.Select(s => s.Count("cli_teleport_peer")));
         Assert.Equal("characterSave", report.Provenance["clientStart"]);
         Assert.Contains(report.Steps, step => step.Name == "stage the pinned disposable local character" && step.Passed);
+        var stepNames = report.Steps.Select(step => step.Name).ToArray();
+        int ready = Array.IndexOf(stepNames, "the server accepts connections before client launch");
+        int opened = Array.IndexOf(stepNames, "launch the owned client to its menu, plugins pinned");
+        Assert.True(ready >= 0 && opened > ready);
+        Assert.DoesNotContain(report.Steps, step => step.Name == "first: the server accepts game connections");
         Assert.Contains(report.Steps, step => step.Name == "remove only the staged character and its game-made backups" && step.Passed);
         Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
         Assert.Equal(1, _client.Count("cli_select_character tester-copy"));

@@ -1,0 +1,63 @@
+using Valheim.Testing.Game;
+using Xunit;
+
+public sealed class DirectWorldStartTests
+{
+    [Fact]
+    public void DedicatedJoinWritesAOneUsePasswordFreeRequestAndRequiresPreparedSpawn()
+    {
+        string output = Directory.CreateTempSubdirectory("vt-direct-start-").FullName;
+        try
+        {
+            var plan = Plan(output);
+            Assert.Contains("prepared character", Assert.Throws<ArgumentException>(() => DirectWorldStart.Write(plan, output)).Message);
+            plan.StartAtCharacterSave = true;
+            plan.CharacterStart = new CharacterStartPlan
+            {
+                PreparedFile = Path.Combine(output, "fresh.fch"), Sha256 = new string('a', 64),
+                CharactersLocalDirectory = Path.Combine(output, "characters_local"),
+                SteamUserDataDirectory = Path.Combine(output, "userdata"), CharacterStore = output,
+            };
+            string file = DirectWorldStart.Write(plan, output);
+            string text = File.ReadAllText(file);
+            string[] lines = File.ReadAllLines(file);
+            Assert.Contains("mode=join", lines);
+            Assert.Contains("character=fresh", lines);
+            Assert.Contains("target=127.0.0.1:2456", lines);
+            Assert.Contains("passwordVariable=VT_SECRET", lines);
+            Assert.Contains("devcommands=true", lines);
+            Assert.DoesNotContain("the-secret", text);
+            string second = DirectWorldStart.Write(plan, output);
+            Assert.NotEqual(file, second);
+            Assert.Equal(text, File.ReadAllText(second)); // A second owned launch keeps the first request as evidence.
+        }
+        finally { Directory.Delete(output, recursive: true); }
+    }
+
+    [Fact]
+    public void DirectStartCannotAttachCrossplayOrNameAnotherWorld()
+    {
+        string output = Path.GetFullPath("direct-start-evidence");
+        var plan = Plan(output);
+        plan.Mode = "attach"; plan.Install = "";
+        Assert.Contains("owned client", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+        plan.Mode = "owned"; plan.Install = output; plan.Crossplay = true; plan.Join = ""; plan.PasswordVariable = null;
+        Assert.Contains("crossplay", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+        plan.Crossplay = false; plan.Join = "127.0.0.1:2456"; plan.DirectStartWorldUid = "";
+        Assert.Contains("directStartWorldUid", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+    }
+
+    [Fact]
+    public void DirectStartRejectsACharacterNameTheStartupSpecCannotParse()
+    {
+        var plan = Plan(Path.GetFullPath("direct-start-evidence"));
+        plan.Character = "fresh=other";
+        Assert.Contains("key=value", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+    }
+
+    private static ClientRunPlan Plan(string output) => new()
+    {
+        Mode = "owned", Install = output, Port = 5556, Join = "127.0.0.1:2456", Character = "fresh",
+        DirectStart = true, DirectStartWorldUid = "12345", PasswordVariable = "VT_SECRET", Pinning = "none",
+    };
+}

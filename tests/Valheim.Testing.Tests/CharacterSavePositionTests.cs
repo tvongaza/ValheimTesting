@@ -34,6 +34,33 @@ public class CharacterSavePositionTests
     }
 
     [Fact]
+    public void CleanCharacterCanGainExactlyOneWorldEntryWithoutChangingItsIdentity()
+    {
+        byte[] clean = Profile(includeWorlds: false).File;
+        Assert.True(CharacterSavePosition.IsFreshSmokeSeed(clean));
+        Assert.Throws<KeyNotFoundException>(() => CharacterSavePosition.AtWorld(clean, 300, 12, 43, -8));
+
+        byte[] prepared = CharacterSavePosition.AtNewWorld(clean, 300, 12, 43, -8);
+        Assert.Equal(CharacterSavePosition.ReadIdentity(clean), CharacterSavePosition.ReadIdentity(prepared));
+        Assert.False(CharacterSavePosition.IsFreshSmokeSeed(prepared));
+        Assert.Equal(prepared, CharacterSavePosition.AtWorld(prepared, 300, 12, 43, -8));
+        Assert.Throws<InvalidOperationException>(() => CharacterSavePosition.AtNewWorld(prepared, 300, 12, 43, -8));
+        Assert.Equal(clean, Profile(includeWorlds: false).File); // The supplied bytes were never edited in place.
+    }
+
+    [Fact]
+    public void AddingAWorldPreservesExistingWorldsAndRejectsFirstSpawn()
+    {
+        var fixture = Profile(mapBytes: 140_000);
+        byte[] original = fixture.File;
+        byte[] added = CharacterSavePosition.AtNewWorld(original, 300, -21, 61, 14);
+        Assert.Equal(added, CharacterSavePosition.AtWorld(added, 300, -21, 61, 14));
+        Assert.Equal(Payload(original).AsSpan(fixture.World100Flag, 13).ToArray(), Payload(added).AsSpan(fixture.World100Flag, 13).ToArray());
+        Assert.Equal(Payload(original).AsSpan(fixture.World200Flag, 13).ToArray(), Payload(added).AsSpan(fixture.World200Flag, 13).ToArray());
+        Assert.Throws<InvalidDataException>(() => CharacterSavePosition.AtNewWorld(Profile(firstSpawn: true).File, 300, 1, 2, 3));
+    }
+
+    [Fact]
     public void UnfamiliarVersionOrStatLayoutIsRefused()
     {
         var original = Profile();
@@ -76,11 +103,11 @@ public class CharacterSavePositionTests
     }
 
     [Fact]
-    public void HostedAndAttachedPlansCannotClaimAPreparedCharacterStart()
+    public void HostedWithoutDirectStartAndAttachedPlansCannotClaimAPreparedCharacterStart()
     {
         var hosted = new ClientRunPlan { Mode = "attach", HostWorld = new HostWorldPlan(), Port = 5556,
             Character = "fresh", StartAtCharacterSave = true, Pinning = "none" };
-        Assert.Contains("hosted worlds", Assert.Throws<ArgumentException>(() => hosted.Validate()).Message);
+        Assert.Contains("requires directStart", Assert.Throws<ArgumentException>(() => hosted.Validate()).Message);
         var attached = new ClientRunPlan { Mode = "attach", Join = "127.0.0.1:2456", Port = 5556,
             Character = "fresh", StartAtCharacterSave = true, Pinning = "none" };
         Assert.Contains("owned client", Assert.Throws<ArgumentException>(() => attached.Validate()).Message);
@@ -107,6 +134,30 @@ public class CharacterSavePositionTests
             Assert.NotEqual(original, File.ReadAllBytes(output));
             Assert.Throws<IOException>(() => CharacterStartCopy.Prepare(character, output, 200, 1, 2, 3));
             Assert.Equal(14f, BitConverter.ToSingle(Payload(File.ReadAllBytes(output)), Profile().World200Flag + 1));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void RegisteredCleanCharacterCanBePreparedForFirstWorldAndStaged()
+    {
+        string root = Directory.CreateTempSubdirectory("vt-character-new-world-").FullName;
+        string local = Path.Combine(root, "characters_local"), evidence = Path.Combine(root, "evidence");
+        string steam = Path.Combine(root, "userdata");
+        Directory.CreateDirectory(local); Directory.CreateDirectory(evidence); Directory.CreateDirectory(steam);
+        try
+        {
+            string source = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "newworld.fch");
+            byte[] clean = Profile(includeWorlds: false).File;
+            File.WriteAllBytes(source, clean);
+            var character = Register(root, source);
+            string hash = CharacterStartCopy.PrepareForNewWorld(character, prepared, 300, 12, 43, -8);
+            Assert.Equal(clean, File.ReadAllBytes(source));
+            var plan = new CharacterStartPlan { PreparedFile = prepared, Sha256 = hash,
+                CharactersLocalDirectory = local, SteamUserDataDirectory = steam, CharacterStore = Path.Combine(root, "store") };
+            using (CharacterStartStage.Install(plan, "newworld", 300, new HeightExpectation(12, -8, 43)))
+                Assert.Equal(File.ReadAllBytes(prepared), File.ReadAllBytes(Path.Combine(local, "newworld.fch")));
+            Assert.False(File.Exists(Path.Combine(local, "newworld.fch")));
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -239,7 +290,8 @@ public class CharacterSavePositionTests
     internal sealed record Fixture(byte[] File, int World100Flag, int World200Flag);
 
     // A hand-built 1.0.16 profile payload. No game save or decompiled source is checked in.
-    internal static Fixture Profile(int mapBytes = 0, long secondUid = 200, bool firstSpawn = false, long playerId = 5678)
+    internal static Fixture Profile(int mapBytes = 0, long secondUid = 200, bool firstSpawn = false, long playerId = 5678,
+        bool includeWorlds = true)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -262,9 +314,9 @@ public class CharacterSavePositionTests
             }
         }
         writer.Write(firstSpawn);
-        writer.Write(2); // per-world records
-        int first = World(writer, 100, mapBytes);
-        int second = World(writer, secondUid, 0);
+        writer.Write(includeWorlds ? 2 : 0); // per-world records
+        int first = includeWorlds ? World(writer, 100, mapBytes) : -1;
+        int second = includeWorlds ? World(writer, secondUid, 0) : -1;
         writer.Write("Test character"); writer.Write(playerId); writer.Write("seed");
         writer.Write(false); // cheats
         writer.Write(1_700_000_000L); // creation date

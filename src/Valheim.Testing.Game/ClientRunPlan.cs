@@ -49,6 +49,15 @@ public sealed class ClientRunPlan
     /// <summary>An existing, disposable local character (never a cloud character).</summary>
     public string Character { get; set; } = "";
     /// <summary>
+    /// Owned client only: ValheimCLI's Standard pack selects <see cref="Character"/> and enters the planned world on
+    /// startup. The runner waits for that world instead of the menu. For a dedicated join, set
+    /// <see cref="DirectStartWorldUid"/> to the server fixture's UID; a hosted client's UID comes from
+    /// <see cref="HostWorld"/>. The startup request is a small password-free file in the run's private evidence.
+    /// </summary>
+    public bool DirectStart { get; set; }
+    /// <summary>The exact destination world UID when <see cref="DirectStart"/> joins a dedicated server.</summary>
+    public string DirectStartWorldUid { get; set; } = "";
+    /// <summary>
     /// Opt in only after staging a positioned copy of this disposable local character while the game is stopped.
     /// The first client round verifies arrival from the client's support reading without teleporting; later rounds
     /// and zone-cycle movements still use <see cref="PlayerPlacement.Arrive"/>. A wrong or missing start fails the run.
@@ -156,10 +165,24 @@ public sealed class ClientRunPlan
             throw new ArgumentException("A hosting client runs on this machine, where the runner places the fixture world in its save directory; its ValheimCLI host is 127.0.0.1.");
         if (Crossplay && (Join.Length != 0 || PasswordVariable != null))
             throw new ArgumentException("A crossplay client joins the server's PlayFab lobby, not an address, and the crossplay join command would carry a password as text: leave out join and passwordVariable, and run the crossplay fixture server private without a password.");
+        if (DirectStart)
+        {
+            if (!Owned || Crossplay) throw new ArgumentException("directStart requires an owned client joining by address or hosting a local fixture; crossplay lobby discovery is not available at launch.");
+            if (Character.Contains('=')) throw new ArgumentException("A direct-start character filename cannot contain '='; the startup request uses one key=value per line.");
+            if (HostWorld == null && (string.IsNullOrWhiteSpace(Join) ||
+                !long.TryParse(DirectStartWorldUid, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out _)))
+                throw new ArgumentException("A direct-start join needs join and directStartWorldUid for the pinned server fixture.");
+            if (HostWorld != null && DirectStartWorldUid.Length != 0)
+                throw new ArgumentException("A direct-start host takes its world UID from hostWorld; leave out directStartWorldUid.");
+            if (!StartAtCharacterSave)
+                throw new ArgumentException("A direct-start client needs a prepared character so the first spawn is at the planned dry point.");
+        }
+        else if (DirectStartWorldUid.Length != 0) throw new ArgumentException("directStartWorldUid is unused without directStart.");
         foreach (string? token in new[] { HostWorld == null && !Crossplay ? Join : null, Character, PasswordVariable })
             if (token != null && (token.Length == 0 || token.Any(char.IsWhiteSpace))) throw new ArgumentException("Join address, character and password variable must be single tokens.");
-        if (StartAtCharacterSave && HostWorld != null)
-            throw new ArgumentException("startAtCharacterSave requires a client joining a dedicated server; hosted worlds have no arrival step.");
+        if (StartAtCharacterSave && HostWorld != null && !DirectStart)
+            throw new ArgumentException("startAtCharacterSave for a hosted world requires directStart and a HostRounds arrival point.");
         if (StartAtCharacterSave && (!Owned || CharacterStart == null))
             throw new ArgumentException("startAtCharacterSave requires an owned client and characterStart staging details.");
         if (!StartAtCharacterSave && CharacterStart != null)
@@ -256,7 +279,8 @@ public sealed class ClientRunPlan
     {
         if (!Owned || CliManifest == null) return null;
         var manifest = CliCapabilityManifest.Read(CliManifest);
-        return manifest.Check(Install, Capabilities.Concat(capabilities ?? []));
+        return manifest.Check(Install, Capabilities.Concat(capabilities ?? [])
+            .Concat(DirectStart ? [CliCapabilities.DirectStart] : []));
     }
 
     /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>

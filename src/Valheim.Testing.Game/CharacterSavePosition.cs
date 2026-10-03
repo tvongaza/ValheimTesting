@@ -14,7 +14,15 @@ internal static class CharacterSavePosition
     private const int MaxPayloadBytes = 64 * 1024 * 1024;
     private const int MaxEntries = 100_000;
 
-    internal static byte[] AtWorld(byte[] file, long worldUid, float x, float y, float z)
+    internal static byte[] AtWorld(byte[] file, long worldUid, float x, float y, float z) =>
+        Position(file, worldUid, x, y, z, addWorld: false);
+
+    // Only a version-gated, fully parsed disposable save can gain a world entry. This is separate from AtWorld so
+    // callers cannot silently add a world when they intended to update an existing one.
+    internal static byte[] AtNewWorld(byte[] file, long worldUid, float x, float y, float z) =>
+        Position(file, worldUid, x, y, z, addWorld: true);
+
+    private static byte[] Position(byte[] file, long worldUid, float x, float y, float z, bool addWorld)
     {
         ArgumentNullException.ThrowIfNull(file);
         if (worldUid == 0) throw new ArgumentOutOfRangeException(nameof(worldUid), "A real world UID is required.");
@@ -25,11 +33,39 @@ internal static class CharacterSavePosition
         Layout layout = Walk(payload, worldUid);
         if (layout.FirstSpawn)
             throw new InvalidDataException("The character has not completed its first spawn; the game would ignore a saved logout point.");
-        (int flagOffset, int pointOffset) = layout.World ?? throw new KeyNotFoundException("The character has no entry for the requested world UID.");
-        payload[flagOffset] = 1;
-        WriteFloat(payload, pointOffset, x);
-        WriteFloat(payload, pointOffset + 4, y);
-        WriteFloat(payload, pointOffset + 8, z);
+        if (addWorld)
+        {
+            if (layout.World != null) throw new InvalidOperationException("The character already has an entry for this world UID; update it instead.");
+            if (layout.WorldCount >= MaxEntries) throw new InvalidDataException("The character has too many world entries to add another.");
+            if (payload.Length > MaxPayloadBytes - 60) throw new InvalidDataException("The character payload is too large to add a world entry.");
+            using var expanded = new MemoryStream(payload.Length + 60);
+            using (var entryWriter = new BinaryWriter(expanded, System.Text.Encoding.UTF8, leaveOpen: true))
+            {
+                entryWriter.Write(payload.AsSpan(0, layout.WorldCountOffset));
+                entryWriter.Write(layout.WorldCount + 1);
+                entryWriter.Write(payload.AsSpan(layout.WorldCountOffset + 4, layout.WorldEndOffset - layout.WorldCountOffset - 4));
+                entryWriter.Write(worldUid);
+                entryWriter.Write(false); // no custom spawn
+                WritePoint(entryWriter, 0, 0, 0);
+                entryWriter.Write(true); // logout point present
+                WritePoint(entryWriter, x, y, z);
+                entryWriter.Write(false); // no death point
+                WritePoint(entryWriter, 0, 0, 0);
+                WritePoint(entryWriter, 0, 0, 0); // home point
+                entryWriter.Write(false); // no map data
+                entryWriter.Write(payload.AsSpan(layout.WorldEndOffset));
+            }
+            payload = expanded.ToArray();
+            _ = Walk(payload, worldUid); // The finished save must still parse through its trailing player data.
+        }
+        else
+        {
+            (int flagOffset, int pointOffset) = layout.World ?? throw new KeyNotFoundException("The character has no entry for the requested world UID.");
+            payload[flagOffset] = 1;
+            WriteFloat(payload, pointOffset, x);
+            WriteFloat(payload, pointOffset + 4, y);
+            WriteFloat(payload, pointOffset + 8, z);
+        }
 
         using var output = new MemoryStream(file.Length);
         using var writer = new BinaryWriter(output);
@@ -73,7 +109,8 @@ internal static class CharacterSavePosition
         return !layout.FirstSpawn && layout.WorldCount == 0;
     }
 
-    private sealed record Layout(bool FirstSpawn, int WorldCount, (int FlagOffset, int PointOffset)? World, CharacterIdentity Identity);
+    private sealed record Layout(bool FirstSpawn, int WorldCount, int WorldCountOffset, int WorldEndOffset,
+        (int FlagOffset, int PointOffset)? World, CharacterIdentity Identity);
 
     private static Layout Walk(byte[] payload, long worldUid)
     {
@@ -100,6 +137,7 @@ internal static class CharacterSavePosition
             }
 
             bool firstSpawn = ReadFlag(reader);
+            int worldCountOffset = checked((int)stream.Position);
             int worldCount = ReadCount(reader);
             (int FlagOffset, int PointOffset)? found = null;
             var seen = new HashSet<long>();
@@ -118,6 +156,7 @@ internal static class CharacterSavePosition
                 if (ReadFlag(reader)) Skip(stream, ReadBlobLength(reader, stream)); // map data
                 if (worldUid != 0 && uid == worldUid) found = (flagOffset, pointOffset);
             }
+            int worldEndOffset = checked((int)stream.Position);
             string name = reader.ReadString();
             long playerId = reader.ReadInt64();
             reader.ReadString(); // start seed
@@ -126,7 +165,7 @@ internal static class CharacterSavePosition
             if (ReadFlag(reader)) Skip(stream, ReadBlobLength(reader, stream)); // player data
             if (stream.Position != stream.Length)
                 throw new InvalidDataException("Character payload has unexpected trailing data.");
-            return new Layout(firstSpawn, worldCount, found, new CharacterIdentity(name, playerId));
+            return new Layout(firstSpawn, worldCount, worldCountOffset, worldEndOffset, found, new CharacterIdentity(name, playerId));
         }
         catch (EndOfStreamException ex)
         {
@@ -175,6 +214,11 @@ internal static class CharacterSavePosition
 
     private static void WriteFloat(byte[] payload, int offset, float value) =>
         BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(offset, sizeof(float)), value);
+
+    private static void WritePoint(BinaryWriter writer, float x, float y, float z)
+    {
+        writer.Write(x); writer.Write(y); writer.Write(z);
+    }
 }
 
 internal readonly record struct CharacterIdentity(string Name, long PlayerId);

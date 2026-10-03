@@ -21,6 +21,10 @@ public sealed class HostedPlan
     public ClientRunPlan Client { get; set; } = new();
     public Site DrySite { get; set; } = new();
     public Site WetSite { get; set; } = new();
+    /// <summary>Required for direct start: dry ground where the prepared character first appears.</summary>
+    public Site? Arrival { get; set; }
+    /// <summary>Exact known log lines and reasons for this disposable run; other errors still fail teardown.</summary>
+    public Dictionary<string, LogClassification> LogScan { get; set; } = [];
     /// <summary>The word the host's greeting changes to for the broadcast check; it is set back afterwards.</summary>
     public string NewGreeting { get; set; } = "";
 
@@ -33,12 +37,20 @@ public sealed class HostedPlan
         if (!plan.Client.Pinned) throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
         if (plan.Client.HostWorld == null) throw new ArgumentException("Add the client's hostWorld section: the fixture world it hosts.");
         plan.Client.Validate();
+        LogScanner.CheckClassifications(plan.LogScan);
         foreach (string plugin in new[] { LifecyclePlan.ModPlugin, LifecyclePlan.AdapterPlugin })
             if (!plan.Client.Pins.TryGetValue(plugin, out var md5) || md5 == "absent")
                 throw new ArgumentException($"The host runs MyMod and its adapter: pin {plugin} by its MD5.");
         if (ControlPlugins.All.FirstOrDefault(c => plan.Client.Pins.TryGetValue(c.Guid, out var value) && value != "absent") is { } control)
             throw new ArgumentException($"The hosted scenario has no control run: remove {control.Guid}.");
         LifecyclePlan.CheckSites(plan.DrySite, plan.WetSite);
+        if (plan.Client.DirectStart)
+        {
+            if (plan.Arrival == null) throw new ArgumentException("A direct-start hosted run needs an arrival point matching the prepared character.");
+            plan.Arrival.Validate("arrival point", requireGround: true);
+            if (plan.Arrival.Ground < LifecyclePlan.WaterLevel + LifecyclePlan.Clearance)
+                throw new ArgumentException("The direct-start arrival must be dry ground.");
+        }
         if (!Word.IsMatch(plan.NewGreeting)) throw new ArgumentException("Set newGreeting to one word (letters, digits, - or _): the host's greeting changes to it for the broadcast check.");
         return plan;
     }
@@ -63,7 +75,8 @@ public static class HostedScenario
     {
         var timeout = TimeSpan.FromSeconds(plan.Client.JoinSeconds);
         report.Provenance["hostBroadcast"] = hostLog == null ? "not observed: an attached host's log is its operator's" : "the owned host's live BepInEx log";
-        new HostRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation }.Run(openClient, round =>
+        new HostRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation,
+            Arrival = plan.Arrival == null ? null : new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground) }.Run(openClient, round =>
         {
             var host = round.Server; // The same actor as round.Client.
             if (round.Index > 0)
@@ -71,6 +84,10 @@ public static class HostedScenario
                 round.Step("host: the marker is still at the dry site after the restart, none at the wet site", () => RequireMarkers(host, plan, dry: 1));
                 return;
             }
+            // A clean character needs explicit acknowledgement before Terminal will run this mod's cheat commands.
+            // Only the direct-start plan has a prepared disposable character and copied fixture owned by this run.
+            if (plan.Client.DirectStart)
+                round.Step("acknowledge cheat use on the disposable character and fixture", () => CampaignSteps.AcknowledgeLocalCheats(host));
             round.Step("host: the mod's Harmony patches are applied", () =>
                 HarmonyCensus.Read(host, Capabilities.Harmony, LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied());
             round.Step("no marker at either site before the mod acts", () => RequireMarkers(host, plan, dry: 0));
@@ -140,10 +157,11 @@ public static class HostedRun
         string output = Path.GetFullPath(args[2]);
         bool ownOutput = false;
         var logs = new List<RunLog>();
+        HostedPlan? plan = null;
         try
         {
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
-            var plan = HostedPlan.ReadValidated(args[1]);
+            plan = HostedPlan.ReadValidated(args[1]);
             report.Provenance["planSha256"] = WorldFixture.Hash(args[1]);
             report.Provenance["scenario"] = plan.Scenario;
             report.Provenance["clientMode"] = plan.Client.Mode;
@@ -170,7 +188,7 @@ public static class HostedRun
         finally
         {
             Console.CancelKeyPress -= onCancel;
-            if (logs.Count != 0) report.ScanLogs(logs);
+            if (logs.Count != 0) report.ScanLogs(logs, plan?.LogScan);
             if (ownOutput) report.Write(output);
         }
         Console.WriteLine(!report.Passed ? "FAIL" : args[0] == RunMode ? "PASS" : "VALIDATED (plan and the run's preflight only; nothing was copied and no game was launched)");

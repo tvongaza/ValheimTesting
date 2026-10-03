@@ -8,7 +8,8 @@ namespace Valheim.Testing.Game;
 /// after a restart, with the evidence written in the same shape each time. <see cref="Run"/> opens the client, then for
 /// each of <see cref="Rounds"/>:
 /// <list type="number">
-/// <item>waits until the server accepts game connections (only now, so the steps before overlap a first boot's late socket);</item>
+/// <item>waits until the server accepts game connections (before opening a client with a prepared character start,
+/// otherwise before each join);</item>
 /// <item>joins with the plan's disposable character (devcommands first, exactly once), verifies the client's world pins and
 /// waits for the world; a <see cref="ClientRunPlan.Crossplay"/> client first reads the server's lobby (<see cref="Lobby"/>)
 /// and joins it (<see cref="SessionControl.JoinCrossplay"/>);</item>
@@ -85,7 +86,12 @@ public sealed class ClientRounds
             if (Client.StartAtCharacterSave)
                 Report.Step("stage the pinned disposable local character", () => stage = CharacterStartStage.Install(
                     Client.CharacterStart!, Client.Character, long.Parse(WorldUid, System.Globalization.CultureInfo.InvariantCulture), Arrival!));
-            Report.Step(OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
+            // A direct-start client joins as part of opening. Prepare the menu-start comparison under the same
+            // ready-server condition, so its startup timing does not include a different readiness wait.
+            if (Client.DirectStart || Client.StartAtCharacterSave)
+                Report.Step("the server accepts connections before client launch", () => WaitUntilJoinable(server));
+            Report.Step(OpenStep ?? (Client.DirectStart ? "launch the owned client directly into its pinned world" :
+                Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
                 () => session = openClient());
             for (int i = 0; i < Rounds.Count; i++)
             {
@@ -127,9 +133,19 @@ public sealed class ClientRounds
     private void Join(ClientRound round)
     {
         var session = new SessionControl(round.Client);
-        round.Step("the server accepts game connections", () => WaitUntilJoinable(round.Server));
+        bool directFirst = Client.DirectStart && round.Index == 0;
+        if (!(round.Index == 0 && (Client.DirectStart || Client.StartAtCharacterSave)))
+            round.Step("the server accepts game connections", () => WaitUntilJoinable(round.Server));
         bool preparedStart = Client.StartAtCharacterSave && round.Index == 0;
-        if (Client.Crossplay)
+        if (directFirst)
+        {
+            round.Step("verify the direct-start client is in the pinned world" + (ProtectPlayer ? ", protected" : ""), () =>
+            {
+                round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
+                session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
+            });
+        }
+        else if (Client.Crossplay)
         {
             CrossplayLobby? lobby = null;
             round.Step("the server's crossplay lobby is open", () => lobby = Lobby!(round.Server));
@@ -177,6 +193,8 @@ public sealed class ClientRounds
         if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
         if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with HostRounds.");
         if (Client.Crossplay && Lobby == null) throw new ArgumentException("Lobby: a crossplay client joins the server's PlayFab lobby; supply Lobby, for example with CrossplayServer.WaitForLobby.");
+        if (Client.DirectStart && Client.DirectStartWorldUid != WorldUid)
+            throw new ArgumentException("Client.directStartWorldUid must match the owned server's world UID.");
     }
 
     internal static void CheckRoundNames(IReadOnlyList<string> rounds)

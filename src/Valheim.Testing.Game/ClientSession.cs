@@ -12,7 +12,8 @@ namespace Valheim.Testing.Game;
 /// and so on for later sessions: evidence is never overwritten). Disposing closes the
 /// connection and, for an owned client, stops only the process this session started (never one found by name): it asks the
 /// client to quit and kills it only if it does not (<see cref="Stopped"/>), then keeps its logs beside the evidence. An
-/// attached client's process is never touched. Given a <see cref="SteamAccountHold"/>, a session starts or attaches only while
+/// attached client's process is never touched. A <see cref="ClientRunPlan.DirectStart"/> owned client is pinned to its
+/// world before the session is returned; ordinary clients are pinned at the menu. Given a <see cref="SteamAccountHold"/>, a session starts or attaches only while
 /// that lease is live (and signed-in checked when the profile asks), and a lost lease stops the owned client at once (an attached
 /// client is detached); the hold's owner releases it after disposing the session.
 /// </summary>
@@ -107,9 +108,11 @@ public sealed class ClientSession : IDisposable
     }
 
     /// <summary>
-    /// Launches the plan's client install with <see cref="ClientLaunch"/> and waits, on events, until it is at its main
-    /// menu with the pinned plugins: ValheimCLI's listening line in this launch's BepInEx log, then the MainMenu state
-    /// push. Every wait races the process exit, which ends startup at once with its exit code. Refuses before launching
+    /// Launches the plan's client install with <see cref="ClientLaunch"/> and waits, on events, until it reaches its main
+    /// menu, or the pinned world for <see cref="ClientRunPlan.DirectStart"/>: ValheimCLI's listening line in this launch's
+    /// BepInEx log, then the corresponding state push. A direct start writes a password-free request into the run output
+    /// and verifies player readiness and the world UID before returning. Every wait races the process exit, which ends
+    /// startup at once with its exit code. Refuses before launching
     /// when something already listens on the client's CLI port (a command could reach a client this session does not own),
     /// when no Steam client is running here, when the plan's password variable is not set in this process (the client
     /// inherits it), when the install's <c>BepInEx/patchers</c> holds anything the plan's <see cref="ClientRunPlan.Patchers"/>
@@ -141,6 +144,14 @@ public sealed class ClientSession : IDisposable
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }
         finally { reservation.Stop(); }
         if (!SteamRunning()) throw new InvalidOperationException("No Steam client is running in this session. An owned client needs Steam running and signed in, in the desktop session this runner runs in.");
+        if (plan.DirectStart)
+        {
+            string request = DirectWorldStart.Write(plan, output);
+            start.Environment[DirectWorldStart.FileVariable] = request;
+            // A prior client launch may have left this marker in the runner's environment. The new owned process must
+            // always consume its own request once; pack reloads inside that process set the marker themselves.
+            start.Environment[DirectWorldStart.ClaimedVariable] = "0";
+        }
         string log = Path.Combine(plan.Install, "BepInEx", "LogOutput.log");
         var platform = ClientLaunch.Detect(plan.Install);
         string playerLog = PlayerLog(platform);
@@ -148,7 +159,7 @@ public sealed class ClientSession : IDisposable
         LogWait? cliLog = null;
         try
         {
-            return Launch(plan, output,
+            var session = Launch(plan, output,
                 () =>
                 {
                     cliLog = new LogWait(log); // Opened before the launch: an earlier run's lines never count.
@@ -162,9 +173,23 @@ public sealed class ClientSession : IDisposable
                     await StartupEvents.WaitForBepInExLog(cliLog!, bepInEx < left ? bepInEx : left, playerLog, token).ConfigureAwait(false);
                     await cliLog!.WaitAsync(StartupEvents.CliListening, left - clock.Elapsed, StartupEvents.StartupFailures, token).ConfigureAwait(false);
                     using var states = StateWait.Connect(plan.Host, plan.Port);
-                    await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
+                    await states.WaitAsync(plan.DirectStart ? [StateWait.InWorld] : [StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
                 }, cancellation, () => cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog) : null,
                 [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")], account);
+            if (plan.DirectStart)
+            {
+                try
+                {
+                    string worldUid = plan.HostWorld?.WorldUid ?? plan.DirectStartWorldUid;
+                    // The scenario decides whether the player should be protected. A client-only probe may need to
+                    // observe combat or aggro, and ClientRounds/HostRounds protect once when their policy asks for it.
+                    new SessionControl(session.Actor).WaitForWorld(worldUid, TimeSpan.FromSeconds(plan.JoinSeconds), cancellation, protectPlayer: false);
+                    session.Actor.VerifyEnvironment(plan.WorldExpectations(worldUid));
+                    CliCapabilities.RequireDirectStartClaimed(session.Actor);
+                }
+                catch { session.Dispose(); throw; }
+            }
+            return session;
         }
         finally { cliLog?.Dispose(); }
     }
@@ -215,18 +240,19 @@ public sealed class ClientSession : IDisposable
                 var waiting = ready(deadline, abandon.Token);
                 var first = Task.WhenAny(waiting, exited, Elapsed(clock, deadline, abandon.Token)).GetAwaiter().GetResult();
                 abandon.Cancel();
-                // An exit counts even when readiness completed too: a client that is gone is not at its menu.
+                // An exit counts even when readiness completed too: a client that is gone is not ready.
                 if (exited.IsCompletedSuccessfully)
-                    throw new WaitFailedException("client at its main menu", "the owned client exited with code " + exited.Result + exitHint?.Invoke(), clock.Elapsed, null);
+                    throw new WaitFailedException(plan.DirectStart ? "client in its world" : "client at its main menu", "the owned client exited with code " + exited.Result + exitHint?.Invoke(), clock.Elapsed, null);
                 cancellation.ThrowIfCancellationRequested();
-                if (first != waiting) throw new WaitTimeoutException("client at its main menu within the start deadline", clock.Elapsed, null);
+                if (first != waiting) throw new WaitTimeoutException(plan.DirectStart ? "client in its world within the start deadline" : "client at its main menu within the start deadline", clock.Elapsed, null);
                 waiting.GetAwaiter().GetResult(); // A readiness failure (a plugin-load error, a closed state connection) ends startup.
             }
             var transport = connect();
             try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
             catch { transport.Dispose(); throw; }
-            actor.VerifyEnvironment(plan.MenuExpectations);
-            if (plan.Capabilities.Length != 0) CliCapabilities.Require(actor, plan.Capabilities); // Live, after any static manifest check.
+            actor.VerifyEnvironment(plan.DirectStart ? plan.WorldExpectations(plan.HostWorld?.WorldUid ?? plan.DirectStartWorldUid) : plan.MenuExpectations);
+            if (plan.Capabilities.Length != 0 || plan.DirectStart)
+                CliCapabilities.Require(actor, plan.Capabilities.Concat(plan.DirectStart ? [CliCapabilities.DirectStart] : [])); // Live, after any static manifest check.
             // A lease lost during startup: this client must not run on the account.
             account?.ThrowIfLost();
             return new ClientSession(actor, process, logs, architecture).Using(account);
