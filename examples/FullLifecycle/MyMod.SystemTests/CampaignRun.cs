@@ -65,6 +65,7 @@ public static class CampaignScenarios
                 case LifecyclePlan.RefusedJoinScenario: RefusedJoinScenario.Run(run); break;
                 case LifecyclePlan.ContentCensusScenario: ContentCensusScenario.Run(run); break;
                 case LifecyclePlan.ReviewCaptureScenarioName: ReviewCaptureScenario.Run(run); break;
+                case LifecyclePlan.AreaObjectsScenarioName: AreaObjectsScenario.Run(run); break;
                 case LifecyclePlan.CrossplayScenario:
                     // The dry-site lifecycle, joined through each boot's crossplay lobby instead of the server's address.
                     DrySiteScenario.Run(plan, run.Server, run.RestartServer, () => run.OpenClient(plan.Client!, null), run.WaitUntilJoinable,
