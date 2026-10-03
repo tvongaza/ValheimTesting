@@ -12,9 +12,10 @@ public class PlayerPlacementTests
         new ScriptedTransport().OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0.6,33.7,2.8 ms=4"));
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void SignalArrivalMakesOneWaitPerPhaseAndOneTeleport(bool fast)
+    [InlineData(false, 30)]
+    [InlineData(true, 30)]
+    [InlineData(true, 180)]
+    public void SignalArrivalMakesOneWaitPerPhaseAndOneTeleport(bool fast, int seconds)
     {
         var serverTransport = new ScriptedTransport()
             .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
@@ -26,7 +27,7 @@ public class PlayerPlacementTests
             .On("cli_teleport_test_mode on", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True gameChecks=area,floor minMoveSeconds=2 cooldownSeconds=0.5"))
             .Extension("valheim.world", "player-support-wait", _ => Standing());
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        var result = PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30), fast);
+        var result = PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(seconds), fast);
         Assert.True(result.Support.GetProperty("grounded").GetBoolean());
         Assert.Contains("floorAtDone=True", result.Trace);
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
@@ -35,6 +36,8 @@ public class PlayerPlacementTests
         Assert.Equal(1, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
         Assert.Equal(fast ? 1 : 0, clientTransport.Count("cli_teleport_test_mode on"));
         Assert.Equal(0, clientTransport.Count("cli_extension valheim.world/player-support"));
+        if (seconds > 120)
+            Assert.Contains(clientTransport.Commands, command => command.StartsWith("cli_wait_teleportable 120 ", StringComparison.Ordinal));
     }
 
     [Fact]

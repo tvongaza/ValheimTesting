@@ -78,7 +78,8 @@ public sealed class SessionControl(GameActor actor)
     /// Turns the attached game's devcommands on and requires the game's reply to say so. The console command toggles and
     /// reports the resulting state, so a reply of off is toggled once more. ValheimCLI refuses mutating extension
     /// commands, the session join among them, until devcommands is on, and a fresh game starts with it off. It is the
-    /// game's local flag: on a client joined to a server, cheats also need that server's admin list.
+    /// game's local flag: on a client joined to a server, Valheim 1.0 also needs ValheimCLI's explicit
+    /// <c>AllowOnServerClients = true</c> setting for the test commands, even if the player is a server admin.
     /// </summary>
     public void EnableDevcommands()
     {

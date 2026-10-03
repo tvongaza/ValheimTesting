@@ -21,12 +21,13 @@ public static class PlayerPlacement
     /// Arrives using one bounded in-game wait at each transition. The runner does not poll the remote player:
     /// ValheimCLI observes readiness and support on game frames and returns once each condition holds.
     /// The server requests the teleport exactly once. Test timing is an explicit opt-in and still uses the game's
-    /// own area and floor checks.
+    /// own area and floor checks. <paramref name="timeout"/> is the overall deadline; each CLI wait is capped
+    /// at 120 seconds, so a phase that takes longer fails without issuing another request or teleport.
     /// </summary>
     public static TeleportArrival ArriveOnSignals(GameActor server, GameActor client, HeightExpectation point,
         TimeSpan timeout, bool fastTestTiming = false, CancellationToken cancellation = default, bool skipIntro = true)
     {
-        if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(120)) throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(600)) throw new ArgumentOutOfRangeException(nameof(timeout));
         TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
         var support = client.RequireCapability("valheim.world/player-support-wait");
         var clock = Stopwatch.StartNew();
