@@ -156,6 +156,18 @@ class CampaignTests(unittest.TestCase):
                 campaign.run(self.args)
         self.assertFalse(json.loads((self.evidence / "result.json").read_text())["destroyed"])
 
+    def test_modified_asset_during_run_is_refused_and_vm_destroyed(self):
+        asset = Path(self.temp.name) / "fixture.tar.gz"
+        asset.write_bytes(b"pinned fixture")
+        self.args.asset = [asset]
+        self.test.write_text("#!/bin/bash\nchmod u+w \"$VT_VM_SNAPSHOT_DIR/3-fixture.tar.gz\"\n"
+                             "printf changed > \"$VT_VM_SNAPSHOT_DIR/3-fixture.tar.gz\"\n"
+                             "printf '{\"status\":\"passed\"}' > \"$VT_VM_EVIDENCE/check-result.json\"\n")
+        self.patches()
+        with self.assertRaisesRegex(RuntimeError, "snapshotted input changed: 3-fixture.tar.gz"):
+            campaign.run(self.args)
+        self.assertTrue(json.loads((self.evidence / "result.json").read_text())["destroyed"])
+
     def test_zero_exit_without_assertion_artifact_is_not_a_pass(self):
         self.test.write_text("#!/bin/bash\nexit 0\n")
         self.patches()
