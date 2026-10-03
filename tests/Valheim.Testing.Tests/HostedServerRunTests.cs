@@ -13,16 +13,17 @@ internal sealed class FakeServerHost : IGameHost
 {
     private readonly string _mirror;
     private readonly FakeOwnedServer? _server;
+    private readonly GameHostKind _kind;
     private readonly object _sync = new();
     private readonly Dictionary<int, (string Start, Func<CancellationToken, Task<int>> Exit, Action Stop)> _processes = [];
     private int _nextClient = 77;
 
-    public FakeServerHost(string name, string mirror, FakeOwnedServer? server = null, int tunnelPort = 15577)
+    public FakeServerHost(string name, string mirror, FakeOwnedServer? server = null, int tunnelPort = 15577, GameHostKind kind = GameHostKind.Ssh)
     {
-        Name = name; _mirror = mirror; _server = server; TunnelPort = tunnelPort;
+        Name = name; _mirror = mirror; _server = server; TunnelPort = tunnelPort; _kind = kind;
     }
     public string Name { get; }
-    public GameHostKind Kind => GameHostKind.Ssh;
+    public GameHostKind Kind => _kind;
     public HostShell Shell => HostShell.Bash;
     public int TunnelPort { get; }
     public List<(string Script, IReadOnlyDictionary<string, string> Variables)> Runs { get; } = [];
@@ -727,7 +728,7 @@ public sealed partial class HostedServerRunTests : IDisposable
             refused = Record.Exception(() => run.OpenClient(client));
             return Task.CompletedTask;
         }, clientHost, new ScriptedTransport())));
-        Assert.Contains("architecture arm64 is for a macOS client launched in this runner's own session", Assert.IsType<ArgumentException>(refused).Message);
+        Assert.Contains("architecture arm64 is for a macOS client launched locally in this runner's GUI session", Assert.IsType<ArgumentException>(refused).Message);
         Assert.Empty(clientHost.Claims); Assert.Empty(clientHost.Runs); Assert.Empty(clientHost.Tunnels);
     }
 }

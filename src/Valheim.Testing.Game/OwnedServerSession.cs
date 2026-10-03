@@ -357,11 +357,23 @@ public sealed class OwnedServerSession : IDisposable
 public sealed class DirectServerProcess : IServerProcess
 {
     private readonly Process _process;
+    // The profile's account and host lock still need a conservative exit answer after ClientSession disposes this handle.
+    private int _disposedExit = -1;
     private readonly Task _stdout, _stderr;
     private readonly string _logPrefix;
     private readonly string[] _gameLogs;
     public int Id => _process.Id;
-    public bool HasExited => _process.HasExited;
+    public bool HasExited
+    {
+        get
+        {
+            int disposed = Volatile.Read(ref _disposedExit);
+            if (disposed >= 0) return disposed == 1;
+            try { return _process.HasExited; }
+            catch (ObjectDisposedException) { return false; }
+            catch (InvalidOperationException) { return false; }
+        }
+    }
     /// <summary>How <see cref="StopCleanly"/> asks the process to quit: <see cref="QuitRequest.Interrupt"/> for a dedicated server (the default), <see cref="QuitRequest.CloseWindow"/> for a game client.</summary>
     public QuitRequest Quit { get; init; } = QuitRequest.Interrupt;
     public DirectServerProcess(ProcessStartInfo start, string logPrefix, params string[] gameLogs)
@@ -447,7 +459,12 @@ public sealed class DirectServerProcess : IServerProcess
             else File.WriteAllText(target + ".absent", "Game did not create this log: " + _gameLogs[i]);
         }
     }
-    public void Dispose() => _process.Dispose();
+    public void Dispose()
+    {
+        if (Volatile.Read(ref _disposedExit) >= 0) return;
+        Volatile.Write(ref _disposedExit, HasExited ? 1 : 0);
+        _process.Dispose();
+    }
 }
 
 // Local evidence only. Review before publishing: world names/positions and IDs may appear.

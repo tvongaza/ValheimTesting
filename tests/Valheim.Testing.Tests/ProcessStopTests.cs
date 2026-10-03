@@ -86,6 +86,19 @@ public class ProcessStopTests
         Assert.True(owned.HasExited);
     }
 
+    [Fact] public void ADisposedOwnedProcessStillProvesItsExitToAccountAndHostLocks()
+    {
+        using var dir = new TempDirectory();
+        var start = OperatingSystem.IsWindows()
+            ? new ProcessStartInfo("ping", "-t 127.0.0.1") { CreateNoWindow = true }
+            : new ProcessStartInfo("/bin/sleep", "30");
+        var owned = new DirectServerProcess(start, Path.Combine(dir.Path, "owned"));
+        owned.Stop(TimeSpan.FromSeconds(5));
+        owned.Dispose();
+        Assert.True(owned.HasExited);
+        owned.Dispose(); // Cleanup is idempotent.
+    }
+
     // A capture can only stay open after the exit when another process holds the pipe; the failure names which one.
     [Fact] public void ACaptureHeldOpenByAnEscapedProcessIsNamed()
     {
