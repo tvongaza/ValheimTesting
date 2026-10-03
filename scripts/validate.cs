@@ -80,17 +80,15 @@ finally
 {
     if (Directory.Exists(consumer)) Directory.Delete(consumer, recursive: true);
 }
-foreach (string project in Directory.GetFiles(Path.Combine(root, "examples"), "*.csproj", SearchOption.AllDirectories)
-             .Where(p => Path.GetDirectoryName(Path.GetDirectoryName(p)) == Path.Combine(root, "examples"))
-             .OrderBy(p => p, StringComparer.Ordinal))
-    Run("dotnet", "build", project, "-c", "Release", "-m:1");
+Run("dotnet", "build", Solution("examples", Directory.GetFiles(Path.Combine(root, "examples"), "*.csproj", SearchOption.AllDirectories)
+    .Where(p => Path.GetDirectoryName(Path.GetDirectoryName(p)) == Path.Combine(root, "examples"))), "-c", "Release", "-nodeReuse:false");
 // The full-life-cycle example's external projects; its game-side mod and adapter need a game install and build elsewhere.
 Test("examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj");
 Run("dotnet", "run", "--project", "examples/NoGameTerrain", "-c", "Release", "--no-build");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
-foreach (string name in new[] { "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool" })
-    Run("dotnet", "pack", $"src/{name}/{name}.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
-Run("dotnet", "pack", "examples/NativeSmoke/NativeSmoke.csproj", "-c", "Release", "-m:1", "-o", Path.Combine(root, ".packages"));
+Run("dotnet", "pack", Solution("packages", new[] { "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool" }
+    .Select(name => $"src/{name}/{name}.csproj").Append("examples/NativeSmoke/NativeSmoke.csproj")),
+    "-c", "Release", "-nodeReuse:false", "-o", Path.Combine(root, ".packages"));
 // Install the packed binding-check tool as a mod's CI would, from the fresh local feed only, and let it check its own
 // library against the Mono.Cecil it ships with: a real assembly whose every Cecil reference must bind (exit 0).
 string tools = Path.Combine(Path.GetTempPath(), "valheim-bindings-tool-" + Guid.NewGuid().ToString("N"));
@@ -145,6 +143,18 @@ static string FindRoot()
         for (DirectoryInfo? dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
             if (File.Exists(Path.Combine(dir.FullName, "cli-dependency.json"))) return dir.FullName;
     throw new InvalidOperationException("Run from inside the ValheimTesting repository.");
+}
+
+// One MSBuild invocation for several projects, through a solution file written beside the results: shared references are
+// evaluated and built once and independent projects build in parallel. One command per project spent about 2.5 s each on
+// a Windows CI runner, most of it start-up. No worker node outlives the command (-nodeReuse:false at the call).
+string Solution(string name, IEnumerable<string> projects)
+{
+    string file = Path.Combine(results, name + ".slnx");
+    var solution = new XElement("Solution", projects.Select(project => Path.GetFullPath(project, root)).Order(StringComparer.Ordinal)
+        .Select(project => new XElement("Project", new XAttribute("Path", Path.GetRelativePath(results, project).Replace('\\', '/')))));
+    File.WriteAllText(file, solution.ToString());
+    return file;
 }
 
 // A test run's results go under artifacts/validate. When its test host is stopped (--blame-hang) or crashes, vstest reports
