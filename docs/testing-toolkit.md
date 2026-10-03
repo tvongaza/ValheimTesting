@@ -592,6 +592,10 @@ Plan rules on `ServerRunPlan` refuse a plan before anything is copied, with an `
 The toolkit's own tests cover the rules every pinned plan follows: output path, launch host, executable, pins, save root, Doorstop and token variables, and unknown fields. A mod's plan tests need only cover its own rules.
 
 `ClientRounds` runs a persistence scenario's client rounds over `ClientSession`, `SessionControl` and `PlayerPlacement`. The mod supplies the per-round measurement as a delegate, and its step names where it wants its own (`OpenStep`, `ArriveStep`). For each of `Rounds` (default `first`, `after-restart`), the helper:
+
+For repeated teleport-based checks, set `client.eventDrivenArrival: true` with a current ValheimCLI Standard and World Tools pack. The runner makes one bounded request for teleport readiness, arms a one-hop trace, asks the server to teleport exactly once, then makes one bounded request for supported arrival. ValheimCLI observes these conditions on game frames and returns a result when each changes; the runner does not repeatedly query the client over the network. Each round writes `arrival.json` and `teleport-trace.json`, including the game's area, floor and completion times. A missing ready floor or unsupported landing fails the run. The older arrival path remains the default for existing CLI installs.
+
+An owned, strictly pinned test client may also set `client.fastTestTeleports: true` alongside `eventDrivenArrival`. Its launch permits the Standard pack's test mode, which the runner enables after joining. This keeps the game's area and floor checks and initial movement gate, but allows completion as soon as they pass and shortens the idle cooldown. It is off by default and is refused for an attached or unpinned client. Compare the trace and the full scenario time with the ordinary mode before claiming a speedup.
 1. waits until the server accepts game connections;
 2. joins (devcommands first, exactly once), verifies the client's world pins and waits for the world, which protects the player (`SessionControl.WaitForWorld`'s default);
 3. arrives at `Arrival` if one is given, writing `{round}-arrival.json`;

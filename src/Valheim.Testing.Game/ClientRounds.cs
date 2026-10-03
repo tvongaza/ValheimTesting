@@ -73,6 +73,8 @@ public sealed class ClientRounds
         Report.Provenance["clientRounds"] = string.Join(",", Rounds);
         Report.Provenance["clientJoin"] = Client.Crossplay ? "crossplay" : "address";
         Report.Provenance["clientStart"] = Client.StartAtCharacterSave ? "characterSave" : "teleport";
+        Report.Provenance["arrivalWait"] = Client.EventDrivenArrival ? "game-side signal" : "remote observations";
+        Report.Provenance["testFastTeleport"] = Client.FastTestTeleports.ToString();
         // What an owned client is launched as (never another slice); an attached client's is its operator's.
         Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
         Report.Provenance["cliPreflight"] = Client.CliPreflight;
@@ -172,10 +174,20 @@ public sealed class ClientRounds
         });
         if (Arrival is { } point)
         {
-            round.Step(preparedStart ? "verify prepared character start at the measurement point" : ArriveStep,
-                () => round.Write("arrival", preparedStart
-                    ? PlayerPlacement.ObserveArrival(round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation)
-                    : PlayerPlacement.Arrive(round.Server, round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor)));
+            round.Step(preparedStart ? "verify prepared character start at the measurement point" : ArriveStep, () =>
+            {
+                if (preparedStart)
+                    round.Write("arrival", PlayerPlacement.ObserveArrival(round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation));
+                else if (Client.EventDrivenArrival)
+                {
+                    var result = PlayerPlacement.ArriveOnSignals(round.Server, round.Client, point,
+                        TimeSpan.FromSeconds(Client.ArrivalSeconds), Client.FastTestTeleports, Cancellation);
+                    round.Write("arrival", result.Support);
+                    round.Write("teleport-trace", result.Trace);
+                }
+                else round.Write("arrival", PlayerPlacement.Arrive(round.Server, round.Client, point,
+                    TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor));
+            });
         }
     }
 

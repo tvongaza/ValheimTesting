@@ -152,6 +152,9 @@ public sealed class ClientSession : IDisposable
             // always consume its own request once; pack reloads inside that process set the marker themselves.
             start.Environment[DirectWorldStart.ClaimedVariable] = "0";
         }
+        // The Standard pack still starts with the mode off. This marker only permits an owned test to opt in
+        // after the character joins; an operator's attached client never receives it.
+        if (plan.FastTestTeleports) start.Environment["VALHEIMCLI_TEST_FAST_TELEPORT"] = "1";
         string log = Path.Combine(plan.Install, "BepInEx", "LogOutput.log");
         var platform = ClientLaunch.Detect(plan.Install);
         string playerLog = PlayerLog(platform);

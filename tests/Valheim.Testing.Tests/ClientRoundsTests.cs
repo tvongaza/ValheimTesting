@@ -156,6 +156,48 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("x64", report.Provenance["clientArchitecture"]);
     }
 
+    [Fact] public void EventDrivenRoundsKeepOneWaitAndTracePerHop()
+    {
+        var plan = Plan();
+        plan.EventDrivenArrival = true;
+        plan.FastTestTeleports = true;
+        _client.On("cli_teleport_test_mode on", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True"))
+            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
+            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
+            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 floorAtDone=True doneMs=3500"))
+            .Extension("valheim.world", "player-support-wait", _ => new
+            {
+                source = "local-player-support", complete = true, x = Point.X, y = Point.Height, z = Point.Z, speed = 0f,
+                grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            });
+        var report = new ScenarioReport("signal-rounds");
+        Rounds(report, plan).Run(Server(), Open(plan), Measure());
+        Assert.True(report.Passed);
+        Assert.Equal(2, _client.Count("cli_wait_teleportable"));
+        Assert.Equal(2, _client.Count("cli_teleport_trace_wait"));
+        Assert.Equal(2, _client.Count("cli_extension valheim.world/player-support-wait"));
+        Assert.Equal(0, _client.Count("cli_extension valheim.world/player-support"));
+        Assert.True(Wrote("first-teleport-trace.json"));
+        Assert.True(Wrote("after-restart-teleport-trace.json"));
+        Assert.Equal("game-side signal", report.Provenance["arrivalWait"]);
+        Assert.Equal("True", report.Provenance["testFastTeleport"]);
+    }
+
+    [Fact] public void FastTeleportRequiresAnOwnedPinnedSignalRun()
+    {
+        var plan = Plan();
+        plan.FastTestTeleports = true;
+        Assert.Contains("eventDrivenArrival", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+        plan.EventDrivenArrival = true;
+        plan.Mode = "attach";
+        plan.Install = "";
+        Assert.Contains("owned", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+        plan.Mode = "owned";
+        plan.Install = Path.GetFullPath("client-install");
+        plan.Pinning = "none";
+        Assert.Contains("strictly pinned", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+    }
+
     [Theory] [InlineData("owned", "arm64", "arm64")] [InlineData("owned", "x64", "x64")] [InlineData("attach", "", "attached")]
     public void TheReportRecordsTheClientsArchitecture(string mode, string architecture, string recorded)
     {
