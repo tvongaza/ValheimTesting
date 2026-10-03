@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -164,17 +165,58 @@ public static class OwnedCopies
         return (null, null);
     }
 
-    // Each running process's executable; one this user cannot read (another user's, a protected one) cannot be a run's game.
-    private static IReadOnlyList<(int Pid, string Executable)> Processes()
+    // Each running process's executable, where the system lets this user read it. On Windows that includes some processes of
+    // other users and elevated ones (their image path needs only limited query access), which then count as using a copy.
+    internal static IReadOnlyList<(int Pid, string Executable)> Processes()
     {
         if (ProcessesOverride is { } fake) return fake();
         var list = new List<(int, string)>();
+        char[] buffer = new char[1024];
         foreach (var process in Process.GetProcesses())
             using (process)
-            {
-                try { if (process.MainModule?.FileName is { Length: > 0 } file) list.Add((process.Id, System.IO.Path.GetFullPath(file))); }
-                catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException or UnauthorizedAccessException) { }
-            }
+                if (Executable(process, ref buffer) is { Length: > 0 } file) list.Add((process.Id, System.IO.Path.GetFullPath(file)));
         return list;
+    }
+
+    // Windows and Linux ask for the image path alone. MainModule lists every module of the process first: a scan of 284
+    // processes took 1.7 s that way on a Windows machine, against 0.03 s for the image path, which names the same file in the
+    // same form (an 8.3 path stays one). On Linux both read /proc/<pid>/exe. macOS keeps MainModule.
+    private static string? Executable(Process process, ref char[] buffer)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows()) return WindowsImage.Path(process.Id, ref buffer);
+            if (OperatingSystem.IsLinux()) return new FileInfo($"/proc/{process.Id}/exe").LinkTarget;
+            return process.MainModule?.FileName;
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException
+                                          or UnauthorizedAccessException or IOException) { return null; }
+    }
+
+    private static class WindowsImage
+    {
+        private const uint QueryLimitedInformation = 0x1000; // PROCESS_QUERY_LIMITED_INFORMATION
+        private const int InsufficientBuffer = 122; // ERROR_INSUFFICIENT_BUFFER
+        private const int LongestPath = 32768; // characters, with the terminating null
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern Microsoft.Win32.SafeHandles.SafeProcessHandle OpenProcess(uint access, bool inheritHandle, int processId);
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "QueryFullProcessImageNameW")]
+        private static extern bool QueryFullProcessImageName(Microsoft.Win32.SafeHandles.SafeProcessHandle process, uint flags, char[] name, ref uint size);
+
+        // Null when the process cannot be opened (gone, or protected from this user). The buffer grows once for a long path
+        // and is kept for the rest of the scan.
+        public static string? Path(int processId, ref char[] buffer)
+        {
+            using var handle = OpenProcess(QueryLimitedInformation, false, processId);
+            if (handle.IsInvalid) return null;
+            while (true)
+            {
+                uint size = (uint)buffer.Length;
+                if (QueryFullProcessImageName(handle, 0, buffer, ref size)) return new string(buffer, 0, (int)size);
+                if (Marshal.GetLastWin32Error() != InsufficientBuffer || buffer.Length >= LongestPath) return null;
+                buffer = new char[LongestPath];
+            }
+        }
     }
 }
