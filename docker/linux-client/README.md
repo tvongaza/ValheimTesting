@@ -93,6 +93,10 @@ The evidence directory is private because its SSH configuration names the VM end
 details. Review and redact before sharing. Test without renting via
 `python3 -m unittest discover -s docker/linux-client/tests -p 'test_vm_campaign.py' -v`.
 
+For a native client run, the test script must select the intended Steam authenticator/account explicitly and hold that
+account's lease before renting. Do not rely on an authenticator's default first account: a correct QR approval for the
+wrong account can interrupt a game already running elsewhere. The campaign manages the VM, not Steam account ownership.
+
 Then, inside the container (`docker exec vt ...`):
 
 1. **Download the client.** As `steam`: `DepotDownloader -app 892970 -os linux -dir /home/steam/valheim -qr -remember-password`. It prints a login QR code; `vt-qr-url` turns it into a link that any Steam authenticator can approve (the Steam Mobile app, or for example `steamguard qr-login --url <link>` from steamguard-cli on a machine you trust).
