@@ -8,6 +8,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 string root = FindRoot();
 // The launcher test reaches this point without needing the validated assemblies or the DocFX tool.
@@ -42,6 +43,10 @@ string errors = standardError.GetAwaiter().GetResult();
 Console.Write(output);
 Console.Error.Write(errors);
 if (process.ExitCode != 0) throw new InvalidOperationException($"DocFX failed with exit code {process.ExitCode}.");
+string transcript = output + "\n" + errors;
+if (!Regex.IsMatch(transcript, @"(?m)^\s*0 warning\(s\)\s*$") ||
+    Regex.IsMatch(transcript, @"(?im)^\s*warning:"))
+    throw new InvalidOperationException("DocFX reported a warning or omitted its zero-warning summary.");
 if (output.Contains("InvalidFileLink", StringComparison.Ordinal) ||
     output.Contains("InvalidCrossReference", StringComparison.Ordinal) ||
     errors.Contains("InvalidFileLink", StringComparison.Ordinal) ||
@@ -78,9 +83,8 @@ foreach (var (page, excerpt) in new (string Page, string Excerpt)[]
         throw new InvalidOperationException($"DocFX omitted the selected contextual example from {page}.");
 }
 
-// DocFX can log "Found project reference without a matching metadata reference" for Valheim.Testing.csproj (Roslyn's
-// MSBuild workspace; whether it appears depends on project load order, not on these sources). It costs nothing as long
-// as the pages of the projects that reference Valheim.Testing still link its types, which these check.
+// The solution input keeps project references in DocFX's metadata graph. Check the rendered links too: a warning-free
+// build alone does not prove that cross-project links survived a DocFX or solution change.
 foreach (var (page, link) in new (string Page, string Link)[]
 {
     ("api/Valheim.Testing.Doubles.TerrainWorld.html", "href=\"Valheim.Testing.ITerrain.html\""),

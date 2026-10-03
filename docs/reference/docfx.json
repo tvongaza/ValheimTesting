@@ -2,15 +2,8 @@
   "metadata": [{
     "src": [
       {
-        "files": [
-          "src/Valheim.Testing/Valheim.Testing.csproj",
-          "src/Valheim.Testing.Doubles/Valheim.Testing.Doubles.csproj",
-          "src/Valheim.Testing.Game/Valheim.Testing.Game.csproj",
-          "src/Valheim.Testing.Bindings/Valheim.Testing.Bindings.csproj",
-          "src/Valheim.Testing.Bindings.Tool/Valheim.Testing.Bindings.Tool.csproj",
-          "tests/Valheim.Testing.Adapter.CompileCheck/Valheim.Testing.Adapter.CompileCheck.csproj"
-        ],
-        "src": "../../"
+        "files": ["ValheimTesting.Api.sln"],
+        "src": "."
       }
     ],
     "dest": "api",
