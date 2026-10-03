@@ -20,11 +20,12 @@ public sealed class DirectWorldStartTests
             };
             string file = DirectWorldStart.Write(plan, output);
             string text = File.ReadAllText(file);
-            Assert.Contains("mode=join\n", text);
-            Assert.Contains("character=fresh\n", text);
-            Assert.Contains("target=127.0.0.1:2456\n", text);
-            Assert.Contains("passwordVariable=VT_SECRET\n", text);
-            Assert.Contains("devcommands=true\n", text);
+            string[] lines = File.ReadAllLines(file);
+            Assert.Contains("mode=join", lines);
+            Assert.Contains("character=fresh", lines);
+            Assert.Contains("target=127.0.0.1:2456", lines);
+            Assert.Contains("passwordVariable=VT_SECRET", lines);
+            Assert.Contains("devcommands=true", lines);
             Assert.DoesNotContain("the-secret", text);
             string second = DirectWorldStart.Write(plan, output);
             Assert.NotEqual(file, second);
