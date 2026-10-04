@@ -254,7 +254,8 @@ public sealed class ClientRunPlan
     /// plugin in <c>scripts</c> has ScriptEngine pinned and set to <c>LoadOnStart</c>, and ValheimCLI's standing expectations
     /// file, when its config sets one, parses one pin per line, names a world when strict, and agrees with the plan's pins and
     /// hosted world. An unpinned client skips the plugin checks, which need pins. With a <see cref="CliManifest"/>, last, the
-    /// install's ValheimCLI files must be exactly its set and provide <see cref="Capabilities"/> (<see cref="CheckCliManifest"/>).
+    /// install's ValheimCLI files must be exactly its set and provide its own requested pack capabilities
+    /// (<see cref="CheckCliManifest"/>). A mod adapter's extensions are confirmed after the client loads.
     /// An attached client's install is its operator's and is not read. <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/>
     /// runs the install part itself; <see cref="HostRounds"/> runs all of it before it places the fixture.
     /// </summary>
@@ -300,7 +301,9 @@ public sealed class ClientRunPlan
 
     /// <summary>
     /// The static capability check alone: an owned client's install against its <see cref="CliManifest"/>
-    /// (<see cref="CliCapabilityManifest.Check"/>), requiring <see cref="Capabilities"/> and <paramref name="capabilities"/>.
+    /// (<see cref="CliCapabilityManifest.Check"/>), requiring only the ValheimCLI-owned entries in
+    /// <see cref="Capabilities"/> and <paramref name="capabilities"/>. A mod's own extensions are
+    /// checked from the live game after its plugin loads; the CLI pack manifest cannot declare them.
     /// Null, with nothing read, for a plan without a manifest or an attached client, whose capabilities only the live check
     /// sees. Refuses a missing manifest (<see cref="FileNotFoundException"/>), a malformed one (<see cref="InvalidDataException"/>)
     /// and an install that is not its set or lacks a capability (<see cref="InvalidOperationException"/>).
@@ -309,7 +312,7 @@ public sealed class ClientRunPlan
     {
         if (!Owned || CliManifest == null) return null;
         var manifest = CliCapabilityManifest.Read(CliManifest);
-        return manifest.Check(Install, RequiredCliCapabilities.Concat(capabilities ?? []));
+        return manifest.Check(Install, RequiredCliCapabilities.Concat(capabilities ?? []).Where(CliCapabilities.IsPackCapability));
     }
 
     /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>

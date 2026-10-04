@@ -35,6 +35,10 @@ public static class CliCapabilities
         ["valheim.world"] = "the World Tools pack (Valheim.Cli.WorldTools.dll, plugin valheimCLI.worldtools)",
     };
 
+    /// <summary>Only these owners belong to ValheimCLI's own pack manifest. A mod adapter's
+    /// extension is checked from the live game after it loads, not from ValheimCLI's DLL set.</summary>
+    internal static bool IsPackCapability(string path) => Packs.ContainsKey(path.Split('/')[0]);
+
     /// <summary>
     /// Refuses unless every one of <paramref name="paths"/> (<c>owner/command</c>) is a live command of a schema-1 result,
     /// naming every missing one and the pack that provides it, or saying that this ValheimCLI predates command packs.

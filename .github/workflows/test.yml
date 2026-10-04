@@ -209,7 +209,7 @@ jobs:
           printf '%s\n' "Port 2222" "ListenAddress 127.0.0.1" "HostKey $d/host_key" "PidFile $d/sshd.pid" \
             "AuthorizedKeysFile $d/authorized_keys" "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
             "PubkeyAuthentication yes" "UsePAM yes" "StrictModes no" "AllowTcpForwarding local" "AllowAgentForwarding no" \
-            "X11Forwarding no" "MaxStartups 100" > "$d/sshd_config"
+            "X11Forwarding no" "MaxStartups 100" "Subsystem sftp internal-sftp" > "$d/sshd_config"
           sudo mkdir -p /run/sshd
           sudo /usr/sbin/sshd -f "$d/sshd_config" -E "$d/sshd.log"
           echo "[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$d/host_key.pub")" > "$k/known_hosts"

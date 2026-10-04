@@ -166,6 +166,8 @@ public static class HostInstall
         string prefix = managed + "/";
         if (!listing.Files.Keys.Any(key => key.StartsWith("BepInEx/core/", StringComparison.OrdinalIgnoreCase)))
             throw new DirectoryNotFoundException($"BepInEx is not installed in {listing.Root} on {listing.HostName} (no BepInEx/core).");
+        if (listing.Files.Keys.Any(key => key.StartsWith("BepInEx/core/core/", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"The install on {listing.HostName} has a nested BepInEx/core/core. Replace the loader as one coherent tree before launch.");
         return new InstallPins
         {
             Game = InstallPins.ListingHash(Under(listing, prefix).Where(file => !file.Relative.Contains('/') &&

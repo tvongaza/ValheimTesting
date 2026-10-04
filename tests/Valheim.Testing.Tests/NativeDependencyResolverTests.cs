@@ -1,4 +1,6 @@
 using Valheim.Testing.Game;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 public sealed class NativeDependencyResolverTests : IDisposable
@@ -46,6 +48,277 @@ public sealed class NativeDependencyResolverTests : IDisposable
         new TargetedRegression(environment).Stage("parent");
         File.AppendAllText(plan.Plugins[0].File, "changed");
         Assert.Contains("missing or changed", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(lockFile)).Message);
+    }
+
+    [Fact] public void HostedRuntimeSelectionUsesTheReviewedDependencyClosure()
+    {
+        var plan = NativeDependencyResolver.Resolve(Request(_rig.Parent));
+        Assert.True(plan.Ready);
+        string path = Path.Combine(_rig.Root, "host-lock.json");
+        plan.Write(path);
+        var staged = HostedRuntimeStage.FromDependencies(path);
+        Assert.Equal(plan.Mods.Count + plan.Plugins.Count + plan.CliFiles.Count, staged.Count);
+        Assert.All(staged, file => Assert.StartsWith("BepInEx/plugins/", file.RelativePath));
+        Assert.Contains(staged, file => file.RelativePath == "BepInEx/plugins/valheimCLI.dll");
+        File.AppendAllText(_rig.Parent, "changed");
+        Assert.Throws<InvalidDataException>(() => HostedRuntimeStage.FromDependencies(path));
+    }
+
+    [Fact] public async Task HostedCampaignPreparesServerAndAnyNumberOfNamedClientsAndRetiresTheirCopies()
+    {
+        string parent = _rig.Write("campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
+        string client = _rig.Write("campaign/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
+        string serverLock = Lock(parent, "server"), clientLock = Lock(client, "client");
+        string[] stores = [Store("one", 101), Store("two", 202), Store("three", 303)];
+        string world = Path.Combine(_rig.Root, "campaign-world");
+        Directory.CreateDirectory(world);
+        using (var payload = new MemoryStream())
+        {
+            using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
+            { writer.Write(41); writer.Write("Campaign"); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(4242L); }
+            File.WriteAllBytes(Path.Combine(world, "Campaign.fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
+        }
+        File.WriteAllText(Path.Combine(world, "Campaign.db"), "fixture");
+        var hosts = new Dictionary<string, FakeServerHost>(StringComparer.Ordinal);
+        foreach (string name in new[] { "server", "client-a", "client-b", "client-c" })
+        {
+            var host = new FakeServerHost(name, Path.Combine(_rig.Root, "mirror-" + name), windows: true);
+            hosts[name] = host;
+            host.SteamUserReply = "VT-STEAMUSER account " + (name == "client-b" ? 202 : name == "client-c" ? 303 : 101) + "\n";
+            string source = host.Local(@"C:\game\source");
+            if (name == "server") FakeInstalls.Server(source); else FakeInstalls.Client(source);
+            File.WriteAllText(Path.Combine(source, name == "server" ? ServerLaunch.WindowsExecutable : ClientLaunch.WindowsExecutable), "game");
+            File.WriteAllText(Path.Combine(source, "winhttp.dll"), "unknown proxy version");
+            File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+            if (name != "server")
+            {
+                Directory.CreateDirectory(host.Local(@"C:\save\characters_local"));
+                Directory.CreateDirectory(host.Local(@"C:\Steam\userdata"));
+            }
+        }
+        string profileFile = Path.Combine(_rig.Root, "campaign-profile.json");
+        File.WriteAllText(Path.Combine(_rig.Root, "accounts.json"), JsonSerializer.Serialize(new
+        {
+            pool = "campaign", leaseDirectory = @"C:\leases", steamGuard = "signed-in",
+            accounts = new[] { new { name = "test_a", host = "client-a", steamId = "76561197960265829" }, new { name = "test_b", host = "client-b", steamId = "76561197960265930" },
+                new { name = "test_c", host = "client-c", steamId = "76561197960266031" } },
+        }));
+        File.WriteAllText(profileFile, JsonSerializer.Serialize(new
+        {
+            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "powershell",
+                @lock = @"C:\locks\campaign.lock", destination = "test@" + name }),
+            server = new { host = "server", install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5577, gamePort = 2456, localCliPort = 6577 },
+            clients = new Dictionary<string, object> {
+                ["client-a"] = new { host = "client-a", install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5578, localCliPort = 6578, steamAccount = "test_a" },
+                ["client-b"] = new { host = "client-b", install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5579, localCliPort = 6579, steamAccount = "test_b" },
+                ["client-c"] = new { host = "client-c", install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5580, localCliPort = 6580, steamAccount = "test_c" },
+            },
+            steamAccounts = new { pool = "accounts.json", leaseHost = "server", checkSignedIn = true },
+        }));
+        string manifestFile = Path.Combine(_rig.Root, "campaign.json");
+        File.WriteAllText(manifestFile, JsonSerializer.Serialize(new
+        {
+            profile = profileFile,
+            world, join = "test-server.example:2456",
+            server = new { dependencyLock = serverLock },
+            clients = new Dictionary<string, object> {
+                ["client-a"] = new { dependencyLock = clientLock, character = Character(stores[0], "one", "vt-one") },
+                ["client-b"] = new { dependencyLock = clientLock, character = Character(stores[1], "two", "vt-two") },
+                ["client-c"] = new { dependencyLock = clientLock, character = Character(stores[2], "three", "vt-three") },
+            },
+        }));
+        var duplicate = JsonNode.Parse(File.ReadAllText(manifestFile))!;
+        duplicate["clients"]!["client-b"]!["character"]!["store"] = stores[0];
+        duplicate["clients"]!["client-b"]!["character"]!["registeredName"] = "one";
+        string duplicateFile = Path.Combine(_rig.Root, "duplicate-player.json");
+        File.WriteAllText(duplicateFile, duplicate.ToJsonString());
+        Assert.Contains("different registered character player IDs", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.Check(duplicateFile)).Message);
+        Assert.All(hosts.Values, host => Assert.Empty(host.Claims));
+        HostedCampaignPreparation.Check(manifestFile);
+        File.WriteAllText(Path.Combine(_rig.Root, "one-account.json"), JsonSerializer.Serialize(new
+        {
+            pool = "campaign", leaseDirectory = @"C:\leases", steamGuard = "signed-in",
+            accounts = new[] { new { name = "test_a", steamId = "76561197960265829" } },
+        }));
+        var limitedProfile = JsonNode.Parse(File.ReadAllText(profileFile))!;
+        limitedProfile["steamAccounts"]!["pool"] = "one-account.json";
+        limitedProfile["clients"]!["client-a"]!.AsObject().Remove("steamAccount");
+        limitedProfile["clients"]!["client-b"]!.AsObject().Remove("steamAccount");
+        limitedProfile["clients"]!["client-c"]!.AsObject().Remove("steamAccount");
+        string limitedProfileFile = Path.Combine(_rig.Root, "limited-profile.json");
+        File.WriteAllText(limitedProfileFile, limitedProfile.ToJsonString());
+        var limitedManifest = JsonNode.Parse(File.ReadAllText(manifestFile))!;
+        limitedManifest["profile"] = limitedProfileFile;
+        string limitedManifestFile = Path.Combine(_rig.Root, "limited-campaign.json");
+        File.WriteAllText(limitedManifestFile, limitedManifest.ToJsonString());
+        Assert.Contains("different account", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.Check(limitedManifestFile)).Message);
+        Assert.All(hosts.Values, host => Assert.Empty(host.Claims));
+        hosts["client-a"].SteamUserReply = "VT-STEAMUSER unreadable\n";
+        hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 999\n";
+        var identities = await Assert.ThrowsAsync<AggregateException>(() => HostedCampaignPreparation.PrepareAsync(manifestFile,
+            Path.Combine(_rig.Root, "bad-identities"), TimeSpan.FromSeconds(30), name => hosts[name]));
+        Assert.Equal(2, identities.InnerExceptions.Count);
+        Assert.All(hosts.Values, host => Assert.DoesNotContain("ship", host.Scripts));
+        hosts["client-a"].SteamUserReply = "VT-STEAMUSER account 101\n";
+        hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 202\n";
+        int active = 0, peak = 0;
+        foreach (var host in hosts.Values)
+            host.BeforeShip = async () =>
+            {
+                int now = Interlocked.Increment(ref active);
+                int old;
+                while ((old = Volatile.Read(ref peak)) < now && Interlocked.CompareExchange(ref peak, now, old) != old) { }
+                try { await Task.Delay(30); }
+                finally { Interlocked.Decrement(ref active); }
+            };
+        string output = Path.Combine(_rig.Root, "prepared");
+        string[] prepared;
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name]))
+        {
+            var profile = EnvironmentProfile.Read(campaign.ProfileFile);
+            prepared = [profile.Server!.Install, profile.Clients["client-a"].Install,
+                profile.Clients["client-b"].Install, profile.Clients["client-c"].Install];
+            Assert.Equal(4, campaign.Listings.Count);
+            Assert.Contains("BepInEx/plugins/Server.dll", campaign.Listings["server"].Files.Keys);
+            Assert.DoesNotContain("BepInEx/plugins/Server.dll", campaign.Listings["client-a"].Files.Keys);
+            Assert.Contains("BepInEx/plugins/Client.dll", campaign.Listings["client-b"].Files.Keys);
+            Assert.Contains("BepInEx/config/valheimCLI.valheimCLI.cfg", campaign.Listings["client-a"].Files.Keys);
+            Assert.Contains("example.server", campaign.PluginPins("server").Keys);
+            Assert.DoesNotContain("example.server", campaign.PluginPins("client-a").Keys);
+            var clients = new Dictionary<string, ClientRunPlan>
+            {
+                ["client-a"] = new(), ["client-b"] = new(), ["client-c"] = new(),
+            };
+            var plan = new ServerRunPlan();
+            campaign.ApplyTo(plan, HostedCampaignManifest.Read(manifestFile), clients, output);
+            Assert.Equal("4242", plan.Pins["worlduid"]);
+            Assert.All(plan.World.Sha256.Keys, path => Assert.StartsWith("worlds_local" + Path.DirectorySeparatorChar, path));
+            Assert.True(File.Exists(Path.Combine(plan.World.Source, "worlds_local", "Campaign.fwl")));
+            Assert.True(File.Exists(Path.Combine(plan.World.Source, "worlds_local", "Campaign.db")));
+            WorldFixture.Verify(plan.World.Source, plan.World.Sha256);
+            Assert.Equal(profile.Server.Install, plan.Runtime.Source);
+            Assert.Equal("vt-one", clients["client-a"].Character);
+            Assert.Equal("test-server.example:2456", clients["client-b"].Join);
+            Assert.Equal("vt-three", clients["client-c"].Character);
+            Assert.All(clients.Values, role => Assert.True(File.Exists(role.CliManifest)));
+            Assert.True(File.Exists(hosts["client-a"].Local(@"C:\save\characters_local\vt-one.fch")));
+            Assert.True(File.Exists(hosts["client-b"].Local(@"C:\save\characters_local\vt-two.fch")));
+            Assert.True(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
+            Assert.All(new[] { "server", "client-a", "client-b", "client-c" }, name => Assert.NotEmpty(hosts[name].Claims));
+        }
+        Assert.True(peak >= 2, "Independent actors should stage concurrently, not wait for each prior actor's copy.");
+        foreach (string name in hosts.Keys)
+        {
+            Assert.True(File.Exists(Path.Combine(hosts[name].Local(@"C:\game\source"), "BepInEx", "core", "BepInEx.dll")));
+            Assert.Equal(hosts[name].Claims.Count, hosts[name].Releases.Count);
+        }
+        Assert.False(Directory.Exists(hosts["server"].Local(prepared[0])));
+        Assert.False(Directory.Exists(hosts["client-a"].Local(prepared[1])));
+        Assert.False(Directory.Exists(hosts["client-b"].Local(prepared[2])));
+        Assert.False(Directory.Exists(hosts["client-c"].Local(prepared[3])));
+        Assert.False(File.Exists(hosts["client-a"].Local(@"C:\save\characters_local\vt-one.fch")));
+        Assert.False(File.Exists(hosts["client-b"].Local(@"C:\save\characters_local\vt-two.fch")));
+        Assert.False(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
+
+        // A dedicated server and one client may share a machine. Their installs are separate, but setup should
+        // still overlap under one host claim rather than serialising two full game copies.
+        var sharedHost = hosts["server"];
+        string sharedClientSource = sharedHost.Local(@"C:\game\client-source");
+        FakeInstalls.Client(sharedClientSource);
+        File.WriteAllText(Path.Combine(sharedClientSource, ClientLaunch.WindowsExecutable), "game");
+        File.WriteAllText(Path.Combine(sharedClientSource, "winhttp.dll"), "unknown proxy version");
+        File.WriteAllText(Path.Combine(sharedClientSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        Directory.CreateDirectory(sharedHost.Local(@"C:\save\characters_local"));
+        Directory.CreateDirectory(sharedHost.Local(@"C:\Steam\userdata"));
+        string sharedAccounts = Path.Combine(_rig.Root, "shared-host-accounts.json");
+        File.WriteAllText(sharedAccounts, JsonSerializer.Serialize(new
+        {
+            pool = "campaign", leaseDirectory = @"C:\leases", steamGuard = "signed-in",
+            accounts = new[] { new { name = "test_a", host = "server", steamId = "76561197960265829" }, new { name = "test_b", host = "client-b", steamId = "76561197960265930" },
+                new { name = "test_c", host = "client-c", steamId = "76561197960266031" } },
+        }));
+        var sameHostProfile = JsonNode.Parse(File.ReadAllText(profileFile))!;
+        sameHostProfile["steamAccounts"]!["pool"] = sharedAccounts;
+        sameHostProfile["clients"]!["client-a"]!["host"] = "server";
+        sameHostProfile["clients"]!["client-a"]!["install"] = @"C:\game\client-source";
+        string sameHostProfileFile = Path.Combine(_rig.Root, "shared-host-profile.json");
+        File.WriteAllText(sameHostProfileFile, sameHostProfile.ToJsonString());
+        var sameHostManifest = JsonNode.Parse(File.ReadAllText(manifestFile))!;
+        sameHostManifest["profile"] = sameHostProfileFile;
+        string sameHostManifestFile = Path.Combine(_rig.Root, "shared-host-campaign.json");
+        File.WriteAllText(sameHostManifestFile, sameHostManifest.ToJsonString());
+        int sharedActive = 0, sharedPeak = 0;
+        sharedHost.BeforeShip = async () =>
+        {
+            int now = Interlocked.Increment(ref sharedActive);
+            int old;
+            while ((old = Volatile.Read(ref sharedPeak)) < now && Interlocked.CompareExchange(ref sharedPeak, now, old) != old) { }
+            try { await Task.Delay(30); }
+            finally { Interlocked.Decrement(ref sharedActive); }
+        };
+        int claimsBefore = sharedHost.Claims.Count;
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
+            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]))
+        {
+            Assert.Equal(claimsBefore + 1, sharedHost.Claims.Count);
+            Assert.True(sharedPeak >= 2, "Server and client setup on one host should overlap under its single claim.");
+            Assert.Contains("BepInEx/plugins/Server.dll", campaign.Listings["server"].Files.Keys);
+            Assert.DoesNotContain("BepInEx/plugins/Server.dll", campaign.Listings["client-a"].Files.Keys);
+            Assert.True(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+        }
+        Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+
+        object Character(string store, string registeredName, string fileName) => new
+        {
+            store, registeredName, fileName,
+            charactersLocalDirectory = @"C:\save\characters_local", steamUserDataDirectory = @"C:\Steam\userdata",
+        };
+        string Store(string name, long id)
+        {
+            string local = _rig.Write("characters_local/" + name + ".fch", CharacterSavePositionTests.Profile(playerId: id).File);
+            string store = Path.Combine(_rig.Root, "registered-" + name);
+            DisposableCharacterStore.Create(store).Register(name, local);
+            return store;
+        }
+
+        string Lock(string mod, string name)
+        {
+            var resolved = NativeDependencyResolver.Resolve(Request(mod));
+            Assert.True(resolved.Ready, string.Join("; ", resolved.Gaps.Select(gap => gap.Reason)));
+            string path = Path.Combine(_rig.Root, name + "-lock.json");
+            resolved.Write(path);
+            return path;
+        }
+    }
+
+    [Fact] public async Task PreparingOrRetiringACharacterRefusesAnActiveGameProcess()
+    {
+        var host = new FakeServerHost("client", Path.Combine(_rig.Root, "active-game"), windows: true) { GameActive = true };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(2)));
+        Assert.Contains(host.Scripts, script => script == "game-process");
+        host.GameActive = false;
+        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(2));
+    }
+
+    [Fact] public async Task LostCharacterInstallReplyNamesThePossibleSaveWithoutDeletingIt()
+    {
+        string original = _rig.Write("characters_local/tester.fch", CharacterSavePositionTests.Profile(playerId: 919).File);
+        string store = Path.Combine(_rig.Root, "ambiguous-store");
+        DisposableCharacterStore.Create(store).Register("tester", original);
+        var host = new FakeServerHost("client", Path.Combine(_rig.Root, "ambiguous-host"), windows: true);
+        Directory.CreateDirectory(host.Local(@"C:\save\characters_local"));
+        Directory.CreateDirectory(host.Local(@"C:\Steam\userdata"));
+        host.Failures["character-install"] = FakeServerHost.TransportFailure;
+        var chosen = HostedCharacterStage.Select(new HostedCampaignCharacter
+        {
+            Store = store, RegisteredName = "tester", FileName = "vt-ambiguous",
+            CharactersLocalDirectory = @"C:\save\characters_local", SteamUserDataDirectory = @"C:\Steam\userdata",
+        }, _rig.Root);
+        var error = await Assert.ThrowsAsync<IOException>(() => HostedCharacterStage.StageAsync(host, chosen,
+            @"C:\runs\vt-prep-test\character-stage", TimeSpan.FromSeconds(5), CancellationToken.None));
+        Assert.Contains("not proven", error.Message);
+        Assert.Contains("vt-ambiguous", error.Message);
+        Assert.DoesNotContain("character-retire", host.Scripts);
     }
 
     [Fact] public void AnEditedLockCannotStageAnExtraCliPackOutsideTheSelectedManifest()

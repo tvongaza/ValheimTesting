@@ -27,6 +27,13 @@ public class BepInExLoaderTests
         root.Config(string.Format(Doorstop4, System.IO.Path.Combine(root.Path, "BepInEx", "core", "BepInEx.Preloader.dll")));
         BepInExLoader.RequireWindowsLoader(root.Path, "install");
     }
+    [Fact] public void NestedCoreIsRefusedBeforeThePreloaderCanLoadHarmonyTwice()
+    {
+        using var root = new Root(string.Format(Doorstop3, @"BepInEx\core\BepInEx.Preloader.dll"));
+        root.Add(@"BepInEx\core\core\0Harmony20.dll");
+        var error = Assert.Throws<InvalidOperationException>(() => BepInExLoader.RequireCore(root.Path, "client"));
+        Assert.Contains("nested BepInEx/core/core", error.Message);
+    }
     // An existing DLL is not enough: Doorstop would load it instead of BepInEx.
     [Theory]
     [InlineData(Doorstop4, @"BepInEx\core\Other.Preloader.dll")]

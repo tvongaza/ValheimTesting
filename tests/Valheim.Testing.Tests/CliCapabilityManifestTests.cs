@@ -127,6 +127,19 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Equal(1, process.Stops); // A failed live check stops the client it started.
     }
 
+    [Fact] public void AModAdapterExtensionIsDeferredToTheLiveCheckNotRequiredOfValheimCliPacks()
+    {
+        var builds = new Builds();
+        using var install = Staged(builds, (Core, builds.Core), (Standard, builds.Standard));
+        var plan = PlanFor(install, Manifest(builds, "client with adapter", (Core, builds.Core), (Standard, builds.Standard)));
+        plan.Capabilities = ["mymod.testing/markers"];
+        var checkedSet = plan.CheckCliManifest()!;
+        Assert.DoesNotContain("mymod.testing/markers", checkedSet.Capabilities);
+        var error = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _root,
+            () => new Process(), () => new ScriptedTransport(), (_, _) => Task.CompletedTask));
+        Assert.Contains("mymod.testing/markers", error.Message);
+    }
+
     [Fact] public void TheJotunnRunsMonolithicValheimCliFailsBeforeLaunchNamingTheMissingPack()
     {
         var builds = new Builds();

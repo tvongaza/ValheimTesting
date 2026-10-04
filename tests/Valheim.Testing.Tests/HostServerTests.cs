@@ -411,6 +411,17 @@ public sealed class HostServerTests : IDisposable
         Assert.Contains("on box", changed.Message);
     }
 
+    [Fact] public void HostPinsRefuseANestedCoreBeforeAnyRuntimeIsCopied()
+    {
+        string install = Path.Combine(_root, "nested-core");
+        FakeInstalls.Server(install);
+        string nested = Path.Combine(install, "BepInEx", "core", "core");
+        Directory.CreateDirectory(nested);
+        File.WriteAllText(Path.Combine(nested, "0Harmony20.dll"), "duplicate");
+        var error = Assert.Throws<InvalidOperationException>(() => HostInstall.Pins(ListingOf(install)));
+        Assert.Contains("nested BepInEx/core/core", error.Message);
+    }
+
     [Fact] public void AHostCopyMustMatchTheManifestExactly()
     {
         string runtime = Path.Combine(_root, "runtime");

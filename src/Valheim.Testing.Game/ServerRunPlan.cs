@@ -14,7 +14,10 @@ public sealed class PinnedDirectory
     /// <summary>Without <paramref name="requireHashes"/> (an explicitly unpinned plan) the hashes may be left out; listed ones are still full SHA256.</summary>
     public void Validate(bool requireHashes)
     {
-        if (!Path.IsPathFullyQualified(Source) || (requireHashes && Sha256.Count == 0)) throw new ArgumentException("A full source path and fixture hashes are required.");
+        // A profile run may be assembled on macOS for a Windows host. The source then names an absolute path on the
+        // host rather than one this process can open; the hosted runner verifies its bytes through HostListing.
+        bool hostAbsolute = System.Text.RegularExpressions.Regex.IsMatch(Source, @"^[A-Za-z]:[\\/]") || Source.StartsWith(@"\\", StringComparison.Ordinal);
+        if (!(Path.IsPathFullyQualified(Source) || hostAbsolute) || (requireHashes && Sha256.Count == 0)) throw new ArgumentException("A full source path and fixture hashes are required.");
         foreach (var hash in Sha256)
             if (hash.Value.Length != 64 || !hash.Value.All(Uri.IsHexDigit)) throw new ArgumentException("Use full SHA256 fixture hashes.");
     }

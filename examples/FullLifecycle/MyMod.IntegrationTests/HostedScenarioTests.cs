@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Globalization;
 using MyMod.SystemTests;
 using Valheim.Testing.Game;
@@ -59,9 +60,14 @@ public sealed class HostedScenarioTests : IDisposable
     // The host: at its menu until it starts the world, then the world (one loading reading, then ready with its player).
     private ScriptedTransport Host()
     {
+        bool acknowledged = false;
         bool devcommands = false;
         return new ScriptedTransport()
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .On("cli_access", _ => ScriptedTransport.Ok("ACCESS " + JsonSerializer.Serialize(new { schemaVersion = 1, complete = true,
+                devcommands, cheatsAcknowledged = acknowledged, allowOnServerClients = true, server = _hosting, dedicated = false,
+                joinedClient = _hosting && !_hosting, localPlayer = _hosting, profileAvailable = _hosting })))
+            .On("cli_acknowledge_local_cheats", _ => { acknowledged = true; return ScriptedTransport.Ok("OK: localCharacterCheated=True"); })
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
             .OnPrefix("cli_start_host_world ", command =>
             {
