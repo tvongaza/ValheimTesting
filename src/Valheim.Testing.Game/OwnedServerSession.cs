@@ -40,20 +40,23 @@ public sealed class StartupEvents
     /// BepInEx's chainloader lines for a plugin it did not load: a missing dependency, an incompatibility or an exception
     /// while loading. In a pinned runtime any of them means the wrong environment, so pass them as <see cref="Failures"/>.
     /// </summary>
+    // The log scan's startup patterns, the one owner of their regexes.
+    private static string StartupPatterns => string.Join("|", LogScanner.Patterns.Where(pattern => pattern.Phase.HasFlag(LogPhase.Startup)).Select(pattern => pattern.Line.ToString()));
     public static readonly IReadOnlyList<Regex> BepInExPluginLoadFailures =
         [new(@"^\[(?:Warning|Error|Fatal) *: *BepInEx\] (?:Could not load|Error loading) \[", RegexOptions.CultureInvariant)];
     /// <summary>
-    /// Lines that mean the runtime's assemblies do not fit the game: a <c>TypeLoadException</c>, <c>MissingMethodException</c>
-    /// or <c>MissingFieldException</c> (a leftover preloader patcher or a mod built for another game version) in a BepInEx
-    /// warning, error or fatal line, or an exception line that starts with its name as Unity and .NET write it
-    /// (<c>System.TypeLoadException: ...</c>); and ValheimCLI's packs reporting that its core never became ready ("CLI core
-    /// 1.1 is not ready."). An info or debug line that only mentions an exception (a mod's handled soft dependency) does not
-    /// count. Before ValheimCLI listens, all of them mean the run cannot work, so startup should end at once instead of at its deadline.
+    /// Lines that mean the runtime's assemblies do not fit the game: a <see cref="LogPhase.Startup"/> pattern of
+    /// <see cref="LogScanner.Patterns"/> (<c>TypeLoadException</c>, <c>MissingMethodException</c>, <c>MissingFieldException</c>:
+    /// a leftover preloader patcher or a mod built for another game version) in a BepInEx warning, error or fatal line, or an
+    /// exception line that starts with its name as Unity and .NET write it (<c>System.TypeLoadException: ...</c>); and
+    /// ValheimCLI's packs reporting that its core never became ready ("CLI core 1.1 is not ready."). An info or debug line
+    /// that only mentions an exception (a mod's handled soft dependency) does not count. Before ValheimCLI listens, all of
+    /// them mean the run cannot work, so startup should end at once instead of at its deadline.
     /// </summary>
     public static readonly IReadOnlyList<Regex> RuntimeLoadFailures =
     [
-        new(@"^\[(?:Warning|Error|Fatal) *:[^\]]*\].*\b(?:TypeLoadException|MissingMethodException|MissingFieldException)\b", RegexOptions.CultureInvariant),
-        new(@"^(?:System\.)?(?:TypeLoadException|MissingMethodException|MissingFieldException): ", RegexOptions.CultureInvariant),
+        new(@"^\[(?:Warning|Error|Fatal) *:[^\]]*\].*(?:" + StartupPatterns + ")", RegexOptions.CultureInvariant),
+        new(@"^(?:System\.)?(?:" + StartupPatterns + "): ", RegexOptions.CultureInvariant),
         new(@"^\[(?:Error|Fatal) *:[^\]]*\] CLI core \S+ is not ready\.", RegexOptions.CultureInvariant),
     ];
     /// <summary><see cref="BepInExPluginLoadFailures"/> and <see cref="RuntimeLoadFailures"/>: what the owned server and client startups fail on.</summary>

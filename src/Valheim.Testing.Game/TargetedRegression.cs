@@ -32,7 +32,7 @@ public sealed class RegressionEnvironment
     public List<RegressionFile> Patchers { get; set; } = [];
     /// <summary>Assembly names a staged DLL references but only uses when present (a guarded soft integration); none by default.</summary>
     public List<string> OptionalReferences { get; set; } = [];
-    /// <summary>Reasoned expected log lines for this native regression; unclassified BepInEx errors fail by default.</summary>
+    /// <summary>Reasoned expected log lines and patterns of the run's own for this native regression (<see cref="LogClassification"/>); unclassified BepInEx errors fail by default.</summary>
     public Dictionary<string, LogClassification> LogScan { get; set; } = [];
     /// <summary>Optional: the game build and BepInEx core <see cref="Game"/> must have (<see cref="InstallPins"/>; its patchers value is not compared).</summary>
     public InstallPins? GamePins { get; set; }

@@ -69,7 +69,8 @@ public partial class ServerRunPlan
     public string[] Patchers { get; set; } = [];
     /// <summary>
     /// This run's severities for the teardown log scan's patterns (<see cref="LogScanner.Names"/>), each with a written
-    /// reason, for example <c>"rpc-method-missing": { "severity": "Failure", "reason": "..." }</c>.
+    /// reason, for example <c>"rpc-method-missing": { "severity": "Failure", "reason": "..." }</c>; under a new name, a pattern
+    /// of the run's own with a <c>line</c> regex (<see cref="LogClassification.Line"/>).
     /// </summary>
     public Dictionary<string, LogClassification> LogScan { get; set; } = [];
 

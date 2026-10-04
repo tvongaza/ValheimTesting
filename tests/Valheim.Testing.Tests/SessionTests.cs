@@ -155,6 +155,17 @@ public class SessionTests
         Assert.Contains(StartupEvents.RuntimeLoadFailures, failure => failure.IsMatch(line));
         Assert.Contains(StartupEvents.StartupFailures, failure => failure.IsMatch(line));
     }
+    [Fact] public void StartupLoadFailuresUseTheLogScansOwnPatterns()
+    {
+        var startup = LogScanner.Patterns.Where(pattern => pattern.Phase.HasFlag(LogPhase.Startup)).ToList();
+        Assert.Equal(new[] { "missing-method", "missing-field", "type-load" }, startup.Select(pattern => pattern.Name));
+        Assert.All(startup, pattern => Assert.Equal(LogPhase.Startup | LogPhase.Teardown, pattern.Phase));
+        Assert.All(startup, pattern => Assert.Null(pattern.Frame)); // startup matching reads the line only
+        Assert.All(startup, pattern => Assert.Contains(pattern.Line.ToString(), StartupEvents.RuntimeLoadFailures[0].ToString()));
+        Assert.All(startup, pattern => Assert.Contains(pattern.Line.ToString(), StartupEvents.RuntimeLoadFailures[1].ToString()));
+        // A teardown-only problem does not end a startup.
+        Assert.DoesNotContain(StartupEvents.StartupFailures, failure => failure.IsMatch("[Warning:  HarmonyX] UnpatchAll has been called - This will remove ALL HARMONY PATCHES."));
+    }
     [Fact] public void StartupFailuresKeepThePluginLoadFailures() =>
         Assert.All(StartupEvents.BepInExPluginLoadFailures, failure => Assert.Contains(failure, StartupEvents.StartupFailures));
     [Theory]

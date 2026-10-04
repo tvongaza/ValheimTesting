@@ -296,7 +296,7 @@ public sealed class LogScanTests : IDisposable
         Assert.Equal("[Warning:  My Mod] QuitLog: quitting", count.FirstExpected);
     }
     [Theory]
-    [InlineData("not-a-pattern", "Failure", "reason", "not a known pattern")]
+    [InlineData("not-a-pattern", "Failure", "reason", "not a built-in pattern")]
     [InlineData("type-load", "Warning", " ", "written reason")]
     [InlineData("type-load", null, "reason", "written reason")]
     public void AClassificationNeedsAKnownNameASeverityAndAReason(string name, string? severity, string reason, string message)
@@ -369,8 +369,65 @@ public sealed class LogScanTests : IDisposable
         Assert.Null(plan.LogScan["accesstools-not-found"].Severity);
         Assert.Equal(new[] { "name m_optional" }, plan.LogScan["accesstools-not-found"].Expected);
         plan.CheckPatchersAndLogScan();
+        File.WriteAllText(path, """{ "logScan": { "mymod-fallback": { "line": "fell back to ", "frame": "MyMod\\.", "severity": "failure", "reason": "Never in a pinned runtime." } } }""");
+        plan = ServerRunPlan.Read<ServerRunPlan>(path);
+        Assert.Equal(("fell back to ", "MyMod\\."), (plan.LogScan["mymod-fallback"].Line, plan.LogScan["mymod-fallback"].Frame));
+        plan.CheckPatchersAndLogScan();
         File.WriteAllText(path, """{ "logScan": { "rpc-method-missing": { "severity": "failure", "reason": "x", "extra": 1 } } }""");
         Assert.ThrowsAny<JsonException>(() => ServerRunPlan.Read<ServerRunPlan>(path));
+    }
+    [Fact] public void APlanAddsItsOwnFailurePatternAndNamesAnotherModsNoise()
+    {
+        var plan = new Dictionary<string, LogClassification>
+        {
+            ["mymod-fallback"] = new() { Line = @"^\[Warning *: *My Mod\] fell back to ", Severity = LogSeverity.Failure, Reason = "MyMod must never fall back in a pinned runtime." },
+            ["othermod-noise"] = new() { Line = @"^\[Warning *: *Other Mod\] Config file not found", Severity = LogSeverity.Warning, Reason = "Other Mod logs this on every first start." },
+        };
+        string text = Boot + "[Warning:  My Mod] fell back to the vanilla road table\n[Warning: Other Mod] Config file not found; writing defaults\n" + Tail;
+        var scan = LogScanner.Scan(Write(text), plan);
+        Assert.True(scan.Failed);
+        var fallback = Count(scan, "mymod-fallback");
+        Assert.Equal((1, LogSeverity.Failure, 3, "MyMod must never fall back in a pinned runtime."), (fallback.Count, fallback.Severity, fallback.FirstLine!.Value, fallback.Reason));
+        Assert.Equal((1, LogSeverity.Warning), (Count(scan, "othermod-noise").Count, Count(scan, "othermod-noise").Severity));
+        Assert.Equal(0, Count(scan, LogScanner.UnknownWarning).Count);
+        Assert.Equal([.. LogScanner.Names.Take(LogScanner.Patterns.Count), "mymod-fallback", "othermod-noise", LogScanner.UnityException, LogScanner.UnknownWarning, LogScanner.UnknownError],
+            scan.Counts.Select(count => count.Pattern));
+        // Without the plan's patterns both lines are unknown warnings and nothing fails.
+        var plain = LogScanner.Scan(Write(text));
+        Assert.False(plain.Failed); Assert.Equal(2, Count(plain, LogScanner.UnknownWarning).Count);
+    }
+    [Fact] public void NewGameNoiseCanBeAllowedFromAPlanWithoutAToolkitRelease()
+    {
+        string text = Boot + "[Error  : Unity Log] Some new null-GPU error on a dedicated server.\n" + Tail;
+        Assert.True(LogScanner.Scan(Write(text)).Failed); // unknown-error, as #187's lines were before #189
+        var plan = new Dictionary<string, LogClassification>
+        {
+            ["headless-server-graphics-2"] = new() { Line = @"^\[Error\s+:\s*Unity Log\]\s*Some new null-GPU error on a dedicated server\.$", Severity = LogSeverity.Warning, Reason = "Every 1.0.17 dedicated server boot logs it (measured 4 Oct)." },
+        };
+        var scan = LogScanner.Scan(Write(text), plan);
+        Assert.False(scan.Failed); Assert.Equal(1, Count(scan, "headless-server-graphics-2").Count);
+    }
+    [Fact] public void APlanRegexThatRunsAwayNamesItsPattern()
+    {
+        var plan = new Dictionary<string, LogClassification> { ["mymod-slow"] = new() { Line = "^(a+)+$", Severity = LogSeverity.Warning, Reason = "r" } };
+        var error = Assert.Throws<InvalidOperationException>(() => LogScanner.Scan(Write(Boot + new string('a', 40) + "!\n" + Tail), plan));
+        Assert.Equal("Log scan: mymod-slow's regex took over 1 s on line 3 of server BepInEx log; simplify it.", error.Message);
+    }
+    [Theory]
+    [InlineData("mymod-x", null, "Failure", "r", null, "needs a line regex, a severity and a written reason")]
+    [InlineData("mymod-x", "fell back", null, "r", null, "needs a line regex, a severity and a written reason")]
+    [InlineData("mymod-x", "fell back", "Failure", " ", null, "needs a line regex, a severity and a written reason")]
+    [InlineData("mymod-x", "fell (back", "Failure", "r", null, "mymod-x's line regex does not parse")]
+    [InlineData("mymod-x", "fell back", "Failure", "r", "MyMod.(", "mymod-x's frame regex does not parse")]
+    [InlineData("missing-method", "anything", "Failure", "r", null, "missing-method is built in; its regex cannot be replaced")]
+    public void APlansOwnPatternIsRefusedUnlessComplete(string name, string? line, string? severity, string reason, string? frame, string message)
+    {
+        var plan = new Dictionary<string, LogClassification>
+        {
+            [name] = new() { Line = line, Frame = frame, Severity = severity == null ? null : Enum.Parse<LogSeverity>(severity), Reason = reason },
+        };
+        Assert.Contains(message, Assert.Throws<ArgumentException>(() => LogScanner.CheckClassifications(plan)).Message);
+        Assert.Throws<ArgumentException>(() => LogScanner.Scan(Write(Boot + Tail), plan));
     }
     // Unity's Player.log of the 30 Sep 2026 Jötunn #494 negative control (Valheim 1.0.16, Windows client), shortened and with
     // the assembly ids replaced: an exception Jötunn threw in a death hook, which BepInEx's log did not have.
