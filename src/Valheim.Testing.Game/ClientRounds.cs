@@ -130,7 +130,7 @@ public sealed class ClientRounds
             world.Opened(client);
             for (int i = 0; i < Rounds.Count; i++)
             {
-                var round = new ClientRound(Rounds[i], i, i == Rounds.Count - 1, world.ServerFor(client), client, Report, Output);
+                var round = new ClientRound(Rounds[i], i, i == Rounds.Count - 1, world.ServerFor(client), client, Report, Output, world.WorldUid);
                 if (i > 0) afterRestart?.Invoke(round);
                 world.Enter(round);
                 measure(round);
@@ -173,6 +173,7 @@ public sealed class ClientRounds
     {
         string LeaveStep { get; }
         string CompletedKey { get; }
+        string WorldUid { get; }
         void Record();
         void Prepare();
         void Opened(GameActor client);
@@ -189,6 +190,7 @@ public sealed class ClientRounds
         private GameActor _server = server;
         public string LeaveStep => "the client leaves to its menu";
         public string CompletedKey => "clientRoundsCompleted";
+        public string WorldUid => rounds.WorldUid!; // CheckJoined requires it.
         public void Record()
         {
             rounds.Report.Provenance["clientRounds"] = string.Join(",", rounds.Rounds);
@@ -217,6 +219,7 @@ public sealed class ClientRounds
         private ScenarioReport Report => rounds.Report;
         public string LeaveStep => "the host leaves to its menu";
         public string CompletedKey => "hostRoundsCompleted";
+        public string WorldUid => plan.WorldUid;
         public void Record()
         {
             Report.Provenance["role"] = "host";
@@ -347,8 +350,8 @@ public sealed class ClientRounds
 /// <summary>One round of <see cref="ClientRounds"/>, handed to the mod's measurement and after-restart check.</summary>
 public sealed class ClientRound
 {
-    internal ClientRound(string name, int index, bool last, GameActor server, GameActor client, ScenarioReport report, string output)
-    { Name = name; Index = index; Last = last; Server = server; Client = client; Report = report; Output = output; }
+    internal ClientRound(string name, int index, bool last, GameActor server, GameActor client, ScenarioReport report, string output, string worldUid)
+    { Name = name; Index = index; Last = last; Server = server; Client = client; Report = report; Output = output; WorldUid = worldUid; }
 
     /// <summary>The round's name, which prefixes its steps and evidence files.</summary>
     public string Name { get; }
@@ -366,15 +369,22 @@ public sealed class ClientRound
     /// <summary>Records a step named <c>{round}: {name}</c> and rethrows its failure.</summary>
     public void Step(string name, Action action) => Report.Step(Name + ": " + name, action);
 
+    /// <summary>The world UID the rounds run in, which every evidence file of this round names.</summary>
+    public string WorldUid { get; }
+
     /// <summary>
-    /// Writes <paramref name="value"/> as indented JSON to <c>{round}-{name}.json</c> in the output directory and returns
-    /// the path. Refuses a file that already exists: evidence is never overwritten.
+    /// Writes <paramref name="value"/> as indented JSON to <c>{round}-{name}.json</c> in the output directory, links it from
+    /// <c>result.json</c> (<see cref="ScenarioReport.Attach(EvidenceReference)"/>: kind <paramref name="name"/>, site the
+    /// round's name) and returns the path. <paramref name="name"/> is an evidence kind: 1-40 lower-case letters, digits or
+    /// hyphens. Refuses a file that already exists: evidence is never overwritten.
     /// </summary>
     public string Write(string name, object value)
     {
+        if (!ScenarioReport.ValidKind(name)) throw new ArgumentException("Name round evidence with 1-40 lower-case letters, digits or hyphens.", nameof(name));
         string path = Path.Combine(Output, $"{Name}-{name}.json");
-        using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
-        JsonSerializer.Serialize(file, value, value.GetType(), new JsonSerializerOptions { WriteIndented = true });
+        using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
+            JsonSerializer.Serialize(file, value, value.GetType(), new JsonSerializerOptions { WriteIndented = true });
+        Report.Attach(new EvidenceReference(name, Name, WorldUid, path, WorldFixture.Hash(path)));
         return path;
     }
 }

@@ -7,7 +7,6 @@ namespace Valheim.Testing.Game;
 
 /// <summary>A bounded, read-only observation of loaded terrain at an explicitly named site.</summary>
 public sealed record TerrainSitePoint(int X, int Z);
-public sealed record TerrainSiteCommand(string Role, string Command, DateTimeOffset AtUtc, IReadOnlyList<string> Reply);
 public sealed record TerrainSiteReading(TerrainSitePoint Point, double GroundHeight, double TerrainSurfaceHeight,
     double Dirt, double Cultivated, double Paved, double ClearVegetation);
 public sealed record TerrainSiteDelta(TerrainSitePoint Point, double GroundHeight, double TerrainSurfaceHeight,
@@ -19,10 +18,9 @@ public sealed record TerrainSiteDelta(TerrainSitePoint Point, double GroundHeigh
 /// replies are retained so a test report can be audited without trusting only the parsed values.
 /// </summary>
 public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeOffset StartedUtc, DateTimeOffset FinishedUtc,
-    IReadOnlyList<TerrainSiteReading> Readings, IReadOnlyList<TerrainSiteCommand> Commands)
+    IReadOnlyList<TerrainSiteReading> Readings, IReadOnlyList<ObservedCommand> Commands) : IEvidence
 {
-    private static readonly Regex Area = new(@"^OK: AREA_READY (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) ready=(?<ready>True|False) zone=-?\d+,-?\d+ loaded=(?<loaded>True|False) objects=\d+ without_instance=(?<missing>\d+)$", RegexOptions.CultureInvariant);
-    private static readonly Regex Ground = new(@"^GROUND (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) h=(?<height>-?\d+\.\d+)$", RegexOptions.CultureInvariant);
+    public string Kind => "terrain-site";
     private static readonly Regex Surface = new(@"^SURFACE (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) hit=(?<hit>\d+) name=(?<name>\S+) y=(?<height>-?\d+\.\d+) layer=\S+ zdo=\S+ trigger=(True|False)$", RegexOptions.CultureInvariant);
     private static readonly Regex SurfaceEnd = new(@"^OK: SURFACE_AT (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) hits=(?<hits>\d+)$", RegexOptions.CultureInvariant);
     private static readonly Regex Paint = new(@"^PAINT (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) dirt=(?<dirt>\d+\.\d+) cultivated=(?<cultivated>\d+\.\d+) paved=(?<paved>\d+\.\d+) clearveg=(?<clearveg>\d+\.\d+) -> .+$", RegexOptions.CultureInvariant);
@@ -42,30 +40,29 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
         if (!client.Pinned || server is not null && !server.Pinned) throw new InvalidOperationException("Terrain snapshots require strict environment pins on every actor.");
 
         var started = DateTimeOffset.UtcNow;
-        var commands = new List<TerrainSiteCommand>();
-        CheckWorld(client, worldUid, "client");
-        if (server is not null) CheckWorld(server, worldUid, "server");
+        var commands = new List<ObservedCommand>();
+        SiteObservation.CheckWorld(client, worldUid, "client");
+        if (server is not null) SiteObservation.CheckWorld(server, worldUid, "server");
         var clock = Stopwatch.StartNew();
         foreach (var point in points)
         {
-            WaitReady(client, "client", point, readinessTimeout, clock, commands, cancellation);
-            if (server is not null) WaitReady(server, "server", point, readinessTimeout, clock, commands, cancellation);
+            SiteObservation.WaitAreaReady(client, "client", point.X, point.Z, readinessTimeout, clock, commands, cancellation);
+            if (server is not null) SiteObservation.WaitAreaReady(server, "server", point.X, point.Z, readinessTimeout, clock, commands, cancellation);
         }
         var readings = new List<TerrainSiteReading>(points.Count);
         foreach (var point in points)
         {
             cancellation.ThrowIfCancellationRequested();
-            var ground = Lines(client, "client", $"cli_ground_height {point.X} {point.Z}", commands);
-            double height = Number(Only(ground, Ground, point).Groups["height"].Value);
-            var surface = Lines(client, "client", $"cli_surface_at {point.X} {point.Z}", commands);
+            double height = SiteObservation.GroundHeight(client, "client", point.X, point.Z, commands);
+            var surface = SiteObservation.Lines(client, "client", $"cli_surface_at {point.X} {point.Z}", commands);
             double terrain = TerrainSurface(surface, point);
-            var paint = Lines(client, "client", $"cli_paint_at {point.X} {point.Z}", commands);
+            var paint = SiteObservation.Lines(client, "client", $"cli_paint_at {point.X} {point.Z}", commands);
             var p = Only(paint, Paint, point);
             double dirt = Channel(p, "dirt"), cultivated = Channel(p, "cultivated"), paved = Channel(p, "paved"), clear = Channel(p, "clearveg");
             readings.Add(new(point, height, terrain, dirt, cultivated, paved, clear));
         }
-        CheckWorld(client, worldUid, "client");
-        if (server is not null) CheckWorld(server, worldUid, "server");
+        SiteObservation.CheckWorld(client, worldUid, "client");
+        if (server is not null) SiteObservation.CheckWorld(server, worldUid, "server");
         return new(site, worldUid, started, DateTimeOffset.UtcNow, readings, commands);
     }
 
@@ -80,52 +77,7 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
             b.Dirt - a.Dirt, b.Cultivated - a.Cultivated, b.Paved - a.Paved, b.ClearVegetation - a.ClearVegetation)).ToArray();
     }
 
-    private static void CheckWorld(GameActor actor, string worldUid, string role)
-    {
-        var state = new SessionControl(actor).Read();
-        if (!state.WorldReady || state.WorldUid != worldUid)
-            throw new InvalidOperationException($"{role} is not ready in the expected world; observed UID {state.WorldUid ?? "none"}.");
-        if (role == "client" && (!state.LocalPlayer || !state.PlayerReady))
-            throw new InvalidOperationException("Loaded terrain and paint require a ready client player at the site.");
-        if (role == "server" && !state.Server)
-            throw new InvalidOperationException("The supplied server actor is not hosting the world.");
-    }
-
-    private static void WaitReady(GameActor actor, string role, TerrainSitePoint point, TimeSpan timeout, Stopwatch clock,
-        List<TerrainSiteCommand> commands, CancellationToken cancellation)
-    {
-        string last = "no area reply";
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            var reply = Lines(actor, role, $"cli_area_ready {point.X} {point.Z} 0", commands);
-            last = string.Join(" | ", reply);
-            var match = Only(reply, Area, point);
-            if (match.Groups["ready"].Value == "True" && match.Groups["loaded"].Value == "True" && match.Groups["missing"].Value == "0") return;
-            if (clock.Elapsed >= timeout) throw new TimeoutException($"{role} area at {point.X},{point.Z} did not become ready within {timeout}. Last state: {last}");
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (timeout - clock.Elapsed).TotalMilliseconds))));
-        }
-    }
-
-    private static IReadOnlyList<string> Lines(GameActor actor, string role, string command, List<TerrainSiteCommand> commands)
-    {
-        // Recorded before judging, so a refused command is in the evidence.
-        var reply = actor.Execute(command, requireAccepted: false);
-        string[] lines = reply.Output.ToArray();
-        commands.Add(new(role, command, DateTimeOffset.UtcNow, lines));
-        if (!reply.Accepted || lines.Length == 0)
-            throw new InvalidOperationException($"{role} returned an incomplete or error reply for {command}: {string.Join(" | ", lines)}");
-        return lines;
-    }
-
-    private static Match Only(IReadOnlyList<string> lines, Regex pattern, TerrainSitePoint point)
-    {
-        if (lines.Count != 1) throw new InvalidOperationException("Expected exactly one complete terrain reply.");
-        var match = pattern.Match(lines[0]);
-        if (!match.Success || Number(match.Groups["x"].Value) != point.X || Number(match.Groups["z"].Value) != point.Z)
-            throw new InvalidOperationException($"Incomplete terrain reply or wrong coordinates at {point.X},{point.Z}: {lines[0]}");
-        return match;
-    }
+    private static Match Only(IReadOnlyList<string> lines, Regex pattern, TerrainSitePoint point) => SiteObservation.One(lines, pattern, point.X, point.Z);
 
     private static double TerrainSurface(IReadOnlyList<string> lines, TerrainSitePoint point)
     {
@@ -149,10 +101,5 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
         if (value is < 0 or > 1) throw new InvalidOperationException("Paint channel is outside [0,1].");
         return value;
     }
-    private static double Number(string text)
-    {
-        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) || !double.IsFinite(value))
-            throw new InvalidOperationException("Terrain reply contains a non-finite number.");
-        return value;
-    }
+    private static double Number(string text) => SiteObservation.Number(text);
 }

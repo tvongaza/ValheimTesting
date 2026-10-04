@@ -48,11 +48,12 @@ public sealed class AreaObjectSnapshotTests
         {
             var report = new ScenarioReport("object evidence");
             report.Step("capture site", () => { });
-            report.AttachAreaObjectSnapshot(snapshot);
+            report.Attach(snapshot);
             report.Write(directory);
-            var link = Assert.Single(report.AreaObjectSnapshots);
+            var link = Assert.Single(report.Evidence);
+            Assert.Equal(("area-objects", "evidence/area-objects-001.json"), (link.Kind, link.File));
             using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "result.json")));
-            Assert.Equal(link.Sha256, result.RootElement.GetProperty("AreaObjectSnapshots")[0].GetProperty("Sha256").GetString());
+            Assert.Equal(link.Sha256, result.RootElement.GetProperty("Evidence")[0].GetProperty("Sha256").GetString());
             using var capture = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, link.File)));
             Assert.Equal("cli_zdos_at 16 -8 8", capture.RootElement.GetProperty("Commands")[1].GetProperty("Command").GetString());
         }

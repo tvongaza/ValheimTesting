@@ -99,14 +99,16 @@ public sealed class TerrainSiteSnapshotTests
         string directory = Path.Combine(Path.GetTempPath(), "terrain-site-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var report = new ScenarioReport("site test"); report.Step("read terrain", () => { }); report.AttachTerrainSnapshot(before);
+            var report = new ScenarioReport("site test"); report.Step("read terrain", () => { }); report.Attach(before);
             report.Write(directory);
-            var link = Assert.Single(report.TerrainSnapshots);
+            var link = Assert.Single(report.Evidence);
             Assert.Equal("site", link.Site);
+            Assert.Equal("terrain-site", link.Kind);
+            Assert.Equal("evidence/terrain-site-001.json", link.File);
             using var snapshot = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, link.File)));
             Assert.Equal("cli_ground_height 16 -8", snapshot.RootElement.GetProperty("Commands")[1].GetProperty("Command").GetString());
             using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "result.json")));
-            Assert.Equal(link.Sha256, result.RootElement.GetProperty("TerrainSnapshots")[0].GetProperty("Sha256").GetString());
+            Assert.Equal(link.Sha256, result.RootElement.GetProperty("Evidence")[0].GetProperty("Sha256").GetString());
         }
         finally { Directory.Delete(directory, true); }
     }
@@ -115,12 +117,12 @@ public sealed class TerrainSiteSnapshotTests
     {
         var transport = Transport(); using var actor = transport.Actor();
         var report = new ScenarioReport("failure capture");
-        var error = Assert.Throws<InvalidOperationException>(() => report.StepWithTerrainOnFailure("check ground",
+        var error = Assert.Throws<InvalidOperationException>(() => report.StepWithEvidenceOnFailure("check ground",
             () => throw new InvalidOperationException("unexpected ground"),
             () => TerrainSiteSnapshot.Capture(actor, "site", "7", [Point], TimeSpan.FromSeconds(1))));
         Assert.Equal("unexpected ground", error.Message);
         string directory = Path.Combine(Path.GetTempPath(), "terrain-site-" + Guid.NewGuid().ToString("N"));
-        try { report.Write(directory); Assert.Single(report.TerrainSnapshots); }
+        try { report.Write(directory); Assert.Equal("terrain-site", Assert.Single(report.Evidence).Kind); }
         finally { Directory.Delete(directory, true); }
     }
 }
