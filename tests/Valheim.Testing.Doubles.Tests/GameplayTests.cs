@@ -75,7 +75,7 @@ public sealed class GameplayTests : IDisposable
 
     [Fact] public void TheHeightmapBuilderAnswersReadyOnlyForABuiltUnconsumedZone()
     {
-        _scope.WithHeightmapBuilder();
+        HeightmapBuilder.instance = new HeightmapBuilder();
         var world = new TerrainWorld(new Valheim.Testing.PlaneTerrain(33f));
         var builder = HeightmapBuilder.instance; Assert.NotNull(builder); var centre = new Vector3(64, 0, 0);
         Assert.False(builder.IsTerrainReady(centre, 4, 16f, false, world)); Assert.Equal(1, builder.QueuedCount);
@@ -98,7 +98,7 @@ public sealed class GameplayTests : IDisposable
     }
     [Fact] public void HeightsBlendAcrossCornerBiomesAndADistantLodSmoothsSteps()
     {
-        _scope.WithHeightmapBuilder();
+        HeightmapBuilder.instance = new HeightmapBuilder();
         var world = new SplitWorld();
         var builder = HeightmapBuilder.instance; Assert.NotNull(builder);
         // x from -32 to 32 in four steps: the west corners are Meadows (10 m), the east ones Mountain (50 m).

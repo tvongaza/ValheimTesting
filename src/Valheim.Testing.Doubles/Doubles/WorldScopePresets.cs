@@ -5,10 +5,9 @@
 #nullable enable
 // ReSharper disable InconsistentNaming
 // The process's role as the game sees it (dedicated server, listen-server host, client, main menu), the players each
-// role has, plugin loading, and ObjectDB's two registration passes, as ValheimWorldScope presets.
+// role has, as ValheimWorldScope presets.
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Valheim.Testing.Doubles;
 
 /// <summary>A player, as mod code finds one: its view (and so its ZDO), its name and id from the ZDO, and the list of every player object.</summary>
@@ -58,12 +57,6 @@ namespace Valheim.Testing.Doubles
     /// </summary>
     public sealed partial class ValheimWorldScope
     {
-        private UnityEngine.GameObject? _pluginManager;
-        private ObjectDB? _objectDBPrefab;
-        private UnityEngine.GameObject[] _vanillaItems = new UnityEngine.GameObject[0];
-        private Recipe[] _vanillaRecipes = new Recipe[0];
-        private StatusEffect[] _vanillaEffects = new StatusEffect[0];
-
         /// <summary>The preview character <see cref="AtMainMenu"/> made, or null.</summary>
         public Player? PreviewPlayer { get; private set; }
 
@@ -126,62 +119,8 @@ namespace Valheim.Testing.Doubles
             return player;
         }
 
-        /// <summary>
-        /// Loads a plugin as BepInEx's chainloader does: adds it to the manager object, which runs its Awake at once.
-        /// An exception from Awake reaches the test (BepInEx would log it and leave the plugin half set up).
-        /// </summary>
-        public T LoadPlugin<T>() where T : BepInEx.BaseUnityPlugin
-        {
-            _pluginManager ??= new UnityEngine.GameObject("BepInEx_Manager");
-            return _pluginManager.AddComponent<T>();
-        }
-
         /// <summary>A config disk with no files yet: plugin configs start from their defaults.</summary>
         public ValheimWorldScope WithConfigFiles() { BepInEx.Configuration.ConfigFile.s_files = new Dictionary<string, string>(StringComparer.Ordinal); return this; }
-
-        /// <summary>
-        /// The game's own ObjectDB content: the prefab the main menu copies and the world scene's database both start from
-        /// these items, recipes and status effects. Returns the prefab (its lists are the ones the main menu shares).
-        /// No ObjectDB is the instance until a pass runs.
-        /// </summary>
-        public ObjectDB WithObjectDB(IEnumerable<UnityEngine.GameObject>? items = null, IEnumerable<Recipe>? recipes = null, IEnumerable<StatusEffect>? statusEffects = null)
-        {
-            _vanillaItems = items?.ToArray() ?? new UnityEngine.GameObject[0];
-            _vanillaRecipes = recipes?.ToArray() ?? new Recipe[0];
-            _vanillaEffects = statusEffects?.ToArray() ?? new StatusEffect[0];
-            ObjectDB.m_instance = null;
-            return _objectDBPrefab = new ObjectDB { m_items = _vanillaItems.ToList(), m_recipes = _vanillaRecipes.ToList(), m_StatusEffects = _vanillaEffects.ToList() };
-        }
-        /// <summary>
-        /// The main menu's pass, as the game runs it each time the menu loads: a new ObjectDB is added (its Awake and
-        /// <see cref="ObjectDB.AwakePostfix"/> run on empty lists), then <c>CopyOtherDB</c> takes the prefab's lists themselves
-        /// (and <see cref="ObjectDB.CopyOtherDBPostfix"/> runs). What a mod adds here lands in the prefab's lists, so it is
-        /// still there the next time the menu loads.
-        /// </summary>
-        public ObjectDB LoadMainMenuObjectDB()
-        {
-            var prefab = _objectDBPrefab ?? throw new InvalidOperationException("Declare the game's own content first with WithObjectDB.");
-            var db = new UnityEngine.GameObject("FejdStartup").AddComponent<ObjectDB>();
-            db.CopyOtherDB(prefab);
-            return db;
-        }
-        /// <summary>
-        /// A world load's pass: the world scene's ObjectDB wakes with the game's own content as it was built (new lists, not
-        /// the prefab's), and <see cref="ObjectDB.AwakePostfix"/> runs.
-        /// </summary>
-        public ObjectDB LoadWorldObjectDB()
-        {
-            if (_objectDBPrefab == null) throw new InvalidOperationException("Declare the game's own content first with WithObjectDB.");
-            var main = new UnityEngine.GameObject("_GameMain");
-            main.SetActive(false);
-            var db = main.AddComponent<ObjectDB>();
-            db.m_items = _vanillaItems.ToList(); db.m_recipes = _vanillaRecipes.ToList(); db.m_StatusEffects = _vanillaEffects.ToList();
-            main.SetActive(true);
-            return db;
-        }
-
-        /// <summary>A heightmap builder with nothing queued or ready.</summary>
-        public ValheimWorldScope WithHeightmapBuilder() { HeightmapBuilder.m_instance = new HeightmapBuilder(); return this; }
 
         private void EnterWorld(bool server, bool dedicated)
         {

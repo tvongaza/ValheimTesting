@@ -96,30 +96,20 @@ public sealed class HandshakeTests
         Assert.Equal(ZNet.ConnectionStatus.ErrorBanned, client.Status); Assert.Equal(8, (int)client.Status);
 
         server.m_bannedList.Remove(ClientSteamId.ToString());
-        server.SetServerPassword("secret");
-        var wrong = new ZNet { Server = false, Uid = 2, JoinPassword = "guess" };
-        ConnectSteam(server, wrong); Frames(server, wrong);
+        server.RefusePassword = true; // stands for a wrong password; passwords themselves are not modelled
+        var wrong = new ZNet { Server = false, Uid = 2 };
+        var (refused, _) = ConnectSteam(server, wrong); Frames(server, wrong);
         Assert.Equal(ZNet.ConnectionStatus.ErrorPassword, wrong.Status); Assert.Equal(6, (int)wrong.Status);
+        Assert.False(refused.IsReady());
 
-        var waiting = new ZNet { Server = false, Uid = 2 }; // asked for a password it does not have: the dialog waits
-        var (_, atWaiting) = ConnectSteam(server, waiting); Frames(server, waiting);
-        Assert.Equal(ZNet.ConnectionStatus.Connecting, waiting.Status); Assert.Equal(new[] { "ServerHandshake" }, Calls(atWaiting));
-
-        var right = new ZNet { Server = false, Uid = 2, JoinPassword = "secret" };
+        server.RefusePassword = false;
+        var right = new ZNet { Server = false, Uid = 2 };
         ConnectSteam(server, right); Frames(server, right);
         Assert.Equal(ZNet.ConnectionStatus.Connected, right.Status);
 
-        var again = new ZNet { Server = false, Uid = 2, JoinPassword = "secret" };
+        var again = new ZNet { Server = false, Uid = 2 };
         ConnectSteam(server, again); Frames(server, again);
         Assert.Equal(ZNet.ConnectionStatus.ErrorAlreadyConnected, again.Status); Assert.Equal(7, (int)again.Status);
-    }
-
-    [Fact] public void AFullServerRefusesWithCode9()
-    {
-        using var scope = Network(); var (server, client) = Sides();
-        for (long id = 10; id < 20; id++) server.Peers.Add(id, new ZNetPeer());
-        ConnectSteam(server, client); Frames(server, client);
-        Assert.Equal(ZNet.ConnectionStatus.ErrorFull, client.Status); Assert.Equal(9, (int)client.Status);
     }
 
     /// <summary>
@@ -263,22 +253,12 @@ public sealed class HandshakeTests
         Assert.Equal(sent, a.Sent.Count); Assert.Equal(4, sender.Invoked.Count); // a closed connection sends and records nothing
     }
 
-    [Fact] public void PingsKeepAConnectionAndSilenceClosesIt()
-    {
-        var log = new List<string>(); BepInEx.Logging.ManualLogSource.Captured = log;
-        try
-        {
-            var a = new ZSteamSocket(1); var b = new ZSteamSocket(2); SocketDouble.Link(a, b);
-            var near = new ZRpc(a); var far = new ZRpc(b);
-            near.Update(1.5f);
-            Assert.Equal("00-00-00-00-01", BitConverter.ToString(a.Sent.Single().GetArray())); // method 0, true: a ping
-            far.Update(0f); near.Update(0f);
-            Assert.Equal("00-00-00-00-00", BitConverter.ToString(b.Sent.Single().GetArray())); // the reply
-            Assert.Equal(0f, near.GetTimeSinceLastPing());
-            near.Update(29f); Assert.True(a.IsConnected());
-            near.Update(2f);
-            Assert.False(a.IsConnected()); Assert.False(b.IsConnected()); Assert.Contains("ZRpc timeout detected", log);
-        }
-        finally { BepInEx.Logging.ManualLogSource.Captured = null; }
-    }
+    // Pings, the timeout, the player limit and passwords are not modelled (#307). Their members are absent, so a mod that
+    // calls them fails to compile against the doubles instead of getting an answer the game would not give.
+    [Theory]
+    [InlineData(typeof(ZNet), "GetNrOfPlayers")] [InlineData(typeof(ZNet), "SetServerPassword")]
+    [InlineData(typeof(ZRpc), "SetLongTimeout")] [InlineData(typeof(ZRpc), "GetTimeSinceLastPing")]
+    [InlineData(typeof(SyncedList), "Load")] [InlineData(typeof(ZPlayFabSocket), "Compressing")]
+    public void WhatIsNotModelledIsAbsent(Type type, string member) =>
+        Assert.Empty(type.GetMember(member, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static));
 }

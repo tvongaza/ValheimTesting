@@ -761,6 +761,9 @@ ObjectDB	method	TryGetItemPrefab(ItemDrop.ItemData.SharedData, out UnityEngine.G
 ObjectDB	method	TryGetItemPrefab(int, out UnityEngine.GameObject) : bool	game
 ObjectDB	method	TryGetItemPrefab(string, out UnityEngine.GameObject) : bool	game
 ObjectDB	method	UpdateRegisters() : void	game
+ObjectDB	method	static DeclareVanilla(IEnumerable<UnityEngine.GameObject>, IEnumerable<Recipe>, IEnumerable<StatusEffect>) : ObjectDB	absent
+ObjectDB	method	static LoadMainMenu(ObjectDB) : ObjectDB	absent
+ObjectDB	method	static LoadWorld(ObjectDB) : ObjectDB	absent
 ObjectDB	property	static instance : ObjectDB	game
 OnlineBackendType	type	enum	game
 OnlineBackendType	field	static CustomSocket : OnlineBackendType	game
@@ -1019,7 +1022,6 @@ SyncedList	method	Add(string) : void	game
 SyncedList	method	Contains(string) : bool	game
 SyncedList	method	Count() : int	game
 SyncedList	method	GetList() : List<string>	game
-SyncedList	method	Load(string) : void	differs	Load() : void
 SyncedList	method	Remove(string) : void	game
 Terminal	type	class	game
 Terminal	ctor	.ctor()	game
@@ -1818,12 +1820,12 @@ ZLog	method	static LogWarning(object) : void	game
 ZNet	type	class : UnityEngine.MonoBehaviour	game
 ZNet	ctor	.ctor()	game
 ZNet	field	Dedicated : bool	absent
-ZNet	field	JoinPassword : string	absent
 ZNet	field	NetworkVersion : uint	absent
 ZNet	field	OnlineBackend : OnlineBackendType	absent
 ZNet	field	Peers : Dictionary<long, ZNetPeer>	absent
 ZNet	field	PlayFabId : string	absent
 ZNet	field	PlayerName : string	absent
+ZNet	field	RefusePassword : bool	absent
 ZNet	field	RemoteCommands : List<string>	absent
 ZNet	field	SaveCalls : int	absent
 ZNet	field	Server : bool	absent
@@ -1836,7 +1838,6 @@ ZNet	field	m_permittedList : SyncedList	game
 ZNet	field	static instance : ZNet	game
 ZNet	field	static m_loadError : bool	game
 ZNet	method	Disconnect(ZNetPeer) : void	game
-ZNet	method	GetNrOfPlayers() : int	game
 ZNet	method	GetPeer(ZRpc) : ZNetPeer	game
 ZNet	method	GetPeer(long) : ZNetPeer	game
 ZNet	method	GetPeerByHostName(string) : ZNetPeer	game
@@ -1857,7 +1858,6 @@ ZNet	method	RPC_ServerHandshake(ZRpc, string) : void	game
 ZNet	method	RemoteCommand(string) : void	game
 ZNet	method	Save(bool, bool, bool) : void	game
 ZNet	method	SendPeerInfo(ZRpc, string) : void	game
-ZNet	method	SetServerPassword(string) : void	absent
 ZNet	method	Start() : void	game
 ZNet	method	Update() : void	game
 ZNet	method	UpdatePeers(float) : void	game
@@ -2019,8 +2019,6 @@ ZPlayFabSocket	field	m_remotePlayerId : string	game
 ZPlayFabSocket	method	Flush() : bool	game
 ZPlayFabSocket	method	GetEndPointString() : string	game
 ZPlayFabSocket	method	GetHostName() : string	game
-ZPlayFabSocket	method	VersionMatch() : void	game
-ZPlayFabSocket	property	Compressing : bool	absent
 ZRoutedRpc	type	class	game
 ZRoutedRpc	ctor	.ctor()	differs	.ctor(bool)
 ZRoutedRpc	field	Dropped : List<ValueTuple<long, ZDOID, string, string>>	absent
@@ -2069,7 +2067,6 @@ ZRpc	field	Invoked : List<ValueTuple<string, object[]>>	absent
 ZRpc	method	Deliver(string, params object[]) : ZRpc.ErrorCode	absent
 ZRpc	method	Dispose() : void	game
 ZRpc	method	GetSocket() : ISocket	game
-ZRpc	method	GetTimeSinceLastPing() : float	game
 ZRpc	method	Invoke(string, params object[]) : void	game
 ZRpc	method	IsConnected() : bool	game
 ZRpc	method	IsRegistered(string) : bool	absent
@@ -2081,7 +2078,6 @@ ZRpc	method	Register<T>(string, Action<ZRpc, T>) : void	game
 ZRpc	method	Unregister(string) : void	game
 ZRpc	method	Update(float) : ZRpc.ErrorCode	game
 ZRpc	method	static Serialize(object[], ref ZPackage) : void	game
-ZRpc	method	static SetLongTimeout(bool) : void	game
 ZRpc.ErrorCode	type	enum	game
 ZRpc.ErrorCode	field	static Disconnected : ZRpc.ErrorCode	game
 ZRpc.ErrorCode	field	static IncompatibleVersion : ZRpc.ErrorCode	game

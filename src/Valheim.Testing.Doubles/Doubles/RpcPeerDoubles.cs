@@ -5,12 +5,13 @@
 #nullable enable
 // ReSharper disable InconsistentNaming
 // Valheim's direct peer RPCs (ZRpc, ZNetPeer.m_rpc) and the join handshake ZNet runs over them, by the game's 1.0.16
-// rules, so a mod's version check or join refusal can be tested with both sides in one process.
+// rules, so a mod's version check or join refusal can be tested with both sides in one process. A protocol rule stays
+// here only while a test that stands for a mod's use exercises it: passwords, the player limit, pings and timeouts are
+// not modelled.
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
-using System.Text;
 using Valheim.Testing.Doubles;
 
 /// <summary>
@@ -19,9 +20,9 @@ using Valheim.Testing.Doubles;
 /// each handler with its parameters read from the bytes by their types. As in the game: registering a name again replaces
 /// its handler; a call nobody registered is ignored (kept in <see cref="Dropped"/>); a package that ends before its
 /// parameters do makes <see cref="Update"/> stop and report <see cref="ErrorCode.IncompatibleVersion"/>; any other handler
-/// exception is logged and the next package handled (kept in <see cref="Exceptions"/>). Pings are sent once a second of
-/// <see cref="Update"/> time and the connection closes after 30 s without a reply. Unlike the game, an argument it cannot
-/// write throws (see <see cref="ZRoutedRpc"/>), and so does registering a handler with a parameter it cannot read.
+/// exception is logged and the next package handled (kept in <see cref="Exceptions"/>). Pings and the timeout are not
+/// modelled. Unlike the game, an argument it cannot write throws (see <see cref="ZRoutedRpc"/>), and so does registering a
+/// handler with a parameter it cannot read.
 /// </summary>
 public partial class ZRpc : IDisposable
 {
@@ -31,10 +32,6 @@ public partial class ZRpc : IDisposable
 
     private readonly ISocket m_socket;
     private readonly Dictionary<int, (string Name, Delegate Handler)> m_functions = new();
-    private float m_pingTimer;
-    private float m_timeSinceLastPing;
-    private static readonly float m_pingInterval = 1f;
-    private static float m_timeout = 30f;
     /// <summary>Every call sent through this channel, as made.</summary>
     [TestOnly] public readonly List<(string Method, object[] Args)> Invoked = new();
     /// <summary>The method hash of every call that arrived with no handler; the game ignores them silently.</summary>
@@ -46,7 +43,6 @@ public partial class ZRpc : IDisposable
     public void Dispose() => m_socket.Dispose();
     public ISocket GetSocket() => m_socket;
     public bool IsConnected() => m_socket.IsConnected();
-    public float GetTimeSinceLastPing() => m_timeSinceLastPing;
 
     public void Register(string name, RpcMethod.Method f) => Add(name, f);
     public void Register<T>(string name, Action<ZRpc, T> f) => Add(name, f);
@@ -76,7 +72,7 @@ public partial class ZRpc : IDisposable
     }
 
     /// <summary>
-    /// Reads and handles everything that has arrived, as the game does each frame, then pings: <see cref="ErrorCode.Disconnected"/>
+    /// Reads and handles everything that has arrived, as the game does each frame: <see cref="ErrorCode.Disconnected"/>
     /// once the connection is closed, <see cref="ErrorCode.IncompatibleVersion"/> when a package ended too early.
     /// </summary>
     public ErrorCode Update(float dt)
@@ -84,7 +80,6 @@ public partial class ZRpc : IDisposable
         if (!m_socket.IsConnected()) return ErrorCode.Disconnected;
         for (var pkg = m_socket.Recv(); pkg != null; pkg = m_socket.Recv())
             if (Handle(pkg) == ErrorCode.IncompatibleVersion) return ErrorCode.IncompatibleVersion;
-        UpdatePing(dt);
         return ErrorCode.Success;
     }
 
@@ -93,13 +88,6 @@ public partial class ZRpc : IDisposable
     {
         var pkg = Package(method, args); pkg.SetPos(0);
         return Handle(pkg);
-    }
-
-    /// <summary>The game's timeout without a ping reply: 30 s, or 90 s with <paramref name="enable"/>. Process-wide, as in the game.</summary>
-    public static void SetLongTimeout(bool enable)
-    {
-        m_timeout = enable ? 90f : 30f;
-        ZLog.Log($"ZRpc timeout set to {m_timeout}s ");
     }
 
     /// <summary>
@@ -136,7 +124,6 @@ public partial class ZRpc : IDisposable
     private void HandlePackage(ZPackage package)
     {
         int hash = package.ReadInt();
-        if (hash == 0) { ReceivePing(package); return; }
         if (!m_functions.TryGetValue(hash, out var function)) { Dropped.Add(hash); return; }
         if (function.Handler is RpcMethod.Method direct) { direct(this); return; }
         var parameters = function.Handler.Method.GetParameters();
@@ -144,25 +131,6 @@ public partial class ZRpc : IDisposable
         values[0] = this;
         for (int i = 1; i < parameters.Length; i++) values[i] = ZRoutedRpc.ReadArgument(package, parameters[i].ParameterType);
         function.Handler.DynamicInvoke(values);
-    }
-
-    private void UpdatePing(float dt)
-    {
-        m_pingTimer += dt;
-        if (m_pingTimer > m_pingInterval)
-        {
-            m_pingTimer = 0f;
-            var ping = new ZPackage(); ping.Write(0); ping.Write(true);
-            m_socket.Send(ping);
-        }
-        m_timeSinceLastPing += dt;
-        if (m_timeSinceLastPing > m_timeout) { ZLog.LogWarning("ZRpc timeout detected"); m_socket.Close(); }
-    }
-
-    private void ReceivePing(ZPackage package)
-    {
-        if (package.ReadBool()) { var reply = new ZPackage(); reply.Write(0); reply.Write(false); m_socket.Send(reply); }
-        else m_timeSinceLastPing = 0f;
     }
 }
 
@@ -183,12 +151,12 @@ public sealed partial class ZNetPeer : IDisposable
 
 /// <summary>
 /// The join handshake, as the game runs it (1.0.16). A client's <see cref="OnNewConnection"/> sends ServerHandshake;
-/// the server answers ClientHandshake (whether a password is needed, and the salt); the client sends PeerInfo (its id,
-/// game and network version, name and, hashed, the password); the server checks the network version (a mismatch is
-/// refused with <c>Error</c> 3), the ban and permit lists (8), the player count (9), the password (6) and a second
-/// connection with the same id (7), then answers with its own PeerInfo. The client checks the version the same way and
-/// is <see cref="ConnectionStatus.Connected"/>; an <c>Error</c> sets its status to that code. Each side handles what has
-/// arrived when its <see cref="UpdatePeers"/> runs.
+/// the server answers ClientHandshake; the client sends PeerInfo (its id, game and network version and name); the server
+/// checks the network version (a mismatch is refused with <c>Error</c> 3), the ban and permit lists (8), the password
+/// (6, only when a test sets <see cref="RefusePassword"/>) and a second connection with the same id (7), then answers with
+/// its own PeerInfo. The client checks the version the same way and is <see cref="ConnectionStatus.Connected"/>; an
+/// <c>Error</c> sets its status to that code. Each side handles what has arrived when its <see cref="UpdatePeers"/> runs.
+/// Passwords themselves (the salt, the hash, the client's dialog) and the player limit (9) are not modelled.
 /// </summary>
 public sealed partial class ZNet
 {
@@ -216,14 +184,10 @@ public sealed partial class ZNet
     [TestOnly] public string PlayerName = "";
     /// <summary>The PlayFab id this side sends.</summary>
     [TestOnly] public string PlayFabId = "";
-    /// <summary>The password a client joins with when the server asks for one (the game asks in a dialog; empty leaves it waiting).</summary>
-    [TestOnly] public string JoinPassword = "";
-    private string m_serverPassword = "";
-    private string m_serverPasswordSalt = "";
-    private static long s_joiningKey = long.MinValue;
-
-    /// <summary>Makes this server ask for <paramref name="password"/>, stored salted and hashed as the game does.</summary>
-    [TestOnly] public void SetServerPassword(string password) => m_serverPassword = string.IsNullOrEmpty(password) ? "" : HashPassword(password, ServerPasswordSalt());
+    /// <summary>On a server: refuse every joining client with <c>Error</c> 6, as the game refuses a wrong password.</summary>
+    [TestOnly] public bool RefusePassword;
+    // Joining peers have no id yet; they wait in Peers under keys no id uses.
+    private long m_joiningKey = long.MinValue;
 
     /// <summary>
     /// A new connection, as the game handles it: the peer joins <see cref="Peers"/> as joining (not ready, <c>m_uid</c> 0)
@@ -233,7 +197,7 @@ public sealed partial class ZNet
     public void OnNewConnection(ZNetPeer peer)
     {
         peer.Ready = false;
-        Peers.Add(s_joiningKey++, peer);
+        Peers.Add(m_joiningKey++, peer);
         peer.m_rpc.Register<ZPackage>("PeerInfo", RPC_PeerInfo);
         peer.m_rpc.Register("Disconnect", RPC_Disconnect);
         if (Server) { peer.m_rpc.Register<string>("ServerHandshake", RPC_ServerHandshake); return; }
@@ -257,17 +221,6 @@ public sealed partial class ZNet
         if (uid == OwnUid) return true;
         foreach (var peer in Peers) if (peer.Value.Ready && peer.Key == uid) return true;
         return false;
-    }
-
-    /// <summary>
-    /// The players in the game, approximated: the ready peers, and the host when it has a local player. The game counts its
-    /// player list, which it refreshes on joins and leaves and which includes the host unless the server is headless.
-    /// </summary>
-    public int GetNrOfPlayers()
-    {
-        int players = Player.m_localPlayer != null ? 1 : 0;
-        foreach (var peer in Peers.Values) if (peer.Ready) players++;
-        return players;
     }
 
     /// <summary>Removes the peer and closes its connection.</summary>
@@ -301,20 +254,18 @@ public sealed partial class ZNet
         var peer = GetPeer(rpc);
         if (peer == null) return;
         ZLog.Log("Got handshake from client " + peer.m_socket.GetEndPointString());
-        // No matchmaking provider here, so an invite key never waives the password.
-        peer.m_rpc.Invoke("ClientHandshake", !string.IsNullOrEmpty(m_serverPassword), ServerPasswordSalt());
+        peer.m_rpc.Invoke("ClientHandshake", false, ""); // passwords are not modelled: never asked for
     }
 
+    /// <summary>Sends PeerInfo unless the server asks for a password (the game then waits in its password dialog).</summary>
     public void RPC_ClientHandshake(ZRpc rpc, bool needPassword, string serverPasswordSalt)
     {
-        m_serverPasswordSalt = serverPasswordSalt;
         if (!needPassword) SendPeerInfo(rpc);
-        else if (!string.IsNullOrEmpty(JoinPassword)) SendPeerInfo(rpc, JoinPassword);
     }
 
     /// <summary>
-    /// Sends this side's PeerInfo as the game lays it out. A server's world fields are empty; a client's Steam session
-    /// ticket is empty (the server does not verify it) and it sends no invite key.
+    /// Sends this side's PeerInfo as the game lays it out. A server's world fields are empty; a client's password field,
+    /// Steam session ticket and invite key are empty (the server checks none of them).
     /// </summary>
     public void SendPeerInfo(ZRpc rpc, string password = "")
     {
@@ -332,7 +283,7 @@ public sealed partial class ZNet
         }
         else
         {
-            pkg.Write(string.IsNullOrEmpty(password) ? "" : HashPassword(password, ServerPasswordSalt()));
+            pkg.Write(""); // the hashed password
             pkg.Write(""); // invite key
             pkg.Write(Array.Empty<byte>()); // Steam session ticket
         }
@@ -373,7 +324,7 @@ public sealed partial class ZNet
                 ZLog.Log("Player " + playerName + " : " + hostName + " is blacklisted or not in whitelist.");
                 return;
             }
-            string password = pkg.ReadString();
+            pkg.ReadString(); // the hashed password
             pkg.ReadString(); // invite key
             if (OnlineBackend == OnlineBackendType.Steamworks)
             {
@@ -387,13 +338,7 @@ public sealed partial class ZNet
                 if (peer.m_socket is not ZPlayFabSocket) // the game then checks the PlayFab player's authentication; every player passes here
                     throw new InvalidOperationException($"This server runs on PlayFab (crossplay) but the peer's socket is {peer.m_socket.GetType().Name}; the game reads a PlayFab id here.");
             }
-            if (GetNrOfPlayers() >= 10)
-            {
-                rpc.Invoke("Error", (int)ConnectionStatus.ErrorFull);
-                ZLog.Log("Peer " + name + " disconnected due to server is full");
-                return;
-            }
-            if (m_serverPassword != password)
+            if (RefusePassword)
             {
                 rpc.Invoke("Error", (int)ConnectionStatus.ErrorPassword);
                 ZLog.Log("Peer " + name + " has wrong password");
@@ -440,23 +385,6 @@ public sealed partial class ZNet
         if (peer == null || !peer.m_server) return;
         Status = ConnectionStatus.ErrorKicked;
         Disconnect(peer);
-    }
-
-    private string ServerPasswordSalt()
-    {
-        if (m_serverPasswordSalt.Length == 0)
-        {
-            var bytes = new byte[16];
-            using (var random = System.Security.Cryptography.RandomNumberGenerator.Create()) random.GetBytes(bytes);
-            m_serverPasswordSalt = Encoding.ASCII.GetString(bytes);
-        }
-        return m_serverPasswordSalt;
-    }
-
-    private static string HashPassword(string password, string salt)
-    {
-        using var md5 = System.Security.Cryptography.MD5.Create();
-        return Encoding.ASCII.GetString(md5.ComputeHash(Encoding.ASCII.GetBytes(password + salt)));
     }
 
     // The game's version text: major.minor[.patch], a patch "rcN" being a release candidate (stored negative).
