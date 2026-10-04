@@ -56,7 +56,7 @@ public class SyntheticTerrain : ITerrain
 
     public TerrainBiome GetBiome(float wx, float wy)
     {
-        if (GetHeight(wx, wy) < 30f - 2f)
+        if (GetHeight(wx, wy) < TerrainMath.SeaLevel - 2f)
             return TerrainBiome.Ocean;
         if (HasMountain && TerrainMath.Abs(wx - MountainX) < MountainHalfWidth * 0.6f)
             return TerrainBiome.Mountain;

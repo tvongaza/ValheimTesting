@@ -49,7 +49,7 @@ public class GridDumpTerrainTests
     [InlineData(-2, 8, TerrainBiome.Meadows)]     // exactly halfway: the larger x
     [InlineData(-4, 9.99f, TerrainBiome.Ocean)]
     [InlineData(-4, 10, TerrainBiome.BlackForest)] // exactly halfway: the larger z
-    [InlineData(4, 8, TerrainBiome.Ashlands)]
+    [InlineData(4, 8, TerrainBiome.AshLands)]
     [InlineData(3, 11, TerrainBiome.Mountain)]
     public void BiomeIsTheNearestNodesLabel(float x, float z, TerrainBiome biome) => Assert.Equal(biome, Read(Dump).GetBiome(x, z));
 
@@ -134,6 +134,8 @@ public class GridDumpTerrainTests
     [InlineData("x,z,height,biome\n0,0,1,None\n", "unknown biome 'None'")]
     [InlineData("x,z,height,biome\n0,0,1,3\n", "unknown biome '3'")]
     [InlineData("x,z,height,biome\n0,0,1,Unknown\n", "unknown biome 'Unknown'")]
+    [InlineData("x,z,height,biome\n0,0,1,Ashlands\n", "unknown biome 'Ashlands'")] // the game writes AshLands
+    [InlineData("x,z,height,biome\n0,0,1,meadows\n", "unknown biome 'meadows'")]
     [InlineData("x,z,height\n0,0,abc\n", "line 2 column 'height' is not a finite number")]
     [InlineData("x,z,height,base_height\n0,0,1,NaN\n", "line 2 column 'base_height' is not a finite number")]
     [InlineData("x,z,height\n0,0,NaN\n", "is not a finite number")]

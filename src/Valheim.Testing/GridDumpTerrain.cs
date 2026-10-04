@@ -91,7 +91,7 @@ public sealed class GridDumpTerrain : ITerrain
     public float GetHeight(float x, float z) => Sample(_heights, x, z);
 
     /// <summary>
-    /// Valheim's unitless generator base-height value as exported by `cli_world_dump`, not a ground elevation in metres.
+    /// Valheim's unitless generator base-height value as ValheimCLI's world dump exports it, not a ground elevation in metres.
     /// At nodes this is the dumped value; between nodes it is bilinear and only an approximation.
     /// </summary>
     public float GetBaseHeight(float x, float z)
@@ -174,7 +174,7 @@ public sealed class GridDumpTerrain : ITerrain
     /// <c>river_width</c> are optional but only together; <c>base_height</c> is an optional unitless generator
     /// value, not metre-valued ground height. Other columns are ignored. Rows may come in any order but must cover every node of one evenly spaced grid exactly once,
     /// with the same spacing on x and z. Numbers use the invariant culture. Empty lines are skipped. This reads
-    /// ValheimCLI's <c>cli_world_dump</c> output (<c>x,z,height,biome,river,river_width,base_height</c>) as is.
+    /// ValheimCLI's world-dump output (<c>x,z,height,biome,river,river_width,base_height</c>) as is.
     /// Every refusal throws <see cref="InvalidDataException"/> naming the line.
     /// </summary>
     public static GridDumpTerrain Read(TextReader reader, string provenance)
@@ -286,9 +286,9 @@ public sealed class GridDumpTerrain : ITerrain
     private static TerrainBiome Biome(string cell, int line, string provenance)
     {
         string name = cell.Trim();
-        // Names only (the game writes AshLands; this enum says Ashlands); a bare number or Unknown is refused.
+        // The game's own names, exactly as it writes them (AshLands); a bare number, another case or Unknown is refused.
         foreach (TerrainBiome biome in Enum.GetValues(typeof(TerrainBiome)))
-            if (biome != TerrainBiome.Unknown && string.Equals(biome.ToString(), name, StringComparison.OrdinalIgnoreCase)) return biome;
+            if (biome != TerrainBiome.Unknown && string.Equals(biome.ToString(), name, StringComparison.Ordinal)) return biome;
         throw new InvalidDataException($"{provenance}: line {line} has unknown biome '{name}'.");
     }
 }

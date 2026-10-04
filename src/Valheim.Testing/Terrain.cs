@@ -1,7 +1,15 @@
 using System;
 
 namespace Valheim.Testing;
-public enum TerrainBiome { Unknown, Meadows, BlackForest, Swamp, Mountain, Plains, Mistlands, Ocean, Ashlands, DeepNorth }
+
+internal static class GridValues
+{
+    internal static void Finite(float value)
+    {
+        if (float.IsNaN(value) || float.IsInfinity(value)) throw new ArgumentOutOfRangeException(nameof(value), "A finite value is required.");
+    }
+}
+public enum TerrainBiome { Unknown, Meadows, BlackForest, Swamp, Mountain, Plains, Mistlands, Ocean, AshLands, DeepNorth }
 public interface ITerrain
 {
     // Horizontal x/z, returned height y; all metres.
@@ -25,6 +33,8 @@ public sealed class PlaneTerrain : ITerrain
 }
 internal static class TerrainMath
 {
+    /// <summary>The game's sea level in metres (ZoneSystem.m_waterLevel); the one copy every default here uses.</summary>
+    internal const float SeaLevel = 30f;
     internal static float Sqrt(float value) => (float)Math.Sqrt(value);
     internal static float Sin(float value) => (float)Math.Sin(value);
     internal static float Abs(float value) => Math.Abs(value);

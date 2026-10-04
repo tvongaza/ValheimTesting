@@ -37,7 +37,7 @@ public enum TerrainColoring { Height, Biome }
 /// <summary>
 /// Renders an <see cref="ITerrain"/> into an RGB image for review. The image covers <see cref="Area"/> with
 /// square pixels of <see cref="MetresPerPixel"/>; +x points right and +z points up (north up). Each pixel shows
-/// the terrain sampled once at its centre. Polylines are drawn over the terrain in the order added, then points.
+/// the terrain sampled once at its centre. Contours are drawn over the terrain, then polylines in the order added, then points.
 /// The same inputs give the same bytes on every platform, provided the terrain itself answers the same heights.
 /// A terrain that refuses a coordinate (outside a grid, an uncaptured replay sample, a missing biome layer)
 /// fails the render; nothing is painted in its place. A picture of an input is not evidence the game agrees.
@@ -50,6 +50,7 @@ public sealed class TerrainRenderer
     private readonly List<(float x, float z)[]> _polylines = new List<(float, float)[]>();
     private readonly List<RenderColor> _polylineColors = new List<RenderColor>();
     private readonly List<(float x, float z, RenderColor color, int radius)> _points = new List<(float, float, RenderColor, int)>();
+    private readonly List<(float interval, RenderColor color)> _contours = new List<(float, RenderColor)>();
 
     public TerrainArea Area { get; }
     public float MetresPerPixel { get; }
@@ -61,7 +62,7 @@ public sealed class TerrainRenderer
     /// <summary>Height mode: the height drawn white.</summary>
     public float HighHeight { get; set; } = 100;
     /// <summary>Height mode: heights below this are drawn as water; null draws every height as land. The game's sea level is 30.</summary>
-    public float? WaterLevel { get; set; } = 30;
+    public float? WaterLevel { get; set; } = TerrainMath.SeaLevel;
 
     /// <summary>The area's width and depth must each be a whole number of pixels.</summary>
     public TerrainRenderer(TerrainArea area, float metresPerPixel)
@@ -102,6 +103,21 @@ public sealed class TerrainRenderer
         return this;
     }
 
+    /// <summary>
+    /// Adds contour lines at <see cref="WaterLevel"/> (the game's sea level, 30 m, when it is null) and every
+    /// <paramref name="interval"/> metres above and below it.
+    /// A pixel is drawn when a 4-neighbour's height lies below a level its own height reaches, so each line is one pixel
+    /// wide on its uphill side and the coastline is always one of the lines. Heights are the pixel-centre samples the
+    /// terrain answers, in either colouring mode; between nodes of a grid those are its interpolation, not the game's.
+    /// </summary>
+    public TerrainRenderer Contours(float interval, RenderColor color)
+    {
+        GridValues.Finite(interval);
+        if (interval < .01f) throw new ArgumentOutOfRangeException(nameof(interval), "Contours must be at least 0.01 m apart.");
+        _contours.Add((interval, color));
+        return this;
+    }
+
     /// <summary>World x of a pixel column's centre.</summary>
     public float PixelX(int px) => (float)(Area.MinX + (px + .5) * MetresPerPixel);
     /// <summary>World z of a pixel row's centre; row 0 is the top (largest z).</summary>
@@ -118,15 +134,28 @@ public sealed class TerrainRenderer
                 throw new InvalidOperationException("WaterLevel must be at least LowHeight and below HighHeight.");
         }
         var image = new TerrainImage(Width, Height);
+        float[]? heights = _contours.Count > 0 ? new float[checked(Width * Height)] : null;
         for (int py = 0; py < Height; py++)
         {
             float z = PixelZ(py);
             for (int px = 0; px < Width; px++)
             {
                 float x = PixelX(px);
-                image.Set(px, py, Coloring == TerrainColoring.Biome ? BiomeColor(terrain.GetBiome(x, z)) : HeightColor(terrain.GetHeight(x, z)));
+                if (Coloring == TerrainColoring.Biome)
+                {
+                    image.Set(px, py, BiomeColor(terrain.GetBiome(x, z)));
+                    if (heights != null) heights[py * Width + px] = Finite(terrain.GetHeight(x, z));
+                }
+                else
+                {
+                    float height = terrain.GetHeight(x, z);
+                    image.Set(px, py, HeightColor(height));
+                    if (heights != null) heights[py * Width + px] = height;
+                }
             }
         }
+        if (heights != null)
+            foreach (var (interval, color) in _contours) DrawContours(image, heights, interval, color);
         for (int i = 0; i < _polylines.Count; i++)
         {
             var line = _polylines[i];
@@ -156,6 +185,26 @@ public sealed class TerrainRenderer
         if (Math.Abs(px) > MaxOverlayOffset || Math.Abs(py) > MaxOverlayOffset)
             throw new ArgumentOutOfRangeException(nameof(x), $"Overlay point ({x},{z}) is more than {MaxOverlayOffset} pixels from the image.");
         return ((int)px, (int)py);
+    }
+
+    private static float Finite(float height) =>
+        float.IsNaN(height) || float.IsInfinity(height) ? throw new InvalidOperationException("The terrain returned a non-finite height.") : height;
+
+    private void DrawContours(TerrainImage image, float[] heights, float interval, RenderColor color)
+    {
+        double sea = WaterLevel ?? TerrainMath.SeaLevel;
+        // The level index a height reaches. A height within a thousandth of an interval below a level counts as on it, so
+        // float rounding cannot move a height written as exactly a level (30.3f at 0.1 m) into the band below.
+        double Band(int i) => Math.Floor((heights[i] - sea) / interval + 1e-3);
+        for (int py = 0; py < Height; py++)
+            for (int px = 0; px < Width; px++)
+            {
+                int i = py * Width + px;
+                double own = Band(i);
+                if ((px > 0 && Band(i - 1) < own) || (px + 1 < Width && Band(i + 1) < own) ||
+                    (py > 0 && Band(i - Width) < own) || (py + 1 < Height && Band(i + Width) < own))
+                    image.Set(px, py, color);
+            }
     }
 
     private static void Plot(TerrainImage image, int px, int py, RenderColor color)
@@ -210,7 +259,7 @@ public sealed class TerrainRenderer
             case TerrainBiome.Plains: return new RenderColor(215, 195, 100);
             case TerrainBiome.Mistlands: return new RenderColor(120, 110, 130);
             case TerrainBiome.Ocean: return new RenderColor(40, 80, 160);
-            case TerrainBiome.Ashlands: return new RenderColor(160, 60, 40);
+            case TerrainBiome.AshLands: return new RenderColor(160, 60, 40);
             case TerrainBiome.DeepNorth: return new RenderColor(190, 220, 240);
             default: return new RenderColor(255, 0, 255);
         }

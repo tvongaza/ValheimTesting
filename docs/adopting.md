@@ -8,7 +8,7 @@ If the immediate problem is getting a mod or mod combination to load, use the [m
 
 | Your mod needs to test… | Use | First example | What still needs the game |
 |---|---|---|---|
-| A decision over heights, slopes, biomes or declared zone state | `Valheim.Testing` | [SharedWorld](../examples/SharedWorld/README.md) | Real generator output, physics and save encoding |
+| A decision over heights, slopes or biomes (zone state: the terrain doubles) | `Valheim.Testing` | [SharedWorld](../examples/SharedWorld/README.md) | Real generator output, physics and save encoding |
 | Production code that calls supported Unity/Valheim types | `Valheim.Testing.Doubles` in a source-linked test project | [ModWithTests](../examples/ModWithTests/README.md): five runnable xUnit cases | Unmodelled game methods, Harmony timing, actual replication |
 | Retry, refusal, readiness or cleanup in a scenario driver | `Valheim.Testing.Game.Fakes` | [Test fakes](testing-toolkit.md#test-fakes) | The real process/game lifecycle |
 | Loaded height, collision or paint reaching a client | `Valheim.Testing.Game` plus ValheimCLI in the game | [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md), [PaintCheck](../examples/PaintCheck/README.md) | This is a bounded native check; appearance remains a human judgement |

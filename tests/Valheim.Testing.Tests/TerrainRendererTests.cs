@@ -64,6 +64,61 @@ public class TerrainRendererTests
         Assert.Equal(new RenderColor(160, 140, 96), renderer.HeightColor(50));
     }
 
+    [Theory]
+    [InlineData(TerrainColoring.Height)]
+    [InlineData(TerrainColoring.Biome)]
+    public void ContoursMarkTheUphillPixelOfEachLevelFromSeaLevel(TerrainColoring coloring)
+    {
+        // Heights 27 + x at pixel centres x = .5 .. 19.5, i.e. 27.5 .. 46.5. Levels 30, 35, 40, 45 are first reached
+        // at columns 3 (30.5), 8 (35.5), 13 (40.5) and 18 (45.5); the coastline (30) is one of them.
+        var image = new TerrainRenderer(new TerrainArea(0, 0, 20, 3), 1) { Coloring = coloring }
+            .Contours(5, Black).Render(new PlaneTerrain(27, 1, 0));
+        for (int y = 0; y < 3; y++)
+            for (int x = 0; x < 20; x++)
+                Assert.Equal(x is 3 or 8 or 13 or 18, image[x, y].Equals(Black));
+    }
+
+    [Fact]
+    public void ContoursDrawUnderPolylinesAndNothingOnLevelGround()
+    {
+        var flat = new TerrainRenderer(new TerrainArea(0, 0, 8, 8), 1).Contours(1, Black).Render(new PlaneTerrain(40.5f));
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) Assert.NotEqual(Black, flat[x, y]);
+        var crossed = new TerrainRenderer(new TerrainArea(0, 0, 20, 3), 1).Contours(5, Black)
+            .Polyline(new[] { (3.5f, 1.5f) }, Red).Render(new PlaneTerrain(27, 1, 0));
+        Assert.Equal(Red, crossed[3, 1]);
+        Assert.Equal(Black, crossed[3, 0]);
+    }
+
+    [Fact]
+    public void ContoursStartAtTheConfiguredWaterLevelAndKeepHeightsThatSitOnALevel()
+    {
+        // Heights 22.5 .. 31.5; with WaterLevel 25 the levels 25 and 30 are first reached at columns 3 (25.5) and 8 (30.5).
+        var coast = new TerrainRenderer(new TerrainArea(0, 0, 10, 1), 1) { LowHeight = 0, WaterLevel = 25 }
+            .Contours(5, Black).Render(new PlaneTerrain(22, 1, 0));
+        for (int x = 0; x < 10; x++) Assert.Equal(x is 3 or 8, coast[x, 0].Equals(Black));
+        // 30.3 m is exactly the level 30 + 3 * 0.1 even though (30.3f - 30) / 0.1f is just below 3 in floating point.
+        var fine = new TerrainRenderer(new TerrainArea(0, 0, 4, 1), 1).Contours(.1f, Black)
+            .Render(new CompositeTerrain(new PlaneTerrain(30.2f), TerrainRegion.Rectangle(2, 0, 4, 1, new PlaneTerrain(30.3f))));
+        for (int x = 0; x < 4; x++) Assert.Equal(x == 2, fine[x, 0].Equals(Black));
+    }
+
+    [Theory]
+    [InlineData(0f)] [InlineData(-5f)] [InlineData(.001f)] [InlineData(float.NaN)] [InlineData(float.PositiveInfinity)]
+    public void ContourIntervalMustBeAPositiveDistance(float interval) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => Renderer().Contours(interval, Black));
+
+    [Fact]
+    public void TheDefaultWaterLevelIsTheGamesSeaLevelAndSyntheticTerrainAgrees()
+    {
+        Assert.Equal(30f, Renderer().WaterLevel);
+        // SyntheticTerrain labels ground more than 2 m below that sea level as Ocean.
+        var island = new SyntheticTerrain { HasRiver = false, HasMountain = false };
+        float x = 0;
+        while (island.GetHeight(x, 0) >= 28f) x += 1;
+        Assert.Equal(TerrainBiome.Ocean, island.GetBiome(x, 0));
+        Assert.Equal(TerrainBiome.Meadows, island.GetBiome(x - 1, 0));
+    }
+
     [Fact]
     public void OverlaysDrawPolylinesThenPointsAndClipAtTheEdge()
     {
