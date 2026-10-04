@@ -30,7 +30,11 @@ public sealed record EnvironmentAssignment(string Actor, string Environment, str
 
 /// <summary>The resolved fixed profile used by the existing host lifecycle, and its reviewable assignments.</summary>
 public sealed record ResolvedEnvironmentInventory(EnvironmentProfile Profile,
-    IReadOnlyList<EnvironmentAssignment> Assignments);
+    IReadOnlyList<EnvironmentAssignment> Assignments)
+{
+    /// <summary>Loader selected for each actor without changing the caller's campaign declaration.</summary>
+    public IReadOnlyDictionary<string, string?> LoaderPackages { get; init; } = new Dictionary<string, string?>();
+}
 
 /// <summary>
 /// Ordered, private operator inventory. Client identities are discovered from their signed-in Steam environments;
@@ -165,12 +169,14 @@ public sealed class EnvironmentInventory
             };
         }
         profile.Validate();
-        foreach (var actor in actors)
-            if (actor.Input.LoaderPackage == null) actor.Input.LoaderPackage = chosen[actor.Name].LoaderPackage;
         var assignments = actors.Select(actor => new EnvironmentAssignment(actor.Name, chosen[actor.Name].Name,
             actor.Kind == "server" ? "dedicated-server" : "client", chosen[actor.Name].Host,
             reasons[actor.Name])).ToArray();
-        return new ResolvedEnvironmentInventory(profile, assignments);
+        return new ResolvedEnvironmentInventory(profile, assignments)
+        {
+            LoaderPackages = actors.ToDictionary(actor => actor.Name,
+                actor => actor.Input.LoaderPackage ?? chosen[actor.Name].LoaderPackage, StringComparer.Ordinal),
+        };
     }
 
     private static string? Refusal(string actor, string kind, HostedCampaignRole input, EnvironmentRecipe recipe,

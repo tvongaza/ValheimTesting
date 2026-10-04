@@ -72,6 +72,26 @@ public sealed class EnvironmentInventoryTests : IDisposable
     }
 
     [Fact]
+    public void LoaderSelectionDoesNotChangeCampaignWhenResolvedAgain()
+    {
+        var inventory = Inventory();
+        inventory.Environments.Single(recipe => recipe.Name == "client-pc").LoaderPackage = "pc-loader.json";
+        inventory.Environments.Single(recipe => recipe.Name == "client-mac").LoaderPackage = "mac-loader.json";
+        inventory.Validate(_root);
+        var campaign = Campaign();
+
+        var first = inventory.Resolve(campaign);
+        Assert.EndsWith("pc-loader.json", first.LoaderPackages["client-a"]);
+        Assert.Null(campaign.Clients["client-a"].LoaderPackage);
+
+        campaign.Clients["client-a"].EnvironmentCandidates = ["client-mac"];
+        campaign.Clients["client-b"].EnvironmentCandidates = ["client-vm"];
+        var second = inventory.Resolve(campaign);
+        Assert.EndsWith("mac-loader.json", second.LoaderPackages["client-a"]);
+        Assert.Null(campaign.Clients["client-a"].LoaderPackage);
+    }
+
+    [Fact]
     public void AnotherClientEnvironmentNeedsNoAccountEntryOrStaticSteamId()
     {
         var inventory = Inventory();
@@ -213,6 +233,7 @@ public sealed class EnvironmentInventoryTests : IDisposable
     public void CampaignPreflightSelectsInventoryBeforeReportingOtherInputFaults()
     {
         var inventory = Inventory();
+        inventory.Environments[0].LoaderPackage = "missing-loader.json";
         string inventoryFile = Path.Combine(_root, "inventory.json");
         File.WriteAllText(inventoryFile, JsonSerializer.Serialize(inventory,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
@@ -229,6 +250,7 @@ public sealed class EnvironmentInventoryTests : IDisposable
         }));
         var report = HostedCampaignPreparation.Inspect(campaignFile);
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "inventory");
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "loader");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
         Assert.Equal(["server-pc", "client-pc", "client-vm"], report.Actors.Select(actor => actor.Environment));
         Assert.All(report.Actors, actor => Assert.NotNull(actor.SelectionReason));

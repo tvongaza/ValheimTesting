@@ -421,8 +421,9 @@ public static class HostedCampaignPreparation
                     else if (thisRole?.Host == otherRole.Host)
                         problems.Add(new(name, "host constraint", $"differentHostFrom requires a different host than {other}."));
                 }
-            if (input.LoaderPackage != null)
-                Try(name, "loader", () => _ = BepInExLoaderPackage.Read(input.LoaderPackage));
+            string? loaderPackage = resolved?.LoaderPackages.GetValueOrDefault(name) ?? input.LoaderPackage;
+            if (loaderPackage != null)
+                Try(name, "loader", () => _ = BepInExLoaderPackage.Read(loaderPackage));
             Try(name, "dependencies and CLI packs", () =>
             {
                 var files = HostedRuntimeStage.FromDependencies(input.DependencyLock).Concat(input.Files).ToArray();
@@ -468,9 +469,21 @@ public static class HostedCampaignPreparation
         var report = new CampaignPreflightReport(problems) { Actors = actors };
         if (profile?.Server == null || !manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))
             return new Inspection(null, report);
+        HostedCampaignRole RoleInput(string name, HostedCampaignRole input)
+        {
+            string? loaderPackage = resolved?.LoaderPackages.GetValueOrDefault(name) ?? input.LoaderPackage;
+            if (loaderPackage == input.LoaderPackage) return input;
+            return new HostedCampaignRole
+            {
+                DependencyLock = input.DependencyLock, EnvironmentCandidates = input.EnvironmentCandidates,
+                DifferentHostFrom = input.DifferentHostFrom, LoaderPackage = loaderPackage,
+                Files = input.Files, Character = input.Character,
+            };
+        }
         var roles = new List<(string Name, GameRole Role, HostedCampaignRole Input)>
-            { ("server", profile.Server, manifest.Server) };
-        roles.AddRange(profile.Clients.Select(client => (client.Key, client.Value, manifest.Clients[client.Key])));
+            { ("server", profile.Server, RoleInput("server", manifest.Server)) };
+        roles.AddRange(profile.Clients.Select(client => (client.Key, client.Value,
+            RoleInput(client.Key, manifest.Clients[client.Key]))));
         return new Inspection(new Inputs(manifest, profile, roles, selected, characters), report);
     }
 
