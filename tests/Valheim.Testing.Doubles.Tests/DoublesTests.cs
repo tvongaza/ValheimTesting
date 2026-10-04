@@ -315,6 +315,26 @@ public sealed class DoublesTests : IDisposable
         ZRoutedRpc.instance.Deliver(7, "Mod_Unknown"); // dropped without an error, as in the game
         Assert.Equal("Mod_Unknown", Assert.Single(ZRoutedRpc.instance.Dropped).Method);
     }
+    [Fact] public void WithoutAZdoManThisPeerIsOneIdForZNetAndRoutedRpcs()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithNetwork();
+        ZDOMan.instance = null; // network only, no ZDOs (restored on dispose)
+        ZNet.instance.Peers.Add(12, new ZNetPeer { m_uid = 12, Ready = true });
+        var got = new List<long>();
+        ZRoutedRpc.instance.Register("Mod_Self", sender => got.Add(sender));
+        Assert.Equal(ZNet.GetUID(), ZRoutedRpc.instance.PeerId);
+        Assert.NotEqual(ZRoutedRpc.Everybody, ZNet.GetUID());
+        // A call to ourselves runs here once and is not broadcast to peer 12.
+        ZRoutedRpc.instance.InvokeRoutedRPC(ZNet.GetUID(), "Mod_Self");
+        Assert.Equal(new[] { ZNet.GetUID() }, got);
+        Assert.Empty(ZRoutedRpc.instance.Sent);
+        // A side given its own id (as two-sided tests do) is that id for routed calls too.
+        ZNet.instance.Uid = 2;
+        Assert.Equal(2, ZRoutedRpc.instance.PeerId);
+        ZRoutedRpc.instance.InvokeRoutedRPC(ZNet.GetUID(), "Mod_Self");
+        Assert.Equal(new[] { 1L, 2L }, got);
+        Assert.Empty(ZRoutedRpc.instance.Sent);
+    }
     [Fact] public void JotunnRpcsAreKeptByNameAndTheScopeGivesAFreshManager()
     {
         var manager = Jotunn.Managers.NetworkManager.Instance;
@@ -339,6 +359,10 @@ public sealed class DoublesTests : IDisposable
             Assert.Same(east, Heightmap.FindHeightmap(new UnityEngine.Vector3(70, 0, 0)));
             Assert.Null(Heightmap.FindHeightmap(new UnityEngine.Vector3(200, 0, 0)));
             Assert.Same(east.m_terrainComp, TerrainComp.FindTerrainCompiler(new UnityEngine.Vector3(64, 0, 0)));
+            // A seam point (x = 32) belongs to the first zone for both lookups, edges included, as in the game.
+            Assert.Same(west, Heightmap.FindHeightmap(new UnityEngine.Vector3(32, 0, 0)));
+            Assert.Same(west.m_terrainComp, TerrainComp.FindTerrainCompiler(new UnityEngine.Vector3(32, 0, 0)));
+            Assert.Same(east.m_terrainComp, TerrainComp.FindTerrainCompiler(new UnityEngine.Vector3(96, 0, 32)));
             Assert.Equal(2, Heightmap.GetAllHeightmaps().Count); Assert.Same(east, Heightmap.Registered);
             var reloaded = scope.RegisterHeightmap(new Vector2s(0, 0));
             Assert.Equal(new[] { east, reloaded }, Heightmap.GetAllHeightmaps());

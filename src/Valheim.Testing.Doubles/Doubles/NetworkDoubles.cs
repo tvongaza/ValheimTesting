@@ -121,8 +121,11 @@ public sealed partial class ZRoutedRpc
 
     /// <summary>Sets this peer's id, as the game does from the session id.</summary>
     public void SetUID(long uid) => m_id = uid;
-    /// <summary>This peer's id: the one <see cref="SetUID"/> gave, else this session's (<c>ZDOMan.m_sessionID</c>), else 1.</summary>
-    public long PeerId => m_id ?? ZDOMan.instance?.m_sessionID ?? 1;
+    /// <summary>
+    /// This peer's id: the one <see cref="SetUID"/> gave, else <c>ZNet.GetUID()</c> (this session's id, or the current
+    /// side's <c>ZNet.Uid</c> in a two-sided test), as the game sets it from the session id.
+    /// </summary>
+    public long PeerId => m_id ?? ZNet.GetUID();
     private static bool IsServer => ZNet.instance.IsServer();
 
     /// <summary>
