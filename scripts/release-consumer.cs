@@ -1,6 +1,7 @@
 // Checks the published packages the way a new mod author meets them. Needs NuGet.org; never launches Valheim.
 //
 //   dotnet run scripts/release-consumer.cs -- pins
+//   dotnet run scripts/release-consumer.cs -- versions
 //   dotnet run scripts/release-consumer.cs -- consumer [--wait-minutes 30]
 //
 // pins: every copyable version pin in the README, CONTRIBUTING, docs and examples must name a version served by
@@ -8,6 +9,11 @@
 // a PackageReference, a `dotnet tool install` or `dotnet add package` command, `-p:ToolkitPackageVersion=` (the Game
 // package), and a backticked package ID followed by a backticked version, as in the package table. History in prose
 // ("new in Game preview.11") is not a pin. Dated native-validation records are not scanned.
+//
+// versions: offline. Refuses a release whose manifest or packed dependencies name a `-candidate.<sha>` version: a candidate
+// is a local build identity, and NuGet.org never lets a published id/version be replaced. Checked are each packed
+// project's <Version> and Valheim.Testing* PackageReferences, and the Cli packageVersion in cli-dependency.json.
+// release.yml runs it before building; consumer runs it first. A candidate may sit on main between releases.
 //
 // consumer: the release manifest is this checkout's package versions (the <Version> of each packed project and the Cli
 // packageVersion in cli-dependency.json), so run it on the release tag. It waits up to --wait-minutes for NuGet.org to
@@ -41,13 +47,14 @@ for (int i = 1; i < args.Length; i++)
 return mode switch
 {
     "pins" => await Pins(),
-    "consumer" => await Consumer(),
+    "versions" => Versions(),
+    "consumer" => Versions() == 0 ? await Consumer() : 1,
     _ => Usage(mode == "" ? "no mode" : $"unknown mode '{mode}'"),
 };
 
 int Usage(string problem)
 {
-    Console.Error.WriteLine($"release-consumer: {problem}. Usage: dotnet run scripts/release-consumer.cs -- (pins | consumer [--wait-minutes N])");
+    Console.Error.WriteLine($"release-consumer: {problem}. Usage: dotnet run scripts/release-consumer.cs -- (pins | versions | consumer [--wait-minutes N])");
     return 2;
 }
 
@@ -76,6 +83,41 @@ async Task<int> Pins()
         ? $"All {pins.Count} documented pins name versions served by NuGet.org."
         : $"{bad} of {pins.Count} documented pins are not served by NuGet.org.");
     return bad == 0 ? 0 : 1;
+}
+
+int Versions()
+{
+    // Every version a release would publish or depend on: each packed project's <Version> and Valheim.Testing*
+    // references (attributes in any order), and the Cli pin. A version set through an MSBuild property cannot be read
+    // here, so it is refused rather than passed.
+    var stated = new List<Pin>();
+    var element = new Regex(@"<Version>(?<version>[^<]+)</Version>|<PackageReference\b[^>]*>|""packageVersion"":\s*""(?<version>[^""]+)""");
+    var include = new Regex(@"\bInclude=""(?<id>Valheim\.Testing[\w.]*)""");
+    var reference = new Regex(@"\b(?:Version|VersionOverride)=""\[?(?<version>[^\]""]+)\]?""");
+    foreach (string file in packed.Select(ProjectFile).Append("cli-dependency.json"))
+    {
+        string[] lines = File.ReadAllLines(Path.Combine(root, file));
+        for (int i = 0; i < lines.Length; i++)
+            foreach (Match m in element.Matches(lines[i]))
+            {
+                if (m.Groups["version"].Success) { stated.Add(new Pin(file, i + 1, file, m.Groups["version"].Value)); continue; }
+                if (include.Match(m.Value) is not { Success: true } id) continue;
+                foreach (Match v in reference.Matches(m.Value)) stated.Add(new Pin(file, i + 1, id.Groups["id"].Value, v.Groups["version"].Value));
+            }
+    }
+    var refused = stated.Where(p => p.Version.Contains("-candidate", StringComparison.OrdinalIgnoreCase) || p.Version.Contains("$(")).ToList();
+    foreach (Pin pin in refused)
+    {
+        string problem = pin.Version.Contains("$(")
+            ? $"{pin.File}:{pin.Line} sets {pin.Id}'s version through a property ({pin.Version}), which this check cannot read; write the exact version."
+            : $"{pin.File}:{pin.Line} names the candidate version {pin.Version}. A candidate is a local build identity and is never released; " +
+              "move it to a version NuGet.org has never served before tagging.";
+        Console.Error.WriteLine("FAIL " + problem);
+        if (actions) Console.WriteLine($"::error file={pin.File},line={pin.Line}::{problem}");
+    }
+    if (refused.Count > 0) return 1;
+    Console.WriteLine($"No candidate version in the {stated.Count} release versions and dependencies.");
+    return 0;
 }
 
 async Task<int> Consumer()
@@ -344,10 +386,12 @@ static string? SourceOf(string packageDir)
     return doc.RootElement.TryGetProperty("source", out JsonElement source) ? source.GetString() : null;
 }
 
+static string ProjectFile(string name) => name == "Valheim.Testing.NativeSmoke"
+    ? "examples/NativeSmoke/NativeSmoke.csproj"
+    : $"src/{name}/{name}.csproj";
+
 string SourceVersion(string name) =>
-    Regex.Match(File.ReadAllText(name == "Valheim.Testing.NativeSmoke"
-        ? Path.Combine(root, "examples", "NativeSmoke", "NativeSmoke.csproj")
-        : Path.Combine(root, "src", name, name + ".csproj")), "<Version>([^<]+)</Version>") is { Success: true } m
+    Regex.Match(File.ReadAllText(Path.Combine(root, ProjectFile(name))), "<Version>([^<]+)</Version>") is { Success: true } m
         ? m.Groups[1].Value
         : throw new InvalidOperationException("No <Version> in " + name + ".csproj");
 
