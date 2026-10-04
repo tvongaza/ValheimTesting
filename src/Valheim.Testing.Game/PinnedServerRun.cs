@@ -25,7 +25,7 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// <summary>Adds the mod's provenance (scenario details) to the report.</summary>
     public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
     /// <summary>
-    /// Establishes test access on the owned disposable server before the scenario (<see cref="Game.TestAccess.Ensure"/>):
+    /// Establishes test access on the owned disposable server, on its first boot and every restart (<see cref="OwnedServerSession.EnsureTestAccess"/>, <see cref="Game.TestAccess.Ensure"/>):
     /// devcommands, then the cheat acknowledgement (<c>confirmcheats</c>), each verified through ValheimCLI's
     /// <c>cli_access</c>. False only for a run that issues no test commands (a load smoke).
     /// </summary>
@@ -533,9 +533,9 @@ public static class PinnedServerRun
             };
             launched = context;
             session = context.Session = options.SessionOverride?.Invoke(context) ?? hosted?.Session(context, options) ?? OwnedSession(context, options);
+            // The session owns test access on every boot it starts, so a scenario's restart comes back with it too.
+            session.EnsureTestAccess |= options.TestAccess;
             report.Step(StepPhase.Setup, "start and verify owned dedicated fixture", () => context.Server = session.Start());
-            if (options.TestAccess)
-                report.Step(StepPhase.Setup, "verify test access on the disposable server", () => Game.TestAccess.Ensure(context.Server, TestActorRole.DedicatedServer));
             phase = StepPhase.Scenario;
             await options.Scenario(context).ConfigureAwait(false);
         }

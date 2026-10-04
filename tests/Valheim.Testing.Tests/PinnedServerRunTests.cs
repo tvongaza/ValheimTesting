@@ -111,18 +111,28 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(ClientArchitecture.Arm64, ClientOptions().ReadPlan(nativePlan).Client!.LaunchArchitecture);
         Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", nativePlan, Output], ClientOptions()));
     }
-    [Fact] public async Task TheDefaultRunEstablishesTestAccessOnceAndAServerThatNeverAcknowledgesFails()
+    // #256 amendment C: a restarted server process has neither cheat gate, so the session establishes test access on every
+    // boot it starts, the scenario's restarts included; a server that never acknowledges fails its start, asked once.
+    [Fact] public async Task TheDefaultRunEstablishesTestAccessOnEveryBootAndAServerThatNeverAcknowledgesFails()
     {
         if (OperatingSystem.IsMacOS()) return; // This fake runtime is Windows or Linux, which a Mac cannot run.
         string plan = WritePlan(linux: HostRunsLinux);
         var server = new FakeOwnedServer("test.mod");
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: server, testAccess: true)));
-        Assert.Equal(new[] { "devcommands1", "confirmcheats1" }, server.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")));
-        Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString() == "verify test access on the disposable server" && step.GetProperty("Passed").GetBoolean());
+        TestAccessState? afterRestart = null;
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: server, testAccess: true, scenario: run =>
+        {
+            afterRestart = TestAccess.Read(run.Session.Restart());
+            return Task.CompletedTask;
+        })));
+        Assert.Equal(new[] { "devcommands1", "confirmcheats1", "devcommands2", "confirmcheats2" },
+            server.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")));
+        Assert.True(afterRestart is { Devcommands: true, CheatsAcknowledged: true });
         Directory.Delete(Output, true);
         var stubborn = new FakeOwnedServer("test.mod") { IgnoreConfirmCheats = true };
         Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: stubborn, testAccess: true)));
-        Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString() == "verify test access on the disposable server" && !step.GetProperty("Passed").GetBoolean());
+        var start = Result().GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "start and verify owned dedicated fixture");
+        Assert.False(start.GetProperty("Passed").GetBoolean());
+        Assert.Contains("The owned server started, but its test access was not established", start.GetProperty("Error").GetString());
         Assert.Single(stubborn.Events.Where(e => e.StartsWith("confirmcheats"))); // once, never retried
     }
     [Fact] public async Task ExistingEvidenceIsNeverOverwrittenAndBadUsageIsRefused()

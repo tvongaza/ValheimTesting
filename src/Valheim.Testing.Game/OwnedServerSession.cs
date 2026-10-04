@@ -157,12 +157,21 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     }
     public GameActor Start() => StartAsync().GetAwaiter().GetResult();
     /// <summary>
+    /// Establishes test access (<see cref="TestAccess.Ensure"/> as <see cref="TestActorRole.DedicatedServer"/>: devcommands, then
+    /// <c>confirmcheats</c>, each verified through ValheimCLI's <c>cli_access</c>) on every boot this session starts, before
+    /// <see cref="Start"/> returns: the first and each <see cref="Restart"/>, since a new server process has neither gate.
+    /// False for a session that issues no test commands (a load smoke). <see cref="PinnedServerRun"/> sets it from
+    /// <see cref="PinnedServerRunOptions{TPlan}.TestAccess"/>.
+    /// </summary>
+    public bool EnsureTestAccess { get; set; }
+    /// <summary>
     /// Launches one owned server and returns its strictly pinned actor. Every stage races the process exit, which ends
     /// startup at once with the exit code and the last log line. With <see cref="Events"/>, the first connection waits for
     /// ValheimCLI's listening line and, optionally, a world-loaded state push. The adapter's own readiness has no event:
     /// an unregistered or incomplete session observation is re-probed, read-only, every poll interval until the deadline.
     /// The startup deadline bounds everything, including connecting and the final pin verification, which gets only the
-    /// time left (at most the command timeout).
+    /// time left (at most the command timeout). Then, with <see cref="EnsureTestAccess"/>, the boot's test access is established
+    /// (two console mutations, each issued once, under the command timeout); its failure fails the start.
     /// </summary>
     public async Task<GameActor> StartAsync()
     {
@@ -285,9 +294,18 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
                     finally { transport?.Dispose(); }
                 }, (GameActor? actor) => actor != null, Left(stage), _poll > TimeSpan.Zero ? _poll : TimeSpan.FromTicks(1), _cancellation, null, _ => last,
                 ExitRace.Pause(exited)).ConfigureAwait(false);
-            return _actor = started.Value!;
+            _actor = started.Value!;
         }
         finally { stop.Cancel(); }
+        // After the read-only bootstrap, never inside it: its mutations are issued once and never retried by the probe. A new
+        // process has neither cheat gate, so every boot, the first and each restart, gets its test access here.
+        if (EnsureTestAccess)
+        {
+            try { TestAccess.Ensure(_actor, TestActorRole.DedicatedServer); }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { throw new InvalidOperationException("The owned server started, but its test access was not established: " + error.Message, error); }
+        }
+        return _actor;
     }
     public static bool StartupUnavailable(CommandResult reply) => !reply.Ok &&
         (reply.Output.Any(x => x == "Error: Console not available (game not fully loaded)") ||
