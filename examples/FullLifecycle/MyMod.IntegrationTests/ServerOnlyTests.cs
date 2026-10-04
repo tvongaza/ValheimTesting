@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using MyMod.SystemTests;
+using Valheim.Testing;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
@@ -94,15 +95,15 @@ public sealed class ServerOnlyTests : IDisposable
 
     [Fact] public void TheClosestSitesOutsideTheMarginsAreChosen()
     {
-        GeneratorSample[] samples =
+        TerrainSample[] samples =
         [
-            new(0, 0, 33f),        // Dry by the rule, but within the margin: never chosen.
-            new(10, 0, 30f),       // Wet by the rule, within the margin.
-            new(0, 64, 34.5f),     // The closest dry site: at least 34.5 m includes 34.5.
-            new(-64, 64, 40f),
-            new(40, 60, 12f),      // Wet, but within 50 m of the dry site on both axes.
-            new(-200, 0, 28.5f),   // The closest usable wet site: at most 28.5 m includes 28.5.
-            new(300, 0, 5f),
+            Sample(0, 0, 33f),        // Dry by the rule, but within the margin: never chosen.
+            Sample(10, 0, 30f),       // Wet by the rule, within the margin.
+            Sample(0, 64, 34.5f),     // The closest dry site: at least 34.5 m includes 34.5.
+            Sample(-64, 64, 40f),
+            Sample(40, 60, 12f),      // Wet, but within 50 m of the dry site on both axes.
+            Sample(-200, 0, 28.5f),   // The closest usable wet site: at most 28.5 m includes 28.5.
+            Sample(300, 0, 5f),
         ];
         var (dry, wet) = ServerFixture.TryChooseSites(samples) ?? throw new InvalidOperationException("No sites chosen.");
         Assert.Equal((0f, 64f, 34.5f), (dry.X, dry.Z, dry.Ground));
@@ -111,21 +112,29 @@ public sealed class ServerOnlyTests : IDisposable
         Assert.Null(ServerFixture.TryChooseSites(samples.Where(s => s.Height < 34)));  // No dry site left.
     }
 
-    // A generator that is dry land (40 m) everywhere except the sea (10 m) east of x = 1000.
+    private static TerrainSample Sample(float x, float z, float height) => new(x, z, height, TerrainBiome.Meadows);
+
+    // A generator that is dry land (40 m) everywhere except the sea (10 m) east of x = 1000, answering as ValheimCLI's
+    // World Tools does (the full capture TerrainCapture reads).
     private static ScriptedTransport Generator(bool complete = true) => new ScriptedTransport().Extension("valheim.world", "terrain-grid", args =>
     {
         float x0 = float.Parse(args[0], CultureInfo.InvariantCulture), z0 = float.Parse(args[1], CultureInfo.InvariantCulture), step = float.Parse(args[2], CultureInfo.InvariantCulture);
         int nx = int.Parse(args[3], CultureInfo.InvariantCulture), nz = int.Parse(args[4], CultureInfo.InvariantCulture);
         Assert.Equal("generator", args[5]);
         var samples = Enumerable.Range(0, nx * nz).Select(i => (X: x0 + i % nx * step, Z: z0 + i / nx * step))
-            .Select(p => new { complete = true, height = p.X > 1000 ? 10f : 40f, x = p.X, z = p.Z }).ToArray();
-        return new { source = "terrain-grid", complete, layer = "generator", units = "metres", samples };
+            .Select(p => new { complete = true, height = p.X > 1000 ? 10f : 40f, x = p.X, z = p.Z, biome = p.X > 1000 ? "Ocean" : "Meadows", riverWeight = 0f, riverWidth = 0f }).ToArray();
+        return new
+        {
+            formatVersion = 1, source = "terrain-grid", complete, layer = "generator", units = "metres", consistency = "per-sample",
+            originX = x0, originZ = z0, spacing = step, countX = nx, countZ = nz, worldUid = "4242", gameVersion = "fixture",
+            gameAssemblyId = Guid.Empty.ToString(), worldGenVersion = 2, startedUtc = "2026-10-04T00:00:00Z", finishedUtc = "2026-10-04T00:00:01Z", samples,
+        };
     });
 
     [Fact] public void SitesComeFromTheGeneratorGridsAndTheSearchStopsOnceBothAreFound()
     {
         var generator = Generator();
-        var (dry, wet) = ServerFixture.ChooseSites(generator.Actor());
+        var (dry, wet) = ServerFixture.ChooseSites(generator.Actor(), "4242");
         Assert.Equal((-16f, -16f, 40f), (dry.X, dry.Z, dry.Ground)); // The first grid's samples closest to the centre; ties go to the smaller x, then z.
         Assert.Equal((1152f, -128f, 10f), (wet.X, wet.Z, wet.Ground)); // Only the third grid reaches the sea.
         Assert.Equal(3, generator.Count("cli_extension valheim.world/terrain-grid"));
@@ -134,7 +143,7 @@ public sealed class ServerOnlyTests : IDisposable
     [Fact] public void AnIncompleteGridIsRefusedNotSearched()
     {
         var generator = Generator(complete: false);
-        Assert.Throws<InvalidOperationException>(() => ServerFixture.ChooseSites(generator.Actor()));
+        Assert.Throws<InvalidOperationException>(() => ServerFixture.ChooseSites(generator.Actor(), "4242"));
         Assert.Equal(1, generator.Count("cli_extension valheim.world/terrain-grid"));
     }
 
