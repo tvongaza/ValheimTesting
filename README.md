@@ -41,16 +41,16 @@ Consumers of published packages can restore directly from NuGet.org; see [the ad
 Requires only the .NET 10 SDK and Git; the bootstrap and validation scripts are .NET file-based C# programs. The pure library targets netstandard2.0; the game library and examples target net10.0 and allow a newer runtime. The ValheimCLI transport package is built for net10.0 from the pinned ValheimCLI source, so .NET 10 is the only modern runtime needed.
 
 ```sh
-bash scripts/run.sh bootstrap
+dotnet run scripts/bootstrap-cli.cs
 # Or use a local CLI clone; the script exports only the pinned commit:
-# bash scripts/run.sh bootstrap --source /path/to/valheimCLI
-bash scripts/run.sh validate
+# dotnet run scripts/bootstrap-cli.cs -- --source /path/to/valheimCLI
+dotnet run scripts/validate.cs
 dotnet run --project examples/NoGameTerrain -c Release
 ```
 
 `validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Choose the packages in [getting started](docs/getting-started.md#package-versions-and-feeds): its exact versions are known-good example pins, while the linked NuGet pages show current releases. Pin the versions your mod tests actually use; a newly published package does not silently change a passing test. Use the local feed only to try a build that is not yet published.
 
-Use `pwsh -File scripts/run.ps1 bootstrap` and `pwsh -File scripts/run.ps1 validate` on Windows. These launchers test actual write access to NuGet's package and HTTP caches **before** `dotnet run` compiles its file-based script. If either cache is blocked by a sandbox, both use a writable cache under the system temporary directory and print the selected paths. If the fallback is also blocked, set `NUGET_PACKAGES` and `NUGET_HTTP_CACHE_PATH` to writable directories. They also check the directory where the SDK builds file-based scripts (`dotnet/runfile` under the temporary directory on Windows, under `~/Library/Application Support` on macOS and `~/.local/share` or `XDG_DATA_HOME` on Linux), which no SDK setting moves; if a sandbox blocks it, the launcher converts the script with `dotnet project convert` and runs that project from `artifacts/runfile` instead. Direct `dotnet run scripts/*.cs` still checks caches before child restores, but may fail during its own first restore; use the launchers for a fresh checkout.
+The same commands work in any shell on Windows, macOS and Linux; there is no per-shell launcher. A sandbox that blocks the NuGet caches or the SDK's file-based app directory needs the sandbox recipe in [AGENTS.md](AGENTS.md).
 
 ## Platforms
 

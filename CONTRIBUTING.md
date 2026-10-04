@@ -26,16 +26,15 @@ For a change spanning repositories, link the companion PRs and state which depen
 Fork the repository, clone your fork, and make a focused branch from current `main`. Check existing edits before starting. The [setup guide](docs/getting-started.md) covers prerequisites and package consumption. From the repository root:
 
 ```sh
-bash scripts/run.sh bootstrap
-bash scripts/run.sh validate
+dotnet run scripts/bootstrap-cli.cs
+dotnet run scripts/validate.cs
 
 # For a public API or documentation change, build the candidate reference too:
 dotnet tool restore
-bash scripts/run.sh api-docs
+dotnet run scripts/api-docs.cs
 ```
 
-Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game examples and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout.
-On Windows use `pwsh -File scripts/run.ps1` with `bootstrap`, `validate` or `api-docs`. The launchers check both NuGet caches before the .NET SDK's first restore and select a writable temporary cache if necessary. If the SDK's file-based app state directory is not writable, they run the script as a converted project in `artifacts/runfile`.
+Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game examples and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout. The same lines work in any shell on Windows, macOS and Linux.
 
 For a quick iteration before the full local check:
 

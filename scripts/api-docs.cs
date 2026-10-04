@@ -4,16 +4,14 @@
 //   dotnet tool restore
 //   dotnet run scripts/bootstrap-cli.cs
 //   dotnet run scripts/validate.cs
-//   bash scripts/run.sh api-docs    (pwsh -File scripts/run.ps1 api-docs on Windows)
+//   dotnet run scripts/api-docs.cs
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
 string root = FindRoot();
-// The launcher test reaches this point without needing the validated assemblies or the DocFX tool.
-if (args is ["--cache-preflight-only"]) { Console.WriteLine("API docs script reached after launcher preflight."); return 0; }
-if (args.Length != 0) throw new ArgumentException("usage: api-docs [--cache-preflight-only]");
+if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/api-docs.cs");
 foreach (string path in new[]
 {
     "src/Valheim.Testing/bin/Release/netstandard2.0/Valheim.Testing.dll",

@@ -66,18 +66,11 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet --info
-      - run: bash scripts/run.sh bootstrap
-        if: runner.os != 'Windows'
-      - run: pwsh -File scripts/run.ps1 bootstrap
-        if: runner.os == 'Windows'
+      - run: dotnet run scripts/bootstrap-cli.cs
       # validate.cs stops a command at its own 10-minute deadline, with a process table; the step timeout is the backstop if
       # the script itself stops answering. Normal runs take 2-5 minutes. Its transcript and test results are kept when the
       # step fails or is cancelled (#171).
-      - run: bash scripts/run.sh validate
-        if: runner.os != 'Windows'
-        timeout-minutes: 20
-      - run: pwsh -File scripts/run.ps1 validate
-        if: runner.os == 'Windows'
+      - run: dotnet run scripts/validate.cs
         timeout-minutes: 20
       - name: Keep the validation transcript
         if: failure() || cancelled()
@@ -93,47 +86,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           dotnet tool restore
-          bash scripts/run.sh api-docs
+          dotnet run scripts/api-docs.cs
       - name: Save the NuGet package cache
         if: steps.nuget-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
-  cache-preflight:
-    name: cache preflight (${{ matrix.os }})
-    # The launchers' NuGet cache and file-based app state checks (#210). They need only the SDK and the scripts, so they run
-    # beside the test job instead of after it: on Windows they took 50 s of the longest job.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-      DOTNET_NOLOGO: '1'
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: '10.0.x'
-      # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
-      # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
-      # an image ever refuses the change.
-      - name: Stop real-time scanning on this throwaway Windows runner
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          try
-          {
-            Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
-            "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
-          }
-          catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
-      - run: dotnet run scripts/test-nuget-cache-preflight.cs
   mod-example:
     name: mod example (published packages)
     # Keep in step with examples/ModWithTests/.github/workflows/tests.yml. A copy outside the checkout leaves this
