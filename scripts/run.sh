@@ -8,7 +8,8 @@ case "${1:-}" in
   validate) script=validate.cs ;;
   api-docs) script=api-docs.cs ;;
   campaign) script=campaign ;;
-  *) printf 'usage: %s {bootstrap|validate|api-docs|campaign} [script arguments]\n' "$0" >&2; exit 2 ;;
+  env) script=env ;;
+  *) printf 'usage: %s {bootstrap|validate|api-docs|campaign|env} [script arguments]\n' "$0" >&2; exit 2 ;;
 esac
 shift
 cd "$root"
@@ -55,6 +56,9 @@ fi
 
 if [[ "$script" == campaign ]]; then
   exec dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign "$@"
+fi
+if [[ "$script" == env ]]; then
+  exec dotnet run --project examples/NativeSmoke -c Release -- env "$@"
 fi
 
 # The SDK builds a file-based script under a per-user directory that no setting moves (#210): the temporary directory

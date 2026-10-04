@@ -27,7 +27,9 @@ public static class ThreeActorCampaign
             HostedCampaignPreparation.Check(manifestFile);
             var manifest = HostedCampaignManifest.Read(manifestFile);
             var template = ServerRunPlan.Read<LifecyclePlan>(templateFile);
-            var profile = EnvironmentProfile.Read(manifest.Profile);
+            var profile = manifest.Inventory.Length != 0
+                ? EnvironmentInventory.Read(manifest.Inventory).Resolve(manifest).Profile
+                : EnvironmentProfile.Read(manifest.Profile);
             if (!NativeDependencyLock.ReadReady(manifest.Server.DependencyLock).CliManifest.Files.Any(file =>
                     file.Plugins.Contains("valheimCLI.worldtools", StringComparer.Ordinal)))
                 throw new InvalidOperationException("The server needs the pinned ValheimCLI WorldTools pack for cli_peers before the three-actor run starts.");
@@ -36,8 +38,9 @@ public static class ThreeActorCampaign
             if (!manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(["client-a", "client-b"]))
                 throw new ArgumentException("This example needs client-a and client-b; the toolkit's preparation supports any number of named clients.");
             if (profile.SteamAccounts == null ||
-                profile.Clients.Values.Any(client => string.IsNullOrWhiteSpace(client.SteamAccount)))
-                throw new ArgumentException("This simultaneous-client example needs a Steam account pool and one named account per client.");
+                (manifest.Inventory.Length == 0 &&
+                 profile.Clients.Values.Any(client => string.IsNullOrWhiteSpace(client.SteamAccount))))
+                throw new ArgumentException("This simultaneous-client example needs either an inventory that verifies signed-in accounts or a fixed profile with distinct leased accounts.");
             if (manifest.World.Length == 0 || manifest.Join.Length == 0)
                 throw new ArgumentException("Set world and join in the campaign manifest.");
             if (template.Client == null || template.SecondClient == null)

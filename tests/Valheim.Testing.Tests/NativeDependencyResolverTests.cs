@@ -155,9 +155,14 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(hosts.Values, host => Assert.Empty(host.Claims));
         hosts["client-a"].SteamUserReply = "VT-STEAMUSER unreadable\n";
         hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 999\n";
-        var identities = await Assert.ThrowsAsync<AggregateException>(() => HostedCampaignPreparation.PrepareAsync(manifestFile,
+        var hostReport = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
+        Assert.Contains(hostReport.Problems, problem => problem.Actor == "client-a" && problem.Input == "Steam identity");
+        Assert.Contains(hostReport.Problems, problem => problem.Actor == "client-b" && problem.Input == "Steam identity");
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "ship" or "copy" or "start"));
+        var identities = await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(manifestFile,
             Path.Combine(_rig.Root, "bad-identities"), TimeSpan.FromSeconds(30), name => hosts[name]));
-        Assert.Equal(2, identities.InnerExceptions.Count);
+        Assert.Contains("client-a Steam identity", identities.Message);
+        Assert.Contains("client-b Steam identity", identities.Message);
         Assert.All(hosts.Values, host => Assert.DoesNotContain("ship", host.Scripts));
         hosts["client-a"].SteamUserReply = "VT-STEAMUSER account 101\n";
         hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 202\n";

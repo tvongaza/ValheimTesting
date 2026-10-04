@@ -6,6 +6,12 @@ For a step-by-step single-mod and mod-conflict investigation, including how to r
 
 Install the preview command-line tool from NuGet.org, then run it against a prepared game install. `init` can first create an editable project without launching the game. The tool checks that its required `Valheim.Testing.Game` package is published and builds the generated project from NuGet.org alone before launching.
 
+For a multi-actor campaign, the source-built candidate also has `valheim-test env preflight MANIFEST [--hosts] [--json]`. It checks
+the reviewed local inputs and reports all independent problems before contacting a host. It does not prove runtime
+readiness unless `--hosts` is specified; that read-only pass checks selected game installs, loader pairs, conflicting
+sessions and signed-in Steam identities. The campaign rechecks mutable Steam identity and process state before launch. The published tool may not
+have this command until its next release.
+
 ```sh
 dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease
 valheim-test start \

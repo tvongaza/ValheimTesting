@@ -287,8 +287,28 @@ game starts. If the source install's loader is unsuitable, set `loaderPackage` o
 applies them only to the disposable copy. Do not repair the live source install or copy individual Doorstop files by hand.
 A nested `BepInEx/core/core` can make the preloader load Harmony twice and abort before writing its main log.
 
-Campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool. Preparation
-matches each host's account before copying; launch repeats that check under the account lease, then verifies the game's
+For an ordered set of reusable machines, copy [the environment inventory template](MyMod.SystemTests/sample-environment-inventory.json)
+to that private directory. Replace its host addresses and paths. Sign into Steam on each client host beforehand;
+the runner reads the signed-in identity during host preflight, refuses two clients on the same account, and checks
+the running game's own identity after launch. It never changes the login. The private prepared profile derives
+one lease entry per observed identity. Inventories that may use the same accounts must use the same `leaseHost` and
+`leaseDirectory` to coordinate their leases. Set
+`"inventory": "environment-inventory.json"` in the campaign manifest **instead of** `profile`. Each campaign role
+may list `environmentCandidates` in preference order, or omit it to consider all compatible recipes in inventory
+order. `differentHostFrom` names actors that must run on another host; for example, client B may require a host
+different from client A while the dedicated server shares client A's machine. Resolution backs up to another recipe
+if an earlier choice leaves a later actor without a compatible host. A recipe with `hosting-client` capability is
+reserved for a client-hosted scenario; this dedicated-server campaign only assigns `server` and `client` recipes.
+Run `valheim-test env preflight` first to see each chosen recipe and its reason. `--hosts` adds read-only checks of
+the selected installs, ValheimCLI ports and signed-in Steam accounts. Preparation writes
+`environment-assignments.json` beside its generated private profile so the choice is reviewable afterwards. The
+source installs remain untouched and all actor runtime copies are made after the full preflight passes.
+Rented GPU VM client environments are experimental in this campaign flow; start with local or known SSH desktops.
+They still require an interactive desktop, a signed-in Steam client and the same preflight and lease checks.
+
+Fixed-profile campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool;
+inventory campaigns discover the IDs from the selected hosts instead. Preparation checks identity before copying;
+launch repeats that check under the account lease, then verifies the game's
 own identity. Unix's remembered Steam login alone is not proof of the running game's account. Identity values are redacted
 from the recorded identity reply. The FullLifecycle runner opts into `TestAccess.Ensure`: dedicated servers acknowledge
 cheats locally, and clients acknowledge their disposable character after joining. `AllowOnServerClients` must already be
@@ -300,11 +320,18 @@ placeholders, never defaults that the runner guesses.
 From the repository root, these are the preparation check and the complete run:
 
 ```sh
+bash scripts/run.sh env preflight /private/test/campaign.json
 bash scripts/run.sh campaign check /private/test/campaign.json /private/test/three-actor-plan.json
 bash scripts/run.sh campaign run /private/test/campaign.json /private/test/three-actor-plan.json /private/test/runs/first
 ```
 
-`check` reviews local locks, characters, fixture metadata and the host/account profile without touching a host. `run`
+The first line is the candidate `valheim-test env preflight MANIFEST` command through the cache-checking repository launcher;
+on Windows use `pwsh -File scripts/run.ps1 env preflight ...`. Use `--json` for a machine-readable report. It
+reports all independent local lock, loader, character, fixture and profile problems it can find in one pass, plus the
+selected actors and hosts. Add `--hosts` to read the selected source installs and Steam sessions on their hosts;
+it does not copy or launch anything. Without that flag it does not contact hosts or assert their current readiness.
+The scenario's `check` adds its own plan requirements without touching a host. A ready host result is still checked
+again under leases before launch. `run`
 starts with the repository launcher's NuGet cache write check, so an unwritable user cache is replaced before .NET
 tries to restore packages. On Windows the same entry point is `./scripts/run.ps1 campaign ...`. The run then
 takes one lock per host, checks for conflicting client or owned-runtime processes, and prepares all named actors concurrently, even when a server and
