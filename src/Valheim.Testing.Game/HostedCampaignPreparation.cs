@@ -264,6 +264,7 @@ public static class HostedCampaignPreparation
             }
             catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
             { failures.Add(new(group.Key, "session", error.Message)); }
+            var capacities = new ConcurrentBag<(string Actor, HostCopyCapacity Capacity)>();
             await Task.WhenAll(group.Select(async item =>
             {
                 try
@@ -272,6 +273,13 @@ public static class HostedCampaignPreparation
                 }
                 catch (Exception error) when (error is ArgumentException or InvalidOperationException or HostOperationException or IOException)
                 { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
+                try
+                {
+                    capacities.Add((item.Name, await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
+                        item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)));
+                }
+                catch (Exception error) when (error is ArgumentException or InvalidOperationException or HostOperationException or IOException)
+                { failures.Add(new(item.Name, "copy space", error.Message)); }
                 if (!inspection.Report.Problems.Any(problem => problem.Actor == item.Name && problem.Input == "loader"))
                 {
                     try
@@ -310,6 +318,8 @@ public static class HostedCampaignPreparation
                 catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
                 { failures.Add(new(item.Name, "Steam identity", error.Message)); }
             })).ConfigureAwait(false);
+            try { HostCopyCapacityProbe.RequireCombined(group.Key, capacities); }
+            catch (IOException error) { failures.Add(new(group.Key, "copy space", error.Message)); }
         });
         await Task.WhenAll(hostChecks).ConfigureAwait(false);
         cancellation.ThrowIfCancellationRequested();
@@ -531,6 +541,10 @@ public static class HostedCampaignPreparation
                 await using var claim = await host.AcquireLockAsync(profile.Hosts[hostName].Lock,
                     "campaign-prepare " + id + " " + hostName, timeout, cancellation).ConfigureAwait(false);
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation, clientSession: group.Any(item => item.Name != "server")).ConfigureAwait(false);
+                var capacities = await Task.WhenAll(group.Select(async item =>
+                    (item.Name, Capacity: await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
+                        item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)))).ConfigureAwait(false);
+                HostCopyCapacityProbe.RequireCombined(hostName, capacities.Select(item => (Actor: item.Name, item.Capacity)));
                 await Task.WhenAll(group.Select(async item =>
                 {
                     var (name, role, _) = item;
