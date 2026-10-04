@@ -16,33 +16,35 @@ public class PlayerPlacementTests
     private const string TraceOk = "OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3500 floorReadyMs=3600 doneMs=3620 floorAtDone=True final=100,42.5,-40";
     private const string TraceNoFloor = "OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3500 floorReadyMs=-1 doneMs=3620 floorAtDone=False final=100,42.5,-40";
 
-    // A server that moves its one peer once, and a client that answers every signal-arrival phase; the trace and the
-    // test-mode switch-off replies are the parts a test varies.
+    // A server that moves its one peer once, and a client that answers every arrival phase; the trace, the readiness wait
+    // and the readings before and after the teleport are the parts a test varies.
     private static (ScriptedTransport Server, ScriptedTransport Client) SignalTransports(string trace = TraceOk,
-        Func<string, CommandResult>? off = null, Func<string, CommandResult>? teleportable = null)
+        Func<string, CommandResult>? teleportable = null, Func<object>? before = null, Func<object>? landed = null, Func<string, CommandResult>? teleport = null,
+        Func<string, CommandResult>? intro = null)
     {
         var server = new ScriptedTransport()
             .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", Peers))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport"));
-        var client = NoIntro()
+            .OnPrefix("cli_teleport_peer ", teleport ?? (_ => ScriptedTransport.Ok("OK: asked peer 1 to teleport")));
+        var client = new ScriptedTransport()
+            .OnPrefix("cli_skip_intro", intro ?? (_ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0.6,33.7,2.8 ms=4")))
             .OnPrefix("cli_wait_teleportable ", teleportable ?? (_ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500 stillMs=0 cooldownSeconds=2.00 grounded=True position=0,40,0")))
             .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
             .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok(trace))
-            .On("cli_teleport_test_mode on", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True gameChecks=area,floor minMoveSeconds=2 cooldownSeconds=0.5"))
-            .On("cli_teleport_test_mode off", off ?? (_ => ScriptedTransport.Ok("OK: testFastTeleport enabled=False gameChecks=area,floor minMoveSeconds=2 cooldownSeconds=0.5")))
-            .Extension("valheim.world", "player-support-wait", _ => Standing());
+            .Extension("valheim.session", "teleport-signals", _ => new { source = "teleport-signals", complete = true })
+            .Extension("valheim.world", "player-support", _ => (before ?? (() => Standing(y: 40f)))())
+            .Extension("valheim.world", "player-support-wait", _ => (landed ?? (() => Standing()))());
         return (server, client);
     }
 
     [Theory]
     [InlineData(30)]
     [InlineData(180)]
-    public void SignalArrivalMakesOneWaitPerPhaseAndOneTeleport(int seconds)
+    public void ArrivalMakesOneWaitPerPhaseAndOneTeleport(int seconds)
     {
         var (serverTransport, clientTransport) = SignalTransports();
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         var before = client.CommandTimeout;
-        var result = PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(seconds));
+        var result = PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(seconds));
         Assert.True(result.Support.GetProperty("grounded").GetBoolean());
         Assert.Contains("floorAtDone=True", result.Trace);
         Assert.Equal(2000, result.Timing.MovedMs);
@@ -50,29 +52,51 @@ public class PlayerPlacementTests
         Assert.Equal(3600, result.Timing.FloorReadyMs);
         Assert.Equal(3620, result.Timing.DoneMs);
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
+        Assert.Contains("cli_teleport_peer 1 100 43 -40", serverTransport.Commands);
         Assert.Equal(1, clientTransport.Count("cli_wait_teleportable"));
         Assert.Equal(1, clientTransport.Count("cli_teleport_trace_wait"));
         Assert.Equal(1, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
+        Assert.Equal(1, clientTransport.Count("cli_extension valheim.world/player-support")); // the one flying check, never a polling loop
         Assert.Equal(0, clientTransport.Count("cli_teleport_test_mode")); // the game's ordinary timing, always
-        Assert.Equal(0, clientTransport.Count("cli_extension valheim.world/player-support"));
         if (seconds > 120)
             Assert.Contains(clientTransport.Commands, command => command.StartsWith("cli_wait_teleportable 120 ", StringComparison.Ordinal));
+        // With the intro skipped, a player need not be grounded: one that spawns swimming (29 Sep: fixture copies sharing a
+        // world UID put the character in this copy's water) is teleported like a standing one.
+        Assert.Contains(clientTransport.Commands, command => command.StartsWith("cli_wait_teleportable ", StringComparison.Ordinal) && command.EndsWith(" 0 False", StringComparison.Ordinal));
+        Assert.Equal(1, clientTransport.Count("cli_extensions")); // one capability listing per arrival
         Assert.Equal(before, client.CommandTimeout);
+        // In order: the intro, the flying check, readiness, the armed trace; the server's teleport; then the waits.
+        var commands = clientTransport.Commands.ToList();
+        int Index(string prefix) => commands.FindIndex(c => c == prefix || c.StartsWith(prefix + " ", StringComparison.Ordinal));
+        Assert.True(Index("cli_skip_intro") < Index("cli_extension valheim.world/player-support"));
+        Assert.True(Index("cli_extension valheim.world/player-support") < Index("cli_wait_teleportable"));
+        Assert.True(Index("cli_wait_teleportable") < Index("cli_teleport_trace_arm"));
+        Assert.True(Index("cli_teleport_trace_arm") < Index("cli_teleport_trace_wait"));
+        Assert.True(Index("cli_teleport_trace_wait") < Index("cli_extension valheim.world/player-support-wait"));
     }
 
     [Fact]
-    public void SignalArrivalRefusesACompletionWithoutFloorAndNeverRetries()
+    public void ArrivalRefusesACompletionWithoutFloorAndNeverRetries()
     {
         var (serverTransport, clientTransport) = SignalTransports(TraceNoFloor);
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         Assert.Contains("without a ready floor", Assert.Throws<InvalidOperationException>(() =>
-            PlayerPlacement.ArriveOnSignals(server, client, Point, TimeSpan.FromSeconds(30))).Message);
+            PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30))).Message);
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
         Assert.Equal(0, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
     }
 
-    // A failed hop still switches the test timing off (best effort), and its own failure is the one reported,
-    // even when the client does not answer the switch.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(601)]
+    public void ArrivalTimeoutIsPositiveAndAtMostTenMinutes(int seconds)
+    {
+        var (serverTransport, clientTransport) = SignalTransports();
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.Throws<ArgumentOutOfRangeException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(seconds)));
+        Assert.All(clientTransport.Commands.Concat(serverTransport.Commands), c => Assert.StartsWith("cli_expect", c)); // the actors' own pin checks only
+    }
+
     [Fact] public void ProtectionMustBeReadBack()
     {
         using var ok = new ScriptedTransport().On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True")).Actor();
@@ -97,131 +121,54 @@ public class PlayerPlacementTests
         Assert.Throws<InvalidOperationException>(() => PlayerPlacement.OnlyPeer(two));
     }
 
-    private int teleportedAfterReads = -1;
-    [Fact] public void ArrivalTeleportsOnceAndWaitsForTheClientToStandThere()
+    // Standing in water 12.5 m below the declared dry ground after the teleport: the client's wait ends unsupported.
+    [Fact] public void AnUnsupportedLandingIsNotArrivalAndTheTeleportIsNotRepeated()
     {
-        int reads = 0;
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => { teleportedAfterReads = reads; return ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"); });
-        // Before the teleport: still loading, then riding the first-join Valkyrie, then standing at the spawn. After it:
-        // falling onto the point, then settled there. Only the last is arrival.
-        var clientTransport = NoIntro().Extension("valheim.world", "player-support", _ => ++reads switch
-        {
-            1 => Loading(),
-            2 => new { source = "local-player-support", complete = true, x = 0f, y = 80f, z = 0f, speed = 12f, grounded = false, flying = false, attached = true, dead = false, teleporting = false, units = "metres" },
-            3 => new { source = "local-player-support", complete = true, x = 0.6f, y = 33.7f, z = 2.8f, speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres" },
-            4 => Standing(y: 44f, grounded: false, speed: 3),
-            _ => Standing(),
-        });
+        var (serverTransport, clientTransport) = SignalTransports(landed: () => Standing(y: 30f, grounded: false));
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        var arrived = PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), settleFor: TimeSpan.Zero);
-        Assert.True(arrived.GetProperty("grounded").GetBoolean());
-        Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
-        Assert.Contains("cli_teleport_peer 1 100 43 -40", serverTransport.Commands);
-        Assert.Equal(5, reads);
-        // The teleport went out only after the player stood still at the spawn (reading 3).
-        Assert.Equal(3, teleportedAfterReads);
-        // The intro was skipped before the first player reading.
-        var commands = clientTransport.Commands.ToList();
-        int skip = commands.FindIndex(c => c.StartsWith("cli_skip_intro ", StringComparison.Ordinal));
-        Assert.InRange(skip, 0, commands.FindIndex(c => c.StartsWith("cli_extension valheim.world/player-support", StringComparison.Ordinal)) - 1);
-    }
-    [Fact] public void ArrivalThatNeverSettlesTimesOutWithoutASecondTeleport()
-    {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
-        // Settled at the spawn, so the teleport goes out; then standing in water, 12.5 m below the declared dry ground.
-        int reads = 0;
-        var clientTransport = NoIntro().Extension("valheim.world", "player-support", _ => ++reads == 1
-            ? new { source = "local-player-support", complete = true, x = 0.6f, y = 33.7f, z = 2.8f, speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres" }
-            : Standing(y: 30f, grounded: false));
-        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        var error = Assert.Throws<TimeoutException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(1), settleFor: TimeSpan.Zero));
+        var error = Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30)));
         Assert.Contains("\"y\":30", error.Message);
+        Assert.Contains("not repeated", error.Message);
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
     }
-    // 29 Sep native run: the first reading after the join already showed the player standing at the spawn, the teleport
-    // went out within the game's 2 s post-spawn cooldown and was dropped. Standing still must last before the teleport.
-    [Fact] public void ThePlayerMustStandStillForAWhileBeforeTheTeleport()
+    // The game decides when a teleport would be taken (spawn and teleport cooldown, attached, dead, riding the intro); a
+    // player that never gets there is not teleported.
+    [Fact] public void APlayerThatNeverBecomesTeleportableIsNotTeleported()
     {
-        // Timed, not counted: polls can take longer than their 250 ms on a loaded machine, but the teleport can never
-        // come sooner than settleFor after the first still reading.
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        TimeSpan? firstStill = null, teleported = null;
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => { teleported = clock.Elapsed; return ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"); });
-        var clientTransport = NoIntro().Extension("valheim.world", "player-support", _ =>
-        {
-            if (teleported != null) return Standing();
-            firstStill ??= clock.Elapsed;
-            return new { source = "local-player-support", complete = true, x = 0.6f, y = 33.7f, z = 2.8f, speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres" };
-        });
+        var (serverTransport, clientTransport) = SignalTransports(teleportable: _ => ScriptedTransport.Ok("ERROR: code=teleportable_timeout attached=True ms=1000"));
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), settleFor: TimeSpan.FromSeconds(1));
-        Assert.True(teleported - firstStill >= TimeSpan.FromSeconds(1), $"teleported {(teleported - firstStill)?.TotalMilliseconds:F0} ms after the player first stood still");
-    }
-    // 29 Sep native run: two copies of one world pinned the same world UID, and the character had logged out on the other
-    // copy's raised road, which this copy does not have. It spawned swimming (grounded false, y 28, bobbing at 6 cm/s),
-    // never "stood still" on the ground, and the arrival timed out before the teleport it needed.
-    [Fact] public void APlayerSwimmingAtTheSpawnIsTeleportedOnce()
-    {
-        bool teleported = false;
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=280.0,28.07,-384.0 zone=4,-6"))
-            .OnPrefix("cli_teleport_peer ", _ => { teleported = true; return ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"); });
-        var clientTransport = NoIntro().Extension("valheim.world", "player-support", _ => teleported
-            ? Standing()
-            : new { source = "local-player-support", complete = true, x = 280f, y = 28.07f, z = -384f, speed = .06f, grounded = false, flying = false, attached = false, dead = false, teleporting = false, units = "metres" });
-        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        var arrived = PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(10), settleFor: TimeSpan.Zero);
-        Assert.True(arrived.GetProperty("grounded").GetBoolean());
-        Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
-    }
-    // Without the intro skip, the Valkyrie ride may still be running: it is not reported as attached and its speed can read
-    // low, so a player that is not grounded is not teleported (the swimming case above needs the skip).
-    [Fact] public void WithoutTheIntroSkipAPlayerThatIsNotGroundedIsNotTeleported()
-    {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,80.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
-        var clientTransport = new ScriptedTransport().Extension("valheim.world", "player-support", _ =>
-            new { source = "local-player-support", complete = true, x = 0f, y = 80f, z = 0f, speed = .1f, grounded = false, flying = false, attached = false, dead = false, teleporting = false, units = "metres" });
-        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        Assert.Contains("Nothing was teleported", Assert.Throws<TimeoutException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(1), settleFor: TimeSpan.Zero, skipIntro: false)).Message);
+        Assert.Contains("teleportable_timeout", Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(5))).Message);
         Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+        Assert.Equal(0, clientTransport.Count("cli_teleport_trace_arm"));
+    }
+    // Without the intro skip, the Valkyrie ride may still be running, so the readiness wait also requires the player grounded.
+    [Fact] public void ArrivalCanLeaveTheIntroAloneAndThenRequiresTheGround()
+    {
+        var (serverTransport, clientTransport) = SignalTransports();
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(5), skipIntro: false);
         Assert.Equal(0, clientTransport.Count("cli_skip_intro"));
+        Assert.Contains(clientTransport.Commands, c => c.StartsWith("cli_wait_teleportable ", StringComparison.Ordinal) && c.EndsWith(" 0 True", StringComparison.Ordinal));
+        Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
     }
-    [Fact] public void AFallingPlayerIsNotTeleported()
+    // An older Standard pack: refused by name before the intro skip or anything else is sent.
+    [Fact] public void AClientWithoutTheTeleportSignalsIsRefusedBeforeAnythingIsSent()
     {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
-        var clientTransport = NoIntro().Extension("valheim.world", "player-support", _ => Standing(y: 60f, grounded: false, speed: 3));
-        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        Assert.Contains("Nothing was teleported", Assert.Throws<TimeoutException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(1), settleFor: TimeSpan.Zero)).Message);
-        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
-    }
-    [Fact] public void APlayerThatNeverStandsStillIsNotTeleported()
-    {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
-        var clientTransport = NoIntro().Extension("valheim.world", "player-support", _ =>
-            new { source = "local-player-support", complete = true, x = 0f, y = 80f, z = 0f, speed = 12f, grounded = false, flying = false, attached = true, dead = false, teleporting = false, units = "metres" });
-        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        Assert.Contains("Nothing was teleported", Assert.Throws<TimeoutException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(1), settleFor: TimeSpan.Zero)).Message);
-        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+        var server = new ScriptedTransport();
+        var client = new ScriptedTransport()
+            .Extension("valheim.world", "player-support", _ => Standing())
+            .Extension("valheim.world", "player-support-wait", _ => Standing());
+        using var serverActor = server.Actor(); using var clientActor = client.Actor();
+        Assert.Contains(CliCapabilities.TeleportSignals, Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(serverActor, clientActor, Point, TimeSpan.FromSeconds(30))).Message);
+        Assert.All(client.Commands, c => Assert.True(c == "cli_extensions" || c.StartsWith("cli_expect", StringComparison.Ordinal), c));
+        Assert.All(server.Commands, c => Assert.StartsWith("cli_expect", c));
     }
     [Fact] public void ARefusedTeleportIsNotArrival()
     {
-        using var server = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("ERROR: peer 1 has no character yet")).Actor();
-        using var client = NoIntro().Extension("valheim.world", "player-support", _ => Standing()).Actor();
-        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(5), settleFor: TimeSpan.Zero));
+        var (serverTransport, clientTransport) = SignalTransports(teleport: _ => ScriptedTransport.Ok("ERROR: peer 1 has no character yet"));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, clientTransport.Count("cli_teleport_trace_wait"));
     }
 
     [Theory]
@@ -245,27 +192,11 @@ public class PlayerPlacementTests
     }
     [Fact] public void ArrivalSkipsTheIntroBeforeAnythingElseAndRefusesToTeleportIfItFails()
     {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
-        var clientTransport = new ScriptedTransport()
-            .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("ERROR: code=skip_intro_timeout pending=respawn skipped=True ms=30000"))
-            .Extension("valheim.world", "player-support", _ => Standing());
+        var (serverTransport, clientTransport) = SignalTransports(intro: _ => ScriptedTransport.Ok("ERROR: code=skip_intro_timeout pending=respawn skipped=True ms=30000"));
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(5), settleFor: TimeSpan.Zero));
+        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(5)));
         Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
-        Assert.DoesNotContain(clientTransport.Commands, c => c.StartsWith("cli_extension valheim.world/player-support", StringComparison.Ordinal));
-    }
-    [Fact] public void ArrivalCanLeaveTheIntroAlone()
-    {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
-        // Unscripted, so a skip would throw.
-        var clientTransport = new ScriptedTransport().Extension("valheim.world", "player-support", _ => Standing());
-        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
-        PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(5), settleFor: TimeSpan.Zero, skipIntro: false);
-        Assert.Equal(0, clientTransport.Count("cli_skip_intro"));
+        Assert.Equal(new[] { "cli_skip_intro 5" }, clientTransport.Commands.Where(c => c != "cli_extensions" && !c.StartsWith("cli_expect", StringComparison.Ordinal)));
     }
 
     [Fact] public void EverySupportReadingMustShowThePlayerSettled()
@@ -292,27 +223,21 @@ public class PlayerPlacementTests
     }
     [Fact] public void ArrivalRefusesAFlyingPlayerAndNeverTeleports()
     {
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"));
-        using var server = serverTransport.Actor();
-        using var client = NoIntro().Extension("valheim.world", "player-support", _ => Standing(flying: true)).Actor();
+        var (serverTransport, clientTransport) = SignalTransports(before: () => Standing(flying: true));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        var error = Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), settleFor: TimeSpan.Zero));
+        var error = Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30)));
         Assert.Contains("flying", error.Message);
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), "refused at once, not after the arrival timeout");
         Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+        Assert.Equal(0, clientTransport.Count("cli_wait_teleportable"));
     }
     [Fact] public void ArrivalRefusesAPlayerWhoStartsFlyingAfterTheTeleport()
     {
-        bool teleported = false;
-        var serverTransport = new ScriptedTransport()
-            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
-            .OnPrefix("cli_teleport_peer ", _ => { teleported = true; return ScriptedTransport.Ok("OK: asked peer 1 to teleport to 100.0,43.0,-40.0"); });
-        using var server = serverTransport.Actor();
-        using var client = NoIntro().Extension("valheim.world", "player-support", _ => Standing(flying: teleported)).Actor();
+        var (serverTransport, clientTransport) = SignalTransports(landed: () => Standing(flying: true));
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         Assert.Contains("flying", Assert.Throws<InvalidOperationException>(() =>
-            PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), settleFor: TimeSpan.Zero)).Message);
+            PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30))).Message);
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
     }
 

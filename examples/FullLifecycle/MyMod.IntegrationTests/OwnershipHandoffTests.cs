@@ -176,19 +176,12 @@ public sealed class OwnershipHandoffTests
         Assert.Equal(wrongOwner ? 0 : 1, second.Count("cli_extension mymod.testing/marker-owner-claim"));
     }
 
+    // CampaignWorld's client answers the arrival waits (ScriptedTransport.ArrivalSignals); this one also teleports itself.
     private static ScriptedTransport ReadyClient(CampaignWorld world, LifecyclePlan plan) => world.Client()
-            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=1"))
-            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=1"))
             .OnPrefix("cli_teleport ", _ => { world.MoveClient(plan.Arrival.X, plan.Arrival.Ground, plan.Arrival.Z); return ScriptedTransport.Ok("OK: Teleported to test point"); })
-            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=1 floorAtDone=True"))
             .Extension("valheim.world", "terrain", _ => new
             {
                 source = "loaded-ground", complete = true, units = "metres", x = plan.Arrival.X, z = plan.Arrival.Z, height = plan.Arrival.Ground,
-            })
-            .Extension("valheim.world", "player-support-wait", _ => new
-            {
-                source = "local-player-support", complete = true, x = plan.Arrival.X, y = plan.Arrival.Ground, z = plan.Arrival.Z,
-                speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
             })
             .Extension("mymod.testing", "marker-owner-claim", _ => new
             {

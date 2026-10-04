@@ -40,7 +40,7 @@ public static class LifecycleWorldScenario
         var zoneCycle = new ZoneCycle
         {
             Capability = Capabilities.Zones, Zones = LifecyclePlan.MarkerZones(plan.DrySite), Away = CampaignSteps.At(plan.Away!), Back = CampaignSteps.At(plan.Arrival),
-            StepTimeout = timeout, SettleFor = run.SettleFor, Interval = run.Interval,
+            StepTimeout = timeout, Interval = run.Interval,
         };
         var logout = new LogoutCycle
         {
@@ -51,7 +51,7 @@ public static class LifecycleWorldScenario
         new ClientRounds
         {
             Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Arrival = CampaignSteps.At(plan.Arrival), ArriveStep = "arrive beside the marker",
-            SettleFor = run.SettleFor, Cancellation = run.Cancellation,
+            Cancellation = run.Cancellation,
         }.Run(run.Server, () => run.OpenClient(client, null),
             measure: round =>
             {

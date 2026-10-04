@@ -65,6 +65,24 @@ public sealed class ScriptedTransport : ICancellableGameTransport
         });
         return this;
     }
+    /// <summary>
+    /// Answers <see cref="PlayerPlacement.Arrive"/>'s in-game waits as a client whose player can be teleported at once:
+    /// <c>cli_wait_teleportable</c>, a trace per <c>cli_teleport_trace_arm</c> that completes with a ready floor, and
+    /// <c>valheim.world/player-support-wait</c> with <paramref name="landed"/> (the player's support reading after the
+    /// server's teleport). Also lists <c>valheim.session/teleport-signals</c>. The server's <c>cli_teleport_peer</c> is the test's.
+    /// </summary>
+    public ScriptedTransport ArrivalSignals(Func<object> landed)
+    {
+        ArgumentNullException.ThrowIfNull(landed);
+        int traces = 0;
+        OnPrefix("cli_wait_teleportable ", _ => Ok("OK: TELEPORTABLE ms=0 stillMs=0 cooldownSeconds=2.00 grounded=True position=0,40,0"));
+        On("cli_teleport_trace_arm", _ => Ok("OK: TELEPORT_TRACE_ARM id=" + Interlocked.Increment(ref traces).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        OnPrefix("cli_teleport_trace_wait ", command => Ok("OK: TELEPORT_TRACE id=" + command.Split(' ')[1] +
+            " distant=True requestedMs=0 movedMs=2000 areaReadyMs=2000 floorReadyMs=2000 doneMs=2000 floorAtDone=True final=0,0,0"));
+        Extension("valheim.session", "teleport-signals", _ => new { source = "teleport-signals", complete = true });
+        return Extension("valheim.world", "player-support-wait", _ => landed());
+    }
+
     /// <summary>The client test-access state <see cref="ClientAccess"/> answers from.</summary>
     public ScriptedAccess Access { get; } = new();
 

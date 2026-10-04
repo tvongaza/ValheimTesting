@@ -113,7 +113,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         WriteServerLog();
         return new()
         {
-            Plan = plan, Server = Server(), OwnedServer = this, Report = report, Output = Output, SettleFor = TimeSpan.Zero, Interval = TimeSpan.FromMilliseconds(10),
+            Plan = plan, Server = Server(), OwnedServer = this, Report = report, Output = Output, Interval = TimeSpan.FromMilliseconds(10),
             OpenClient = (client, directory) =>
             {
                 string output = directory == null ? Output : Directory.CreateDirectory(Path.Combine(Output, directory)).FullName;
@@ -203,6 +203,13 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         return Server();
     }
 
+    // The client's player as its support reading reports it, wherever the last teleport put it.
+    private object Support() => new
+    {
+        source = "local-player-support", complete = _joined, x = _x, y = _y, z = _z, speed = 0f,
+        grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+    };
+
     /// <summary>A client; a refused one runs another MyMod build, so the server refuses its join.</summary>
     public ScriptedTransport Client(bool refused = false)
     {
@@ -246,11 +253,8 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
             })
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
-            .Extension("valheim.world", "player-support", _ => new
-            {
-                source = "local-player-support", complete = _joined, x = _x, y = _y, z = _z, speed = 0f,
-                grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
-            })
+            .Extension("valheim.world", "player-support", _ => Support())
+            .ArrivalSignals(Support)
             .OnPrefix("cli_prefabs_at ", command =>
             {
                 var (x, z) = Coordinates(command, 1, 3);

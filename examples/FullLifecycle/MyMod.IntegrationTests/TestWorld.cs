@@ -107,6 +107,11 @@ internal sealed class TestWorld : IOwnedServer
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => new
             {
+                source = "local-player-support", complete = true, x = 0f, y = 40f, z = 0f, speed = 0f,
+                grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })
+            .ArrivalSignals(() => new
+            {
                 source = "local-player-support", complete = true, x = arrival.X, y = arrival.Ground, z = arrival.Z, speed = 0f,
                 grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
             })

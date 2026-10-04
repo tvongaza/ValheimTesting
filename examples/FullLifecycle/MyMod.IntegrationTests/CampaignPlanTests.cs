@@ -30,7 +30,6 @@ public sealed class CampaignPlanTests : IDisposable
     private JsonObject Owned(JsonObject client, string name)
     {
         client["mode"] = "owned";
-        client["eventDrivenArrival"] = true;
         client["character"] = name;
         client["install"] = Path.Combine(_directory, "install-" + name);
         client["installPins"] = new JsonObject { ["game"] = new string('a', 64), ["bepinexCore"] = new string('b', 64), ["patchers"] = new string('c', 64) };
@@ -80,7 +79,7 @@ public sealed class CampaignPlanTests : IDisposable
                 plan["secondClient"] = Owned(Client(port: 5557), "ClientB");
                 foreach (var entry in new[] { plan["client"]!, plan["secondClient"]! })
                     entry["capabilities"] = new JsonArray(Capabilities.Markers, Capabilities.MarkerOwner,
-                        Capabilities.MarkerOwnerWait, Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait");
+                        Capabilities.MarkerOwnerWait, Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait", Valheim.Testing.Game.CliCapabilities.TeleportSignals);
                 plan["secondArrival"] = new JsonObject { ["x"] = 100, ["z"] = -32, ["ground"] = 42.4 };
                 break;
             case LifecyclePlan.ThreeActorScenario:
@@ -163,15 +162,19 @@ public sealed class CampaignPlanTests : IDisposable
         Refused(missingCapability, "Pin " + LifecyclePlan.AdapterPlugin);
     }
 
-    [Fact] public void OwnershipHandoffRequiresEventDrivenArrivalAtNormalTeleportTiming()
+    [Fact] public void OwnershipHandoffRequiresTheArrivalSignalsBeforeGameplay()
     {
-        var missingSignalWait = Plan(LifecyclePlan.OwnershipHandoffScenario);
-        missingSignalWait["secondClient"]!["eventDrivenArrival"] = false;
-        Refused(missingSignalWait, "eventDrivenArrival");
+        var missingSignals = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        var capabilities = missingSignals["secondClient"]!["capabilities"]!.AsArray();
+        capabilities.Remove(capabilities.Single(c => c!.GetValue<string>() == Valheim.Testing.Game.CliCapabilities.TeleportSignals));
+        Refused(missingSignals, Valheim.Testing.Game.CliCapabilities.TeleportSignals);
 
-        var unverifiedFastTiming = Plan(LifecyclePlan.OwnershipHandoffScenario);
-        unverifiedFastTiming["client"]!["fastTestTeleports"] = true;
-        Refused(unverifiedFastTiming, "fastTestTeleports");
+        foreach (string removed in new[] { "eventDrivenArrival", "fastTestTeleports" })
+        {
+            var stale = Plan(LifecyclePlan.OwnershipHandoffScenario);
+            stale["client"]![removed] = true;
+            Refused(stale, removed + " was removed (ValheimTesting #299)");
+        }
     }
 
     [Fact] public void TheSamplePlansAreValidPlans()

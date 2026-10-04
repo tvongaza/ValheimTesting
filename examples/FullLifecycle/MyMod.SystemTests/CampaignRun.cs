@@ -69,8 +69,6 @@ public sealed class CampaignRun
     /// <summary>The crossplay server's lobby (<see cref="CrossplayServer.WaitForLobby"/>), for the crossplay scenario.</summary>
     public Func<GameActor, CrossplayLobby>? Lobby { get; init; }
     public CancellationToken Cancellation { get; init; }
-    /// <summary>How long the player must stand still before a teleport; tests pass zero.</summary>
-    public TimeSpan? SettleFor { get; init; }
     /// <summary>How often the scenarios' observation waits re-read; tests pass a few milliseconds.</summary>
     public TimeSpan Interval { get; init; } = TimeSpan.FromSeconds(1);
 }
@@ -97,7 +95,7 @@ public static class CampaignScenarios
                 case LifecyclePlan.CrossplayScenario:
                     // The dry-site lifecycle, joined through each boot's crossplay lobby instead of the server's address.
                     DrySiteScenario.Run(plan, run.Server, run.OwnedServer, () => run.OpenClient(plan.Client!, null), run.Report, run.Output,
-                        run.Cancellation, run.SettleFor, run.Lobby ?? throw new ArgumentException("The crossplay scenario needs the server's lobby."));
+                        run.Cancellation, run.Lobby ?? throw new ArgumentException("The crossplay scenario needs the server's lobby."));
                     break;
                 default: throw new ArgumentException($"{plan.Scenario} is not a campaign scenario.");
             }

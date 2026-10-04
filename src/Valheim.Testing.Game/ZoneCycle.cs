@@ -146,8 +146,6 @@ public sealed class ZoneCycle
     public required HeightExpectation Back { get; init; }
     /// <summary>How long each of the four waits may take: arriving away, the unload, arriving back and the reload.</summary>
     public required TimeSpan StepTimeout { get; init; }
-    /// <summary>How long the player must stand still before each teleport (<see cref="PlayerPlacement.Arrive"/>); tests pass zero.</summary>
-    public TimeSpan? SettleFor { get; init; }
     /// <summary>How often the zones are re-read while waiting.</summary>
     public TimeSpan Interval { get; init; } = TimeSpan.FromMilliseconds(250);
 
@@ -178,7 +176,7 @@ public sealed class ZoneCycle
             round.Step("the zones of interest are loaded before leaving", () => before = Loaded(round.Client, capability));
             round.Step($"leave the area for ({Away.X}, {Away.Z})", () => away = Leave(round.Server, round.Client, before!, cancellation));
             round.Step("the client unloads the zones", () => { var (reading, took) = WaitFor(round.Client, capability, unload: true, cancellation); unloaded = reading; unloadTook = took; });
-            round.Step($"return to ({Back.X}, {Back.Z})", () => back = PlayerPlacement.Arrive(round.Server, round.Client, Back, StepTimeout, cancellation, SettleFor));
+            round.Step($"return to ({Back.X}, {Back.Z})", () => back = PlayerPlacement.Arrive(round.Server, round.Client, Back, StepTimeout, cancellation).Support);
             round.Step("the client loads the zones again", () => { var (reading, took) = WaitFor(round.Client, capability, unload: false, cancellation); reloaded = reading; reloadTook = took; });
         }
         catch
@@ -200,7 +198,7 @@ public sealed class ZoneCycle
         var before = Loaded(client, capability);
         var away = Leave(server, client, before, cancellation);
         var (unloaded, unloadTook) = WaitFor(client, capability, unload: true, cancellation);
-        var back = PlayerPlacement.Arrive(server, client, Back, StepTimeout, cancellation, SettleFor);
+        var back = PlayerPlacement.Arrive(server, client, Back, StepTimeout, cancellation).Support;
         var (reloaded, reloadTook) = WaitFor(client, capability, unload: false, cancellation);
         return new(before, away, unloaded, unloadTook, back, reloaded, reloadTook);
     }
@@ -217,7 +215,7 @@ public sealed class ZoneCycle
 
     private JsonElement Leave(GameActor server, GameActor client, ZoneReading before, CancellationToken cancellation)
     {
-        var arrived = PlayerPlacement.Arrive(server, client, Away, StepTimeout, cancellation, SettleFor);
+        var arrived = PlayerPlacement.Arrive(server, client, Away, StepTimeout, cancellation).Support;
         // Arrival allows 2 m, which can cross into the next zone: where the client's player is decides, not the declared point.
         RequireFarEnough(before.Range, ZoneId.Of(arrived.GetProperty("x").GetSingle(), arrived.GetProperty("z").GetSingle()), "The player");
         return arrived;
@@ -259,7 +257,7 @@ public sealed class ZoneCycle
         if (Zones is not { Count: >= 1 and <= 64 }) throw new ArgumentException("Zones: name 1 to 64 zones of interest.");
         if (Zones.Distinct().Count() != Zones.Count) throw new ArgumentException("Zones: each zone once.");
         if (Zones.Any(z => Math.Abs(z.X) > 255 || Math.Abs(z.Z) > 255)) throw new ArgumentException("Zones: outside the world (zone coordinates beyond ±255).");
-        if (StepTimeout <= TimeSpan.Zero) throw new ArgumentException("StepTimeout: give each wait an explicit, positive timeout.");
+        if (StepTimeout <= TimeSpan.Zero || StepTimeout > TimeSpan.FromMinutes(10)) throw new ArgumentException("StepTimeout: give each wait an explicit, positive timeout of at most 10 minutes (an arrival's limit).");
         if (Interval <= TimeSpan.Zero) throw new ArgumentException("Interval: give a positive interval.");
         TerrainProbe.Validate("loaded-ground", "away point", [Away], .3f);
         TerrainProbe.Validate("loaded-ground", "return point", [Back], .3f);

@@ -14,30 +14,40 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public static class PlayerPlacement
 {
-    /// <summary>A single teleport's game-reported phase times and the client's supported landing.</summary>
+    /// <summary>What <see cref="Arrive"/> needs from the client's ValheimCLI: the Standard pack's bounded teleport commands
+    /// (<c>cli_wait_teleportable</c>, <c>cli_teleport_trace_arm</c>/<c>cli_teleport_trace_wait</c>), World Tools' support
+    /// wait, and its support reading (the flying check). <see cref="ClientRounds"/> checks them for an arriving client.</summary>
+    public static readonly IReadOnlyList<string> ArrivalCapabilities = [CliCapabilities.TeleportSignals, "valheim.world/player-support-wait", "valheim.world/player-support"];
+
+    /// <summary>One arrival: the client's supported landing, and the teleport's game-reported phase times and raw trace line.</summary>
     public sealed record TeleportArrival(JsonElement Support, string Trace, TeleportTrace Timing);
 
     /// <summary>
-    /// Arrives using one bounded in-game wait at each transition. The runner does not poll the remote player:
-    /// ValheimCLI observes readiness and support on game frames and returns once each condition holds.
-    /// The server requests the teleport exactly once, at the game's ordinary timing. <paramref name="timeout"/> is the overall deadline; each CLI wait is capped
-    /// at 120 seconds, so a phase that takes longer fails without issuing another request or teleport.
+    /// Has the server teleport the only connected player (<see cref="OnlyPeer"/>) to <paramref name="point"/>, a little
+    /// above it so the character settles onto the ground, exactly once, at the game's ordinary teleport timing, and returns
+    /// once the client's own observation shows the player supported there (<see cref="SurfaceProbe.Supported"/>). Unless
+    /// <paramref name="skipIntro"/> is false it first ends a first-join intro (<see cref="SkipIntro"/>), a no-op for a
+    /// character that has spawned before. Each transition is one bounded wait inside the game, not repeated remote reads:
+    /// ValheimCLI waits until the player can be teleported (the game silently drops a teleport within 2 s of a spawn or of
+    /// the previous teleport), arms a one-hop trace, and after the server's one request waits for the teleport to finish
+    /// with a ready floor, then for supported arrival. A player shown flying is refused before the teleport (see
+    /// <see cref="SetFly"/>). <paramref name="timeout"/> (at most 600 s) covers the intro and every wait; each CLI wait is
+    /// capped at 120 s. Nothing is retried: a lost reply is an unknown outcome, not a failure to act. Needs
+    /// <see cref="ArrivalCapabilities"/> on the client.
     /// </summary>
-    public static TeleportArrival ArriveOnSignals(GameActor server, GameActor client, HeightExpectation point,
+    public static TeleportArrival Arrive(GameActor server, GameActor client, HeightExpectation point,
         TimeSpan timeout, CancellationToken cancellation = default, bool skipIntro = true)
     {
         if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(600)) throw new ArgumentOutOfRangeException(nameof(timeout));
         TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
-        var support = client.RequireCapability("valheim.world/player-support-wait");
+        // One listing; a missing pack is named before anything is sent.
+        var capabilities = client.RequireCapabilities(ArrivalCapabilities);
+        Capability support = capabilities[1], reading = capabilities[2];
         var clock = Stopwatch.StartNew();
         if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
-        return Hop(server, client, point, support, clock, timeout, cancellation, skipIntro);
-    }
-
-    private static TeleportArrival Hop(GameActor server, GameActor client, HeightExpectation point, Capability support,
-        Stopwatch clock, TimeSpan timeout, CancellationToken cancellation, bool skipIntro)
-    {
         cancellation.ThrowIfCancellationRequested();
+        // One read, not a wait: a flying player is never supported, so refuse before anything moves.
+        RefuseFlying(client.Observe(reading));
         string ready = SecondsLeft(clock, timeout);
         WithTimeout(client, timeout - clock.Elapsed, () =>
             client.Execute($"cli_wait_teleportable {ready} 0 {!skipIntro}").RequireLine("OK: TELEPORTABLE ",
@@ -56,27 +66,28 @@ public static class PlayerPlacement
                 "OK: TELEPORT_TRACE ", "The client did not complete its teleport"));
         var timing = TeleportTrace.Parse(trace, id);
         if (!timing.FloorAtDone)
-            throw new InvalidOperationException("The game ended its teleport without a ready floor: " + trace);
+            throw new InvalidOperationException("The game ended its teleport without a ready floor: " + trace + ". The teleport was not repeated.");
         cancellation.ThrowIfCancellationRequested();
         Observation landed = null!;
         WithTimeout(client, timeout - clock.Elapsed, () => landed = client.Observe(support,
             point.X.ToString("R", CultureInfo.InvariantCulture), point.Height.ToString("R", CultureInfo.InvariantCulture),
             point.Z.ToString("R", CultureInfo.InvariantCulture), SecondsLeft(clock, timeout)));
+        RefuseFlying(landed);
         if (!SurfaceProbe.Supported(landed, point))
-            throw new InvalidOperationException("The client wait ended without supported arrival: " + landed.Data.GetRawText());
+            throw new InvalidOperationException($"The player did not settle at ({point.X}, {point.Height}, {point.Z}); the client's wait ended with: {landed.Data.GetRawText()}. The teleport was not repeated.");
         return new TeleportArrival(landed.Data.Clone(), trace, timing);
     }
 
     private static string SecondsLeft(Stopwatch clock, TimeSpan timeout)
     {
         double left = (timeout - clock.Elapsed).TotalSeconds;
-        if (left <= 0) throw new TimeoutException("The one-hop arrival deadline expired; the teleport was not repeated.");
+        if (left <= 0) throw new TimeoutException("The arrival deadline expired; the teleport was not repeated.");
         return Math.Min(120, left).ToString("R", CultureInfo.InvariantCulture);
     }
 
     private static void WithTimeout(GameActor actor, TimeSpan remaining, Action action)
     {
-        if (remaining <= TimeSpan.Zero) throw new TimeoutException("The one-hop arrival deadline expired; the teleport was not repeated.");
+        if (remaining <= TimeSpan.Zero) throw new TimeoutException("The arrival deadline expired; the teleport was not repeated.");
         var previous = actor.CommandTimeout;
         try { actor.CommandTimeout = remaining + TimeSpan.FromSeconds(10); action(); }
         finally { actor.CommandTimeout = previous; }
@@ -140,76 +151,11 @@ public static class PlayerPlacement
         return int.Parse(characters[0][1], NumberStyles.Integer, CultureInfo.InvariantCulture);
     }
 
-    /// <summary>
-    /// Unless <paramref name="skipIntro"/> is false, first ends a first-join intro (<see cref="SkipIntro"/>), which is a
-    /// no-op for a character that has spawned before. Then waits until the client's player has held still somewhere for
-    /// <paramref name="settleFor"/> (default 3 s): the game refuses a teleport within 2 s of a spawn or of the previous
-    /// teleport, silently, and the Valkyrie of a first-join intro overwrites the player's position every frame. Still, not
-    /// grounded: a character that logged out where this world copy has water spawns swimming, and the game teleports a
-    /// swimming player as readily as a standing one. With <paramref name="skipIntro"/> false the intro may still be running
-    /// (the ride is not reported as attached, and its speed can read low), so the player must also be grounded. Then has the server teleport the only connected player to <paramref name="point"/> (a little
-    /// above it, so the character settles onto the ground) exactly once, and waits on the client until its player stands
-    /// settled there (<see cref="SurfaceProbe.Supported"/>). Returns the observation that established arrival. Refuses at
-    /// once, before or after the teleport, if a reading shows the player flying (see <see cref="SetFly"/>). The one
-    /// timeout covers the intro and both waits. Times out without retrying the teleport: a lost reply is an unknown outcome, not a
-    /// failure to act.
-    /// </summary>
-    public static JsonElement Arrive(GameActor server, GameActor client, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation = default, TimeSpan? settleFor = null, bool skipIntro = true)
-    {
-        var still = settleFor ?? TimeSpan.FromSeconds(3);
-        if (still < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(settleFor));
-        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
-        var support = client.RequireCapability("valheim.world/player-support");
-        var clock = Stopwatch.StartNew();
-        // The intro gets at most a minute of the budget, and never less than the command's one-second minimum.
-        if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
-        Observation? last = null;
-        // Still anywhere, and for long enough: the game drops a teleport while the player is already teleporting and within
-        // 2 s of a spawn or teleport (its cooldown); an attached player (a chair, a ship) or an unfinished observation waits too.
-        TimeSpan? stillSince = null;
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            last = client.Observe(support);
-            RefuseFlying(last);
-            if (!ReadyToTeleport(last, requireGrounded: !skipIntro)) stillSince = null;
-            else if ((stillSince ??= clock.Elapsed) + still <= clock.Elapsed) break;
-            if (clock.Elapsed >= timeout)
-                throw new TimeoutException($"The player never stood still before the teleport within {timeout.TotalSeconds:F0} s; last reading: {last.Data.GetRawText()}. Nothing was teleported.");
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
-        }
-        int peer = OnlyPeer(server);
-        string at = string.Join(" ", new[] { point.X, point.Height + .5f, point.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
-        server.Execute($"cli_teleport_peer {peer} {at}").RequireLine("OK: asked peer", "The server did not accept the teleport");
-        while (clock.Elapsed < timeout)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            last = client.Observe(support);
-            RefuseFlying(last);
-            if (last.Complete && SurfaceProbe.Supported(last, point)) return last.Data.Clone();
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
-        }
-        throw new TimeoutException($"The player did not settle at ({point.X}, {point.Height}, {point.Z}) within {timeout.TotalSeconds:F0} s; last reading: " +
-            (last == null ? "none" : last.Data.GetRawText()) + ". The teleport was not repeated.");
-    }
-
     /// <summary>A flying player is never supported: measuring support or grounding while fly is on is refused, not failed.</summary>
     private static void RefuseFlying(Observation observation)
     {
         if (observation.Complete && observation.Data.TryGetProperty("flying", out var flying) && flying.ValueKind == JsonValueKind.True)
             throw new InvalidOperationException("The player is flying, so support cannot be measured. Fly is for review and visual steps only; turn it off first (SetFly(client, false)).");
-    }
-
-    // Grounded is not required when the intro was skipped: the game's teleport refuses only a player that is already
-    // teleporting or within its cooldown, and a swimming player (grounded false, bobbing at a few centimetres a second) is
-    // teleported like a standing one. With the intro possibly running, grounded is what shows the ride is over.
-    private static bool ReadyToTeleport(Observation observation, bool requireGrounded)
-    {
-        if (!observation.Complete) return false;
-        var d = observation.Data;
-        return (!requireGrounded || d.GetProperty("grounded").GetBoolean()) && !d.GetProperty("attached").GetBoolean() && !d.GetProperty("teleporting").GetBoolean() &&
-            !d.GetProperty("dead").GetBoolean() && d.GetProperty("speed").GetSingle() <= .15f;
     }
 
     /// <summary>

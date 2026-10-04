@@ -32,12 +32,12 @@ public static class VanillaClientScenario
             Capability = Capabilities.UnresolvedPrefabs, Radius = 64, KnownPrefabs = [ControlPlugins.ServerOnlyPrefabName],
             ClientLogs = log == null ? null : () => new[] { new RunLog("client BepInEx log (live)", log, Required: true) },
             ArrivalTimeout = TimeSpan.FromSeconds(client.ArrivalSeconds), CensusTimeout = TimeSpan.FromSeconds(client.ArrivalSeconds),
-            CensusInterval = run.Interval, SettleFor = run.SettleFor, Cancellation = run.Cancellation,
+            CensusInterval = run.Interval, Cancellation = run.Cancellation,
         };
         new ClientRounds
         {
             Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Arrival = CampaignSteps.At(plan.Arrival), ArriveStep = "arrive beside the marker",
-            SettleFor = run.SettleFor, Cancellation = run.Cancellation,
+            Cancellation = run.Cancellation,
         }.Run(run.Server, () => run.OpenClient(client, null),
             measure: round =>
             {

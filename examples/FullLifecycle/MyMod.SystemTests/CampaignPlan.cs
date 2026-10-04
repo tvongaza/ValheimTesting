@@ -148,12 +148,10 @@ public sealed partial class LifecyclePlan
         SameBuildsAs(first, "client A"); SameBuildsAs(second, "client B");
         foreach (var (client, name) in new[] { (first, "client A"), (second, "client B") })
             foreach (string capability in new[] { Capabilities.Markers, Capabilities.MarkerOwner, Capabilities.MarkerOwnerWait,
-                         Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait" })
+                         Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait", CliCapabilities.TeleportSignals })
                 if (!client.Capabilities.Contains(capability, StringComparer.Ordinal))
                     throw new ArgumentException($"The {name} must require {capability} before gameplay.");
         if (!first.Owned || !second.Owned) throw new ArgumentException("The handoff uses two owned, disposable clients; attached personal clients are refused.");
-        if (!first.EventDrivenArrival || !second.EventDrivenArrival)
-            throw new ArgumentException("Both handoff clients require eventDrivenArrival: each teleport waits inside the game, not by polling a remote client.");
         if (first.HostWorld != null || second.HostWorld != null || first.Crossplay || second.Crossplay)
             throw new ArgumentException("Both handoff clients join the dedicated server by address.");
         if (!string.Equals(first.Join, second.Join, StringComparison.OrdinalIgnoreCase))

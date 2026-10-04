@@ -34,6 +34,8 @@ public static class ReviewCapture
         ArgumentNullException.ThrowIfNull(server);
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(clientHost);
+        // Refused before review-begin touches the client: PlayerPlacement.Arrive's deadline is at most 10 minutes.
+        if (arrivalTimeout <= TimeSpan.Zero || arrivalTimeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(arrivalTimeout));
         return CaptureCoreAsync(server, client, plan, clientHost.Shell.Kind,
             (host, local, token) => clientHost.FetchDirectoryAsync(host, local, fetchTimeout, token),
             () => { PlayerPlacement.Protect(client); PlayerPlacement.Arrive(server, client, plan.Arrival, arrivalTimeout, cancellation); },

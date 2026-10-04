@@ -50,7 +50,7 @@ public static class RefusedJoinScenario
 
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Rounds = ["matching"], SettleFor = run.SettleFor, Cancellation = run.Cancellation,
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Rounds = ["matching"], Cancellation = run.Cancellation,
             OpenStep = client.Owned ? "launch the matching owned client to its menu, plugins pinned" : "attach to the operator's matching client at its menu, plugins pinned",
         }.Run(run.Server, () => run.OpenClient(client, MatchingDirectory),
             round => round.Step("the server keeps the matching client connected as its one player", () => PlayerPlacement.OnlyPeer(round.Server)));

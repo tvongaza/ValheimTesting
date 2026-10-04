@@ -45,13 +45,16 @@ public sealed class ZoneCycleTests : IDisposable
 
         public ScriptedTransport Client() => new ScriptedTransport()
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
-            .Extension("valheim.world", "player-support", _ => new
-            {
-                source = "local-player-support", complete = true, x = X, y = Y, z = Z, speed = 0f,
-                grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
-            })
+            .Extension("valheim.world", "player-support", _ => Support())
+            .ArrivalSignals(Support)
             .Extension("mymod.testing", "zones", Zones)
             .Extension("mymod.testing", "marker", _ => new { source = "marker", complete = true, saved = SavedMarker, field = FieldMarker });
+
+        private object Support() => new
+        {
+            source = "local-player-support", complete = true, x = X, y = Y, z = Z, speed = 0f,
+            grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+        };
 
         private object Zones(IReadOnlyList<string> arguments)
         {
@@ -75,7 +78,7 @@ public sealed class ZoneCycleTests : IDisposable
     private static ZoneCycle Cycle(HeightExpectation? away = null, TimeSpan? timeout = null) => new()
     {
         Capability = "mymod.testing/zones", Zones = Site, Away = away ?? FarAway, Back = Home,
-        StepTimeout = timeout ?? TimeSpan.FromSeconds(10), SettleFor = TimeSpan.Zero, Interval = TimeSpan.FromMilliseconds(10),
+        StepTimeout = timeout ?? TimeSpan.FromSeconds(10), Interval = TimeSpan.FromMilliseconds(10),
     };
 
     private static JsonElement Marker(GameActor client) => client.ObserveComplete(client.RequireCapability("mymod.testing/marker"), "marker").Data;
