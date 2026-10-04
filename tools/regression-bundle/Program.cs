@@ -1,4 +1,4 @@
-using Valheim.Testing.Game;
+using Valheim.Testing.Bundles;
 
 // Turns a targeted native regression into a directory for a person to review before sharing it. Publishes nothing.
 //   bundle <bundle.json> <new-dir>     check the evidence and toolkit pin, then write the scrubbed bundle

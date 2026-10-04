@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Valheim.Testing.Bundles;
 using Valheim.Testing.Game;
 using Xunit;
 
@@ -248,13 +249,25 @@ public sealed class RegressionBundleTests : IDisposable
 
     [Fact] public void TheSampleBundleSpecNamesOnlyKnownFields()
     {
-        string sample = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "examples", "RegressionBundle", "bundle.sample.json"));
+        string sample = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "tools", "regression-bundle", "bundle.sample.json"));
         var read = JsonSerializer.Deserialize<BundleSpec>(sample, new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true, UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
         })!;
         Assert.Equal(new[] { "parent", "candidate" }, read.Arms.Keys);
         Assert.Equal("fail", read.Arms["parent"].Expect);
+    }
+
+    [Fact] public void TheGamePackageHoldsNoBundleTypesAndNoHttpClient()
+    {
+        // The bundler is a maintainer tool (tools/regression-bundle); the package a mod's tests reference keeps none of it.
+        var game = typeof(WorldFixture).Assembly;
+        var tool = typeof(RegressionBundle).Assembly;
+        Assert.Equal("RegressionBundle", tool.GetName().Name);
+        string[] moved = tool.GetExportedTypes().Select(type => type.Name).ToArray();
+        Assert.Contains("BundleSpec", moved);
+        Assert.Empty(game.GetExportedTypes().Where(type => moved.Contains(type.Name)).Select(type => type.FullName));
+        Assert.DoesNotContain(game.GetReferencedAssemblies(), name => name.Name == "System.Net.Http");
     }
 
     // ---- the clean build ----

@@ -5,7 +5,9 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
-namespace Valheim.Testing.Game;
+using Valheim.Testing.Game;
+
+namespace Valheim.Testing.Bundles;
 
 /// <summary>
 /// What a public bundle of a targeted native regression is made from, kept beside the private evidence: the runner's
@@ -51,7 +53,7 @@ public sealed class BundleSpec
     {
         path = Path.GetFullPath(path);
         BundleSpec spec;
-        try { spec = ClientPlanFile.Read<BundleSpec>(path); }
+        try { spec = RegressionBundle.ReadStrict<BundleSpec>(path); }
         catch (JsonException error) { throw new ArgumentException($"{path} is not a bundle spec: {error.Message}", error); }
         string directory = Path.GetDirectoryName(path)!;
         string Full(string value) => value.Length == 0 || Path.IsPathFullyQualified(value) ? value : Path.GetFullPath(Path.Combine(directory, value));
@@ -83,7 +85,13 @@ public sealed class BundleSpec
         Toolkit.Validate();
         if (Plugins.Count == 0 || Plugins.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("plugins: list the plugin IDs the issue is about; every other plugin name is refused.");
         if (Arms.Count == 0) throw new ArgumentException("arms: name each arm's evidence directory and declared result.");
-        foreach (var (name, arm) in Arms) { RegressionEnvironment.RequireToken(name, "arms"); arm.Validate("arms." + name); }
+        foreach (var (name, arm) in Arms)
+        {
+            // The rule RegressionEnvironment applies to its arm names, which a bundle's arms repeat.
+            if (!Regex.IsMatch(name, @"^[A-Za-z0-9][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant))
+                throw new ArgumentException($"arms: \"{name}\" is not a name of letters, digits, - and _.");
+            arm.Validate("arms." + name);
+        }
         Native?.Validate(Sources.Select(source => Path.GetFileName(source)).ToList());
         if (Limitations.Count == 0 || Limitations.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("limitations: state what the result does not establish.");
     }
@@ -184,7 +192,7 @@ public interface IBundleSources
 public sealed class PublicBundleSources : IBundleSources
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
-    static PublicBundleSources() => Http.DefaultRequestHeaders.UserAgent.ParseAdd("Valheim.Testing.Game-RegressionBundle");
+    static PublicBundleSources() => Http.DefaultRequestHeaders.UserAgent.ParseAdd("ValheimTesting-regression-bundle");
 
     public IReadOnlyList<string>? PackageVersions(string id)
     {
@@ -239,6 +247,18 @@ public static class RegressionBundle
     public const string ManifestFile = "BUNDLE-MANIFEST.json", ReadmeFile = "README.md", TemplateFile = "regression.template.json", ProbeDirectory = "Probe";
     public const string Package = "Valheim.Testing.Game";
     private static readonly string[] AllowedExtensions = [".cs", ".csproj", ".props", ".targets", ".json", ".md"];
+    // How the toolkit reads plan and environment files (its ClientPlanFile): camelCase, any case, no unknown field.
+    private static readonly JsonSerializerOptions StrictJson = new()
+    {
+        PropertyNameCaseInsensitive = true, UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    /// <summary>Reads a spec or an environment template without validating it, refusing unknown fields.</summary>
+    internal static T ReadStrict<T>(string path) => JsonSerializer.Deserialize<T>(File.ReadAllText(path), StrictJson) ?? throw new ArgumentException("Empty file: " + path);
+
+    // How TargetedRegression writes run-manifest.json.
+    private static readonly JsonSerializerOptions ManifestJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     // Readable files: a person reviews them before sharing, so <placeholders> and apostrophes stay as written.
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -332,7 +352,7 @@ public static class RegressionBundle
         var environment = spec.Environment == null ? null : RegressionEnvironment.Read(spec.Environment);
         string template = Path.Combine(Path.GetFullPath(bundle), TemplateFile);
         RegressionEnvironment? bundled = null;
-        try { bundled = ClientPlanFile.Read<RegressionEnvironment>(template); }
+        try { bundled = ReadStrict<RegressionEnvironment>(template); }
         catch (Exception error) when (error is IOException or JsonException or ArgumentException) { }
         Verify(bundle, spec, environment, CheckEvidence(spec, environment, bundled));
     }
@@ -365,7 +385,7 @@ public static class RegressionBundle
         }
         try
         {
-            foreach (string problem in TemplateProblems(ClientPlanFile.Read<RegressionEnvironment>(Path.Combine(bundle, TemplateFile)))) problems.Add($"{TemplateFile}: {problem}");
+            foreach (string problem in TemplateProblems(ReadStrict<RegressionEnvironment>(Path.Combine(bundle, TemplateFile)))) problems.Add($"{TemplateFile}: {problem}");
         }
         catch (Exception error) when (error is IOException or JsonException or ArgumentException) { problems.Add($"{TemplateFile}: missing or not an environment manifest ({error.Message})"); }
         problems.AddRange(Scrub(bundle, actual, RulesFor(spec, environment, evidence)));
@@ -549,7 +569,7 @@ public static class RegressionBundle
 
         // Which build ran: every source that records it must agree, and the declared values must be among them.
         string manifestPath = Path.Combine(arm.Evidence, "run-manifest.json");
-        RunManifest? run = File.Exists(manifestPath) ? JsonSerializer.Deserialize<RunManifest>(File.ReadAllText(manifestPath), TargetedRegression.ManifestJson) : null;
+        RunManifest? run = File.Exists(manifestPath) ? JsonSerializer.Deserialize<RunManifest>(File.ReadAllText(manifestPath), ManifestJson) : null;
         if (run != null && run.Arm != name) throw new InvalidOperationException($"{where}: run-manifest.json is arm {run.Arm}'s.");
         var declared = environment?.Mod.Arms[name];
         // The first source that records a value, after every source that records it agrees (case aside).
@@ -788,7 +808,7 @@ public static class RegressionBundle
     private static (RegressionEnvironment Template, List<string> Replaced) ReadTemplate(string path)
     {
         RegressionEnvironment template;
-        try { template = ClientPlanFile.Read<RegressionEnvironment>(path); }
+        try { template = ReadStrict<RegressionEnvironment>(path); }
         catch (JsonException error) { throw new ArgumentException($"template: {path} is not an environment manifest's shape: {error.Message}", error); }
         var problems = TemplateProblems(template).ToList();
         if (problems.Count != 0) throw new InvalidOperationException($"template: {path} holds machine-specific values; make each a <...> placeholder: " + string.Join("; ", problems));
