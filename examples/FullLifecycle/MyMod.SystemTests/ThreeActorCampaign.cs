@@ -22,6 +22,7 @@ public static class ThreeActorCampaign
             Console.Error.WriteLine("Usage: MyMod.SystemTests campaign check <campaign.json> <scenario-template.json> | campaign run <campaign.json> <scenario-template.json> <new-output-directory>");
             return 2;
         }
+        using var cancellation = new RunCancellation();
         try
         {
             HostedCampaignPreparation.Check(manifestFile);
@@ -57,7 +58,7 @@ public static class ThreeActorCampaign
             Directory.CreateDirectory(output);
             var clock = Stopwatch.StartNew();
             var prepared = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(output, "prepared"),
-                TimeSpan.FromMinutes(10)).ConfigureAwait(false);
+                TimeSpan.FromMinutes(10), cancellation: cancellation.Token).ConfigureAwait(false);
             double preparationSeconds = clock.Elapsed.TotalSeconds;
             Console.WriteLine($"Campaign preparation: {preparationSeconds:F1}s for {manifest.Clients.Count + 1} actors.");
             int result;
@@ -112,6 +113,11 @@ public static class ThreeActorCampaign
         {
             Console.Error.WriteLine("Campaign setup: " + error.Message);
             return 2;
+        }
+        catch (OperationCanceledException) when (cancellation.Token.IsCancellationRequested)
+        {
+            Console.Error.WriteLine("Campaign setup was interrupted; owned preparation cleanup was attempted before exit.");
+            return 130;
         }
     }
 
