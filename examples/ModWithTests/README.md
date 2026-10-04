@@ -1,5 +1,7 @@
 # First test of your mod's code
 
+**Audience:** a mod author starting to test. **Concept:** unit-test the source file the mod ships, with shared game doubles.
+
 This is a miniature mod source tree plus a complete xUnit consumer project. It tests the **same source file the mod would ship**, using game doubles supplied by a NuGet source package. It needs the .NET 10 SDK and package restore access, but no Valheim, Steam, Unity, ValheimCLI or server. No plugin is built or installed.
 
 ## Run this example

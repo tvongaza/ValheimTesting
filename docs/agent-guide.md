@@ -9,13 +9,13 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Task | Start here | What success does not prove |
 |---|---|---|
 | Test source that uses game types | [ModWithTests](../examples/ModWithTests/README.md), the complete source-linked xUnit example | Unmodeled game behavior or native physics |
-| Test a mod decision on declared terrain | [NoGameTerrain](../examples/NoGameTerrain/README.md), then call real mod code from its own tests | Native noise, physics or save encoding |
+| Test a mod decision on declared terrain | [ModWithTests](../examples/ModWithTests/README.md) with declared terrain such as [SharedWorld](../examples/SharedWorld/README.md)'s, calling real mod code from its own tests | Native noise, physics or save encoding |
 | Test driver failure/cleanup behavior | [Library tests](../tests/Valheim.Testing.Tests), controlled transports | Runtime Harmony/RPC timing |
-| Read a game sample | [GameObserve](../examples/GameObserve/README.md) | That the sampled value is independently correct |
-| Compare generator or loaded ground | [TerrainCheck](../examples/TerrainCheck/README.md) | Collider, paint or walking behavior |
+| Read a game sample | [ObserveCheck `capture`](../examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay) | That the sampled value is independently correct |
+| Compare generator or loaded ground | [ObserveCheck `ground`](../examples/ObserveCheck/README.md#ground-generator-or-loaded-ground-heights) | Collider, paint or walking behavior |
 | Review a pinned dump as a picture | [`TerrainRenderer` with contours](shared-world.md#render-a-terrain-for-review); ValheimCLI's `examples/world-map.py` for the topographic map | The pictured interpolation or rendered colour being native gameplay evidence |
-| Compare client ground and support | [ClientSurfaceCheck](../examples/ClientSurfaceCheck/README.md) | Human usability |
-| Compare loaded paint | [PaintCheck](../examples/PaintCheck/README.md) | Rendered appearance or every biome's alpha meaning |
+| Compare client ground and support | [ObserveCheck `surface`](../examples/ObserveCheck/README.md#surface-a-clients-ground-collider-and-support) | Human usability |
+| Compare loaded paint | [ObserveCheck `paint`](../examples/ObserveCheck/README.md#paint-loaded-paint-channels) | Rendered appearance or every biome's alpha meaning |
 | Capture a named loaded-terrain site before/after or on failure | [Terrain site snapshots](terrain-site-snapshots.md) | Generator height, ZDO state or human usability |
 | Capture saved objects, containers and loaded structures near a site | [Area object snapshots](area-object-snapshots.md) | Terrain/paint or a mod-specific correctness verdict |
 | Find a run's evidence: snapshots, review stills and clips, round JSON | [Evidence linked from result.json](evidence.md) | That any picture looks right; a human verdict is recorded separately |
@@ -23,8 +23,8 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Load a mod or isolate a mod-set conflict | [NativeSmoke](../examples/NativeSmoke/README.md) through [Debugging mods](debugging-mods.md): `valheim-test server-load`, `server-load-ab` or `start` | The mod's gameplay behavior or which mod owns a conflict |
 | Prepare a dedicated server and multiple owned clients | [FullLifecycle three-actor campaign](../examples/FullLifecycle/README.md#prepare-the-campaign): reviewed per-role locks, separate character/account hosts, strict pins, one run command | An arbitrary mod's gameplay correctness; the small sample is a setup smoke |
 | Share a native regression's source and result | [RegressionBundle](../examples/RegressionBundle/README.md): a scrubbed directory for review, never published | That a ported runner's harness ran natively, or that no private detail outside its rules remains |
-| Exercise extension replacement | [ReloadCheck](../examples/ReloadCheck/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
-| Collect walking evidence | [WalkingReview](../examples/WalkingReview/README.md) | Acceptance without a separate human verdict |
+| Exercise extension replacement | [tools/reload-check](../tools/reload-check/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
+| Collect walking evidence | [ObserveCheck `walk`](../examples/ObserveCheck/README.md#walk-record-a-person-walking-a-route) | Acceptance without a separate human verdict |
 | Collect a short world-only motion clip | [FullLifecycle human review](../examples/FullLifecycle/README.md#bounded-motion-evidence) | UI implemented on an unexpected scene layer, or a visual verdict without watching the clip |
 
 Use an existing mod-owned scenario when one fits. [Roads scenarios](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) cover empty saves, pending bridge respawn, terrain and paint. [MWL scenarios](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) cover full-mode port probes; their bounded full-mode payment/delivery/ownership gate now passes. Server-only MWL cannot validate ports.
@@ -81,7 +81,7 @@ Assume a native ValheimCLI test may need cheat access, even for a read-only comm
 ## Bounded paint/reload recipe
 
 1. Have the fixture owner prepare a small declared road/paint profile, preserving pre-write inputs and expected results. The observer does not write or load terrain. Use a stable saved paint baseline; an ungenerated zone's initial paint may not be a stable client-arrival expectation.
-2. Run PaintCheck against the loaded ValheimCLI-only client with exact pins and a new output directory. Pair it with ClientSurfaceCheck if collision/height is in scope.
+2. Run ObserveCheck's `paint` probe against the loaded ValheimCLI-only client with exact pins and a new output directory. Pair it with the `surface` probe if collision/height is in scope.
 3. Test the same observation with deliberately unchanged pre-road expectations. Only intentionally changed samples should fail; keep the negative report labelled separately.
 4. Confirm a save, leave the world, restart only the owned server, rejoin and reverify pins/readiness/arrival. Repeat the **original** expectation plan in another new output directory.
 5. Inspect every result, incomplete sample and game warning/error. Retain the original failed attempts; do not silently replace evidence or use a saved report from an older DLL.
@@ -105,9 +105,9 @@ Inspect evidence before publishing: logs may expose account identifiers, local p
 
 ## Captured inputs and session capabilities
 
-Use [TerrainCapture](../examples/TerrainCapture/README.md) for a bounded `valheim.world/terrain-grid` observation and validated exact replay. Keep generator and loaded-ground layers distinct. A replay is input, not an independent expected result. To choose test sites on a world the game has just created, `SiteSearch.Find(server, worldUid, grids, enough)` reads generator grids through `TerrainCapture` in order, each required to come from the pinned world, until the mod's own rule is satisfied, and `SiteSearch.Nearest` picks the sample closest to the world's centre with an order-independent tie-break ([FullLifecycle](../examples/FullLifecycle/README.md)'s `prepare-server`).
+Use [ObserveCheck `capture`](../examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay) for a bounded `valheim.world/terrain-grid` observation and validated exact replay. Keep generator and loaded-ground layers distinct. A replay is input, not an independent expected result. To choose test sites on a world the game has just created, `SiteSearch.Find(server, worldUid, grids, enough)` reads generator grids through `TerrainCapture` in order, each required to come from the pinned world, until the mod's own rule is satisfied, and `SiteSearch.Nearest` picks the sample closest to the world's centre with an order-independent tie-break ([FullLifecycle](../examples/FullLifecycle/README.md)'s `prepare-server`).
 
-Use [SessionControl](../examples/SessionControl/README.md) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. These capabilities passed the [bounded native campaign](native-validation-20260927.md); mod readiness and human usability remain separate.
+Use [ObserveCheck `session`](../examples/ObserveCheck/README.md#session-state-save-join-leave) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. These capabilities passed the [bounded native campaign](native-validation-20260927.md); mod readiness and human usability remain separate.
 
 ## Require strict expectations
 

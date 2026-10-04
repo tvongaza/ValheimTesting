@@ -1,6 +1,6 @@
 # Linux game client host
 
-A container image for running the **Valheim game client** on a Linux machine with an NVIDIA GPU, so native client checks (ValheimCLI, [ClientSurfaceCheck](../../examples/ClientSurfaceCheck), [PaintCheck](../../examples/PaintCheck)) can run on rented or remote hardware. It is the client-side counterpart of [`docker/linux-server`](../linux-server/README.md).
+A container image for running the **Valheim game client** on a Linux machine with an NVIDIA GPU, so native client checks (ValheimCLI, [ObserveCheck `surface`](../../examples/ObserveCheck/README.md#surface-a-clients-ground-collider-and-support), [ObserveCheck `paint`](../../examples/ObserveCheck/README.md#paint-loaded-paint-channels)) can run on rented or remote hardware. It is the client-side counterpart of [`docker/linux-server`](../linux-server/README.md).
 
 It contains no credentials and no game files, so this repository's workflow publishes it to GHCR as `valheim-linux-client` (`ghcr.io/<owner>/valheim-linux-client`, see the repository's Packages). You bring your own Steam account (which must own Valheim), approve its logins by QR code, and the game is downloaded when the container runs.
 

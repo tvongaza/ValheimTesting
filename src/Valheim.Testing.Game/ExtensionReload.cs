@@ -5,7 +5,7 @@ namespace Valheim.Testing.Game;
 public sealed record ExtensionInstance(string Id, string Version, string Instance);
 
 /// <summary>
-/// The steps of a hot-reload smoke test of a game-side extension (see examples/ReloadCheck): replace the extension's DLL
+/// The steps of a hot-reload smoke test of a game-side extension (see tools/reload-check): replace the extension's DLL
 /// in the reloader's watched directory without it ever seeing a half-written file, then wait until the replacement has
 /// registered as a new instance, or until a removed extension is gone. Waiting re-reads <c>cli_extensions</c> (read-only)
 /// at an interval, because a registration announces itself nowhere else. Use a <see cref="GameActor"/> whose pins allow

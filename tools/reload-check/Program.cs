@@ -4,7 +4,7 @@ using System.Text.Json;
 using Valheim.Testing.Game;
 using valheim_cli.Testing;
 
-// Attach to an already owned disposable game. This example never starts/stops it.
+// Attach to an already owned disposable game. This check never starts/stops it.
 // ScriptEngine must watch ONLY this probe; the CLI core remains in plugins/.
 if (args.Length != 6)
 {

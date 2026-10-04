@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The image's boot check (native-linux.yml, native-server-checks.sh smoke); built from this repository, never packed. -->
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><RollForward>Major</RollForward><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" /></ItemGroup>
+</Project>

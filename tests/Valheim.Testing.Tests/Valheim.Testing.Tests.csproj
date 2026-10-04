@@ -17,6 +17,8 @@
     <Compile Include="../../examples/NativeSmoke/SmokeInputs.cs" Link="NativeSmoke/SmokeInputs.cs" />
     <Compile Include="../../examples/NativeSmoke/SmokeProject.cs" Link="NativeSmoke/SmokeProject.cs" />
     <Compile Include="../../tools/dev-loop/dev-loop.cs" Link="DevLoop/dev-loop.cs" />
+    <!-- The ObserveCheck example's flow without its CliTransport entry point (ObserveCheckTests). -->
+    <Compile Include="../../examples/ObserveCheck/ObserveCheck.cs" Link="ObserveCheck/ObserveCheck.cs" />
     <!-- Compiles small ValheimCLI-shaped assemblies at test time for the capability manifest tests; none is committed. -->
     <!-- Real native dumps and the manifests the capture writes for them; byte-exact (see the directory's .gitattributes). -->
     <None Include="Fixtures/WorldDump/*.csv;Fixtures/WorldDump/*.json" CopyToOutputDirectory="PreserveNewest" />

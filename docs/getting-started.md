@@ -85,7 +85,7 @@ External runners are console programs. To run one from the IDE, set its command-
 
 ## 2. Keep broad coverage in unit tests
 
-For a test of actual mod source, start with [`ModWithTests`](../examples/ModWithTests/README.md). For an introduction to independent terrain expectations, use [`NoGameTerrain`](../examples/NoGameTerrain/README.md). Its executable checks hand-derived heights on a plane, replays captured inputs, and refuses a missing biome instead of inventing one.
+For a test of actual mod source, start with [`ModWithTests`](../examples/ModWithTests/README.md). For independent terrain expectations, use [`SharedWorld`](../examples/SharedWorld/README.md): declared terrain, zone seams and a grid dump checked against its source, with no game. `ReplayTerrain` and `TerrainCapture.Load` replay captured inputs exactly and refuse a missing biome instead of inventing one.
 
 In your own tests, feed these small terrain inputs into the real mod decisions. Keep expectations independent of the algorithm under test. A plane or replay is not a replacement for Valheim's generator, Unity physics, native save encoding or networking.
 
@@ -138,7 +138,7 @@ The [Roads scenario guide](https://github.com/tvongaza/ProceduralRoads/blob/revi
 
 ### On Linux, macOS or in a container
 
-The dedicated server also runs on Linux. Build the launch with `ServerLaunch.CreateStartInfo(runtime, arguments, environment)` (Game preview.11 onward) and pass it to `DirectServerProcess` as on Windows. It detects the platform from the runtime's executable, refuses a runtime with both or neither, and on Linux sets BepInEx's Doorstop variables and prepends to `LD_LIBRARY_PATH`/`LD_PRELOAD` without dropping existing entries. The [Linux image](../docker/linux-server/README.md) installs the free dedicated server with anonymous SteamCMD and BepInEx at build time; [LinuxServerSmoke](../examples/LinuxServerSmoke/README.md) is the smallest runner for it.
+The dedicated server also runs on Linux. Build the launch with `ServerLaunch.CreateStartInfo(runtime, arguments, environment)` (Game preview.11 onward) and pass it to `DirectServerProcess` as on Windows. It detects the platform from the runtime's executable, refuses a runtime with both or neither, and on Linux sets BepInEx's Doorstop variables and prepends to `LD_LIBRARY_PATH`/`LD_PRELOAD` without dropping existing entries. The [Linux image](../docker/linux-server/README.md) installs the free dedicated server with anonymous SteamCMD and BepInEx at build time; [LinuxServerSmoke](../docker/linux-server/smoke/README.md) is the smallest runner for it.
 
 What works: owned dedicated-server native checks on Linux, locally or in CI; the image and smoke were verified on a Linux x86-64 Docker host on 28 September 2026. The separate [Linux client container](../docker/linux-client/README.md) supports native clients on NVIDIA GPU hosts with a display and authenticated Steam session. General remote-host orchestration remains outside the library. The **server** image contains game files; keep it local or inside the CI job and never publish it. The published client base image contains no game files; do not publish it after installing the game.
 
@@ -189,7 +189,7 @@ Two Mac session limits apply to any owned Mac client, native or not. The client 
 
 Most comparison examples take a new output directory and write `result.json`, `junit.xml`, command transcripts and residuals. Exit 0 establishes only that tool's assertions. The example READMEs describe their outputs and effects. Inspect game logs too; a passing scenario does not certify every loaded mod.
 
-[WalkingReview](../examples/WalkingReview/README.md) records a person moving normally. A qualifying trace still needs a human verdict on usability and appearance. Small cosmetic bumps can be accepted; a test need not demand a perfect road.
+[ObserveCheck `walk`](../examples/ObserveCheck/README.md#walk-record-a-person-walking-a-route) records a person moving normally. A qualifying trace still needs a human verdict on usability and appearance. Small cosmetic bumps can be accepted; a test need not demand a perfect road.
 
 Attachment examples never claim or restore the machine and do not own an existing game process. Owned session tools stop only processes they started; their disposable copies and reports remain for inspection. The operator owns machine/account coordination, backups, protection and restoration. Review reports for private account/world data before publishing.
 

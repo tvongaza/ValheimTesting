@@ -2,8 +2,8 @@
 //
 //   dotnet run scripts/validate.cs
 //
-// Runs the library tests, compiles the adapter source package against reference stubs, builds every example,
-// executes the two no-game examples, packs the libraries into the local feed and runs scripts/consumer.cs --feed local:
+// Runs the library tests, compiles the adapter source package against reference stubs, builds every example and tool,
+// executes the no-game example (SharedWorld), packs the libraries into the local feed and runs scripts/consumer.cs --feed local:
 // a consumer outside this checkout of exactly the packages just packed.
 //
 // Each command is announced with the time and its duration. A test run that makes no progress for five minutes is stopped
@@ -27,11 +27,12 @@ Test("tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj
 // The adapter source is compiled into a mod's game-side adapter against the game; here, against declared signatures
 // and the real HarmonyX (see the project for what that does and does not prove).
 Run("dotnet", "build", "tests/Valheim.Testing.Adapter.CompileCheck/Valheim.Testing.Adapter.CompileCheck.csproj", "-c", "Release", "-m:1");
-Run("dotnet", "build", Solution("examples", Directory.GetFiles(Path.Combine(root, "examples"), "*.csproj", SearchOption.AllDirectories)
-    .Where(p => Path.GetDirectoryName(Path.GetDirectoryName(p)) == Path.Combine(root, "examples"))), "-c", "Release", "-nodeReuse:false");
+// Every example and maintainer tool one directory down, and the Linux image's boot check (docker/linux-server/smoke).
+Run("dotnet", "build", Solution("examples", new[] { "examples", "tools" }
+    .SelectMany(dir => Directory.GetDirectories(Path.Combine(root, dir)).SelectMany(sub => Directory.GetFiles(sub, "*.csproj")))
+    .Append(Path.Combine(root, "docker", "linux-server", "smoke", "LinuxServerSmoke.csproj"))), "-c", "Release", "-nodeReuse:false");
 // The full-life-cycle example's external projects; its game-side mod and adapter need a game install and build elsewhere.
 Test("examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj");
-Run("dotnet", "run", "--project", "examples/NoGameTerrain", "-c", "Release", "--no-build");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
 Run("dotnet", "pack", Solution("packages", new[] { "Valheim.Testing", "Valheim.Testing.Doubles", "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool" }
     .Select(name => $"src/{name}/{name}.csproj").Append("examples/NativeSmoke/NativeSmoke.csproj")),

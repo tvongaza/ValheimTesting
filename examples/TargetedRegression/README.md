@@ -1,5 +1,7 @@
 # Targeted native regression
 
+**Audience:** a mod author checking one fix in the real game. **Concept:** A/B regression of a parent and a candidate build.
+
 A copyable template for a small A/B regression in the real game: **one owned client hosts one disposable fixture world with one mod under test**, once with the parent build and once with the candidate. You fill in a short manifest, get a preflight result **without opening the game**, then run each arm through the toolkit's strict-pinned hosted [`ClientRounds`](../../docs/testing-toolkit.md#hosted-listen-server-worlds) runner. Restarts, dedicated servers and several clients belong in [FullLifecycle](../FullLifecycle/README.md) instead.
 
 | File | What it is | Change it? |

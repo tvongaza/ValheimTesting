@@ -5,7 +5,7 @@
     drops the "removed" command. It compiles against your game install (-p:ValheimPath=) and the exact ValheimCLI core the
     game runs (-p:CliDll=), never in this repository or its CI. The symbols are embedded: ScriptEngine expects them.
   -->
-  <Import Project="../../../tools/game-references/Valheim.GameReferences.props" />
+  <Import Project="../../game-references/Valheim.GameReferences.props" />
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
     <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
@@ -13,5 +13,5 @@
     <UseValheimCli>true</UseValheimCli>
     <DefineConstants Condition="'$(ProbeRevision)' == 'B'">$(DefineConstants);PROBE_B</DefineConstants>
   </PropertyGroup>
-  <Import Project="../../../tools/game-references/Valheim.GameReferences.targets" />
+  <Import Project="../../game-references/Valheim.GameReferences.targets" />
 </Project>
