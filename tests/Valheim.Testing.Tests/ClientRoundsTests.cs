@@ -140,13 +140,11 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("x64", report.Provenance["clientArchitecture"]);
     }
 
-    [Fact] public void JoinedEventDrivenRoundsKeepOneWaitAndTracePerHopWithoutFastMode()
+    [Fact] public void JoinedEventDrivenRoundsKeepOneWaitAndTracePerHop()
     {
         var plan = Plan();
         plan.EventDrivenArrival = true;
-        _client.On("cli_teleport_test_mode on", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=True"))
-            .On("cli_teleport_test_mode off", _ => ScriptedTransport.Ok("OK: testFastTeleport enabled=False"))
-            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
+        _client.OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
             .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
             .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3400 floorReadyMs=3450 doneMs=3500 floorAtDone=True final=100,42.5,-40"))
             .Extension("valheim.world", "player-support-wait", _ => new
@@ -171,43 +169,6 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(3450, trace.RootElement.GetProperty("FloorReadyMs").GetInt64());
         Assert.Equal(3500, trace.RootElement.GetProperty("DoneMs").GetInt64());
         Assert.Equal("game-side signal", report.Provenance["arrivalWait"]);
-        Assert.Equal("False", report.Provenance["testFastTeleport"]);
-    }
-
-    [Fact] public void FastTeleportRequiresAnOwnedPinnedSignalRun()
-    {
-        var plan = Plan();
-        plan.FastTestTeleports = true;
-        Assert.Contains("eventDrivenArrival", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
-        plan.EventDrivenArrival = true;
-        plan.Mode = "attach";
-        plan.Install = "";
-        Assert.Contains("owned", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
-        plan.Mode = "owned";
-        plan.Install = Path.GetFullPath("client-install");
-        plan.Pinning = "none";
-        Assert.Contains("strictly pinned", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
-    }
-
-    [Fact] public void AJoinedFastTeleportIsRefusedBeforeOpeningTheClientOrMovingThePlayer()
-    {
-        var plan = Plan();
-        plan.EventDrivenArrival = true;
-        plan.FastTestTeleports = true;
-        Assert.Contains("hostWorld.local", Assert.Throws<ArgumentException>(() =>
-            Rounds(new ScenarioReport("guard"), plan).Run(Server(), Open(plan), Measure())).Message);
-        Assert.Equal(0, _opens);
-        Assert.Equal(0, _servers.Sum(server => server.Count("cli_teleport_peer")));
-    }
-
-    [Fact] public void DirectRoundCallCannotBypassFastTeleportPlanGuard()
-    {
-        var plan = Plan();
-        plan.FastTestTeleports = true;
-        Assert.Contains("eventDrivenArrival", Assert.Throws<ArgumentException>(() =>
-            Rounds(new ScenarioReport("guard"), plan).Run(Server(), Open(plan), Measure())).Message);
-        Assert.Equal(0, _opens);
-        Assert.Equal(0, _servers.Sum(server => server.Count("cli_teleport_peer")));
     }
 
     [Theory] [InlineData("owned", "arm64", "arm64")] [InlineData("owned", "x64", "x64")] [InlineData("attach", "", "attached")]

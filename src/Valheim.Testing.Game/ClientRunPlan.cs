@@ -52,31 +52,25 @@ public sealed class ClientRunPlan
     // Removed (#298): direct start and prepared-character start saved 0.07 s over the menu start. A plan that still names
     // one is refused with what to do instead of the generic unknown-field error.
     [JsonInclude, JsonPropertyName("directStart"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedDirectStart { get => null; set => throw Removed("directStart"); }
+    private JsonElement? RemovedDirectStart { get => null; set => throw Removed("directStart", 298, StartInstead); }
     [JsonInclude, JsonPropertyName("directStartWorldUid"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedDirectStartWorldUid { get => null; set => throw Removed("directStartWorldUid"); }
+    private JsonElement? RemovedDirectStartWorldUid { get => null; set => throw Removed("directStartWorldUid", 298, StartInstead); }
     [JsonInclude, JsonPropertyName("startAtCharacterSave"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedStartAtCharacterSave { get => null; set => throw Removed("startAtCharacterSave"); }
+    private JsonElement? RemovedStartAtCharacterSave { get => null; set => throw Removed("startAtCharacterSave", 298, StartInstead); }
     [JsonInclude, JsonPropertyName("characterStart"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedCharacterStart { get => null; set => throw Removed("characterStart"); }
-    private static ArgumentException Removed(string field) => new(
-        $"The client plan's {field} was removed (ValheimTesting #298): an owned client launches to its menu and joins (or hosts), " +
-        "and the first arrival teleports. Delete directStart, directStartWorldUid, startAtCharacterSave and characterStart from the plan.");
+    private JsonElement? RemovedCharacterStart { get => null; set => throw Removed("characterStart", 298, StartInstead); }
+    private const string StartInstead = "an owned client launches to its menu and joins (or hosts), and the first arrival teleports";
+    private static ArgumentException Removed(string field, int issue, string instead) =>
+        new($"The client plan's {field} was removed (ValheimTesting #{issue}): {instead}. Delete {field} from the plan.");
     /// <summary>
     /// Use ValheimCLI's bounded, game-side teleport readiness and support waits for arrival instead of repeated
-    /// remote observations. Requires the current Standard and World Tools packs. The ordinary game teleport timing
-    /// remains in force unless <see cref="FastTestTeleports"/> is also selected.
+    /// remote observations. Requires the current Standard and World Tools packs. The game's ordinary teleport timing applies.
     /// </summary>
     public bool EventDrivenArrival { get; set; }
-    /// <summary>
-    /// Owned, strictly pinned test clients only: allow ValheimCLI to complete a distant teleport once the game's
-    /// area and floor checks pass after its initial movement. The test launch sets its opt-in environment marker;
-    /// the runner switches the mode on for each arrival hop and off once it lands. This does not preload terrain or
-    /// bypass support checks. Only a client running its own local fixture world may use it. A joined client's area
-    /// check covers only objects the server has already sent: a native cold hop finished while its site marker had
-    /// not arrived, so joined clients are refused before launch.
-    /// </summary>
-    public bool FastTestTeleports { get; set; }
+    // Removed (#299): no library runner could reach fastTestTeleports after #239 (it required hostWorld.local, which
+    // ClientRounds refuses, and HostRounds never used signal arrival).
+    [JsonInclude, JsonPropertyName("fastTestTeleports"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedFastTestTeleports { get => null; set => throw Removed("fastTestTeleports", 299, "no runner could use it; arrival uses the game's ordinary teleport timing"); }
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
     public string? PasswordVariable { get; set; }
     public int StartSeconds { get; set; } = 300;
@@ -152,7 +146,6 @@ public sealed class ClientRunPlan
     {
         bool pinned = Pinned;
         if (Mode is not ("owned" or "attach")) throw new ArgumentException("Client mode is owned or attach.");
-        CheckTestTeleportOptions();
         // The install is a path on the client's machine, which with an environment profile is not this one (a Windows
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
@@ -237,14 +230,6 @@ public sealed class ClientRunPlan
     /// </summary>
     public void Preflight() => Preflight([]);
 
-    internal void CheckTestTeleportOptions()
-    {
-        if (FastTestTeleports && (!EventDrivenArrival || !Owned || !Pinned))
-            throw new ArgumentException("fastTestTeleports requires eventDrivenArrival and an owned, strictly pinned test client.");
-        if (FastTestTeleports && HostWorld?.Local != true)
-            throw new ArgumentException("fastTestTeleports requires hostWorld.local: a joined client's cold destination can arrive after fast teleport completion. Use ordinary teleport timing for joined clients.");
-    }
-
     /// <summary>Everything the launch and arrival code needs from the pinned ValheimCLI set.</summary>
     internal IEnumerable<string> RequiredCliCapabilities => Capabilities
         .Concat(EventDrivenArrival ? ["valheim.world/player-support-wait", CliCapabilities.TeleportSignals] : []);
@@ -256,7 +241,6 @@ public sealed class ClientRunPlan
     public void Preflight(IEnumerable<string> capabilities)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
-        CheckTestTeleportOptions();
         var identity = HostWorld?.Preflight();
         if (Owned) CheckOwnedInstall(identity?.Name, capabilities);
     }
