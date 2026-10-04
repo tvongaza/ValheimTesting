@@ -214,7 +214,8 @@ public sealed class GameActor : IDisposable
     public JsonElement Invoke(Capability command, params string[] arguments)
     {
         if (arguments.Any(x => x.Any(char.IsWhiteSpace) || x.Length == 0)) throw new ArgumentException("Extension arguments must be single tokens in preview 1.");
-        var reply = Execute("cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments)));
+        // ParseInvocation checks success itself, after reading a failed extension's own code and message.
+        var reply = Execute("cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments)), requireSuccess: false);
         return ParseInvocation(command, reply);
     }
     /// <summary>
@@ -242,12 +243,24 @@ public sealed class GameActor : IDisposable
     }
     private static JsonElement ParseInvocation(Capability command, CommandResult reply)
     {
+        // A failed extension's own code and message are in its structured result; ValheimCLI's closing ERROR line only
+        // says "see structured result", so read that first.
+        if (!reply.Ok && reply.Output.Count(x => x.StartsWith("EXTENSION_RESULT ", StringComparison.Ordinal)) == 1)
+        {
+            using var failed = ParseLine(reply, "EXTENSION_RESULT ");
+            if (failed.RootElement.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False) throw ExtensionFailed(command, failed.RootElement);
+        }
         RequireSuccess(reply);
         using var document = ParseLine(reply, "EXTENSION_RESULT "); var root = document.RootElement;
-        if (!root.GetProperty("ok").GetBoolean()) throw new InvalidOperationException("Extension returned an error.");
+        if (!root.GetProperty("ok").GetBoolean()) throw ExtensionFailed(command, root);
         if (root.GetProperty("schemaVersion").GetInt32() != command.SchemaVersion || root.GetProperty("instance").GetString() != command.Instance ||
             root.GetProperty("extension").GetString() != command.Path.Split('/')[0]) throw new InvalidOperationException("Extension changed; explicitly rediscover capabilities after reload.");
         return root.GetProperty("data").Clone();
+    }
+    private static InvalidOperationException ExtensionFailed(Capability command, JsonElement result)
+    {
+        static string? Text(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        return new InvalidOperationException($"{command.Path} failed: {Text(result, "code") ?? "no code"}: {Text(result, "message") ?? "no message"}");
     }
     public Observation Observe(Capability command, params string[] arguments)
     {

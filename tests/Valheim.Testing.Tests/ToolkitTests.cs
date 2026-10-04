@@ -113,6 +113,19 @@ public class ToolkitTests
         using var actor = new GameActor("server", fake); actor.VerifyEnvironment("cli_expect plugin=0123456789abcdef0123456789abcdef");
         Assert.Throws<InvalidOperationException>(() => actor.Invoke(new("roads/query", "old", true, 1)));
     }
+    [Fact] public void AFailedExtensionIsReportedWithItsOwnCodeAndMessage()
+    {
+        var fake = new Fake();
+        using var actor = new GameActor("server", fake); actor.VerifyEnvironment("cli_expect plugin=0123456789abcdef0123456789abcdef");
+        // As ValheimCLI answers a failed extension: the structured result, then an ERROR line pointing at it.
+        fake.CommandsOk = false;
+        fake.Output = ["EXTENSION_RESULT {\"schemaVersion\":1,\"ok\":false,\"extension\":\"mymod.testing\",\"instance\":\"a\",\"code\":\"result_too_large\",\"message\":\"The census of Mod_ is larger than ValheimCLI's 256 KiB extension result.\",\"data\":{}}",
+            "ERROR: code=result_too_large message=Extension failed; see structured result."];
+        var error = Assert.Throws<InvalidOperationException>(() => actor.Invoke(new("mymod.testing/content-census", "a", true, 1), "owner", "Mod_"));
+        Assert.Equal("mymod.testing/content-census failed: result_too_large: The census of Mod_ is larger than ValheimCLI's 256 KiB extension result.", error.Message);
+        fake.Output = ["ERROR: code=transport_required message=Use the CLI connection."]; // no structured result: the reply's own error
+        Assert.Equal("test_error: ", Assert.Throws<InvalidOperationException>(() => actor.Invoke(new("mymod.testing/content-census", "a", true, 1), "owner", "Mod_")).Message[..12]);
+    }
     [Fact] public void MutatingCapabilityCannotBePolled()
     {
         using var actor = new GameActor("server", new Fake()); Assert.Throws<InvalidOperationException>(() => actor.Observe(new("roads/change", "a", false, 1)));
@@ -125,8 +138,10 @@ public class ToolkitTests
     }
     private sealed class Fake : IGameTransport
     {
-        public bool Ok = true; public List<string> Output = [];
-        public CommandResult Execute(string command, TimeSpan timeout) => new() { Ok = Ok, Output = command.StartsWith("cli_expect ") ? ["OK: EXPECT"] : Output, ErrorCode = "test_error" };
+        public bool Ok = true; public bool CommandsOk = true; public List<string> Output = []; // CommandsOk: every command but the pin check
+        public CommandResult Execute(string command, TimeSpan timeout) => command.StartsWith("cli_expect ")
+            ? new() { Ok = Ok, Output = ["OK: EXPECT"], ErrorCode = "test_error" }
+            : new() { Ok = Ok && CommandsOk, Output = Output, ErrorCode = "test_error" };
         public void Dispose() { }
     }
     private sealed class Directories : IDisposable
