@@ -23,7 +23,7 @@ Several game-side projects can import them once from `Directory.Build.props` and
 
 ```sh
 dotnet build MyMod/MyMod.csproj -p:ValheimPath="/path/to/Valheim"
-# or once per shell, the variable tools/dev-loop uses too:
+# or once per shell:
 export VALHEIM_PATH="/path/to/Valheim"
 ```
 

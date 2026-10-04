@@ -42,16 +42,4 @@ public sealed class SmokePlanTests
         Assert.All(commands.Where(command => command.StartsWith("cli_expect", StringComparison.Ordinal)),
             command => Assert.Contains("--strict", command));
     }
-
-    [Fact]
-    public void DevLoopDocsAndScriptsPointAtThisPlan()
-    {
-        foreach (string relative in new[] { "tools/dev-loop/README.md", "tools/dev-loop/dev-loop.sh", "tools/dev-loop/dev-loop.ps1", "docs/getting-started.md" })
-        {
-            string text = File.ReadAllText(Path.Combine(new[] { Root }.Concat(relative.Split('/')).ToArray()));
-            Assert.True(text.Contains("smoke-plan.yaml", StringComparison.Ordinal), relative + " does not name the smoke plan");
-            Assert.False(text.Contains("examples/smoke-plan.yaml", StringComparison.Ordinal) || text.Contains(@"examples\smoke-plan.yaml", StringComparison.Ordinal),
-                relative + " still points at ValheimCLI's examples/smoke-plan.yaml");
-        }
-    }
 }

@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
 using Xunit;
 
 // Moved from ValheimCLI (commit ee4cd23, Tests/RequestBroker.Tests/ExampleScripts.cs and RepoPaths.cs) on
@@ -24,19 +22,19 @@ public sealed class WindowsFactAttribute : FactAttribute
     }
 }
 
-/// <summary>The output of one run of a dev-loop script.</summary>
+/// <summary>The output of one run of a script in tools/.</summary>
 internal sealed record ScriptRun(int ExitCode, string Stdout, string Stderr)
 {
     public void AssertExit(int expected) =>
         Assert.True(expected == ExitCode, $"expected exit {expected}, got {ExitCode}\nstdout:\n{Stdout}\nstderr:\n{Stderr}");
 }
 
-/// <summary>Runs the real scripts in tools/dev-loop (or another tools/ folder) against inert fake tools in a temporary directory.</summary>
+/// <summary>Runs the real scripts in a tools/ folder against inert fake tools in a temporary directory.</summary>
 internal sealed class DevLoopScripts : IDisposable
 {
     private readonly string _tools;
 
-    public DevLoopScripts(string tools = "dev-loop")
+    public DevLoopScripts(string tools)
     {
         _tools = tools;
         Root = Directory.CreateTempSubdirectory(tools + "-scripts-").FullName;
@@ -151,8 +149,6 @@ internal sealed class DevLoopScripts : IDisposable
         if (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
         return lines.ToArray();
     }
-
-    public static string Md5Hex(string text) => Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
 
     public void Dispose()
     {

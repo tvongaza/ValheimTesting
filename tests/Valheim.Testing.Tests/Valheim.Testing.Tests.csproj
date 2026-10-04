@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable></PropertyGroup>
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable>
+    <!-- dev-loop.cs is a file-based script; compiled here without its top-level entry point. -->
+    <DefineConstants>$(DefineConstants);DEV_LOOP_TESTS</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
     <ProjectReference Include="../../examples/NativeSmoke/NativeSmoke.csproj" />
@@ -13,6 +16,7 @@
     <Compile Include="../../examples/NativeSmoke/EnvCommand.cs" Link="NativeSmoke/EnvCommand.cs" />
     <Compile Include="../../examples/NativeSmoke/SmokeInputs.cs" Link="NativeSmoke/SmokeInputs.cs" />
     <Compile Include="../../examples/NativeSmoke/SmokeProject.cs" Link="NativeSmoke/SmokeProject.cs" />
+    <Compile Include="../../tools/dev-loop/dev-loop.cs" Link="DevLoop/dev-loop.cs" />
     <!-- Compiles small ValheimCLI-shaped assemblies at test time for the capability manifest tests; none is committed. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
