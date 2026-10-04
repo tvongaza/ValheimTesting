@@ -4,7 +4,13 @@ namespace Valheim.Testing.Game;
 public sealed record CampaignPreflightProblem(string Actor, string Input, string Message);
 
 /// <summary>One statically selected actor. Host eligibility does not claim that the host is currently ready.</summary>
-public sealed record CampaignPreflightActor(string Name, string Kind, string Host, string Platform);
+public sealed record CampaignPreflightActor(string Name, string Kind, string Host, string Platform)
+{
+    /// <summary>The selected inventory recipe, when resolution used an ordered inventory.</summary>
+    public string? Environment { get; init; }
+    /// <summary>Why this recipe was selected after considering earlier choices.</summary>
+    public string? SelectionReason { get; init; }
+}
 
 /// <summary>A deterministic, read-only review of the locally selected actors and fixture.</summary>
 public sealed record CampaignPreflightReport(IReadOnlyList<CampaignPreflightProblem> Problems)

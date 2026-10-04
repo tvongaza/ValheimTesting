@@ -36,9 +36,21 @@ public sealed class EnvironmentProfile
     public static EnvironmentProfile Parse(string json) => Parse(json, Environment.CurrentDirectory);
     internal static EnvironmentProfile Parse(string json, string directory)
     {
+        using (var document = JsonDocument.Parse(json, new JsonDocumentOptions
+               { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }))
+            if (document.RootElement.TryGetProperty("steamAccounts", out var section) &&
+                section.TryGetProperty("inlinePool", out var embedded) && embedded.ValueKind == JsonValueKind.Object)
+                _ = SteamAccountPool.Parse(embedded.GetRawText());
         var profile = JsonSerializer.Deserialize<EnvironmentProfile>(json, Json) ?? throw new ArgumentException("Empty environment profile.");
         // Read before validating, so the clients' accounts are checked against it with everything else.
-        if (profile.SteamAccounts is { Pool: { Length: > 0 } pool } accounts)
+        if (profile.SteamAccounts is { InlinePool: not null } inline)
+        {
+            if (!string.IsNullOrWhiteSpace(inline.Pool))
+                throw new ArgumentException("steamAccounts: choose either pool or inlinePool, not both.");
+            inline.InlinePool.Validate();
+            inline.Accounts = inline.InlinePool;
+        }
+        else if (profile.SteamAccounts is { Pool: { Length: > 0 } pool } accounts)
         {
             accounts.PoolFile = Path.GetFullPath(pool, directory);
             try { accounts.Accounts = SteamAccountPool.Read(accounts.PoolFile); }
@@ -236,6 +248,8 @@ public sealed class SteamAccountsProfile
 {
     /// <summary>The pool file, relative to the profile's directory or absolute. Its <c>leaseDirectory</c> is on <see cref="LeaseHost"/>.</summary>
     public string Pool { get; set; } = "";
+    /// <summary>An account pool embedded in a private inventory-derived profile, instead of another private file.</summary>
+    public SteamAccountPool? InlinePool { get; set; }
     /// <summary>The profile host that keeps the leases. Every run sharing the pool must use the same host and directory.</summary>
     public string LeaseHost { get; set; } = "";
     /// <summary>
@@ -250,7 +264,8 @@ public sealed class SteamAccountsProfile
 
     internal void Validate(EnvironmentProfile profile, List<string> errors)
     {
-        if (string.IsNullOrWhiteSpace(Pool)) errors.Add("steamAccounts: name the pool file.");
+        if (string.IsNullOrWhiteSpace(Pool) && InlinePool == null) errors.Add("steamAccounts: name the pool file or inlinePool.");
+        if (!string.IsNullOrWhiteSpace(Pool) && InlinePool != null) errors.Add("steamAccounts: choose either pool or inlinePool.");
         if (!profile.Hosts.TryGetValue(LeaseHost ?? "", out var leaseHost)) errors.Add($"steamAccounts: the lease host '{LeaseHost}' is not listed under hosts.");
         if (profile.Clients.Count == 0) errors.Add("steamAccounts: list the clients that lease accounts under clients.");
         if (Accounts == null) return;

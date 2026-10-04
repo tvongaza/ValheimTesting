@@ -287,6 +287,19 @@ game starts. If the source install's loader is unsuitable, set `loaderPackage` o
 applies them only to the disposable copy. Do not repair the live source install or copy individual Doorstop files by hand.
 A nested `BepInEx/core/core` can make the preloader load Harmony twice and abort before writing its main log.
 
+For an ordered set of reusable machines, copy [the environment inventory template](MyMod.SystemTests/sample-environment-inventory.json)
+to that private directory. Replace its host addresses, paths, Steam account names and SteamID64 placeholders. Set
+`"inventory": "environment-inventory.json"` in the campaign manifest **instead of** `profile`. Each campaign role
+may list `environmentCandidates` in preference order, or omit it to consider all compatible recipes in inventory
+order. `differentHostFrom` names actors that must run on another host; for example, client B may require a host
+different from client A while the dedicated server shares client A's machine. Resolution backs up to another recipe
+if an earlier choice leaves a later actor without a compatible host. A recipe with `hosting-client` capability is
+reserved for a client-hosted scenario; this dedicated-server campaign only assigns `server` and `client` recipes.
+Run `valheim-test env preflight` first to see each chosen recipe and its reason. `--hosts` adds read-only checks of
+the selected installs, ValheimCLI ports and signed-in Steam accounts. Preparation writes
+`environment-assignments.json` beside its generated private profile so the choice is reviewable afterwards. The
+source installs remain untouched and all actor runtime copies are made after the full preflight passes.
+
 Campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool. Preparation
 matches each host's account before copying; launch repeats that check under the account lease, then verifies the game's
 own identity. Unix's remembered Steam login alone is not proof of the running game's account. Identity values are redacted
@@ -300,12 +313,13 @@ placeholders, never defaults that the runner guesses.
 From the repository root, these are the preparation check and the complete run:
 
 ```sh
-dotnet run --project examples/NativeSmoke -- env preflight /private/test/campaign.json
+bash scripts/run.sh env preflight /private/test/campaign.json
 bash scripts/run.sh campaign check /private/test/campaign.json /private/test/three-actor-plan.json
 bash scripts/run.sh campaign run /private/test/campaign.json /private/test/three-actor-plan.json /private/test/runs/first
 ```
 
-The first line is the candidate `valheim-test env preflight MANIFEST` command; use `--json` for a machine-readable report. It
+The first line is the candidate `valheim-test env preflight MANIFEST` command through the cache-checking repository launcher;
+on Windows use `pwsh -File scripts/run.ps1 env preflight ...`. Use `--json` for a machine-readable report. It
 reports all independent local lock, loader, character, fixture and profile problems it can find in one pass, plus the
 selected actors and hosts. Add `--hosts` to read the selected source installs and Steam sessions on their hosts;
 it does not copy or launch anything. Without that flag it does not contact hosts or assert their current readiness.

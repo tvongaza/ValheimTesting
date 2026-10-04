@@ -8,6 +8,10 @@ namespace Valheim.Testing.Game;
 public sealed class HostedCampaignRole
 {
     public string DependencyLock { get; set; } = "";
+    /// <summary>Ordered environment names from the private inventory; empty considers every recipe for this actor's role.</summary>
+    public List<string> EnvironmentCandidates { get; set; } = [];
+    /// <summary>Actor names that must be assigned to a different host.</summary>
+    public List<string> DifferentHostFrom { get; set; } = [];
     /// <summary>Optional local manifest for a reviewed loader/core set applied only to the disposable runtime.</summary>
     public string? LoaderPackage { get; set; }
     public List<HostedRuntimeFile> Files { get; set; } = [];
@@ -23,6 +27,8 @@ public sealed class HostedCampaignRole
 public sealed class HostedCampaignManifest
 {
     public string Profile { get; set; } = "";
+    /// <summary>Private ordered host/environment inventory. Use this instead of a fixed profile.</summary>
+    public string Inventory { get; set; } = "";
     /// <summary>Optional pinned world fixture for a scenario runner built on this preparation.</summary>
     public string World { get; set; } = "";
     /// <summary>The dedicated server's public or LAN game address, including port, for direct-join scenarios.</summary>
@@ -43,13 +49,17 @@ public sealed class HostedCampaignManifest
         string directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
         var manifest = JsonSerializer.Deserialize<HostedCampaignManifest>(File.ReadAllText(path), Json)
             ?? throw new InvalidDataException("Empty hosted campaign manifest.");
-        if (string.IsNullOrWhiteSpace(manifest.Profile)) throw new InvalidDataException("Name the environment profile in profile.");
-        manifest.Profile = Path.GetFullPath(manifest.Profile, directory);
+        if (string.IsNullOrWhiteSpace(manifest.Profile) == string.IsNullOrWhiteSpace(manifest.Inventory))
+            throw new InvalidDataException("Name exactly one of profile (fixed legacy assignment) or inventory (ordered environments).");
+        if (manifest.Profile.Length != 0) manifest.Profile = Path.GetFullPath(manifest.Profile, directory);
+        if (manifest.Inventory.Length != 0) manifest.Inventory = Path.GetFullPath(manifest.Inventory, directory);
         if (manifest.World.Length != 0) manifest.World = Path.GetFullPath(manifest.World, directory);
         if (manifest.Server == null || manifest.Clients == null) throw new InvalidDataException("A hosted campaign needs a server and named clients.");
         void Resolve(HostedCampaignRole role)
         {
             if (string.IsNullOrWhiteSpace(role.DependencyLock)) throw new InvalidDataException("Every campaign role needs its own reviewed dependencyLock.");
+            if (role.EnvironmentCandidates == null || role.DifferentHostFrom == null || role.Files == null)
+                throw new InvalidDataException("A campaign role's environmentCandidates, differentHostFrom and files must be lists, not null.");
             role.DependencyLock = Path.GetFullPath(role.DependencyLock, directory);
             if (role.LoaderPackage != null) role.LoaderPackage = Path.GetFullPath(role.LoaderPackage, directory);
             foreach (var file in role.Files)
@@ -321,7 +331,15 @@ public static class HostedCampaignPreparation
         if (manifest == null) return new Inspection(null, new CampaignPreflightReport(problems));
 
         EnvironmentProfile? profile = null;
-        Try("campaign", "profile", () => profile = EnvironmentProfile.Read(manifest.Profile));
+        ResolvedEnvironmentInventory? resolved = null;
+        if (manifest.Inventory.Length != 0)
+            Try("campaign", "inventory", () =>
+            {
+                resolved = EnvironmentInventory.Read(manifest.Inventory).Resolve(manifest);
+                profile = resolved.Profile;
+            });
+        else
+            Try("campaign", "profile", () => profile = EnvironmentProfile.Read(manifest.Profile));
         if (profile != null)
         {
             if (profile.Server == null) problems.Add(new("server", "role", "A hosted campaign needs a dedicated server."));
@@ -362,6 +380,18 @@ public static class HostedCampaignPreparation
                 .Select(client => (Name: client.Key, Input: client.Value))).ToArray();
         foreach (var (name, input) in manifestRoles)
         {
+            if (manifest.Profile.Length != 0 && input.EnvironmentCandidates.Count != 0)
+                problems.Add(new(name, "environment candidates", "environmentCandidates needs an inventory, not a fixed profile."));
+            if (manifest.Profile.Length != 0)
+                foreach (string other in input.DifferentHostFrom)
+                {
+                    var otherRole = other == "server" ? profile?.Server : profile?.Clients.GetValueOrDefault(other);
+                    var thisRole = name == "server" ? profile?.Server : profile?.Clients.GetValueOrDefault(name);
+                    if (other == name || otherRole == null)
+                        problems.Add(new(name, "host constraint", $"differentHostFrom names unknown or self actor {other}."));
+                    else if (thisRole?.Host == otherRole.Host)
+                        problems.Add(new(name, "host constraint", $"differentHostFrom requires a different host than {other}."));
+                }
             if (input.LoaderPackage != null)
                 Try(name, "loader", () => _ = BepInExLoaderPackage.Read(input.LoaderPackage));
             Try(name, "dependencies and CLI packs", () =>
@@ -401,8 +431,10 @@ public static class HostedCampaignPreparation
             .Select(role =>
             {
                 var selectedRole = role.Name == "server" ? profile.Server! : profile.Clients[role.Name];
+                var assignment = resolved?.Assignments.FirstOrDefault(item => item.Actor == role.Name);
                 return new CampaignPreflightActor(role.Name, role.Name == "server" ? "dedicated-server" : "client",
-                    selectedRole.Host, profile.Hosts.TryGetValue(selectedRole.Host, out var host) ? host.Platform : "unknown");
+                    selectedRole.Host, profile.Hosts.TryGetValue(selectedRole.Host, out var host) ? host.Platform : "unknown")
+                { Environment = assignment?.Environment, SelectionReason = assignment?.Reason };
             }).ToArray();
         var report = new CampaignPreflightReport(problems) { Actors = actors };
         if (profile?.Server == null || !manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))
@@ -427,6 +459,9 @@ public static class HostedCampaignPreparation
         string output = Path.GetFullPath(outputDirectory);
         if (Directory.Exists(output) || File.Exists(output)) throw new InvalidOperationException("Use a new private campaign output directory: " + output);
         Directory.CreateDirectory(output);
+        if (manifest.Inventory.Length != 0)
+            File.WriteAllText(Path.Combine(output, "environment-assignments.json"),
+                JsonSerializer.Serialize(readiness.Report.Actors, new JsonSerializerOptions { WriteIndented = true }) + "\n");
         foreach (var (name, role, _) in roles)
         {
             const string configName = "BepInEx/config/valheimCLI.valheimCLI.cfg";
