@@ -241,7 +241,7 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
     public bool IsValid() => Zdo != null;
     public bool IsOwner() => Zdo.IsOwner();
     public bool HasOwner() => Zdo.HasOwner();
-    public void ClaimOwnership() { if (!IsOwner()) Zdo.SetOwner(ZDOMan.instance?.m_sessionID ?? 1); }
+    public void ClaimOwnership() { if (!IsOwner()) Zdo.SetOwner(ZDOMan.GetSessionID()); }
     public ZDO GetZDO() => Zdo;
     /// <summary>As the game's: the view lets go of its ZDO, so GetZDO() returns null and IsValid() false.</summary>
     public void ResetZDO() => Zdo = null!;
@@ -317,7 +317,12 @@ public partial class ZDOMan
     {
         get { var byId = new System.Collections.Generic.Dictionary<ZDOID, ZDO>(); foreach (var zdo in Zdos) byId[zdo.m_uid] = zdo; return byId; }
     }
-    public static long GetSessionID() => instance?.m_sessionID ?? 0;
+    /// <summary>
+    /// This session's id, the one source of "who am I" (<c>ZNet.GetUID()</c> and <c>ZRoutedRpc</c>'s peer id read it, as
+    /// in the game). Without a ZDOMan it is 1, the default <see cref="m_sessionID"/>: never 0, which is
+    /// <c>ZRoutedRpc.Everybody</c>.
+    /// </summary>
+    public static long GetSessionID() => instance?.m_sessionID ?? 1;
     public ZDO? GetZDO(ZDOID id) => id.IsNone() ? null : Zdos.Find(zdo => zdo.m_uid.Equals(id));
     public void DestroyZDO(ZDO zdo) { if (!DestroyQueue.Contains(zdo)) DestroyQueue.Add(zdo); }
     /// <summary>Removes the queued ZDOs, as the game's next update does; returns how many went.</summary>
@@ -396,17 +401,12 @@ public partial class TerrainComp
     public bool m_initialized = true;
     public int SaveCount;
 
-    /// <summary>The zone's live compiler: the one on the loaded heightmap whose zone holds the position, if it has one.</summary>
-    public static TerrainComp? FindTerrainCompiler(UnityEngine.Vector3 pos)
-    {
-        foreach (var hm in Heightmap.s_heightmaps)
-        {
-            float half = hm.m_width * hm.m_scale * 0.5f;
-            if (hm.m_terrainComp != null && UnityEngine.Mathf.Abs(hm.transform.position.x - pos.x) < half && UnityEngine.Mathf.Abs(hm.transform.position.z - pos.z) < half)
-                return hm.m_terrainComp;
-        }
-        return null;
-    }
+    /// <summary>
+    /// The first live compiler whose zone holds the position, edges included (a seam point belongs to the first zone),
+    /// as in the game; null where none is. It never creates one.
+    /// </summary>
+    public static TerrainComp? FindTerrainCompiler(UnityEngine.Vector3 pos) =>
+        Heightmap.s_heightmaps.Find(hm => hm.m_terrainComp != null && hm.IsPointInside(pos))?.m_terrainComp;
 
     /// <summary>A new compiler for the heightmap's zone with its own ZDO, registered with the ZDOMan when there is one and owned by us.</summary>
     public TerrainComp(Heightmap hmap, int width)
@@ -418,7 +418,7 @@ public partial class TerrainComp
             ? ZDOMan.instance.CreateNewZDO(hmap.transform.position, prefab)
             : new ZDO(hmap.transform.position, prefab);
         zdo.Persistent = true;
-        zdo.SetOwner(ZDOMan.instance?.m_sessionID ?? 1);
+        zdo.SetOwner(ZDOMan.GetSessionID());
         m_nview = new ZNetView(zdo);
         int n = (width + 1) * (width + 1);
         m_levelDelta = new float[n];
