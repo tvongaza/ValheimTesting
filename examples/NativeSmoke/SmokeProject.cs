@@ -101,7 +101,7 @@ internal static class SmokeProject
                 },
                 SessionCapability = NativeServerRuntime.SessionCapability,
                 SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
-                EnableDevcommands = false,
+                TestAccess = false,
                 Scenario = run =>
                 {
                     run.Report.Step("selected server mods loaded", () =>

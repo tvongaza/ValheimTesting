@@ -696,7 +696,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         Name = name,
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
-        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", EnableDevcommands = false,
+        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
         Scenario = scenario ?? (_ => Task.CompletedTask),
         HostSeams = new HostedSeams
         {
@@ -740,7 +740,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
         {
             Name = kept.Name, ReadPlan = kept.ReadPlan, SessionCapability = kept.SessionCapability, SessionTokenVariable = kept.SessionTokenVariable,
-            EnableDevcommands = false, Scenario = kept.Scenario, HostSeams = kept.HostSeams, KeepRuntime = true,
+            TestAccess = false, Scenario = kept.Scenario, HostSeams = kept.HostSeams, KeepRuntime = true,
         }));
         Assert.True(Directory.Exists(host.Local(RunDirectory + "/runtime")));
         Assert.Contains("kept on request", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
@@ -754,7 +754,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
         {
             Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
-            EnableDevcommands = false, Scenario = options.Scenario, HostSeams = options.HostSeams, StagedRuntime = staged,
+            TestAccess = false, Scenario = options.Scenario, HostSeams = options.HostSeams, StagedRuntime = staged,
         }));
         Assert.DoesNotContain(host.Runs, run => run.Script == "copy");
     }

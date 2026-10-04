@@ -53,7 +53,6 @@ namespace Valheim.Testing.Adapter
                     ["source"] = "owned-test-session", ["token"] = Environment.GetEnvironmentVariable(tokenVariable) ?? "",
                     ["pid"] = process.Id, ["saveRoot"] = Utils.GetSaveDataPath(FileHelpers.FileSource.Local),
                     ["dedicated"] = net != null && net.IsDedicated(),
-                    ["devcommands"] = DevcommandsFlag(),
                     // A dedicated server opens its game socket only when world generation finishes, on a first boot well after
                     // the world has loaded; a join before that times out. Reported apart from complete, so a runner can do
                     // other work meanwhile and wait for it just before the first join (OwnedServerSession.WaitUntilJoinable).
@@ -68,10 +67,5 @@ namespace Valheim.Testing.Adapter
         /// </summary>
         public static bool AcceptingConnections() => ZNet.instance != null && Members.Field<object?>(ZNet.instance, "m_hostSocket") != null;
 
-        /// <summary>
-        /// The raw devcommands flag that ValheimCLI's extension gate reads. <c>IsCheatsEnabled</c> is not it: another mod can
-        /// make that true on a dedicated server without enabling mutating extensions.
-        /// </summary>
-        public static bool DevcommandsFlag() => global::Console.instance != null && Members.StaticField<bool>(typeof(Terminal), "m_cheat");
     }
 }

@@ -105,7 +105,7 @@ public static class ServerFixture
             var started = session = Session(plan, copy!.DirectoryPath, world, pins, output, cancellation.Token);
             GameActor server = null!;
             report.Step("start the owned server on a new world, plugins pinned", () => server = started.Start());
-            report.Step("enable test devcommands", () => EnableDevcommands(server));
+            report.Step("verify test access on the disposable server", () => TestAccess.Ensure(server, TestActorRole.DedicatedServer));
             WorldFacts facts = new();
             report.Step("read the new world's uid", () => facts = ReadWorld(server));
             report.Provenance["worldUid"] = facts.Uid; report.Provenance["worldSeed"] = facts.Seed;
@@ -223,13 +223,6 @@ public static class ServerFixture
         }, () => new RecordingTransport(new CliTransport("127.0.0.1", plan.Port), Path.Combine(output, "connection-" + ++connection + ".jsonl")),
             world, expectations, "mymod.testing/session", TimeSpan.FromSeconds(StartupSeconds), TimeSpan.FromSeconds(CommandSeconds), cancellation: cancellation)
         { Events = plan.DedicatedStartupEvents(runtime) };
-    }
-
-    private static void EnableDevcommands(GameActor server)
-    {
-        var capability = server.RequireCapability("mymod.testing/session");
-        if (!server.Observe(capability).Data.GetProperty("devcommands").GetBoolean()) server.Execute("devcommands");
-        if (!server.Observe(capability).Data.GetProperty("devcommands").GetBoolean()) throw new InvalidOperationException("Devcommands did not enable.");
     }
 
     private static void WritePlan(string path, string runtime, IReadOnlyDictionary<string, string> runtimeHashes, string world, ServerPlatform platform,

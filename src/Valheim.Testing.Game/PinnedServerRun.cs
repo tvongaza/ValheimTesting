@@ -32,10 +32,12 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public Action<TPlan, EnvironmentProfile?>? CheckEnvironment { get; init; }
     /// <summary>Adds the mod's provenance (scenario details) to the report.</summary>
     public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
-    /// <summary>Turns devcommands on through the session capability's <c>devcommands</c> field before the scenario.</summary>
-    public bool EnableDevcommands { get; init; } = true;
-    /// <summary>Opt in to verified cheat access on the owned disposable server before the scenario. Requires cli_access.</summary>
-    public bool AcknowledgeCheats { get; init; }
+    /// <summary>
+    /// Establishes test access on the owned disposable server before the scenario (<see cref="Game.TestAccess.Ensure"/>):
+    /// devcommands, then the cheat acknowledgement (<c>confirmcheats</c>), each verified through ValheimCLI's
+    /// <c>cli_access</c>. False only for a run that issues no test commands (a load smoke).
+    /// </summary>
+    public bool TestAccess { get; init; } = true;
     /// <summary>The scenario for a launching mode, given the started, strictly pinned server.</summary>
     public required Func<PinnedServerRunContext<TPlan>, Task> Scenario { get; init; }
     /// <summary>
@@ -440,15 +442,8 @@ public static class PinnedServerRun
             launched = context;
             session = context.Session = options.SessionOverride?.Invoke(context) ?? hosted?.Session(context, options) ?? OwnedSession(context, options);
             report.Step("start and verify owned dedicated fixture", () => context.Server = session.Start());
-            if (options.AcknowledgeCheats)
-                report.Step("verify test access on the disposable server", () => TestAccess.Ensure(context.Server, TestActorRole.DedicatedServer));
-            else if (options.EnableDevcommands)
-                report.Step("enable test devcommands", () =>
-                {
-                    var capability = context.Server.RequireCapability(options.SessionCapability);
-                    if (!context.Server.Observe(capability).Data.GetProperty("devcommands").GetBoolean()) context.Server.Execute("devcommands");
-                    if (!context.Server.Observe(capability).Data.GetProperty("devcommands").GetBoolean()) throw new InvalidOperationException("Devcommands did not enable.");
-                });
+            if (options.TestAccess)
+                report.Step("verify test access on the disposable server", () => Game.TestAccess.Ensure(context.Server, TestActorRole.DedicatedServer));
             await options.Scenario(context).ConfigureAwait(false);
         }
     }

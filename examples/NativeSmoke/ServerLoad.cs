@@ -107,7 +107,7 @@ internal static class ServerLoad
                         SessionCapability = NativeServerRuntime.SessionCapability,
                         StagedRuntime = runtime.Copy, // the run uses the staged copy itself: one server copy, not two
                         SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
-                        EnableDevcommands = false,
+                        TestAccess = false,
                         Provenance = (_, record) =>
                         {
                             if (serverLoader != null) record["serverLoaderPackage"] = serverLoader.Identity;
