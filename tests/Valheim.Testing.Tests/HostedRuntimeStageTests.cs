@@ -37,6 +37,37 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Empty(errors);
     }
 
+    // The real bash apply replaces the copied loader with a reviewed package's: the prepared runtime's loader pin is the package's.
+    [Fact] public async Task MacShellReplacesTheCopiedLoaderWithAReviewedPackage()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var host = new LocalGameHost("local-mac", HostShell.Bash);
+        string source = Path.Combine(_root, "source");
+        foreach (var (relative, text) in new[] { ("Valheim.app/Contents/MacOS/Valheim", "game"),
+            ("Valheim.app/Contents/Resources/Data/Managed/" + InstallPins.GameAssemblyName, "game"), ("BepInEx/core/BepInEx.dll", "old core"),
+            ("BepInEx/core/BepInEx.Preloader.dll", "old preloader"), ("BepInEx/core/stale.dll", "stale"), ("doorstop_libs/libdoorstop_x64.dylib", "old doorstop") })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(source, relative))!);
+            File.WriteAllText(Path.Combine(source, relative), text);
+        }
+        string packageRoot = Path.Combine(_root, "package");
+        foreach (var (relative, text) in new[] { ("BepInEx/core/BepInEx.dll", "new core"), ("BepInEx/core/BepInEx.Preloader.dll", "new preloader"), ("libdoorstop.dylib", "new doorstop") })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(packageRoot, relative))!);
+            File.WriteAllText(Path.Combine(packageRoot, relative), text);
+        }
+        var package = BepInExLoaderPackage.Capture(packageRoot, "native-loader", "1");
+        string chosen = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(chosen, "selected plugin");
+        string run = Path.Combine(_root, "vt-loader");
+        var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, Path.Combine(run, "runtime"), Path.Combine(run, "staging"),
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30), loaderPackage: package);
+        Assert.Equal(package.Loader, HostInstall.Pins(listing).Loader);
+        Assert.Equal(package.Loader, InstallPins.Of(Path.Combine(run, "runtime")).Loader);
+        Assert.False(listing.Files.ContainsKey("BepInEx/core/stale.dll"));
+        Assert.False(listing.Files.ContainsKey("doorstop_libs/libdoorstop_x64.dylib"));
+    }
+
     // Executes the actual bash copy, shipment, listing and apply scripts on macOS. A fake host cannot catch BSD-tool
     // option mismatches, which have repeatedly consumed native-test setup time.
     [Fact] public async Task MacShellStagesASelectedClientWithoutRunningTheGame()

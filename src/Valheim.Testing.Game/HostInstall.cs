@@ -32,7 +32,7 @@ public sealed class HostListing
 
 /// <summary>
 /// Reads and copies game installs and runtimes on a host, so a run on another machine keeps the same pins as one here: the
-/// runtime manifest, the game build, BepInEx core and patchers (<see cref="InstallPins"/>), the patcher names and the server's
+/// runtime manifest, the game build, loader and patchers (<see cref="InstallPins"/>), the patcher names and the server's
 /// execute bit are all checked against what the host holds, not against a local copy.
 /// </summary>
 public static class HostInstall
@@ -43,19 +43,20 @@ public static class HostInstall
 
     /// <summary>
     /// Hashes every regular file under <paramref name="root"/> on the host (links are refused, as <see cref="WorldFixture"/>
-    /// refuses them). <paramref name="directories"/> limits the listing to those subdirectories (relative, <c>*</c> allowed, for
-    /// example <c>*_Data/Managed</c>); null lists everything. The patcher entries and executables are always read.
+    /// refuses them). <paramref name="paths"/> limits the listing to those subdirectories and files (relative, <c>*</c> allowed
+    /// in a directory, for example <c>*_Data/Managed</c>; a file only by its exact name, for example <c>winhttp.dll</c>); null
+    /// lists everything. The patcher entries and executables are always read.
     /// </summary>
-    public static async Task<HostListing> ListAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? directories = null, CancellationToken cancellation = default)
+    public static async Task<HostListing> ListAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(host);
         RequireHostPath(host, root, nameof(root));
-        foreach (string directory in directories ?? Array.Empty<string>())
-            if (string.IsNullOrWhiteSpace(directory) || directory.Any(char.IsControl) || directory.StartsWith('/') || directory.Split('/', '\\').Contains(".."))
-                throw new ArgumentException($"'{directory}' is not a relative directory inside the root.", nameof(directories));
+        foreach (string path in paths ?? Array.Empty<string>())
+            if (string.IsNullOrWhiteSpace(path) || path.Any(char.IsControl) || path.StartsWith('/') || path.Split('/', '\\').Contains(".."))
+                throw new ArgumentException($"'{path}' is not a relative path inside the root.", nameof(paths));
         var result = (await host.RunAsync(HostInstallScripts.List(host.Shell.Kind), new Dictionary<string, string>
         {
-            ["root"] = root, ["dirs"] = string.Join('\n', directories ?? Array.Empty<string>()),
+            ["root"] = root, ["dirs"] = string.Join('\n', paths ?? Array.Empty<string>()),
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Listing {root} on {host.Name}");
         return ReadListing(host.Name, host.Shell.Kind, root, result);
     }
@@ -153,7 +154,11 @@ public static class HostInstall
         throw new InvalidOperationException($"The {what} at {listing.Root} on {listing.HostName} is not the pinned one ({string.Join("; ", problems)}).");
     }
 
-    /// <summary>The <see cref="InstallPins"/> of a listing that covers the game's Managed folder, <c>BepInEx/core</c> and <c>BepInEx/patchers</c>.</summary>
+    /// <summary>What a listing for <see cref="Pins"/> needs to cover: the game's Managed folder, the loader files and <c>BepInEx/patchers</c>.</summary>
+    internal static readonly string[] PinPaths =
+        ["*_Data/Managed", "*.app/Contents/Resources/Data/Managed", .. InstallPins.LoaderRootFiles, .. InstallPins.LoaderFolders, "BepInEx/patchers"];
+
+    /// <summary>The <see cref="InstallPins"/> of a listing that covers <see cref="PinPaths"/>.</summary>
     public static InstallPins Pins(HostListing listing) => Pins(listing, out _);
 
     private static InstallPins Pins(HostListing listing, out string managed)
@@ -172,18 +177,20 @@ public static class HostInstall
         {
             Game = InstallPins.ListingHash(Under(listing, prefix).Where(file => !file.Relative.Contains('/') &&
                 file.Relative.StartsWith("assembly_", StringComparison.Ordinal) && file.Relative.EndsWith(".dll", StringComparison.Ordinal))),
-            BepInExCore = InstallPins.ListingHash(Under(listing, "BepInEx/core/")),
+            Loader = InstallPins.ListingHash(listing.Files.Select(pair => (Relative: InstallPins.LoaderPath(pair.Key, Comparison(listing)), Sha256: pair.Value))
+                .Where(file => file.Relative != null).Select(file => (file.Relative!, file.Sha256))),
             Patchers = InstallPins.ListingHash(Under(listing, "BepInEx/patchers/")),
         };
     }
 
     // The files under a folder, relative to it, as the folder's listing names them.
     private static IEnumerable<(string Relative, string Sha256)> Under(HostListing listing, string prefix) =>
-        listing.Files.Where(pair => pair.Key.StartsWith(prefix, listing.Shell == HostShellKind.PowerShell ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-            .Select(pair => (pair.Key[prefix.Length..], pair.Value));
+        listing.Files.Where(pair => pair.Key.StartsWith(prefix, Comparison(listing))).Select(pair => (pair.Key[prefix.Length..], pair.Value));
+    private static StringComparison Comparison(HostListing listing) =>
+        listing.Shell == HostShellKind.PowerShell ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     /// <summary>
-    /// Pinned: refuses a listing whose game build, BepInEx core or patchers are not <paramref name="pinned"/>, naming each that
+    /// Pinned: refuses a listing whose game build, loader or patchers are not <paramref name="pinned"/>, naming each that
     /// differs. Returns the pins found, for the report.
     /// </summary>
     public static InstallPins CheckPins(InstallPins pinned, HostListing listing, string kind)
@@ -257,7 +264,7 @@ internal static class HostInstallScripts
     public static string List(HostShellKind kind) => kind == HostShellKind.Bash ? BashList : PowerShellList;
     public static string Port(HostShellKind kind) => kind == HostShellKind.Bash ? BashPort : PowerShellPort;
 
-    // Variables: root, dirs (relative directory patterns, one per line; none lists everything). sha256sum prints each file as
+    // Variables: root, dirs (relative directory patterns and file names, one per line; none lists everything). sha256sum prints each file as
     // "<hash>  ./<path>", escaping a name with a backslash or line break. Links are refused before anything is hashed.
     public static readonly string BashList = """
         set -u
@@ -270,7 +277,11 @@ internal static class HostInstallScripts
             while IFS= read -r pattern; do
                 [ -n "$pattern" ] || continue
                 IFS=$'\n'
-                for d in $pattern; do if [ -d "$d" ] && [ ! -L "$d" ]; then roots+=("./$d"); fi; done
+                # A named file that is a link is kept, so the link check below refuses it rather than leave it out.
+                for d in $pattern; do
+                  if [ -d "$d" ] && [ ! -L "$d" ]; then roots+=("./$d")
+                  elif [ ! -d "$d" ] && { [ -f "$d" ] || [ -L "$d" ]; }; then roots+=("./$d"); fi
+                done
                 unset IFS
             done <<< "$dirs"
         fi
@@ -292,26 +303,32 @@ internal static class HostInstallScripts
         # Patterns resolve segment by segment with .NET, so every path found keeps the root's own spelling (a short 8.3 name
         # included) and the relative paths below are exact.
         $roots = @()
+        $links = New-Object 'Collections.Generic.List[string]'
         if (-not $dirs) { $roots = @($full) } else {
             foreach ($pattern in ($dirs -split "`n")) {
                 if (-not $pattern) { continue }
                 $current = @($full)
-                foreach ($segment in ($pattern -split '[\\/]')) {
-                    if (-not $segment) { continue }
+                $segments = @($pattern -split '[\\/]' | Where-Object { $_ })
+                for ($i = 0; $i -lt $segments.Count; $i++) {
+                    $segment = $segments[$i]
                     $next = @()
                     foreach ($dir in $current) {
                         if ($segment.IndexOfAny([char[]]'*?') -ge 0) { $next += [IO.Directory]::GetDirectories($dir, $segment) }
                         elseif ([IO.Directory]::Exists((Join-Path $dir $segment))) { $next += (Join-Path $dir $segment) }
+                        elseif ($i -eq $segments.Count - 1 -and [IO.File]::Exists((Join-Path $dir $segment))) { $next += (Join-Path $dir $segment) }
                     }
                     $current = $next
                 }
-                foreach ($dir in $current) { if (-not ([IO.File]::GetAttributes($dir) -band [IO.FileAttributes]::ReparsePoint)) { $roots += $dir } }
+                foreach ($dir in $current) {
+                    $attributes = [IO.File]::GetAttributes($dir)
+                    if (-not ($attributes -band [IO.FileAttributes]::ReparsePoint)) { $roots += $dir }
+                    elseif (-not ($attributes -band [IO.FileAttributes]::Directory)) { $links.Add($dir) } # a named file that is a link is refused below
+                }
             }
         }
         $files = New-Object 'Collections.Generic.List[string]'
-        $links = New-Object 'Collections.Generic.List[string]'
         $pending = New-Object 'Collections.Generic.Stack[string]'
-        foreach ($r in $roots) { $pending.Push($r) }
+        foreach ($r in $roots) { if ([IO.File]::GetAttributes($r) -band [IO.FileAttributes]::Directory) { $pending.Push($r) } else { $files.Add($r) } }
         while ($pending.Count -gt 0) {
             foreach ($entry in [IO.Directory]::GetFileSystemEntries($pending.Pop())) {
                 $attributes = [IO.File]::GetAttributes($entry)

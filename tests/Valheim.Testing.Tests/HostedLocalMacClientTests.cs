@@ -20,7 +20,7 @@ public sealed partial class HostedServerRunTests
         {
             Mode = "owned", Install = install, Host = "127.0.0.1", Port = 5578, Join = "127.0.0.1:2456", Character = "Tester",
             Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), ["example.mymod"] = "absent" },
-            InstallPins = new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) },
+            InstallPins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) },
         };
         return (profile, ServerRunPlan.Read<ServerRunPlan>(planPath), client);
     }

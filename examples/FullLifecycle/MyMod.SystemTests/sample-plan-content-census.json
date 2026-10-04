@@ -44,7 +44,7 @@
   },
   "runtimePins": {
     "game": "<InstallPins.Of(runtime).Game>",
-    "bepinexCore": "<InstallPins.Of(runtime).BepInExCore>",
+    "loader": "<InstallPins.Of(runtime).Loader>",
     "patchers": "<InstallPins.Of(runtime).Patchers>"
   },
   "port": 5577,
@@ -69,7 +69,7 @@
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
-      "bepinexCore": "<InstallPins.Of(install).BepInExCore>",
+      "loader": "<InstallPins.Of(install).Loader>",
       "patchers": "<InstallPins.Of(install).Patchers>"
     },
     "join": "127.0.0.1:2456",
