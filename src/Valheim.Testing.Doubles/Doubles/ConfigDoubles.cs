@@ -113,8 +113,8 @@ namespace BepInEx
     /// <summary>
     /// The base of a BepInEx plugin. As in BepInEx 5.4.23, constructing one reads its <see cref="BepInPlugin"/> attribute
     /// (and throws without it), makes its <see cref="Logger"/> and opens its <see cref="Config"/> at
-    /// <c>BepInEx/config/&lt;GUID&gt;.cfg</c> (on the in-memory disk). <c>ValheimWorldScope.LoadPlugin&lt;T&gt;()</c> adds it
-    /// to an object as the chainloader does, which runs its Awake.
+    /// <c>BepInEx/config/&lt;GUID&gt;.cfg</c> (on the in-memory disk). The chainloader adds every plugin to one manager
+    /// object (<c>manager.AddComponent&lt;T&gt;()</c> in a test), which runs its Awake.
     /// </summary>
     public abstract partial class BaseUnityPlugin : UnityEngine.MonoBehaviour
     {

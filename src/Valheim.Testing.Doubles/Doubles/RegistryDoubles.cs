@@ -19,7 +19,8 @@ using Valheim.Testing.Doubles;
 /// themselves (not copies), as the main menu does with the ObjectDB prefab, and indexes again. The index is built with
 /// a dictionary's Add, as the game's, so two items with the same name make the next <see cref="UpdateRegisters"/>
 /// throw. <see cref="AwakePostfix"/> and <see cref="CopyOtherDBPostfix"/> run where a mod's Harmony postfix on those
-/// methods would. <c>ValheimWorldScope.LoadMainMenuObjectDB</c> and <c>LoadWorldObjectDB</c> run the game's two passes.
+/// methods would. <see cref="DeclareVanilla"/> stands for the game's own content; <see cref="LoadMainMenu"/> and
+/// <see cref="LoadWorld"/> run the game's two passes over it.
 /// </summary>
 public partial class ObjectDB : MonoBehaviour
 {
@@ -47,6 +48,48 @@ public partial class ObjectDB : MonoBehaviour
     [TestOnly] public readonly List<string> EarlyLookups = new();
     [TestOnly] public void MarkNotYetRegistered(params string[] names) { foreach (var name in names) NotYetRegistered.Add(name.GetStableHashCode()); }
     [TestOnly] public void FinishRegistering() => NotYetRegistered.Clear();
+
+    // The game's own content as it was built, which the world pass starts from (DeclareVanilla's database only).
+    private (GameObject[] Items, Recipe[] Recipes, StatusEffect[] Effects)? m_vanilla;
+
+    /// <summary>
+    /// The game's own ObjectDB content: the prefab the main menu copies and the world scene's database both start from
+    /// these items, recipes and status effects. Returns the prefab (its lists are the ones the main menu shares). No
+    /// ObjectDB is the instance until a pass runs.
+    /// </summary>
+    [TestOnly] public static ObjectDB DeclareVanilla(IEnumerable<GameObject>? items = null, IEnumerable<Recipe>? recipes = null, IEnumerable<StatusEffect>? statusEffects = null)
+    {
+        var vanilla = (Items: items?.ToArray() ?? new GameObject[0], Recipes: recipes?.ToArray() ?? new Recipe[0], Effects: statusEffects?.ToArray() ?? new StatusEffect[0]);
+        m_instance = null;
+        return new ObjectDB { m_items = vanilla.Items.ToList(), m_recipes = vanilla.Recipes.ToList(), m_StatusEffects = vanilla.Effects.ToList(), m_vanilla = vanilla };
+    }
+    /// <summary>
+    /// The main menu's pass, as the game runs it each time the menu loads: a new ObjectDB is added (its Awake and
+    /// <see cref="AwakePostfix"/> run on empty lists), then <see cref="CopyOtherDB"/> takes the prefab's lists themselves
+    /// (and <see cref="CopyOtherDBPostfix"/> runs). What a mod adds here lands in the prefab's lists, so it is still there
+    /// the next time the menu loads.
+    /// </summary>
+    [TestOnly] public static ObjectDB LoadMainMenu(ObjectDB vanilla)
+    {
+        if (vanilla is null) throw new ArgumentNullException(nameof(vanilla), "Pass the database DeclareVanilla returned.");
+        var db = new GameObject("FejdStartup").AddComponent<ObjectDB>();
+        db.CopyOtherDB(vanilla);
+        return db;
+    }
+    /// <summary>
+    /// A world load's pass: the world scene's ObjectDB wakes with the game's own content as it was built (new lists, not
+    /// the prefab's), and <see cref="AwakePostfix"/> runs.
+    /// </summary>
+    [TestOnly] public static ObjectDB LoadWorld(ObjectDB vanilla)
+    {
+        var content = vanilla.m_vanilla ?? throw new ArgumentException("Pass the database DeclareVanilla returned.", nameof(vanilla));
+        var main = new GameObject("_GameMain");
+        main.SetActive(false);
+        var db = main.AddComponent<ObjectDB>();
+        db.m_items = content.Items.ToList(); db.m_recipes = content.Recipes.ToList(); db.m_StatusEffects = content.Effects.ToList();
+        main.SetActive(true);
+        return db;
+    }
 
     public void Awake()
     {

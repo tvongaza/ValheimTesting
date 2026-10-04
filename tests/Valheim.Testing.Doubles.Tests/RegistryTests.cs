@@ -31,31 +31,31 @@ public sealed class RegistryTests : IDisposable
 
     [Fact] public void AGuardedRegistrationLeavesOneEntryThroughMenuWorldAndMenuAgain()
     {
-        _scope.WithObjectDB(new[] { Item("Wood"), Item("Stone") });
+        var vanilla = ObjectDB.DeclareVanilla(new[] { Item("Wood"), Item("Stone") });
         ObjectDB.AwakePostfix = RegisterGuarded; ObjectDB.CopyOtherDBPostfix = RegisterGuarded;
-        var menu = _scope.LoadMainMenuObjectDB();
+        var menu = ObjectDB.LoadMainMenu(vanilla);
         Assert.Same(menu, ObjectDB.instance); Assert.Same(s_modItem, menu.GetItemPrefab("ModSword"));
-        var world = _scope.LoadWorldObjectDB();
+        var world = ObjectDB.LoadWorld(vanilla);
         Assert.Same(world, ObjectDB.instance);
         Assert.Equal(1, world.m_items.Count(i => i.name == "ModSword"));
-        var menuAgain = _scope.LoadMainMenuObjectDB();
+        var menuAgain = ObjectDB.LoadMainMenu(vanilla);
         Assert.Equal(1, menuAgain.m_items.Count(i => i.name == "ModSword")); Assert.Empty(menuAgain.FindDuplicateItems());
         Assert.Equal(new[] { "Wood", "Stone", "ModSword" }, menuAgain.m_items.Select(i => i.name));
     }
 
     [Fact] public void AnUnguardedRegistrationBreaksTheSecondMenuLoad()
     {
-        var prefab = _scope.WithObjectDB(new[] { Item("Wood") });
+        var prefab = ObjectDB.DeclareVanilla(new[] { Item("Wood") });
         ObjectDB.AwakePostfix = RegisterUnguarded; ObjectDB.CopyOtherDBPostfix = RegisterUnguarded;
         // The menu's Awake runs on an empty database, then CopyOtherDB shares the prefab's lists: the item lands in them.
-        var menu = _scope.LoadMainMenuObjectDB();
+        var menu = ObjectDB.LoadMainMenu(prefab);
         Assert.Same(prefab.m_items, menu.m_items); Assert.Equal(1, prefab.m_items.Count(i => i.name == "ModSword"));
         // Back at the menu, the prefab's lists still hold the item; adding it again makes the index throw.
-        Assert.Throws<ArgumentException>(() => _scope.LoadMainMenuObjectDB());
+        Assert.Throws<ArgumentException>(() => ObjectDB.LoadMainMenu(prefab));
         Assert.Equal(new[] { "ModSword" }, prefab.FindDuplicateItems().Single().Names.Distinct());
         // The world's database starts from the game's own content, not the prefab's lists.
         ObjectDB.AwakePostfix = null;
-        Assert.Equal(new[] { "Wood" }, _scope.LoadWorldObjectDB().m_items.Select(i => i.name));
+        Assert.Equal(new[] { "Wood" }, ObjectDB.LoadWorld(prefab).m_items.Select(i => i.name));
     }
 
     [Fact] public void ZNetSceneAwakeIndexesPrefabsByHashAndReportsADuplicate()
@@ -86,8 +86,7 @@ public sealed class RegistryTests : IDisposable
         scene.FinishRegistering();
         Assert.NotNull(scene.GetPrefab("Troll")); Assert.Single(scene.EarlyLookups);
 
-        _scope.WithObjectDB(new[] { Item("Coins") });
-        var db = _scope.LoadWorldObjectDB();
+        var db = ObjectDB.LoadWorld(ObjectDB.DeclareVanilla(new[] { Item("Coins") }));
         db.MarkNotYetRegistered("Coins");
         Assert.Null(db.GetItemPrefab("Coins")); Assert.False(db.TryGetItemPrefab("Coins", out _));
         Assert.Equal(new[] { "Coins", "Coins" }, db.EarlyLookups);
@@ -104,8 +103,7 @@ public sealed class RegistryTests : IDisposable
         var recipe = ScriptableObject.CreateInstance<Recipe>(); recipe.m_item = sword.GetComponent<ItemDrop>();
         recipe.m_resources = new[] { new Piece.Requirement { m_resItem = wood.GetComponent<ItemDrop>(), m_amount = 10, m_amountPerLevel = 5 } };
         var rested = ScriptableObject.CreateInstance<StatusEffect>(); rested.name = "Rested";
-        _scope.WithObjectDB(new[] { sword, wood }, new[] { recipe }, new[] { rested });
-        var db = _scope.LoadWorldObjectDB();
+        var db = ObjectDB.LoadWorld(ObjectDB.DeclareVanilla(new[] { sword, wood }, new[] { recipe }, new[] { rested }));
         var copy = sword.GetComponent<ItemDrop>().m_itemData.Clone();
         Assert.Same(recipe, db.GetRecipe(copy)); Assert.Same(sword, db.GetItemPrefab(copy.m_shared));
         Assert.Equal(new[] { sword.GetComponent<ItemDrop>() }, db.GetAllItems(ItemDrop.ItemData.ItemType.OneHandedWeapon, "Sword"));

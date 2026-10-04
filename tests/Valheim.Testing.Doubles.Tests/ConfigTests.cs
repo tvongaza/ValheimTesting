@@ -27,6 +27,7 @@ public sealed class UnattributedPlugin : BaseUnityPlugin { }
 public sealed class ConfigTests : IDisposable
 {
     private readonly ValheimWorldScope _scope = new ValheimWorldScope().WithScene().WithConfigFiles();
+    private readonly Chainloader _plugins = new();
     private static string Path(string name) => System.IO.Path.Combine("BepInEx", "config", name);
     private static string[] Lines(string? text) => (text ?? "").Replace("\r\n", "\n").Split('\n');
     public void Dispose() { UnityEngine.Object.EndOfFrame(); _scope.Dispose(); }
@@ -34,7 +35,7 @@ public sealed class ConfigTests : IDisposable
     [Fact] public void APluginsConfigIsBoundInAwakeAndWrittenInBepInExsFormat()
     {
         var log = _scope.CaptureLog();
-        var plugin = _scope.LoadPlugin<ConfiguredPlugin>();
+        var plugin = _plugins.Load<ConfiguredPlugin>();
         Assert.Equal(40, plugin.Radius.Value); Assert.Contains("configured 40", log);
         Assert.Equal(System.IO.Path.GetFullPath(Path("example.configured.cfg")), plugin.Config.ConfigFilePath);
         Assert.Equal(new[]
@@ -60,7 +61,7 @@ public sealed class ConfigTests : IDisposable
             "",
         }, Lines(plugin.Config.FileText));
         Assert.Equal("example.configured", plugin.Info.Metadata.GUID);
-        Assert.Throws<InvalidOperationException>(() => _scope.LoadPlugin<UnattributedPlugin>());
+        Assert.Throws<InvalidOperationException>(() => _plugins.Load<UnattributedPlugin>());
     }
 
     [Fact] public void SettingChangedFiresOncePerChangeAndNotForAnEqualValue()

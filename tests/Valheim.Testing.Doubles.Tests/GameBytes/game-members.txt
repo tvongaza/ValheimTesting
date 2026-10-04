@@ -761,6 +761,9 @@ ObjectDB	method	TryGetItemPrefab(ItemDrop.ItemData.SharedData, out UnityEngine.G
 ObjectDB	method	TryGetItemPrefab(int, out UnityEngine.GameObject) : bool	game
 ObjectDB	method	TryGetItemPrefab(string, out UnityEngine.GameObject) : bool	game
 ObjectDB	method	UpdateRegisters() : void	game
+ObjectDB	method	static DeclareVanilla(IEnumerable<UnityEngine.GameObject>, IEnumerable<Recipe>, IEnumerable<StatusEffect>) : ObjectDB	absent
+ObjectDB	method	static LoadMainMenu(ObjectDB) : ObjectDB	absent
+ObjectDB	method	static LoadWorld(ObjectDB) : ObjectDB	absent
 ObjectDB	property	static instance : ObjectDB	game
 OnlineBackendType	type	enum	game
 OnlineBackendType	field	static CustomSocket : OnlineBackendType	game

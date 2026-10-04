@@ -91,23 +91,26 @@ public sealed class WorldScopePresetTests
         Assert.Empty(ZNet.instance.GetPeers()); Assert.Contains(remote, Player.GetAllPlayers());
     }
 
+
     [Fact] public void APluginAwakeThatLocalizesWorksOnADedicatedServer()
     {
         // In 1.0.16 PlatformPrefs falls back to PlayerPrefs on a dedicated server, so this is safe there.
         using var scope = new ValheimWorldScope().AsDedicatedServer().WithConfigFiles().WithScene();
-        Assert.Equal("[eager_hello]", scope.LoadPlugin<EagerPlugin>().Greeting);
-        Assert.True(scope.LoadPlugin<PatientPlugin>().Enabled.Value);
+        var plugins = new Chainloader();
+        Assert.Equal("[eager_hello]", plugins.Load<EagerPlugin>().Greeting);
+        Assert.True(plugins.Load<PatientPlugin>().Enabled.Value);
     }
 
     [Fact] public void OptingIntoThePre10PlatformFailureMakesALocalizingAwakeThrow()
     {
         using var scope = new ValheimWorldScope().AsClient().WithConfigFiles().WithScene();
         PlatformPrefs.Unavailable = "Steamworks is not initialized yet (a pre-1.0 client)";
-        var error = Assert.Throws<InvalidOperationException>(() => scope.LoadPlugin<EagerPlugin>());
+        var plugins = new Chainloader();
+        var error = Assert.Throws<InvalidOperationException>(() => plugins.Load<EagerPlugin>());
         Assert.Contains("Steamworks is not initialized yet", error.Message);
         Assert.Throws<InvalidOperationException>(() => PlatformPrefs.GetString("language"));
         // Written to wait, the same work is safe: Awake binds config only, and the text is made once the platform is up.
-        var patient = scope.LoadPlugin<PatientPlugin>();
+        var patient = plugins.Load<PatientPlugin>();
         Assert.True(patient.Enabled.Value);
         PlatformPrefs.Unavailable = null;
         Localization.instance.AddWord("eager_hello", "Hello");
