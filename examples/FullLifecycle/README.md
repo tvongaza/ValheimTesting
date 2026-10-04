@@ -300,11 +300,17 @@ placeholders, never defaults that the runner guesses.
 From the repository root, these are the preparation check and the complete run:
 
 ```sh
+dotnet run --project examples/NativeSmoke -- env preflight /private/test/campaign.json
 bash scripts/run.sh campaign check /private/test/campaign.json /private/test/three-actor-plan.json
 bash scripts/run.sh campaign run /private/test/campaign.json /private/test/three-actor-plan.json /private/test/runs/first
 ```
 
-`check` reviews local locks, characters, fixture metadata and the host/account profile without touching a host. `run`
+The first line is the candidate `valheim-test env preflight MANIFEST` command; use `--json` for a machine-readable report. It
+reports all independent local lock, loader, character, fixture and profile problems it can find in one pass, plus the
+selected actors and hosts. Add `--hosts` to read the selected source installs and Steam sessions on their hosts;
+it does not copy or launch anything. Without that flag it does not contact hosts or assert their current readiness.
+The scenario's `check` adds its own plan requirements without touching a host. A ready host result is still checked
+again under leases before launch. `run`
 starts with the repository launcher's NuGet cache write check, so an unwritable user cache is replaced before .NET
 tries to restore packages. On Windows the same entry point is `./scripts/run.ps1 campaign ...`. The run then
 takes one lock per host, checks for conflicting client or owned-runtime processes, and prepares all named actors concurrently, even when a server and

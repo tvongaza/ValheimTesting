@@ -75,9 +75,47 @@ public static class HostedRuntimeStage
         return selected.Values.ToArray();
     }
 
-    public static async Task<HostListing> PrepareAsync(IGameHost host, HostedRuntimeKind kind, string source, string destination, string staging,
+    /// <summary>Read-only source-install eligibility, shared by campaign preflight and the later copy.</summary>
+    internal static async Task<HostListing> InspectSourceAsync(IGameHost host, HostedRuntimeKind kind, string source,
+        BepInExLoaderPackage? loaderPackage, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        loaderPackage?.Validate();
+        if (loaderPackage != null && loaderPackage.Files.ContainsKey(BepInExLoader.WindowsProxy) !=
+            (host.Shell.Kind == HostShellKind.PowerShell))
+            throw new InvalidDataException("The reviewed loader package does not match the host platform.");
+        var sourceListing = await HostInstall.ListAsync(host, source, timeout, cancellation: cancellation).ConfigureAwait(false);
+        if (kind == HostedRuntimeKind.Server) _ = HostInstall.DetectServer(sourceListing);
+        else
+        {
+            bool windows = sourceListing.Files.ContainsKey(ClientLaunch.WindowsExecutable);
+            bool linux = sourceListing.Files.ContainsKey(ClientLaunch.LinuxExecutable);
+            bool mac = sourceListing.Files.ContainsKey("Valheim.app/Contents/MacOS/Valheim");
+            if ((windows ? 1 : 0) + (linux ? 1 : 0) + (mac ? 1 : 0) != 1 || sourceListing.Files.ContainsKey(ServerLaunch.WindowsExecutable) ||
+                sourceListing.Files.ContainsKey(ServerLaunch.LinuxExecutable))
+                throw new InvalidOperationException($"The source install on {host.Name} must contain exactly one Windows, Linux or macOS client executable and no server executable.");
+            if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
+                throw new InvalidOperationException($"The client install on {host.Name} does not match its host platform.");
+        }
+        if (loaderPackage == null) _ = HostInstall.Pins(sourceListing);
+        if (loaderPackage == null && host.Shell.Kind == HostShellKind.PowerShell)
+        {
+            byte[] proxy = await HostClientPreflight.Read(host, HostInstall.Join(source, BepInExLoader.WindowsProxy), timeout, cancellation).ConfigureAwait(false)
+                ?? throw new FileNotFoundException($"The source install on {host.Name} has no {BepInExLoader.WindowsProxy}.");
+            byte[] config = await HostClientPreflight.Read(host, HostInstall.Join(source, BepInExLoader.WindowsConfig), timeout, cancellation).ConfigureAwait(false)
+                ?? throw new FileNotFoundException($"The source install on {host.Name} has no {BepInExLoader.WindowsConfig}.");
+            BepInExLoader.RequireWindowsLoader(proxy, Encoding.UTF8.GetString(config), source, $"source install on {host.Name}");
+        }
+        return sourceListing;
+    }
+
+    public static Task<HostListing> PrepareAsync(IGameHost host, HostedRuntimeKind kind, string source, string destination, string staging,
         IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout, CancellationToken cancellation = default,
-        BepInExLoaderPackage? loaderPackage = null)
+        BepInExLoaderPackage? loaderPackage = null) =>
+        PrepareWithInspectedSourceAsync(host, kind, source, destination, staging, files, timeout, cancellation, loaderPackage, null);
+
+    internal static async Task<HostListing> PrepareWithInspectedSourceAsync(IGameHost host, HostedRuntimeKind kind,
+        string source, string destination, string staging, IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout,
+        CancellationToken cancellation, BepInExLoaderPackage? loaderPackage, HostListing? inspectedSource)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(files);
@@ -131,29 +169,12 @@ public static class HostedRuntimeStage
                 if (!selected.TryAdd(relative, (Path.Combine(loaderPackage.Root, relative.Replace('/', Path.DirectorySeparatorChar)), sha)))
                     throw new InvalidDataException("A selected runtime file overrides a reviewed loader file: " + relative);
         }
-        var sourceListing = await HostInstall.ListAsync(host, source, timeout, cancellation: cancellation).ConfigureAwait(false);
-        if (kind == HostedRuntimeKind.Server) _ = HostInstall.DetectServer(sourceListing);
-        else
-        {
-            bool windows = sourceListing.Files.ContainsKey(ClientLaunch.WindowsExecutable);
-            bool linux = sourceListing.Files.ContainsKey(ClientLaunch.LinuxExecutable);
-            bool mac = sourceListing.Files.ContainsKey("Valheim.app/Contents/MacOS/Valheim");
-            if ((windows ? 1 : 0) + (linux ? 1 : 0) + (mac ? 1 : 0) != 1 || sourceListing.Files.ContainsKey(ServerLaunch.WindowsExecutable) ||
-                sourceListing.Files.ContainsKey(ServerLaunch.LinuxExecutable))
-                throw new InvalidOperationException($"The source install on {host.Name} must contain exactly one Windows, Linux or macOS client executable and no server executable.");
-            if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
-                throw new InvalidOperationException($"The client install on {host.Name} does not match its host platform.");
-        }
-        // Check this before shipping anything. It also refuses a source whose loader is absent.
-        if (loaderPackage == null) _ = HostInstall.Pins(sourceListing);
-        if (loaderPackage == null && host.Shell.Kind == HostShellKind.PowerShell)
-        {
-            byte[] proxy = await HostClientPreflight.Read(host, HostInstall.Join(source, BepInExLoader.WindowsProxy), timeout, cancellation).ConfigureAwait(false)
-                ?? throw new FileNotFoundException($"The source install on {host.Name} has no {BepInExLoader.WindowsProxy}.");
-            byte[] config = await HostClientPreflight.Read(host, HostInstall.Join(source, BepInExLoader.WindowsConfig), timeout, cancellation).ConfigureAwait(false)
-                ?? throw new FileNotFoundException($"The source install on {host.Name} has no {BepInExLoader.WindowsConfig}.");
-            BepInExLoader.RequireWindowsLoader(proxy, Encoding.UTF8.GetString(config), source, $"source install on {host.Name}");
-        }
+        // Check this before shipping anything; a reviewed loader package fixes only the disposable copy.
+        if (inspectedSource != null && (inspectedSource.HostName != host.Name || inspectedSource.Root != source))
+            throw new ArgumentException("The inspected source belongs to a different host or install.", nameof(inspectedSource));
+        // A shared campaign preflight already hashed and inspected this source. Reuse that exact listing, then compare
+        // the copied runtime against it: if the source changed before or during the copy, the mismatch is refused.
+        var sourceListing = inspectedSource ?? await InspectSourceAsync(host, kind, source, loaderPackage, timeout, cancellation).ConfigureAwait(false);
         string payload = Path.Combine(Path.GetTempPath(), "valheim-host-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(payload);
         bool shipped = false, copied = false, prepared = false;

@@ -65,5 +65,14 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(listing.Files.ContainsKey("BepInEx/plugins/old.dll"));
         Assert.True(File.Exists(old));
         Assert.False(Directory.Exists(Path.Combine(run, "staging")));
+        var inspected = await HostedRuntimeStage.InspectSourceAsync(host, HostedRuntimeKind.Client, source, null,
+            TimeSpan.FromSeconds(30));
+        File.AppendAllText(core, "changed after preflight");
+        string changedRun = Path.Combine(_root, "vt-changed");
+        var changed = await Assert.ThrowsAsync<IOException>(() => HostedRuntimeStage.PrepareWithInspectedSourceAsync(
+            host, HostedRuntimeKind.Client, source, Path.Combine(changedRun, "runtime"), Path.Combine(changedRun, "staging"),
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30), default, null, inspected));
+        Assert.Contains("differs from the pinned source", changed.Message);
+        Assert.False(Directory.Exists(Path.Combine(changedRun, "runtime")));
     }
 }
