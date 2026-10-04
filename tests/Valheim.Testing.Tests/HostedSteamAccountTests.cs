@@ -3,7 +3,7 @@ using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
 
-// PinnedServerRun --profile with a steamAccounts pool: the profile client's account is leased (real lease scripts on this machine)
+// A campaign client's Steam identity lease in the hosted runner: the client's account is leased (real lease scripts on this machine)
 // before its host is touched, renewed while it runs and released after it stopped; without a pool the run is exactly as before.
 public sealed partial class HostedServerRunTests
 {
@@ -39,7 +39,7 @@ public sealed partial class HostedServerRunTests
     {
         var plain = WithClient(null, "gpu-plain", "host-plain");
         string plainOutput = Path.Combine(_root, "out-plain");
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", plain.Profile, "run", plain.Plan, plainOutput], Options(plain.Host, plain.Server, run =>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(plain.Profile), ["run", plain.Plan, plainOutput], Options(plain.Host, plain.Server, run =>
         {
             using (run.OpenClient(OwnedClient())) { }
             return Task.CompletedTask;
@@ -54,7 +54,7 @@ public sealed partial class HostedServerRunTests
 
         LeaseBox.WritePool(_root, Leases);
         var leased = WithClient(Accounts());
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", leased.Profile, "run", leased.Plan, Output], Options(leased.Host, leased.Server, run =>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(leased.Profile), ["run", leased.Plan, Output], Options(leased.Host, leased.Server, run =>
         {
             using (run.OpenClient(OwnedClient())) { }
             return Task.CompletedTask;
@@ -77,7 +77,7 @@ public sealed partial class HostedServerRunTests
         LeaseBox.WritePool(_root, Leases);
         var run = WithClient(Accounts());
         SteamAccountStatus? during = null, afterStop = null;
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, async context =>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, async context =>
         {
             using (var session = context.OpenClient(OwnedClient()))
             {
@@ -97,9 +97,9 @@ public sealed partial class HostedServerRunTests
     {
         LeaseBox.WritePool(_root, Leases);
         var run = WithClient(Accounts());
-        await using var other = await SteamAccountPool.Read(PoolFile).AcquireAsync(LeaseBox.Host(), "another-runner run-x client player", LeaseBox.Timeout);
+        await using var other = await TestEnvironment.Pool(File.ReadAllText(PoolFile)).AcquireAsync(LeaseBox.Host(), "another-runner run-x client player", LeaseBox.Timeout);
         bool opened = false;
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, context =>
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
             using (context.OpenClient(OwnedClient())) opened = true;
             return Task.CompletedTask;
@@ -119,7 +119,7 @@ public sealed partial class HostedServerRunTests
         LeaseBox.WritePool(_root, Leases);
         var run = WithClient(Accounts());
         bool cancelled = false;
-        int code = await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, async context =>
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, async context =>
         {
             using var session = context.OpenClient(OwnedClient());
             LeaseBox.ReleaseBehindTheHoldersBack(Leases);
@@ -142,7 +142,7 @@ public sealed partial class HostedServerRunTests
         LeaseBox.WritePool(_root, Leases);
         var run = WithClient(Accounts());
         run.Client.Failures["client-start"] = new HostResult(HostOutcome.Exited, 0, "VT-INTERACTIVE no-steam no Steam client runs as tester\n", "", TimeSpan.Zero, false);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, context =>
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
             using (context.OpenClient(OwnedClient())) { }
             return Task.CompletedTask;
@@ -157,7 +157,7 @@ public sealed partial class HostedServerRunTests
     {
         LeaseBox.WritePool(_root, Leases);
         var run = WithClient(Accounts());
-        Assert.Equal(3, await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, context =>
+        Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
             var session = context.OpenClient(OwnedClient());
             run.Client.Failures["stop"] = new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(45), true);
@@ -184,7 +184,7 @@ public sealed partial class HostedServerRunTests
         LeaseBox.WritePool(_root, Leases);
         var run = WithClient(Accounts(check: true));
         run.Client.SteamUserReply = reply + "\n";
-        int code = await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, context =>
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
             using (context.OpenClient(OwnedClient())) { }
             return Task.CompletedTask;
@@ -217,7 +217,7 @@ public sealed partial class HostedServerRunTests
         var run = WithClient(Accounts(check: true));
         run.Client.SteamUserReply = "VT-STEAMUSER id " + LeaseBox.SteamId + "\n";
         bool exercised = false;
-        int code = await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, context =>
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
             using var session = context.OpenClient(OwnedClient());
             exercised = true;
@@ -236,7 +236,7 @@ public sealed partial class HostedServerRunTests
         var run = WithClient(Accounts());
         var transport = new ScriptedTransport();
         SteamAccountStatus? during = null;
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, async context =>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, async context =>
         {
             using (var session = context.OpenClient(new ClientRunPlan { Mode = "attach", Port = 15578, Pinning = "none" }))
             {
@@ -263,7 +263,7 @@ public sealed partial class HostedServerRunTests
             LeaseBox.WritePool(_root, Leases, [new { name = LeaseBox.Account, steamId = LeaseBox.SteamId }]);
             var run = WithClient(Accounts(check: true));
             run.Client.SteamUserReply = "VT-STEAMUSER id " + LeaseBox.SteamId + "\n";
-            Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, context =>
+            Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
             {
                 using (context.OpenClient(OwnedClient())) { }
                 return Task.CompletedTask;
@@ -275,7 +275,7 @@ public sealed partial class HostedServerRunTests
             var control = WithClient(Accounts(check: true), "gpu-control", "host-control");
             control.Client.SteamUserReply = "VT-STEAMUSER id " + LeaseBox.SteamId + "\n";
             string controlOutput = Path.Combine(_root, "out-control");
-            Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", control.Profile, "run", control.Plan, controlOutput], Options(control.Host, control.Server, context =>
+            Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(control.Profile), ["run", control.Plan, controlOutput], Options(control.Host, control.Server, context =>
             {
                 using (context.OpenClient(OwnedClient())) { }
                 return Task.CompletedTask;

@@ -26,10 +26,10 @@ public sealed class EnvironmentRecipe
 }
 
 /// <summary>Why a named campaign actor was assigned to one inventory recipe.</summary>
-public sealed record EnvironmentAssignment(string Actor, string Environment, string Role, string Host, string Reason);
+internal sealed record EnvironmentAssignment(string Actor, string Environment, string Role, string Host, string Reason);
 
-/// <summary>The resolved fixed profile used by the existing host lifecycle, and its reviewable assignments.</summary>
-public sealed record ResolvedEnvironmentInventory(EnvironmentProfile Profile,
+/// <summary>The resolved environment a run's host lifecycle uses, and its reviewable assignments.</summary>
+internal sealed record ResolvedEnvironmentInventory(ResolvedEnvironment Environment,
     IReadOnlyList<EnvironmentAssignment> Assignments)
 {
     /// <summary>Loader selected for each actor without changing the caller's campaign declaration.</summary>
@@ -113,7 +113,7 @@ public sealed class EnvironmentInventory
     }
 
     /// <summary>Assign the campaign's actors in order, backtracking when an earlier choice blocks a later one.</summary>
-    public ResolvedEnvironmentInventory Resolve(HostedCampaignManifest campaign)
+    internal ResolvedEnvironmentInventory Resolve(HostedCampaignManifest campaign)
     {
         ArgumentNullException.ThrowIfNull(campaign);
         var actors = new[] { (Name: "server", Kind: "server", Input: campaign.Server) }
@@ -152,7 +152,7 @@ public sealed class EnvironmentInventory
             return false;
         }
         if (!Search(0)) throw new ArgumentException($"No environment assignment for {failedActor}: " + string.Join("; ", refusals));
-        var profile = new EnvironmentProfile
+        var profile = new ResolvedEnvironment
         {
             Hosts = Hosts,
             Server = chosen["server"].Role(),
@@ -174,6 +174,29 @@ public sealed class EnvironmentInventory
             LoaderPackages = actors.ToDictionary(actor => actor.Name,
                 actor => actor.Input.LoaderPackage ?? chosen[actor.Name].LoaderPackage, StringComparer.Ordinal),
         };
+    }
+
+    /// <summary>
+    /// A standalone run's one actor, the dedicated server: the first server environment in inventory order whose host and
+    /// ports can run <paramref name="plan"/>, with the reason it was chosen. Clients go through a campaign, which declares them.
+    /// </summary>
+    internal (ResolvedEnvironment Environment, EnvironmentAssignment Assignment) PlaceServer(ServerRunPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var skipped = new List<string>();
+        foreach (var recipe in Environments.Where(recipe => recipe.Roles.Contains("server")))
+        {
+            var role = recipe.Role();
+            if (recipe.LoaderPackage != null)
+            { skipped.Add(recipe.Name + ": it names a loaderPackage, which only a campaign's preparation applies"); continue; }
+            if (HostedServerRun.Refusal(Hosts[recipe.Host], role, plan) is { } refusal) { skipped.Add(recipe.Name + ": " + refusal); continue; }
+            var environment = new ResolvedEnvironment { Hosts = Hosts, Server = role };
+            environment.Validate();
+            return (environment, new EnvironmentAssignment("server", recipe.Name, "dedicated-server", recipe.Host,
+                skipped.Count == 0 ? "first server recipe in inventory order" : "first server recipe that can run the plan after " + string.Join("; ", skipped)));
+        }
+        throw new ArgumentException("No server environment in the inventory can run this plan" +
+            (skipped.Count == 0 ? ": it lists none." : ": " + string.Join("; ", skipped)));
     }
 
     private static string? Refusal(string actor, string kind, HostedCampaignRole input, EnvironmentRecipe recipe,

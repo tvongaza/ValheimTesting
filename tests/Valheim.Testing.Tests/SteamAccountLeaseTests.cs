@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Xunit;
 
-// Account pools and leases with fake processes: what a pool file may hold, what the lease host is sent, and how a claim, a
+// Account pools and leases with fake processes: what a pool may hold, what the lease host is sent, and how a claim, a
 // renewal and a release are read, including lost replies. The contention, expiry and release checks run through real shells
 // below. Names only: a credential never appears in anything this API writes, sends or reports.
 public class SteamAccountPoolTests
@@ -14,7 +14,6 @@ public class SteamAccountPoolTests
           "pool": "valheim-clients",
           "leaseDirectory": "/var/tmp/valheim-testing/leases",
           "leaseMinutes": 90,
-          "steamGuard": "signed-in",
           "accounts": [
             { "name": "vt_client_one", "host": "gaming-pc" },
             { "name": "vt_client_two" }
@@ -25,52 +24,31 @@ public class SteamAccountPoolTests
     private static ScriptedGameHost Host(FakeLauncher fake) => new SshGameHost("lease-box", "tester@lease-box.example", HostShell.Bash, 0, null, null, "ssh", fake);
     private static string Reply(params string[] lines) => string.Join('\n', lines) + "\n";
 
-    [Fact] public void APoolFileNamesAccountsAndDefaultsToSignedIn()
+    [Fact] public void APoolNamesAccounts()
     {
-        var pool = SteamAccountPool.Parse(Sample);
-        Assert.Equal("valheim-clients", pool.Pool); Assert.Equal(90, pool.LeaseMinutes); Assert.Equal(SteamAccountPool.SignedIn, pool.SteamGuard);
+        var pool = TestEnvironment.Pool(Sample);
+        Assert.Equal("valheim-clients", pool.Pool); Assert.Equal(90, pool.LeaseMinutes);
         Assert.Equal(new[] { "vt_client_one", "vt_client_two" }, pool.Accounts.Select(account => account.Name));
         Assert.Equal("gaming-pc", pool.Accounts[0].Host);
-        Assert.Equal(SteamAccountPool.SignedIn,
-            SteamAccountPool.Parse(Sample.Replace("\"steamGuard\": \"signed-in\",", "")).SteamGuard);
     }
 
     [Theory]
-    [InlineData("\"signed-in\"", "\"automatic\"", "runner never signs in")]
-    [InlineData("\"signed-in\"", "\"approve-each-login\"", "runner never signs in")]
     [InlineData("\"vt_client_two\"", "\"user:password\"", "must be a Steam account name")]
     [InlineData("\"vt_client_two\"", "\"VT_CLIENT_ONE\"", "listed twice")]
-    [InlineData("{ \"name\": \"vt_client_two\" }", "{ \"name\": \"vt_client_two\", \"passwordVariable\": \"VT_PW\" }", "passwordVariable")]
     [InlineData("\"leaseMinutes\": 90", "\"leaseMinutes\": 0", "leaseMinutes must be")]
     [InlineData("\"/var/tmp/valheim-testing/leases\"", "\"leases\"", "leaseDirectory must be")]
-    [InlineData("\"accounts\": [", "\"extra\": 1, \"accounts\": [", "extra")]
     public void AnInvalidPoolIsRefused(string find, string replace, string expected)
     {
         string json = Sample.Replace(find, replace);
         Assert.NotEqual(Sample, json);
-        var error = Record.Exception(() => SteamAccountPool.Parse(json));
+        var error = Record.Exception(() => TestEnvironment.Pool(json));
         Assert.NotNull(error);
         Assert.Contains(expected, error.Message);
     }
 
-    [Theory]
-    [InlineData("password")]
-    [InlineData("Password")]
-    [InlineData("shared_secret")]
-    [InlineData("refreshToken")]
-    [InlineData("guard-code")]
-    public void ACredentialFieldIsRefusedByNameWithoutRepeatingItsValue(string field)
-    {
-        string canary = "canary-" + Guid.NewGuid().ToString("N");
-        string json = Sample.Replace("{ \"name\": \"vt_client_two\" }", "{ \"name\": \"vt_client_two\", \"" + field + "\": \"" + canary + "\" }");
-        var error = Assert.Throws<ArgumentException>(() => SteamAccountPool.Parse(json));
-        Assert.Contains("'" + field + "' at $.accounts[1]." + field, error.Message);
-        Assert.DoesNotContain(canary, error.ToString());
-    }
-
     [Fact] public async Task AClaimSendsNamesOnlyAndReadsTheLease()
     {
-        var pool = SteamAccountPool.Parse(Sample);
+        var pool = TestEnvironment.Pool(Sample);
         var fake = new FakeLauncher().Exits(0, Reply("VT-LEASE claimed vt_client_two 7 1790000000"), FakeLauncher.Report(0));
         var lease = await pool.AcquireAsync(Host(fake), "run-42 on ci", Timeout, clientHost: "linux-gpu");
         Assert.Equal("vt_client_two", lease.Account); Assert.Equal("valheim-clients", lease.Pool); Assert.Equal("run-42 on ci", lease.Owner);
@@ -87,7 +65,7 @@ public class SteamAccountPoolTests
         fake.Exits(0, Reply("VT-LEASE claimed vt_client_one 1 1790000000"), FakeLauncher.Report(0));
         await pool.AcquireAsync(Host(fake), "run-43", Timeout, clientHost: "gaming-pc");
         Assert.Contains("accounts='vt_client_one\nvt_client_two'", FakeLauncher.Script(fake.Calls[1]));
-        await Assert.ThrowsAsync<ArgumentException>(() => SteamAccountPool.Parse(Sample.Replace("{ \"name\": \"vt_client_two\" }", "{ \"name\": \"vt_client_two\", \"host\": \"x\" }"))
+        await Assert.ThrowsAsync<ArgumentException>(() => TestEnvironment.Pool(Sample.Replace("{ \"name\": \"vt_client_two\" }", "{ \"name\": \"vt_client_two\", \"host\": \"x\" }"))
             .AcquireAsync(Host(fake), "run-44", Timeout, clientHost: "elsewhere"));
         Assert.Equal(2, fake.Calls.Count);
     }
@@ -95,7 +73,7 @@ public class SteamAccountPoolTests
     [Fact] public async Task WhenEveryAccountIsHeldTheHoldersAreReported()
     {
         var fake = new FakeLauncher().Exits(0, Reply("VT-LEASE none", "held vt_client_one 1790000000 run-41 on another machine", "taken vt_client_two"), FakeLauncher.Report(0));
-        var error = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => SteamAccountPool.Parse(Sample).AcquireAsync(Host(fake), "run-42", Timeout));
+        var error = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => TestEnvironment.Pool(Sample).AcquireAsync(Host(fake), "run-42", Timeout));
         Assert.Equal(SteamAccountLeaseState.NoneFree, error.State);
         Assert.Equal(new[] { SteamAccountState.Held, SteamAccountState.Contended }, error.Accounts.Select(account => account.State));
         Assert.Equal("run-41 on another machine", error.Accounts[0].Holder);
@@ -105,14 +83,14 @@ public class SteamAccountPoolTests
     [Theory, InlineData(true), InlineData(false)] public async Task AnUnprovenClaimIsUnknownAndExpiresOnItsOwn(bool timedOut)
     {
         var fake = timedOut ? new FakeLauncher().TimesOut() : new FakeLauncher().Exits(0, Reply("VT-LEASE claimed someone_else 1 1"), FakeLauncher.Report(0));
-        var error = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => SteamAccountPool.Parse(Sample).AcquireAsync(Host(fake), "run-42", Timeout, leaseTime: TimeSpan.FromMinutes(5)));
+        var error = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => TestEnvironment.Pool(Sample).AcquireAsync(Host(fake), "run-42", Timeout, leaseTime: TimeSpan.FromMinutes(5)));
         Assert.Equal(SteamAccountLeaseState.Unknown, error.State);
         Assert.Contains("expires after 300.0 s", error.Message);
     }
 
     [Fact] public async Task RenewingAndReleasingNeedTheLeasesOwnClaim()
     {
-        var pool = SteamAccountPool.Parse(Sample);
+        var pool = TestEnvironment.Pool(Sample);
         var fake = new FakeLauncher()
             .Exits(0, Reply("VT-LEASE claimed vt_client_one 3 1790000000"), FakeLauncher.Report(0))
             .Exits(0, Reply("VT-LEASE renewed 1790005400"), FakeLauncher.Report(0))
@@ -150,7 +128,7 @@ public class SteamAccountPoolTests
         Environment.SetEnvironmentVariable(variable, canary);
         try
         {
-            var pool = SteamAccountPool.Parse(Sample);
+            var pool = TestEnvironment.Pool(Sample);
             var fake = new FakeLauncher()
                 .Exits(0, Reply("VT-LEASE claimed vt_client_two 1 1790000000"), FakeLauncher.Report(0))
                 .Exits(0, Reply("VT-LEASE renewed 1790000100"), FakeLauncher.Report(0))
@@ -190,7 +168,7 @@ internal static class LeaseChecks
 {
     public static SteamAccountPool Pool(string root, int accounts) => new()
     {
-        Pool = "ci-pool", LeaseDirectory = root, SteamGuard = SteamAccountPool.SignedIn,
+        Pool = "ci-pool", LeaseDirectory = root,
         Accounts = Enumerable.Range(1, accounts).Select(i => new SteamPoolAccount { Name = "vt_client_" + i }).ToList(),
     };
 

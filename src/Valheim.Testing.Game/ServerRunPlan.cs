@@ -14,7 +14,7 @@ public sealed class PinnedDirectory
     /// <summary>Without <paramref name="requireHashes"/> (an explicitly unpinned plan) the hashes may be left out; listed ones are still full SHA256.</summary>
     public void Validate(bool requireHashes)
     {
-        // A profile run may be assembled on macOS for a Windows host. The source then names an absolute path on the
+        // A run on another host may be assembled on macOS for a Windows host. The source then names an absolute path on the
         // host rather than one this process can open; the hosted runner verifies its bytes through HostListing.
         bool hostAbsolute = System.Text.RegularExpressions.Regex.IsMatch(Source, @"^[A-Za-z]:[\\/]") || Source.StartsWith(@"\\", StringComparison.Ordinal);
         if (!(Path.IsPathFullyQualified(Source) || hostAbsolute) || (requireHashes && Sha256.Count == 0)) throw new ArgumentException("A full source path and fixture hashes are required.");
@@ -148,7 +148,7 @@ public partial class ServerRunPlan
     {
         if (platform != host)
             throw new PlatformNotSupportedException($"A {platform} dedicated-server runtime must run on a {platform} host, not this {host} one; use validate here, " +
-                "or run on a matching host, the Linux server container, or a Linux host with --profile.");
+                "or run on a matching host, the Linux server container, or a Linux host with --inventory.");
     }
     /// <summary>The plan's patcher names and log scan classifications are well formed (the runner checks them for every plan).</summary>
     public void CheckPatchersAndLogScan()

@@ -52,8 +52,8 @@ public static class ReviewCaptureScenario
 
     public static void Run(CampaignRun run)
     {
-        if (run.Profile != null)
-            throw new NotSupportedException("This example captures on the runner's local client. A remote client needs its profile host passed to ReviewCapture.");
+        if (run.RemoteClients)
+            throw new NotSupportedException("This example captures on the runner's local client. A campaign client needs its host (run.ClientHost) passed to ReviewCapture.");
         var plan = run.Plan;
         var client = plan.Client!;
         // The run's own directories, before the client launches: an output path with a space is refused here, not mid-round.

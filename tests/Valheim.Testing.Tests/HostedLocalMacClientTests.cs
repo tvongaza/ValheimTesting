@@ -4,10 +4,10 @@ using Xunit;
 
 public sealed partial class HostedServerRunTests
 {
-    private (EnvironmentProfile Profile, ServerRunPlan Server, ClientRunPlan Client) LocalMacProfile(FakeServerHost serverHost, bool local = true)
+    private (ResolvedEnvironment Profile, ServerRunPlan Server, ClientRunPlan Client) LocalMacProfile(FakeServerHost serverHost, bool local = true)
     {
         var (planPath, profilePath) = Write(serverHost);
-        var profile = EnvironmentProfile.Read(profilePath);
+        var profile = TestEnvironment.Read(profilePath);
         string install = Path.Combine(_root, "mac-install");
         profile.Hosts["mac"] = new HostProfile
         {
@@ -106,10 +106,10 @@ public sealed partial class HostedServerRunTests
         var (profile, server, client) = LocalMacProfile(serverHost);
         profile.SteamAccounts = new SteamAccountsProfile
         {
-            Pool = "fake-accounts.json", LeaseHost = "lease-box", CheckSignedIn = true,
+            LeaseHost = "lease-box", CheckSignedIn = true,
             Accounts = new SteamAccountPool
             {
-                Pool = "mac-profile-test", LeaseDirectory = Path.Combine(_root, "leases"), SteamGuard = SteamAccountPool.SignedIn,
+                Pool = "mac-profile-test", LeaseDirectory = Path.Combine(_root, "leases"),
                 Accounts = [new SteamPoolAccount { Name = "test_mac", Host = "mac", SteamId = LeaseBox.SteamId }],
             },
         };

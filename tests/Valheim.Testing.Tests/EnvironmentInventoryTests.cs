@@ -45,12 +45,12 @@ public sealed class EnvironmentInventoryTests : IDisposable
         var inventory = Inventory();
         inventory.Validate(_root);
         var result = inventory.Resolve(Campaign());
-        Assert.Equal("pc", result.Profile.Server!.Host);
-        Assert.Equal("pc", result.Profile.Clients["client-a"].Host);
-        Assert.Equal("mac", result.Profile.Clients["client-b"].Host);
-        Assert.Null(result.Profile.Clients["client-a"].SteamAccount);
-        Assert.True(result.Profile.SteamAccounts!.CheckSignedIn);
-        Assert.Equal(@"C:\leases", result.Profile.SteamAccounts.ObservedLeaseDirectory);
+        Assert.Equal("pc", result.Environment.Server!.Host);
+        Assert.Equal("pc", result.Environment.Clients["client-a"].Host);
+        Assert.Equal("mac", result.Environment.Clients["client-b"].Host);
+        Assert.Null(result.Environment.Clients["client-a"].SteamAccount);
+        Assert.True(result.Environment.SteamAccounts!.CheckSignedIn);
+        Assert.Equal(@"C:\leases", result.Environment.SteamAccounts.ObservedLeaseDirectory);
         Assert.Equal(["server-pc", "client-pc", "client-mac"], result.Assignments.Select(a => a.Environment));
     }
 
@@ -100,9 +100,9 @@ public sealed class EnvironmentInventoryTests : IDisposable
         campaign.Clients["client-a"].EnvironmentCandidates = ["client-vm"];
         campaign.Clients["client-b"].EnvironmentCandidates = ["client-pc"];
         var result = inventory.Resolve(campaign);
-        Assert.Equal("vm", result.Profile.Clients["client-a"].Host);
-        Assert.Null(result.Profile.SteamAccounts!.Accounts);
-        Assert.Null(result.Profile.Clients["client-a"].SteamAccount);
+        Assert.Equal("vm", result.Environment.Clients["client-a"].Host);
+        Assert.Null(result.Environment.SteamAccounts!.Accounts);
+        Assert.Null(result.Environment.Clients["client-a"].SteamAccount);
     }
 
     [Fact]
@@ -168,36 +168,35 @@ public sealed class EnvironmentInventoryTests : IDisposable
     }
 
     [Fact]
-    public void UnpreparedInventoryProfileCannotBeSerializedAsReady()
+    public async Task AResolvedEnvironmentLeasesNothingUntilItsIdentitiesWereObserved()
     {
         var inventory = Inventory();
         inventory.Validate(_root);
-        var profile = inventory.Resolve(Campaign()).Profile;
-        string file = Path.Combine(_root, "profile.json");
-        File.WriteAllText(file, JsonSerializer.Serialize(profile, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
-        Assert.Throws<ArgumentException>(() => EnvironmentProfile.Read(file));
+        var environment = inventory.Resolve(Campaign()).Environment;
+        string message = (await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            SteamAccountHold.AcquireAsync(environment, "client-a", "run-1", LeaseBox.Host()))).Message;
+        Assert.Contains("not been observed", message);
+        // Observed identities are always checked against the host's signed-in user: turning that off is refused.
+        environment.SteamAccounts!.CheckSignedIn = false;
+        Assert.Contains("require the signed-in check", Assert.Throws<ArgumentException>(environment.Validate).Message);
     }
 
     [Fact]
-    public void ObservedAccountsBecomeAValidPrivateProfileOnlyAfterDistinctIdentityChecks()
+    public void ObservedAccountsBecomeTheInMemoryLeasePoolOnlyAfterDistinctIdentityChecks()
     {
         var inventory = Inventory();
         inventory.Validate(_root);
-        var profile = inventory.Resolve(Campaign()).Profile;
+        var environment = inventory.Resolve(Campaign()).Environment;
         string first = SteamPoolAccount.SteamId64(101), second = SteamPoolAccount.SteamId64(202);
-        Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CompleteObservedSteamAccounts(profile,
+        Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CompleteObservedSteamAccounts(environment,
             new Dictionary<string, string> { ["client-a"] = first, ["client-b"] = first }));
-        HostedCampaignPreparation.CompleteObservedSteamAccounts(profile,
+        HostedCampaignPreparation.CompleteObservedSteamAccounts(environment,
             new Dictionary<string, string> { ["client-a"] = first, ["client-b"] = second });
-        string file = Path.Combine(_root, "prepared-profile.json");
-        File.WriteAllText(file, JsonSerializer.Serialize(profile,
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
-        var parsed = EnvironmentProfile.Read(file);
-        Assert.Equal(2, parsed.SteamAccounts!.Accounts!.Accounts.Count);
-        Assert.Equal(SteamPoolAccount.LeaseKey(first), parsed.Clients["client-a"].SteamAccount);
-        Assert.Equal(SteamPoolAccount.LeaseKey(second), parsed.Clients["client-b"].SteamAccount);
-        Assert.DoesNotContain(first, parsed.Clients["client-a"].SteamAccount!);
-        Assert.True(parsed.SteamAccounts.CheckSignedIn);
+        Assert.Equal(2, environment.SteamAccounts!.Accounts!.Accounts.Count);
+        Assert.Equal(SteamPoolAccount.LeaseKey(first), environment.Clients["client-a"].SteamAccount);
+        Assert.Equal(SteamPoolAccount.LeaseKey(second), environment.Clients["client-b"].SteamAccount);
+        Assert.DoesNotContain(first, environment.Clients["client-a"].SteamAccount!);
+        Assert.True(environment.SteamAccounts.CheckSignedIn);
     }
 
     [Fact]
@@ -246,9 +245,9 @@ public sealed class EnvironmentInventoryTests : IDisposable
         inventory.LeaseDirectory = "/tmp/test-leases";
         inventory.Validate(_root);
         var result = inventory.Resolve(Campaign());
-        Assert.Equal("container", result.Profile.Hosts[result.Profile.Server!.Host].Kind);
-        Assert.Equal("local", result.Profile.Hosts[result.Profile.Clients["client-a"].Host].Kind);
-        Assert.Equal("ssh", result.Profile.Hosts[result.Profile.Clients["client-b"].Host].Kind);
+        Assert.Equal("container", result.Environment.Hosts[result.Environment.Server!.Host].Kind);
+        Assert.Equal("local", result.Environment.Hosts[result.Environment.Clients["client-a"].Host].Kind);
+        Assert.Equal("ssh", result.Environment.Hosts[result.Environment.Clients["client-b"].Host].Kind);
     }
 
     [Fact]

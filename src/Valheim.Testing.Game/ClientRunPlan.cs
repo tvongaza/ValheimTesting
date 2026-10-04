@@ -144,7 +144,7 @@ public sealed class ClientRunPlan
     {
         bool pinned = Pinned;
         if (Mode is not ("owned" or "attach")) throw new ArgumentException("Client mode is owned or attach.");
-        // The install is a path on the client's machine, which with an environment profile is not this one (a Windows
+        // The install is a path on the client's machine, which on another host is not this one (a Windows
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
         var architecture = LaunchArchitecture;

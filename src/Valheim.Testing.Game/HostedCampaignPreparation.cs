@@ -86,14 +86,14 @@ public sealed class HostedCampaignManifest
 /// </summary>
 public sealed class PreparedHostedCampaign : IAsyncDisposable
 {
-    private readonly EnvironmentProfile _profile;
+    private readonly ResolvedEnvironment _profile;
     private readonly IReadOnlyList<(string Host, string Runtime, string Stage)> _copies;
     private readonly IReadOnlyList<(string Host, HostedCampaignCharacter Character)> _characters;
     private readonly Func<string, IGameHost>? _hostFactory;
     private readonly TimeSpan _timeout;
     private bool _retired;
 
-    internal PreparedHostedCampaign(HostedCampaignManifest manifest, EnvironmentProfile profile, IReadOnlyDictionary<string, HostListing> listings,
+    internal PreparedHostedCampaign(HostedCampaignManifest manifest, ResolvedEnvironment profile, IReadOnlyDictionary<string, HostListing> listings,
         IReadOnlyDictionary<string, HostedRuntimeFile[]> selections,
         IReadOnlyList<(string Host, string Runtime, string Stage)> copies,
         IReadOnlyList<(string Host, HostedCampaignCharacter Character)> characters, Func<string, IGameHost>? hostFactory, TimeSpan timeout)
@@ -104,7 +104,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     /// <summary>The campaign as it was read for this preparation: binding uses it, not the file read again later.</summary>
     internal HostedCampaignManifest Manifest { get; }
     /// <summary>The resolved environment the runner places the server and clients with; never written to a file.</summary>
-    internal EnvironmentProfile Environment => _profile;
+    internal ResolvedEnvironment Environment => _profile;
     public IReadOnlyDictionary<string, HostListing> Listings { get; }
     /// <summary>Local reviewed files selected for each process, for deriving ValheimCLI MD5 pins and provenance.</summary>
     public IReadOnlyDictionary<string, HostedRuntimeFile[]> Selections { get; }
@@ -217,7 +217,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
 /// <summary>One command's setup half: reviewed inputs become pinned, separate disposable server/client installs.</summary>
 public static class HostedCampaignPreparation
 {
-    internal sealed record Inputs(HostedCampaignManifest Manifest, EnvironmentProfile Profile,
+    internal sealed record Inputs(HostedCampaignManifest Manifest, ResolvedEnvironment Profile,
         List<(string Name, GameRole Role, HostedCampaignRole Input)> Roles,
         Dictionary<string, HostedRuntimeFile[]> Selections, Dictionary<string, HostedCharacterSelection> Characters);
 
@@ -410,14 +410,14 @@ public static class HostedCampaignPreparation
         Try("campaign", "manifest", () => manifest = HostedCampaignManifest.Read(manifestFile));
         if (manifest == null) return new Inspection(null, new CampaignPreflightReport(problems));
 
-        EnvironmentProfile? profile = null;
+        ResolvedEnvironment? profile = null;
         ResolvedEnvironmentInventory? resolved = null;
         if (manifest.Clients.ContainsKey("server"))
             problems.Add(new("server", "role", "The actor name server is reserved for the dedicated server."));
         else Try("campaign", "inventory", () =>
         {
             resolved = EnvironmentInventory.Read(manifest.Inventory).Resolve(manifest);
-            profile = resolved.Profile;
+            profile = resolved.Environment;
         });
         if (manifest.Server.Character != null)
             problems.Add(new("server", "character", "A dedicated server has no character."));
@@ -495,8 +495,8 @@ public static class HostedCampaignPreparation
         return new Inspection(new Inputs(manifest, profile, roles, selected, characters), report);
     }
 
-    /// <summary>Turn observed, distinct signed-in identities into the private fixed profile used by the runner.</summary>
-    internal static void CompleteObservedSteamAccounts(EnvironmentProfile profile, IReadOnlyDictionary<string, string> observedIds)
+    /// <summary>Turn observed, distinct signed-in identities into the in-memory lease pool the runner leases from.</summary>
+    internal static void CompleteObservedSteamAccounts(ResolvedEnvironment profile, IReadOnlyDictionary<string, string> observedIds)
     {
         var section = profile.SteamAccounts ?? throw new ArgumentException("The inventory has no Steam lease section.", nameof(profile));
         string directory = section.ObservedLeaseDirectory ?? throw new ArgumentException("This profile does not use observed Steam identities.", nameof(profile));
@@ -505,12 +505,11 @@ public static class HostedCampaignPreparation
             throw new ArgumentException("Every client needs a different, verified signed-in Steam identity.", nameof(observedIds));
         var pool = new SteamAccountPool
         {
-            Pool = "steam-clients", LeaseDirectory = directory, SteamGuard = SteamAccountPool.SignedIn,
+            Pool = "steam-clients", LeaseDirectory = directory,
             Accounts = observedIds.Values.Select(id => new SteamPoolAccount
             { Name = SteamPoolAccount.LeaseKey(id), SteamId = id }).ToList(),
         };
         section.ObservedLeaseDirectory = null;
-        section.InlinePool = pool;
         section.Accounts = pool;
         foreach (var (client, id) in observedIds)
             profile.Clients[client].SteamAccount = SteamPoolAccount.LeaseKey(id);

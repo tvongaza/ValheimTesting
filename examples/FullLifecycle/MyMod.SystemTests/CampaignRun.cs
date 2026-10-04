@@ -33,22 +33,22 @@ public sealed class CampaignRun
     /// in one run never overwrites the first one's evidence.
     /// </summary>
     public required Func<ClientRunPlan, string?, ClientSession> OpenClient { get; init; }
-    /// <summary>Opens one named profile client on its own host and Steam lease; used while both clients remain connected.</summary>
-    public Func<ClientRunPlan, string, ClientSession> OpenProfileClient { get; init; } = (_, _) =>
-        throw new ArgumentException("This run has no named client profile.");
+    /// <summary>Opens one named campaign client on its own host and Steam lease; used while both clients remain connected.</summary>
+    public Func<ClientRunPlan, string, ClientSession> OpenCampaignClient { get; init; } = (_, _) =>
+        throw new ArgumentException("This run is not a campaign with named clients.");
     /// <summary>
-    /// Set up any number of named profile clients concurrently. Each role has its own host, Steam lease,
+    /// Set up any number of named campaign clients concurrently. Each role has its own host, Steam lease,
     /// runtime and character. All opens finish before the caller advances past its menu checkpoint. If
     /// one open fails, every successful session is closed before the original failure is rethrown.
     /// </summary>
-    public IReadOnlyDictionary<string, ClientSession> OpenProfileClientsParallel(IReadOnlyDictionary<string, ClientRunPlan> clients)
+    public IReadOnlyDictionary<string, ClientSession> OpenCampaignClientsParallel(IReadOnlyDictionary<string, ClientRunPlan> clients)
     {
         if (clients.Count == 0) throw new ArgumentException("Name at least one client.", nameof(clients));
         var opened = new ConcurrentDictionary<string, ClientSession>(StringComparer.Ordinal);
         var tasks = clients.Select(pair => Task.Run(() =>
         {
             Cancellation.ThrowIfCancellationRequested();
-            opened[pair.Key] = OpenProfileClient(pair.Value, pair.Key);
+            opened[pair.Key] = OpenCampaignClient(pair.Value, pair.Key);
         }, Cancellation)).ToArray();
         try { Task.WhenAll(tasks).GetAwaiter().GetResult(); }
         catch
@@ -60,8 +60,10 @@ public sealed class CampaignRun
     }
     public required ScenarioReport Report { get; init; }
     public required string Output { get; init; }
-    /// <summary>The pinned runner's environment profile, when a client is hosted elsewhere.</summary>
-    public EnvironmentProfile? Profile { get; init; }
+    /// <summary>The dedicated server's host when it runs on another machine (<c>--inventory</c> or a campaign), or null.</summary>
+    public IGameHost? ServerHost { get; init; }
+    /// <summary>True in a campaign, whose clients run on their assigned hosts; false when clients open on this machine.</summary>
+    public bool RemoteClients { get; init; }
     /// <summary>The owned server's live BepInEx log for this boot, or null when this runner cannot read it.</summary>
     public Func<string?> ServerLog { get; init; } = () => null;
     /// <summary>A client's live BepInEx log, when it is owned on this machine; null for an attached client.</summary>

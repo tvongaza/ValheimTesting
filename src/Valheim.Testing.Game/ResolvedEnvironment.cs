@@ -1,65 +1,24 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
 /// <summary>
-/// Where a test run's game processes live: the hosts, which one runs the dedicated server and which runs each client, their
-/// install and runtime paths and their ports. A JSON file kept beside (not inside) a mod's tests, because it describes one
-/// developer's machines; <see cref="Read"/> refuses unknown fields and <see cref="Validate"/> refuses an inconsistent profile
-/// before anything is started. It holds no credentials: SSH uses keys or an agent, named through the user's own ssh config.
+/// Where a run's game processes live once an <see cref="EnvironmentInventory"/> placed its actors: the hosts, which one runs
+/// the dedicated server and which runs each client, their install and runtime paths, their ports and, for a campaign, the
+/// observed Steam identities to lease. It exists only in memory: an inventory resolves it for one run, nothing reads it from
+/// a file and nothing writes it to one.
 /// </summary>
-public sealed class EnvironmentProfile
+internal sealed class ResolvedEnvironment
 {
     private static readonly Regex Name = new("^[A-Za-z0-9][A-Za-z0-9_.-]*$", RegexOptions.CultureInvariant);
-    private static readonly JsonSerializerOptions Json = new()
-    {
-        PropertyNameCaseInsensitive = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-        ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true,
-    };
 
     public Dictionary<string, HostProfile> Hosts { get; set; } = [];
     /// <summary>The dedicated server, if the run has one.</summary>
     public GameRole? Server { get; set; }
     /// <summary>The game clients by name.</summary>
     public Dictionary<string, GameRole> Clients { get; set; } = [];
-    /// <summary>
-    /// Optional: the Steam account pool the clients lease their accounts from (<see cref="SteamAccountHold"/>). Leave it out when
-    /// one person runs one client on one machine; nothing is leased then and runs behave exactly as without it.
-    /// </summary>
+    /// <summary>The lease host, directory and observed identities the clients lease their Steam accounts by.</summary>
     public SteamAccountsProfile? SteamAccounts { get; set; }
-
-    /// <summary>Reads and validates a profile file. A <see cref="SteamAccounts"/> pool path is relative to the profile's directory.</summary>
-    public static EnvironmentProfile Read(string path) => Parse(File.ReadAllText(path), Path.GetDirectoryName(Path.GetFullPath(path))!);
-    /// <summary>Parses and validates a profile. A <see cref="SteamAccounts"/> pool path is relative to the current directory.</summary>
-    public static EnvironmentProfile Parse(string json) => Parse(json, Environment.CurrentDirectory);
-    internal static EnvironmentProfile Parse(string json, string directory)
-    {
-        using (var document = JsonDocument.Parse(json, new JsonDocumentOptions
-               { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }))
-            if (document.RootElement.TryGetProperty("steamAccounts", out var section) &&
-                section.TryGetProperty("inlinePool", out var embedded) && embedded.ValueKind == JsonValueKind.Object)
-                _ = SteamAccountPool.Parse(embedded.GetRawText());
-        var profile = JsonSerializer.Deserialize<EnvironmentProfile>(json, Json) ?? throw new ArgumentException("Empty environment profile.");
-        // Read before validating, so the clients' accounts are checked against it with everything else.
-        if (profile.SteamAccounts is { InlinePool: not null } inline)
-        {
-            if (!string.IsNullOrWhiteSpace(inline.Pool))
-                throw new ArgumentException("steamAccounts: choose either pool or inlinePool, not both.");
-            inline.InlinePool.Validate();
-            inline.Accounts = inline.InlinePool;
-        }
-        else if (profile.SteamAccounts is { Pool: { Length: > 0 } pool } accounts)
-        {
-            accounts.PoolFile = Path.GetFullPath(pool, directory);
-            try { accounts.Accounts = SteamAccountPool.Read(accounts.PoolFile); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
-            { throw new ArgumentException($"Invalid environment profile: steamAccounts.pool {accounts.PoolFile} cannot be read: {error.Message}", error); }
-        }
-        profile.Validate();
-        return profile;
-    }
 
     /// <summary>Every problem at once, as one <see cref="ArgumentException"/>.</summary>
     public void Validate()
@@ -85,7 +44,7 @@ public sealed class EnvironmentProfile
             value.Validate(role, host, errors);
         }
         if (Server != null && Hosts.TryGetValue(Server.Host ?? "", out var serverHost) && serverHost.Platform == "macos")
-            errors.Add($"The server's host '{Server.Host}' is macOS: a remote macOS server host is not supported yet (a macOS server runs locally, without --profile); use a Linux container or a Windows or Linux host.");
+            errors.Add($"The server's host '{Server.Host}' is macOS: a remote macOS server host is not supported yet (a macOS server runs locally, without --inventory); use a Linux container or a Windows or Linux host.");
         // One Valheim client per machine: Steam runs one copy of the game per signed-in session.
         foreach (var shared in Clients.GroupBy(client => client.Value.Host).Where(group => group.Count() > 1))
             errors.Add($"Clients {string.Join(", ", shared.Select(client => client.Key))} share host '{shared.Key}'; a host runs one game client.");
@@ -101,15 +60,15 @@ public sealed class EnvironmentProfile
         SteamAccounts?.Validate(this, errors);
         if (SteamAccounts == null)
             foreach (var (name, client) in Clients.Where(client => client.Value.SteamAccount != null))
-                errors.Add($"The client {name} names Steam account {client.SteamAccount}, but the profile has no steamAccounts pool to lease it from.");
+                errors.Add($"The client {name} names Steam account {client.SteamAccount}, but the environment has no Steam leases to lease it from.");
         if (Server?.SteamAccount != null) errors.Add("The server's steamAccount: a dedicated server needs no Steam account; only clients name one.");
-        if (errors.Count != 0) throw new ArgumentException("Invalid environment profile: " + string.Join(" ", errors));
+        if (errors.Count != 0) throw new ArgumentException("Invalid environment: " + string.Join(" ", errors));
     }
 
     /// <summary>The named host, ready to use. A local host must describe this machine's platform.</summary>
     public IGameHost CreateHost(string name)
     {
-        if (!Hosts.TryGetValue(name, out var host)) throw new ArgumentException($"No host '{name}' in the profile.", nameof(name));
+        if (!Hosts.TryGetValue(name, out var host)) throw new ArgumentException($"No host '{name}' in the environment.", nameof(name));
         var errors = new List<string>();
         host.Validate(name, errors);
         if (errors.Count != 0) throw new ArgumentException(string.Join(" ", errors));
@@ -123,10 +82,10 @@ public sealed class EnvironmentProfile
         };
     }
     /// <summary>The server's host.</summary>
-    public IGameHost CreateServerHost() => CreateHost((Server ?? throw new InvalidOperationException("The profile names no server.")).Host);
+    public IGameHost CreateServerHost() => CreateHost((Server ?? throw new InvalidOperationException("The environment places no server.")).Host);
     /// <summary>The named client's host.</summary>
     public IGameHost CreateClientHost(string client) =>
-        CreateHost(Clients.TryGetValue(client, out var role) ? role.Host : throw new ArgumentException($"No client '{client}' in the profile.", nameof(client)));
+        CreateHost(Clients.TryGetValue(client, out var role) ? role.Host : throw new ArgumentException($"No client '{client}' in the environment.", nameof(client)));
 }
 
 /// <summary>One machine or container. <see cref="Kind"/> is <c>local</c>, <c>ssh</c> or <c>container</c>.</summary>
@@ -194,9 +153,9 @@ public sealed class HostProfile
 }
 
 /// <summary>A server or client: the host it runs on, its install and runtime directories there, and its ports.</summary>
-public sealed class GameRole
+internal sealed class GameRole
 {
-    /// <summary>The name of a host in the profile.</summary>
+    /// <summary>The name of a host in the environment.</summary>
     public string Host { get; set; } = "";
     /// <summary>The prepared game install (with BepInEx) on the host. Runs copy from it and never change it.</summary>
     public string Install { get; set; } = "";
@@ -208,10 +167,7 @@ public sealed class GameRole
     public int GamePort { get; set; }
     /// <summary>The local end of the CLI tunnel; 0 picks a free port.</summary>
     public int LocalCliPort { get; set; }
-    /// <summary>
-    /// Clients only, with <see cref="EnvironmentProfile.SteamAccounts"/>: the pool account this client always leases. Left out, it
-    /// leases the first free account for its host.
-    /// </summary>
+    /// <summary>Clients only: the lease key of the Steam identity observed signed in on its host (<see cref="SteamPoolAccount.LeaseKey"/>).</summary>
     public string? SteamAccount { get; set; }
 
     internal void Validate(string role, HostProfile host, List<string> errors)
@@ -240,70 +196,54 @@ public sealed class GameRole
 }
 
 /// <summary>
-/// The optional <c>steamAccounts</c> section: one pool file (<see cref="SteamAccountPool"/>, names only) and the one host its leases
-/// live on, shared by every run and profile that uses the pool. Each client of a run leases an account before it starts
-/// (<see cref="SteamAccountHold"/>), keeps it renewed while it runs and releases it after teardown.
+/// The clients' Steam leases: the one host and directory the leases live on (an inventory's <c>leaseHost</c> and
+/// <c>leaseDirectory</c>, shared by every run on these accounts), and the pool of identities observed signed in on the
+/// clients' hosts. Each client leases its identity before it starts (<see cref="SteamAccountHold"/>), keeps it renewed while it
+/// runs and releases it after teardown; before it starts, its host's signed-in user is checked against it.
 /// </summary>
-public sealed class SteamAccountsProfile
+internal sealed class SteamAccountsProfile
 {
-    /// <summary>The pool file, relative to the profile's directory or absolute. Its <c>leaseDirectory</c> is on <see cref="LeaseHost"/>.</summary>
-    public string Pool { get; set; } = "";
-    /// <summary>An account pool embedded in a private inventory-derived profile, instead of another private file.</summary>
-    public SteamAccountPool? InlinePool { get; set; }
-    /// <summary>The profile host that keeps the leases. Every run sharing the pool must use the same host and directory.</summary>
+    /// <summary>The environment host that keeps the leases.</summary>
     public string LeaseHost { get; set; } = "";
-    /// <summary>
-    /// Optional guard: before a client starts, its host's signed-in Steam user must be the leased account (the pool's
-    /// <see cref="SteamPoolAccount.SteamId"/>). A host whose signed-in user cannot be read is refused, not passed.
-    /// </summary>
-    public bool CheckSignedIn { get; set; }
-    /// <summary>The pool file's full path, once read.</summary>
-    [JsonIgnore] public string? PoolFile { get; internal set; }
-    /// <summary>The pool, once <see cref="EnvironmentProfile.Read"/> or <see cref="EnvironmentProfile.Parse(string)"/> has read it; set it yourself for a profile built in code.</summary>
-    [JsonIgnore] public SteamAccountPool? Accounts { get; set; }
-    // Inventory resolution uses this only before host preflight. Preparation replaces it with a
-    // concrete inline pool derived from the observed signed-in identities before writing a profile.
-    [JsonIgnore] internal string? ObservedLeaseDirectory { get; set; }
+    /// <summary>Whether a client's host must be signed in to its leased identity before it starts; false only in controlled tests.</summary>
+    public bool CheckSignedIn { get; set; } = true;
+    /// <summary>The observed identities, once the host preflight read them (<see cref="HostedCampaignPreparation"/>).</summary>
+    public SteamAccountPool? Accounts { get; set; }
+    // Set by inventory resolution, before the host preflight observed any identity; preparation replaces it with Accounts.
+    public string? ObservedLeaseDirectory { get; set; }
 
-    internal void Validate(EnvironmentProfile profile, List<string> errors)
+    internal void Validate(ResolvedEnvironment profile, List<string> errors)
     {
+        if (!profile.Hosts.TryGetValue(LeaseHost ?? "", out var leaseHost)) errors.Add($"Steam leases: the lease host '{LeaseHost}' is not listed under hosts.");
         if (ObservedLeaseDirectory != null)
         {
-            if (Pool.Length != 0 || InlinePool != null || Accounts != null)
-                errors.Add("steamAccounts: observed identities cannot also name an account pool.");
-            if (!CheckSignedIn) errors.Add("steamAccounts: observed identities require checkSignedIn.");
-            if (!profile.Hosts.TryGetValue(LeaseHost ?? "", out var host) || !host.IsAbsolutePath(ObservedLeaseDirectory))
-                errors.Add("steamAccounts: observed identities need an absolute lease directory on the listed lease host.");
+            if (!CheckSignedIn) errors.Add("Steam leases: observed identities require the signed-in check.");
+            if (Accounts != null) errors.Add("Steam leases: identities not yet observed cannot also have an account pool.");
+            if (leaseHost != null && !leaseHost.IsAbsolutePath(ObservedLeaseDirectory))
+                errors.Add("Steam leases: the lease directory must be an absolute path on the lease host.");
             if (profile.Clients.Values.Any(client => client.SteamAccount != null))
-                errors.Add("steamAccounts: observed identities must not preselect a client account.");
+                errors.Add("Steam leases: identities not yet observed must not preselect a client account.");
             return;
         }
-        if (string.IsNullOrWhiteSpace(Pool) && InlinePool == null) errors.Add("steamAccounts: name the pool file or inlinePool.");
-        if (!string.IsNullOrWhiteSpace(Pool) && InlinePool != null) errors.Add("steamAccounts: choose either pool or inlinePool.");
-        if (!profile.Hosts.TryGetValue(LeaseHost ?? "", out var leaseHost)) errors.Add($"steamAccounts: the lease host '{LeaseHost}' is not listed under hosts.");
-        if (profile.Clients.Count == 0) errors.Add("steamAccounts: list the clients that lease accounts under clients.");
-        if (Accounts == null) return;
+        if (profile.Clients.Count == 0) errors.Add("Steam leases: list the clients that lease accounts under clients.");
+        if (Accounts == null) { errors.Add("Steam leases: no observed identities."); return; }
         try { Accounts.Validate(); }
-        catch (ArgumentException error) { errors.Add("steamAccounts: " + error.Message); return; }
+        catch (ArgumentException error) { errors.Add("Steam leases: " + error.Message); return; }
         if (leaseHost != null && !leaseHost.IsAbsolutePath(Accounts.LeaseDirectory))
-            errors.Add($"steamAccounts: the pool's leaseDirectory must be an absolute path on the lease host '{LeaseHost}'.");
+            errors.Add($"Steam leases: the lease directory must be an absolute path on the lease host '{LeaseHost}'.");
         foreach (var (name, client) in profile.Clients)
         {
             var candidates = Candidates(client);
             if (client.SteamAccount != null && candidates.Count == 0)
-            {
-                var named = Accounts.Accounts.FirstOrDefault(account => string.Equals(account.Name, client.SteamAccount, StringComparison.OrdinalIgnoreCase));
-                errors.Add(named == null ? $"The client {name} names Steam account {client.SteamAccount}, which pool {Accounts.Pool} does not list."
-                    : $"The client {name} names Steam account {named.Name}, which pool {Accounts.Pool} keeps for host '{named.Host}', not '{client.Host}'.");
-            }
-            else if (candidates.Count == 0) errors.Add($"No account of pool {Accounts.Pool} is for the client {name}'s host '{client.Host}'.");
+                errors.Add($"The client {name} names Steam identity {client.SteamAccount}, which the observed identities do not list.");
+            else if (candidates.Count == 0) errors.Add($"No observed Steam identity is for the client {name}'s host '{client.Host}'.");
             if (CheckSignedIn)
                 foreach (var account in candidates.Where(account => account.SteamId == null))
-                    errors.Add($"checkSignedIn compares the client {name}'s signed-in Steam user with its account: give account {account.Name} its steamId in pool {Accounts.Pool}.");
+                    errors.Add($"The signed-in check compares the client {name}'s signed-in Steam user with identity {account.Name}, which has no SteamID64.");
         }
         foreach (var shared in profile.Clients.Where(client => client.Value.SteamAccount != null)
                      .GroupBy(client => client.Value.SteamAccount!, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
-            errors.Add($"Clients {string.Join(", ", shared.Select(client => client.Key))} name the same Steam account {shared.Key}; an account runs one client at a time.");
+            errors.Add($"Clients {string.Join(", ", shared.Select(client => client.Key))} name the same Steam identity {shared.Key}; an account runs one client at a time.");
     }
 
     /// <summary>The accounts <paramref name="client"/> may lease: the one it names, or every account for its host or for any host.</summary>

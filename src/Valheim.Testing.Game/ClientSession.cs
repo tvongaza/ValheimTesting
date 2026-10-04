@@ -78,7 +78,7 @@ public sealed class ClientSession : IDisposable
         return session;
     }
 
-    // A failed owned startup carries the logs its stopped process kept, for Open's log list (and the profile client's path).
+    // A failed owned startup carries the logs its stopped process kept, for Open's log list (and the campaign client's path).
     private const string KeptLogsKey = "Valheim.Testing.Game.ClientSession.KeptLogs";
     /// <summary>The logs a failed owned startup kept beside the evidence (its process had started); empty for any other failure.</summary>
     internal static IReadOnlyList<RunLog> KeptLogs(Exception error) => error.Data[KeptLogsKey] as IReadOnlyList<RunLog> ?? [];

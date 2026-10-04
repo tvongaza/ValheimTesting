@@ -108,7 +108,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
 
     /// <summary>A campaign run over this world: attached clients, the refused plan's client refused, evidence in <see cref="Output"/>.</summary>
     public CampaignRun Run(LifecyclePlan plan, ScenarioReport report, bool clientLog = false,
-        Func<ClientRunPlan, string, ClientSession>? profileClient = null)
+        Func<ClientRunPlan, string, ClientSession>? campaignClient = null)
     {
         WriteServerLog();
         return new()
@@ -119,7 +119,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
                 string output = directory == null ? Output : Directory.CreateDirectory(Path.Combine(Output, directory)).FullName;
                 return ClientSession.Attach(client, output, Client(refused: client == plan.RefusedClient));
             },
-            OpenProfileClient = profileClient ?? ((_, _) => throw new InvalidOperationException("No profile client was supplied.")),
+            OpenCampaignClient = campaignClient ?? ((_, _) => throw new InvalidOperationException("No campaign client was supplied.")),
             ServerLog = () => ServerLog,
             ClientLog = _ => clientLog ? ClientLog : null,
             Lobby = server => CrossplayServer.WaitForLobby(server, ServerLog, TimeSpan.FromSeconds(5)),

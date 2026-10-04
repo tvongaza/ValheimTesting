@@ -69,9 +69,9 @@ public class SshOptionTests
                                   "sshOptions": ["OPTION"], "lock": "/tmp/lock" } },
               "server": { "host": "far", "install": "/opt/valheim/server", "runtime": "/srv/vt/runs", "cliPort": 5577, "gamePort": 2456 } }
             """;
-        var host = Assert.IsType<SshGameHost>(EnvironmentProfile.Parse(json.Replace("OPTION", "IdentityFile=/keys/test key")).CreateServerHost());
+        var host = Assert.IsType<SshGameHost>(TestEnvironment.Parse(json.Replace("OPTION", "IdentityFile=/keys/test key")).CreateServerHost());
         Assert.Contains("IdentityFile=\"/keys/test key\"", host.SshArguments(forward: false, [], null));
-        Assert.Contains("IdentityFile has no value", Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json.Replace("OPTION", "IdentityFile="))).Message);
+        Assert.Contains("IdentityFile has no value", Assert.Throws<ArgumentException>(() => TestEnvironment.Parse(json.Replace("OPTION", "IdentityFile="))).Message);
     }
 }
 
