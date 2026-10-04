@@ -330,6 +330,7 @@ Ctrl+C and SIGTERM cancel the run. Options name the session capability and token
 `Valheim.Testing.Game.Fakes` tests scenario and session code without a game:
 - `ScriptedTransport` answers strict pins, the extension listing, registered extension commands (in the real `EXTENSION_RESULT` envelope), confirmed saves and any command a test registers. It throws on anything unscripted, records every command, and `Actor()` returns a pinned `GameActor` on it.
 - `FakeOwnedServer` launches `FakeServerProcess`es and answers the session probe and pins as an owned server with a session adapter. Switches make each failure happen: not ready, wrong PID, refused pins, exit on launch, refused connections, refused stop. Gates hold a connection or pin check open. `ConnectEntered`/`PinEntered` let a test inject a failure at exactly that stage, and `Events` records the lifecycle.
+- `FakeClientDataDirectory` is a scope in which a simulated game client keeps its data in a given directory: `HostedWorld.DefaultSaveDirectory` returns it on every platform, so a hosted-world test places its fixture in a temporary folder while the macOS save-directory rule still runs. Only for no-game tests; a real Mac client always uses the signed-in user's directory. Nested scopes restore the outer one when disposed, innermost first; disposing an outer scope while an inner one is open throws.
 - `TempRuntime` is a runtime directory whose BepInEx log a test appends to or rewrites, as each boot does.
 
 ## Game doubles

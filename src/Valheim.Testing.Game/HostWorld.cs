@@ -162,9 +162,16 @@ public sealed class HostedWorld : IDisposable
         return name;
     }
 
-    /// <summary>Where Unity keeps a game client's data on <paramref name="platform"/> (company IronGate, product Valheim), which holds <c>worlds_local</c>.</summary>
+    // Set only by Fakes.FakeClientDataDirectory: the innermost open scope, whose directory a no-game test's simulated client keeps.
+    internal static readonly AsyncLocal<Fakes.FakeClientDataDirectory?> SimulatedClientData = new();
+
+    /// <summary>
+    /// Where Unity keeps a game client's data on <paramref name="platform"/> (company IronGate, product Valheim), which holds <c>worlds_local</c>.
+    /// The only way to change it is a <see cref="Fakes.FakeClientDataDirectory"/> scope, for no-game tests.
+    /// </summary>
     public static string DefaultSaveDirectory(ClientPlatform platform)
     {
+        if (SimulatedClientData.Value is { } simulated) return simulated.Directory;
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return platform switch
         {
