@@ -63,6 +63,7 @@ public sealed class ReviewClipTests
                 string metadata = File.ReadAllText(receipt.MetadataPath);
                 Assert.Contains("\"visualVerdict\": \"not asserted\"", metadata);
                 Assert.Contains(receipt.ManifestSha256, metadata);
+                Assert.Equal(new EvidenceReference("review-clip", "motion-1", "1716468958", receipt.MetadataPath, WorldFixture.Hash(receipt.MetadataPath)), receipt.Evidence);
                 Assert.Equal("cli_extension mymod.testing/review-restore motion-1", transport.Commands.Last());
             }
         }

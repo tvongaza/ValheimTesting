@@ -25,15 +25,23 @@ public static class PaintProbe
     public static PaintMeasurement Read(Observation observation, PaintExpectation expected, float tolerance)
     {
         Validate("declared paint", new[] { expected }, tolerance);
-        observation.RequireComplete("loaded-terrain-paint");
-        var d = observation.Data;
-        if (d.GetProperty("units").GetString() != "rgba01" || d.GetProperty("x").GetSingle() != expected.X || d.GetProperty("z").GetSingle() != expected.Z)
-            throw new InvalidOperationException("Wrong paint coordinates or units.");
-        var actual = new PaintExpectation(expected.X, expected.Z, d.GetProperty("r").GetSingle(), d.GetProperty("g").GetSingle(),
-            d.GetProperty("b").GetSingle(), d.GetProperty("a").GetSingle());
-        Validate("observed paint", new[] { actual }, 0);
+        var actual = Observed(observation, expected.X, expected.Z);
         float error = Channels(actual).Zip(Channels(expected), (a, b) => Math.Abs(a - b)).Max();
         return new(expected, actual, error, error <= tolerance);
+    }
+    /// <summary>The one reader of <c>valheim.world/terrain-paint</c>: the loaded texel's raw RGBA at an integer point.</summary>
+    internal static PaintExpectation Observed(Observation observation, float x, float z)
+    {
+        observation.RequireComplete("loaded-terrain-paint");
+        var d = observation.Data;
+        if (d.GetProperty("units").GetString() != "rgba01" || d.GetProperty("x").GetSingle() != x || d.GetProperty("z").GetSingle() != z)
+            throw new InvalidOperationException("Wrong paint coordinates or units.");
+        var actual = new PaintExpectation(x, z, d.GetProperty("r").GetSingle(), d.GetProperty("g").GetSingle(),
+            d.GetProperty("b").GetSingle(), d.GetProperty("a").GetSingle());
+        // A bad reply is the game's fault, not the caller's: refuse it as one, not as an argument error.
+        if (!Channels(actual).All(v => float.IsFinite(v) && v >= 0 && v <= 1))
+            throw new InvalidOperationException("Paint reply has a channel outside [0,1].");
+        return actual;
     }
     public static IReadOnlyList<PaintMeasurement> Compare(GameActor actor, string expectedFrom, IReadOnlyList<PaintExpectation> samples, float tolerance)
     {
