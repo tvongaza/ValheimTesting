@@ -46,8 +46,7 @@ public static class ContentCensusScenario
         CampaignSteps.ModPatchesApplied(run.Server, report);
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, WaitUntilJoinable = run.WaitUntilJoinable,
-            RestartServer = run.RestartServer, SettleFor = run.SettleFor, Cancellation = run.Cancellation,
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, SettleFor = run.SettleFor, Cancellation = run.Cancellation,
         }.Run(run.Server, () => run.OpenClient(client, null), round =>
         {
             ContentObservation? server = null, joined = null;

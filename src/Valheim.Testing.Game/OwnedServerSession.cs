@@ -105,7 +105,20 @@ public sealed class StartupEvents
         " security software that blocks or quarantines the game or BepInEx's Doorstop loader is a known cause";
 }
 
-public sealed class OwnedServerSession : IDisposable
+/// <summary>
+/// The owned dedicated server a joining client's <see cref="ClientRounds"/> run against: the rounds wait until it accepts
+/// game connections before each join and restart only it between rounds. <see cref="OwnedServerSession"/> implements it;
+/// a no-game test implements it over scripted servers.
+/// </summary>
+public interface IOwnedServer
+{
+    /// <summary>Waits until <paramref name="server"/>, this server's current actor, accepts game connections.</summary>
+    void WaitUntilJoinable(GameActor server);
+    /// <summary>Restarts only this server and returns its new actor.</summary>
+    GameActor Restart();
+}
+
+public sealed class OwnedServerSession : IOwnedServer, IDisposable
 {
     private readonly Func<string, IServerProcess> _launch;
     private readonly Func<IGameTransport> _connect;
@@ -330,6 +343,12 @@ public sealed class OwnedServerSession : IDisposable
             cancellation.WaitHandle.WaitOne(TimeSpan.FromSeconds(1));
         }
     }
+
+    /// <summary>
+    /// Waits until <paramref name="server"/> accepts game connections, through this session's own session capability,
+    /// within its startup deadline (<see cref="WaitUntilJoinable(GameActor, string, TimeSpan, CancellationToken)"/>).
+    /// </summary>
+    public void WaitUntilJoinable(GameActor server) => WaitUntilJoinable(server, _sessionCapability, _startup, _cancellation);
 
     public GameActor Restart()
     {

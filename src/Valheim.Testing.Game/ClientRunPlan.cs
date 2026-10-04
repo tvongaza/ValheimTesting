@@ -44,7 +44,7 @@ public sealed class ClientRunPlan
     public bool Crossplay { get; set; }
     /// <summary>
     /// The client hosts this fixture world from its menu (a listen server) instead of joining a server
-    /// (<see cref="HostRounds"/>). Leave out <see cref="Join"/>, <see cref="PasswordVariable"/> and <see cref="Crossplay"/>.
+    /// (<see cref="ClientRounds"/>). Leave out <see cref="Join"/>, <see cref="PasswordVariable"/> and <see cref="Crossplay"/>.
     /// </summary>
     public HostWorldPlan? HostWorld { get; set; }
     /// <summary>An existing, disposable local character (never a cloud character).</summary>
@@ -68,7 +68,7 @@ public sealed class ClientRunPlan
     /// </summary>
     public bool EventDrivenArrival { get; set; }
     // Removed (#299): no library runner could reach fastTestTeleports after #239 (it required hostWorld.local, which
-    // ClientRounds refuses, and HostRounds never used signal arrival).
+    // a joining client's ClientRounds refuses, and the hosted rounds never used signal arrival).
     [JsonInclude, JsonPropertyName("fastTestTeleports"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     private JsonElement? RemovedFastTestTeleports { get => null; set => throw Removed("fastTestTeleports", 299, "no runner could use it; arrival uses the game's ordinary teleport timing"); }
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
@@ -100,7 +100,7 @@ public sealed class ClientRunPlan
     public string Pinning { get; set; } = EnvironmentPinning.Strict;
     /// <summary>
     /// The ValheimCLI extension commands (<c>owner/command</c>, such as <c>valheim.world/terrain</c>) the run uses beyond what
-    /// its runner requires itself (<see cref="HostRounds"/> adds <see cref="CliCapabilities.HostedRounds"/>). Checked
+    /// its runner requires itself (<see cref="ClientRounds"/> adds <see cref="CliCapabilities.HostedRounds"/>). Checked
     /// against <see cref="CliManifest"/> before an owned launch, and live once the client answers, owned or attached
     /// (<see cref="CliCapabilities.Require(GameActor, string[])"/>).
     /// </summary>
@@ -226,7 +226,7 @@ public sealed class ClientRunPlan
     /// install's ValheimCLI files must be exactly its set and provide its own requested pack capabilities
     /// (<see cref="CheckCliManifest"/>). A mod adapter's extensions are confirmed after the client loads.
     /// An attached client's install is its operator's and is not read. <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/>
-    /// runs the install part itself; <see cref="HostRounds"/> runs all of it before it places the fixture.
+    /// runs the install part itself; <see cref="ClientRounds"/> runs all of it before it places the fixture.
     /// </summary>
     public void Preflight() => Preflight([]);
 
@@ -236,7 +236,7 @@ public sealed class ClientRunPlan
 
     /// <summary>
     /// <see cref="Preflight()"/>, with <paramref name="capabilities"/> (<c>owner/command</c>) that the runner itself uses
-    /// added to <see cref="Capabilities"/> for the manifest check (<see cref="HostRounds"/> passes <see cref="CliCapabilities.HostedRounds"/>).
+    /// added to <see cref="Capabilities"/> for the manifest check (<see cref="ClientRounds"/> passes <see cref="CliCapabilities.HostedRounds"/>).
     /// </summary>
     public void Preflight(IEnumerable<string> capabilities)
     {

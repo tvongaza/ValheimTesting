@@ -7,7 +7,7 @@ public static class ThreeActorSmokeScenario
 {
     public static void Run(CampaignRun run)
     {
-        run.Report.Step("server accepts game connections", () => run.WaitUntilJoinable(run.Server));
+        run.Report.Step("server accepts game connections", () => run.OwnedServer.WaitUntilJoinable(run.Server));
         IReadOnlyDictionary<string, ClientSession>? sessions = null;
         run.Report.Step("both clients start in parallel on their owned hosts", () =>
             sessions = run.OpenProfileClientsParallel(new Dictionary<string, ClientRunPlan>

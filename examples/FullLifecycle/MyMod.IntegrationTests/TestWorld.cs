@@ -12,7 +12,7 @@ namespace MyMod.IntegrationTests;
 /// keeps only what a confirmed save kept, and a client that sees the server's markers once joined. It models the
 /// contracts the scenario relies on, not Valheim: replies, observations and their completeness.
 /// </summary>
-internal sealed class TestWorld
+internal sealed class TestWorld : IOwnedServer
 {
     public const string WorldUid = "4242";
     private readonly List<(float X, float Z)> _markers = [], _saved = [];
@@ -69,6 +69,9 @@ internal sealed class TestWorld
         Servers.Add(transport);
         return transport.Actor("server", "cli_expect worlduid=" + WorldUid);
     }
+
+    /// <summary>As an owned server's session: the scripted server's adapter reports whether it accepts game connections.</summary>
+    public void WaitUntilJoinable(GameActor server) => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(5));
 
     /// <summary>What <c>OwnedServerSession.Restart</c> does to the world: only saved objects come back.</summary>
     public GameActor Restart()

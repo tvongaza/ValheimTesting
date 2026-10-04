@@ -32,7 +32,7 @@ public static class RefusedJoinScenario
         {
             report.Step(refusedPlan.Owned ? "launch the mismatched owned client to its menu, plugins pinned" : "attach to the operator's mismatched client at its menu, plugins pinned",
                 () => refused = run.OpenClient(refusedPlan, RefusedDirectory));
-            report.Step("the server accepts game connections", () => run.WaitUntilJoinable(run.Server));
+            report.Step("the server accepts game connections", () => run.OwnedServer.WaitUntilJoinable(run.Server));
             report.Step($"the mismatched client is refused with {expected} ({(int)expected})", () =>
             {
                 var refusal = new SessionControl(refused!.Actor).JoinExpectingRefusal(refusedPlan.Join, refusedPlan.Character, expected, refusedPlan.MenuExpectations,
@@ -50,8 +50,7 @@ public static class RefusedJoinScenario
 
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, WaitUntilJoinable = run.WaitUntilJoinable,
-            RestartServer = run.RestartServer, Rounds = ["matching"], SettleFor = run.SettleFor, Cancellation = run.Cancellation,
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Rounds = ["matching"], SettleFor = run.SettleFor, Cancellation = run.Cancellation,
             OpenStep = client.Owned ? "launch the matching owned client to its menu, plugins pinned" : "attach to the operator's matching client at its menu, plugins pinned",
         }.Run(run.Server, () => run.OpenClient(client, MatchingDirectory),
             round => round.Step("the server keeps the matching client connected as its one player", () => PlayerPlacement.OnlyPeer(round.Server)));

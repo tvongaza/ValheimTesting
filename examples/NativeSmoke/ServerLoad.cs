@@ -124,8 +124,7 @@ internal static class ServerLoad
                             run.Report.Provenance["firstModLoadedSecondsFromCommand"] =
                                 clock.Elapsed.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture);
                             run.Report.Step("dedicated server accepts a game connection", () =>
-                                OwnedServerSession.WaitUntilJoinable(run.Server, NativeServerRuntime.SessionCapability,
-                                    TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation));
+                                run.Session.WaitUntilJoinable(run.Server));
                             if (clientPlan != null)
                             {
                                 string saves = HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(clientPlan.Install));
@@ -134,9 +133,7 @@ internal static class ServerLoad
                                 new ClientRounds
                                 {
                                     Client = clientPlan, WorldUid = DefaultSmokeWorld.Uid, Report = run.Report, Output = run.Output,
-                                    WaitUntilJoinable = serverActor => OwnedServerSession.WaitUntilJoinable(serverActor,
-                                        NativeServerRuntime.SessionCapability, TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation),
-                                    RestartServer = run.Session.Restart, Rounds = ["first"], ProtectPlayer = false,
+                                    OwnedServer = run.Session, Rounds = ["first"], ProtectPlayer = false,
                                     Cancellation = run.Cancellation,
                                 }.Run(run.Server, () => run.OpenClient(clientPlan), round =>
                                     round.Step("clean client can read the joined world", () =>

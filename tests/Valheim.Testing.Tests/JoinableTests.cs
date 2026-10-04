@@ -81,4 +81,18 @@ public class JoinableTests
             OwnedServerSession.WaitUntilJoinable(server, "my.mod/session", TimeSpan.FromSeconds(5))).Message);
         Assert.Equal(2, checks);
     }
+
+    [Fact] public void AnOwnedSessionWaitsOnItsOwnSessionCapabilityWithinItsStartupDeadline()
+    {
+        using var server = Server(_ => new { source = "owned-test-session", complete = true, acceptingConnections = false }, out var reads);
+        using var session = new FakeOwnedServer("my.mod").Session(TimeSpan.FromSeconds(1));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var error = Assert.Throws<WaitTimeoutException>(() => session.WaitUntilJoinable(server));
+        Assert.Contains("acceptingConnections", error.LastSeen);
+        Assert.True(reads() >= 1);
+        Assert.InRange(clock.Elapsed, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(20));
+        // Negative control: a session for another adapter reads its own capability, which this server does not offer.
+        using var other = new FakeOwnedServer("other.mod").Session(TimeSpan.FromSeconds(1));
+        Assert.Contains("other.mod/session", Assert.Throws<InvalidOperationException>(() => other.WaitUntilJoinable(server)).Message);
+    }
 }

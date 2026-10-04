@@ -13,7 +13,7 @@ public static class CliCapabilities
 {
     /// <summary>The Standard pack's manifest-visible contract for the bounded teleport commands used by signal arrival.</summary>
     public const string TeleportSignals = "valheim.session/teleport-signals";
-    /// <summary>What <see cref="HostRounds"/> uses on the host: its session state, a confirmed save and the leave to its menu.</summary>
+    /// <summary>What <see cref="ClientRounds"/> uses on the host: its session state, a confirmed save and the leave to its menu.</summary>
     public static readonly IReadOnlyList<string> HostedRounds = ["valheim.session/state", "valheim.session/save", "valheim.session/leave"];
 
     // The packs that register ValheimCLI's own extensions (valheimCLI's Packs/Standard and Packs/WorldTools).

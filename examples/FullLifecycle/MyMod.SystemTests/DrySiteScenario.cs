@@ -39,8 +39,8 @@ public static class DrySiteScenario
     /// Runs the scenario. With <paramref name="lobby"/> the client joins each boot's crossplay lobby instead of the server's
     /// address (the crossplay scenario: <see cref="ClientRounds.Lobby"/>).
     /// </summary>
-    public static void Run(LifecyclePlan plan, GameActor server, Func<GameActor> restartOwnedServer, Func<ClientSession> openClient,
-        Action<GameActor> waitUntilJoinable, ScenarioReport report, string output, CancellationToken cancellation = default, TimeSpan? settleFor = null,
+    public static void Run(LifecyclePlan plan, GameActor server, IOwnedServer ownedServer, Func<ClientSession> openClient,
+        ScenarioReport report, string output, CancellationToken cancellation = default, TimeSpan? settleFor = null,
         Func<GameActor, CrossplayLobby>? lobby = null)
     {
         var client = plan.Client ?? throw new ArgumentException("The run mode needs the plan's client section.");
@@ -55,8 +55,8 @@ public static class DrySiteScenario
         // the rounds a confirmed save, the client leaves and only the owned server restarts. It always closes the client.
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = report, Output = output, WaitUntilJoinable = waitUntilJoinable,
-            RestartServer = restartOwnedServer, Arrival = new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = output, OwnedServer = ownedServer,
+            Arrival = new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
             ArriveStep = "arrive beside the marker", SettleFor = settleFor, Cancellation = cancellation, Lobby = lobby,
         }.Run(server, openClient,
             measure: round =>

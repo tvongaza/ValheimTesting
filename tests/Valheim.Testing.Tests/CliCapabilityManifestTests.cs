@@ -173,7 +173,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         plan.Port = 5556; plan.Join = "";
         var report = new ScenarioReport("host");
         int opens = 0;
-        var rounds = new HostRounds { Client = plan, Report = report, Output = hosted.Output };
+        var rounds = new ClientRounds { Client = plan, Report = report, Output = hosted.Output };
         var error = Assert.Throws<InvalidOperationException>(() => rounds.Run(() => { opens++; throw new InvalidOperationException("never opened"); }, _ => { }));
         Assert.Equal(0, opens); // The client never launched.
         Assert.False(Directory.EnumerateFileSystemEntries(hosted.Worlds).Any()); // Nor was the fixture copied.
@@ -384,7 +384,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         public void Dispose() { }
     }
 
-    /// <summary>A pinned hosted fixture world and an empty local worlds folder for <see cref="HostRounds"/>.</summary>
+    /// <summary>A pinned hosted fixture world and an empty local worlds folder for the hosted <see cref="ClientRounds"/>.</summary>
     private sealed class HostedFixture
     {
         public string Worlds { get; }

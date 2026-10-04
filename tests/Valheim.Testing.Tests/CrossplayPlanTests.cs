@@ -212,8 +212,7 @@ public sealed class CrossplayPlanTests : IDisposable
     private ClientRounds Rounds(ScenarioReport report, ClientRunPlan plan, Func<GameActor, CrossplayLobby>? lobby) => new()
     {
         Client = plan, WorldUid = WorldUid, Report = report, Output = _output, Arrival = null, Lobby = lobby,
-        WaitUntilJoinable = server => OwnedServerSession.WaitUntilJoinable(server, "test.mod/session", TimeSpan.FromSeconds(5)),
-        RestartServer = RoundServer,
+        OwnedServer = new TestOwnedServer(RoundServer),
     };
 
     [Fact] public void CrossplayRoundsJoinEachBootsLobbyAndRecordTheJoin()
@@ -243,7 +242,7 @@ public sealed class CrossplayPlanTests : IDisposable
         {
             var error = Assert.Throws<ArgumentException>(() => Rounds(new ScenarioReport("refused"), plan, lobby: null)
                 .Run(RoundServer(), () => { opens++; throw new InvalidOperationException("opened"); }, _ => { }));
-            Assert.Contains(plan.Crossplay ? "Lobby" : "HostRounds", error.Message);
+            Assert.Contains(plan.Crossplay ? "Lobby" : "hosts its own world", error.Message);
         }
         Assert.Equal(0, opens);
     }

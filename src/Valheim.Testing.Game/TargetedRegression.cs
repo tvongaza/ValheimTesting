@@ -249,7 +249,7 @@ public sealed record RunManifestArm(string Arm, string Commit, string Artifact, 
 
 /// <summary>
 /// One arm staged into the disposable install and preflighted: the strict client plan the runner hands to
-/// <see cref="HostRounds"/>, and the run manifest.
+/// <see cref="ClientRounds"/>, and the run manifest.
 /// </summary>
 public sealed class StagedArm
 {
@@ -306,7 +306,7 @@ public sealed class StagedArm
 
 /// <summary>
 /// Stages and preflights a targeted native regression from its <see cref="RegressionEnvironment"/>, without the game, then
-/// hands one arm to the existing strict-pinned <see cref="HostRounds"/>.
+/// hands one arm to the existing strict-pinned <see cref="ClientRounds"/>.
 /// <list type="number">
 /// <item>The fixture root must hold exactly one world with the manifest's UID (<see cref="FixtureLayout"/>).</item>
 /// <item>Every staged file must be its pinned SHA256; each arm is copied to its own artifact name first.</item>
@@ -319,7 +319,7 @@ public sealed class StagedArm
 /// staged install, including the static ValheimCLI capability check against <see cref="RegressionCli.Manifest"/> when set.</item>
 /// </list>
 /// Nothing launches. <see cref="Run"/> repeats the staging for one arm, refuses any file outside the allowlist right before
-/// the launch, and keeps <see cref="HostRounds"/>' live capability check and strict per-command pins as the second gate.
+/// the launch, and keeps <see cref="ClientRounds"/>' live capability check and strict per-command pins as the second gate.
 /// </summary>
 public sealed class TargetedRegression
 {
@@ -456,7 +456,7 @@ public sealed class TargetedRegression
             Patchers = patchers.Select(file => Path.GetFileName(file.File.File)).ToArray(),
             InstallPins = installPins,
             CliManifest = env.Cli.Manifest,
-            Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // HostRounds adds its own.
+            Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // The hosted rounds add their own.
             HostWorld = new HostWorldPlan
             {
                 World = new PinnedDirectory { Source = Path.GetFullPath(env.Fixture.Root), Sha256 = new Dictionary<string, string>(fixture) },
@@ -475,7 +475,7 @@ public sealed class TargetedRegression
     }
 
     /// <summary>
-    /// Runs one arm: stages and preflights it, writes <c>run-manifest.json</c>, then <see cref="HostRounds"/> with
+    /// Runs one arm: stages and preflights it, writes <c>run-manifest.json</c>, then <see cref="ClientRounds"/> with
     /// <paramref name="rounds"/> and <paramref name="measure"/>, refusing a changed install right before the launch and
     /// requiring the scenario's capabilities live before its first round. Scans the client's logs and writes
     /// <c>result.json</c> and <c>junit.xml</c> in every outcome. <paramref name="output"/> must not exist yet.
@@ -510,7 +510,7 @@ public sealed class TargetedRegression
             var staged = stagedArm!;
             staged.Record(report.Provenance);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
-            new HostRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
+            new ClientRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
             {
                 staged.Verify();
                 var client = ClientSession.Open(staged.Plan, output, logs, cancellation);
