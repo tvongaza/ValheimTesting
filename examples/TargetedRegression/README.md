@@ -91,7 +91,7 @@ Compare the arms by their `result.json`, never by an exit code alone: the parent
 
 ## Share the result
 
-Make a public copy with [RegressionBundle](../RegressionBundle/README.md): it checks each arm's `result.json` against its `junit.xml`, command trace and `run-manifest.json`, then writes `Scenario.cs` and `Program.cs` exactly as they ran with a project pinned to the toolkit, a template of your manifest with placeholders and a generated A/B table, and refuses machine paths, private names and unrelated plugin names. It publishes nothing; you review the directory before sharing it.
+From a checkout of this repository, make a public copy with the maintainer tool [tools/regression-bundle](../../tools/regression-bundle/README.md): it checks each arm's `result.json` against its `junit.xml`, command trace and `run-manifest.json`, then writes `Scenario.cs` and `Program.cs` exactly as they ran with a project pinned to the toolkit, a template of your manifest with placeholders and a generated A/B table, and refuses machine paths, private names and unrelated plugin names. It publishes nothing; you review the directory before sharing it.
 
 ## Limits
 
