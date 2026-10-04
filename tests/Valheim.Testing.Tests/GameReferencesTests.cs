@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -103,12 +102,18 @@ public sealed class GameReferencesBuildTests : IDisposable
     }
 }
 
-/// <summary>Each missing part of a game install stops the build before compiling, with an error naming it.</summary>
+/// <summary>
+/// Each missing part of a game install stops the build with an error naming it. The install checks run only the
+/// target that holds them (no restore, no compile); the successful builds in <see cref="GameReferencesBuildTests"/> and
+/// <see cref="PropsWithoutTargets"/> run the real build, through the hook into reference resolution.
+/// </summary>
 public sealed class GameReferencesErrorTests : IDisposable
 {
     private readonly GameReferencesProject _project = new();
 
     public void Dispose() => _project.Dispose();
+
+    private const string AddReferences = "AddValheimGameReferences";
 
     private static readonly Dictionary<string, string?> NoEnvironmentPath = new() { ["VALHEIM_PATH"] = null };
 
@@ -118,7 +123,7 @@ public sealed class GameReferencesErrorTests : IDisposable
         string missing = _project.PathOf("no-game-here");
         _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies);
 
-        BuildRun run = await _project.Build(NoEnvironmentPath, "-p:ValheimPath=" + missing);
+        BuildRun run = await _project.Check(AddReferences, NoEnvironmentPath, "-p:ValheimPath=" + missing);
 
         run.AssertFailedWith("Valheim is not installed at '" + missing + "' (ValheimPath)");
     }
@@ -129,7 +134,7 @@ public sealed class GameReferencesErrorTests : IDisposable
         string home = _project.Folder("home");
         _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies);
 
-        BuildRun run = await _project.Build(GameReferencesProject.WithHome(home));
+        BuildRun run = await _project.Check(AddReferences, GameReferencesProject.WithHome(home));
 
         string expected = Path.Combine(new[] { home }.Concat(GameReferencesProject.DefaultSteamGame().Game.Split('/')).ToArray());
         run.AssertFailedWith("Valheim is not installed at '" + expected + "' (the default Steam folder; neither ValheimPath nor VALHEIM_PATH is set)");
@@ -141,7 +146,7 @@ public sealed class GameReferencesErrorTests : IDisposable
         string folder = _project.Folder("not-a-game");
         _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies);
 
-        BuildRun run = await _project.Build(new Dictionary<string, string?> { ["VALHEIM_PATH"] = folder });
+        BuildRun run = await _project.Check(AddReferences, new Dictionary<string, string?> { ["VALHEIM_PATH"] = folder });
 
         run.AssertFailedWith("'" + folder + "' (the VALHEIM_PATH environment variable) has no valheim_Data/Managed");
     }
@@ -153,7 +158,7 @@ public sealed class GameReferencesErrorTests : IDisposable
         File.Delete(Path.Combine(game, "valheim_Data", "Managed", "assembly_utils.dll"));
         _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies);
 
-        BuildRun run = await _project.Build(NoEnvironmentPath, "-p:ValheimPath=" + game);
+        BuildRun run = await _project.Check(AddReferences, NoEnvironmentPath, "-p:ValheimPath=" + game);
 
         run.AssertFailedWith("Game assemblies not found in");
         Assert.Contains("assembly_utils (", run.Output);
@@ -167,7 +172,7 @@ public sealed class GameReferencesErrorTests : IDisposable
         Directory.Delete(Path.Combine(game, "BepInEx"), recursive: true);
         _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies);
 
-        BuildRun run = await _project.Build(NoEnvironmentPath, "-p:ValheimPath=" + game);
+        BuildRun run = await _project.Check(AddReferences, NoEnvironmentPath, "-p:ValheimPath=" + game);
 
         run.AssertFailedWith("BepInEx assemblies not found in");
         Assert.Contains("BepInEx.dll", run.Output);
@@ -179,7 +184,7 @@ public sealed class GameReferencesErrorTests : IDisposable
         string game = _project.FakeGame("game", "valheim_Data/Managed");
         _project.Write(usesTypesOf: new[] { "assembly_valheim" }, properties: "<UseValheimCli>true</UseValheimCli>");
 
-        BuildRun run = await _project.Build(NoEnvironmentPath, "-p:ValheimPath=" + game);
+        BuildRun run = await _project.Check(AddReferences, NoEnvironmentPath, "-p:ValheimPath=" + game);
 
         run.AssertFailedWith("sets UseValheimCli: pass -p:CliDll=");
     }
@@ -191,7 +196,7 @@ public sealed class GameReferencesErrorTests : IDisposable
         string cli = _project.PathOf("runtime/valheimCLI.dll");
         _project.Write(usesTypesOf: new[] { "assembly_valheim" }, properties: "<UseValheimCli>true</UseValheimCli>");
 
-        BuildRun run = await _project.Build(NoEnvironmentPath, "-p:ValheimPath=" + game, "-p:CliDll=" + cli);
+        BuildRun run = await _project.Check(AddReferences, NoEnvironmentPath, "-p:ValheimPath=" + game, "-p:CliDll=" + cli);
 
         run.AssertFailedWith("CliDll does not exist: '" + cli + "'");
     }
@@ -202,6 +207,7 @@ public sealed class GameReferencesErrorTests : IDisposable
         string game = _project.FakeGame("game", "valheim_Data/Managed");
         _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies, importTargets: false);
 
+        // A real build: the refusal hooks into reference resolution, so this also proves the hook fires before compiling.
         BuildRun run = await _project.Build(NoEnvironmentPath, "-p:ValheimPath=" + game);
 
         run.AssertFailedWith("imports Valheim.GameReferences.props but not Valheim.GameReferences.targets");
@@ -214,21 +220,9 @@ public sealed class GameReferencesErrorTests : IDisposable
         _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies,
             items: "<PackageReference Include=\"Valheim.Testing.Doubles\" Version=\"[0.1.0-preview.4]\" PrivateAssets=\"all\" />");
 
-        BuildRun run = await _project.Build(NoEnvironmentPath, "-p:ValheimPath=" + game);
+        BuildRun run = await _project.Check(AddReferences, NoEnvironmentPath, "-p:ValheimPath=" + game);
 
         run.AssertFailedWith("references both the game's assemblies (Valheim.GameReferences) and Valheim.Testing.Doubles");
-    }
-}
-
-/// <summary>The combined console output of one <c>dotnet build</c>.</summary>
-internal sealed record BuildRun(int ExitCode, string Output)
-{
-    public void AssertSucceeded() => Assert.True(ExitCode == 0, $"expected the build to succeed, got exit {ExitCode}\n{Output}");
-
-    public void AssertFailedWith(string message)
-    {
-        Assert.True(ExitCode != 0, $"expected the build to fail, it succeeded\n{Output}");
-        Assert.True(Output.Contains(message, StringComparison.Ordinal), $"expected the error \"{message}\" in\n{Output}");
     }
 }
 
@@ -290,7 +284,7 @@ internal sealed class GameReferencesProject : IDisposable
     /// <summary>Writes Fixture.csproj, and Uses.cs naming the stand-in type of each of <paramref name="usesTypesOf"/>, so the build compiles only when each resolved.</summary>
     public void Write(IEnumerable<string> usesTypesOf, string properties = "", string items = "", bool importTargets = true)
     {
-        string tools = Path.Combine(DevLoopScripts.RepositoryRoot(), "tools", "game-references");
+        string tools = Path.Combine(FixtureProjects.RepositoryRoot(), "tools", "game-references");
         File.WriteAllText(PathOf("Fixture.csproj"),
             "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
             $"  <Import Project=\"{Path.Combine(tools, "Valheim.GameReferences.props")}\" />\n" +
@@ -304,49 +298,16 @@ internal sealed class GameReferencesProject : IDisposable
             " }; } }\n");
     }
 
-    /// <summary>
-    /// Runs <c>dotnet build Fixture.csproj</c> with this process's environment plus <paramref name="environment"/>
-    /// (a null value removes the variable). No build server or reused node outlives it.
-    /// </summary>
-    public async Task<BuildRun> Build(IReadOnlyDictionary<string, string?> environment, params string[] arguments)
-    {
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } host ? host : "dotnet")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = Root,
-        };
-        foreach (string arg in new[] { "build", PathOf("Fixture.csproj"), "-nologo", "-tl:off", "-nodeReuse:false", "-p:UseSharedCompilation=false", "-warnaserror:MSB3245,MSB3246" }.Concat(arguments))
-            start.ArgumentList.Add(arg);
-        // The test host runs inside an SDK command; its MSBuild variables must not steer the fixture's build.
-        foreach (string name in new[] { "MSBuildExtensionsPath", "MSBuildSDKsPath", "MSBUILD_EXE_PATH", "MSBuildLoadMicrosoftTargetsReadOnly" })
-            start.Environment.Remove(name);
-        start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-        start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-        start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
-        start.Environment["DOTNET_NOLOGO"] = "1";
-        foreach ((string name, string? value) in environment)
-        {
-            if (value is null) start.Environment.Remove(name);
-            else start.Environment[name] = value;
-        }
+    /// <summary>Runs <c>dotnet build Fixture.csproj</c> with this process's environment plus <paramref name="environment"/> (a null value removes the variable).</summary>
+    public Task<BuildRun> Build(IReadOnlyDictionary<string, string?> environment, params string[] arguments) =>
+        FixtureProjects.Dotnet(Root, new[] { "build", PathOf("Fixture.csproj"), "-nologo", "-tl:off", "-nodeReuse:false", "-p:UseSharedCompilation=false", "-warnaserror:MSB3245,MSB3246" }.Concat(arguments), environment);
 
-        using Process process = Process.Start(start) ?? throw new InvalidOperationException("dotnet did not start");
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
-        Task<string> stderr = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("dotnet build of the game-references fixture did not finish within 3 minutes");
-        }
-        return new BuildRun(process.ExitCode, await stdout + await stderr);
-    }
+    /// <summary>
+    /// Runs only <paramref name="target"/> of Fixture.csproj with <c>dotnet msbuild</c>: no restore and no compile. The
+    /// checks of a missing install all stop the build inside the targets that run before reference resolution.
+    /// </summary>
+    public Task<BuildRun> Check(string target, IReadOnlyDictionary<string, string?> environment, params string[] arguments) =>
+        FixtureProjects.Dotnet(Root, new[] { "msbuild", PathOf("Fixture.csproj"), "-nologo", "-tl:off", "-nodeReuse:false", "-t:" + target }.Concat(arguments), environment);
 
     /// <summary>The one public type in a stand-in assembly: FakeGame.A_&lt;name with dots as underscores&gt;.</summary>
     public static string TypeName(string assembly) => "A_" + assembly.Replace('.', '_');

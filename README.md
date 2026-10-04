@@ -91,7 +91,7 @@ Preview APIs may change. No release or upstream merge is implied by this reposit
 
 [`tools/dev-loop`](tools/dev-loop/README.md) holds `dev-loop.cs`, one .NET file-based script for a mod's edit-build-test loop (build, install into a game copy you own, launch, run a strict plan, summarise the log), and a strict smoke plan to start from. It drives a `valheim-cli` executable taken from a ValheimCLI release or build; see [Developer loop](docs/getting-started.md#developer-loop).
 
-Two more tools are for a mod's build: [`tools/test-runners`](tools/test-runners/README.md) runs a test project on `net10.0` and on `net48` (Mono on macOS and Linux, .NET Framework on Windows) and fails if either fails, and [`tools/game-references`](tools/game-references/README.md) gives the mod's game-side projects their Valheim, Unity and BepInEx references from one `ValheimPath`, with an error naming whatever is missing.
+Two more tools are for a mod's build: [`tools/test-runners`](tools/test-runners/README.md) (one MSBuild targets file) runs a test project on `net10.0` and on `net48` (Mono on macOS and Linux, .NET Framework on Windows) and fails if either fails, and [`tools/game-references`](tools/game-references/README.md) gives the mod's game-side projects their Valheim, Unity and BepInEx references from one `ValheimPath`, with an error naming whatever is missing.
 
 Follow-up examples: [PaintCheck](examples/PaintCheck/README.md) compares loaded raw paint channels; [WalkingReview](examples/WalkingReview/README.md) records a human-driven traversal without moving the character.
 Both build locally; the bounded paved paint/reload check passed, while human walking acceptance remains pending.

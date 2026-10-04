@@ -120,10 +120,9 @@ jobs:
     name: game hosts (ssh to localhost, container)
     # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only
     # a key generated for this run (bash and pwsh sessions, a loopback port forward), and an Ubuntu container on the host
-    # network driven with docker exec. Both are removed at the end; the keys live in the runner's temporary directory. An Xvfb
-    # display on :99 carries the interactive client checks (a stand-in Steam and game), locally and over the ssh. The lease
-    # contention checks open ten ssh sessions at once, beyond sshd's default MaxStartups of 10 unauthenticated connections.
-    # The client key and known_hosts sit in a directory with a space in its name, so every connection passes quoted ssh options.
+    # network driven with docker exec. An Xvfb display on :99 carries the interactive client checks (a stand-in Steam and
+    # game), locally and over the ssh. All are removed at the end; .github/scripts/game-hosts.sh sets up and removes the
+    # sshd and the display.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -137,62 +136,22 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: dotnet run scripts/bootstrap-cli.cs
-      - name: Start a throwaway sshd on 127.0.0.1:2222
-        run: |
-          set -euo pipefail
-          d="$RUNNER_TEMP/sshd"
-          mkdir -p "$d"
-          if [ ! -x /usr/sbin/sshd ]; then sudo apt-get update -q && sudo apt-get install -y -q openssh-server; fi
-          ssh-keygen -q -t ed25519 -N '' -C vt-host -f "$d/host_key"
-          k="$RUNNER_TEMP/vt client key"
-          mkdir -p "$k"
-          ssh-keygen -q -t ed25519 -N '' -C vt-client -f "$k/client_key"
-          cp "$k/client_key.pub" "$d/authorized_keys"
-          printf '%s\n' "Port 2222" "ListenAddress 127.0.0.1" "HostKey $d/host_key" "PidFile $d/sshd.pid" \
-            "AuthorizedKeysFile $d/authorized_keys" "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
-            "PubkeyAuthentication yes" "UsePAM yes" "StrictModes no" "AllowTcpForwarding local" "AllowAgentForwarding no" \
-            "X11Forwarding no" "MaxStartups 100" "Subsystem sftp internal-sftp" > "$d/sshd_config"
-          sudo mkdir -p /run/sshd
-          sudo /usr/sbin/sshd -f "$d/sshd_config" -E "$d/sshd.log"
-          echo "[127.0.0.1]:2222 $(cut -d' ' -f1,2 "$d/host_key.pub")" > "$k/known_hosts"
-          echo "VALHEIM_TESTING_SSH_DESTINATION=$(id -un)@127.0.0.1" >> "$GITHUB_ENV"
-          {
-            echo "VALHEIM_TESTING_SSH_OPTIONS<<VT_OPTIONS"
-            echo "IdentityFile=$k/client_key"
-            echo "IdentitiesOnly=yes"
-            echo "UserKnownHostsFile=$k/known_hosts"
-            echo "StrictHostKeyChecking=yes"
-            echo "VT_OPTIONS"
-          } >> "$GITHUB_ENV"
-          # ssh reads a -o value like a config line, so a path with a space is quoted inside the argument.
-          ssh -o BatchMode=yes -o "IdentityFile=\"$k/client_key\"" -o IdentitiesOnly=yes -o "UserKnownHostsFile=\"$k/known_hosts\"" \
-            -o StrictHostKeyChecking=yes -p 2222 "$(id -un)@127.0.0.1" 'echo "ssh to localhost works; pwsh: $(command -v pwsh)"'
+      - name: Start a throwaway sshd on 127.0.0.1:2222 and a virtual X display
+        run: bash .github/scripts/game-hosts.sh start
       - name: Start a throwaway container on the host network
         run: docker run -d --rm --name vt-game-host --network host ubuntu:24.04 sleep 1800
-      - name: Start a virtual X display for the interactive client checks
-        run: |
-          set -euo pipefail
-          if ! command -v Xvfb > /dev/null; then sudo apt-get update -q && sudo apt-get install -y -q xvfb; fi
-          Xvfb :99 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/xvfb.pid"
-          for _ in $(seq 1 100); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
-          [ -S /tmp/.X11-unix/X99 ] || { cat "$RUNNER_TEMP/xvfb.log"; exit 1; }
-          echo "VALHEIM_TESTING_DISPLAY=:99" >> "$GITHUB_ENV"
       - run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release --filter Category=GameHosts
-      - name: Stop the sshd and the container
+      - name: Stop the sshd, the display and the container
         if: always()
         run: |
           docker rm -f vt-game-host || true
-          if [ -f "$RUNNER_TEMP/xvfb.pid" ]; then kill "$(cat "$RUNNER_TEMP/xvfb.pid")" || true; fi
-          if [ -f "$RUNNER_TEMP/sshd/sshd.pid" ]; then sudo kill "$(cat "$RUNNER_TEMP/sshd/sshd.pid")" || true; fi
-          cat "$RUNNER_TEMP/sshd/sshd.log" 2>/dev/null || true
-          rm -rf "$RUNNER_TEMP/sshd" "$RUNNER_TEMP/vt client key"
+          bash .github/scripts/game-hosts.sh stop
   test-runners:
     name: test runners (${{ matrix.os }})
-    # tools/test-runners for real: a copy of ModWithTests that also targets net48 (the two changes its README
-    # describes), run with Mono on Linux and macOS and on .NET Framework on Windows. Negative control: an added
-    # test that fails only on .NET Framework must make the script exit 1, while the net10.0 leg alone still passes, and
-    # a filter that selects no test must fail the net48 leg.
+    # tools/test-runners for real: a copy of ModWithTests that also targets net48 and imports the targets file (the
+    # three changes its README describes), run with Mono on Linux and macOS and on .NET Framework on Windows, with the
+    # same command on every OS. Negative control: an added test that fails only on .NET Framework must fail the run,
+    # while the net10.0 leg alone still passes, and a filter that selects no test must fail the net48 leg.
     # Packages restore from NuGet.org, as in a mod.
     strategy:
       fail-fast: false
@@ -200,6 +159,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
         with:
@@ -241,28 +203,24 @@ jobs:
         run: |
           brew install mono
           mono --version
-      - name: Copy ModWithTests and target net48 too
-        shell: bash
+      - name: Copy ModWithTests, target net48 too and import the targets
         run: |
           cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
+          cp tools/test-runners/Valheim.TestRunners.targets "$RUNNER_TEMP/mod/"
           project="$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj"
           sed -i.orig \
             -e 's#<TargetFramework>net10.0</TargetFramework>#<TargetFrameworks>net48;net10.0</TargetFrameworks>#' \
             -e 's#<PackageReference Include="xunit" Version="2.8.1" />#&<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />#' \
+            -e 's#</Project>#  <Import Project="../Valheim.TestRunners.targets" />\n</Project>#' \
             "$project"
           grep -q '<TargetFrameworks>net48;net10.0</TargetFrameworks>' "$project"
           grep -q 'Include="xunit.runner.console"' "$project"
+          grep -q 'Valheim.TestRunners.targets' "$project"
           rm "$project.orig"
-      - name: Both frameworks pass (bash)
-        if: runner.os != 'Windows'
+      - name: Both frameworks pass
         working-directory: ${{ runner.temp }}/mod
-        run: bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" MyMod.Tests/MyMod.Tests.csproj
-      - name: Both frameworks pass (Windows PowerShell)
-        if: runner.os == 'Windows'
-        working-directory: ${{ runner.temp }}/mod
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\tools\test-runners\run-tests.ps1" MyMod.Tests\MyMod.Tests.csproj
+        run: dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks
       - name: Add a test that fails only on .NET Framework
-        shell: bash
         run: |
           cat > "$RUNNER_TEMP/mod/MyMod.Tests/Net48OnlyFailure.cs" <<'CS'
           using Xunit;
@@ -278,28 +236,13 @@ jobs:
               }
           }
           CS
-      - name: Negative control (bash)
-        if: runner.os != 'Windows'
+      - name: Negative control
         working-directory: ${{ runner.temp }}/mod
         run: |
-          status=0
-          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" MyMod.Tests/MyMod.Tests.csproj || status=$?
-          if [ "$status" != 1 ]; then echo "::error::a net48-only failure must make run-tests.sh exit 1; it exited $status"; exit 1; fi
-          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" --framework net10.0 MyMod.Tests/MyMod.Tests.csproj
+          run() { dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks "$@" | tee "$RUNNER_TEMP/run.log"; return "${PIPESTATUS[0]}"; }
+          status=0; run || status=$?
+          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (tests, exit 1)' "$RUNNER_TEMP/run.log"; then echo "::error::a net48-only failure must fail the run; it exited $status"; exit 1; fi
+          run -f net10.0
           # A filter that selects no test must not pass the net48 leg.
-          status=0
-          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" --framework net48 --filter FullyQualifiedName~NoSuchTest MyMod.Tests/MyMod.Tests.csproj || status=$?
-          if [ "$status" != 1 ]; then echo "::error::a net48 leg that ran no tests must make run-tests.sh exit 1; it exited $status"; exit 1; fi
-      - name: Negative control (Windows PowerShell)
-        if: runner.os == 'Windows'
-        working-directory: ${{ runner.temp }}/mod
-        run: |
-          $script = "$env:GITHUB_WORKSPACE\tools\test-runners\run-tests.ps1"
-          powershell -NoProfile -ExecutionPolicy Bypass -File $script MyMod.Tests\MyMod.Tests.csproj
-          if ($LASTEXITCODE -ne 1) { Write-Output "::error::a net48-only failure must make run-tests.ps1 exit 1; it exited $LASTEXITCODE"; exit 1 }
-          powershell -NoProfile -ExecutionPolicy Bypass -File $script --framework net10.0 MyMod.Tests\MyMod.Tests.csproj
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          # A filter that selects no test must not pass the net48 leg.
-          powershell -NoProfile -ExecutionPolicy Bypass -File $script --framework net48 --filter FullyQualifiedName~NoSuchTest MyMod.Tests\MyMod.Tests.csproj
-          if ($LASTEXITCODE -ne 1) { Write-Output "::error::a net48 leg that ran no tests must make run-tests.ps1 exit 1; it exited $LASTEXITCODE"; exit 1 }
-          exit 0
+          status=0; run -f net48 -p:VSTestTestCaseFilter=FullyQualifiedName~NoSuchTest || status=$?
+          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (no tests ran)' "$RUNNER_TEMP/run.log"; then echo "::error::a net48 leg that ran no tests must fail the run; it exited $status"; exit 1; fi
