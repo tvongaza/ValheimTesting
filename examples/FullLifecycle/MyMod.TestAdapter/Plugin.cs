@@ -58,5 +58,5 @@ public sealed class Plugin : BaseUnityPlugin
         MarkerObservation.Command(),                                // markers <x> <z> [radius]: the mod's own
         MarkerOwnership.SnapshotCommand(), MarkerOwnership.WaitCommand(), MarkerOwnership.ClaimCommand());
     private void OnApplicationQuit() => QuitLogFlush.Quitting("MyMod.TestAdapter OnApplicationQuit");
-    private void OnDestroy() { ReviewClipFrames.AbortOnUnload(); ReviewState.RestoreOnUnload(); _registration?.Dispose(); _ownershipPatch?.UnpatchSelf(); }
+    private void OnDestroy() { ReviewClipFrames.AbortOnUnload(); ReviewState.RestoreOnUnload(); _registration?.Dispose(); _ownershipPatch?.UnpatchSelf(); QuitLogFlush.Disable(); }
 }
