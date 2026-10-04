@@ -1,0 +1,15 @@
+{
+  "Name": "dumpcontract1-coarse",
+  "Path": "dumpcontract1-coarse.csv",
+  "WorldUid": "-18372600",
+  "Seed": "DumpProbe1",
+  "GameBuild": "1.0.16",
+  "Command": "cli_world_dump 128 C:/dumps --window 0,0,512",
+  "Reply": "OK: WORLD_DUMP samples=64 step=128 window=0,0,512 extent=-400,-400..496,496 ms=1 world=C:/dumps\\world.win_0_0_512_s128.csv",
+  "Sha256": "a9420aba3fa06d8788862a67e4f7fee27b4d1c9409efb78b20e7f6f44c0650b5",
+  "Step": 128,
+  "MinX": -400,
+  "MinZ": -400,
+  "MaxX": 496,
+  "MaxZ": 496
+}
