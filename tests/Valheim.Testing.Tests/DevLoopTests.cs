@@ -334,7 +334,7 @@ public sealed class DevLoopTests : IDisposable
     {
         // The shipped entry point, compiled by the SDK as a user runs it (the tests above compile it without that line).
         string dotnet = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } host ? host : "dotnet";
-        string script = Path.Combine(DevLoopScripts.RepositoryRoot(), "tools", "dev-loop", "dev-loop.cs");
+        string script = Path.Combine(FixtureProjects.RepositoryRoot(), "tools", "dev-loop", "dev-loop.cs");
         ToolRun run = DevLoop.RunProcess(dotnet, new[] { "run", "--file", script }, capture: true, directory: _root);
         Assert.True(run.ExitCode == 4, $"exit {run.ExitCode}\n{run.Output}\n{run.Errors}");
         Assert.Contains(DevLoop.Usage, run.Errors);

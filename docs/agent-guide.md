@@ -18,6 +18,7 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Compare loaded paint | [PaintCheck](../examples/PaintCheck/README.md) | Rendered appearance or every biome's alpha meaning |
 | Capture a named loaded-terrain site before/after or on failure | [Terrain site snapshots](terrain-site-snapshots.md) | Generator height, ZDO state or human usability |
 | Capture saved objects, containers and loaded structures near a site | [Area object snapshots](area-object-snapshots.md) | Terrain/paint or a mod-specific correctness verdict |
+| Find a run's evidence: snapshots, review stills and clips, round JSON | [Evidence linked from result.json](evidence.md) | That any picture looks right; a human verdict is recorded separately |
 | A/B regression of one mod in the real game | [TargetedRegression](../examples/TargetedRegression/README.md): preflight without the game, then one hosted run per arm | Other mods, dedicated servers or restarts |
 | Load a mod or isolate a mod-set conflict | [NativeSmoke](../examples/NativeSmoke/README.md) through [Debugging mods](debugging-mods.md): `valheim-test server-load`, `server-load-ab` or `start` | The mod's gameplay behavior or which mod owns a conflict |
 | Prepare a dedicated server and multiple owned clients | [FullLifecycle three-actor campaign](../examples/FullLifecycle/README.md#prepare-the-campaign): reviewed per-role locks, separate character/account hosts, strict pins, one run command | An arbitrary mod's gameplay correctness; the small sample is a setup smoke |

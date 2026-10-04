@@ -209,4 +209,67 @@ public class SessionControlTests
         Assert.Single(fake.Commands.Where(x => x == "cli_extension valheim.session/leave"));
         Assert.Throws<InvalidOperationException>(() => actor.Execute("anything"));
     }
+
+    // JoinWorld, the one join: a client at its menu that joins world 4242 by address.
+    private static ScriptedTransport JoiningClient(bool allowOnServerClients = true)
+    {
+        bool joined = false;
+        return new ScriptedTransport()
+            .ClientAccess(() => joined, allowOnServerClients: allowOnServerClients)
+            .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
+            .Extension("valheim.session", "state", _ => new
+            {
+                source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? "4242" : null, worldPresent = joined,
+                worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined, saving = false, loadError = false,
+                connectionStatus = joined ? "Connected" : "None",
+            })
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+    }
+    private static ClientRunPlan JoinPlan(string mode) => new()
+    {
+        Mode = mode, Install = mode == "owned" ? Path.GetFullPath("client-install") : "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
+        Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) },
+    };
+
+    [Theory] [InlineData("owned")] [InlineData("attached")]
+    public void JoinWorldJoinsOncePinsProtectsAndGivesOnlyAnOwnedClientTestAccess(string mode)
+    {
+        var client = JoiningClient(); using var actor = client.Actor();
+        var state = new SessionControl(actor).JoinWorld(JoinPlan(mode), "4242");
+        Assert.True(state.WorldReady && state.LocalPlayer);
+        Assert.Equal(1, client.Count("cli_extension valheim.session/join"));
+        Assert.Contains("cli_extension valheim.session/join 127.0.0.1:2456 Tester", client.Commands);
+        Assert.Contains(client.Commands, c => c.StartsWith("cli_expect", StringComparison.Ordinal) && c.Contains("worlduid=4242", StringComparison.Ordinal));
+        Assert.Equal(1, client.Count("cli_set_player_safety true"));
+        Assert.True(client.Access.Devcommands); // At the menu, before the join, for either kind of client.
+        // Cheats are acknowledged on an owned client's disposable character only, before the protection it allows.
+        Assert.Equal(mode == "owned", client.Access.CheatsAcknowledged);
+        Assert.Equal(mode == "owned" ? 1 : 0, client.Count("cli_acknowledge_local_cheats"));
+        if (mode == "owned")
+            Assert.True(client.Commands.ToList().IndexOf("cli_acknowledge_local_cheats") < client.Commands.ToList().IndexOf("cli_set_player_safety true"));
+    }
+
+    // Protection is a mutating command on a joined client: an owned client staged without AllowOnServerClients is named at
+    // its test access, before any protection is sent; without protection the setting is not required.
+    [Theory] [InlineData(true)] [InlineData(false)]
+    public void JoinWorldNamesAMissingAllowOnServerClientsBeforeProtecting(bool protect)
+    {
+        var client = JoiningClient(allowOnServerClients: false);
+        using var actor = client.Actor();
+        if (protect)
+            Assert.Contains("AllowOnServerClients", Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(JoinPlan("owned"), "4242")).Message);
+        else new SessionControl(actor).JoinWorld(JoinPlan("owned"), "4242", protectPlayer: false);
+        Assert.Equal(0, client.Count("cli_set_player_safety true"));
+    }
+
+    [Fact] public void JoinWorldRefusesAWrongWayInBeforeAnythingIsSent()
+    {
+        var client = JoiningClient(); using var actor = client.Actor();
+        var session = new SessionControl(actor);
+        var crossplay = JoinPlan("owned"); crossplay.Crossplay = true;
+        Assert.Contains("lobby", Assert.Throws<ArgumentException>(() => session.JoinWorld(crossplay, "4242")).Message);
+        Assert.Contains("by address", Assert.Throws<ArgumentException>(() => session.JoinWorld(JoinPlan("owned"), "4242", new CrossplayLobby("player", "lobby"))).Message);
+        Assert.Throws<ArgumentException>(() => session.JoinWorld(JoinPlan("owned"), "not-a-uid"));
+        Assert.All(client.Commands, c => Assert.StartsWith("cli_expect", c));
+    }
 }

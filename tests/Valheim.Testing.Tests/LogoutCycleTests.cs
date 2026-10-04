@@ -190,13 +190,34 @@ public sealed class LogoutCycleTests : IDisposable
         Assert.Equal(0, transport.Count("cli_extension valheim.session/leave"));
     }
 
+    // The rejoin is the toolkit's one join by address: a crossplay or hosting client is refused before it leaves.
+    [Fact] public void ACrossplayOrHostingPlanIsRefusedBeforeTheLeave()
+    {
+        var (_, transport, client) = Joined();
+        var crossplay = Plan(); crossplay.Crossplay = true;
+        Assert.Contains("by address", Assert.Throws<ArgumentException>(() => Cycle().Run(client, crossplay, WorldUid)).Message);
+        var hosting = Plan(); hosting.HostWorld = new HostWorldPlan();
+        Assert.Throws<ArgumentException>(() => Cycle().Run(client, hosting, WorldUid));
+        Assert.Equal(0, transport.Count("cli_extension valheim.session/leave"));
+    }
+
+    // An owned client's rejoined character gets its test access again, as every join of an owned client does.
+    [Fact] public void AnOwnedClientRejoinsWithTestAccess()
+    {
+        var (_, transport, client) = Joined();
+        var owned = Plan(); owned.Mode = "owned"; owned.Install = Path.GetFullPath("client-install");
+        Cycle().Run(client, owned, WorldUid);
+        Assert.True(transport.Access.CheatsAcknowledged);
+        Assert.Equal(1, transport.Count("cli_extension valheim.session/join"));
+    }
+
     [Fact] public void InARoundEachPartIsAStepAndTheReadingsAreEvidence()
     {
         var output = Path.Combine(_root, "out"); Directory.CreateDirectory(output);
         var (_, _, client) = Joined();
         var server = new ScriptedTransport().Actor("server", "cli_expect worlduid=" + WorldUid);
         var report = new ScenarioReport("logout");
-        Cycle().Run(new ClientRound("first", 0, true, server, client, report, output), Plan(), WorldUid);
+        Cycle().Run(new ClientRound("first", 0, true, server, client, report, output, WorldUid), Plan(), WorldUid);
         Assert.Equal(new[]
         {
             "first: the custom data is set and the profile file hashed before the logout", "first: the client leaves to its menu and the profile file is rewritten",

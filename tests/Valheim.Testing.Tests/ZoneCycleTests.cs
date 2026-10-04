@@ -161,7 +161,7 @@ public sealed class ZoneCycleTests : IDisposable
         var world = new World();
         using var server = world.Server().Actor("server"); using var client = world.Client().Actor("client");
         var report = new ScenarioReport("zones");
-        var round = new ClientRound("first", 0, true, server, client, report, _output);
+        var round = new ClientRound("first", 0, true, server, client, report, _output, "1");
         Cycle().Run(round);
         Assert.Equal(new[]
         {
@@ -172,6 +172,26 @@ public sealed class ZoneCycleTests : IDisposable
         var evidence = JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "first-zone-cycle.json"))).RootElement;
         Assert.Equal(4, evidence.GetProperty("unloaded").GetProperty("zones").GetArrayLength());
         Assert.True(evidence.GetProperty("reloadSeconds").GetDouble() >= 0);
+        report.Write(_output);
+        var link = Assert.Single(report.Evidence);
+        Assert.Equal(new EvidenceReference("zone-cycle", "first", "1", "first-zone-cycle.json", WorldFixture.Hash(Path.Combine(_output, "first-zone-cycle.json"))), link);
+    }
+
+    [Fact] public void ABadEvidenceNameIsRefusedBeforeTheClientMoves()
+    {
+        var world = new World();
+        using var server = world.Server().Actor("server"); using var client = world.Client().Actor("client");
+        var round = new ClientRound("first", 0, true, server, client, new ScenarioReport("zones"), _output, "1");
+        Assert.Throws<ArgumentException>(() => Cycle().Run(round, evidence: "zone_cycle"));
+        Assert.Empty(world.Teleports);
+    }
+
+    [Fact] public void RoundEvidenceIsNamedAsAnEvidenceKind()
+    {
+        using var server = new World().Server().Actor("server");
+        var round = new ClientRound("first", 0, true, server, server, new ScenarioReport("names"), _output, "1");
+        Assert.Throws<ArgumentException>(() => round.Write("Zone Cycle", new { }));
+        Assert.False(File.Exists(Path.Combine(_output, "first-Zone Cycle.json")));
     }
 
     [Fact] public void AFailedCycleInARoundStillWritesWhatItSaw()
@@ -179,7 +199,7 @@ public sealed class ZoneCycleTests : IDisposable
         var world = new World { Stuck = new ZoneId(1, -1) };
         using var server = world.Server().Actor("server"); using var client = world.Client().Actor("client");
         var report = new ScenarioReport("zones");
-        var round = new ClientRound("first", 0, true, server, client, report, _output);
+        var round = new ClientRound("first", 0, true, server, client, report, _output, "1");
         Assert.Throws<WaitTimeoutException>(() => Cycle(timeout: TimeSpan.FromMilliseconds(300)).Run(round));
         Assert.Equal(new[] { "first: the client unloads the zones" }, report.Steps.Where(s => !s.Passed).Select(s => s.Name));
         var evidence = JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "first-zone-cycle.json"))).RootElement;

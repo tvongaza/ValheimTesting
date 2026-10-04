@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Globalization;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Valheim.Testing.Game;
@@ -29,7 +27,7 @@ public static class OwnershipHandoffScenario
             var samples = new[] { CampaignSteps.At(plan.Arrival), CampaignSteps.At(plan.SecondArrival!) };
             var measured = TerrainProbe.Compare(run.Server, "generator", "declared fixture arrival points", samples, 0.5f);
             report.Provenance["arrival-height-check"] = JsonSerializer.Serialize(measured);
-            if (!measured.Passed || measured.Samples.Any(sample => sample.Actual < 31.5f))
+            if (!measured.Passed || measured.Samples.Any(sample => sample.Actual < LifecyclePlan.WaterLevel + LifecyclePlan.Clearance))
                 throw new InvalidOperationException("Fixture arrivals are not confirmed dry: " + JsonSerializer.Serialize(measured));
         });
         CampaignSteps.MarkSites(plan, run.Server, report);
@@ -45,7 +43,7 @@ public static class OwnershipHandoffScenario
 
             report.Step("open pinned client B on its separate leased account", () => b = run.OpenProfileClient(second, "client-b"));
             JoinAndArrive(run, b!.Actor, second, plan.SecondArrival!, "B");
-            report.Step("two clients remain connected at once", () => RequirePeers(run.Server, 2));
+            report.Step("two clients remain connected at once", () => CampaignSteps.RequirePeers(run.Server, 2));
             report.Step("B sees A as the marker's only owner", () =>
             {
                 CampaignSteps.RequireLabelledMarker(b.Actor, plan.DrySite);
@@ -68,7 +66,7 @@ public static class OwnershipHandoffScenario
                 CampaignSteps.RequireLabelledMarker(b.Actor, plan.DrySite);
                 RequireOwner(b.Actor, plan.DrySite, bId, ownedHere: true);
                 RequireOwner(run.Server, plan.DrySite, bId, ownedHere: false, requireInstance: false);
-                RequirePeers(run.Server, 1);
+                CampaignSteps.RequirePeers(run.Server, 1);
             });
         }
         catch (Exception error) { failure = error; }
@@ -92,22 +90,17 @@ public static class OwnershipHandoffScenario
 
     private static void JoinAndArrive(CampaignRun run, GameActor actor, ClientRunPlan plan, Site site, string name)
     {
-        run.Report.Step($"{name} joins the pinned world once and is protected", () =>
-        {
-            var session = new SessionControl(actor);
-            // valheim.session/join completes only after the game's player-ready transition.
-            session.Join(plan.Join, plan.Character, plan.PasswordVariable);
-            actor.VerifyEnvironment(plan.WorldExpectations(run.Plan.WorldUid));
-            var joined = session.Read(); // One identity/readiness check, not an external polling loop.
-            if (!joined.WorldReady || joined.WorldUid != run.Plan.WorldUid || !joined.LocalPlayer)
-                throw new InvalidOperationException($"{name} joined without a ready player in world {run.Plan.WorldUid}: {joined}.");
-            TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: true); // joined outside ClientRounds
-            PlayerPlacement.Protect(actor); // The plan uses disposable local characters.
-        });
+        // The toolkit's one join: the join once, world pins, the world awaited and the player protected, test access.
+        run.Report.Step($"{name} joins the pinned world once and is protected",
+            () => new SessionControl(actor).JoinWorld(plan, run.Plan.WorldUid, cancellation: run.Cancellation));
         run.Report.Step($"{name} arrives on dry ground by game-side signals", () =>
         {
             var point = CampaignSteps.At(site);
-            try { ArriveSelf(actor, point, TimeSpan.FromSeconds(plan.ArrivalSeconds), run.Cancellation, run.Report, name); }
+            PlayerPlacement.TeleportArrival arrival;
+            // With two players the server cannot name one, so the client teleports itself (no server). This scenario tests
+            // ownership, not terrain generation: a location's levelling can move the ground from the generator's height, so
+            // the landing is judged on the loaded ground the client measures once its floor is ready (loadedGround).
+            try { arrival = PlayerPlacement.Arrive(null, actor, point, TimeSpan.FromSeconds(plan.ArrivalSeconds), run.Cancellation, loadedGround: true); }
             catch
             {
                 // Read-only diagnostics before teardown: never retry a teleport or replace its failure.
@@ -125,6 +118,8 @@ public static class OwnershipHandoffScenario
                 }
                 throw;
             }
+            run.Report.Provenance[$"arrival-{name}-ground"] = JsonSerializer.Serialize(new { point.X, point.Z, generator = point.Height, loaded = arrival.Target.Height });
+            if (arrival.Target.Height < LifecyclePlan.WaterLevel + LifecyclePlan.Clearance) throw new InvalidOperationException("Loaded arrival ground is not dry.");
             void Capture(string kind, Func<string> read)
             {
                 string key = $"arrival-{name}-{kind}";
@@ -133,53 +128,6 @@ public static class OwnershipHandoffScenario
             }
         });
     }
-
-    private static void ArriveSelf(GameActor actor, HeightExpectation point, TimeSpan timeout, CancellationToken cancellation, ScenarioReport report, string name)
-    {
-        var clock = Stopwatch.StartNew();
-        PlayerPlacement.SkipIntro(actor, TimeSpan.FromSeconds(Math.Min(60, timeout.TotalSeconds)));
-        string left = SecondsLeft(clock, timeout);
-        WithDeadline(actor, timeout - clock.Elapsed, () => actor.Execute($"cli_wait_teleportable {left} 0 true").RequireLine("OK: TELEPORTABLE "));
-        cancellation.ThrowIfCancellationRequested();
-        string armed = actor.Execute("cli_teleport_trace_arm").RequireLine("OK: TELEPORT_TRACE_ARM id=");
-        string id = armed["OK: TELEPORT_TRACE_ARM id=".Length..];
-        if (!int.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) || n < 1)
-            throw new InvalidOperationException("Invalid teleport trace ID: " + armed);
-        string at = string.Join(" ", new[] { point.X, point.Height + .5f, point.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
-        actor.Execute("cli_teleport " + at).RequireLine("OK: Teleported to "); // Own player, never an ambiguous peer index.
-        cancellation.ThrowIfCancellationRequested();
-        string trace = "";
-        WithDeadline(actor, timeout - clock.Elapsed, () => trace = actor.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}").RequireLine("OK: TELEPORT_TRACE "));
-        if (!trace.Contains("floorAtDone=True", StringComparison.Ordinal)) throw new InvalidOperationException("Teleport ended without a ready floor: " + trace);
-        // This scenario tests ownership, not terrain generation. Native site levelling can differ from the
-        // generator used to choose the initial target. Once its floor is ready, measure the actual loaded ground
-        // as a placement input; the independent player-support observation still has to satisfy the same limits.
-        var ground = TerrainProbe.Compare(actor, "loaded-ground", "generator placement input", new[] { point }, .3f);
-        report.Provenance[$"arrival-{name}-ground"] = JsonSerializer.Serialize(ground);
-        if (ground.Samples[0].Actual < 31.5f) throw new InvalidOperationException("Loaded arrival ground is not dry.");
-        point = point with { Height = ground.Samples[0].Actual };
-        Observation support = null!;
-        WithDeadline(actor, timeout - clock.Elapsed, () => support = actor.Observe(actor.RequireCapability("valheim.world/player-support-wait"),
-            point.X.ToString("R", CultureInfo.InvariantCulture), point.Height.ToString("R", CultureInfo.InvariantCulture),
-            point.Z.ToString("R", CultureInfo.InvariantCulture), SecondsLeft(clock, timeout)));
-        if (!SurfaceProbe.Supported(support, point)) throw new InvalidOperationException("Unsupported arrival: " + support.Data.GetRawText());
-    }
-
-    private static string SecondsLeft(Stopwatch clock, TimeSpan timeout)
-    {
-        double left = (timeout - clock.Elapsed).TotalSeconds;
-        if (left <= 0) throw new TimeoutException("The client's one-hop deadline expired; no action was repeated.");
-        return Math.Min(120, left).ToString("R", CultureInfo.InvariantCulture);
-    }
-
-    private static void WithDeadline(GameActor actor, TimeSpan remaining, Action action)
-    {
-        if (remaining <= TimeSpan.Zero) throw new TimeoutException("The client's one-hop deadline expired; no action was repeated.");
-        var old = actor.CommandTimeout;
-        try { actor.CommandTimeout = remaining + TimeSpan.FromSeconds(10); action(); }
-        finally { actor.CommandTimeout = old; }
-    }
-
 
     private static string Claim(GameActor actor, Site site)
     {
@@ -191,9 +139,15 @@ public static class OwnershipHandoffScenario
 
     private static void WaitForOwner(GameActor actor, Site site, string expected, ScenarioReport report, string evidence)
     {
-        JsonElement data = default;
-        WithDeadline(actor, TimeSpan.FromSeconds(45), () => data = actor.ObserveComplete(actor.RequireCapability(Capabilities.MarkerOwnerWait),
-            OwnerSource, CampaignSteps.Number(site.X), CampaignSteps.Number(site.Z), expected, "40").Data.Clone());
+        JsonElement data;
+        var previous = actor.CommandTimeout;
+        try
+        {
+            actor.CommandTimeout = TimeSpan.FromSeconds(55); // The adapter's own wait is 40 s.
+            data = actor.ObserveComplete(actor.RequireCapability(Capabilities.MarkerOwnerWait),
+                OwnerSource, CampaignSteps.Number(site.X), CampaignSteps.Number(site.Z), expected, "40").Data.Clone();
+        }
+        finally { actor.CommandTimeout = previous; }
         report.Provenance[evidence] = data.GetRawText();
         if (data.GetProperty("owner").GetString() != expected) throw new InvalidOperationException("The owner wait completed for the wrong session.");
     }
@@ -215,13 +169,5 @@ public static class OwnershipHandoffScenario
             local.GetBoolean() != ownedHere || requireInstance &&
             (!data.TryGetProperty("instance", out var instance) || instance.ValueKind != JsonValueKind.True))
             throw new InvalidOperationException("Incomplete or conflicting marker owner observation: " + data.GetRawText());
-    }
-
-    private static void RequirePeers(GameActor server, int expected)
-    {
-        var reply = server.Execute("cli_peers");
-        string line = reply.RequireLine("OK: ", "The game did not confirm its peers");
-        if (line != $"OK: {expected} peer(s)" || reply.Lines("PEER ").Count() != expected)
-            throw new InvalidOperationException($"Expected {expected} connected peer(s). Reply: " + reply.Describe());
     }
 }

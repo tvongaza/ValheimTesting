@@ -148,7 +148,7 @@ public sealed partial class LifecyclePlan
         SameBuildsAs(first, "client A"); SameBuildsAs(second, "client B");
         foreach (var (client, name) in new[] { (first, "client A"), (second, "client B") })
             foreach (string capability in new[] { Capabilities.Markers, Capabilities.MarkerOwner, Capabilities.MarkerOwnerWait,
-                         Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait", CliCapabilities.TeleportSignals })
+                         Capabilities.MarkerOwnerClaim, "valheim.world/terrain" }.Concat(PlayerPlacement.ArrivalCapabilities))
                 if (!client.Capabilities.Contains(capability, StringComparer.Ordinal))
                     throw new ArgumentException($"The {name} must require {capability} before gameplay.");
         if (!first.Owned || !second.Owned) throw new ArgumentException("The handoff uses two owned, disposable clients; attached personal clients are refused.");

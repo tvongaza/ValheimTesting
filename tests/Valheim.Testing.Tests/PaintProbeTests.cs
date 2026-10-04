@@ -17,7 +17,7 @@ public class PaintProbeTests
     [Fact] public void WrongCoordinateRejected() => Assert.Throws<InvalidOperationException>(()=>PaintProbe.Read(Paint(x:33),Expected,.01f));
     [Fact] public void WrongUnitsRejected() => Assert.Throws<InvalidOperationException>(()=>PaintProbe.Read(Paint(units:"metres"),Expected,.01f));
     [Fact] public void WrongLayerRejected() => Assert.Throws<InvalidOperationException>(()=>PaintProbe.Read(Paint() with { Source="compiler-paint" },Expected,.01f));
-    [Fact] public void InvalidChannelRejected() => Assert.Throws<ArgumentException>(()=>PaintProbe.Read(Paint(a:2),Expected,.01f));
+    [Fact] public void InvalidChannelRejected() => Assert.Throws<InvalidOperationException>(()=>PaintProbe.Read(Paint(a:2),Expected,.01f));
     [Theory][InlineData(-1)][InlineData(float.NaN)][InlineData(2)]
     public void InvalidToleranceRejected(float tolerance) => Assert.Throws<ArgumentException>(()=>PaintProbe.Read(Paint(),Expected,tolerance));
     [Fact] public void DuplicateTexelsRejected() => Assert.Throws<ArgumentException>(()=>PaintProbe.Validate("declared",new[]{Expected,Expected},.01f));

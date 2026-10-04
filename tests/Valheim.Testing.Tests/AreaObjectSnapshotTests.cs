@@ -20,7 +20,7 @@ public sealed class AreaObjectSnapshotTests
             "CONTAINER chest_wood pos=16.000,42.000,-8.000 defaultItemsRolled=True bytes=4 id=1:2",
             "  ITEM Wood x1 quality=1 variant=0 durability=100.0 slot=0,0",
             "OK: CONTAINERS_AT 16.0,-8.0 r=8.0 containers=1 unreadable=0"))
-        .On("cli_ground_height 16 -8", _ => ScriptedTransport.Ok("GROUND 16.0,-8.0 h=42.125"))
+        .Extension("valheim.world", "terrain", a => new { source = a[2], complete = true, x = 16f, z = -8f, height = 42.125f, units = "metres" })
         .On("cli_prefabs_at 16 42.125 -8 8", _ => ScriptedTransport.Ok(
             "PREFAB name=chest_wood distance=0.1 pos=16.000,42.000,-8.000 zdo=1:2 owner=0",
             "OK: NEARBY_PREFABS radius=8.0 count=1"))
@@ -48,11 +48,12 @@ public sealed class AreaObjectSnapshotTests
         {
             var report = new ScenarioReport("object evidence");
             report.Step("capture site", () => { });
-            report.AttachAreaObjectSnapshot(snapshot);
+            report.Attach(snapshot);
             report.Write(directory);
-            var link = Assert.Single(report.AreaObjectSnapshots);
+            var link = Assert.Single(report.Evidence);
+            Assert.Equal(("area-objects", "evidence/area-objects-001.json"), (link.Kind, link.File));
             using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "result.json")));
-            Assert.Equal(link.Sha256, result.RootElement.GetProperty("AreaObjectSnapshots")[0].GetProperty("Sha256").GetString());
+            Assert.Equal(link.Sha256, result.RootElement.GetProperty("Evidence")[0].GetProperty("Sha256").GetString());
             using var capture = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, link.File)));
             Assert.Equal("cli_zdos_at 16 -8 8", capture.RootElement.GetProperty("Commands")[1].GetProperty("Command").GetString());
         }

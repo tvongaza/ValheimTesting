@@ -112,16 +112,27 @@ public sealed class OwnershipHandoffTests
         var report = new ScenarioReport("ownership-first-failure");
         var first = ReadyClient(world, plan);
         // This is the client's own settled support reading, not a server-side inference.
-        first.OnPrefix("cli_extension valheim.world/player-support-wait ", _ => ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.world", new
+        if (!loadedGroundIsWet)
+            first.OnPrefix("cli_extension valheim.world/player-support-wait ", _ => ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.world", new
+            {
+                source = "local-player-support", complete = false, x = plan.Arrival.X, y = plan.Arrival.Ground, z = plan.Arrival.Z,
+                speed = 0f, grounded = false, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })));
+        else
         {
-            source = "local-player-support", complete = false, x = plan.Arrival.X, y = plan.Arrival.Ground, z = plan.Arrival.Z,
-            speed = 0f, grounded = false, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
-        })));
-        if (loadedGroundIsWet)
+            // The loaded ground is 0.5 m above the water but inside MyMod's 1.5 m clearance: the player stands on it, so the
+            // arrival succeeds, and the example's dry rule refuses it. (Deeper ground leaves the player swimming, which the
+            // arrival's support wait already fails as not settled.)
             first.OnPrefix("cli_extension valheim.world/terrain ", _ => ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.world", new
             {
-                source = "loaded-ground", complete = true, units = "metres", x = plan.Arrival.X, z = plan.Arrival.Z, height = 20f,
+                source = "loaded-ground", complete = true, units = "metres", x = plan.Arrival.X, z = plan.Arrival.Z, height = 30.5f,
             })));
+            first.OnPrefix("cli_extension valheim.world/player-support-wait ", _ => ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.world", new
+            {
+                source = "local-player-support", complete = true, x = plan.Arrival.X, y = 30.5f, z = plan.Arrival.Z,
+                speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })));
+        }
         bool openedB = false;
         var run = world.Run(plan, report, profileClient: (_, name) =>
         {
@@ -131,9 +142,11 @@ public sealed class OwnershipHandoffTests
 
         var error = Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run));
         Assert.Equal(loadedGroundIsWet ? "Loaded arrival ground is not dry." : "Incomplete observation or wrong observation layer.", error.Message);
-        Assert.Equal(loadedGroundIsWet ? 0 : 1, first.Count("cli_extension valheim.world/player-support-wait"));
-        Assert.True(report.Provenance.ContainsKey("arrival-A-support"), error.ToString());
+        Assert.Equal(1, first.Count("cli_extension valheim.world/player-support-wait"));
+        Assert.Equal(1, first.Count("cli_teleport")); // Never repeated.
         Assert.Contains("arrival-A-ground", report.Provenance.Keys);
+        // A failed arrival leaves read-only diagnostics; a refused dry rule after a supported arrival has the measured ground.
+        Assert.Equal(!loadedGroundIsWet, report.Provenance.ContainsKey("arrival-A-support"));
         Assert.False(openedB);
         Assert.True(first.Disposed);
         Assert.Contains(report.Steps, step => step.Name == "stop only owned client A before lease teardown" && step.Passed);
@@ -207,7 +220,13 @@ public sealed class OwnershipHandoffTests
             .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=1"))
             .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=2"))
             .OnPrefix("cli_teleport ", _ => ScriptedTransport.Ok("OK: Teleported to test point"))
-            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=2 floorAtDone=True"))
+            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=2 distant=False requestedMs=0 movedMs=0 areaReadyMs=0 floorReadyMs=0 doneMs=0 floorAtDone=True final=0,0,0"))
+            .Extension("valheim.session", "teleport-signals", _ => new { source = "teleport-signals", complete = true })
+            .Extension("valheim.world", "player-support", _ => new
+            {
+                source = "local-player-support", complete = true, x = 0f, y = 40f, z = 0f, speed = 0f,
+                grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })
             .Extension("valheim.world", "terrain", _ => new
             {
                 source = "loaded-ground", complete = true, units = "metres", x = plan.SecondArrival!.X, z = plan.SecondArrival.Z, height = plan.SecondArrival.Ground + loadedOffset,

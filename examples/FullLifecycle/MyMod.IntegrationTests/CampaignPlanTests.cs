@@ -79,7 +79,7 @@ public sealed class CampaignPlanTests : IDisposable
                 plan["secondClient"] = Owned(Client(port: 5557), "ClientB");
                 foreach (var entry in new[] { plan["client"]!, plan["secondClient"]! })
                     entry["capabilities"] = new JsonArray(Capabilities.Markers, Capabilities.MarkerOwner,
-                        Capabilities.MarkerOwnerWait, Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait", Valheim.Testing.Game.CliCapabilities.TeleportSignals);
+                        Capabilities.MarkerOwnerWait, Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait", "valheim.world/player-support", Valheim.Testing.Game.CliCapabilities.TeleportSignals);
                 plan["secondArrival"] = new JsonObject { ["x"] = 100, ["z"] = -32, ["ground"] = 42.4 };
                 break;
             case LifecyclePlan.ThreeActorScenario:
@@ -164,10 +164,14 @@ public sealed class CampaignPlanTests : IDisposable
 
     [Fact] public void OwnershipHandoffRequiresTheArrivalSignalsBeforeGameplay()
     {
-        var missingSignals = Plan(LifecyclePlan.OwnershipHandoffScenario);
-        var capabilities = missingSignals["secondClient"]!["capabilities"]!.AsArray();
-        capabilities.Remove(capabilities.Single(c => c!.GetValue<string>() == Valheim.Testing.Game.CliCapabilities.TeleportSignals));
-        Refused(missingSignals, Valheim.Testing.Game.CliCapabilities.TeleportSignals);
+        // Every capability the toolkit's arrival needs, and the loaded-ground reading, is checked before launch.
+        foreach (string capability in Valheim.Testing.Game.PlayerPlacement.ArrivalCapabilities.Append("valheim.world/terrain"))
+        {
+            var missing = Plan(LifecyclePlan.OwnershipHandoffScenario);
+            var capabilities = missing["secondClient"]!["capabilities"]!.AsArray();
+            capabilities.Remove(capabilities.Single(c => c!.GetValue<string>() == capability));
+            Refused(missing, capability);
+        }
 
         foreach (string removed in new[] { "eventDrivenArrival", "fastTestTeleports" })
         {

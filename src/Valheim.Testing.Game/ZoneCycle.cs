@@ -159,7 +159,7 @@ public sealed class ZoneCycle
     public ZoneCycleResult Run(ClientRound round, CancellationToken cancellation = default, string evidence = "zone-cycle")
     {
         ArgumentNullException.ThrowIfNull(round);
-        ArgumentException.ThrowIfNullOrWhiteSpace(evidence);
+        if (!ScenarioReport.ValidKind(evidence)) throw new ArgumentException("Name the evidence with 1-40 lower-case letters, digits or hyphens.", nameof(evidence));
         Validate();
         ZoneReading? before = null, unloaded = null, reloaded = null;
         JsonElement? away = null, back = null;

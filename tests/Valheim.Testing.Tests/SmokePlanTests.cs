@@ -7,7 +7,7 @@ using Xunit;
 /// </summary>
 public sealed class SmokePlanTests
 {
-    private static string Root => DevLoopScripts.RepositoryRoot();
+    private static string Root => FixtureProjects.RepositoryRoot();
 
     private static string PlanPath => Path.Combine(Root, "tools", "dev-loop", "smoke-plan.yaml");
 

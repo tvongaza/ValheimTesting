@@ -1,6 +1,6 @@
 # Read-only terrain site snapshots
 
-`TerrainSiteSnapshot` records loaded ground, terrain collider height and paint at a small, named site. It uses ValheimCLI's World Tools commands (`cli_area_ready`, `cli_ground_height`, `cli_surface_at`, `cli_paint_at`) and retains their exact replies. It does not change terrain, place objects or inspect ZDO contents. Use it to compare a site before and after a mod action or after a save and restart; use separate assertions for gameplay behavior.
+`TerrainSiteSnapshot` records loaded ground, terrain collider height and paint at a small, named site. It waits with ValheimCLI's `cli_area_ready`, then reads each point through the World Tools capabilities the probes use (`valheim.world/terrain` with `loaded-ground`, `valheim.world/terrain-surface`, `valheim.world/terrain-paint`), with the same readers as `TerrainProbe`, `SurfaceProbe` and `PaintProbe`: a snapshot is their readings without expectations. It retains every command and its exact reply. It does not change terrain, place objects or inspect ZDO contents. Every snapshot is linked from `result.json` (see [evidence](evidence.md)). Use it to compare a site before and after a mod action or after a save and restart; use separate assertions for gameplay behavior.
 
 The client must be joined with a ready local player at the site. `GameActor` must have strict plugin and world pins. Pass a separately pinned server actor when the server's world and area readiness matter. The server never supplies the paint or collider readings: those are client-loaded layers. Move the player and verify arrival before taking the snapshot; the capture does not teleport.
 
@@ -23,13 +23,13 @@ var after = TerrainSiteSnapshot.Capture(
 foreach (var change in TerrainSiteSnapshot.Compare(before, after))
     Console.WriteLine($"{change.Point}: ground {change.GroundHeight:+0.000;-0.000;0.000} m");
 
-report.AttachTerrainSnapshot(before);
-report.AttachTerrainSnapshot(after);
-report.Write(outputDirectory); // result.json links to terrain-snapshots/site-001.json and site-002.json
+report.Attach(before);
+report.Attach(after);
+report.Write(outputDirectory); // result.json's Evidence links evidence/terrain-site-001.json and -002.json
 ```
 
-For a failure-only capture, use `report.StepWithTerrainOnFailure("check cave", assertion, () => TerrainSiteSnapshot.Capture(...))`. It rethrows the original assertion failure; a failed capture is also recorded as a failed report step.
+Each reading is `(Point, GroundHeight, ColliderHeight, R, G, B, A)`: the loaded ground height, the height of the terrain vertex's own collider, and the raw paint texel in `PaintProbe`'s channels (R dirt, G cultivated, B paved, A vegetation: 1 where it may grow, 0 where cleared). For a failure-only capture, use `report.StepWithEvidenceOnFailure("check cave", assertion, () => TerrainSiteSnapshot.Capture(...))`. It rethrows the original assertion failure; a failed capture is also recorded as a failed report step.
 
-Capture is intentionally bounded to 1–16 distinct integer x/z points and a readiness wait of at most two minutes. A command with an incomplete, stale, wrong-coordinate or missing terrain reply fails rather than inventing a sample. A timeout names the last area state. The report stores raw replies with role, command and UTC time; review them for private world or plugin details before publishing. `Compare` omits timestamps and raw replies from the numeric delta, but it requires the same site, world and ordered points.
+Capture is intentionally bounded to 1–16 distinct integer x/z points and a readiness wait of at most two minutes. A reply that is incomplete, from another layer, in other units or for another point fails rather than inventing a sample; a refused command is recorded with its refusal before the capture fails. A timeout names the last area state. The report stores raw replies with role, command and UTC time; review them for private world or plugin details before publishing. `Compare` omits timestamps and raw replies from the numeric delta, but it requires the same site, world and ordered points.
 
 This is a **loaded client observation**, not a generator-height oracle. For generator terrain, use [world dumps](world-dump-contract.md) or [TerrainCapture](../examples/TerrainCapture/README.md) with its layer stated explicitly.

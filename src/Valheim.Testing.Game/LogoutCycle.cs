@@ -87,7 +87,9 @@ public sealed record LogoutResult(CustomDataReading Before, ProfileFileState Fil
 /// <para>
 /// <see cref="Run(ClientRound, ClientRunPlan, string, CancellationToken, string)"/> reads the <see cref="Keys"/> (each must be set),
 /// hashes the profile file, has the client leave to its menu, waits for a different hash, joins again with the plan's
-/// character (protected, as <see cref="ClientRounds"/> joins) and requires every key back with its value. Only a disposable
+/// character by address (<see cref="SessionControl.JoinWorld"/>, the join <see cref="ClientRounds"/> uses: protected, and test
+/// access on an owned client) and requires every key back with its value; a crossplay or hosting plan is refused before
+/// anything is sent. Only a disposable
 /// local character: the game must report it saved <c>Local</c>, and <see cref="CharactersDirectory"/> must be the game's
 /// local character folder, <c>characters_local</c>, never a cloud copy. The client is joined again when it returns.
 /// </para>
@@ -124,8 +126,8 @@ public sealed class LogoutCycle
     {
         ArgumentNullException.ThrowIfNull(round);
         ArgumentNullException.ThrowIfNull(plan);
-        ArgumentException.ThrowIfNullOrWhiteSpace(evidence);
-        Validate();
+        if (!ScenarioReport.ValidKind(evidence)) throw new ArgumentException("Name the evidence with 1-40 lower-case letters, digits or hyphens.", nameof(evidence));
+        Validate(plan);
         CustomDataReading? before = null, after = null;
         ProfileFileState? fileBefore = null, fileAfter = null, oldAfter = null;
         TimeSpan? writeSeen = null;
@@ -159,7 +161,7 @@ public sealed class LogoutCycle
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(plan);
-        Validate();
+        Validate(plan);
         var (before, fileBefore) = Prepare(client, plan);
         Leave(client, plan);
         var (fileAfter, oldAfter, writeSeen) = WaitForWrite(fileBefore, cancellation);
@@ -203,13 +205,9 @@ public sealed class LogoutCycle
         return (written.Value, ProfileFileState.Read(before.Path + ".old"), written.Elapsed);
     }
 
-    private static void Rejoin(GameActor client, ClientRunPlan plan, string worldUid, CancellationToken cancellation)
-    {
-        var session = new SessionControl(client);
-        session.Join(plan.Join, plan.Character, plan.PasswordVariable); // Turns devcommands on first. Exactly once.
-        client.VerifyEnvironment(plan.WorldExpectations(worldUid));
-        session.WaitForWorld(worldUid, TimeSpan.FromSeconds(plan.JoinSeconds), cancellation); // Protects the player.
-    }
+    // The one join (devcommands first, exactly once; pins, world, protection, an owned client's test access).
+    private static void Rejoin(GameActor client, ClientRunPlan plan, string worldUid, CancellationToken cancellation) =>
+        new SessionControl(client).JoinWorld(plan, worldUid, cancellation: cancellation);
 
     private CustomDataReading Reloaded(GameActor client, CustomDataReading before)
     {
@@ -221,8 +219,10 @@ public sealed class LogoutCycle
         return after;
     }
 
-    private void Validate()
+    private void Validate(ClientRunPlan plan)
     {
+        // The rejoin is by address (SessionControl.JoinWorld): refused here, before the client leaves, not after.
+        if (plan.Crossplay || plan.HostWorld != null) throw new ArgumentException("plan: the cycle rejoins a dedicated server by address; a crossplay or hosting client is not supported.");
         if (string.IsNullOrWhiteSpace(Capability) || Capability.Split('/').Length != 2) throw new ArgumentException("Capability: name the adapter's custom data observation, owner/name.");
         if (Keys is not { Count: > 0 } || Keys.Any(string.IsNullOrEmpty)) throw new ArgumentException("Keys: name at least one custom data key.");
         if (Keys.Distinct(StringComparer.Ordinal).Count() != Keys.Count) throw new ArgumentException("Keys: each key once.");

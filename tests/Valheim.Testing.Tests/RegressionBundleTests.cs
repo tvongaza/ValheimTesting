@@ -248,7 +248,7 @@ public sealed class RegressionBundleTests : IDisposable
 
     [Fact] public void TheSampleBundleSpecNamesOnlyKnownFields()
     {
-        string sample = File.ReadAllText(Path.Combine(DevLoopScripts.RepositoryRoot(), "examples", "RegressionBundle", "bundle.sample.json"));
+        string sample = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "examples", "RegressionBundle", "bundle.sample.json"));
         var read = JsonSerializer.Deserialize<BundleSpec>(sample, new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true, UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,

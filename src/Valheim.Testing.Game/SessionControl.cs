@@ -87,6 +87,39 @@ public sealed class SessionControl(GameActor actor)
         Transition("join", args);
     }
 
+    /// <summary>
+    /// Joins a client plan's disposable character to the owned dedicated server whose world is <paramref name="worldUid"/>:
+    /// the one join that <see cref="ClientRounds"/>, <see cref="LogoutCycle"/> and a scenario that joins several clients
+    /// itself all use. Devcommands first and the join exactly once, by the plan's address (<see cref="Join"/>) or, for a
+    /// <see cref="ClientRunPlan.Crossplay"/> plan, into the server's <paramref name="lobby"/> (<see cref="JoinCrossplay"/>);
+    /// then the client's world pins (<see cref="ClientRunPlan.WorldExpectations"/>) are verified and the world awaited within
+    /// the plan's join seconds. An owned client then gets test access on its disposable character
+    /// (<see cref="TestAccess.Ensure"/> as <see cref="TestActorRole.ClientInWorld"/>, requiring ValheimCLI's
+    /// <c>AllowOnServerClients</c> when the player is protected, since protection is a mutating command there); an operator's
+    /// attached client keeps devcommands only. Last, unless <paramref name="protectPlayer"/> is false, the player is protected
+    /// (<see cref="PlayerPlacement.Protect"/>; see <see cref="WaitForWorld"/> for what protection changes).
+    /// </summary>
+    public SessionState JoinWorld(ClientRunPlan plan, string worldUid, CrossplayLobby? lobby = null, bool protectPlayer = true, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ValidateWorldUid(worldUid);
+        if (plan.HostWorld != null) throw new ArgumentException("This client hosts its own world (hostWorld); it joins no server.", nameof(plan));
+        if (plan.Crossplay != (lobby != null))
+            throw new ArgumentException(plan.Crossplay ? "A crossplay client joins the server's lobby: pass it (CrossplayServer.WaitForLobby)." : "This client joins by address; a lobby is for a crossplay plan.", nameof(lobby));
+        var timeout = TimeSpan.FromSeconds(plan.JoinSeconds);
+        if (lobby != null)
+            JoinCrossplay(lobby.RemotePlayerId, plan.Character, worldUid, plan.MenuExpectations, timeout, cancellation: cancellation,
+                worldExpectations: plan.WorldExpectations(worldUid));
+        else Join(plan.Join, plan.Character, plan.PasswordVariable); // Exactly once.
+        actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // A transition always needs fresh pins.
+        var state = WaitForWorld(worldUid, timeout, cancellation, protectPlayer: false); // A joined client's world is ready with its player.
+        // Protection is a mutating test command on a joined client: an owned client's access is established first and must
+        // allow it (AllowOnServerClients), so a client staged without it is named here rather than by a refused command.
+        if (plan.Owned) TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: protectPlayer);
+        if (protectPlayer) PlayerPlacement.Protect(actor);
+        return state;
+    }
+
 
     /// <summary>
     /// Joins a server that must refuse this client with <paramref name="expected"/>, for example

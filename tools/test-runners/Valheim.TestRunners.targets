@@ -1,0 +1,213 @@
+<Project>
+  <!--
+    Valheim.TestRunners.targets (ValheimTesting tools/test-runners)
+
+    Runs a test project on every framework it targets and fails if any fails. Import it at the end of a test project
+    that targets a .NET Framework TFM and a modern one (<TargetFrameworks>net48;net10.0</TargetFrameworks>) and
+    references xunit v2 and xunit.runner.console, then:
+
+      dotnet build MyMod.Tests.csproj -t:RunTestsOnBothFrameworks
+      dotnet build MyMod.Tests.csproj -t:RunTestsOnBothFrameworks -f net48             one framework
+      dotnet build MyMod.Tests.csproj -t:RunTestsOnBothFrameworks -p:VSTestTestCaseFilter=FullyQualifiedName~DrySite
+
+    Modern frameworks run with `dotnet test`. .NET Framework ones are built, then run by the xunit v2 console runner
+    the project restored: on .NET Framework on Windows, under Mono (on PATH) elsewhere, serially under Mono. A filter
+    is dotnet test's own VSTestTestCaseFilter; for the console runner it is translated, or refused before anything
+    runs when the console runner cannot express it. A .NET Framework run that ran no tests fails. Every selected
+    framework runs even when an earlier one failed; a summary with one line per framework ends the output.
+    See tools/test-runners/README.md.
+  -->
+  <ItemGroup>
+    <!--
+      Restore then writes PkgXunit_Runner_Console, the folder of the console runner the project restored. This reaches
+      a reference declared before the import: in the project, or in Directory.Build.props.
+    -->
+    <PackageReference Update="xunit.runner.console" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <!--
+    Turns a dotnet test filter into command-line text for this OS's shell (sh, or a .cmd file on Windows), quoted so
+    the shell passes every character through: DotnetTestArguments, the filter for dotnet test, and ConsoleArguments, the
+    filter translated into xunit console options. The console runner ORs options of one kind and ANDs different kinds,
+    so only terms of one kind joined by | translate exactly: FullyQualifiedName~text (or a bare text, dotnet test's
+    shorthand for it), FullyQualifiedName=name, and Trait=value for any trait name. Test properties the console cannot
+    select by (DisplayName, Name, ClassName, ...) are refused (Translated is false): as a trait they would match
+    nothing. Property names compare case-insensitively, as dotnet test's do.
+  -->
+  <UsingTask TaskName="ValheimTestFilter" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Filter ParameterType="System.String" Required="true" />
+      <DotnetTestArguments ParameterType="System.String" Output="true" />
+      <ConsoleArguments ParameterType="System.String" Output="true" />
+      <Translated ParameterType="System.Boolean" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        bool windows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+        Func<string, string> quote = value => windows
+            ? "\"" + value.Replace("\"", "\\\"").Replace("%", "%%") + "\""
+            : "'" + value.Replace("'", "'\\''") + "'";
+        DotnetTestArguments = " --filter " + quote(Filter);
+        Translated = false;
+        ConsoleArguments = "";
+        if (Filter.IndexOfAny(new[] { '&', '(', ')', '!' }) >= 0) return true;
+        var options = new System.Text.StringBuilder();
+        string kind = null;
+        foreach (string raw in Filter.Split('|'))
+        {
+            string term = raw.Trim();
+            if (term.Length == 0) return true;
+            string termKind, option;
+            int tilde = term.IndexOf('~'), equals = term.IndexOf('=');
+            if (tilde >= 0)
+            {
+                if (!string.Equals(term.Substring(0, tilde), "FullyQualifiedName", StringComparison.OrdinalIgnoreCase)) return true;
+                termKind = "method"; option = "-method " + quote("*" + term.Substring(tilde + 1) + "*");
+            }
+            else if (equals >= 0)
+            {
+                string key = term.Substring(0, equals), value = term.Substring(equals + 1);
+                if (key.Length == 0 || value.Length == 0) return true;
+                switch (key.ToLowerInvariant())
+                {
+                    case "fullyqualifiedname": termKind = "method"; option = "-method " + quote(value); break;
+                    case "displayname": case "name": case "classname": case "testcategory": case "priority": case "id": return true;
+                    default: termKind = "trait"; option = "-trait " + quote(key + "=" + value); break;
+                }
+            }
+            else
+            {
+                termKind = "method"; option = "-method " + quote("*" + term + "*");
+            }
+            if (kind != null && kind != termKind) return true;
+            kind = termKind;
+            options.Append(' ').Append(option);
+        }
+        ConsoleArguments = options.ToString();
+        Translated = true;
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="RunTestsOnBothFrameworks">
+    <PropertyGroup>
+      <_ValheimTestFrameworks>$(TargetFramework)</_ValheimTestFrameworks>
+      <_ValheimTestFrameworks Condition="'$(_ValheimTestFrameworks)' == ''">$(TargetFrameworks)</_ValheimTestFrameworks>
+    </PropertyGroup>
+    <ItemGroup>
+      <_ValheimTestFramework Include="$(_ValheimTestFrameworks)" />
+      <_ValheimNetFrameworkTest Include="@(_ValheimTestFramework)" Condition="$([MSBuild]::GetTargetFrameworkIdentifier('%(Identity)')) == '.NETFramework'" />
+      <_ValheimModernTest Include="@(_ValheimTestFramework)" Exclude="@(_ValheimNetFrameworkTest)" />
+    </ItemGroup>
+    <!-- A project that targets one family alone would pass with the other never run; -f selects one on purpose. -->
+    <Error Condition="'$(TargetFrameworks)' == '' Or ('$(TargetFramework)' == '' And ('@(_ValheimNetFrameworkTest)' == '' Or '@(_ValheimModernTest)' == ''))"
+           Text="$(MSBuildProjectFile) targets '$(TargetFrameworks)$(TargetFramework)': RunTestsOnBothFrameworks needs &lt;TargetFrameworks&gt; with a .NET Framework and a modern framework, such as net48;net10.0 (then -f runs one of them). For a project with one framework, use dotnet test." />
+    <Error Condition="'$(TargetFramework)' != '' And !$([System.String]::Copy(';$(TargetFrameworks);').Contains(';$(TargetFramework);'))"
+           Text="$(MSBuildProjectFile) does not target $(TargetFramework) (it targets $(TargetFrameworks)). Choose one of those with -f." />
+
+    <ValheimTestFilter Condition="'@(_ValheimNetFrameworkTest)' != '' And '$(VSTestTestCaseFilter)' != ''" Filter="$(VSTestTestCaseFilter)">
+      <Output TaskParameter="Translated" PropertyName="_ValheimFilterTranslated" />
+    </ValheimTestFilter>
+    <Error Condition="'$(_ValheimFilterTranslated)' == 'false'"
+           Text="The xunit console runner cannot express the filter '$(VSTestTestCaseFilter)'. It takes terms of one kind joined by |: FullyQualifiedName~text, FullyQualifiedName=name or Trait=value. Simplify it, or run only the modern framework with -f net10.0." />
+
+    <Exec Condition="'@(_ValheimNetFrameworkTest)' != '' And !$([MSBuild]::IsOSPlatform('Windows'))" Command="command -v mono" EchoOff="true"
+          IgnoreExitCode="true" StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="_ValheimMonoExit" />
+    </Exec>
+    <Error Condition="'$(_ValheimMonoExit)' != '' And '$(_ValheimMonoExit)' != '0'"
+           Text=".NET Framework tests need Mono on macOS and Linux, and mono is not on PATH. Install it (macOS: brew install mono; Debian/Ubuntu: sudo apt-get install mono-devel), or run only the modern framework with -f net10.0." />
+
+    <!-- One framework at a time, in the project's order; each run reports a result and never stops the next. -->
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_ValheimRunTests" Properties="TargetFramework=%(_ValheimTestFramework.Identity)">
+      <Output TaskParameter="TargetOutputs" ItemName="_ValheimTestSummary" />
+    </MSBuild>
+    <Message Importance="high" Text="== summary" />
+    <Message Importance="high" Text="%(_ValheimTestSummary.Line)" />
+    <ItemGroup>
+      <_ValheimTestFailure Include="@(_ValheimTestSummary)" Condition="'%(_ValheimTestSummary.Failed)' == 'true'" />
+    </ItemGroup>
+    <Error Condition="'@(_ValheimTestFailure)' != ''" Text="Tests failed on @(_ValheimTestFailure, ', '); see the summary above." />
+  </Target>
+
+  <!-- Runs the tests of one framework (the TargetFramework global property) and returns its summary line. -->
+  <Target Name="_ValheimRunTests" Returns="@(_ValheimTestResult)">
+    <PropertyGroup>
+      <_ValheimDotnet>$(DOTNET_HOST_PATH)</_ValheimDotnet>
+      <_ValheimDotnet Condition="'$(_ValheimDotnet)' == ''">dotnet</_ValheimDotnet>
+      <_ValheimNetFramework>false</_ValheimNetFramework>
+      <_ValheimNetFramework Condition="'$(TargetFrameworkIdentifier)' == '.NETFramework'">true</_ValheimNetFramework>
+      <_ValheimStatus />
+      <_ValheimLine />
+    </PropertyGroup>
+    <ValheimTestFilter Condition="'$(VSTestTestCaseFilter)' != ''" Filter="$(VSTestTestCaseFilter)">
+      <Output TaskParameter="DotnetTestArguments" PropertyName="_ValheimFilterOption" />
+      <Output TaskParameter="ConsoleArguments" PropertyName="_ValheimConsoleFilter" />
+    </ValheimTestFilter>
+
+    <!-- Modern frameworks: dotnet test. -->
+    <Message Condition="!$(_ValheimNetFramework)" Importance="high" Text="== $(TargetFramework) (dotnet test)" />
+    <Exec Condition="!$(_ValheimNetFramework)" Command="&quot;$(_ValheimDotnet)&quot; test &quot;$(MSBuildProjectFullPath)&quot; -f $(TargetFramework) -c $(Configuration) --no-restore -nologo$(_ValheimFilterOption)"
+          EnvironmentVariables="MSBUILDDISABLENODEREUSE=1" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="high" StandardErrorImportance="high">
+      <Output TaskParameter="ExitCode" PropertyName="_ValheimStatus" />
+    </Exec>
+    <PropertyGroup Condition="!$(_ValheimNetFramework)">
+      <_ValheimLine Condition="'$(_ValheimStatus)' == '0'">$(TargetFramework): passed</_ValheimLine>
+      <_ValheimLine Condition="'$(_ValheimStatus)' != '0'">$(TargetFramework): FAILED (tests, exit $(_ValheimStatus))</_ValheimLine>
+    </PropertyGroup>
+
+    <!-- .NET Framework: build, then the xunit console runner, which writes an XML report that counts the tests run. -->
+    <PropertyGroup Condition="$(_ValheimNetFramework)">
+      <_ValheimHost>.NET Framework</_ValheimHost>
+      <_ValheimHost Condition="!$([MSBuild]::IsOSPlatform('Windows'))">Mono</_ValheimHost>
+      <_ValheimConsole Condition="'$(PkgXunit_Runner_Console)' != ''">$([MSBuild]::NormalizePath('$(PkgXunit_Runner_Console)', 'tools', 'net48', 'xunit.console.exe'))</_ValheimConsole>
+      <_ValheimReport>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'xunit-console.xml'))</_ValheimReport>
+    </PropertyGroup>
+    <Message Condition="$(_ValheimNetFramework)" Importance="high" Text="== $(TargetFramework) (xunit console, $(_ValheimHost))" />
+    <Exec Condition="$(_ValheimNetFramework)" Command="&quot;$(_ValheimDotnet)&quot; build &quot;$(MSBuildProjectFullPath)&quot; -f $(TargetFramework) -c $(Configuration) --no-restore -nologo -v quiet -clp:NoSummary"
+          EnvironmentVariables="MSBUILDDISABLENODEREUSE=1" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="high" StandardErrorImportance="high">
+      <Output TaskParameter="ExitCode" PropertyName="_ValheimStatus" />
+    </Exec>
+    <PropertyGroup Condition="$(_ValheimNetFramework)">
+      <_ValheimLine Condition="'$(_ValheimStatus)' != '0'">$(TargetFramework): FAILED (build, exit $(_ValheimStatus))</_ValheimLine>
+      <_ValheimLine Condition="'$(_ValheimLine)' == '' And !Exists('$(TargetPath)')">$(TargetFramework): FAILED (the build reported $(TargetPath), which does not exist)</_ValheimLine>
+      <_ValheimLine Condition="'$(_ValheimLine)' == '' And ('$(_ValheimConsole)' == '' Or !Exists('$(_ValheimConsole)'))">$(TargetFramework): not run (no xunit.runner.console)</_ValheimLine>
+    </PropertyGroup>
+    <Message Condition="$(_ValheimNetFramework) And '$(_ValheimLine)' == '$(TargetFramework): not run (no xunit.runner.console)'" Importance="high"
+             Text="No xunit console runner. Add &lt;PackageReference Include=&quot;xunit.runner.console&quot; Version=&quot;&lt;your xunit version&gt;&quot; PrivateAssets=&quot;all&quot; /&gt; to $(MSBuildProjectFile) before the import of Valheim.TestRunners.targets (or to Directory.Build.props)." />
+
+    <PropertyGroup Condition="$(_ValheimNetFramework) And '$(_ValheimLine)' == ''">
+      <_ValheimRun>true</_ValheimRun>
+      <_ValheimMono Condition="!$([MSBuild]::IsOSPlatform('Windows'))">mono </_ValheimMono>
+      <!-- Parallel test collections have crashed Mono in native assembly loading; on Windows the assembly's own setting applies. -->
+      <_ValheimParallel Condition="!$([MSBuild]::IsOSPlatform('Windows'))"> -parallel none</_ValheimParallel>
+    </PropertyGroup>
+    <Delete Condition="'$(_ValheimRun)' == 'true'" Files="$(_ValheimReport)" />
+    <Exec Condition="'$(_ValheimRun)' == 'true'"
+          Command="$(_ValheimMono)&quot;$(_ValheimConsole)&quot; &quot;$(TargetPath)&quot; -xml &quot;$(_ValheimReport)&quot; -nologo$(_ValheimParallel)$(_ValheimConsoleFilter)"
+          IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true" StandardOutputImportance="high" StandardErrorImportance="high">
+      <Output TaskParameter="ExitCode" PropertyName="_ValheimStatus" />
+    </Exec>
+    <XmlPeek Condition="'$(_ValheimRun)' == 'true' And Exists('$(_ValheimReport)')" XmlInputPath="$(_ValheimReport)" Query="/assemblies/assembly/@total">
+      <Output TaskParameter="Result" PropertyName="_ValheimTotal" />
+    </XmlPeek>
+    <PropertyGroup Condition="'$(_ValheimRun)' == 'true'">
+      <_ValheimTotal Condition="'$(_ValheimTotal)' == ''">0</_ValheimTotal>
+      <_ValheimLine Condition="'$(_ValheimStatus)' != '0'">$(TargetFramework): FAILED (tests, exit $(_ValheimStatus))</_ValheimLine>
+      <_ValheimLine Condition="'$(_ValheimLine)' == '' And '$(_ValheimTotal)' == '0'">$(TargetFramework): FAILED (no tests ran)</_ValheimLine>
+      <_ValheimLine Condition="'$(_ValheimLine)' == ''">$(TargetFramework): passed ($(_ValheimTotal) tests)</_ValheimLine>
+    </PropertyGroup>
+    <Message Condition="'$(_ValheimLine)' == '$(TargetFramework): FAILED (no tests ran)'" Importance="high"
+             Text="The xunit console runner ran no tests on $(TargetFramework). Check the filter, and that the tests are public xunit tests." />
+
+    <PropertyGroup>
+      <_ValheimFailed>true</_ValheimFailed>
+      <_ValheimFailed Condition="$(_ValheimLine.StartsWith('$(TargetFramework): passed'))">false</_ValheimFailed>
+    </PropertyGroup>
+    <ItemGroup>
+      <_ValheimTestResult Include="$(TargetFramework)" Line="$(_ValheimLine)" Failed="$(_ValheimFailed)" />
+    </ItemGroup>
+  </Target>
+</Project>

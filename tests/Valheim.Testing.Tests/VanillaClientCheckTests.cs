@@ -54,7 +54,7 @@ public sealed class VanillaClientCheckTests : IDisposable
         var report = new ScenarioReport("vanilla");
         using var clientActor = client.Actor("client");
         using var serverActor = server.Actor("server");
-        var round = new ClientRound("first", 0, true, serverActor, clientActor, report, _output);
+        var round = new ClientRound("first", 0, true, serverActor, clientActor, report, _output, "1");
         try { check.Measure(round); return (report, null); }
         catch (Exception error) { return (report, error); }
     }

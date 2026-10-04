@@ -58,6 +58,43 @@ public sealed class ReviewCaptureTests
     }
 
     [Fact]
+    public void TheStillIsLinkedFromResultJsonBesideSnapshotsInAttachmentOrder()
+    {
+        string run = Directory.CreateTempSubdirectory("vt-review-report-").FullName;
+        try
+        {
+            var (_, client) = Client();
+            using (client) using (var server = new ScriptedTransport().Actor())
+            {
+                var receipt = ReviewCapture.CaptureCore(server, client, Plan(Path.Combine(run, "review-shot-1")), HostShellKind.PowerShell,
+                    Fetch, () => { }, CancellationToken.None);
+                Assert.Equal(new EvidenceReference("review-still", "shot-1", "1716468958", receipt.MetadataPath, WorldFixture.Hash(receipt.MetadataPath)), receipt.Evidence);
+                Assert.Contains(receipt.Sha256, File.ReadAllText(receipt.MetadataPath)); // The sidecar carries the image's digest.
+                var report = new ScenarioReport("review evidence");
+                report.Step("capture", () => { });
+                report.Attach(receipt.Evidence);
+                report.Attach(new EvidenceReference("review-still", "outside", "1716468958", "/elsewhere/outside.png", new string('a', 64)));
+                report.Write(run);
+                Assert.Equal(new[] { "review-shot-1/shot-1.json", Path.GetFullPath("/elsewhere/outside.png") }, report.Evidence.Select(e => e.File).ToArray());
+                using var result = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(run, "result.json")));
+                var linked = result.RootElement.GetProperty("Evidence")[0];
+                Assert.Equal("review-still", linked.GetProperty("Kind").GetString());
+                Assert.Equal(WorldFixture.Hash(receipt.MetadataPath), linked.GetProperty("Sha256").GetString());
+            }
+        }
+        finally { Directory.Delete(run, true); }
+    }
+
+    [Fact]
+    public void AReportRefusesEvidenceItCannotNameOrHash()
+    {
+        var report = new ScenarioReport("bad evidence");
+        Assert.Throws<ArgumentException>(() => report.Attach(new EvidenceReference("Review Still", "s", "1", "/a.png", new string('a', 64))));
+        Assert.Throws<ArgumentException>(() => report.Attach(new EvidenceReference("review-still", "s", "1", "/a.png", "not-a-hash")));
+        Assert.Throws<ArgumentException>(() => report.Attach(new EvidenceReference("review-still", "s", "1", " ", new string('a', 64))));
+    }
+
+    [Fact]
     public void CameraAzimuthChangesTheViewAndIsRecorded()
     {
         string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));

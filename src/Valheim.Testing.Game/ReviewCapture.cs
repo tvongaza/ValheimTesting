@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -17,8 +16,15 @@ public sealed record ReviewCapturePlan(
     IReadOnlyDictionary<string, string> PluginPins, bool MistOff = true, bool ClutterOff = false, int Supersize = 1,
     float CameraAzimuthDegrees = 225);
 
-/// <summary>The fetched PNG, its metadata and digest. No visual verdict is implied.</summary>
-public sealed record ReviewCaptureReceipt(string ImagePath, string MetadataPath, string Sha256, long Bytes);
+/// <summary>
+/// The fetched PNG, its metadata and digest. No visual verdict is implied. <see cref="Evidence"/> links the metadata
+/// sidecar, which records the image's SHA-256 with the world, build, pins and conditions, for
+/// <see cref="ScenarioReport.Attach(EvidenceReference)"/> (kind <c>review-still</c>, site = the capture id).
+/// </summary>
+public sealed record ReviewCaptureReceipt(string ImagePath, string MetadataPath, string Sha256, long Bytes)
+{
+    public required EvidenceReference Evidence { get; init; }
+}
 
 /// <summary>
 /// Makes a reproducible still view with a protected, arrived player. It restores the client's exact starting safety,
@@ -56,15 +62,13 @@ public static class ReviewCapture
         ArgumentNullException.ThrowIfNull(arrive);
         Validate(plan, shell);
         if (!server.Pinned || !client.Pinned) throw new InvalidOperationException("A review capture requires strict server and client pins.");
-        if (Directory.Exists(plan.EvidenceDirectory) || File.Exists(plan.EvidenceDirectory))
-            throw new IOException("Review evidence already exists: " + plan.EvidenceDirectory);
+        string staging = ReviewLease.Stage(plan.EvidenceDirectory);
         var begin = client.RequireCapability(plan.ExtensionId + "/review-begin");
         var restore = client.RequireCapability(plan.ExtensionId + "/review-restore");
         var mistOff = plan.MistOff ? client.RequireCapability(plan.ExtensionId + "/review-mist-off") : null;
         var clutterOff = plan.ClutterOff ? client.RequireCapability(plan.ExtensionId + "/review-clutter-off") : null;
         if (!begin.ReadOnly || restore.ReadOnly) throw new InvalidOperationException("The review adapter's begin/restore capabilities have the wrong access modes.");
         if (mistOff?.ReadOnly == true || clutterOff?.ReadOnly == true) throw new InvalidOperationException("The review adapter's visual commands must be mutations.");
-        string staging = plan.EvidenceDirectory + ".partial-" + Guid.NewGuid().ToString("N");
         string hostImage = plan.HostDirectory.TrimEnd('\\', '/') + (shell == HostShellKind.PowerShell ? "\\" : "/") + plan.Id + ".png";
         Exception? failure = null;
         ReviewCaptureReceipt? receipt = null;
@@ -74,13 +78,13 @@ public static class ReviewCapture
         {
             beginAttempted = true; // A lost reply may still have stored the snapshot in the game.
             original = client.Invoke(begin, plan.Id);
-            RequireState(original, plan.Id, "begun");
+            ReviewLease.RequireState(original, plan.Id, "begun");
             cancellation.ThrowIfCancellationRequested();
             arrive();
             string tod = plan.TimeOfDay.ToString("R", CultureInfo.InvariantCulture);
             client.Execute($"cli_env {tod} {plan.Weather}").RequireLine("OK: ENV ", "environment did not settle");
-            if (mistOff != null) RequireState(client.Invoke(mistOff, plan.Id), plan.Id, "mist-off");
-            if (clutterOff != null) RequireState(client.Invoke(clutterOff, plan.Id), plan.Id, "clutter-off");
+            if (mistOff != null) ReviewLease.RequireState(client.Invoke(mistOff, plan.Id), plan.Id, "mist-off");
+            if (clutterOff != null) ReviewLease.RequireState(client.Invoke(clutterOff, plan.Id), plan.Id, "clutter-off");
             double radians = plan.CameraAzimuthDegrees * Math.PI / 180;
             double cameraX = plan.Arrival.X + plan.CameraDistance * Math.Sin(radians);
             double cameraZ = plan.Arrival.Z + plan.CameraDistance * Math.Cos(radians);
@@ -108,19 +112,16 @@ public static class ReviewCapture
             byte[] png = File.ReadAllBytes(files[0]);
             if (!CompletePng(png)) throw new InvalidDataException("The fetched image is not a complete PNG.");
             string sha = Convert.ToHexString(SHA256.HashData(png)).ToLowerInvariant();
-            var metadata = new
+            string sidecarSha = ReviewLease.WriteSidecar(Path.Combine(staging, plan.Id + ".json"), "human-review-still", plan.Id, plan.WorldUid, plan.GameBuild, plan.PluginPins, new
             {
-                schema = 1, kind = "human-review-still", visualVerdict = "not asserted", plan.Id,
-                worldUid = plan.WorldUid, gameBuild = plan.GameBuild, pluginPins = plan.PluginPins,
                 location = new { plan.Arrival.X, y = plan.Arrival.Height, plan.Arrival.Z },
                 conditions = new { plan.Weather, plan.TimeOfDay, plan.MistOff, plan.ClutterOff, plan.CameraDistance, plan.CameraHeight, plan.CameraAzimuthDegrees, plan.Supersize },
                 initialState = original, captureReply = capture, imageSha256 = sha, imageBytes = png.LongLength,
-                recordedUtc = DateTimeOffset.UtcNow,
-            };
-            string metadataPath = Path.Combine(staging, plan.Id + ".json");
-            File.WriteAllText(metadataPath, JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
-            receipt = new ReviewCaptureReceipt(Path.Combine(plan.EvidenceDirectory, plan.Id + ".png"),
-                Path.Combine(plan.EvidenceDirectory, plan.Id + ".json"), sha, png.LongLength);
+            });
+            string image = Path.Combine(plan.EvidenceDirectory, plan.Id + ".png");
+            string metadata = Path.Combine(plan.EvidenceDirectory, plan.Id + ".json");
+            receipt = new ReviewCaptureReceipt(image, metadata, sha, png.LongLength)
+            { Evidence = new("review-still", plan.Id, plan.WorldUid, metadata, sidecarSha) };
         }
         catch (Exception error) { failure = error; }
         try
@@ -128,8 +129,7 @@ public static class ReviewCapture
             if (beginAttempted)
             {
                 // Restoration is cleanup, so a caller's cancellation never suppresses it. Never resend the capture.
-                var restored = client.Invoke(restore, plan.Id);
-                RequireState(restored, plan.Id, "restored");
+                ReviewLease.RequireState(client.Invoke(restore, plan.Id), plan.Id, "restored");
             }
         }
         catch (Exception cleanup)
@@ -138,12 +138,7 @@ public static class ReviewCapture
         }
         if (failure == null && cancellation.IsCancellationRequested)
             failure = new OperationCanceledException("Review capture was canceled before publication.", cancellation);
-        if (failure != null)
-        {
-            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-        Directory.Move(staging, plan.EvidenceDirectory);
+        ReviewLease.Publish(failure, staging, plan.EvidenceDirectory);
         return receipt!;
     }
 
@@ -154,7 +149,7 @@ public static class ReviewCapture
     public static void Validate(ReviewCapturePlan plan, HostShellKind shell)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        if (!Regex.IsMatch(plan.Id ?? "", "^[A-Za-z0-9-]{1,64}$", RegexOptions.CultureInvariant)) throw new ArgumentException("Capture id must be 1-64 letters, digits or hyphens.");
+        if (!ReviewLease.ValidId(plan.Id)) throw new ArgumentException("Capture id must be 1-64 letters, digits or hyphens.");
         if (!Regex.IsMatch(plan.ExtensionId ?? "", "^[A-Za-z0-9_.-]+$", RegexOptions.CultureInvariant)) throw new ArgumentException("Name the adapter extension id.");
         if (!Regex.IsMatch(plan.Weather ?? "", "^[A-Za-z0-9_]{1,64}$", RegexOptions.CultureInvariant)) throw new ArgumentException("Weather must be one named environment of at most 64 letters, digits or underscores.");
         if (!float.IsFinite(plan.TimeOfDay) || plan.TimeOfDay is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(plan.TimeOfDay));
@@ -170,13 +165,6 @@ public static class ReviewCapture
         bool absolute = shell == HostShellKind.PowerShell ? Regex.IsMatch(host, "^[A-Za-z]:/[^/].*") : host.StartsWith("/", StringComparison.Ordinal);
         if (!absolute || host.Split('/').Any(part => part is "." or ".."))
             throw new ArgumentException("The host image directory must be absolute and contain no traversal segments.");
-    }
-
-    private static void RequireState(JsonElement data, string id, string state)
-    {
-        if (data.GetProperty("source").GetString() != "review-state" || data.GetProperty("id").GetString() != id ||
-            data.GetProperty("state").GetString() != state || !data.GetProperty("complete").GetBoolean())
-            throw new InvalidDataException("The review adapter did not confirm " + state + " for " + id + ".");
     }
 
     private static bool CompletePng(byte[] bytes) => bytes.Length >= 20 &&
