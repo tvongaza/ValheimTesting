@@ -17,12 +17,13 @@ public sealed record MultiplayerIdentity(string SteamId, string PlayFabLoginStat
     public bool PlayFabIdAvailable => PlayFabId.Length != 0 && !PlayFabId.StartsWith("unavailable", StringComparison.Ordinal);
 
     /// <summary>Reads the game's multiplayer identity once (read-only).</summary>
-    public static MultiplayerIdentity Read(GameActor actor) => Parse(actor.Execute("cli_multiplayer_identity", requireSuccess: false).Output);
+    public static MultiplayerIdentity Read(GameActor actor) => Parse(actor.Execute("cli_multiplayer_identity", requireAccepted: false).Output); // read-only; Parse requires the one identity line
+    private const string Prefix = "OK: steamId=";
 
     /// <summary>Parses the reply; refuses a missing line or a missing field.</summary>
     public static MultiplayerIdentity Parse(IEnumerable<string> output)
     {
-        var lines = output.Where(line => line.StartsWith("OK: steamId=", StringComparison.Ordinal)).ToArray();
+        var lines = output.Where(line => line.StartsWith(Prefix, StringComparison.Ordinal)).ToArray();
         if (lines.Length != 1) throw new InvalidOperationException("Expected one multiplayer identity line (OK: steamId=...); got: " + string.Join(" | ", output));
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         string text = lines[0]["OK: ".Length..];

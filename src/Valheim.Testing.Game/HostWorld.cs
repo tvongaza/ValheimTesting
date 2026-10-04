@@ -256,25 +256,23 @@ public static class HostWorlds
         var before = session.Read();
         if (before.Phase != "menu" || before.WorldPresent) throw new InvalidOperationException("A hosted world starts from the client's idle main menu.");
         session.EnableDevcommands();
-        var selected = host.Execute("cli_select_character " + plan.Character, requireSuccess: false);
-        if (!selected.Output.Any(line => line.StartsWith("OK: Selected character '", StringComparison.Ordinal)))
-            throw new InvalidOperationException("The character was not selected: " + string.Join(" | ", selected.Output));
+        host.Execute("cli_select_character " + plan.Character).RequireLine("OK: Selected character '", "The character was not selected");
         string crossplay = world.Crossplay ? "true" : "false";
         try
         {
             var reply = host.Execute(world.Local ? $"cli_start_local_world {worldName}" :
-                $"cli_start_host_world {worldName} --public false --crossplay {crossplay}", requireSuccess: false); // Exactly once.
-            string? line = reply.Output.FirstOrDefault(l => l.StartsWith(world.Local ? "OK: Starting local world '" : "OK: Starting hosted world '", StringComparison.Ordinal));
+                $"cli_start_host_world {worldName} --public false --crossplay {crossplay}"); // Exactly once.
+            string? line = reply.Line(world.Local ? "OK: Starting local world '" : "OK: Starting hosted world '");
             if (world.Local)
             {
                 if (line == null || !line.StartsWith($"OK: Starting local world '{worldName}' using ", StringComparison.Ordinal))
-                    throw new InvalidOperationException("The local world did not start as planned: " + (line ?? string.Join(" | ", reply.Output)));
+                    throw new InvalidOperationException("The local world did not start as planned: " + (line ?? reply.Describe()));
             }
             else
             {
                 string ending = $"; open=true, public=False, crossplay={(world.Crossplay ? "True" : "False")}, backend={(world.Crossplay ? "PlayFab" : "Steamworks")}, passwordSet=False";
                 if (line == null || !line.StartsWith($"OK: Starting hosted world '{worldName}' using ", StringComparison.Ordinal) || !line.EndsWith(ending, StringComparison.Ordinal))
-                    throw new InvalidOperationException("The hosted world did not start as planned: " + (line ?? string.Join(" | ", reply.Output)));
+                    throw new InvalidOperationException("The hosted world did not start as planned: " + (line ?? reply.Describe()));
             }
         }
         finally { host.InvalidateEnvironment(); } // A start that may have begun changes the world.

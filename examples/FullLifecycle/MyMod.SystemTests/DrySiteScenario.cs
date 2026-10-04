@@ -47,8 +47,8 @@ public static class DrySiteScenario
         report.Step("server: the mod's Harmony patches are applied", () =>
             HarmonyCensus.Read(server, "mymod.testing/harmony", LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, Patches).RequireApplied());
         report.Step("no marker at either site before the mod acts", () => { RequireServerMarkers(server, plan.DrySite, 0); RequireServerMarkers(server, plan.WetSite, 0); });
-        report.Step("the mod marks the dry site", () => RequireReply(server.Execute(Mark(plan.DrySite)), "OK: marked "));
-        report.Step("the mod refuses the wet site", () => RequireReply(server.Execute(Mark(plan.WetSite)), "REFUSED: "));
+        report.Step("the mod marks the dry site", () => server.Execute(Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
+        report.Step("the mod refuses the wet site", () => server.Execute(Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));
         report.Step("server: one marker at the dry site, none at the wet site", () => { RequireServerMarkers(server, plan.DrySite, 1); RequireServerMarkers(server, plan.WetSite, 0); });
 
         // The client rounds are the toolkit's (ClientRounds): join, protect, arrive, then this mod's measurement; between
@@ -69,14 +69,6 @@ public static class DrySiteScenario
     }
 
     public static string Mark(Site site) => string.Create(CultureInfo.InvariantCulture, $"mymod_mark {site.X} {site.Z}");
-
-    /// <summary>Requires exactly one <c>OK:</c> or <c>REFUSED:</c> reply from the mod, and that it is the expected one.</summary>
-    public static void RequireReply(valheim_cli.Testing.CommandResult reply, string prefix)
-    {
-        if (reply.Output.Count(line => line.StartsWith("OK: ", StringComparison.Ordinal) || line.StartsWith("REFUSED: ", StringComparison.Ordinal)) != 1 ||
-            !reply.Output.Any(line => line.StartsWith(prefix, StringComparison.Ordinal)))
-            throw new InvalidOperationException($"Expected one \"{prefix.Trim()}\" reply from the mod: " + string.Join(" | ", reply.Output));
-    }
 
     private static readonly Regex ZdoLine = new(@"^ZDO (\S+) id=\S+ pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+) ", RegexOptions.CultureInvariant);
     private static readonly Regex ZdoSummary = new(@"^OK: ZDOS_AT .* objects=(\d+)$", RegexOptions.CultureInvariant);

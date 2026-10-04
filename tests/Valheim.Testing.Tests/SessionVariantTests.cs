@@ -268,7 +268,7 @@ public sealed class SessionVariantTests : IDisposable
         using var actor = transport.Actor("client", Menu);
         var session = new SessionControl(actor);
         var error = Assert.Throws<InvalidOperationException>(() => session.JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10)));
-        Assert.Contains("did not start", error.Message);
+        Assert.Contains("cli_connect_playfab_user ENTITY42 failed: ERROR: Main menu is not available", error.Message);
         Assert.Throws<InvalidOperationException>(() => session.Read());
     }
 

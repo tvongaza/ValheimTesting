@@ -38,7 +38,7 @@ public sealed record ConnectionStatusReading(GameConnectionStatus Status, string
     public int Code => (int)Status;
 
     /// <summary>Reads the game's connection status once (read-only).</summary>
-    public static ConnectionStatusReading Read(GameActor actor) => Parse(actor.Execute("cli_connection_status", requireSuccess: false).Output);
+    public static ConnectionStatusReading Read(GameActor actor) => Parse(actor.Execute("cli_connection_status", requireAccepted: false).Output); // read after a refused join too; Parse requires the one status line
 
     /// <summary>Parses the reply; refuses a missing or repeated status line and a status name this game build does not have.</summary>
     public static ConnectionStatusReading Parse(IEnumerable<string> output)

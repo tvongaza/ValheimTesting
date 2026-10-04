@@ -102,10 +102,11 @@ public sealed record AreaObjectSnapshot(string Site, string WorldUid, int X, int
 
     private static IReadOnlyList<string> Lines(GameActor actor, string role, string command, List<AreaObjectCommand> commands)
     {
-        CommandResult result = actor.Execute(command, requireSuccess: false);
+        // Recorded before judging, so a refused command is in the evidence.
+        var result = actor.Execute(command, requireAccepted: false);
         string[] lines = result.Output.ToArray();
         commands.Add(new(role, command, DateTimeOffset.UtcNow, lines));
-        if (!result.Ok || lines.Length == 0 || lines.Any(line => line.StartsWith("ERROR:", StringComparison.Ordinal)))
+        if (!result.Accepted || lines.Length == 0)
             throw new InvalidOperationException($"{role} returned an error or incomplete reply for {command}: {string.Join(" | ", lines)}");
         return lines;
     }

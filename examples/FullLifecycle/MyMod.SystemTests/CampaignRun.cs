@@ -129,8 +129,8 @@ public static class CampaignSteps
     public static void MarkSites(LifecyclePlan plan, GameActor server, ScenarioReport report, string side = "server")
     {
         report.Step("no marker at either site before the mod acts", () => { DrySiteScenario.RequireServerMarkers(server, plan.DrySite, 0); DrySiteScenario.RequireServerMarkers(server, plan.WetSite, 0); });
-        report.Step("the mod marks the dry site", () => DrySiteScenario.RequireReply(server.Execute(DrySiteScenario.Mark(plan.DrySite)), "OK: marked "));
-        report.Step("the mod refuses the wet site", () => DrySiteScenario.RequireReply(server.Execute(DrySiteScenario.Mark(plan.WetSite)), "REFUSED: "));
+        report.Step("the mod marks the dry site", () => server.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
+        report.Step("the mod refuses the wet site", () => server.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));
         report.Step($"{side}: one marker at the dry site, none at the wet site", () => RequireMarkers(server, plan, dry: 1));
     }
 

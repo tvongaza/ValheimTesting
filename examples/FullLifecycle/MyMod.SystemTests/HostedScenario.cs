@@ -92,8 +92,8 @@ public static class HostedScenario
             round.Step("host: the mod's Harmony patches are applied", () =>
                 HarmonyCensus.Read(host, Capabilities.Harmony, LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied());
             round.Step("no marker at either site before the mod acts", () => RequireMarkers(host, plan, dry: 0));
-            round.Step("the mod marks the dry site", () => DrySiteScenario.RequireReply(host.Execute(DrySiteScenario.Mark(plan.DrySite)), "OK: marked "));
-            round.Step("the mod refuses the wet site", () => DrySiteScenario.RequireReply(host.Execute(DrySiteScenario.Mark(plan.WetSite)), "REFUSED: "));
+            round.Step("the mod marks the dry site", () => host.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
+            round.Step("the mod refuses the wet site", () => host.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));
             round.Step("host: one marker at the dry site, none at the wet site", () => RequireMarkers(host, plan, dry: 1));
             if (hostLog == null) return;
             round.Step("the mod's greeting broadcast runs its handler on the host, which is server and client at once", () =>

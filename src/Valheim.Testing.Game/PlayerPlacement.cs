@@ -38,13 +38,12 @@ public static class PlayerPlacement
         try
         {
             onAttempted = true; // The reply can be lost after the game applied the mode.
-            var mode = client.Execute("cli_teleport_test_mode on", requireSuccess: false);
-            RequireLine(mode, "OK: testFastTeleport enabled=True", "Test teleport timing was not enabled");
+            client.Execute("cli_teleport_test_mode on").RequireLine("OK: testFastTeleport enabled=True", "Test teleport timing was not enabled");
             var arrival = Hop(server, client, point, support, clock, timeout, cancellation, skipIntro);
             offAttempted = true; // Never repeat an uncertain off request.
             try
             {
-                RequireLine(client.Execute("cli_teleport_test_mode off", requireSuccess: false), "OK: testFastTeleport enabled=False",
+                client.Execute("cli_teleport_test_mode off").RequireLine("OK: testFastTeleport enabled=False",
                     "Test teleport timing was not switched off after a supported landing");
             }
             catch (Exception error)
@@ -67,21 +66,19 @@ public static class PlayerPlacement
         cancellation.ThrowIfCancellationRequested();
         string ready = SecondsLeft(clock, timeout);
         WithTimeout(client, timeout - clock.Elapsed, () =>
-            RequireLine(client.Execute($"cli_wait_teleportable {ready} 0 {!skipIntro}"), "OK: TELEPORTABLE ",
+            client.Execute($"cli_wait_teleportable {ready} 0 {!skipIntro}").RequireLine("OK: TELEPORTABLE ",
                 "The client never became ready for a teleport"));
         cancellation.ThrowIfCancellationRequested();
-        var arm = client.Execute("cli_teleport_trace_arm");
-        string armed = RequireLine(arm, "OK: TELEPORT_TRACE_ARM id=", "The client did not arm a teleport trace");
+        string armed = client.Execute("cli_teleport_trace_arm").RequireLine("OK: TELEPORT_TRACE_ARM id=", "The client did not arm a teleport trace");
         if (!int.TryParse(armed["OK: TELEPORT_TRACE_ARM id=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int id) || id < 1)
             throw new InvalidOperationException("The client returned an invalid teleport trace id: " + armed);
         int peer = OnlyPeer(server);
         string at = string.Join(" ", new[] { point.X, point.Height + .5f, point.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
-        var reply = server.Execute($"cli_teleport_peer {peer} {at}");
-        RequireLine(reply, "OK: asked peer", "The server did not accept the teleport");
+        server.Execute($"cli_teleport_peer {peer} {at}").RequireLine("OK: asked peer", "The server did not accept the teleport");
         cancellation.ThrowIfCancellationRequested();
         string trace = "";
         WithTimeout(client, timeout - clock.Elapsed, () =>
-            trace = RequireLine(client.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}"),
+            trace = client.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}").RequireLine(
                 "OK: TELEPORT_TRACE ", "The client did not complete its teleport"));
         var timing = TeleportTrace.Parse(trace, id);
         if (!timing.FloorAtDone)
@@ -105,7 +102,7 @@ public static class PlayerPlacement
         try
         {
             client.CommandTimeout = TimeSpan.FromSeconds(10);
-            client.Execute("cli_teleport_test_mode off", requireSuccess: false);
+            client.Execute("cli_teleport_test_mode off", requireAccepted: false); // best effort; the hop's failure is reported
         }
         catch (Exception) { }
         finally { client.CommandTimeout = previous; }
@@ -125,10 +122,6 @@ public static class PlayerPlacement
         try { actor.CommandTimeout = remaining + TimeSpan.FromSeconds(10); action(); }
         finally { actor.CommandTimeout = previous; }
     }
-
-    private static string RequireLine(CommandResult result, string prefix, string failure)
-        => result.Output.FirstOrDefault(line => line.StartsWith(prefix, StringComparison.Ordinal))
-            ?? throw new InvalidOperationException(failure + ": " + string.Join(" | ", result.Output));
 
     /// <summary>
     /// Verifies that a character staged at a world's logout point actually arrived at <paramref name="point"/>.
@@ -181,10 +174,7 @@ public static class PlayerPlacement
     /// </summary>
     public static void Protect(GameActor client)
     {
-        var reply = client.Execute("cli_set_player_safety true");
-        string line = reply.Output.LastOrDefault(l => l.Contains("playerSafety", StringComparison.Ordinal)) ?? "";
-        if (!line.StartsWith("OK: playerSafety enabled=True god=True ghost=True debugMode=True", StringComparison.Ordinal))
-            throw new InvalidOperationException("Player protection was not confirmed: " + (line.Length > 0 ? line : string.Join(" | ", reply.Output)));
+        client.Execute("cli_set_player_safety true").RequireLine("OK: playerSafety enabled=True god=True ghost=True debugMode=True", "Player protection was not confirmed");
     }
 
     /// <summary>
@@ -195,10 +185,7 @@ public static class PlayerPlacement
     /// </summary>
     public static void SetFly(GameActor client, bool on)
     {
-        var reply = client.Execute(on ? "cli_fly on" : "cli_fly off");
-        string line = reply.Output.LastOrDefault(l => l.StartsWith("OK: fly=", StringComparison.Ordinal)) ?? "";
-        if (!line.StartsWith(on ? "OK: fly=True " : "OK: fly=False ", StringComparison.Ordinal))
-            throw new InvalidOperationException($"Fly {(on ? "on" : "off")} was not confirmed: " + (line.Length > 0 ? line : string.Join(" | ", reply.Output)));
+        client.Execute(on ? "cli_fly on" : "cli_fly off").RequireLine(on ? "OK: fly=True " : "OK: fly=False ", $"Fly {(on ? "on" : "off")} was not confirmed");
     }
 
     /// <summary>
@@ -211,17 +198,16 @@ public static class PlayerPlacement
     {
         if (timeout < TimeSpan.FromSeconds(1) || timeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(timeout));
         var previous = client.CommandTimeout;
-        CommandResult reply;
+        GameReply reply;
         try
         {
             client.CommandTimeout = timeout + TimeSpan.FromSeconds(10);
             reply = client.Execute("cli_skip_intro " + timeout.TotalSeconds.ToString("R", CultureInfo.InvariantCulture));
         }
         finally { client.CommandTimeout = previous; }
-        string line = reply.Output.LastOrDefault(l => l.StartsWith("OK: skipped=", StringComparison.Ordinal) || l.StartsWith("ERROR:", StringComparison.Ordinal)) ?? "";
-        if (line.StartsWith("OK: skipped=True", StringComparison.Ordinal)) return true;
-        if (line.StartsWith("OK: skipped=False", StringComparison.Ordinal)) return false;
-        throw new InvalidOperationException("The intro was not confirmed skipped: " + (line.Length > 0 ? line : string.Join(" | ", reply.Output)));
+        if (reply.Line("OK: skipped=True") != null) return true;
+        if (reply.Line("OK: skipped=False") != null) return false;
+        throw new InvalidOperationException("The intro was not confirmed skipped. Reply: " + reply.Describe());
     }
 
     /// <summary>
@@ -279,9 +265,7 @@ public static class PlayerPlacement
         }
         int peer = OnlyPeer(server);
         string at = string.Join(" ", new[] { point.X, point.Height + .5f, point.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
-        var reply = server.Execute($"cli_teleport_peer {peer} {at}");
-        if (!reply.Output.Any(l => l.StartsWith("OK: asked peer", StringComparison.Ordinal)))
-            throw new InvalidOperationException("The server did not accept the teleport: " + string.Join(" | ", reply.Output));
+        server.Execute($"cli_teleport_peer {peer} {at}").RequireLine("OK: asked peer", "The server did not accept the teleport");
         while (clock.Elapsed < timeout)
         {
             cancellation.ThrowIfCancellationRequested();

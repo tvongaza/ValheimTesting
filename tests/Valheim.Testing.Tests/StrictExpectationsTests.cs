@@ -29,7 +29,7 @@ public class StrictExpectationsTests
     {
         var transport = new Fake(); using var actor = new GameActor("test", transport);
         actor.VerifyEnvironment("cli_expect worlduid=7"); transport.Drift = true;
-        Assert.Throws<InvalidOperationException>(() => actor.Execute("change", requireSuccess: false));
+        Assert.Throws<InvalidOperationException>(() => actor.Execute("change", requireAccepted: false));
         Assert.DoesNotContain("change", transport.Commands);
         transport.Drift = false;
         Assert.Throws<InvalidOperationException>(() => actor.Execute("change")); // explicit repin required after failure

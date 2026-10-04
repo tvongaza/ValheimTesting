@@ -139,17 +139,17 @@ public static class OwnershipHandoffScenario
         var clock = Stopwatch.StartNew();
         PlayerPlacement.SkipIntro(actor, TimeSpan.FromSeconds(Math.Min(60, timeout.TotalSeconds)));
         string left = SecondsLeft(clock, timeout);
-        WithDeadline(actor, timeout - clock.Elapsed, () => RequireLine(actor.Execute($"cli_wait_teleportable {left} 0 true"), "OK: TELEPORTABLE "));
+        WithDeadline(actor, timeout - clock.Elapsed, () => actor.Execute($"cli_wait_teleportable {left} 0 true").RequireLine("OK: TELEPORTABLE "));
         cancellation.ThrowIfCancellationRequested();
-        string armed = RequireLine(actor.Execute("cli_teleport_trace_arm"), "OK: TELEPORT_TRACE_ARM id=");
+        string armed = actor.Execute("cli_teleport_trace_arm").RequireLine("OK: TELEPORT_TRACE_ARM id=");
         string id = armed["OK: TELEPORT_TRACE_ARM id=".Length..];
         if (!int.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) || n < 1)
             throw new InvalidOperationException("Invalid teleport trace ID: " + armed);
         string at = string.Join(" ", new[] { point.X, point.Height + .5f, point.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
-        RequireLine(actor.Execute("cli_teleport " + at), "OK: Teleported to "); // Own player, never an ambiguous peer index.
+        actor.Execute("cli_teleport " + at).RequireLine("OK: Teleported to "); // Own player, never an ambiguous peer index.
         cancellation.ThrowIfCancellationRequested();
         string trace = "";
-        WithDeadline(actor, timeout - clock.Elapsed, () => trace = RequireLine(actor.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}"), "OK: TELEPORT_TRACE "));
+        WithDeadline(actor, timeout - clock.Elapsed, () => trace = actor.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}").RequireLine("OK: TELEPORT_TRACE "));
         if (!trace.Contains("floorAtDone=True", StringComparison.Ordinal)) throw new InvalidOperationException("Teleport ended without a ready floor: " + trace);
         // This scenario tests ownership, not terrain generation. Native site levelling can differ from the
         // generator used to choose the initial target. Once its floor is ready, measure the actual loaded ground
@@ -180,9 +180,6 @@ public static class OwnershipHandoffScenario
         finally { actor.CommandTimeout = old; }
     }
 
-    private static string RequireLine(valheim_cli.Testing.CommandResult reply, string prefix) =>
-        reply.Output.FirstOrDefault(line => line.StartsWith(prefix, StringComparison.Ordinal)) ??
-        throw new InvalidOperationException("The game did not confirm " + prefix + ": " + string.Join(" | ", reply.Output));
 
     private static string Claim(GameActor actor, Site site)
     {
@@ -223,8 +220,8 @@ public static class OwnershipHandoffScenario
     private static void RequirePeers(GameActor server, int expected)
     {
         var reply = server.Execute("cli_peers");
-        string line = RequireLine(reply, "OK: ");
-        if (line != $"OK: {expected} peer(s)" || reply.Output.Count(x => x.StartsWith("PEER ", StringComparison.Ordinal)) != expected)
-            throw new InvalidOperationException($"Expected {expected} connected peer(s): " + string.Join(" | ", reply.Output));
+        string line = reply.RequireLine("OK: ", "The game did not confirm its peers");
+        if (line != $"OK: {expected} peer(s)" || reply.Lines("PEER ").Count() != expected)
+            throw new InvalidOperationException($"Expected {expected} connected peer(s). Reply: " + reply.Describe());
     }
 }
