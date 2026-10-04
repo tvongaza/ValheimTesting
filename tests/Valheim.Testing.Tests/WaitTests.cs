@@ -168,6 +168,27 @@ public class ObservedWaitTests
     }
 }
 
+// ExitRace is the one race of work against a process exit and a deadline (owned server and client startup, local process runs).
+public class ExitRaceTests
+{
+    private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
+    [Fact] public async Task WhicheverComesFirstEndsTheRace()
+    {
+        var never = new TaskCompletionSource().Task;
+        Assert.Equal(RaceEnd.Completed, await ExitRace.RunAsync(Task.CompletedTask, never, System.Diagnostics.Stopwatch.StartNew(), Generous, default));
+        Assert.Equal(RaceEnd.Exited, await ExitRace.RunAsync(never, Task.CompletedTask, System.Diagnostics.Stopwatch.StartNew(), Generous, default));
+        using var cancel = new CancellationTokenSource(20);
+        Assert.Equal(RaceEnd.Expired, await ExitRace.RunAsync(never, never, System.Diagnostics.Stopwatch.StartNew(), Generous, cancel.Token));
+    }
+    [Fact] public async Task TheDeadlineNeverEndsTheRaceBeforeTheClockAgrees()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var never = new TaskCompletionSource().Task;
+        Assert.Equal(RaceEnd.Expired, await ExitRace.RunAsync(never, never, clock, TimeSpan.FromMilliseconds(200), default));
+        Assert.True(clock.Elapsed >= TimeSpan.FromMilliseconds(200), clock.Elapsed.ToString());
+    }
+}
+
 public class LogWaitEvidenceTests
 {
     private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);

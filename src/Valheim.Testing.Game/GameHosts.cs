@@ -365,7 +365,7 @@ internal static class GameHostPorts
                 catch (Exception error) when (error is SocketException || (error is OperationCanceledException && !token.IsCancellationRequested)) { return false; }
             }, listening => listening, timeout, TimeSpan.FromMilliseconds(100), cancellation,
             _ => process.HasExited ? "ssh exited with code " + process.ExitCode.ToString(CultureInfo.InvariantCulture) : null, _ => LastLine(process.Stderr) ?? "nothing",
-            (wait, token) => Task.WhenAny(Task.Delay(wait, token), exited)).ConfigureAwait(false);
+            ExitRace.Pause(exited)).ConfigureAwait(false);
     }
 
     private static string? LastLine(string text) => text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();

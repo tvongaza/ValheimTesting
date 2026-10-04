@@ -92,12 +92,8 @@ internal static class ProcessRunner
                 finally { try { process.StandardInput.Close(); } catch (IOException) { } }
             });
             var exited = process.WaitForExitAsync(CancellationToken.None);
-            using (var expiry = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
-            {
-                var deadline = Task.Delay(timeout, expiry.Token);
-                await Task.WhenAny(exited, stop.Task, deadline).ConfigureAwait(false);
-                expiry.Cancel();
-            }
+            // The run's timeout starts once the process is running, not at Process.Start.
+            await ExitRace.RunAsync(stop.Task, exited, Stopwatch.StartNew(), timeout, cancellation).ConfigureAwait(false);
             var end = stop.Task.IsCompleted ? ProcessEnd.Stopped : exited.IsCompleted ? ProcessEnd.Exited : ProcessEnd.TimedOut;
             if (!exited.IsCompleted)
             {

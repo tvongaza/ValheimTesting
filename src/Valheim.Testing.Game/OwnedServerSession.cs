@@ -184,6 +184,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
         {
             using var abandon = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
             var waiting = wait(Left(stage), abandon.Token);
+            // The wait has the time left as its own deadline, so only the exit is raced.
             if (await Task.WhenAny(waiting, exited).ConfigureAwait(false) == waiting) { await waiting.ConfigureAwait(false); return; }
             abandon.Cancel();
             try { await waiting.ConfigureAwait(false); } catch { /* Abandoned: the exit is the result. */ }
@@ -195,13 +196,11 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
         // call has returned, for cleanup that must wait for it.
         async Task<T> Bounded<T>(string stage, Func<T> call, string? lastSeen = null, Action? abandon = null, Action? afterAbandoned = null)
         {
-            var left = Left(stage);
+            Left(stage);
             // A thread of its own: a busy thread pool must not delay startup, and a blocked call must not hold a pool thread.
             var running = Task.Factory.StartNew(call, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-            using var expiry = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
-            var first = await Task.WhenAny(running, exited, Task.Delay(left, expiry.Token)).ConfigureAwait(false);
-            expiry.Cancel();
-            if (first == running) return await running.ConfigureAwait(false);
+            var end = await ExitRace.RunAsync(running, exited, clock, _startup, stop.Token).ConfigureAwait(false);
+            if (end == RaceEnd.Completed) return await running.ConfigureAwait(false);
             try { abandon?.Invoke(); } catch { /* Best effort: the call is abandoned either way. */ }
             _ = running.ContinueWith(late =>
             {
@@ -209,7 +208,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
                 afterAbandoned?.Invoke();
             }, TaskScheduler.Default);
             _cancellation.ThrowIfCancellationRequested();
-            if (first == exited) throw await Exited(stage).ConfigureAwait(false);
+            if (end == RaceEnd.Exited) throw await Exited(stage).ConfigureAwait(false);
             throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, lastSeen ?? log?.Refresh());
         }
         try
@@ -280,7 +279,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
                     }
                     finally { transport?.Dispose(); }
                 }, (GameActor? actor) => actor != null, Left(stage), _poll > TimeSpan.Zero ? _poll : TimeSpan.FromTicks(1), _cancellation, null, _ => last,
-                (wait, token) => Task.WhenAny(Task.Delay(wait, token), exited)).ConfigureAwait(false);
+                ExitRace.Pause(exited)).ConfigureAwait(false);
             return _actor = started.Value!;
         }
         finally { stop.Cancel(); }
