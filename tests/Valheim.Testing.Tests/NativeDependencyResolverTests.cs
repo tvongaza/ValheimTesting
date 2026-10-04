@@ -224,6 +224,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(File.Exists(hosts["client-a"].Local(@"C:\save\characters_local\vt-one.fch")));
         Assert.False(File.Exists(hosts["client-b"].Local(@"C:\save\characters_local\vt-two.fch")));
         Assert.False(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
+        Assert.False(File.Exists(Path.Combine(output, "profile.json")));
 
         // A dedicated server and one client may share a machine. Their installs are separate, but setup should
         // still overlap under one host claim rather than serialising two full game copies.
