@@ -286,7 +286,8 @@ public partial struct Quaternion
 /// </summary>
 public partial class Object
 {
-    private static readonly System.Collections.Generic.List<Object> s_pendingDestroy = new();
+    /// <summary>What <see cref="Destroy"/> queued for the end of the frame. <c>ValheimWorldScope.WithScene</c> gives a test its own.</summary>
+    internal static System.Collections.Generic.List<Object> s_pendingDestroy = new();
     private string m_name = "";
 
     /// <summary>True once destroyed (after <see cref="EndOfFrame"/> or <see cref="DestroyImmediate"/>). Never throws.</summary>

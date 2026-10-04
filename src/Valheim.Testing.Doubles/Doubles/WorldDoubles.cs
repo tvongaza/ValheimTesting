@@ -67,33 +67,52 @@ namespace Valheim.Testing.Doubles
     }
 
     /// <summary>
-    /// The game's process-wide singletons for one test. Created, it records which objects the singletons refer to
-    /// (<c>WorldGenerator</c>, <c>ZDOMan</c>, <c>ZoneSystem</c>, <c>ZNetScene</c>, <c>ZNet</c>, <c>ZRoutedRpc</c>, Jotunn's <c>NetworkManager</c>, the
-    /// loaded heightmaps, the log capture, the console commands and the local player) plus the server flag and the clock; disposed, it puts those references
-    /// and values back. It restores references, not contents: nothing is deep-copied, so a test that mutates an object it
-    /// did not install (adds a peer to the existing <c>ZNet</c>, a ZDO to the existing <c>ZDOMan</c>) leaves that change
-    /// behind. Use the builder methods to install fresh, isolated objects instead (<see cref="WithZdos"/>,
-    /// <see cref="WithScene"/>, <see cref="WithNetwork"/>, <see cref="WithCommands"/>, ...). A mod's own statics are the mod's to reset. The doubles
+    /// The game's process-wide state for one test. Created, it records every static the doubles keep (the singletons such
+    /// as <c>WorldGenerator</c>, <c>ZDOMan</c>, <c>ZoneSystem</c>, <c>ZNetScene</c>, <c>ZNet</c>, <c>ZRoutedRpc</c>, <c>ObjectDB</c> and Jotunn's
+    /// <c>NetworkManager</c>; the loaded heightmaps, terrain modifiers, Unity objects and pending destroys; the log capture, console
+    /// commands, cheat gates, local player and player list; the registries' hooks, localization, input, preferences, config
+    /// disk, heightmap builder, clock and the random generator <c>Random.InitState</c> installed, not its position in
+    /// its sequence) plus the server and dedicated flags of the <c>ZNet</c> it found;
+    /// disposed, it ends the test's frame (<c>UnityEngine.Object.EndOfFrame</c>) and puts every one back, in reverse order,
+    /// each even when another fails, through <see cref="StaticOverride"/>. A second Dispose does nothing. It restores
+    /// references, not contents: nothing is deep-copied, so a test that mutates an object it did not install (adds a peer to
+    /// the existing <c>ZNet</c>, a ZDO to the existing <c>ZDOMan</c>) leaves that change behind. Use the builder methods to
+    /// install fresh, isolated objects instead (<see cref="WithZdos"/>, <see cref="WithScene"/>, <see cref="WithNetwork"/>,
+    /// <see cref="WithCommands"/>, ...). A mod's own statics are the mod's to scope, with <see cref="StaticOverride"/>. The doubles
     /// are process-wide like the game's, so tests using them must not run in parallel (disable xUnit parallelization
     /// for the assembly).
     /// </summary>
     public sealed partial class ValheimWorldScope : System.IDisposable
     {
-        private readonly WorldGenerator? _world = WorldGenerator.instance;
-        private readonly ZDOMan? _zdos = ZDOMan.instance;
-        private readonly ZoneSystem? _zones = ZoneSystem.instance;
-        private readonly ZNetScene? _scene = ZNetScene.instance;
-        private readonly System.Collections.Generic.List<Heightmap> _heightmaps = Heightmap.s_heightmaps;
-        private bool _ownsHeightmaps;
-        private readonly List<string>? _captured = BepInEx.Logging.ManualLogSource.Captured;
-        private readonly ZNet _net = ZNet.instance;
-        private readonly ZRoutedRpc _rpc = ZRoutedRpc.instance;
-        private readonly Jotunn.Managers.NetworkManager _jotunn = Jotunn.Managers.NetworkManager.Instance;
-        private readonly System.Collections.Generic.Dictionary<string, Terminal.ConsoleCommand> _commands = Terminal.commands;
-        private readonly Player? _localPlayer = Player.m_localPlayer;
-        private readonly bool _server = ZNet.instance?.Server ?? false;
-        private readonly bool _cheat = Terminal.m_cheat, _cheatedAtAll = Achievements.CheatedAtAll;
-        private readonly float _time = UnityEngine.Time.realtimeSinceStartup;
+        // Every mutable static the doubles declare, in one list. A double that adds one adds it here; the doubles' tests
+        // (ValheimWorldScopeTests) change each static inside a scope and fail when one is not put back, unless they list it
+        // as deliberately unscoped.
+        private readonly StaticOverride _statics = StaticOverride
+            .Keep(() => WorldGenerator.instance).AndKeep(() => ZDOMan.instance).AndKeep(() => ZoneSystem.instance)
+            .AndKeep(() => ZNetScene.instance).AndKeep(() => ZNet.instance).AndKeep(() => ZNet.m_loadError)
+            .AndKeep(() => ZRoutedRpc.instance).AndKeep(() => Jotunn.Managers.NetworkManager.Instance)
+            .AndKeep(() => ObjectDB.m_instance).AndKeep(() => ObjectDB.AwakePostfix).AndKeep(() => ObjectDB.CopyOtherDBPostfix)
+            .AndKeep(() => ZNetScene.AwakePostfix).AndKeep(() => HeightmapBuilder.m_instance)
+            .AndKeep(() => global::Heightmap.s_heightmaps).AndKeep(() => global::TerrainModifier.s_instances)
+            .AndKeep(() => global::TerrainModifier.s_needsSorting).AndKeep(() => ZNetView.GhostInit)
+            .AndKeep(() => UnityEngine.Object.s_unityComponents).AndKeep(() => UnityEngine.Object.s_unityGameObjects)
+            .AndKeep(() => UnityEngine.Object.s_pendingDestroy).AndKeep(() => UnityEngine.Object.s_unityReversedOrder)
+            .AndKeep(() => UnityEngine.Time.time).AndKeep(() => UnityEngine.Time.deltaTime).AndKeep(() => UnityEngine.Time.frameCount)
+            .AndKeep(() => UnityEngine.Time.realtimeSinceStartup).AndKeep(() => UnityEngine.Random.s_random)
+            .AndKeep(() => UnityEngine.Canvas.ForceUpdateCount)
+            .AndKeep(() => BepInEx.Logging.ManualLogSource.Captured).AndKeep(() => BepInEx.Logging.ManualLogSource.ThrowOnNextInfo)
+            .AndKeep(() => BepInEx.Configuration.ConfigFile.s_files).AndKeep(() => BepInEx.Paths.GameRootPath)
+            .AndKeep(() => BepInEx.Paths.BepInExRootPath).AndKeep(() => BepInEx.Paths.ConfigPath).AndKeep(() => BepInEx.Paths.PluginPath)
+            .AndKeep(() => Terminal.commands).AndKeep(() => Terminal.m_cheat).AndKeep(() => Achievements.CheatedAtAll)
+            .AndKeep(() => Player.m_localPlayer).AndKeep(() => Player.s_players)
+            .AndKeep(() => Localization.Current).AndKeep(() => Localization.OnLanguageChange).AndKeep(() => ZInput.Current)
+            .AndKeep(() => PlatformPrefs.s_values).AndKeep(() => PlatformPrefs.Unavailable);
+        // Instance state, not statics: the flags of the ZNet this scope found, which AsServer and the presets change, and
+        // its online backend (the game's static ZNet.m_onlineBackend reads it).
+        private readonly ZNet? _net = ZNet.instance;
+        private readonly bool _server = ZNet.instance?.Server ?? false, _dedicated = ZNet.instance?.Dedicated ?? false;
+        private readonly OnlineBackendType _backend = ZNet.instance?.OnlineBackend ?? default;
+        private bool _ownsHeightmaps, _disposed;
 
         public ValheimWorldScope WithWorld(WorldGenerator world) { WorldGenerator.instance = world; return this; }
         public ValheimWorldScope WithTerrain(ITerrain terrain) => WithWorld(new TerrainWorld(terrain));
@@ -110,12 +129,18 @@ namespace Valheim.Testing.Doubles
         /// <summary>A new, empty ZDOMan (this session's id is 1).</summary>
         public ValheimWorldScope WithZdos() { ZDOMan.instance = new ZDOMan(); return this; }
         public ValheimWorldScope WithZoneSystem() { ZoneSystem.instance = new ZoneSystem(); return this; }
-        /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>), and no GameObjects or Unity components yet for FindObjectsByType and RunFrame.</summary>
+        /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>), and no GameObjects, Unity components or pending destroys yet for FindObjectsByType, RunFrame and EndOfFrame.</summary>
         public ValheimWorldScope WithScene()
         {
             ZNetScene.instance = new ZNetScene();
-            UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>(); UnityEngine.Object.s_unityGameObjects = new List<UnityEngine.GameObject>();
+            EmptyUnityScene();
             return this;
+        }
+        /// <summary>No Unity objects or pending destroys: the scene <see cref="WithScene"/> and <see cref="AtMainMenu"/> start from.</summary>
+        private static void EmptyUnityScene()
+        {
+            UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>(); UnityEngine.Object.s_unityGameObjects = new List<UnityEngine.GameObject>();
+            UnityEngine.Object.s_pendingDestroy = new List<UnityEngine.Object>();
         }
         /// <summary>A new <c>ZNet</c> with no peers, as the server or a client, a new <c>ZRoutedRpc</c> and a new Jotunn <c>NetworkManager</c>.</summary>
         public ValheimWorldScope WithNetwork(bool server = true)
@@ -158,15 +183,22 @@ namespace Valheim.Testing.Doubles
         public List<string> CaptureLog() => BepInEx.Logging.ManualLogSource.Captured = new List<string>();
         public void Dispose()
         {
-            UnityEngine.Object.EndOfFrame(); // pending destroys belong to this test's frame
-            RestorePresetState();
-            WorldGenerator.instance = _world; ZDOMan.instance = _zdos; ZoneSystem.instance = _zones; ZNetScene.instance = _scene;
-            global::Heightmap.s_heightmaps = _heightmaps; BepInEx.Logging.ManualLogSource.Captured = _captured;
-            Terminal.commands = _commands; Player.m_localPlayer = _localPlayer;
-            ZNet.instance = _net; ZRoutedRpc.instance = _rpc; Jotunn.Managers.NetworkManager.Instance = _jotunn; if (_net != null) _net.Server = _server; Terminal.m_cheat = _cheat; Achievements.CheatedAtAll = _cheatedAtAll; UnityEngine.Time.realtimeSinceStartup = _time;
-            RestoreTerrainModifiers();
+            if (_disposed) return;
+            _disposed = true;
+            // Pending destroys belong to this test's frame, and so do those an OnDestroy queues while they go.
+            System.Exception? frame = null;
+            try { for (int i = 0; i < 100 && UnityEngine.Object.s_pendingDestroy.Count > 0; i++) UnityEngine.Object.EndOfFrame(); }
+            catch (System.Exception error) { frame = error; }
+            try
+            {
+                if (_net != null) { _net.Server = _server; _net.Dedicated = _dedicated; _net.OnlineBackend = _backend; }
+                _statics.Dispose();
+            }
+            catch (System.Exception restore) when (frame != null)
+            {
+                throw new System.AggregateException("Ending the test's frame failed, and so did restoring the statics.", frame, restore);
+            }
+            if (frame != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(frame).Throw();
         }
-        /// <summary>Puts back what the role presets, registries, config and Unity doubles changed (WorldScopePresets.cs).</summary>
-        partial void RestorePresetState();
     }
 }

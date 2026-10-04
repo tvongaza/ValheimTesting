@@ -777,7 +777,7 @@ namespace UnityEngine
     /// </summary>
     public static partial class Random
     {
-        private static System.Random s_random = new(0);
+        internal static System.Random s_random = new(0);
         public static void InitState(int seed) => s_random = new System.Random(seed);
         /// <summary>A float from 0 to 1, both included.</summary>
         public static float value => (float)(s_random.Next(0, 16777217) / 16777216.0);
