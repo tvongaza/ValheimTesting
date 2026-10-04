@@ -49,8 +49,8 @@ public sealed class HostedPlan
 
 /// <summary>
 /// <c>hosted</c> (#31): the mod on a host, which is the server of its world and a client with a local player in one
-/// process. <see cref="HostRounds"/> places the fixture world, hosts it (protected), and between its two rounds saves
-/// with confirmation and restarts the hosted world.
+/// process. The toolkit's <see cref="ClientRounds"/>, given a client plan with a <c>hostWorld</c> section, places the
+/// fixture world, hosts it (protected), and between its two rounds saves with confirmation and restarts the hosted world.
 /// <list type="number">
 /// <item>First round, on the host: MyMod's patches are applied; no marker before, the mod marks the dry site and refuses the
 /// wet one; the host's saved objects show one marker at the dry site. The host's admin changes the greeting: MyMod
@@ -62,12 +62,11 @@ public sealed class HostedPlan
 /// </summary>
 public static class HostedScenario
 {
-    public static void Run(HostedPlan plan, Func<ClientSession> openClient, ScenarioReport report, string output, string? hostLog, CancellationToken cancellation = default,
-        bool simulatedClient = false)
+    public static void Run(HostedPlan plan, Func<ClientSession> openClient, ScenarioReport report, string output, string? hostLog, CancellationToken cancellation = default)
     {
         var timeout = TimeSpan.FromSeconds(plan.Client.JoinSeconds);
         report.Provenance["hostBroadcast"] = hostLog == null ? "not observed: an attached host's log is its operator's" : "the owned host's live BepInEx log";
-        new HostRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation, SimulatedClient = simulatedClient }.Run(openClient, round =>
+        new ClientRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation }.Run(openClient, round =>
         {
             var host = round.Server; // The same actor as round.Client.
             if (round.Index > 0)
@@ -119,7 +118,7 @@ public static class HostedScenario
 /// <summary>
 /// The hosted run's own entry point, beside the pinned server runner (a host has no dedicated server to pin):
 /// <c>validate-host|host &lt;plan.json&gt; &lt;new-output-directory&gt;</c>. <c>validate-host</c> checks the plan and runs
-/// the same preflight <see cref="HostRounds"/> starts with (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/>: the
+/// the same preflight the hosted <see cref="ClientRounds"/> start with (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/>: the
 /// fixture world's hashes and own world UID, and an owned client's install, with its ValheimCLI set against its
 /// <c>cliManifest</c> when the plan names one), and copies or launches nothing. <c>host</c> runs
 /// <see cref="HostedScenario"/>, then scans the owned client's logs, writes <c>result.json</c> and <c>junit.xml</c> and

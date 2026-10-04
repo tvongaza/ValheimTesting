@@ -132,7 +132,9 @@ public sealed class HostedScenarioTests : IDisposable
     {
         var report = new ScenarioReport("mymod-hosted-test");
         var host = Host();
-        try { HostedScenario.Run(plan, () => ClientSession.Attach(plan.Client, Output, host), report, Output, hostLog, simulatedClient: true); }
+        // The scripted host keeps its data in the temporary folder, as a real client keeps it in its user's own directory.
+        using var data = new FakeClientDataDirectory(Save);
+        try { HostedScenario.Run(plan, () => ClientSession.Attach(plan.Client, Output, host), report, Output, hostLog); }
         catch (Exception) { Assert.False(report.Passed); }
         return report;
     }
@@ -144,7 +146,7 @@ public sealed class HostedScenarioTests : IDisposable
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
         Assert.Equal(new[]
         {
-            "preflight the fixture world, before it is copied",
+            "preflight the fixture world, before it is copied", "preflight the native client's hosted-world save directory",
             "place the disposable fixture world in the client's local worlds", "attach to the operator's client at its menu, plugins pinned",
             "the client's ValheimCLI offers the session commands the rounds use",
             "first: host the fixture world with the disposable character, protected", "first: host: the mod's Harmony patches are applied",

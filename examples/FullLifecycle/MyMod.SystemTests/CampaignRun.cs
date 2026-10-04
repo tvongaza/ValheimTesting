@@ -26,8 +26,8 @@ public sealed class CampaignRun
 {
     public required LifecyclePlan Plan { get; init; }
     public required GameActor Server { get; init; }
-    /// <summary>Restarts only the owned server and returns its new actor.</summary>
-    public required Func<GameActor> RestartServer { get; init; }
+    /// <summary>The owned server: the rounds wait until it accepts game connections and restart only it.</summary>
+    public required IOwnedServer OwnedServer { get; init; }
     /// <summary>
     /// Opens a client of the plan. With a subdirectory, that client's command record and logs go there, so a second client
     /// in one run never overwrites the first one's evidence.
@@ -58,8 +58,6 @@ public sealed class CampaignRun
         }
         return opened;
     }
-    /// <summary>Waits until the given server accepts game connections.</summary>
-    public required Action<GameActor> WaitUntilJoinable { get; init; }
     public required ScenarioReport Report { get; init; }
     public required string Output { get; init; }
     /// <summary>The pinned runner's environment profile, when a client is hosted elsewhere.</summary>
@@ -98,8 +96,8 @@ public static class CampaignScenarios
                 case LifecyclePlan.ThreeActorScenario: ThreeActorSmokeScenario.Run(run); break;
                 case LifecyclePlan.CrossplayScenario:
                     // The dry-site lifecycle, joined through each boot's crossplay lobby instead of the server's address.
-                    DrySiteScenario.Run(plan, run.Server, run.RestartServer, () => run.OpenClient(plan.Client!, null), run.WaitUntilJoinable,
-                        run.Report, run.Output, run.Cancellation, run.SettleFor, run.Lobby ?? throw new ArgumentException("The crossplay scenario needs the server's lobby."));
+                    DrySiteScenario.Run(plan, run.Server, run.OwnedServer, () => run.OpenClient(plan.Client!, null), run.Report, run.Output,
+                        run.Cancellation, run.SettleFor, run.Lobby ?? throw new ArgumentException("The crossplay scenario needs the server's lobby."));
                     break;
                 default: throw new ArgumentException($"{plan.Scenario} is not a campaign scenario.");
             }

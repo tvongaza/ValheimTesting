@@ -35,7 +35,7 @@ public static class OwnershipHandoffScenario
         CampaignSteps.MarkSites(plan, run.Server, report);
         try
         {
-            report.Step("the dedicated server accepts both clients", () => run.WaitUntilJoinable(run.Server));
+            report.Step("the dedicated server accepts both clients", () => run.OwnedServer.WaitUntilJoinable(run.Server));
             report.Step("open pinned client A on its leased account", () => a = run.OpenProfileClient(first, "client-a"));
             JoinAndArrive(run, a!.Actor, first, plan.Arrival, "A");
             report.Step("A sees one labelled marker", () => CampaignSteps.RequireLabelledMarker(a.Actor, plan.DrySite));

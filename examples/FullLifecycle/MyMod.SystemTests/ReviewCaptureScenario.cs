@@ -44,7 +44,7 @@ public static class ReviewCaptureScenario
         new ClientRounds
         {
             Client = client, WorldUid = plan.WorldUid, Report = run.Report, Output = run.Output,
-            WaitUntilJoinable = run.WaitUntilJoinable, RestartServer = run.RestartServer,
+            OwnedServer = run.OwnedServer,
             Rounds = ["joined"], Cancellation = run.Cancellation,
         }.Run(run.Server, () => run.OpenClient(client, null), round =>
         {

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.ExceptionServices;
 using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
@@ -162,9 +161,16 @@ public sealed class HostedWorld : IDisposable
         return name;
     }
 
-    /// <summary>Where Unity keeps a game client's data on <paramref name="platform"/> (company IronGate, product Valheim), which holds <c>worlds_local</c>.</summary>
+    // Set only by Fakes.FakeClientDataDirectory: the innermost open scope, whose directory a no-game test's simulated client keeps.
+    internal static readonly AsyncLocal<Fakes.FakeClientDataDirectory?> SimulatedClientData = new();
+
+    /// <summary>
+    /// Where Unity keeps a game client's data on <paramref name="platform"/> (company IronGate, product Valheim), which holds <c>worlds_local</c>.
+    /// The only way to change it is a <see cref="Fakes.FakeClientDataDirectory"/> scope, for no-game tests.
+    /// </summary>
     public static string DefaultSaveDirectory(ClientPlatform platform)
     {
+        if (SimulatedClientData.Value is { } simulated) return simulated.Directory;
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return platform switch
         {
@@ -309,117 +315,5 @@ public static class HostWorlds
         new SessionControl(host).Leave();
         host.VerifyEnvironment(plan.MenuExpectations); // A transition always needs fresh pins.
         return Start(host, plan, worldName, timeout, cancellation, protectPlayer);
-    }
-}
-
-/// <summary>
-/// The hosted (listen-server) twin of <see cref="ClientRounds"/>: one game client hosts a fixture world and is both the
-/// server and the client of each check. <see cref="Run"/> first runs the plan's static preflight
-/// (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/>: the fixture's pinned files and own world UID, and an owned
-/// client's install, whose ValheimCLI set must also provide <see cref="CliCapabilities.HostedRounds"/> when the plan names a
-/// <see cref="ClientRunPlan.CliManifest"/>), so a wrong fixture, install or ValheimCLI set stops the run before the fixture
-/// is copied or the game started. It then places the fixture
-/// world (<see cref="HostedWorld"/>), opens the client, requires the session commands the rounds use
-/// (<see cref="CliCapabilities.HostedRounds"/>, naming a missing pack or an old ValheimCLI), then for each of <see cref="Rounds"/>:
-/// <list type="number">
-/// <item>hosts the world with the plan's disposable character, protected (<see cref="HostWorlds.Start"/>; from the second round on, this is the host world's restart);</item>
-/// <item>runs the mod's measurement, whose <see cref="ClientRound.Server"/> and <see cref="ClientRound.Client"/> are the same host;</item>
-/// <item>between rounds, a confirmed world save (<see cref="SessionControl.Save"/>); after every round the host leaves to its menu, which saves again.</item>
-/// </list>
-/// The report records <c>role</c> <c>host</c>, <c>hostWorld</c>, <c>hostCrossplay</c>, <c>hostRounds</c>,
-/// <c>hostRoundsCompleted</c> and <c>cliPreflight</c> (<see cref="ClientRunPlan.CliPreflight"/>). The first failure stops the rounds and is rethrown. The client is closed in every outcome
-/// (an owned client stopped, an attached one detached), then the world is moved into the evidence
-/// (<c>hostWorldEvidence</c>). After a failure an attached client may still host the world, so its world is left in place
-/// and named in <c>hostWorldLeftInPlace</c>: remove it once the client has left it.
-/// </summary>
-public sealed class HostRounds
-{
-    /// <summary>The client plan, with its <see cref="ClientRunPlan.HostWorld"/> section.</summary>
-    public required ClientRunPlan Client { get; init; }
-    public required ScenarioReport Report { get; init; }
-    public required string Output { get; init; }
-    /// <summary>
-    /// For a controlled test whose <c>openClient</c> is scripted rather than a game process. It permits a private synthetic
-    /// save directory on a Mac test host. Native runs leave this false so the Mac save-location check runs before placement.
-    /// </summary>
-    public bool SimulatedClient { get; init; }
-    /// <summary>The client's opening step's name; the default says whether it is launched or attached, with plugins pinned.</summary>
-    public string? OpenStep { get; init; }
-    /// <summary>The rounds' names, which prefix their steps and evidence files: letters, digits, <c>-</c> and <c>_</c>, all different.</summary>
-    public IReadOnlyList<string> Rounds { get; init; } = ["first", "after-restart"];
-    public CancellationToken Cancellation { get; init; }
-
-    /// <summary>Runs the rounds, opening the client with <paramref name="openClient"/> (for example <see cref="ClientSession.Open"/>).</summary>
-    public void Run(Func<ClientSession> openClient, Action<ClientRound> measure)
-    {
-        var plan = Client.HostWorld ?? throw new ArgumentException("Client: the plan has no hostWorld section; a client that joins a server runs with ClientRounds.");
-        ClientRounds.CheckRoundNames(Rounds);
-        Report.Provenance["role"] = "host";
-        Report.Provenance["hostMode"] = plan.Local ? "local" : "listen";
-        Report.Provenance["hostCrossplay"] = plan.Crossplay ? "true" : "false";
-        Report.Provenance["hostRounds"] = string.Join(",", Rounds);
-        Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
-        Report.Provenance["cliPreflight"] = Client.CliPreflight;
-        var completed = new List<string>();
-        HostedWorld? world = null;
-        ClientSession? session = null;
-        bool passed = false;
-        try
-        {
-            Report.Step(Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
-                () => Client.Preflight(CliCapabilities.HostedRounds));
-            var platform = Client.Owned ? ClientLaunch.Detect(Client.Install) : HostedWorld.CurrentPlatform;
-            string defaultSaveDirectory = HostedWorld.DefaultSaveDirectory(platform);
-            if (!SimulatedClient)
-                Report.Step("preflight the native client's hosted-world save directory", () =>
-                    HostedWorld.RequireNativeSaveDirectory(platform, plan.SaveDirectory, Client.LaunchArguments, defaultSaveDirectory));
-            string saveDirectory = plan.SaveDirectory ?? defaultSaveDirectory;
-            Report.Step("place the disposable fixture world in the client's local worlds", () => world = HostedWorld.Place(plan, saveDirectory, Output, Client.Pinned));
-            var placed = world!;
-            Report.Provenance["hostWorld"] = placed.Name;
-            Report.Step(OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
-                () => session = openClient());
-            var host = session!.Actor;
-            Report.Step("the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(host, CliCapabilities.HostedRounds));
-            for (int i = 0; i < Rounds.Count; i++)
-            {
-                var round = new ClientRound(Rounds[i], i, i == Rounds.Count - 1, host, host, Report, Output);
-                round.Step(i == 0 ? "host the fixture world with the disposable character, protected" : "restart the hosted world, protected",
-                    () => HostWorlds.Start(host, Client, placed.Name, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation));
-                // The owned host's disposable character and fixture acknowledge cheats; an operator's client keeps devcommands only.
-                if (Client.Owned)
-                    round.Step("establish test access on the owned host", () => TestAccess.Ensure(host, TestActorRole.ClientInWorld));
-                measure(round);
-                if (!round.Last)
-                    Report.Step(ClientRounds.Between("confirmed world save", i, Rounds), () => new SessionControl(host).Save(plan.WorldUid, TimeSpan.FromSeconds(plan.SaveSeconds)));
-                round.Step("the host leaves to its menu", () =>
-                {
-                    new SessionControl(host).Leave();
-                    host.VerifyEnvironment(Client.MenuExpectations); // A transition always needs fresh pins.
-                });
-                completed.Add(round.Name);
-                Report.Provenance["hostRoundsCompleted"] = string.Join(",", completed);
-            }
-            passed = true;
-        }
-        finally
-        {
-            // The world may be moved once no client can still host it: none was opened, the owned one stopped, or every round ended with the host at its menu.
-            bool released = session == null || passed;
-            Exception? teardown = null;
-            if (session != null)
-                try { Report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); released |= session.Owned; }
-                catch (Exception error) { teardown = error; } // Recorded as its own failed step.
-                finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
-            if (world != null)
-            {
-                if (!released) Report.Provenance["hostWorldLeftInPlace"] = world.WorldsDirectory + " (" + world.Name + ")";
-                else
-                    try { Report.Step("move the hosted world from the client's local worlds into the evidence", world.Collect); Report.Provenance["hostWorldEvidence"] = world.CollectedTo!; }
-                    catch (Exception error) { teardown ??= error; }
-            }
-            // A failure already on its way out is the one to rethrow; a failed teardown fails a passing run.
-            if (passed && teardown != null) ExceptionDispatchInfo.Capture(teardown).Throw();
-        }
     }
 }

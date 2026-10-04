@@ -1,6 +1,6 @@
 # Targeted native regression
 
-A copyable template for a small A/B regression in the real game: **one owned client hosts one disposable fixture world with one mod under test**, once with the parent build and once with the candidate. You fill in a short manifest, get a preflight result **without opening the game**, then run each arm through the toolkit's strict-pinned [`HostRounds`](../../docs/testing-toolkit.md#hosted-listen-server-worlds) runner. Restarts, dedicated servers and several clients belong in [FullLifecycle](../FullLifecycle/README.md) instead.
+A copyable template for a small A/B regression in the real game: **one owned client hosts one disposable fixture world with one mod under test**, once with the parent build and once with the candidate. You fill in a short manifest, get a preflight result **without opening the game**, then run each arm through the toolkit's strict-pinned hosted [`ClientRounds`](../../docs/testing-toolkit.md#hosted-listen-server-worlds) runner. Restarts, dedicated servers and several clients belong in [FullLifecycle](../FullLifecycle/README.md) instead.
 
 | File | What it is | Change it? |
 |---|---|---|
@@ -79,7 +79,7 @@ dotnet run --project examples/TargetedRegression -c Release -- run /absolute/pat
 dotnet run --project examples/TargetedRegression -c Release -- run /absolute/path/to/regression.json candidate /absolute/path/to/new-evidence-candidate
 ```
 
-`run` stages the arm again and repeats every check, refuses any file that appeared in the staged folders since (a plugin outside the allowlist loads even when the test never calls it), then hands the plan to `HostRounds`: it places the fixture, launches the owned client, requires the hosted-session capabilities and the scenario's `Capabilities` live, hosts the world with the character protected and runs `Scenario.Measure`. Every command is checked against strict pins: each staged plugin's GUID with its MD5 and the world's UID. No other plugin is pinned `absent`: the clean install loads nothing else, and strict pins refuse anything unlisted. The client is stopped and the world moved into the evidence in every outcome.
+`run` stages the arm again and repeats every check, refuses any file that appeared in the staged folders since (a plugin outside the allowlist loads even when the test never calls it), then hands the plan to the hosted `ClientRounds`: it places the fixture, launches the owned client, requires the hosted-session capabilities and the scenario's `Capabilities` live, hosts the world with the character protected and runs `Scenario.Measure`. Every command is checked against strict pins: each staged plugin's GUID with its MD5 and the world's UID. No other plugin is pinned `absent`: the clean install loads nothing else, and strict pins refuse anything unlisted. The client is stopped and the world moved into the evidence in every outcome.
 
 Each evidence directory holds `result.json`, `junit.xml`, `run-manifest.json` (the arm, every arm's commit and hash, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; no machine path), the command trace `client-commands.jsonl`, the scenario's own JSON files and `host-world/`. `result.json` records the arm, the mod build and the cleanup steps in its provenance. The disposable install stays for the next arm; `clean` removes it.
 

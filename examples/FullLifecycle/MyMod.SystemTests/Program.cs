@@ -40,12 +40,11 @@ var options = new PinnedServerRunOptions<LifecyclePlan>
             }
             return Task.CompletedTask;
         }
-        Action<GameActor> joinable = server => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation);
         if (run.Plan.Scenario == LifecyclePlan.LifecycleScenario)
         {
             // Its logs are scanned with the server's at teardown, after the scenario stops the client, and also after a failed startup.
-            DrySiteScenario.Run(run.Plan, run.Server, run.Session.Restart, () => ClientSession.Open(run.Plan.Client!, run.Output, run.Logs, run.Cancellation),
-                joinable, run.Report, run.Output, run.Cancellation);
+            DrySiteScenario.Run(run.Plan, run.Server, run.Session, () => ClientSession.Open(run.Plan.Client!, run.Output, run.Logs, run.Cancellation),
+                run.Report, run.Output, run.Cancellation);
             return Task.CompletedTask;
         }
         // The native campaign's scenarios (CampaignScenarios). Their in-run log reads open files on this machine, so a run
@@ -53,7 +52,7 @@ var options = new PinnedServerRunOptions<LifecyclePlan>
         bool local = run.Profile == null;
         CampaignScenarios.Run(new CampaignRun
         {
-            Plan = run.Plan, Server = run.Server, RestartServer = run.Session.Restart, WaitUntilJoinable = joinable, Report = run.Report,
+            Plan = run.Plan, Server = run.Server, OwnedServer = run.Session, Report = run.Report,
             Output = run.Output, Cancellation = run.Cancellation, Profile = run.Profile,
             OpenClient = (client, directory) =>
             {

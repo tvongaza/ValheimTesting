@@ -41,6 +41,37 @@ public class FakesTests
         var transport = new ScriptedTransport { PinsHold = false };
         Assert.Throws<InvalidOperationException>(() => transport.Actor());
     }
+    [Fact] public void AFakeClientDataDirectoryIsTheDefaultOnEveryPlatformOnlyInsideItsScope()
+    {
+        var platforms = new[] { ClientPlatform.Windows, ClientPlatform.MacOS, ClientPlatform.Linux };
+        var real = platforms.Select(HostedWorld.DefaultSaveDirectory).ToArray();
+        string outer = Path.Combine(Path.GetTempPath(), "fake-client-outer"), inner = Path.Combine(Path.GetTempPath(), "fake-client-inner");
+        using (var first = new FakeClientDataDirectory(outer))
+        {
+            Assert.All(platforms, p => Assert.Equal(Path.GetFullPath(outer), HostedWorld.DefaultSaveDirectory(p)));
+            using (new FakeClientDataDirectory(inner))
+                Assert.All(platforms, p => Assert.Equal(Path.GetFullPath(inner), HostedWorld.DefaultSaveDirectory(p)));
+            // Disposing the inner scope restores the outer one, not the real default.
+            Assert.All(platforms, p => Assert.Equal(Path.GetFullPath(outer), HostedWorld.DefaultSaveDirectory(p)));
+            first.Dispose(); first.Dispose(); // Twice is harmless.
+            Assert.Equal(real, platforms.Select(HostedWorld.DefaultSaveDirectory));
+        }
+        Assert.Equal(real, platforms.Select(HostedWorld.DefaultSaveDirectory));
+        Assert.All(real, path => Assert.DoesNotContain("fake-client", path, StringComparison.Ordinal));
+        Assert.Throws<ArgumentException>(() => new FakeClientDataDirectory(" "));
+    }
+    [Fact] public void AnOuterFakeClientDataDirectoryCannotBeDisposedBeforeItsInnerOne()
+    {
+        var real = HostedWorld.DefaultSaveDirectory(ClientPlatform.MacOS);
+        var outer = new FakeClientDataDirectory(Path.Combine(Path.GetTempPath(), "fake-client-outer"));
+        var inner = new FakeClientDataDirectory(Path.Combine(Path.GetTempPath(), "fake-client-inner"));
+        Assert.Throws<InvalidOperationException>(outer.Dispose);
+        Assert.Equal(inner.Directory, HostedWorld.DefaultSaveDirectory(ClientPlatform.MacOS)); // Nothing changed.
+        inner.Dispose();
+        Assert.Equal(outer.Directory, HostedWorld.DefaultSaveDirectory(ClientPlatform.MacOS));
+        outer.Dispose();
+        Assert.Equal(real, HostedWorld.DefaultSaveDirectory(ClientPlatform.MacOS));
+    }
     [Fact] public void AFakeOwnedServerStartsRestartsAndRecordsItsLifecycle()
     {
         var server = new FakeOwnedServer("my.mod");

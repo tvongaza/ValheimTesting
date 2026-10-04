@@ -14,7 +14,7 @@ namespace MyMod.IntegrationTests;
 /// and run MyMod (or not). Switches plant each failure and each control. It models the contracts the scenarios rely on
 /// (replies, observations, their completeness), not Valheim. No game, Steam or network connection.
 /// </summary>
-internal sealed class CampaignWorld : IDisposable
+internal sealed class CampaignWorld : IOwnedServer, IDisposable
 {
     public const string WorldUid = "4242", Md5Mod = "11111111111111111111111111111111", Md5Adapter = "22222222222222222222222222222222",
         Md5Cli = "33333333333333333333333333333333", Md5Mismatched = "44444444444444444444444444444444", PlayFabId = "ENTITY42";
@@ -113,8 +113,7 @@ internal sealed class CampaignWorld : IDisposable
         WriteServerLog();
         return new()
         {
-            Plan = plan, Server = Server(), RestartServer = Restart, Report = report, Output = Output, SettleFor = TimeSpan.Zero, Interval = TimeSpan.FromMilliseconds(10),
-            WaitUntilJoinable = server => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(5)),
+            Plan = plan, Server = Server(), OwnedServer = this, Report = report, Output = Output, SettleFor = TimeSpan.Zero, Interval = TimeSpan.FromMilliseconds(10),
             OpenClient = (client, directory) =>
             {
                 string output = directory == null ? Output : Directory.CreateDirectory(Path.Combine(Output, directory)).FullName;
@@ -191,6 +190,9 @@ internal sealed class CampaignWorld : IDisposable
         Servers.Add(transport);
         return transport.Actor("server", "cli_expect worlduid=" + WorldUid);
     }
+
+    /// <summary>As an owned server's session: the scripted server's adapter reports whether it accepts game connections.</summary>
+    public void WaitUntilJoinable(GameActor server) => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(5));
 
     /// <summary>What <c>OwnedServerSession.Restart</c> does to the world: only saved objects and keys come back.</summary>
     public GameActor Restart()

@@ -12,7 +12,7 @@ public static class AreaObjectsScenario
         new ClientRounds
         {
             Client = client, WorldUid = plan.WorldUid, Report = run.Report, Output = run.Output,
-            WaitUntilJoinable = run.WaitUntilJoinable, RestartServer = run.RestartServer,
+            OwnedServer = run.OwnedServer,
             Arrival = CampaignSteps.At(plan.Arrival), Rounds = ["joined"],
             SettleFor = run.SettleFor, Cancellation = run.Cancellation,
         }.Run(run.Server, () => run.OpenClient(client, null), round =>

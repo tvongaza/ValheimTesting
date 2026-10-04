@@ -245,7 +245,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var staged = new TargetedRegression(manifest, ["valheim.session/join", "example.probe/read"]).Stage("parent");
         Assert.StartsWith("valheimCLI test build: BepInEx/plugins/valheimCLI.dll, BepInEx/plugins/Valheim.Cli.Standard.dll", staged.Manifest.CliManifest);
         Assert.Equal(CliCapabilities.HostedRounds.Append("valheim.session/join"), staged.Manifest.Capabilities);
-        Assert.Equal(new[] { "valheim.session/join" }, staged.Plan.Capabilities); // HostRounds adds its own; ValheimCLI's are checked statically and live.
+        Assert.Equal(new[] { "valheim.session/join" }, staged.Plan.Capabilities); // The hosted rounds add their own; ValheimCLI's are checked statically and live.
         Assert.Equal(new[] { "example.probe/read" }, staged.Manifest.LiveOnlyCapabilities);
         // The Epic Loot shape: a pack with the expected file name and plugin GUID, from another build.
         var coherent = manifest.Cli.Packs;
