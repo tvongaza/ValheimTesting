@@ -77,6 +77,27 @@ public class SessionTests
         var error = Assert.Throws<WaitFailedException>(() => session.Start()); Assert.Contains("code 1", error.Reason);
         Assert.DoesNotContain(fake.Events, x => x.StartsWith("probe"));
     }
+    // #256 amendment C: a new server process has devcommands off and cheats unacknowledged; the session that owns test access
+    // establishes it on every boot, the restart included. Without it, a restarted server comes back without either gate.
+    [Fact] public void TestAccessIsEstablishedOnEveryBootTheSessionStarts()
+    {
+        var fake = new FakeOwnedServer("roads.testing");
+        using (var session = fake.Session(Generous))
+        {
+            session.EnsureTestAccess = true;
+            Assert.True(TestAccess.Read(session.Start()) is { Devcommands: true, CheatsAcknowledged: true });
+            Assert.True(TestAccess.Read(session.Restart()) is { Devcommands: true, CheatsAcknowledged: true });
+        }
+        Assert.Equal(new[] { "devcommands1", "confirmcheats1", "devcommands2", "confirmcheats2" },
+            fake.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")));
+        var plain = new FakeOwnedServer("roads.testing");
+        using var without = plain.Session(Generous);
+        without.Start();
+        plain.Devcommands = true; plain.CheatsAcknowledged = true; // as if established once on the first boot
+        Assert.True(TestAccess.Read(without.Restart()) is { Devcommands: false, CheatsAcknowledged: false });
+        // A session that does not own test access sends neither mutation, on any boot.
+        Assert.DoesNotContain(plain.Events, e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats"));
+    }
     [Fact] public void CancelledSessionDoesNotLaunch()
     {
         using var cancellation = new CancellationTokenSource(); cancellation.Cancel();

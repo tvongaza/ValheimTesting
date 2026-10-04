@@ -101,9 +101,9 @@ public static class ServerFixture
                 "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"];
             var plan = new LifecyclePlan { Scenario = LifecyclePlan.ServerScenario, Arguments = arguments, Port = CliPort };
             var started = session = Session(plan, copy!.DirectoryPath, world, pins, output, cancellation.Token);
+            started.EnsureTestAccess = true; // The session's own test access, on this boot and any restart.
             GameActor server = null!;
-            report.Step(StepPhase.Setup, "start the owned server on a new world, plugins pinned", () => server = started.Start());
-            report.Step(StepPhase.Setup, "verify test access on the disposable server", () => TestAccess.Ensure(server, TestActorRole.DedicatedServer));
+            report.Step(StepPhase.Setup, "start the owned server on a new world, plugins pinned, with test access", () => server = started.Start());
             WorldFacts facts = new();
             report.Step("read the new world's uid", () => facts = ReadWorld(server));
             report.Provenance["worldUid"] = facts.Uid; report.Provenance["worldSeed"] = facts.Seed;

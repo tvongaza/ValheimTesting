@@ -38,7 +38,7 @@ public sealed class FakeOwnedServer
     public bool ExitOnLaunch { get; set; }
     /// <summary>Connecting throws <see cref="IOException"/>, as before the CLI listens.</summary>
     public bool RefuseConnections { get; set; }
-    /// <summary>The server's test access as ValheimCLI's <c>cli_access</c> reports it; <c>devcommands</c> toggles it, <c>confirmcheats</c> acknowledges cheats.</summary>
+    /// <summary>The server's test access as ValheimCLI's <c>cli_access</c> reports it; <c>devcommands</c> toggles it, <c>confirmcheats</c> acknowledges cheats. Each launch starts with both off, as a new game process does.</summary>
     public bool Devcommands { get; set; }
     public bool CheatsAcknowledged { get; set; }
     /// <summary>Accept <c>confirmcheats</c> without acknowledging cheats: a server whose access never becomes ready.</summary>
@@ -64,7 +64,12 @@ public sealed class FakeOwnedServer
     public IOwnedProcess Launch(string token)
     {
         FakeOwnedProcess process;
-        lock (_sync) { _tokens.Add(token); process = _current = new FakeOwnedProcess(this, _tokens.Count); _events.Add("launch" + process.Id); }
+        lock (_sync)
+        {
+            _tokens.Add(token); process = _current = new FakeOwnedProcess(this, _tokens.Count); _events.Add("launch" + process.Id);
+            // As in the game, a new process starts with devcommands off and cheats unacknowledged.
+            Devcommands = false; CheatsAcknowledged = false;
+        }
         if (ExitOnLaunch) process.Exit(1);
         OnLaunch?.Invoke(process);
         return process;
