@@ -194,9 +194,9 @@ public sealed class CrossplayPlanTests : IDisposable
 
     private static ScriptedTransport CrossplayClient()
     {
-        bool devcommands = false, joined = false;
+        bool joined = false;
         return new ScriptedTransport()
-            .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .ClientAccess(() => joined)
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
             .OnPrefix("cli_connect_playfab_user ", command => { joined = true; return ScriptedTransport.Ok($"OK: PlayFab user join started for {command.Split(' ')[1]} using character 'Tester' (tester, Local)"); })
             .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)

@@ -39,6 +39,35 @@ public sealed class ScriptedTransport : ICancellableGameTransport
     /// </summary>
     public ScriptedTransport Extension(string owner, string name, Func<IReadOnlyList<string>, object> data, bool readOnly = true, int resultVersion = 1, string instance = "fake")
     { lock (_sync) _extensions.Add((owner, instance, name, resultVersion, readOnly, data)); return this; }
+    /// <summary>
+    /// Answers a game client's test access as ValheimCLI and the game do (<see cref="TestAccess"/>): <c>cli_access</c> from
+    /// the scripted state, <c>devcommands</c> toggling it and <c>cli_acknowledge_local_cheats</c> acknowledging cheats.
+    /// <paramref name="inWorld"/> says whether the client has a local player (joined or hosting); <paramref name="hosting"/>
+    /// whether it is the server of that world. Read <see cref="Access"/> to see or change the state. It replaces any handler
+    /// already registered for those three commands; register a different reply (a refusal, say) after it.
+    /// </summary>
+    public ScriptedTransport ClientAccess(Func<bool> inWorld, Func<bool>? hosting = null, bool allowOnServerClients = true)
+    {
+        On("devcommands", _ => Ok("Dev commands: " + (Access.Devcommands = !Access.Devcommands)));
+        On("cli_acknowledge_local_cheats", _ =>
+        {
+            if (!inWorld()) return Ok("ERROR: code=no_local_player A loaded local character is required");
+            Access.CheatsAcknowledged = true; return Ok("OK: cheats acknowledged");
+        });
+        On("cli_access", _ =>
+        {
+            bool world = inWorld(), server = world && (hosting?.Invoke() ?? false);
+            return Ok("ACCESS " + JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1, complete = true, devcommands = Access.Devcommands, cheatsAcknowledged = Access.CheatsAcknowledged,
+                allowOnServerClients, server, dedicated = false, joinedClient = world && !server, localPlayer = world, profileAvailable = world,
+            }));
+        });
+        return this;
+    }
+    /// <summary>The client test-access state <see cref="ClientAccess"/> answers from.</summary>
+    public ScriptedAccess Access { get; } = new();
+
     /// <summary>Answers <c>cli_save</c>: <c>OK: SAVE saveNumber=N</c> with a rising N when confirmed, otherwise a failed reply.</summary>
     public ScriptedTransport Saves(bool confirmed = true) { lock (_sync) _saveConfirmed = confirmed; return this; }
 
@@ -117,4 +146,11 @@ public sealed class ScriptedTransport : ICancellableGameTransport
         return Ok(ExtensionResult(found.Owner, found.Data(words.Skip(2).ToArray()), found.Instance));
     }
     public void Dispose() { lock (_sync) Disposed = true; }
+}
+
+/// <summary>A scripted client's test access (<see cref="ScriptedTransport.ClientAccess"/>).</summary>
+public sealed class ScriptedAccess
+{
+    public bool Devcommands { get; set; }
+    public bool CheatsAcknowledged { get; set; }
 }

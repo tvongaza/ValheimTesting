@@ -47,9 +47,8 @@ public sealed class HostRoundsTests : IDisposable
         // leaveOffered false: the host's ValheimCLI has no valheim.session/leave (an older Standard pack).
         public Game(string worlds, bool leaveOffered = true)
         {
-            bool devcommands = false;
             Transport = new ScriptedTransport()
-                .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+                .ClientAccess(() => Hosting, () => Hosting)
                 .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
                 .OnPrefix("cli_start_host_world ", command =>
                 {
@@ -120,9 +119,9 @@ public sealed class HostRoundsTests : IDisposable
             "place the disposable fixture world in the client's local worlds",
             "launch the owned client to its menu, plugins pinned",
             "the client's ValheimCLI offers the session commands the rounds use",
-            "first: host the fixture world with the disposable character, protected", "first: measure",
+            "first: host the fixture world with the disposable character, protected", "first: establish test access on the owned host", "first: measure",
             "confirmed world save", "first: the host leaves to its menu",
-            "after-restart: restart the hosted world, protected", "after-restart: measure", "after-restart: the host leaves to its menu",
+            "after-restart: restart the hosted world, protected", "after-restart: establish test access on the owned host", "after-restart: measure", "after-restart: the host leaves to its menu",
             "stop only the owned client",
             "move the hosted world from the client's local worlds into the evidence",
         }, report.Steps.Select(s => s.Name));

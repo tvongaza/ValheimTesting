@@ -405,6 +405,9 @@ public sealed class HostRounds
                 }
                 else round.Step(i == 0 ? "host the fixture world with the disposable character, protected" : "restart the hosted world, protected",
                     () => HostWorlds.Start(host, Client, placed.Name, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation));
+                // The owned host's disposable character and fixture acknowledge cheats; an operator's client keeps devcommands only.
+                if (Client.Owned)
+                    round.Step("establish test access on the owned host", () => TestAccess.Ensure(host, TestActorRole.ClientInWorld));
                 measure(round);
                 if (!round.Last)
                     Report.Step(ClientRounds.Between("confirmed world save", i, Rounds), () => new SessionControl(host).Save(plan.WorldUid, TimeSpan.FromSeconds(plan.SaveSeconds)));

@@ -114,12 +114,6 @@ public static class CampaignScenarios
 /// <summary>Steps the campaign scenarios share, with the same names as <see cref="DrySiteScenario"/>'s.</summary>
 public static class CampaignSteps
 {
-    /// <summary>Mark only a staged disposable local character as cheated before CLI cheat-classified checks.</summary>
-    public static void AcknowledgeLocalCheats(GameActor client)
-    {
-        TestAccess.Ensure(client, TestActorRole.ClientInWorld, clientMutations: true);
-    }
-
     /// <summary>Every patch MyMod declares is applied on the server (the adapter's census).</summary>
     public static void ModPatchesApplied(GameActor server, ScenarioReport report, string side = "server") =>
         report.Step($"{side}: the mod's Harmony patches are applied", () =>

@@ -28,9 +28,8 @@ public sealed class LogoutCycleTests : IDisposable
 
         public ScriptedTransport Transport(string profile)
         {
-            bool devcommands = false;
             return new ScriptedTransport()
-                .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+                .ClientAccess(() => Joined)
                 .Extension("valheim.session", "join", _ => { Joined = true; Live = OnLoad(_saved); return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
                 .Extension("valheim.session", "leave", _ =>
                 {

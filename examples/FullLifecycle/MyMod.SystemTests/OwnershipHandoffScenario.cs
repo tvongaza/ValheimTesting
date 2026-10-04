@@ -101,7 +101,7 @@ public static class OwnershipHandoffScenario
             var joined = session.Read(); // One identity/readiness check, not an external polling loop.
             if (!joined.WorldReady || joined.WorldUid != run.Plan.WorldUid || !joined.LocalPlayer)
                 throw new InvalidOperationException($"{name} joined without a ready player in world {run.Plan.WorldUid}: {joined}.");
-            CampaignSteps.AcknowledgeLocalCheats(actor);
+            TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: true); // joined outside ClientRounds
             PlayerPlacement.Protect(actor); // The plan uses disposable local characters.
         });
         run.Report.Step($"{name} arrives on dry ground by game-side signals", () =>

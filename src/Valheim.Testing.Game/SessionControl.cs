@@ -75,23 +75,13 @@ public sealed class SessionControl(GameActor actor)
     }
 
     /// <summary>
-    /// Turns the attached game's devcommands on and requires the game's reply to say so. The console command toggles and
-    /// reports the resulting state, so a reply of off is toggled once more. ValheimCLI refuses mutating extension
-    /// commands, the session join among them, until devcommands is on, and a fresh game starts with it off. It is the
-    /// game's local flag: on a client joined to a server, Valheim 1.0 also needs ValheimCLI's explicit
-    /// <c>AllowOnServerClients = true</c> setting for the test commands, even if the player is a server admin.
+    /// Turns the client's devcommands on at its menu: <see cref="TestAccess.Ensure"/> as <see cref="TestActorRole.ClientMenu"/>,
+    /// which reads ValheimCLI's <c>cli_access</c>, toggles once only if needed and verifies the result. ValheimCLI refuses
+    /// mutating extension commands, the session join among them, until devcommands is on, and a fresh game starts with it
+    /// off. Cheats are acknowledged after joining (<see cref="ClientRounds"/> does it for an owned client). On a client joined
+    /// to a server, Valheim 1.0 also needs ValheimCLI's <c>AllowOnServerClients = true</c> for mutating test commands.
     /// </summary>
-    public void EnableDevcommands()
-    {
-        for (int attempt = 0; attempt < 2; attempt++)
-        {
-            string reply = string.Join(" ", actor.Execute("devcommands").Output);
-            if (Regex.IsMatch(reply, @"Dev ?commands:\s*True", RegexOptions.IgnoreCase)) return;
-            if (!Regex.IsMatch(reply, @"Dev ?commands:\s*False", RegexOptions.IgnoreCase))
-                throw new InvalidOperationException("Unrecognised devcommands reply: " + reply);
-        }
-        throw new InvalidOperationException("Devcommands stayed off after two toggles.");
-    }
+    public void EnableDevcommands() => TestAccess.Ensure(actor, TestActorRole.ClientMenu);
 
     /// <summary>
     /// Joins a server. Turns devcommands on first unless <paramref name="enableDevcommands"/> is false, because the
