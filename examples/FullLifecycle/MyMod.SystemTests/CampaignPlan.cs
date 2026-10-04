@@ -156,11 +156,9 @@ public sealed partial class LifecyclePlan
             throw new ArgumentException("Both handoff clients join the dedicated server by address.");
         if (!string.Equals(first.Join, second.Join, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Both handoff clients must join the same dedicated-server address.");
-        if (first.Port == second.Port) throw new ArgumentException("Give the two clients distinct ValheimCLI ports.");
+        // Hosts, installs and CLI ports are the campaign's: its inventory assigns each client its own host.
         if (string.Equals(first.Character, second.Character, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Give the two clients distinct disposable character names.");
-        if (string.Equals(Path.GetFullPath(first.Install), Path.GetFullPath(second.Install), StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Give the two clients separate installs; one Steam session runs one game client.");
         var secondArrival = SecondArrival ?? throw new ArgumentException("Add secondArrival on dry ground beside the marker.");
         secondArrival.Validate("second arrival", requireGround: true);
         float betweenPlayers = MathF.Sqrt(MathF.Pow(secondArrival.X - Arrival.X, 2) + MathF.Pow(secondArrival.Z - Arrival.Z, 2));
@@ -176,28 +174,9 @@ public sealed partial class LifecyclePlan
         SameBuildsAs(first, "client A"); SameBuildsAs(second, "client B");
         if (!first.Owned || !second.Owned || first.Crossplay || second.Crossplay || first.HostWorld != null || second.HostWorld != null)
             throw new ArgumentException("The three-actor smoke needs two owned clients joining one dedicated server.");
-        if (first.Join != second.Join || first.Port == second.Port || first.Character == second.Character ||
-            first.Install.Equals(second.Install, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Give the two clients one join address and distinct CLI ports, characters and installs.");
-    }
-
-    /// <summary>Two named profile clients and two different leased accounts are required before fixtures are copied.</summary>
-    public void CheckHandoffEnvironment(EnvironmentProfile? profile)
-    {
-        if (Scenario is not (OwnershipHandoffScenario or ThreeActorScenario)) return;
-        if (profile == null) throw new ArgumentException("The ownership handoff needs --profile with two client hosts and Steam account leases.");
-        if (!profile.Clients.TryGetValue("client-a", out var a) || !profile.Clients.TryGetValue("client-b", out var b))
-            throw new ArgumentException("The profile must name client-a and client-b.");
-        if (string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The handoff clients need separate hosts.");
-        if (profile.SteamAccounts == null || string.IsNullOrWhiteSpace(a.SteamAccount) || string.IsNullOrWhiteSpace(b.SteamAccount) ||
-            string.Equals(a.SteamAccount, b.SteamAccount, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Pin two distinct Steam accounts in the profile for client-a and client-b.");
-        if (a.CliPort != Client!.Port || b.CliPort != SecondClient!.Port)
-            throw new ArgumentException("The profile's client-a/client-b CLI ports must match client/secondClient in the plan.");
-        if (!string.Equals(a.Install.TrimEnd('/', '\\'), Client.Install.TrimEnd('/', '\\'), StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(b.Install.TrimEnd('/', '\\'), SecondClient.Install.TrimEnd('/', '\\'), StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The profile's client-a/client-b installs must match client/secondClient in the plan.");
+        // Hosts, installs and CLI ports are the campaign's: its inventory assigns each client its own host.
+        if (first.Join != second.Join || first.Character == second.Character)
+            throw new ArgumentException("Give the two clients one join address and distinct characters.");
     }
 
     // The client runs the server's MyMod and adapter builds, pinned by the same MD5s.

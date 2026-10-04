@@ -9,7 +9,7 @@ public sealed class EnvironmentRecipe
 {
     public string Name { get; set; } = "";
     public string Host { get; set; } = "";
-    /// <summary><c>server</c>, <c>client</c> or <c>hosting-client</c>. The latter is one process with both capabilities.</summary>
+    /// <summary><c>server</c> or <c>client</c>; a client recipe may list only client, a server recipe only server.</summary>
     public List<string> Roles { get; set; } = [];
     public string Install { get; set; } = "";
     public string Runtime { get; set; } = "";
@@ -87,19 +87,16 @@ public sealed class EnvironmentInventory
             if (!NamePattern.IsMatch(recipe.Name ?? "")) errors.Add("Invalid environment name: " + recipe.Name);
             if (recipe.Host == null || !Hosts.TryGetValue(recipe.Host, out var host))
             { errors.Add($"Environment {recipe.Name} names unknown host {recipe.Host}."); continue; }
-            if (recipe.Roles.Count == 0 || recipe.Roles.Any(role => role is not ("server" or "client" or "hosting-client")) ||
-                recipe.Roles.Distinct(StringComparer.Ordinal).Count() != recipe.Roles.Count)
-                errors.Add($"Environment {recipe.Name} needs distinct server, client or hosting-client roles.");
-            if (recipe.Roles.Contains("server") && recipe.Roles.Count != 1)
-                errors.Add($"Environment {recipe.Name}: a dedicated server recipe cannot also be a client process.");
+            if (recipe.Roles is not (["server"] or ["client"]))
+                errors.Add($"Environment {recipe.Name} needs roles [\"server\"] or [\"client\"]: a dedicated server recipe cannot also be a client process.");
             if (!host.IsAbsolutePath(recipe.Install) || !host.IsAbsolutePath(recipe.Runtime))
                 errors.Add($"Environment {recipe.Name} needs absolute install and runtime paths on {recipe.Host}.");
             if (recipe.CliPort is < 1024 or > 65535 || recipe.LocalCliPort is < 0 or > 65535)
                 errors.Add($"Environment {recipe.Name} needs valid ValheimCLI ports.");
-            bool serves = recipe.Roles.Contains("server") || recipe.Roles.Contains("hosting-client");
+            bool serves = recipe.Roles.Contains("server");
             if (serves ? recipe.GamePort is < 1024 or > 65534 : recipe.GamePort != 0)
                 errors.Add($"Environment {recipe.Name} needs a gamePort only when it serves a world.");
-            foreach (string role in recipe.Roles.Where(role => role is "server" or "client"))
+            foreach (string role in recipe.Roles)
                 recipe.Role().Validate(role == "server" ? "server" : "client " + recipe.Name, host, errors);
             if (recipe.Roles.Contains("server") && host.Platform == "macos")
                 errors.Add($"Environment {recipe.Name}: remote macOS dedicated servers are not supported by this campaign runner.");
@@ -108,7 +105,7 @@ public sealed class EnvironmentInventory
         }
         foreach (var duplicate in Environments.GroupBy(recipe => recipe.Name, StringComparer.Ordinal).Where(group => group.Count() > 1))
             errors.Add("Environment " + duplicate.Key + " is listed twice.");
-        bool hasClients = Environments.Any(recipe => recipe.Roles.Contains("client") || recipe.Roles.Contains("hosting-client"));
+        bool hasClients = Environments.Any(recipe => recipe.Roles.Contains("client"));
         if (hasClients && (string.IsNullOrWhiteSpace(LeaseHost) || !Hosts.TryGetValue(LeaseHost, out var leaseHost) ||
             string.IsNullOrWhiteSpace(LeaseDirectory) || !leaseHost.IsAbsolutePath(LeaseDirectory)))
             errors.Add("Client environments need a listed leaseHost and an absolute leaseDirectory on it.");

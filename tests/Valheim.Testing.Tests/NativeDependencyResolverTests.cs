@@ -1,4 +1,5 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Xunit;
@@ -96,29 +97,24 @@ public sealed class NativeDependencyResolverTests : IDisposable
                 Directory.CreateDirectory(host.Local(@"C:\Steam\userdata"));
             }
         }
-        string profileFile = Path.Combine(_rig.Root, "campaign-profile.json");
-        File.WriteAllText(Path.Combine(_rig.Root, "accounts.json"), JsonSerializer.Serialize(new
+        // Each actor's environment on its own host; the clients' Steam identities are the ones signed in there.
+        object Environment(string name, string host, string role, int port, string install = @"C:\game\source") => new
         {
-            pool = "campaign", leaseDirectory = @"C:\leases", steamGuard = "signed-in",
-            accounts = new[] { new { name = "test_a", host = "client-a", steamId = "76561197960265829" }, new { name = "test_b", host = "client-b", steamId = "76561197960265930" },
-                new { name = "test_c", host = "client-c", steamId = "76561197960266031" } },
-        }));
-        File.WriteAllText(profileFile, JsonSerializer.Serialize(new
+            name, host, roles = new[] { role }, install, runtime = @"C:\runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
+        };
+        object Inventory(params object[] environments) => new
         {
             hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "powershell",
                 @lock = @"C:\locks\campaign.lock", destination = "test@" + name }),
-            server = new { host = "server", install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5577, gamePort = 2456, localCliPort = 6577 },
-            clients = new Dictionary<string, object> {
-                ["client-a"] = new { host = "client-a", install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5578, localCliPort = 6578, steamAccount = "test_a" },
-                ["client-b"] = new { host = "client-b", install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5579, localCliPort = 6579, steamAccount = "test_b" },
-                ["client-c"] = new { host = "client-c", install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5580, localCliPort = 6580, steamAccount = "test_c" },
-            },
-            steamAccounts = new { pool = "accounts.json", leaseHost = "server", checkSignedIn = true },
-        }));
+            environments, leaseHost = "server", leaseDirectory = @"C:\leases",
+        };
+        string inventoryFile = Path.Combine(_rig.Root, "campaign-inventory.json");
+        File.WriteAllText(inventoryFile, JsonSerializer.Serialize(Inventory(Environment("server", "server", "server", 5577),
+            Environment("client-a", "client-a", "client", 5578), Environment("client-b", "client-b", "client", 5579), Environment("client-c", "client-c", "client", 5580))));
         string manifestFile = Path.Combine(_rig.Root, "campaign.json");
         File.WriteAllText(manifestFile, JsonSerializer.Serialize(new
         {
-            profile = profileFile,
+            inventory = inventoryFile,
             world, join = "test-server.example:2456",
             server = new { dependencyLock = serverLock },
             clients = new Dictionary<string, object> {
@@ -135,52 +131,26 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains("different registered character player IDs", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.Check(duplicateFile)).Message);
         Assert.All(hosts.Values, host => Assert.Empty(host.Claims));
         HostedCampaignPreparation.Check(manifestFile);
-        File.WriteAllText(Path.Combine(_rig.Root, "one-account.json"), JsonSerializer.Serialize(new
-        {
-            pool = "campaign", leaseDirectory = @"C:\leases", steamGuard = "signed-in",
-            accounts = new[] { new { name = "test_a", steamId = "76561197960265829" } },
-        }));
-        var limitedProfile = JsonNode.Parse(File.ReadAllText(profileFile))!;
-        limitedProfile["steamAccounts"]!["pool"] = "one-account.json";
-        limitedProfile["clients"]!["client-a"]!.AsObject().Remove("steamAccount");
-        limitedProfile["clients"]!["client-b"]!.AsObject().Remove("steamAccount");
-        limitedProfile["clients"]!["client-c"]!.AsObject().Remove("steamAccount");
-        string limitedProfileFile = Path.Combine(_rig.Root, "limited-profile.json");
-        File.WriteAllText(limitedProfileFile, limitedProfile.ToJsonString());
-        var limitedManifest = JsonNode.Parse(File.ReadAllText(manifestFile))!;
-        limitedManifest["profile"] = limitedProfileFile;
-        string limitedManifestFile = Path.Combine(_rig.Root, "limited-campaign.json");
-        File.WriteAllText(limitedManifestFile, limitedManifest.ToJsonString());
-        Assert.Contains("different account", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.Check(limitedManifestFile)).Message);
-        Assert.All(hosts.Values, host => Assert.Empty(host.Claims));
         hosts["client-a"].SteamUserReply = "VT-STEAMUSER unreadable\n";
-        hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 999\n";
+        hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 303\n"; // client-c's identity: one account, two simultaneous clients.
         var hostReport = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
         Assert.Contains(hostReport.Problems, problem => problem.Actor == "client-a" && problem.Input == "Steam identity");
-        Assert.Contains(hostReport.Problems, problem => problem.Actor == "client-b" && problem.Input == "Steam identity");
+        Assert.Contains(hostReport.Problems, problem => problem.Actor == "clients" && problem.Input == "Steam identities" && problem.Message.Contains("client-b, client-c"));
         Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "ship" or "copy" or "start"));
         var identities = await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(manifestFile,
             Path.Combine(_rig.Root, "bad-identities"), TimeSpan.FromSeconds(30), name => hosts[name]));
         Assert.Contains("client-a Steam identity", identities.Message);
-        Assert.Contains("client-b Steam identity", identities.Message);
+        Assert.Contains("client-b, client-c use the same signed-in Steam account", identities.Message);
         Assert.All(hosts.Values, host => Assert.DoesNotContain("ship", host.Scripts));
         hosts["client-a"].SteamUserReply = "VT-STEAMUSER account 101\n";
         hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 202\n";
-        int active = 0, peak = 0;
-        foreach (var host in hosts.Values)
-            host.BeforeShip = async () =>
-            {
-                int now = Interlocked.Increment(ref active);
-                int old;
-                while ((old = Volatile.Read(ref peak)) < now && Interlocked.CompareExchange(ref peak, now, old) != old) { }
-                try { await Task.Delay(30); }
-                finally { Interlocked.Decrement(ref active); }
-            };
+        var overlap = new Overlap();
+        foreach (var host in hosts.Values) host.BeforeShip = overlap.EnterAsync;
         string output = Path.Combine(_rig.Root, "prepared");
         string[] prepared;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name]))
         {
-            var profile = EnvironmentProfile.Read(campaign.ProfileFile);
+            var profile = campaign.Environment;
             prepared = [profile.Server!.Install, profile.Clients["client-a"].Install,
                 profile.Clients["client-b"].Install, profile.Clients["client-c"].Install];
             Assert.Equal(4, campaign.Listings.Count);
@@ -192,7 +162,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.DoesNotContain("example.server", campaign.PluginPins("client-a").Keys);
             var clients = new Dictionary<string, ClientRunPlan>
             {
-                ["client-a"] = new(), ["client-b"] = new(), ["client-c"] = new(),
+                ["client-a"] = new() { Pins = new() { ["example.server"] = "absent" } }, ["client-b"] = new(), ["client-c"] = new(),
             };
             var plan = new ServerRunPlan();
             campaign.ApplyTo(plan, HostedCampaignManifest.Read(manifestFile), clients, output);
@@ -203,6 +173,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
             WorldFixture.Verify(plan.World.Source, plan.World.Sha256);
             Assert.Equal(profile.Server.Install, plan.Runtime.Source);
             Assert.Equal("vt-one", clients["client-a"].Character);
+            Assert.Equal("absent", clients["client-a"].Pins["example.server"]); // Binding keeps what a client pins absent.
+            Assert.Contains("example.client", clients["client-a"].Pins.Keys);
             Assert.Equal("test-server.example:2456", clients["client-b"].Join);
             Assert.Equal("vt-three", clients["client-c"].Character);
             Assert.All(clients.Values, role => Assert.True(File.Exists(role.CliManifest)));
@@ -211,7 +183,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.True(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
             Assert.All(new[] { "server", "client-a", "client-b", "client-c" }, name => Assert.NotEmpty(hosts[name].Claims));
         }
-        Assert.True(peak >= 2, "Independent actors should stage concurrently, not wait for each prior actor's copy.");
+        Assert.True(overlap.Seen, "Independent actors should stage concurrently, not wait for each prior actor's copy.");
         foreach (string name in hosts.Keys)
         {
             Assert.True(File.Exists(Path.Combine(hosts[name].Local(@"C:\game\source"), "BepInEx", "core", "BepInEx.dll")));
@@ -224,7 +196,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(File.Exists(hosts["client-a"].Local(@"C:\save\characters_local\vt-one.fch")));
         Assert.False(File.Exists(hosts["client-b"].Local(@"C:\save\characters_local\vt-two.fch")));
         Assert.False(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
-        Assert.False(File.Exists(Path.Combine(output, "profile.json")));
+        Assert.False(File.Exists(Path.Combine(output, "profile.json"))); // The prepared environment, with the observed Steam IDs, stays in memory.
 
         // A dedicated server and one client may share a machine. Their installs are separate, but setup should
         // still overlap under one host claim rather than serialising two full game copies.
@@ -236,38 +208,22 @@ public sealed class NativeDependencyResolverTests : IDisposable
         File.WriteAllText(Path.Combine(sharedClientSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         Directory.CreateDirectory(sharedHost.Local(@"C:\save\characters_local"));
         Directory.CreateDirectory(sharedHost.Local(@"C:\Steam\userdata"));
-        string sharedAccounts = Path.Combine(_rig.Root, "shared-host-accounts.json");
-        File.WriteAllText(sharedAccounts, JsonSerializer.Serialize(new
-        {
-            pool = "campaign", leaseDirectory = @"C:\leases", steamGuard = "signed-in",
-            accounts = new[] { new { name = "test_a", host = "server", steamId = "76561197960265829" }, new { name = "test_b", host = "client-b", steamId = "76561197960265930" },
-                new { name = "test_c", host = "client-c", steamId = "76561197960266031" } },
-        }));
-        var sameHostProfile = JsonNode.Parse(File.ReadAllText(profileFile))!;
-        sameHostProfile["steamAccounts"]!["pool"] = sharedAccounts;
-        sameHostProfile["clients"]!["client-a"]!["host"] = "server";
-        sameHostProfile["clients"]!["client-a"]!["install"] = @"C:\game\client-source";
-        string sameHostProfileFile = Path.Combine(_rig.Root, "shared-host-profile.json");
-        File.WriteAllText(sameHostProfileFile, sameHostProfile.ToJsonString());
+        string sameHostInventoryFile = Path.Combine(_rig.Root, "shared-host-inventory.json");
+        File.WriteAllText(sameHostInventoryFile, JsonSerializer.Serialize(Inventory(Environment("server", "server", "server", 5577),
+            Environment("client-a", "server", "client", 5578, @"C:\game\client-source"), Environment("client-b", "client-b", "client", 5579),
+            Environment("client-c", "client-c", "client", 5580))));
         var sameHostManifest = JsonNode.Parse(File.ReadAllText(manifestFile))!;
-        sameHostManifest["profile"] = sameHostProfileFile;
+        sameHostManifest["inventory"] = sameHostInventoryFile;
         string sameHostManifestFile = Path.Combine(_rig.Root, "shared-host-campaign.json");
         File.WriteAllText(sameHostManifestFile, sameHostManifest.ToJsonString());
-        int sharedActive = 0, sharedPeak = 0;
-        sharedHost.BeforeShip = async () =>
-        {
-            int now = Interlocked.Increment(ref sharedActive);
-            int old;
-            while ((old = Volatile.Read(ref sharedPeak)) < now && Interlocked.CompareExchange(ref sharedPeak, now, old) != old) { }
-            try { await Task.Delay(30); }
-            finally { Interlocked.Decrement(ref sharedActive); }
-        };
+        var sharedOverlap = new Overlap();
+        sharedHost.BeforeShip = sharedOverlap.EnterAsync;
         int claimsBefore = sharedHost.Claims.Count;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
             Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]))
         {
             Assert.Equal(claimsBefore + 1, sharedHost.Claims.Count);
-            Assert.True(sharedPeak >= 2, "Server and client setup on one host should overlap under its single claim.");
+            Assert.True(sharedOverlap.Seen, "Server and client setup on one host should overlap under its single claim.");
             Assert.Contains("BepInEx/plugins/Server.dll", campaign.Listings["server"].Files.Keys);
             Assert.DoesNotContain("BepInEx/plugins/Server.dll", campaign.Listings["client-a"].Files.Keys);
             Assert.True(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
@@ -294,6 +250,122 @@ public sealed class NativeDependencyResolverTests : IDisposable
             string path = Path.Combine(_rig.Root, name + "-lock.json");
             resolved.Write(path);
             return path;
+        }
+    }
+
+    // RunCampaignAsync: one report from the campaign's preflight through the run to retiring the prepared install, with the
+    // prepared environment in memory (no profile.json, plan.json or campaign-times.json); a plan that disagrees with the
+    // campaign is refused in Preflight before any host is contacted.
+    [Fact] public async Task CampaignRunPreparesRunsAndRetiresInOneReportAndRefusesADisagreeingPlanFirst()
+    {
+        string serverDll = _rig.Write("run-campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
+        var resolved = NativeDependencyResolver.Resolve(Request(serverDll));
+        Assert.True(resolved.Ready, string.Join("; ", resolved.Gaps.Select(gap => gap.Reason)));
+        string serverLock = Path.Combine(_rig.Root, "run-campaign-lock.json");
+        resolved.Write(serverLock);
+        string world = Path.Combine(_rig.Root, "run-campaign-world");
+        Directory.CreateDirectory(world);
+        using (var payload = new MemoryStream())
+        {
+            using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
+            { writer.Write(41); writer.Write("Campaign"); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(4242L); }
+            File.WriteAllBytes(Path.Combine(world, "Campaign.fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
+        }
+        File.WriteAllText(Path.Combine(world, "Campaign.db"), "fixture");
+        var server = new FakeOwnedServer("test.mod", saveRoot: @"C:\runs\run-test\world");
+        var host = new FakeServerHost("pc", Path.Combine(_rig.Root, "run-campaign-pc"), server, windows: true);
+        string source = host.Local(@"C:\game\source");
+        FakeInstalls.Server(source);
+        File.WriteAllText(Path.Combine(source, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
+        File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        string inventory = Path.Combine(_rig.Root, "run-campaign-inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\campaign.lock", destination = "test@pc" } },
+            environments = new[] { new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 } },
+        }));
+        string manifest = Path.Combine(_rig.Root, "run-campaign.json");
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new
+        {
+            inventory, world, join = "test-server.example:2456",
+            server = new { dependencyLock = serverLock }, clients = new Dictionary<string, object>(),
+        }));
+        SitePlan Plan(string pin, string password, string value = "<md5 of the server's plugin>") => new()
+        {
+            Scenario = "smoke", Port = 5577,
+            Arguments = ["-batchmode", "-nographics", "-savedir", "{world}", "-port", "2456", "-password", password, "-logFile", "{runtime}/toolkit-unity.log"],
+            Pins = new() { [pin] = value },
+        };
+        bool scenarioRan = false;
+        var options = new PinnedServerRunOptions<SitePlan>
+        {
+            Name = "campaign-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
+            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
+            Scenario = run => { scenarioRan = true; Assert.NotNull(run.ServerHost); return Task.CompletedTask; },
+            HostSeams = new HostedSeams { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
+        };
+        IReadOnlyDictionary<string, ClientRunPlan> NoClients(SitePlan _) => new Dictionary<string, ClientRunPlan>();
+
+        // A legacy fixed-profile manifest is named as such; a manifest without world or join is refused before any host.
+        string legacy = Path.Combine(_rig.Root, "run-campaign-legacy.json");
+        File.WriteAllText(legacy, "{\"profile\": \"environment.json\", \"server\": {\"dependencyLock\": \"lock.json\"}, \"clients\": {}}");
+        Assert.Contains(HostedCampaignPreparation.Inspect(legacy).Problems, problem => problem.Message.Contains("replace profile with inventory"));
+        string noJoin = Path.Combine(_rig.Root, "run-campaign-nojoin.json");
+        File.WriteAllText(noJoin, JsonSerializer.Serialize(new { inventory, world, server = new { dependencyLock = serverLock }, clients = new Dictionary<string, object>() }));
+        HostedCampaignPreparation.Check(noJoin);
+        Assert.Contains("Set world (the fixture) and join", Assert.Throws<ArgumentException>(() =>
+            HostedCampaignPreparation.CheckPlan(noJoin, Plan("example.server", "secret"), new Dictionary<string, ClientRunPlan>())).Message);
+        // A plugin pinned absent (a client's way to say "not loaded") that the lock selects contradicts the campaign too.
+        Assert.Contains("pins plugin example.server absent", Assert.Throws<ArgumentException>(() =>
+            HostedCampaignPreparation.CheckPlan(manifest, Plan("example.server", "secret", "absent"), new Dictionary<string, ClientRunPlan>())).Message);
+
+        // A plugin the lock does not select and a placeholder argument: both named, in Preflight, before any host script.
+        string refusedOutput = Path.Combine(_rig.Root, "run-campaign-refused");
+        Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.missing", "<fixture password>"), NoClients, refusedOutput, options));
+        var refused = JsonDocument.Parse(File.ReadAllText(Path.Combine(refusedOutput, "result.json"))).RootElement;
+        var agreement = refused.GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "the plan agrees with the campaign");
+        Assert.Equal("Preflight", agreement.GetProperty("Phase").GetString());
+        Assert.Contains("example.missing", agreement.GetProperty("Error").GetString());
+        Assert.Contains("<fixture password>", agreement.GetProperty("Error").GetString());
+        Assert.False(refused.GetProperty("PreflightPassed").GetBoolean());
+        Assert.Empty(host.Scripts); Assert.Empty(host.Claims); Assert.False(scenarioRan);
+
+        string output = Path.Combine(_rig.Root, "run-campaign-out");
+        Assert.Equal(0, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, output, options));
+        Assert.True(scenarioRan);
+        var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
+        Assert.True(result.GetProperty("CleanupVerified").GetBoolean());
+        var steps = result.GetProperty("Steps").EnumerateArray().ToDictionary(step => step.GetProperty("Name").GetString()!, step => step.GetProperty("Phase").GetString());
+        Assert.Equal("Setup", steps["check the hosts and prepare every actor's disposable install"]);
+        Assert.Equal("Cleanup", steps["retire the campaign's prepared installs and characters"]);
+        Assert.True(File.Exists(Path.Combine(output, "prepared", "environment-assignments.json")));
+        Assert.False(File.Exists(Path.Combine(output, "prepared", "profile.json")));
+        Assert.False(File.Exists(Path.Combine(output, "campaign-times.json")));
+        // The bound plan is evidence (NaN sites included), hashed as the run's plan; the campaign and inventory are hashed too.
+        string bound = Path.Combine(output, "prepared", "plan.json");
+        Assert.Equal(WorldFixture.Hash(bound), result.GetProperty("Provenance").GetProperty("planSha256").GetString());
+        Assert.Contains("NaN", File.ReadAllText(bound));
+        Assert.Equal(WorldFixture.Hash(manifest), result.GetProperty("Provenance").GetProperty("campaignSha256").GetString());
+        Assert.Equal(WorldFixture.Hash(inventory), result.GetProperty("Provenance").GetProperty("inventorySha256").GetString());
+        Assert.Equal(host.Claims.Count, host.Releases.Count);
+        Assert.Empty(Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*")); // The prepared install was retired.
+    }
+
+    private sealed class SitePlan : ServerRunPlan { public float Ground { get; set; } = float.NaN; }
+
+    // A barrier, not a delay: each ship waits until a second one is inside at the same time. Overlapping setups always meet
+    // (the first waits for the second); serialised setups never do, so each ship gives up after the bound and Seen stays false.
+    private sealed class Overlap
+    {
+        private readonly TaskCompletionSource _met = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _inside;
+        public bool Seen => _met.Task.IsCompleted;
+        public async Task EnterAsync()
+        {
+            if (Interlocked.Increment(ref _inside) >= 2) _met.TrySetResult();
+            try { await Task.WhenAny(_met.Task, Task.Delay(TimeSpan.FromSeconds(5))); }
+            finally { Interlocked.Decrement(ref _inside); }
         }
     }
 

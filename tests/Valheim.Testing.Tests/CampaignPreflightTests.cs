@@ -15,32 +15,32 @@ public sealed class CampaignPreflightTests : IDisposable
         return file;
     }
 
-    private string Profile(bool client)
+    // One Windows host carrying a server environment and a client environment: both actors may share it.
+    private string Inventory(bool leases = true) => Write("inventory.json", new
     {
-        return Write("profile.json", new
+        hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\test.lock", destination = "test@pc" } },
+        environments = new object[]
         {
-            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\test.lock", destination = "test@pc" } },
-            server = new { host = "pc", install = @"C:\game", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
-            clients = client ? new Dictionary<string, object>
-            {
-                ["client-a"] = new { host = "pc", install = @"C:\game", runtime = @"C:\runs", cliPort = 5578, localCliPort = 6578, steamAccount = "test_a" },
-            } : new Dictionary<string, object>(),
-        });
-    }
+            new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\game", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
+            new { name = "pc-client", host = "pc", roles = new[] { "client" }, install = @"C:\client", runtime = @"C:\runs", cliPort = 5578, localCliPort = 6578 },
+        },
+        leaseHost = leases ? "pc" : "",
+        leaseDirectory = @"C:\leases",
+    });
 
     [Fact]
     public async Task IndependentFaultsAcrossRolesAreAllReportedBeforeContactingAnyHost()
     {
-        string profile = Profile(client: true); // No account pool: profile is invalid independently of the files below.
+        string inventory = Inventory(leases: false); // No lease host: the inventory is invalid independently of the files below.
         string file = Write("campaign.json", new
         {
-            profile, world = Path.Combine(_root, "missing-world"),
+            inventory, world = Path.Combine(_root, "missing-world"),
             server = new { dependencyLock = "missing-server-lock.json", loaderPackage = "missing-loader.json" },
             clients = new Dictionary<string, object> { ["client-a"] = new { dependencyLock = "missing-client-lock.json" } },
         });
         var report = HostedCampaignPreparation.Inspect(file);
         Assert.False(report.Ready);
-        Assert.Contains(report.Problems, problem => problem.Actor == "campaign" && problem.Input == "profile");
+        Assert.Contains(report.Problems, problem => problem.Actor == "campaign" && problem.Input == "inventory");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "loader");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
         Assert.Contains(report.Problems, problem => problem.Actor == "client-a" && problem.Input == "dependencies and CLI packs");
@@ -49,7 +49,7 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.True(report.Problems.Count >= 6);
         using var output = new StringWriter();
         Assert.Equal(3, await EnvCommand.RunAsync(["preflight", file], output, new StringWriter()));
-        Assert.Empty(report.Actors); // Invalid profiles have no selected actor, even when other inputs can be checked.
+        Assert.Empty(report.Actors); // An invalid inventory selects no actor, even when other inputs can be checked.
         Assert.Contains("REFUSED server loader", output.ToString());
         Assert.Contains("REFUSED client-a character", output.ToString());
         var error = Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.Check(file));
@@ -60,7 +60,7 @@ public sealed class CampaignPreflightTests : IDisposable
     [Fact]
     public async Task ReviewedFixtureUidIsCheckedIndependentlyOfMissingPackages()
     {
-        string profile = Profile(client: false);
+        string inventory = Inventory();
         string world = Path.Combine(_root, "world");
         Directory.CreateDirectory(world);
         using (var payload = new MemoryStream())
@@ -72,7 +72,7 @@ public sealed class CampaignPreflightTests : IDisposable
         File.WriteAllText(Path.Combine(world, "Small.db"), "fixture");
         string file = Write("campaign.json", new
         {
-            profile, world, worldUid = "9999", server = new { dependencyLock = "missing-lock.json" },
+            inventory, world, worldUid = "9999", server = new { dependencyLock = "missing-lock.json" },
             clients = new Dictionary<string, object>(),
         });
         var report = HostedCampaignPreparation.Inspect(file);
@@ -98,10 +98,10 @@ public sealed class CampaignPreflightTests : IDisposable
     [Fact]
     public async Task ReadOnlyHostCheckKeepsIndependentLocalSessionAndInstallFailures()
     {
-        string profile = Profile(client: false);
+        string inventory = Inventory();
         string file = Write("campaign.json", new
         {
-            profile, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
+            inventory, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
         });
         var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true) { GameActive = true, PortBusy = true };
         var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
@@ -115,21 +115,20 @@ public sealed class CampaignPreflightTests : IDisposable
     }
 
     [Fact]
-    public async Task MissingAccountPoolIsReportedWithoutHidingOtherHostFaults()
+    public async Task UnverifiableSteamIdentityIsReportedWithoutHidingOtherHostFaults()
     {
-        string profile = Profile(client: true);
-        var json = JsonNode.Parse(File.ReadAllText(profile))!;
-        json["clients"]!["client-a"]!.AsObject().Remove("steamAccount");
-        File.WriteAllText(profile, json.ToJsonString());
+        string inventory = Inventory();
         string file = Write("campaign.json", new
         {
-            profile, server = new { dependencyLock = "missing-server-lock.json" },
+            inventory, server = new { dependencyLock = "missing-server-lock.json" },
             clients = new Dictionary<string, object> { ["client-a"] = new { dependencyLock = "missing-client-lock.json" } },
         });
-        var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true);
+        var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true) { SteamUserReply = "VT-STEAMUSER unreadable\n" };
         var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
-        Assert.Contains(report.Problems, problem => problem.Actor == "clients" && problem.Input == "Steam identities");
+        Assert.Contains(report.Problems, problem => problem.Actor == "client-a" && problem.Input == "Steam identity");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "game and loader");
         Assert.Contains(report.Problems, problem => problem.Actor == "client-a" && problem.Input == "game and loader");
+        // The server and the client share the host: that is no conflict.
+        Assert.Equal(["pc", "pc"], report.Actors.Select(actor => actor.Host));
     }
 }
