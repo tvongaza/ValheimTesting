@@ -75,6 +75,19 @@ public sealed class NativeSmokeConsumerTests : IDisposable
             Assert.Contains("NativeSmoke.Adapter." + file, names);
     }
 
+    // The editable consumer pins the newest released Game package from toolkit-versions.json, the one record of releases.
+    // The tool carries the file under the name SmokeProject reads, so an installed tool reads the version it was built with.
+    [Fact]
+    public void EditableConsumerPinsTheReleasedGameFromToolkitVersions()
+    {
+        string file = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "toolkit-versions.json"));
+        using var versions = System.Text.Json.JsonDocument.Parse(file);
+        Assert.Equal(versions.RootElement.GetProperty("released").GetProperty("Valheim.Testing.Game").GetString(), SmokeProject.GameVersion);
+        using Stream? carried = System.Reflection.Assembly.Load("NativeSmoke").GetManifestResourceStream("toolkit-versions.json");
+        Assert.NotNull(carried);
+        Assert.Equal(file, new StreamReader(carried).ReadToEnd());
+    }
+
     private static string Manifest() =>
         "{\"schema\":1,\"build\":\"fixture\",\"files\":[{\"file\":\"valheimCLI.dll\",\"sha256\":\"" +
         new string('a', 64) + "\",\"plugins\":[\"valheimCLI.valheimCLI\"],\"extensions\":{}}]}";
