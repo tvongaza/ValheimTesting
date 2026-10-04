@@ -170,6 +170,21 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet run scripts/release-consumer.cs -- pins
+      # Candidates may sit on main between releases; release.yml refuses them. This only proves the refusal works.
+      - name: A candidate version is refused at release (negative control)
+        run: |
+          refused() { # $1 file, $2 sed expression
+            git checkout -- cli-dependency.json src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
+            sed -i -E "$2" "$1"
+            if out=$(dotnet run scripts/release-consumer.cs -- versions 2>&1); then
+              echo "$out"; echo "::error::release-consumer versions accepted a candidate in $1."; return 1
+            fi
+            echo "$out"
+            case "$out" in *"$1:"*"-candidate.0000000"*) ;; *) echo "::error::The refusal does not name $1."; return 1 ;; esac
+          }
+          refused cli-dependency.json 's/("packageVersion": "[^"]+)"/\1-candidate.0000000"/'
+          refused src/Valheim.Testing.Game/Valheim.Testing.Game.csproj 's/(Include="Valheim\.Testing\.Cli" Version="\[[^]]+)\]/\1-candidate.0000000]/'
+          git checkout -- cli-dependency.json src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
   game-hosts:
     name: game hosts (ssh to localhost, container)
     # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only
