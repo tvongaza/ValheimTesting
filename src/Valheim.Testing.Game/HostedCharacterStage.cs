@@ -48,8 +48,8 @@ internal static class HostedCharacterStage
             File.Copy(selected.File, target);
             if (!WorldFixture.Hash(target).Equals(selected.Handle.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The local copy of the registered character changed.");
-            await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
             shipped = true;
+            await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
             var listing = await HostInstall.ListAsync(host, staging, timeout, cancellation: cancellation).ConfigureAwait(false);
             if (!listing.Files.TryGetValue(selected.Input.FileName + ".fch", out string? hash) ||
                 !hash.Equals(selected.Handle.Sha256, StringComparison.OrdinalIgnoreCase))
@@ -70,20 +70,30 @@ internal static class HostedCharacterStage
             }
             switch (InteractiveClient.Line(reply.Stdout, "VT-CHAR "))
             {
-                case "staged": return;
+                case "staged":
+                    await DropStageAsync(host, staging, timeout).ConfigureAwait(false);
+                    shipped = false;
+                    return;
                 case "collision": throw new IOException($"A local or Steam Cloud character named {selected.Input.FileName} already exists on {host.Name}; choose a fresh disposable filename.");
                 case "missing-directory": throw new DirectoryNotFoundException($"The client character or Steam userdata folder is missing on {host.Name}.");
                 default: throw new HostOperationException($"Character staging on {host.Name} was not proven; inspect the disposable name " +
                     $"{selected.Input.FileName} in characters_local before retrying.", reply);
             }
         }
-        finally
+        catch (Exception original)
         {
             if (shipped)
             {
                 try { await DropStageAsync(host, staging, timeout).ConfigureAwait(false); }
-                catch { /* The failed stage remains visible; the host lock is still owned by the caller. */ }
+                catch (Exception cleanup)
+                {
+                    throw new AggregateException("Character staging failed and its remote staging directory was not proven removed.", original, cleanup);
+                }
             }
+            throw;
+        }
+        finally
+        {
             Directory.Delete(payload, recursive: true);
         }
     }
@@ -103,6 +113,8 @@ internal static class HostedCharacterStage
         var reply = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsDropStage : BashDropStage,
             new Dictionary<string, string> { ["stage"] = staging }, timeout).ConfigureAwait(false);
         reply.EnsureSuccess($"Removing character staging on {host.Name}");
+        if (InteractiveClient.Line(reply.Stdout, "VT-CHAR-STAGE-DROPPED") == null)
+            throw new HostOperationException($"Character staging cleanup on {host.Name} was not proven", reply);
     }
 
     private static Dictionary<string, string> Variables(HostedCampaignCharacter input, string staging) => new()
