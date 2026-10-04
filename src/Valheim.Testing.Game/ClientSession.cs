@@ -92,7 +92,6 @@ public sealed class ClientSession : IDisposable
     /// </summary>
     public static ClientSession Attach(ClientRunPlan plan, string output, SteamAccountHold? account, IGameTransport? transport = null)
     {
-        plan.CheckTestTeleportOptions();
         if (plan.Owned) throw new ArgumentException("This plan's client is owned: launch it instead.");
         account?.RequireReady(null); // Before the session assumes the client.
         transport ??= new CliTransport(plan.Host, plan.Port);
@@ -142,7 +141,6 @@ public sealed class ClientSession : IDisposable
         Action<IServerProcess>? processStarted)
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
-        plan.CheckTestTeleportOptions();
         account?.RequireReady(null);
         var start = plan.CheckOwnedInstall(); // Patchers, install pins, loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
@@ -150,9 +148,6 @@ public sealed class ClientSession : IDisposable
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }
         finally { reservation.Stop(); }
         if (!SteamRunning()) throw new InvalidOperationException("No Steam client is running in this session. An owned client needs Steam running and signed in, in the desktop session this runner runs in.");
-        // The Standard pack still starts with the mode off. This marker only permits an owned test to opt in
-        // after the character joins; an operator's attached client never receives it.
-        if (plan.FastTestTeleports) start.Environment["VALHEIMCLI_TEST_FAST_TELEPORT"] = "1";
         string log = Path.Combine(plan.Install, "BepInEx", "LogOutput.log");
         var platform = ClientLaunch.Detect(plan.Install);
         string playerLog = PlayerLog(platform);
@@ -213,7 +208,6 @@ public sealed class ClientSession : IDisposable
     internal static ClientSession Launch(ClientRunPlan plan, string output, Func<IServerProcess> start, Func<IGameTransport> connect,
         Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, SteamAccountHold? account = null)
     {
-        plan.CheckTestTeleportOptions();
         if (plan.PasswordVariable is { } variable && Environment.GetEnvironmentVariable(variable) == null)
             throw new InvalidOperationException($"Set {variable} in this runner's environment; the launched client inherits it for the join.");
         account?.RequireReady(null);

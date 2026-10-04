@@ -20,13 +20,21 @@ public sealed class RemovedStartOptionsTests : IDisposable
         var error = Assert.ThrowsAny<Exception>(() => ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path));
         string message = error.Message + " " + error.InnerException?.Message;
         Assert.Contains($"The client plan's {field} was removed (ValheimTesting #298)", message);
-        Assert.Contains("launches to its menu and joins", message);
+        Assert.Contains($"launches to its menu and joins (or hosts), and the first arrival teleports. Delete {field} from the plan.", message);
+    }
+
+    [Fact] public void APlanThatStillNamesFastTestTeleportsIsRefused()
+    {
+        string path = Path.Combine(_directory, "plan.json");
+        File.WriteAllText(path, """{ "client": { "mode": "owned", "fastTestTeleports": true } }""");
+        var error = Assert.ThrowsAny<Exception>(() => ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path));
+        Assert.Contains("fastTestTeleports was removed (ValheimTesting #299)", error.Message + " " + error.InnerException?.Message);
     }
 
     [Fact] public void AWrittenPlanCarriesNoRemovedField()
     {
         string json = System.Text.Json.JsonSerializer.Serialize(new ClientRunPlan { Mode = "owned" });
-        foreach (string field in new[] { "directStart", "startAtCharacterSave", "characterStart" })
+        foreach (string field in new[] { "directStart", "startAtCharacterSave", "characterStart", "fastTestTeleports" })
             Assert.DoesNotContain(field, json, StringComparison.OrdinalIgnoreCase);
     }
 }

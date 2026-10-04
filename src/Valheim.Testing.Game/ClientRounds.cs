@@ -73,7 +73,6 @@ public sealed class ClientRounds
         Report.Provenance["clientRounds"] = string.Join(",", Rounds);
         Report.Provenance["clientJoin"] = Client.Crossplay ? "crossplay" : "address";
         Report.Provenance["arrivalWait"] = Client.EventDrivenArrival ? "game-side signal" : "remote observations";
-        Report.Provenance["testFastTeleport"] = Client.FastTestTeleports.ToString();
         // What an owned client is launched as (never another slice); an attached client's is its operator's.
         Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
         Report.Provenance["cliPreflight"] = Client.CliPreflight;
@@ -147,7 +146,7 @@ public sealed class ClientRounds
                 if (Client.EventDrivenArrival)
                 {
                     var result = PlayerPlacement.ArriveOnSignals(round.Server, round.Client, point,
-                        TimeSpan.FromSeconds(Client.ArrivalSeconds), Client.FastTestTeleports, Cancellation);
+                        TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation);
                     round.Write("arrival", result.Support);
                     round.Write("teleport-trace", result.Timing);
                 }
@@ -164,7 +163,6 @@ public sealed class ClientRounds
     private void Check()
     {
         CheckRoundNames(Rounds);
-        Client.CheckTestTeleportOptions();
         if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
         if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with HostRounds.");
         if (Client.Crossplay && Lobby == null) throw new ArgumentException("Lobby: a crossplay client joins the server's PlayFab lobby; supply Lobby, for example with CrossplayServer.WaitForLobby.");

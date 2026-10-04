@@ -154,8 +154,6 @@ public sealed partial class LifecyclePlan
         if (!first.Owned || !second.Owned) throw new ArgumentException("The handoff uses two owned, disposable clients; attached personal clients are refused.");
         if (!first.EventDrivenArrival || !second.EventDrivenArrival)
             throw new ArgumentException("Both handoff clients require eventDrivenArrival: each teleport waits inside the game, not by polling a remote client.");
-        if (first.FastTestTeleports || second.FastTestTeleports)
-            throw new ArgumentException("The handoff keeps normal teleport timing: fastTestTeleports is not validated for cold joined-client destinations (see #216).");
         if (first.HostWorld != null || second.HostWorld != null || first.Crossplay || second.Crossplay)
             throw new ArgumentException("Both handoff clients join the dedicated server by address.");
         if (!string.Equals(first.Join, second.Join, StringComparison.OrdinalIgnoreCase))
