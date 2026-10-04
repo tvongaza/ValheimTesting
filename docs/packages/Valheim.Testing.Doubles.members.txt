@@ -1016,7 +1016,6 @@ SyncedList	method	Add(string) : void	game
 SyncedList	method	Contains(string) : bool	game
 SyncedList	method	Count() : int	game
 SyncedList	method	GetList() : List<string>	game
-SyncedList	method	Load(string) : void	test-only
 SyncedList	method	Remove(string) : void	game
 Terminal	type	class	game
 Terminal	ctor	.ctor()	game
@@ -1815,12 +1814,12 @@ ZLog	method	static LogWarning(object) : void	game
 ZNet	type	class : UnityEngine.MonoBehaviour	game
 ZNet	ctor	.ctor()	game
 ZNet	field	Dedicated : bool	test-only
-ZNet	field	JoinPassword : string	test-only
 ZNet	field	NetworkVersion : uint	test-only
 ZNet	field	OnlineBackend : OnlineBackendType	test-only
 ZNet	field	Peers : Dictionary<long, ZNetPeer>	test-only
 ZNet	field	PlayFabId : string	test-only
 ZNet	field	PlayerName : string	test-only
+ZNet	field	RefusePassword : bool	test-only
 ZNet	field	RemoteCommands : List<string>	test-only
 ZNet	field	SaveCalls : int	test-only
 ZNet	field	Server : bool	test-only
@@ -1833,7 +1832,6 @@ ZNet	field	m_permittedList : SyncedList	game
 ZNet	field	static instance : ZNet	game
 ZNet	field	static m_loadError : bool	game
 ZNet	method	Disconnect(ZNetPeer) : void	game
-ZNet	method	GetNrOfPlayers() : int	game
 ZNet	method	GetPeer(ZRpc) : ZNetPeer	game
 ZNet	method	GetPeer(long) : ZNetPeer	game
 ZNet	method	GetPeerByHostName(string) : ZNetPeer	game
@@ -1854,7 +1852,6 @@ ZNet	method	RPC_ServerHandshake(ZRpc, string) : void	game
 ZNet	method	RemoteCommand(string) : void	game
 ZNet	method	Save(bool, bool, bool) : void	game
 ZNet	method	SendPeerInfo(ZRpc, string) : void	game
-ZNet	method	SetServerPassword(string) : void	test-only
 ZNet	method	Start() : void	game
 ZNet	method	Update() : void	game
 ZNet	method	UpdatePeers(float) : void	game
@@ -2016,8 +2013,6 @@ ZPlayFabSocket	field	m_remotePlayerId : string	game
 ZPlayFabSocket	method	Flush() : bool	game
 ZPlayFabSocket	method	GetEndPointString() : string	game
 ZPlayFabSocket	method	GetHostName() : string	game
-ZPlayFabSocket	method	VersionMatch() : void	game
-ZPlayFabSocket	property	Compressing : bool	test-only
 ZRoutedRpc	type	class	game
 ZRoutedRpc	ctor	.ctor()	test-only
 ZRoutedRpc	field	Dropped : List<ValueTuple<long, ZDOID, string, string>>	test-only
@@ -2066,7 +2061,6 @@ ZRpc	field	Invoked : List<ValueTuple<string, object[]>>	test-only
 ZRpc	method	Deliver(string, params object[]) : ZRpc.ErrorCode	test-only
 ZRpc	method	Dispose() : void	game
 ZRpc	method	GetSocket() : ISocket	game
-ZRpc	method	GetTimeSinceLastPing() : float	game
 ZRpc	method	Invoke(string, params object[]) : void	game
 ZRpc	method	IsConnected() : bool	game
 ZRpc	method	IsRegistered(string) : bool	test-only
@@ -2078,7 +2072,6 @@ ZRpc	method	Register<T>(string, Action<ZRpc, T>) : void	game
 ZRpc	method	Unregister(string) : void	game
 ZRpc	method	Update(float) : ZRpc.ErrorCode	game
 ZRpc	method	static Serialize(object[], ref ZPackage) : void	game
-ZRpc	method	static SetLongTimeout(bool) : void	game
 ZRpc.ErrorCode	type	enum	game
 ZRpc.ErrorCode	field	static Disconnected : ZRpc.ErrorCode	game
 ZRpc.ErrorCode	field	static IncompatibleVersion : ZRpc.ErrorCode	game

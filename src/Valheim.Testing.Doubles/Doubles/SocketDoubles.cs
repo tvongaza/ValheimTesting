@@ -45,7 +45,7 @@ public partial interface ISocket
     private readonly Queue<byte[]> m_inbox = new();
     private SocketDouble? m_remote;
     private bool m_connected = true;
-    /// <summary>Every package sent on this end, as sent (pings included), each at read position 0.</summary>
+    /// <summary>Every package sent on this end, as sent, each at read position 0.</summary>
     public readonly List<ZPackage> Sent = new();
 
     /// <summary>Connects two ends, as a join does.</summary>
@@ -116,11 +116,8 @@ public partial class ZPlayFabSocket : SocketDouble
         m_platformPlayerId = new Splatform.PlatformUserID(platformUserID);
         m_remotePlayerId = remotePlayerID;
     }
-    /// <summary>True once <see cref="VersionMatch"/> ran: the game compresses a PlayFab peer's traffic from then on.</summary>
-    [TestOnly] public bool Compressing { get; private set; }
     public override string GetHostName() => m_platformPlayerId.ToString();
     public override string GetEndPointString() => "playfab/" + m_remotePlayerId;
-    public override void VersionMatch() => Compressing = true;
     /// <summary>Not implemented in the game (1.0.16) either.</summary>
     public override bool Flush() => throw new NotImplementedException();
 }
@@ -239,23 +236,12 @@ public enum OnlineBackendType { Steamworks, PlayFab, EOS, CustomSocket, None }
 
 /// <summary>
 /// One of the game's id lists (<c>adminlist.txt</c>, <c>bannedlist.txt</c>, <c>permittedlist.txt</c>): one entry per line,
-/// compared as exact strings. <see cref="Load"/> reads a file's text as the game does. The file itself is not modelled.
+/// compared as exact strings (the game trims nothing). The file itself is not modelled.
 /// </summary>
 public partial class SyncedList
 {
     private readonly List<string> m_list = new();
     [TestOnly] public SyncedList(params string[] entries) { foreach (var entry in entries) Add(entry); }
-    /// <summary>
-    /// Replaces the entries with a file's lines, as the game reads it: empty lines and lines starting with <c>//</c> are
-    /// skipped and nothing is trimmed, so a line with a stray space never matches.
-    /// </summary>
-    [TestOnly] public void Load(string fileText)
-    {
-        m_list.Clear();
-        using var reader = new System.IO.StringReader(fileText);
-        for (string? line = reader.ReadLine(); line != null; line = reader.ReadLine())
-            if (line.Length > 0 && !line.StartsWith("//")) m_list.Add(line);
-    }
     public List<string> GetList() => m_list;
     public int Count() => m_list.Count;
     public bool Contains(string s) => m_list.Contains(s);

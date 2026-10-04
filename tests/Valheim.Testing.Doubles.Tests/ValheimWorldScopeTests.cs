@@ -27,8 +27,6 @@ public sealed class ValheimWorldScopeTests
         ["UnityEngine.Object.s_unityPendingParent"] = "[ThreadStatic] plumbing that lives only inside one Instantiate call",
         ["UnityEngine.Object.s_unityPendingWorldStays"] = "[ThreadStatic] plumbing that lives only inside one Instantiate call",
         ["UnityEngine.Object.s_unityLastCloneMap"] = "[ThreadStatic] plumbing read right after one Instantiate call",
-        ["ZRpc.m_timeout"] = "goes with the ping and timeout model (#307)",
-        ["ZNet.s_joiningKey"] = "a key counter for joining peers: keys stay unique; goes with the handshake trim (#307)",
     };
 
     // Readonly statics cannot be put back, only cleared; each one that holds objects says why it may outlive a test.

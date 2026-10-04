@@ -20,7 +20,7 @@ public sealed class PlatformIdTests
         Assert.Equal("Xbox_" + XboxId, new ZPlayFabSocket("Xbox_" + XboxId).GetHostName());
         Assert.Equal("Xbox_" + XboxId, new ZPlayFabSocket("X_" + XboxId).GetHostName());     // a display prefix names its platform
         Assert.Equal("", new ZPlayFabSocket(SteamId).GetHostName());                          // no prefix: does not parse
-        Assert.Throws<NotImplementedException>(() => crossplaySteam.Flush());
+        Assert.Throws<NotImplementedException>(() => crossplaySteam.Flush());                 // as the game's
     }
 
     [Fact] public void PlatformIdsParseAndDisplayAsTheGamesDo()
@@ -44,19 +44,19 @@ public sealed class PlatformIdTests
         string steamPeer = new ZSteamSocket(76561198000000002).GetHostName(), crossplayPeer = new ZPlayFabSocket("Steam_" + SteamId).GetHostName();
         string xboxPeer = new ZPlayFabSocket("Xbox_" + XboxId).GetHostName();
 
-        net.m_adminList.Load("// List admin players ID  ONE per line\nSteam_" + SteamId + "\nXbox_" + XboxId + "\n");
+        net.m_adminList = new SyncedList("Steam_" + SteamId, "Xbox_" + XboxId);
         Assert.True(net.IsAdmin(steamPeer)); Assert.True(net.IsAdmin(crossplayPeer)); Assert.True(net.IsAdmin(xboxPeer));
         Assert.False(net.IsAdmin(XboxId));                          // the same digits from a Steam socket are a Steam id
         // Negative control: comparing the host name with the list's lines misses the Steam peer.
         Assert.False(net.m_adminList.Contains(steamPeer));
 
-        net.m_adminList.Load(SteamId);                              // a bare Steam id still works, for both kinds of Steam peer
+        net.m_adminList = new SyncedList(SteamId);                              // a bare Steam id still works, for both kinds of Steam peer
         Assert.True(net.IsAdmin(steamPeer)); Assert.True(net.IsAdmin(crossplayPeer)); Assert.False(net.IsAdmin(xboxPeer));
-        net.m_adminList.Load(XboxId);                               // but not for other platforms
+        net.m_adminList = new SyncedList(XboxId);                               // but not for other platforms
         Assert.False(net.IsAdmin(xboxPeer));
-        net.m_adminList.Load("V_" + SteamId + "\nX_11400714819323198485"); // the ids as the game displays them
+        net.m_adminList = new SyncedList("V_" + SteamId, "X_11400714819323198485"); // the ids as the game displays them
         Assert.True(net.IsAdmin(steamPeer)); Assert.True(net.IsAdmin(crossplayPeer)); Assert.True(net.IsAdmin(new ZPlayFabSocket("Xbox_1").GetHostName()));
-        net.m_adminList.Load(" Steam_" + SteamId + "\n\nSteam_" + SteamId + " ");  // lines are not trimmed
+        net.m_adminList = new SyncedList(" Steam_" + SteamId, "Steam_" + SteamId + " "); // entries are not trimmed
         Assert.False(net.IsAdmin(steamPeer)); Assert.Equal(2, net.m_adminList.Count());
     }
 
@@ -128,8 +128,7 @@ public sealed class PlatformIdTests
         Assert.Equal("Mod_Big", Assert.Single(ZRoutedRpc.instance.Invoked).Method);
     }
 
-    // A crossplay server: the peer is a PlayFab socket, its host name carries the platform, and the connection starts
-    // compressing once the versions match.
+    // A crossplay server: the peer is a PlayFab socket and its host name carries the platform.
     [Fact] public void ACrossplayClientJoinsAndIsCheckedByItsPrefixedId()
     {
         using var scope = new ValheimWorldScope().WithNetwork(server: true).WithZdos();
@@ -143,7 +142,6 @@ public sealed class PlatformIdTests
         var atClient = new ZNetPeer(clientEnd, server: true); client.OnNewConnection(atClient);
         for (int i = 0; i < 3; i++) { server.UpdatePeers(0f); client.UpdatePeers(0f); }
         Assert.Equal(ZNet.ConnectionStatus.Connected, client.Status);
-        Assert.True(serverEnd.Compressing); Assert.True(clientEnd.Compressing);
         Assert.Same(atServer, server.GetPeerByHostName("Steam_" + SteamId));
         Assert.True(server.IsAdmin(server.GetPeer(2)!.m_socket.GetHostName()));
 
@@ -155,6 +153,5 @@ public sealed class PlatformIdTests
         server.OnNewConnection(new ZNetPeer(xboxAtServer, server: false)); xbox.OnNewConnection(new ZNetPeer(xboxEnd, server: true));
         for (int i = 0; i < 3; i++) { server.UpdatePeers(0f); xbox.UpdatePeers(0f); }
         Assert.Equal(ZNet.ConnectionStatus.ErrorBanned, xbox.Status); Assert.Equal(8, (int)xbox.Status);
-        Assert.False(xboxAtServer.Compressing);
     }
 }
