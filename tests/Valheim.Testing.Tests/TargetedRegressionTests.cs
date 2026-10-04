@@ -320,7 +320,7 @@ public sealed class TargetedRegressionTests : IDisposable
 
     [Fact] public void TheTemplatesSampleManifestNamesOnlyKnownFields()
     {
-        string sample = File.ReadAllText(Path.Combine(DevLoopScripts.RepositoryRoot(), "examples", "TargetedRegression", "regression.sample.json"));
+        string sample = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "examples", "TargetedRegression", "regression.sample.json"));
         var read = System.Text.Json.JsonSerializer.Deserialize<RegressionEnvironment>(sample, new System.Text.Json.JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true, UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,

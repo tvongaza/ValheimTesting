@@ -189,10 +189,10 @@ jobs:
           rm -rf "$RUNNER_TEMP/sshd" "$RUNNER_TEMP/vt client key"
   test-runners:
     name: test runners (${{ matrix.os }})
-    # tools/test-runners for real: a copy of ModWithTests that also targets net48 (the two changes its README
-    # describes), run with Mono on Linux and macOS and on .NET Framework on Windows. Negative control: an added
-    # test that fails only on .NET Framework must make the script exit 1, while the net10.0 leg alone still passes, and
-    # a filter that selects no test must fail the net48 leg.
+    # tools/test-runners for real: a copy of ModWithTests that also targets net48 and imports the targets file (the
+    # three changes its README describes), run with Mono on Linux and macOS and on .NET Framework on Windows, with the
+    # same command on every OS. Negative control: an added test that fails only on .NET Framework must fail the run,
+    # while the net10.0 leg alone still passes, and a filter that selects no test must fail the net48 leg.
     # Packages restore from NuGet.org, as in a mod.
     strategy:
       fail-fast: false
@@ -200,6 +200,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
         with:
@@ -241,28 +244,24 @@ jobs:
         run: |
           brew install mono
           mono --version
-      - name: Copy ModWithTests and target net48 too
-        shell: bash
+      - name: Copy ModWithTests, target net48 too and import the targets
         run: |
           cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
+          cp tools/test-runners/Valheim.TestRunners.targets "$RUNNER_TEMP/mod/"
           project="$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj"
           sed -i.orig \
             -e 's#<TargetFramework>net10.0</TargetFramework>#<TargetFrameworks>net48;net10.0</TargetFrameworks>#' \
             -e 's#<PackageReference Include="xunit" Version="2.8.1" />#&<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />#' \
+            -e 's#</Project>#  <Import Project="../Valheim.TestRunners.targets" />\n</Project>#' \
             "$project"
           grep -q '<TargetFrameworks>net48;net10.0</TargetFrameworks>' "$project"
           grep -q 'Include="xunit.runner.console"' "$project"
+          grep -q 'Valheim.TestRunners.targets' "$project"
           rm "$project.orig"
-      - name: Both frameworks pass (bash)
-        if: runner.os != 'Windows'
+      - name: Both frameworks pass
         working-directory: ${{ runner.temp }}/mod
-        run: bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" MyMod.Tests/MyMod.Tests.csproj
-      - name: Both frameworks pass (Windows PowerShell)
-        if: runner.os == 'Windows'
-        working-directory: ${{ runner.temp }}/mod
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\tools\test-runners\run-tests.ps1" MyMod.Tests\MyMod.Tests.csproj
+        run: dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks
       - name: Add a test that fails only on .NET Framework
-        shell: bash
         run: |
           cat > "$RUNNER_TEMP/mod/MyMod.Tests/Net48OnlyFailure.cs" <<'CS'
           using Xunit;
@@ -278,28 +277,13 @@ jobs:
               }
           }
           CS
-      - name: Negative control (bash)
-        if: runner.os != 'Windows'
+      - name: Negative control
         working-directory: ${{ runner.temp }}/mod
         run: |
-          status=0
-          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" MyMod.Tests/MyMod.Tests.csproj || status=$?
-          if [ "$status" != 1 ]; then echo "::error::a net48-only failure must make run-tests.sh exit 1; it exited $status"; exit 1; fi
-          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" --framework net10.0 MyMod.Tests/MyMod.Tests.csproj
+          run() { dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks "$@" | tee "$RUNNER_TEMP/run.log"; return "${PIPESTATUS[0]}"; }
+          status=0; run || status=$?
+          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (tests, exit 1)' "$RUNNER_TEMP/run.log"; then echo "::error::a net48-only failure must fail the run; it exited $status"; exit 1; fi
+          run -f net10.0
           # A filter that selects no test must not pass the net48 leg.
-          status=0
-          bash "$GITHUB_WORKSPACE/tools/test-runners/run-tests.sh" --framework net48 --filter FullyQualifiedName~NoSuchTest MyMod.Tests/MyMod.Tests.csproj || status=$?
-          if [ "$status" != 1 ]; then echo "::error::a net48 leg that ran no tests must make run-tests.sh exit 1; it exited $status"; exit 1; fi
-      - name: Negative control (Windows PowerShell)
-        if: runner.os == 'Windows'
-        working-directory: ${{ runner.temp }}/mod
-        run: |
-          $script = "$env:GITHUB_WORKSPACE\tools\test-runners\run-tests.ps1"
-          powershell -NoProfile -ExecutionPolicy Bypass -File $script MyMod.Tests\MyMod.Tests.csproj
-          if ($LASTEXITCODE -ne 1) { Write-Output "::error::a net48-only failure must make run-tests.ps1 exit 1; it exited $LASTEXITCODE"; exit 1 }
-          powershell -NoProfile -ExecutionPolicy Bypass -File $script --framework net10.0 MyMod.Tests\MyMod.Tests.csproj
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          # A filter that selects no test must not pass the net48 leg.
-          powershell -NoProfile -ExecutionPolicy Bypass -File $script --framework net48 --filter FullyQualifiedName~NoSuchTest MyMod.Tests\MyMod.Tests.csproj
-          if ($LASTEXITCODE -ne 1) { Write-Output "::error::a net48 leg that ran no tests must make run-tests.ps1 exit 1; it exited $LASTEXITCODE"; exit 1 }
-          exit 0
+          status=0; run -f net48 -p:VSTestTestCaseFilter=FullyQualifiedName~NoSuchTest || status=$?
+          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (no tests ran)' "$RUNNER_TEMP/run.log"; then echo "::error::a net48 leg that ran no tests must fail the run; it exited $status"; exit 1; fi
