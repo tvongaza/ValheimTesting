@@ -1,4 +1,4 @@
-// The game-side half of the ReloadCheck example: a ScriptEngine script (BepInEx/scripts) that registers a ValheimCLI
+// The game-side half of the ReloadCheck tool: a ScriptEngine script (BepInEx/scripts) that registers a ValheimCLI
 // extension, so the driver can replace revision A with B (-p:ProbeRevision=B) and then remove it. Test runtimes only.
 // Moved from ValheimCLI (commit d112140, examples/ReloadProbe) to ValheimTesting on 30 Sep 2026; the code is unchanged.
 using System;

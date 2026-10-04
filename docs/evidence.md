@@ -11,7 +11,7 @@ A run's `result.json` lists every piece of evidence the scenario attached in its
 | Review still (`ReviewCapture.Capture`) | `review-still` | the capture id | the JSON sidecar, which records the PNG's SHA-256 | `report.Attach(receipt.Evidence)` |
 | Review clip (`ReviewClip.Capture`) | `review-clip` | the clip id | the JSON sidecar, which records the SHA-256 of `frames.csv` and of every frame | `report.Attach(receipt.Evidence)` |
 | A round's JSON (`ClientRound.Write`), such as `arrival`, `zone-cycle` or `logout` | the name given to `Write` | the round name | `{round}-{name}.json` | `ClientRound.Write` itself |
-| Anything else written by the scenario, such as [WalkingReview](../examples/WalkingReview/README.md)'s `review.json` | the scenario's own (`walking-review`) | the scenario's own | that file | `report.Attach(new EvidenceReference(...))` |
+| Anything else written by the scenario, such as [ObserveCheck `walk`](../examples/ObserveCheck/README.md#walk-record-a-person-walking-a-route)'s `review.json` | the scenario's own (`walking-review`) | the scenario's own | that file | `report.Attach(new EvidenceReference(...))` |
 
 A kind is 1 to 40 lower-case letters, digits or hyphens. `Attach` refuses a reference without a file or a lower-case SHA-256.
 

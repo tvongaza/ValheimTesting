@@ -34,7 +34,7 @@ dotnet tool restore
 dotnet run scripts/api-docs.cs
 ```
 
-Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game examples and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout. The same lines work in any shell on Windows, macOS and Linux.
+Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game example (SharedWorld) and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout. The same lines work in any shell on Windows, macOS and Linux.
 
 For a quick iteration before the full local check:
 
@@ -77,7 +77,7 @@ public class TerraceExample
 }
 ```
 
-For stateful examples, start with [SharedWorld](examples/SharedWorld/README.md) and [SharedWorldTests](tests/Valheim.Testing.Tests/SharedWorldTests.cs). For captured inputs, use [TerrainCapture](examples/TerrainCapture/README.md) and its [import tests](tests/Valheim.Testing.Tests/TerrainCaptureTests.cs). Replay is exact lookup today; interpolation would be an explicit new policy with its own tests, not a silent fallback for a missing sample.
+For stateful examples, start with [SharedWorld](examples/SharedWorld/README.md) and [SharedWorldTests](tests/Valheim.Testing.Tests/SharedWorldTests.cs). For captured inputs, use [ObserveCheck `capture`](examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay) and its [import tests](tests/Valheim.Testing.Tests/TerrainCaptureTests.cs). Replay is exact lookup today; interpolation would be an explicit new policy with its own tests, not a silent fallback for a missing sample.
 
 Keep seeded models repeatable. State whether an input is immutable, test-owned mutable state, or safe for concurrent readers. Avoid shared mutable global fixtures, wall-clock-dependent outputs and accidental sharing of buffers. Do not add automatic seam repair or other helpers that hide the defect a consuming test should detect.
 

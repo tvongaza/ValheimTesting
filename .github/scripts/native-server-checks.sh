@@ -38,7 +38,7 @@ echo "Dedicated server build $(cat /opt/valheim/server-buildid.txt)"
 
 case "$check" in
   smoke)
-    dotnet run --project examples/LinuxServerSmoke -c Release -- "$server" "$out" 600
+    dotnet run --project docker/linux-server/smoke -c Release -- "$server" "$out" 600
     ;;
   example)
     mkdir -p "$out"

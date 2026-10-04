@@ -10,7 +10,7 @@ A local Ubuntu 24.04 image for owned native checks against the **Linux** Valheim
 
 No credentials are needed or accepted. SteamCMD logs in anonymously; the dedicated server is free.
 
-**Verified** on a Linux x86-64 Docker host on 28 September 2026 with dedicated-server build 25527701: the image built, [LinuxServerSmoke](../../examples/LinuxServerSmoke/README.md) passed all five steps (BepInEx chainloader after about 5 s, the new world loaded after about 51 s), and `scripts/validate.cs` passed inside the container. Only the Apple Silicon (emulated) path below remains experimental.
+**Verified** on a Linux x86-64 Docker host on 28 September 2026 with dedicated-server build 25527701: the image built, [LinuxServerSmoke](smoke/README.md) passed all five steps (BepInEx chainloader after about 5 s, the new world loaded after about 51 s), and `scripts/validate.cs` passed inside the container. Only the Apple Silicon (emulated) path below remains experimental.
 
 ## Keep the image private
 
@@ -30,13 +30,13 @@ The build context is this directory only; no repository source enters the image.
 
 ## Run a check inside the container
 
-A runner inside the container is an ordinary .NET program. The [LinuxServerSmoke](../../examples/LinuxServerSmoke/README.md) example is the smallest one: it boots the server once with BepInEx and stops it.
+A runner inside the container is an ordinary .NET program. The [LinuxServerSmoke](smoke/README.md) boot check is the smallest one: it boots the server once with BepInEx and stops it.
 
 ```sh
 docker run --rm -it -v "$PWD:/src:ro" valheimtesting-linux-server:local bash
 # Inside the container, work on a writable copy of the repository:
 cp -r /src ~/repo && cd ~/repo
-dotnet run --project examples/LinuxServerSmoke -c Release -- /opt/valheim/server ~/out
+dotnet run --project docker/linux-server/smoke -c Release -- /opt/valheim/server ~/out
 ```
 
 A fresh container is a disposable runtime: BepInEx writes its log and configuration into `/opt/valheim/server`, and the smoke refuses a runtime that already has a BepInEx log. Start a new container for another run, or give each run its own copy of the server directory.
@@ -75,7 +75,7 @@ The supported Mac workflows are a Mac game client (launched through ValheimCLI, 
 
 [`native-server-checks.yml`](../../.github/workflows/native-server-checks.yml) builds this image on a GitHub-hosted runner and runs two checks in fresh containers of it. Before that, the runner builds the transport package `cli-dependency.json` pins into the checkout's local feed (`scripts/bootstrap-cli.cs`), which the containers copy with the checkout, so the checks restore the version `main` pins even before it is released to NuGet.org:
 
-1. [LinuxServerSmoke](../../examples/LinuxServerSmoke/README.md): the server starts, loads BepInEx and creates a new world.
+1. [LinuxServerSmoke](smoke/README.md): the server starts, loads BepInEx and creates a new world.
 2. The [FullLifecycle](../../examples/FullLifecycle/README.md#the-server-half-alone) example's server half: ValheimCLI (core, Standard and WorldTools, from the commit in `cli-dependency.json`), the example mod and its adapter are built against this server's own assemblies; `prepare-server` creates a new world and picks a dry and a wet site from its generator heights; the pinned `dry-site-server` run then has the mod mark one and refuse the other, confirms a save, restarts only its server and finds the marker again.
 
 **When.** Every night at 03:23 UTC, and every four hours a cheap job asks Steam (anonymous `app_info_print`, no download) for the public branch's build id and runs the checks only if that build has not been checked yet. Only a build whose image build, smoke, example, evidence collection and artifact upload all passed is remembered, in the Actions cache as a text file (never for a negative control): after a failure the watch checks the same build again every four hours until it passes or a new build appears; the nightly run and a manual run always check. A run can also be started by hand (**Actions > Scheduled native server checks > Run workflow**, or `gh workflow run native-server-checks.yml --ref <branch>`; `watch_only` makes it decide like the watch); only the default branch's copy runs on schedule. A run on another branch also sees the default branch's record, so to test the watch itself give the runs the same `cache_scope`, which keeps their record apart.

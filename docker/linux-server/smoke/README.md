@@ -2,11 +2,11 @@
 
 `LinuxServerSmoke <disposable-server-runtime> <new-output-directory> [seconds 30..1800] [port]`
 
-Boots one owned dedicated server with BepInEx through `ServerLaunch` and `DirectServerProcess`, waits for startup evidence and stops exactly that process, then boots it again on the saved world. It is written for the [Linux image](../../docker/linux-server/README.md) but takes whatever platform the runtime's executable names, so it also works on a Windows server copy, and on a Mac with the macOS server (`valheim_server/Valheim`; its modded launch needs the native BepInEx described in [getting started](../../docs/getting-started.md)). A Windows or Linux runtime on a Mac stops at the first step.
+Boots one owned dedicated server with BepInEx through `ServerLaunch` and `DirectServerProcess`, waits for startup evidence and stops exactly that process, then boots it again on the saved world. It is the [Linux image](../README.md)'s boot check (`native-linux.yml`, `native-server-checks.sh smoke`), not an example for mod authors. It takes whatever platform the runtime's executable names, so it also works on a Windows server copy, and on a Mac with the macOS server (`valheim_server/Valheim`; its modded launch needs the native BepInEx described in [getting started](../../../docs/getting-started.md)). A Windows or Linux runtime on a Mac stops at the first step.
 
 ```sh
 # Inside the Linux image, from a writable copy of this repository:
-dotnet run --project examples/LinuxServerSmoke -c Release -- /opt/valheim/server ~/out
+dotnet run --project docker/linux-server/smoke -c Release -- /opt/valheim/server ~/out
 ```
 
 It passes a generated world name, a throwaway password it never prints, `-public 0`, `-savedir <output>/savedir` and `-logFile <output>/server.log`. Steps, each recorded in `result.json` and `junit.xml`:

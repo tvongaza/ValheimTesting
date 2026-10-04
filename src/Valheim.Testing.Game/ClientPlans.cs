@@ -6,7 +6,7 @@ namespace Valheim.Testing.Game;
 /// <summary>
 /// What a client surface check measures: loaded-ground heights at grid vertices and, optionally, a support point where a
 /// stationary player must stand grounded (on dry ground: a swimming player is not supported). Fixture preparation writes
-/// it; <c>ClientSurfaceCheck</c> reads it. Expected values come from the fixture's declared inputs, never from the check.
+/// it; the ObserveCheck example's <c>surface</c> probe reads it. Expected values come from the fixture's declared inputs, never from the check.
 /// </summary>
 public sealed class SurfacePlan
 {
@@ -25,7 +25,7 @@ public sealed class SurfacePlan
     public void Write(string path) { Validate(); ClientPlanFile.Write(path, this); }
 }
 
-/// <summary>What a client paint check measures: loaded paint RGBA at declared points. Fixture preparation writes it; <c>PaintCheck</c> reads it.</summary>
+/// <summary>What a client paint check measures: loaded paint RGBA at declared points. Fixture preparation writes it; the ObserveCheck example's <c>paint</c> probe reads it.</summary>
 public sealed class PaintPlan
 {
     public string ExpectedFrom { get; set; } = "";
