@@ -1,10 +1,9 @@
 # A smoke test for any mod: does the game still reach a playable world with the
 # mod installed, and does the mod answer?
 #
-# Build, deploy and run it in one step with the dev-loop scripts next to it:
-#   VALHEIM_EXPECTATIONS=pins.txt tools/dev-loop/dev-loop.sh MyMod.csproj tools/dev-loop/smoke-plan.yaml
-#   (Windows PowerShell: $env:VALHEIM_EXPECTATIONS = 'pins.txt', then
-#    powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj tools\dev-loop\smoke-plan.yaml)
+# Build, deploy and run it in one step with the dev-loop script next to it:
+#   VALHEIM_PATH=<owned game copy> VALHEIM_EXPECTATIONS=pins.txt \
+#     dotnet run --file tools/dev-loop/dev-loop.cs -- MyMod.csproj tools/dev-loop/smoke-plan.yaml
 #
 # Or run it against a game you deployed yourself:
 #   valheim-cli --expect-strict pins.txt --test tools/dev-loop/smoke-plan.yaml --launch

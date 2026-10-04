@@ -89,7 +89,7 @@ Preview APIs may change. No release or upstream merge is implied by this reposit
 
 ## Developer-loop scripts
 
-[`tools/dev-loop`](tools/dev-loop/README.md) holds the bash and PowerShell scripts for a mod's edit-build-test loop (build, install, launch, run a strict plan, summarise the log), for snapshotting and checking plugin pins, for hashing a world's save folder as the game does and for sampling a value over time, and a strict smoke plan to start from. They moved here from ValheimCLI on 28 and 30 September 2026 and drive a `valheim-cli` executable taken from a ValheimCLI release or build; see [Developer loop](docs/getting-started.md#developer-loop).
+[`tools/dev-loop`](tools/dev-loop/README.md) holds `dev-loop.cs`, one .NET file-based script for a mod's edit-build-test loop (build, install into a game copy you own, launch, run a strict plan, summarise the log), and a strict smoke plan to start from. It drives a `valheim-cli` executable taken from a ValheimCLI release or build; see [Developer loop](docs/getting-started.md#developer-loop).
 
 Two more tools are for a mod's build: [`tools/test-runners`](tools/test-runners/README.md) runs a test project on `net10.0` and on `net48` (Mono on macOS and Linux, .NET Framework on Windows) and fails if either fails, and [`tools/game-references`](tools/game-references/README.md) gives the mod's game-side projects their Valheim, Unity and BepInEx references from one `ValheimPath`, with an error naming whatever is missing.
 

@@ -1,17 +1,26 @@
-# Developer-loop scripts
+# Developer loop
 
-Scripts for a mod's edit-build-test loop against a local game, and a plan to start from. They drive the `valheim-cli` executable; they are not part of the libraries and never run during `scripts/validate.cs` except under the inert-tool tests described below.
+[`dev-loop.cs`](dev-loop.cs) runs one round of a mod's edit-build-test loop against a game copy you own: build the mod, install its DLL into `BepInEx/plugins`, launch the game, run a test plan in strict mode, then count the log's warnings and errors. [`smoke-plan.yaml`](smoke-plan.yaml) is a strict plan to start from. The script drives the `valheim-cli` executable; it is not part of the libraries, and `scripts/validate.cs` runs it in-process against a fake tool runner, and once as shipped to see it start (see [Tests](#tests)).
 
-| Script | What it does |
-|---|---|
-| `dev-loop.sh` / `dev-loop.ps1` | Build a mod, install its DLL into `BepInEx/plugins`, launch Valheim and run a test plan in strict mode, then summarise the log |
-| `pin-mods.sh` / `pin-mods.ps1` | Snapshot the plugin pins of a running game, check a game against them (strict), or run a command only on a matching game |
-| `log-summary.sh` | Count the warnings and errors in `BepInEx/LogOutput.log` by level, source and message; `dev-loop.sh` runs it after every round |
-| `smoke-plan.yaml` | A strict test plan for any mod: reach a throwaway local world with the mod loaded, check the player and one of the mod's commands, take a screenshot |
-| `world-hash.sh` / `world-hash.ps1` | Hash a world's save folder the way the game does at load (`cli_world`'s `files=`, the `worldfiles` pin), and with `--compare` check it against the running game |
-| `sample-value.sh` / `sample-value.ps1` | Sample one static member of the game or a mod with `cli_call` at a fixed interval and write the series as CSV |
+It is a .NET file-based script, one file for every OS, and needs a .NET 10 SDK. A `global.json` that pins an older SDK where you run it stops `dotnet` before the script starts; run it from a folder without that pin, with full paths. From your mod's checkout, with the paths prefixed by wherever your ValheimTesting checkout is:
 
-The dev-loop, pin-mods and log-summary scripts moved here from ValheimCLI (commit `ee4cd23`) on 28 September 2026; `smoke-plan.yaml`, `world-hash.sh` and `sample-value.sh` followed from commit `d112140` on 30 September 2026, and `world-hash.ps1` and `sample-value.ps1` were added here as their Windows twins. ValheimCLI stays a minimal executable and game-side API, and the support scripts live with the testing toolkit. The moved scripts' behaviour did not change, except that `world-hash` now refuses an argument other than `--compare`.
+```sh
+VALHEIM_PATH=/path/to/owned/Valheim VALHEIM_CLI=/path/to/valheim-cli VALHEIM_EXPECTATIONS=pins.txt \
+  dotnet run --file tools/dev-loop/dev-loop.cs -- MyMod.csproj tools/dev-loop/smoke-plan.yaml
+```
+
+```powershell
+$env:VALHEIM_PATH = 'D:\valheim-copies\Valheim'
+$env:VALHEIM_CLI = 'C:\path\to\valheim-cli.exe'
+$env:VALHEIM_EXPECTATIONS = "$PWD\pins.txt"
+dotnet run --file tools\dev-loop\dev-loop.cs -- "$PWD\MyMod.csproj" "$PWD\tools\dev-loop\smoke-plan.yaml"
+```
+
+`--file` matters in a folder that holds a project: without it `dotnet run` runs that project instead. The SDK starts a file-based script in the script's own folder, not yours, so relative paths (the project, the plan, `VALHEIM_PATH`, `VALHEIM_EXPECTATIONS`, `VALHEIM_CLI`) are read from the folder your shell passes as `PWD`, and the tools run there. bash and zsh keep it current; PowerShell and cmd do not, so there give full paths as above, and the tools run in the project's folder. Without `PWD` the script refuses a relative path rather than read it from `tools/dev-loop`, and it refuses a project or plan that is not where it looked.
+
+The script's header lists its environment variables, options and exit codes. Options: `--fail-on warning|error` fails a round whose plan passed when the log has a line at that level or worse; `--live` allows a Steam library install (below).
+
+The dev-loop, pin-mods and log-summary scripts moved here from ValheimCLI (commit `ee4cd23`) on 28 September 2026 as bash and PowerShell twins; `dev-loop.cs` replaced the twins and `log-summary.sh` on 4 October 2026. `pin-mods`, `world-hash` and `sample-value` were removed then: each was a wrapper around a `valheim-cli` command or a recipe the transport package already owns (see [Pins without the dev loop](#pins-without-the-dev-loop)).
 
 ## Get valheim-cli
 
@@ -23,60 +32,42 @@ cd valheimCLI/CLI
 dotnet build -c Release     # CLI/bin/Release/net9.0/valheim-cli (valheim-cli.exe on Windows)
 ```
 
-Use a build at or after the ValheimCLI commit pinned in [`cli-dependency.json`](../../cli-dependency.json): the scripts need `--status` with its `local_process=` field, `--expect-strict`, `--test`, `--launch`, `--progress`, `--stall`, `--remote` and `manifest --write`. The game needs the matching `valheimCLI.dll` in `BepInEx/plugins`. Put `valheim-cli` on `PATH`, or point `VALHEIM_CLI` at it.
+Use a build at or after the ValheimCLI commit pinned in [`cli-dependency.json`](../../cli-dependency.json): the script needs `--status` with its `local_process=` field, `--expect-strict`, `--test`, `--launch`, `--progress` and `--stall`. The game needs the matching `valheimCLI.dll` in `BepInEx/plugins`. Put `valheim-cli` on `PATH`, or point `VALHEIM_CLI` at it.
 
-## bash or PowerShell
+## Which game it installs into
 
-The dev-loop, pin-mods, world-hash and sample-value scripts come as twins with the same steps, environment variables and exit codes: bash for macOS and Linux, PowerShell for Windows (Windows PowerShell 5.1 or PowerShell 7). Keep the two in step when changing either. Run them from your mod's checkout:
+`VALHEIM_PATH` is required and has no default: the script copies the build into that folder's `BepInEx/plugins` and `valheim-cli` launches the game from it. Point it at a copy of the game you own and can throw away, not at the install Steam updates and every other launch uses. A folder under a Steam library's `steamapps/common` is refused (exit 3) unless you pass `--live`, which says you mean to change that install. Build-time references find the game through [`tools/game-references`](../game-references/README.md), the one place that knows the Steam folders.
 
-| | macOS / Linux (bash) | Windows (PowerShell) |
-| --- | --- | --- |
-| build, deploy, run a plan | `tools/dev-loop/dev-loop.sh MyMod.csproj plan.yaml` | `powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj plan.yaml` |
-| snapshot pins | `tools/dev-loop/pin-mods.sh snapshot pins.txt` | `powershell -ExecutionPolicy Bypass -File tools\dev-loop\pin-mods.ps1 snapshot pins.txt` |
-| check pins (strict) | `tools/dev-loop/pin-mods.sh check pins.txt` | `powershell -ExecutionPolicy Bypass -File tools\dev-loop\pin-mods.ps1 check pins.txt` |
-| summarise the last run's log | `tools/dev-loop/log-summary.sh` | printed by `dev-loop.ps1` |
-| hash a world, compare with the game | `tools/dev-loop/world-hash.sh Dev --compare` | `powershell -ExecutionPolicy Bypass -File tools\dev-loop\world-hash.ps1 Dev --compare` |
-| sample a value over time | `tools/dev-loop/sample-value.sh EnvMan.IsDay 10 5 > day.csv` | `powershell -ExecutionPolicy Bypass -File tools\dev-loop\sample-value.ps1 EnvMan.IsDay 10 5 > day.csv` |
-
-Prefix the paths with wherever your ValheimTesting checkout is. Set the environment in each shell's own way:
-
-```bash
-VALHEIM_CLI=/path/to/valheim-cli VALHEIM_EXPECTATIONS=pins.txt tools/dev-loop/dev-loop.sh MyMod.csproj tools/dev-loop/smoke-plan.yaml
-```
-
-```powershell
-$env:VALHEIM_CLI = 'C:\path\to\valheim-cli.exe'
-$env:VALHEIM_EXPECTATIONS = 'pins.txt'
-powershell -ExecutionPolicy Bypass -File tools\dev-loop\dev-loop.ps1 MyMod.csproj tools\dev-loop\smoke-plan.yaml
-```
-
-[`smoke-plan.yaml`](smoke-plan.yaml) is a plan to start from; see [the smoke plan](#the-smoke-plan). `VALHEIM_PATH` defaults to the Steam folder of each system; on Windows that is `C:\Program Files (x86)\Steam\steamapps\common\Valheim`. Where `dev-loop.sh` ends with `log-summary.sh`, `dev-loop.ps1` prints the log's warning, error and fatal counts by level and source. Each script's header lists its environment variables and exit codes.
-
-The game must not be running when `dev-loop` deploys: a running game keeps the old build (and on Windows locks the file). The script refuses to deploy unless `valheim-cli --status` reports `local_process=false`.
+The game must not be running when the script deploys: a running game keeps the old build (and on Windows locks the file). The script refuses to deploy unless `valheim-cli --status` reports `local_process=false`.
 
 ## Strict pins in the dev loop
 
-`dev-loop <MyMod.csproj> <plan.yaml>` runs the plan in strict mode against `VALHEIM_EXPECTATIONS`. Every rebuild changes the mod's md5, so the script never passes that file as it is, and never accepts whatever md5 the game reports: it hashes the DLL it just built and deploys, writes a temporary copy of the pins file in which only that mod's pin is replaced, checks the installed copy matches, and passes the copy to `--expect-strict`. The pins file must pin the mod exactly once, under its DLL name or under the key named by `VALHEIM_PLUGIN_KEY` (its GUID or name); otherwise the script stops before deploying. Every other pin, including the core and pack hashes, is kept as written. See ValheimCLI's `docs/expectations.md` for the pins file format.
+With a plan, the script runs it in strict mode against `VALHEIM_EXPECTATIONS`. Every rebuild changes the mod's md5, so it never passes that file as it is, and never accepts whatever md5 the game reports: it hashes the DLL it just built and deploys, writes a temporary copy of the pins file in which only that mod's pin is replaced, checks the installed copy matches, and passes the copy to `--expect-strict`. The pins file must pin the mod exactly once, under its DLL name or under the key named by `VALHEIM_PLUGIN_KEY` (its GUID or name); otherwise the script stops before deploying. Every other pin, including the core and pack hashes, is kept as written. See ValheimCLI's `docs/expectations.md` for the pins file format.
 
-`pin-mods check` and `run` are strict by default, like `dev-loop`. `pin-mods snapshot` is an explicit read-only setup step: it writes down whatever the game runs now, so review the file before accepting it as a test's expectation. A launch without a plan, or `valheim-cli --status`, only brings a game up; neither is a test result.
+A launch without a plan, or `valheim-cli --status`, only brings a game up; neither is a test result.
+
+## Pins without the dev loop
+
+`valheim-cli` takes pins directly; there is no wrapper script:
+
+| | Command |
+| --- | --- |
+| snapshot the running game's plugin pins (an explicit setup step: review the file before accepting it as a test's expectation) | `valheim-cli manifest --write pins.txt` (add `--with-world` for the loaded world) |
+| check a game against them, strictly (exit 6 with the mismatches on drift) | `valheim-cli --expect-strict pins.txt` |
+| run a console command only on a matching game | `valheim-cli --expect-strict pins.txt cli_manifest` |
+| run a plan only on a matching game | `valheim-cli --expect-strict pins.txt --test plan.yaml` |
+
+The load-time world files hash (`cli_world`'s `files=`, the `worldfiles` pin) is `Expectations.HashDirectory` in the `Valheim.Testing.Cli` package, documented once in ValheimCLI's [`docs/expectations.md`](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/expectations.md#world-files-hash). To record a value over time, call `cli_call` from a test; to wait for a condition, use an event wait (see [Waiting](../../docs/testing-toolkit.md#waiting)) or `valheim-cli wait --for`.
 
 ## The smoke plan
 
 [`smoke-plan.yaml`](smoke-plan.yaml) checks that the game still reaches a playable world with the mod installed and that the mod answers: it waits for the main menu, makes a throwaway local character and world (so it never touches real saves), waits for the world, checks the player, turns on player safety, runs one of the mod's console commands and takes a screenshot. Replace the `mod_command` and `mod_answer` variables (or pass `--var mod_command=...`) with a command of your own and the text it prints.
 
-The plan is strict by itself: `game.expect` names a pins file next to the plan and `game.expectStrict` is true, so `valheim-cli --test` checks every loaded plugin before the first step even without `--expect-strict`. `dev-loop` always passes `--expect-strict` with the pin of the build it just deployed, which overrides the plan's file. `SmokePlanTests` parses the plan with the transport package's own plan model and fails if it stops being strict.
-
-## World files hash
-
-`world-hash.sh <world>` (or `world-hash.ps1`) prints the hash the game takes of a world's save folder just before loading it: `cli_world`'s `files=` field and the `worldfiles` pin. The world is a name under `VALHEIM_SAVES` (default: the game's `worlds_local` folder) or a folder path. With `--compare` it also asks the running server or host (`cli_world`) and exits 1 when the two differ, or when the game has no load-time hash (a joined client, or no world loaded). Use it on a fixture copy you restore before each run: hash the copy, then compare after the game has loaded it. The recipe is documented once, in ValheimCLI's [`docs/expectations.md`](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/expectations.md#world-files-hash); the tests check both scripts against a hand-worked vector with nested files and against the game's own implementation, which the transport package carries.
-
-## Sampling a value over time
-
-`sample-value.sh <[Namespace.]Type.Member> <count> <interval-seconds> [arg ...]` (or `sample-value.ps1`) calls one static member with `cli_call` every interval and writes CSV with the columns `sample,utc,value,error`. `value` is the `VALUE` text as `cli_call` prints it, or the item count for a collection; `error` is the first line of a failed reply. A failed first sample stops the script (the member or its arguments are wrong); a later failure is recorded as a row and sampling goes on. The interval sets a time series' rate; it is not a wait for a condition, which is a job for an event wait (see [Waiting](../../docs/testing-toolkit.md#waiting)) or `valheim-cli wait --for`. `cli_call` needs ValheimCLI's Reflection pack and devcommands.
+The plan is strict by itself: `game.expect` names a pins file next to the plan and `game.expectStrict` is true, so `valheim-cli --test` checks every loaded plugin before the first step even without `--expect-strict`. The dev loop always passes `--expect-strict` with the pin of the build it just deployed, which overrides the plan's file. `SmokePlanTests` parses the plan with the transport package's own plan model and fails if it stops being strict.
 
 ## Waiting for a log line
 
-There is no shell script for this; the libraries wait on events. In a test, `LogWait` follows a local log from its current end (or a byte offset), so earlier lines never match, and waits for a log that does not exist yet; give it every outcome, failures included, so a failure returns as fast as a success (see [Waiting](../../docs/testing-toolkit.md#waiting)). For a game on another machine, a game host's `LogOffsetAsync` and `WaitForLogAsync` follow the log there (see [game hosts](../../docs/testing-toolkit.md#game-hosts-and-environment-profiles-preview-13)). To wait for a game state rather than a line, use `StateWait` or `valheim-cli wait --for`.
+There is no script for this; the libraries wait on events. In a test, `LogWait` follows a local log from its current end (or a byte offset), so earlier lines never match, and waits for a log that does not exist yet; give it every outcome, failures included, so a failure returns as fast as a success (see [Waiting](../../docs/testing-toolkit.md#waiting)). For a game on another machine, a game host's `LogOffsetAsync` and `WaitForLogAsync` follow the log there (see [game hosts](../../docs/testing-toolkit.md#game-hosts-and-environment-profiles-preview-13)). To wait for a game state rather than a line, use `StateWait` or `valheim-cli wait --for`.
 
 ## A game on another machine
 
@@ -85,11 +76,11 @@ ValheimCLI listens on its machine's loopback only. Reach it through an SSH port 
 ```sh
 ssh -N -L 127.0.0.1:5556:127.0.0.1:5555 user@game-host      # leave running; Ctrl-C closes it
 valheim-cli --port 5556 --remote --status
-VALHEIM_CLI_PORT=5556 tools/dev-loop/pin-mods.sh check pins.txt
+valheim-cli --port 5556 --expect-strict pins.txt
 ```
 
-`dev-loop` deploys to a local game folder, so it is for a local game only. `pin-mods` and `sample-value` work through the tunnel with `VALHEIM_CLI_PORT`, and so does `world-hash --compare` when the folder it hashes is a copy of the one the remote game loaded. A test drives remote games through a game host instead, whose `OpenCliTunnelAsync` opens the same loopback-only forward and refuses one that could listen beyond loopback (see [game hosts](../../docs/testing-toolkit.md#game-hosts-and-environment-profiles-preview-13)).
+The dev loop deploys to a local game folder, so it is for a local game only. A test drives remote games through a game host instead, whose `OpenCliTunnelAsync` opens the same loopback-only forward and refuses one that could listen beyond loopback (see [game hosts](../../docs/testing-toolkit.md#game-hosts-and-environment-profiles-preview-13)).
 
 ## Tests
 
-`tests/Valheim.Testing.Tests` runs the real scripts against inert fake tools in a temporary directory; nothing is built, installed or launched. `DevLoopGuardTests` and `StrictExampleTests` run the bash scripts on macOS and Linux and are reported as skipped on Windows. `DevLoopGuardPowerShellTests` and `StrictExamplePowerShellTests` run the same cases against the PowerShell twins under Windows PowerShell on Windows and are reported as skipped elsewhere. `WorldHashScriptTests` and `SampleValueScriptTests` hold each case once and run it against `world-hash.sh`/`sample-value.sh` on macOS and Linux and against the `.ps1` twins on Windows: the world hash of a fixture folder with nested files against a hand-worked vector and the game's own implementation, by folder and by world name, and `--compare` against a fake `cli_world` that agrees, disagrees, is a client without files or cannot connect; the CSV columns, a failed first sample that stops the run, and a later failure that is recorded while sampling goes on. `SmokePlanTests` runs on every OS. `dotnet run scripts/validate.cs` runs them with the rest of the library tests.
+`tests/Valheim.Testing.Tests` compiles `dev-loop.cs` without its entry point and `DevLoopTests` runs it in-process on every OS against a fake tool runner and a temporary game folder; nothing is built, installed into a real game or launched. The cases: the stopped-game guard (a running game, a stopped one, no answer, conflicting answers, a `valheim-cli` that does not start), relative paths read from `PWD` with the tools run there, a relative path without `PWD` (the tools then run in the project's folder), a project or plan that is not there, no `VALHEIM_PATH`, a Steam library install with and without `--live` and one reached through a link, the pins derived from the build (other lines kept, the key named by `VALHEIM_PLUGIN_KEY`, no pin or two pins for the build), the build's and the plan's exit codes, the log summary and `--fail-on`, one real process for the tool runner itself, and one `dotnet run --file` of the script as shipped. `SmokePlanTests` parses the plan. `dotnet run scripts/validate.cs` runs them with the rest of the library tests.
