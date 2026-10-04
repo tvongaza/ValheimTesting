@@ -36,6 +36,7 @@ internal sealed class FakeServerHost : IGameHost
     public Exception? TunnelFailure { get; set; }
     public bool PortBusy { get; set; }
     public bool GameActive { get; set; }
+    public long AvailableCopyBytes { get; set; } = 100L << 30;
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
     public bool IgnoreQuit { get; set; }
     public bool ClientWritesBepInExLog { get; set; } = true;
@@ -84,6 +85,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostedCharacterStage.BashDropStage) ? "character-drop" :
         ReferenceEquals(script, HostedRuntimeStage.WindowsProcessCheck) ? "game-process" :
         ReferenceEquals(script, HostedRuntimeStage.BashProcessCheck) ? "game-process" :
+        ReferenceEquals(script, HostCopyCapacityProbe.Windows) ? "copy-space" :
+        ReferenceEquals(script, HostCopyCapacityProbe.Bash) ? "copy-space" :
         ReferenceEquals(script, CrossplayLibraryScripts.Check) ? "party" :
         ReferenceEquals(script, InteractiveScripts.LinuxWait) ? "wait" :
         ReferenceEquals(script, InteractiveScripts.WindowsWait) ? "wait" :
@@ -106,6 +109,9 @@ internal sealed class FakeServerHost : IGameHost
         switch (name)
         {
             case "game-process": return Ok(GameActive ? "VT-GAME busy\n" : "VT-GAME idle\n");
+            case "copy-space":
+                return Ok($"VT-STORAGE {DiskSpace.DirectoryBytes(Local(v["source"]))} {AvailableCopyBytes} " +
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes(Windows ? "C:\\" : "/")) + "\n");
             case "preflight-read":
             {
                 string file = Local(v["path"]);
