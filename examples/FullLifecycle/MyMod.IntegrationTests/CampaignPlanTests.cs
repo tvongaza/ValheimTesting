@@ -196,6 +196,25 @@ public sealed class CampaignPlanTests : IDisposable
         Assert.Equal(HostedPlan.HostedScenarioName, HostedPlan.ReadValidated(hosted).Scenario);
     }
 
+    [Fact] public void AReviewCapturePlanIsRefusedByTheLibrarysCaptureRuleBeforeLaunch()
+    {
+        // The example keeps no copy of the capture ranges: ReviewCapture.Validate refuses them when the plan is read.
+        JsonObject Sample() => JsonNode.Parse(Fill(File.ReadAllText(Path.Combine(SourceSamples(), "sample-plan-review-capture.json"))))!.AsObject();
+        Assert.Equal(LifecyclePlan.ReviewCaptureScenarioName, Read(Sample()).Scenario);
+        var plan = Sample(); plan["capture"]!["cameraAzimuthDegrees"] = 360;
+        Assert.Contains("azimuth", Assert.ThrowsAny<ArgumentException>(() => Read(plan)).Message);
+        plan = Sample(); plan["capture"]!["supersize"] = 5;
+        Assert.ThrowsAny<ArgumentException>(() => Read(plan));
+        plan = Sample(); plan["capture"]!["weather"] = "Clear sky";
+        Assert.Contains("Weather", Assert.ThrowsAny<ArgumentException>(() => Read(plan)).Message);
+        plan = Sample(); plan["capture"]!["weather"] = new string('a', 65);
+        Assert.Contains("Weather", Assert.ThrowsAny<ArgumentException>(() => Read(plan)).Message);
+        plan = Sample(); plan["capture"]!["gameBuild"] = new string('1', 65);
+        Assert.Contains("provenance", Assert.ThrowsAny<ArgumentException>(() => Read(plan)).Message);
+        plan = Sample(); plan["capture"]!["gameBuild"] = "";
+        Assert.Contains("provenance", Assert.ThrowsAny<ArgumentException>(() => Read(plan)).Message);
+    }
+
     private static string SourceSamples([CallerFilePath] string sourceFile = "") =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "../MyMod.SystemTests"));
 

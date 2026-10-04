@@ -42,7 +42,7 @@ public sealed class ReviewClipTests
     }
 
     [Fact]
-    public async Task ReadyClientProducesBoundedAnimatedPngAndRestoresLease()
+    public void ReadyClientPublishesHashedFramesAndRestoresLease()
     {
         string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
         try
@@ -50,15 +50,19 @@ public sealed class ReviewClipTests
             var (transport, client) = Client();
             using (client)
             {
-                var receipt = await ReviewClip.CaptureCoreAsync(client, Plan(output), Fetch, CancellationToken.None);
-                Assert.True(File.Exists(receipt.ClipPath));
+                var receipt = ReviewClip.CaptureCore(client, Plan(output), Fetch, CancellationToken.None);
+                Assert.Equal(output, receipt.FramesDirectory);
                 Assert.Equal(2, receipt.Frames);
                 Assert.Equal(500, receipt.DurationMs);
-                Assert.Contains("\"visualVerdict\": \"not asserted\"", File.ReadAllText(receipt.MetadataPath));
-                byte[] bytes = File.ReadAllBytes(receipt.ClipPath);
-                Assert.True(bytes.AsSpan(0, 8).SequenceEqual(Png.AsSpan(0, 8)));
-                Assert.Contains("acTL", System.Text.Encoding.ASCII.GetString(bytes));
-                Assert.Contains("fdAT", System.Text.Encoding.ASCII.GetString(bytes));
+                Assert.Equal(Png.Length * 2L, receipt.Bytes);
+                // The receipt's digest is the game's manifest, which lists every frame's digest.
+                string manifest = Path.Combine(output, "frames.csv");
+                Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(manifest))).ToLowerInvariant(), receipt.ManifestSha256);
+                Assert.Equal(new[] { "frame-000.png", "frame-001.png", "frames.csv", "motion-1.json" },
+                    Directory.GetFiles(output).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray());
+                string metadata = File.ReadAllText(receipt.MetadataPath);
+                Assert.Contains("\"visualVerdict\": \"not asserted\"", metadata);
+                Assert.Contains(receipt.ManifestSha256, metadata);
                 Assert.Equal("cli_extension mymod.testing/review-restore motion-1", transport.Commands.Last());
             }
         }
@@ -66,25 +70,25 @@ public sealed class ReviewClipTests
     }
 
     [Fact]
-    public async Task UnreadyClientNeverStartsCapture()
+    public void UnreadyClientNeverStartsCapture()
     {
         var (transport, client) = Client(ready: false);
         using (client)
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => ReviewClip.CaptureCoreAsync(client,
+            Assert.Throws<InvalidOperationException>(() => ReviewClip.CaptureCore(client,
                 Plan(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))), Fetch, CancellationToken.None));
             Assert.DoesNotContain(transport.Commands, command => command.Contains("review-begin"));
         }
     }
 
     [Fact]
-    public async Task FailedTransferCannotBecomePassingEvidence()
+    public void FailedTransferCannotBecomePassingEvidence()
     {
         string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
         var (transport, client) = Client();
         using (client)
         {
-            await Assert.ThrowsAsync<IOException>(() => ReviewClip.CaptureCoreAsync(client, Plan(output),
+            Assert.Throws<IOException>(() => ReviewClip.CaptureCore(client, Plan(output),
                 (_, local, _) => { Directory.CreateDirectory(local); throw new IOException("transfer failed"); }, CancellationToken.None));
             Assert.False(Directory.Exists(output));
             Assert.Empty(Directory.GetDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".partial-*"));
@@ -93,7 +97,7 @@ public sealed class ReviewClipTests
     }
 
     [Fact]
-    public async Task CancellationAfterBeginRestoresStateAndLeavesNoClip()
+    public void CancellationAfterBeginRestoresStateAndLeavesNoClip()
     {
         string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
         using var cancel = new CancellationTokenSource();
@@ -103,14 +107,14 @@ public sealed class ReviewClipTests
         }; });
         using (client)
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ReviewClip.CaptureCoreAsync(client, Plan(output), Fetch, cancel.Token));
+            Assert.ThrowsAny<OperationCanceledException>(() => ReviewClip.CaptureCore(client, Plan(output), Fetch, cancel.Token));
             Assert.False(Directory.Exists(output));
             Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
         }
     }
 
     [Fact]
-    public async Task CancellationDuringTransferCannotPublishCompletedFrames()
+    public void CancellationDuringTransferCannotPublishCompletedFrames()
     {
         string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
         using var cancel = new CancellationTokenSource();
@@ -123,7 +127,7 @@ public sealed class ReviewClipTests
                 cancel.Cancel();
                 return copied;
             }
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ReviewClip.CaptureCoreAsync(client, Plan(output), Transfer, cancel.Token));
+            Assert.ThrowsAny<OperationCanceledException>(() => ReviewClip.CaptureCore(client, Plan(output), Transfer, cancel.Token));
             Assert.False(Directory.Exists(output));
             Assert.Empty(Directory.GetDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".partial-*"));
             Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
@@ -131,50 +135,22 @@ public sealed class ReviewClipTests
     }
 
     [Fact]
-    public async Task CancellationOfInFlightCaptureWaitsForHandlerCleanupBeforeRestoring()
-    {
-        string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
-        using var cancel = new CancellationTokenSource();
-        var (transport, client) = Client();
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        bool handlerCleaned = false;
-        transport.OnCancellable(async (command, token) =>
-        {
-            Assert.Contains("review-clip-frames", command);
-            started.SetResult();
-            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
-            finally { handlerCleaned = true; }
-            throw new InvalidOperationException("Unreachable after cancellation.");
-        });
-        using (client)
-        {
-            Task<ReviewClipReceipt> capture = ReviewClip.CaptureCoreAsync(client, Plan(output), Fetch, cancel.Token);
-            await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            cancel.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => capture);
-            Assert.True(handlerCleaned);
-            Assert.False(Directory.Exists(output));
-            Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
-            Assert.Equal("cli_extension mymod.testing/review-restore motion-1", transport.Commands.Last());
-        }
-    }
-
-    [Fact]
-    public async Task DriftOnTheSeparateCommandConnectionRefusesCapture()
+    public void PinDriftBeforeTheFrameCommandRefusesCapture()
     {
         string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
         var (transport, client) = Client();
         using (client)
         {
-            transport.OnCancellable((_, _) => throw new InvalidOperationException("The frame command must not run."));
-            // The actor was verified before the drift. The second connection must still check the same pins.
+            // The actor was verified before the drift. Its pin check before the frame command must still refuse it.
             bool refused = false;
             transport.OnPrefix("cli_expect ", _ => {
                 if (!refused && transport.Count("cli_extension mymod.testing/review-begin") > 0)
                 { refused = true; return ScriptedTransport.Failed("MISMATCH worlduid: wrong fixture"); }
                 return ScriptedTransport.Ok("OK: EXPECT");
             });
-            await Assert.ThrowsAsync<InvalidOperationException>(() => ReviewClip.CaptureCoreAsync(client, Plan(output), Fetch, CancellationToken.None));
+            // A drifted actor refuses every later command, the restore included (the adapter restores on unload).
+            var error = Assert.Throws<AggregateException>(() => ReviewClip.CaptureCore(client, Plan(output), Fetch, CancellationToken.None));
+            Assert.All(error.InnerExceptions, inner => Assert.IsType<InvalidOperationException>(inner));
             Assert.True(refused);
             Assert.Equal(0, transport.Count("cli_extension mymod.testing/review-clip-frames"));
             Assert.False(Directory.Exists(output));
@@ -182,18 +158,25 @@ public sealed class ReviewClipTests
     }
 
     [Fact]
-    public void CorruptedFrameDigestIsRefused()
+    public void CorruptedFrameDigestIsRefusedAndNothingIsPublished()
     {
-        string dir = Directory.CreateTempSubdirectory("vt-bad-frame-").FullName;
-        try
+        string output = Path.Combine(Path.GetTempPath(), "vt-motion-" + Guid.NewGuid().ToString("N"));
+        var (transport, client) = Client();
+        using (client)
         {
-            string frame = Path.Combine(dir, "frame.png");
-            File.WriteAllBytes(frame, Png);
-            Assert.Throws<InvalidDataException>(() => ApngClip.Write(Path.Combine(dir, "clip.apng"), [
-                new ApngClip.Frame(frame, 0, new string('0', 64), Png.Length),
-                new ApngClip.Frame(frame, 500, PngHash, Png.Length)]));
+            async Task<FetchedDirectory> Corrupt(string host, string local, CancellationToken token)
+            {
+                var copied = await Fetch(host, local, token);
+                byte[] changed = (byte[])Png.Clone();
+                changed[^13] ^= 1; // Same length, different bytes from those the game hashed.
+                await File.WriteAllBytesAsync(Path.Combine(local, "frame-001.png"), changed, token);
+                return copied;
+            }
+            var error = Assert.Throws<InvalidDataException>(() => ReviewClip.CaptureCore(client, Plan(output), Corrupt, CancellationToken.None));
+            Assert.Contains("game-side digest", error.Message);
+            Assert.False(Directory.Exists(output));
+            Assert.Empty(Directory.GetDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".partial-*"));
+            Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
         }
-        finally { Directory.Delete(dir, true); }
     }
-
 }

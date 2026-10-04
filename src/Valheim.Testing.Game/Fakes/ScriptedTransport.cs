@@ -10,7 +10,7 @@ namespace Valheim.Testing.Game.Fakes;
 /// Commands registered with <see cref="On"/> or <see cref="OnPrefix"/> are answered first. Anything unscripted throws, so
 /// a scenario cannot silently issue a command its test did not expect. <see cref="Commands"/> records every command.
 /// </summary>
-public sealed class ScriptedTransport : ICancellableGameTransport
+public sealed class ScriptedTransport : IGameTransport
 {
     private readonly object _sync = new();
     private readonly List<string> _commands = [];
@@ -19,7 +19,6 @@ public sealed class ScriptedTransport : ICancellableGameTransport
     private readonly List<(string Owner, string Instance, string Name, int ResultVersion, bool ReadOnly, Func<IReadOnlyList<string>, object> Data)> _extensions = [];
     private bool? _saveConfirmed;
     private int _saveNumber = 1;
-    private Func<string, CancellationToken, Task<CommandResult>>? _cancellable;
 
     /// <summary>Whether <c>cli_expect</c> confirms the strict pins.</summary>
     public bool PinsHold { get; set; } = true;
@@ -30,8 +29,6 @@ public sealed class ScriptedTransport : ICancellableGameTransport
     public int Count(string command) => Commands.Count(x => x == command || x.StartsWith(command + " ", StringComparison.Ordinal));
 
     public ScriptedTransport On(string command, Func<string, CommandResult> reply) { lock (_sync) _exact[command] = reply; return this; }
-    /// <summary>Controls one interruptible command in a scenario test; ordinary scripted commands remain synchronous.</summary>
-    public ScriptedTransport OnCancellable(Func<string, CancellationToken, Task<CommandResult>> reply) { _cancellable = reply; return this; }
     public ScriptedTransport OnPrefix(string prefix, Func<string, CommandResult> reply) { lock (_sync) _prefixes.Add((prefix, reply)); return this; }
     /// <summary>
     /// Registers <c>owner/name</c>: listed by <c>cli_extensions</c> and answered with an <c>EXTENSION_RESULT</c> envelope around
@@ -120,24 +117,6 @@ public sealed class ScriptedTransport : ICancellableGameTransport
         if (command == "cli_save" && _saveConfirmed is bool confirmed)
             return confirmed ? Ok("OK: SAVE saveNumber=" + Interlocked.Increment(ref _saveNumber)) : Failed("ERROR: save failed");
         throw new InvalidOperationException("Unscripted command: " + command);
-    }
-
-    public async Task<CommandResult> ExecuteCancelableAsync(string expectations, string command, TimeSpan timeout, CancellationToken cancellation)
-    {
-        cancellation.ThrowIfCancellationRequested();
-        var pins = Execute(expectations, timeout);
-        if (!pins.Ok || !PlanExpectations.Judge(new ExpectationSource { From = "actor", Strict = true }, pins.Output).Held)
-            throw new InvalidOperationException("Game did not confirm the strict environment pins on the command connection.");
-        cancellation.ThrowIfCancellationRequested();
-        CommandResult reply;
-        if (_cancellable == null) reply = Execute(command, timeout);
-        else
-        {
-            lock (_sync) _commands.Add(command);
-            reply = await _cancellable(command, cancellation).ConfigureAwait(false);
-        }
-        cancellation.ThrowIfCancellationRequested();
-        return reply;
     }
 
     private string Listing()

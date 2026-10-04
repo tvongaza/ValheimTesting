@@ -1,5 +1,5 @@
 // Source compiled into a mod's game-side test adapter. This is a scene-only frame source for a bounded private clip,
-// not a desktop recorder. The host owns fetching, validation, clip assembly and deletion after a failed run.
+// not a desktop recorder. The host owns fetching, validation and deletion after a failed run.
 #if VALHEIM_TESTING_REVIEW_CLIP
 #nullable enable
 using System;

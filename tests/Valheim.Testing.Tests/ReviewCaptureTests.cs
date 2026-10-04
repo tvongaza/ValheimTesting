@@ -31,7 +31,7 @@ public sealed class ReviewCaptureTests
     }
 
     [Fact]
-    public async Task CaptureRestoresVisualStateAndWritesReviewOnlyEvidence()
+    public void CaptureRestoresVisualStateAndWritesReviewOnlyEvidence()
     {
         string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
         try
@@ -40,7 +40,7 @@ public sealed class ReviewCaptureTests
             using (client) using (var server = new ScriptedTransport().Actor())
             {
                 bool arrived = false;
-                var result = await ReviewCapture.CaptureCoreAsync(server, client, Plan(root), HostShellKind.PowerShell,
+                var result = ReviewCapture.CaptureCore(server, client, Plan(root), HostShellKind.PowerShell,
                     Fetch, () => arrived = true, CancellationToken.None);
                 Assert.True(arrived);
                 Assert.True(File.Exists(result.ImagePath));
@@ -58,7 +58,7 @@ public sealed class ReviewCaptureTests
     }
 
     [Fact]
-    public async Task CameraAzimuthChangesTheViewAndIsRecorded()
+    public void CameraAzimuthChangesTheViewAndIsRecorded()
     {
         string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
         try
@@ -66,7 +66,7 @@ public sealed class ReviewCaptureTests
             var (transport, client) = Client();
             using (client) using (var server = new ScriptedTransport().Actor())
             {
-                await ReviewCapture.CaptureCoreAsync(server, client, Plan(root) with { CameraAzimuthDegrees = 45 },
+                ReviewCapture.CaptureCore(server, client, Plan(root) with { CameraAzimuthDegrees = 45 },
                     HostShellKind.PowerShell, Fetch, () => { }, CancellationToken.None);
                 var capture = transport.Commands.Single(c => c.StartsWith("cli_capture ", StringComparison.Ordinal)).Split(' ');
                 Assert.True(double.Parse(capture[2], System.Globalization.CultureInfo.InvariantCulture) > 100);
@@ -78,13 +78,13 @@ public sealed class ReviewCaptureTests
     }
 
     [Fact]
-    public async Task CaptureFailureStillRestoresAndLeavesNoPassingImage()
+    public void CaptureFailureStillRestoresAndLeavesNoPassingImage()
     {
         string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
         var (transport, client) = Client(_ => ScriptedTransport.Failed("ERROR: capture did not finish"));
         using (client) using (var server = new ScriptedTransport().Actor())
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => ReviewCapture.CaptureCoreAsync(server, client, Plan(root),
+            Assert.Throws<InvalidOperationException>(() => ReviewCapture.CaptureCore(server, client, Plan(root),
                 HostShellKind.PowerShell, Fetch, () => { }, CancellationToken.None));
             Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
             Assert.False(Directory.Exists(root));
@@ -92,13 +92,13 @@ public sealed class ReviewCaptureTests
     }
 
     [Fact]
-    public async Task RetrievalFailureRestoresAndDoesNotExposePartialEvidence()
+    public void RetrievalFailureRestoresAndDoesNotExposePartialEvidence()
     {
         string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
         var (transport, client) = Client();
         using (client) using (var server = new ScriptedTransport().Actor())
         {
-            await Assert.ThrowsAsync<IOException>(() => ReviewCapture.CaptureCoreAsync(server, client, Plan(root),
+            Assert.Throws<IOException>(() => ReviewCapture.CaptureCore(server, client, Plan(root),
                 HostShellKind.PowerShell, (_, _, _) => throw new IOException("host transfer failed"), () => { }, CancellationToken.None));
             Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
             Assert.False(Directory.Exists(root));
@@ -106,13 +106,35 @@ public sealed class ReviewCaptureTests
     }
 
     [Fact]
-    public async Task FailedRestorationCannotProduceAPassingCapture()
+    public void CancellationDuringTransferRestoresAndPublishesNothing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
+        using var cancel = new CancellationTokenSource();
+        var (transport, client) = Client();
+        using (client) using (var server = new ScriptedTransport().Actor())
+        {
+            async Task<FetchedDirectory> Transfer(string host, string local, CancellationToken _)
+            {
+                var copied = await Fetch(host, local, CancellationToken.None);
+                cancel.Cancel();
+                return copied;
+            }
+            Assert.ThrowsAny<OperationCanceledException>(() => ReviewCapture.CaptureCore(server, client, Plan(root),
+                HostShellKind.PowerShell, Transfer, () => { }, cancel.Token));
+            Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
+            Assert.False(Directory.Exists(root));
+            Assert.Empty(Directory.GetDirectories(Path.GetDirectoryName(root)!, Path.GetFileName(root) + ".partial-*"));
+        }
+    }
+
+    [Fact]
+    public void FailedRestorationCannotProduceAPassingCapture()
     {
         string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
         var (transport, client) = Client(restore: _ => throw new InvalidOperationException("restore failed"));
         using (client) using (var server = new ScriptedTransport().Actor())
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => ReviewCapture.CaptureCoreAsync(server, client, Plan(root),
+            Assert.Throws<InvalidOperationException>(() => ReviewCapture.CaptureCore(server, client, Plan(root),
                 HostShellKind.PowerShell, Fetch, () => { }, CancellationToken.None));
             Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
             Assert.False(Directory.Exists(root));

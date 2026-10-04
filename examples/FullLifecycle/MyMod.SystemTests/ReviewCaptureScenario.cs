@@ -2,7 +2,10 @@ using Valheim.Testing.Game;
 
 namespace MyMod.SystemTests;
 
-/// <summary>Example of issue #78: two human-review stills from the same joined client and declared site.</summary>
+/// <summary>
+/// The plan's declared capture conditions for issue #78: the <see cref="ReviewCapturePlan"/> fields an operator chooses,
+/// with their defaults. <see cref="ReviewCapture.Validate"/> owns the ranges; this class only carries the JSON.
+/// </summary>
 public sealed class CaptureSettings
 {
     public string GameBuild { get; set; } = "";
@@ -15,31 +18,47 @@ public sealed class CaptureSettings
     public bool MistOff { get; set; } = true;
     public bool ClutterOff { get; set; }
     public int Supersize { get; set; } = 1;
-
-    public void Validate()
-    {
-        if (string.IsNullOrWhiteSpace(GameBuild) || GameBuild.Length > 64)
-            throw new ArgumentException("Declare the Valheim game build for the review evidence.");
-        if (Weather.Length is < 1 or > 64 || !Weather.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'))
-            throw new ArgumentException("Review weather must be one named environment.");
-        if (!float.IsFinite(TimeOfDay) || TimeOfDay is < 0 or > 1 ||
-            !float.IsFinite(CameraDistance) || CameraDistance is < 2 or > 100 ||
-            !float.IsFinite(CameraHeight) || CameraHeight is < 1 or > 100 ||
-            !float.IsFinite(CameraAzimuthDegrees) || CameraAzimuthDegrees is < 0 or >= 360 || Supersize is < 1 or > 4)
-            throw new ArgumentException("Review time, camera distance, height or supersize is outside the supported range.");
-    }
 }
 
+/// <summary>Example of issue #78: two human-review stills from the same joined client and declared site.</summary>
 public static class ReviewCaptureScenario
 {
+    private static readonly string[] Ids = ["first", "second"];
+    /// <summary>The runner's own machine runs the client in this example, so its shell decides the host path rules.</summary>
+    private static HostShell LocalShell => OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash;
+
+    /// <summary>The two stills a run under <paramref name="output"/> captures, as the library validates and takes them.</summary>
+    private static IEnumerable<ReviewCapturePlan> Shots(LifecyclePlan plan, string output) => Ids.Select(id =>
+    {
+        var capture = plan.Capture ?? throw new ArgumentException("Add capture conditions to the review-capture plan.");
+        var client = plan.Client ?? throw new ArgumentException("The review-capture scenario looks from a client: add the client section.");
+        return new ReviewCapturePlan(id,
+            new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
+            capture.Weather, capture.TimeOfDay, capture.CameraDistance, capture.CameraHeight,
+            "mymod.testing", Path.Combine(output, "capture-host-" + id),
+            Path.Combine(output, "review-" + id), plan.WorldUid, capture.GameBuild,
+            client.Pins, capture.MistOff, capture.ClutterOff, capture.Supersize, capture.CameraAzimuthDegrees);
+    });
+
+    /// <summary>
+    /// Refuses the declared conditions with the library's rule before anything launches. The output directory is not known
+    /// yet, so a fixed placeholder stands in; the run's real directories are checked again when each still is taken.
+    /// </summary>
+    public static void Validate(LifecyclePlan plan)
+    {
+        string placeholder = OperatingSystem.IsWindows() ? @"C:\review-plan-check" : "/review-plan-check";
+        foreach (var shot in Shots(plan, placeholder)) ReviewCapture.Validate(shot, LocalShell.Kind);
+    }
+
     public static void Run(CampaignRun run)
     {
         if (run.Profile != null)
             throw new NotSupportedException("This example captures on the runner's local client. A remote client needs its profile host passed to ReviewCapture.");
         var plan = run.Plan;
-        var capture = plan.Capture!;
         var client = plan.Client!;
-        IGameHost host = new LocalGameHost("review-client", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+        // The run's own directories, before the client launches: an output path with a space is refused here, not mid-round.
+        foreach (var shot in Shots(plan, run.Output)) ReviewCapture.Validate(shot, LocalShell.Kind);
+        IGameHost host = new LocalGameHost("review-client", LocalShell);
         run.Report.Provenance["humanReview"] = "two stills; no visual verdict asserted";
         new ClientRounds
         {
@@ -48,21 +67,9 @@ public static class ReviewCaptureScenario
             Rounds = ["joined"], Cancellation = run.Cancellation,
         }.Run(run.Server, () => run.OpenClient(client, null), round =>
         {
-            foreach (var id in new[] { "first", "second" })
-            {
-                round.Step($"capture {id} view for human review", () =>
-                {
-                    var shot = new ReviewCapturePlan(id,
-                        new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
-                        capture.Weather, capture.TimeOfDay, capture.CameraDistance, capture.CameraHeight,
-                        "mymod.testing", Path.Combine(run.Output, "capture-host-" + id),
-                        Path.Combine(run.Output, "review-" + id), plan.WorldUid, capture.GameBuild,
-                        client.Pins, capture.MistOff, capture.ClutterOff, capture.Supersize, capture.CameraAzimuthDegrees);
-                    _ = ReviewCapture.CaptureAsync(round.Server, round.Client, host, shot,
-                        TimeSpan.FromSeconds(client.ArrivalSeconds), TimeSpan.FromSeconds(30), run.Cancellation)
-                        .GetAwaiter().GetResult();
-                });
-            }
+            foreach (var shot in Shots(plan, run.Output))
+                round.Step($"capture {shot.Id} view for human review", () => ReviewCapture.Capture(round.Server, round.Client, host, shot,
+                    TimeSpan.FromSeconds(client.ArrivalSeconds), TimeSpan.FromSeconds(30), run.Cancellation));
             run.Report.Provenance["reviewCapture"] = "review-first/first.png and review-second/second.png; inspect both images by eye";
         });
     }
