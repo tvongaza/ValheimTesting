@@ -288,6 +288,7 @@ internal sealed class HostedServerRun
         HostInstall.RequirePatchers(listing, plan.Patchers, "client install");
         if (plan.Pinned)
             HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, BepInEx core and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, "client install");
+        await HostClientPreflight.CheckAsync(host, role.Install, platform, plan, Quick, cancellation).ConfigureAwait(false);
         await HostInstall.RequirePortFreeAsync(host, role.CliPort, Quick, cancellation).ConfigureAwait(false);
         // BepInEx rewrites its log at each start; an earlier one moves aside so the wait from offset 0 sees this start's lines only.
         var moved = (await host.RunAsync(HostedClientScripts.MoveAside(host.Shell.Kind), new Dictionary<string, string>
@@ -314,7 +315,20 @@ internal sealed class HostedServerRun
                 async (left, token) =>
                 {
                     var clock = Stopwatch.StartNew();
-                    (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left, token).ConfigureAwait(false)).EnsureMatched();
+                    var bepInEx = TimeSpan.FromSeconds(plan.BepInExSeconds);
+                    if (bepInEx > left) bepInEx = left;
+                    try
+                    {
+                        (await host.WaitForLogAsync(log, 0, new System.Text.RegularExpressions.Regex("^"), StartupEvents.StartupFailures,
+                            bepInEx, token).ConfigureAwait(false)).EnsureMatched();
+                    }
+                    catch (WaitTimeoutException error)
+                    {
+                        throw new InvalidOperationException($"BepInEx wrote no fresh log line on {host.Name} within {plan.BepInExSeconds}s. " +
+                            $"The game may have reached its menu without BepInEx; check winhttp.dll, doorstop_config.ini and BepInEx/core as one pack. " +
+                            $"The client's Player.log and boot output are kept in {local}.", error);
+                    }
+                    (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
                     if (!_seams.StateWaits) return;
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);

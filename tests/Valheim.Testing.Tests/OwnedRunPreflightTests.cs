@@ -165,6 +165,11 @@ public sealed class OwnedRunPreflightTests : IDisposable
         // A hash prefix of the plan's build agrees with it.
         install.Standing("expect.txt", $"valheimCLI.valheimCLI={install.CliMd5[..8]}\nworld=any\n");
         plan.Preflight();
+        // An inherited positive pin for an unrelated plugin would reject every command after launch.
+        install.Standing("expect.txt", $"valheimCLI.valheimCLI={install.CliMd5}\ncom.bepis.bepinex.scriptengine=any\nworld=any\n");
+        Assert.Contains("plugin the plan does not pin", Assert.Throws<InvalidOperationException>(plan.Preflight).Message);
+        install.Standing("expect.txt", $"valheimCLI.valheimCLI={install.CliMd5}\nworld=any\n");
+        plan.Preflight();
     }
 
     // ---- the Doorstop proxy and its configuration ----
