@@ -1,7 +1,7 @@
 # Check NuGet's caches and the SDK's file-based app state before dotnet run restores a file-based script.
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('bootstrap', 'validate', 'api-docs', 'campaign')]
+    [ValidateSet('bootstrap', 'validate', 'api-docs', 'campaign', 'env')]
     [string]$Task,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$TaskArgs
@@ -14,6 +14,7 @@ $script = switch ($Task) {
     'validate' { 'validate.cs' }
     'api-docs' { 'api-docs.cs' }
     'campaign' { 'campaign' }
+    'env' { 'env' }
 }
 
 function Get-CachePath([string]$variable, [string]$kind) {
@@ -55,10 +56,15 @@ else {
 }
 $env:NUGET_PACKAGES = $packages
 $env:NUGET_HTTP_CACHE_PATH = $http
-if ($Task -eq 'campaign') {
+if ($Task -eq 'campaign' -or $Task -eq 'env') {
     Push-Location $root
     try {
-        & dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign @TaskArgs
+        if ($Task -eq 'campaign') {
+            & dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign @TaskArgs
+        }
+        else {
+            & dotnet run --project examples/NativeSmoke -c Release -- env @TaskArgs
+        }
         exit $LASTEXITCODE
     }
     finally { Pop-Location }

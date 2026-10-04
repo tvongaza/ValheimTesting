@@ -27,7 +27,9 @@ public static class ThreeActorCampaign
             HostedCampaignPreparation.Check(manifestFile);
             var manifest = HostedCampaignManifest.Read(manifestFile);
             var template = ServerRunPlan.Read<LifecyclePlan>(templateFile);
-            var profile = EnvironmentProfile.Read(manifest.Profile);
+            var profile = manifest.Inventory.Length != 0
+                ? EnvironmentInventory.Read(manifest.Inventory).Resolve(manifest).Profile
+                : EnvironmentProfile.Read(manifest.Profile);
             if (!NativeDependencyLock.ReadReady(manifest.Server.DependencyLock).CliManifest.Files.Any(file =>
                     file.Plugins.Contains("valheimCLI.worldtools", StringComparer.Ordinal)))
                 throw new InvalidOperationException("The server needs the pinned ValheimCLI WorldTools pack for cli_peers before the three-actor run starts.");
