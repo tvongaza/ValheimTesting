@@ -29,9 +29,11 @@ public sealed partial class LifecyclePlan : ServerRunPlan
     /// <summary>Optional human checkpoint; never part of pass or fail.</summary>
     public ReviewSettings Review { get; set; } = new();
 
-    public static LifecyclePlan ReadValidated(string path)
+    public static LifecyclePlan ReadValidated(string path) => Validated(Read<LifecyclePlan>(path));
+
+    /// <summary>The example's rules on a plan in memory: a read plan, or a campaign template once bound to its prepared actors.</summary>
+    public static LifecyclePlan Validated(LifecyclePlan plan)
     {
-        var plan = Read<LifecyclePlan>(path);
         // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
         if (!plan.Pinned || plan.Client is { Pinned: false } || plan.RefusedClient is { Pinned: false } || plan.SecondClient is { Pinned: false })
             throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");

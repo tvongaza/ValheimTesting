@@ -22,8 +22,6 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public IReadOnlyList<string> PrepareModes { get; init; } = [];
     /// <summary>Refuses a mode and plan that do not belong together (throw <see cref="ArgumentException"/>).</summary>
     public Action<string, TPlan>? CheckMode { get; init; }
-    /// <summary>Checks a plan against its optional host profile before the runner copies fixtures or starts a process.</summary>
-    public Action<TPlan, EnvironmentProfile?>? CheckEnvironment { get; init; }
     /// <summary>Adds the mod's provenance (scenario details) to the report.</summary>
     public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
     /// <summary>
@@ -173,6 +171,15 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// </example>
 public static class PinnedServerRun
 {
+    // Preparing a campaign copies a game install per actor, on every host at once.
+    private static readonly TimeSpan CampaignTimeout = TimeSpan.FromMinutes(10);
+    // A plan's unused sites are NaN until set.
+    private static readonly JsonSerializerOptions BoundPlanJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true,
+        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals,
+    };
+
     /// <summary>The option that names an environment profile; it comes before the mode.</summary>
     public const string ProfileOption = "--profile";
 
@@ -234,14 +241,45 @@ public static class PinnedServerRun
             Console.Error.WriteLine($"Usage: {options.Name} [{ProfileOption} <environment.json>] {string.Join("|", modes)} <plan.json> <new-output-directory>");
             return 2;
         }
-        string mode = args[0];
+        string planFile = args[1];
         using var cancellation = new RunCancellation();
+        return await RunAsync(args[0], () => options.ReadPlan(planFile), () => WorldFixture.Hash(planFile), Path.GetFileName(planFile),
+            args[2], options, cancellation, profilePath, campaign: null).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="plan"/> on a campaign's actors (<see cref="HostedCampaignManifest"/>): the dedicated server and each
+    /// named client on the environment the inventory assigns it. The campaign's static preflight and the plan's agreement with
+    /// it (every plugin the plan pins is one a role selects; no angle-bracket placeholder left in the server's arguments) are
+    /// Preflight steps; preparing the disposable installs and characters (<see cref="HostedCampaignPreparation.PrepareAsync"/>,
+    /// with its read-only host checks first) and binding them to the plan (<see cref="PreparedHostedCampaign.ApplyTo"/>) are
+    /// Setup steps; retiring them after the processes stopped is a Cleanup step. <paramref name="clients"/> names the plan's
+    /// client sections by the campaign's client names. The evidence, <c>result.json</c> and <c>junit.xml</c> are written to
+    /// <paramref name="output"/> (new), the prepared inputs to its <c>prepared/</c>. Exit codes as <see cref="MainAsync{TPlan}"/>.
+    /// </summary>
+    public static async Task<int> RunCampaignAsync<TPlan>(string manifestFile, TPlan plan,
+        Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> clients, string output, PinnedServerRunOptions<TPlan> options)
+        where TPlan : ServerRunPlan
+    {
+        ArgumentNullException.ThrowIfNull(plan); ArgumentNullException.ThrowIfNull(clients);
+        using var cancellation = new RunCancellation();
+        // The bound plan is kept as evidence (prepared/plan.json, never read back): its hash is the run's planSha256.
+        string full = Path.GetFullPath(output);
+        return await RunAsync("run", () => plan, () => WorldFixture.Hash(Path.Combine(full, "prepared", "plan.json")),
+            Path.GetFileName(manifestFile), output, options, cancellation, profilePath: null, campaign: (manifestFile, clients)).ConfigureAwait(false);
+    }
+
+    private static async Task<int> RunAsync<TPlan>(string mode, Func<TPlan> readPlan, Func<string> planHash, string planName, string outputArgument,
+        PinnedServerRunOptions<TPlan> options, RunCancellation cancellation, string? profilePath,
+        (string Manifest, Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> Clients)? campaign) where TPlan : ServerRunPlan
+    {
         var report = new ScenarioReport(options.Name);
         OwnedServerSession? session = null;
         WorldFixture? runtime = null, world = null;
         PinnedServerRunContext<TPlan>? launched = null;
         HostedServerRun? hosted = null;
-        string output = Path.GetFullPath(args[2]);
+        PreparedHostedCampaign? prepared = null;
+        string output = Path.GetFullPath(outputArgument);
         bool ownOutput = false, pinned = true, definite = false, unknownOutcome = false;
         string? unknown = null;
         var phase = StepPhase.Preflight; // Where a failure outside any step happened: before copying, until the scenario, or in it.
@@ -250,38 +288,65 @@ public static class PinnedServerRun
         try
         {
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
-            var plan = options.ReadPlan(args[1]); plan.CheckOutput(output); plan.CheckPatchersAndLogScan(); plan.CheckCrossplay();
+            var plan = readPlan(); plan.CheckPatchersAndLogScan(); plan.CheckCrossplay();
+            if (campaign == null) plan.CheckOutput(output); // A campaign's sources are its prepared copies, bound below.
             pinned = plan.Pinned;
             if (!pinned)
             {
                 // Only the plan's own explicit "pinning": "none" gets here; warned before anything is copied or launched.
-                EnvironmentPinning.Warn($"{options.Name} with plan {Path.GetFileName(args[1])}");
+                EnvironmentPinning.Warn($"{options.Name} with plan {planName}");
                 report.MarkNotPinned("the plan sets pinning \"none\"");
             }
-            ServerPlatform platform;
             EnvironmentProfile? environment = null;
+            if (campaign is var (manifestFile, bind))
+            {
+                // Stages 1 and 2 never copy: every independent problem is reported before the first host write.
+                Directory.CreateDirectory(output); ownOutput = true;
+                report.Provenance["campaignSha256"] = WorldFixture.Hash(manifestFile);
+                HostedCampaignPreparation.Inspection inspection = null!;
+                report.Step(StepPhase.Preflight, "campaign inputs and actor assignment", () =>
+                {
+                    inspection = HostedCampaignPreparation.InspectInputs(manifestFile);
+                    inspection.Report.RequireReady();
+                    report.Provenance["inventorySha256"] = WorldFixture.Hash(inspection.Inputs!.Manifest.Inventory);
+                });
+                report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, bind(plan)));
+                phase = StepPhase.Setup; // From here the hosts are written to.
+                await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
+                    prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
+                        options.HostSeams?.Host, cancellation.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
+                {
+                    prepared!.ApplyTo(plan, prepared.Manifest, bind(plan), Path.Combine(output, "prepared"));
+                    plan.CheckOutput(output);
+                    File.WriteAllText(Path.Combine(output, "prepared", "plan.json"), JsonSerializer.Serialize(plan, plan.GetType(), BoundPlanJson) + "\n");
+                });
+                environment = prepared!.Environment;
+            }
+            ServerPlatform platform;
             if (profilePath != null)
             {
-                // The runtime is the server host's install, copied and checked there; nothing local is read for it.
                 environment = EnvironmentProfile.Read(profilePath);
-                options.CheckEnvironment?.Invoke(plan, environment);
+                report.Provenance["profileSha256"] = WorldFixture.Hash(profilePath);
+            }
+            if (environment != null)
+            {
+                // The runtime is the server host's install, copied and checked there; nothing local is read for it.
                 hosted = HostedServerRun.Create(environment, plan, options.Name, options.HostSeams);
                 // A client's lost Steam account lease stops that client, then the run, as Ctrl+C would.
                 hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };
-                report.Provenance["profileSha256"] = WorldFixture.Hash(profilePath);
                 hosted.Record(report.Provenance);
                 platform = hosted.HostProfile.Platform == "windows" ? ServerPlatform.Windows : ServerPlatform.Linux;
             }
             else
             {
-                options.CheckEnvironment?.Invoke(plan, null);
                 // The runtime's contents decide its platform; checked on the pinned source so a wrong host fails before copying.
                 platform = ServerLaunch.Detect(plan.Runtime.Source); plan.CheckExecutable(platform);
                 if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);
             }
             if (hosted != null && options.StagedRuntime != null) throw new ArgumentException("A --profile run copies its runtime on the server host; a staged local runtime copy cannot stand in for it.");
             options.CheckMode?.Invoke(mode, plan);
-            report.Provenance["planSha256"] = WorldFixture.Hash(args[1]);
+            report.Provenance["planSha256"] = planHash();
             report.Provenance["scenario"] = plan.Scenario;
             options.Provenance?.Invoke(plan, report.Provenance);
             if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = WorldFixture.Hash(runner);
@@ -291,7 +356,7 @@ public static class PinnedServerRun
             report.Provenance["crossplay"] = plan.Crossplay ? "true" : "false";
             // Never deleted automatically: a failed stop or partial save must stay inspectable. Only the runtime copy goes at
             // the end, after a clean stop, keeping what the run changed in it.
-            Directory.CreateDirectory(output); ownOutput = true;
+            if (!ownOutput) { Directory.CreateDirectory(output); ownOutput = true; }
             // Before copying: a drive that fills part-way through a copy leaves a broken runtime behind.
             report.Step(StepPhase.Preflight, "enough free disk space for the copies", () =>
             {
@@ -387,6 +452,14 @@ public static class PinnedServerRun
             }
             if (hosted != null)
                 foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped, KeepRequested(options.KeepRuntime)).ConfigureAwait(false)) Classify(failure);
+            // After every process the run started has stopped: the campaign's disposable installs and characters go.
+            if (prepared != null)
+                try
+                {
+                    await report.StepAsync(StepPhase.Cleanup, "retire the campaign's prepared installs and characters",
+                        () => prepared.DisposeAsync().AsTask()).ConfigureAwait(false);
+                }
+                catch (Exception error) { Console.Error.WriteLine("Prepared copies retained; inspect the hosts before another run: " + error.Message); Classify(error); }
             // After the stop, which keeps each boot's logs; a client's were kept when the scenario closed it. Logs missing after
             // an unknown outcome are explained by it, so the scan then decides nothing on its own.
             if (launched != null && launched.Logs.Count != 0 && !report.ScanLogs(launched.Logs, launched.Plan.LogScan) && unknown == null) definite = true;

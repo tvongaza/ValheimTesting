@@ -1,5 +1,5 @@
 {
-  "profile": "./environment.json",
+  "inventory": "./sample-environment-inventory.json",
   "world": "./fixture-world",
   "join": "test-server.example:2456",
   "server": {

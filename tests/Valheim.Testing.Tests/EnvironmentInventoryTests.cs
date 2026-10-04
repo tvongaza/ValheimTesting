@@ -117,6 +117,28 @@ public sealed class EnvironmentInventoryTests : IDisposable
 
     }
 
+    [Theory]
+    [InlineData("hosting-client")]
+    [InlineData("server,client")]
+    public void RecipeRolesAreOneServerOrOneClient(string roles)
+    {
+        var inventory = Inventory();
+        inventory.Environments[1].Roles = [.. roles.Split(',')];
+        Assert.Contains("roles [\"server\"] or [\"client\"]", Assert.Throws<ArgumentException>(() => inventory.Validate(_root)).Message);
+    }
+
+    [Fact]
+    public void ActorsOnOneHostNeverShareACliPort()
+    {
+        var inventory = Inventory();
+        inventory.Environments[1].CliPort = 5501; // client-pc on the server's port on the same host
+        inventory.Validate(_root);
+        var campaign = Campaign();
+        campaign.Clients["client-a"].EnvironmentCandidates = ["client-pc"];
+        string message = Assert.Throws<ArgumentException>(() => inventory.Resolve(campaign)).Message;
+        Assert.Contains("ValheimCLI port conflicts on host pc", message);
+    }
+
     [Fact]
     public void InventoryRejectsCredentialFieldsBeforeDeserializing()
     {

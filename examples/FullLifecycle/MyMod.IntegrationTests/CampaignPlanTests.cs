@@ -127,36 +127,13 @@ public sealed class CampaignPlanTests : IDisposable
         Refused(plan, "whole-metre coordinates");
     }
 
-    [Fact] public void OwnershipHandoffRejectsAmbiguousClientsAndRequiresTwoAccountHosts()
+    [Fact] public void OwnershipHandoffRejectsAmbiguousClients()
     {
-        var valid = Plan(LifecyclePlan.OwnershipHandoffScenario);
-        var plan = Read(valid);
-        Assert.Throws<ArgumentException>(() => plan.CheckHandoffEnvironment(null));
-        var profile = new Valheim.Testing.Game.EnvironmentProfile
-        {
-            Clients = new()
-            {
-                ["client-a"] = new() { Host = "machine-a", CliPort = 5556, SteamAccount = "account-a", Install = plan.Client!.Install },
-                ["client-b"] = new() { Host = "machine-b", CliPort = 5557, SteamAccount = "account-b", Install = plan.SecondClient!.Install },
-            },
-            SteamAccounts = new(),
-        };
-        plan.CheckHandoffEnvironment(profile);
-        profile.Clients["client-b"].SteamAccount = "account-a";
-        Assert.Contains("two distinct Steam accounts", Assert.Throws<ArgumentException>(() => plan.CheckHandoffEnvironment(profile)).Message);
-        profile.Clients["client-b"].SteamAccount = "account-b";
-        profile.Clients["client-b"].Host = "MACHINE-A";
-        Assert.Contains("separate hosts", Assert.Throws<ArgumentException>(() => plan.CheckHandoffEnvironment(profile)).Message);
-        profile.Clients["client-b"].Host = "machine-b";
-        profile.Clients["client-b"].CliPort = 5556;
-        Assert.Contains("ports must match", Assert.Throws<ArgumentException>(() => plan.CheckHandoffEnvironment(profile)).Message);
-
+        // Separate hosts, distinct signed-in Steam identities and CLI ports are the inventory's assignment (EnvironmentInventoryTests).
+        Read(Plan(LifecyclePlan.OwnershipHandoffScenario));
         var duplicateCharacter = Plan(LifecyclePlan.OwnershipHandoffScenario);
         duplicateCharacter["secondClient"]!["character"] = "ClientA";
         Refused(duplicateCharacter, "distinct disposable character");
-        var duplicatePort = Plan(LifecyclePlan.OwnershipHandoffScenario);
-        duplicatePort["secondClient"]!["port"] = 5556;
-        Refused(duplicatePort, "distinct ValheimCLI ports");
         var missingCapability = Plan(LifecyclePlan.OwnershipHandoffScenario);
         missingCapability["secondClient"]!["pins"]!.AsObject().Remove(LifecyclePlan.AdapterPlugin);
         Refused(missingCapability, "Pin " + LifecyclePlan.AdapterPlugin);

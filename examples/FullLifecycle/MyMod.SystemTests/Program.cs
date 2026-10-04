@@ -12,15 +12,23 @@ if (args.Length > 0 && args[0] is HostedRun.RunMode or HostedRun.ValidateMode) r
 var options = new PinnedServerRunOptions<LifecyclePlan>
 {
     Name = "mymod-system-test",
-    ReadPlan = LifecyclePlan.ReadValidated,
+    ReadPlan = path =>
+    {
+        var plan = LifecyclePlan.ReadValidated(path);
+        // Two simultaneous clients are a campaign's actors (an inventory assigns their hosts and Steam identities).
+        if (plan.Scenario is LifecyclePlan.ThreeActorScenario or LifecyclePlan.OwnershipHandoffScenario)
+            throw new ArgumentException($"The {plan.Scenario} scenario runs as a campaign: campaign run <campaign.json> <plan.json> <new-output-directory>.");
+        return plan;
+    },
     SessionCapability = "mymod.testing/session",
     SessionTokenVariable = LifecyclePlan.SessionTokenVariable,
     CheckMode = (mode, plan) =>
     {
         if (mode == "run" && plan.Client == null && !plan.ServerOnly)
             throw new ArgumentException($"A run looks from a client: add the client section, or use the {LifecyclePlan.ServerScenario} scenario for the server half alone.");
+        // A campaign template is bound to its prepared actors in memory; its own rules apply to the bound plan.
+        if (plan.Scenario is LifecyclePlan.ThreeActorScenario or LifecyclePlan.OwnershipHandoffScenario) LifecyclePlan.Validated(plan);
     },
-    CheckEnvironment = (plan, profile) => plan.CheckHandoffEnvironment(profile),
     Provenance = (plan, provenance) =>
     {
         provenance["clientMode"] = plan.Client?.Mode ?? "none";

@@ -139,7 +139,7 @@ The result is a local directory of hashed evidence: the source frames `frame-000
 
 [`sample-plan-area-objects.json`](MyMod.SystemTests/sample-plan-area-objects.json) shows the separate `area-objects` run for issue #201. It joins an owned, pinned client to a disposable dedicated server, arrives at dry ground, then calls `AreaObjectSnapshot.Capture` at a 16 m radius. The server supplies saved ZDO and container rows; the client supplies loaded prefabs and current piece-support rows. The runner writes the complete replies to `evidence/area-objects-001.json` and links it, with its SHA-256, from `result.json`'s `Evidence`. This is optional diagnostic evidence: it checks complete replies and world identity, not whether MyMod should have placed a particular object. Use the normal `validate` and `run` commands with the sample's paths and hashes replaced. See [object snapshots](../../docs/area-object-snapshots.md) for the contract and privacy limits.
 
-Six more scenarios, and a hosted run, take the toolkit's lifecycle steps and world observations through one native campaign: a real dedicated server owned by the runner (as above, or on another host with `--profile`) and a real Windows client. Each plan runs one scenario; together they prove the native acceptance items of issues #20, #23, #24, #26, #30, #31, #32, #33, #34 and #35 that a game can prove, and #91's content census once its native run is done (below). The dry-site feature is unchanged. What the campaign adds is small and kept apart:
+Six more scenarios, and a hosted run, take the toolkit's lifecycle steps and world observations through one native campaign: a real dedicated server owned by the runner (as above, or on another host with `--profile`, or as a campaign) and a real Windows client. Each plan runs one scenario; together they prove the native acceptance items of issues #20, #23, #24, #26, #30, #31, #32, #33, #34 and #35 that a game can prove, and #91's content census once its native run is done (below). The dry-site feature is unchanged. What the campaign adds is small and kept apart:
 
 - **MyMod** gains a version handshake adapted from the wiki's [RPC version-handshaking concept](https://github.com/Valheim-Modding/Wiki/wiki/RPC-Version-Handshaking) ([VersionHandshake.cs](MyMod/VersionHandshake.cs); its net version is a build property, so `-p:MyModNetVersion=2` builds a mismatched MyMod), one server-synced config entry with its own routed-RPC sync ([SyncedGreeting.cs](MyMod/SyncedGreeting.cs), `[Server] Greeting`, changed on the server with `mymod_greeting <word>`), a custom-data key on the player (`mymod_note <word>` writes `mymod.note`) and a saved label on its marker (`mymod_label`), and registered content for the content census ([Content.cs](MyMod/Content.cs): one item, `MyMod_SurveyStake`, registered in ObjectDB and as a ZNetScene prefab, one recipe, `Recipe_MyMod_SurveyStake`, a Hammer-table piece `MyMod_SurveyPost`, and a status effect `MyMod_SurveyBlessing`; `-p:MyModOmit=recipe` and `-p:MyModOmit=status-effect` build two separate census controls). Unlike the wiki example, a client without MyMod still joins; only an installed, mismatched copy is refused. Nothing spawns the item. The wiki pattern predates 1.0; the native checks below are the evidence for this example's behavior on 1.0.16.
 - **MyMod.TestAdapter** registers the toolkit's adapter commands (`zones`, `custom-data`, `globalkeys`, `globalkey` behind the `MYMOD_TEST_FIXTURES` gate, `config`, `unresolved-prefabs`, `dungeon-rooms`, `harmony`, `content-census`) and the mod's own marker and ownership commands. It depends on MyMod only softly and never on its types, so it also loads on a client without MyMod.
@@ -156,7 +156,7 @@ Six more scenarios, and a hosted run, take the toolkit's lifecycle steps and wor
 | [content-census](MyMod.SystemTests/sample-plan-content-census.json) | `content-census` | MyMod, adapter | MyMod, adapter (the server's builds) | #91/#114 in each round (first, after restart and rejoin) each side observes MyMod's declared item, prefabs, recipe, Hammer-table piece and status effect ([content-expectations.json](MyMod.SystemTests/content-expectations.json)); dependencies resolve, no undeclared content appears in scope, and the observation comes from that side's pinned MyMod build. The #114 additions passed a native run. |
 | [ownership-handoff](MyMod.SystemTests/sample-plan-ownership-handoff.json) | `ownership-handoff` | MyMod, adapter | Two simultaneous owned clients, each with MyMod and adapter on a different host and Steam account | #211 A explicitly claims the marker; B sees A's owner; A leaves; B explicitly claims it; server and B agree on one owner. This tests orchestration, not automatic ownership of every Valheim object. Native Windows dedicated server + macOS/Windows clients passed 47/47 steps (Valheim 1.0.16) |
 
-For `ownership-handoff`, use the [environment inventory](MyMod.SystemTests/sample-environment-inventory.json). It lists client hosts in preference order and maps their `cliPort` values to the sample plan's `client.port` and `secondClient.port`. Each host has its own game install and disposable local character. Sign into Steam on each client host first; preflight reads the account in use and rejects a conflict. No Steam ID or account-pool file is needed in the inventory:
+Run `ownership-handoff` as a campaign ([Prepare the campaign](#prepare-the-campaign)) with the [environment inventory](MyMod.SystemTests/sample-environment-inventory.json). It lists client hosts in preference order; binding the prepared actors sets each client's install and `port` from its assigned environment. Each host has its own game install and disposable local character. Sign into Steam on each client host first; preflight reads the account in use and rejects a conflict. No Steam ID or account-pool file is needed in the inventory:
 
 ```json
 {
@@ -170,7 +170,7 @@ For `ownership-handoff`, use the [environment inventory](MyMod.SystemTests/sampl
 }
 ```
 
-Run `validate` first: a missing profile, shared account or host, ambiguous port or character, missing capability, or wrong plugin pin is refused before a fixture copy or launch. Then run the scenario with the same plan and profile. The profile stays private; the [sample plan](MyMod.SystemTests/sample-plan-ownership-handoff.json) uses placeholder file hashes and a documentation-only server address. Each client joins with the toolkit's one join (`SessionControl.JoinWorld`: world pins, the world awaited, the player protected, test access on its disposable character), and arrives with the toolkit's one arrival, `PlayerPlacement.Arrive` without a server, so the client teleports itself: with two players the server cannot name one.
+Run `campaign check` first: two clients on one host, a CLI port conflict, two clients with one registered character, or a plugin the plan pins but a role's lock does not select is refused before any host is contacted; a shared signed-in Steam account is refused by `env preflight --hosts` and again before the first copy. The example's own plan rules (a missing capability, one character name twice) are checked on the bound plan before any game starts. Then `campaign run` with the same manifest and plan; the ordinary `run` refuses these two scenarios. The inventory stays private; the [sample plan](MyMod.SystemTests/sample-plan-ownership-handoff.json) uses placeholder file hashes and a documentation-only server address. Each client joins with the toolkit's one join (`SessionControl.JoinWorld`: world pins, the world awaited, the player protected, test access on its disposable character), and arrives with the toolkit's one arrival, `PlayerPlacement.Arrive` without a server, so the client teleports itself: with two players the server cannot name one.
 
 Give the clients separate landing points at least 3 m apart, each beside the marker rather than on it. Before either client launches, the server checks the declared heights against the fixture's generator and refuses wet targets. After each teleport's floor-ready signal, the client measures loaded terrain at its target (`Arrive`'s `loadedGround`), which may include location levelling absent from the raw generator, and the scenario refuses it when it is not dry. That measured height is a placement input, not a terrain-correctness assertion; a separate player-support observation must still confirm proximity, grounding and low speed. Failed arrival keeps a bounded read-only support/ground diagnostic before teardown.
 
@@ -211,47 +211,44 @@ client B back at its menu while A stays in the world, and both joined again. Eac
 the next checkpoint reads the resulting state; a failed or uncertain transition is not retried. This tests setup and
 rejoin, not marker ownership or gameplay. The underlying
 `HostedCampaignPreparation` accepts any number of named clients beside one dedicated server: each role is a separate
-profile/lock/character object, and `ApplyTo` binds a dictionary of client plans by name. The example binds only
+lock/character object, and `ApplyTo` binds a dictionary of client plans by name. The example binds only
 `client-a` and `client-b` because its assertion expects two peers. A different mod can bind three or more without
-changing preparation. Simultaneous clients need different Steam account leases, hosts and registered character player IDs.
+changing preparation. Simultaneous clients need different signed-in Steam identities, hosts and registered character player IDs.
 
 The server and every client prepare their runtime in parallel, with one claim per host. After the server's ready
 checkpoint, `OpenProfileClientsParallel` launches the named clients concurrently and waits for all of them at the
 menu checkpoint. The join and rejoin checkpoints are explicit so a test can pause one actor while the others stay in
 the world. A failed client start closes the other successful starts before teardown; it does not advance the test.
 
-Copy the two sample JSON files to a private test directory. In the campaign manifest, name the private environment
-profile, fixture world, direct-join address, and a reviewed dependency lock for each role. Create each lock from an
+Copy the sample campaign and inventory to a private test directory. In the campaign manifest, name the private environment
+inventory, fixture world, direct-join address, and a reviewed dependency lock for each role. Create each lock from an
 explicit `NativeDependencyRequest` with `dotnet run scripts/native-dependencies.cs -- resolve request.json lock.json`;
 the lock selects the mod, its hard dependencies and one coherent ValheimCLI core and packs. The server lock must include
-WorldTools because the two-peer checkpoint calls `cli_peers`; `campaign check` refuses a lock without it before the
-game starts. If the source install's loader is unsuitable, set `loaderPackage` on that campaign role to a reviewed
+WorldTools because the two-peer checkpoint calls `cli_peers`: the plan pins `valheimCLI.worldtools`, and `campaign check`
+refuses a plugin the plan pins but the role's lock does not select, before the game starts. If the source install's loader is unsuitable, set `loaderPackage` on that campaign role to a reviewed
 `BepInExLoaderPackage` manifest. The existing package API captures and validates its files and hashes; campaign preparation
 applies them only to the disposable copy. Do not repair the live source install or copy individual Doorstop files by hand.
 A nested `BepInEx/core/core` can make the preloader load Harmony twice and abort before writing its main log.
 
-For an ordered set of reusable machines, copy [the environment inventory template](MyMod.SystemTests/sample-environment-inventory.json)
-to that private directory. Replace its host addresses and paths. Sign into Steam on each client host beforehand;
+The [environment inventory template](MyMod.SystemTests/sample-environment-inventory.json) lists the reusable machines
+in preference order. Replace its host addresses and paths. Sign into Steam on each client host beforehand;
 the runner reads the signed-in identity during host preflight, refuses two clients on the same account, and checks
-the running game's own identity after launch. It never changes the login. The private prepared profile derives
-one lease entry per observed identity. Inventories that may use the same accounts must use the same `leaseHost` and
+the running game's own identity after launch. It never changes the login. The prepared environment, kept in memory,
+leases one entry per observed identity. Inventories that may use the same accounts must use the same `leaseHost` and
 `leaseDirectory` to coordinate their leases. Set
-`"inventory": "environment-inventory.json"` in the campaign manifest **instead of** `profile`. Each campaign role
+`"inventory": "environment-inventory.json"` in the campaign manifest. Each campaign role
 may list `environmentCandidates` in preference order, or omit it to consider all compatible recipes in inventory
 order. `differentHostFrom` names actors that must run on another host; for example, client B may require a host
 different from client A while the dedicated server shares client A's machine. Resolution backs up to another recipe
-if an earlier choice leaves a later actor without a compatible host. A recipe with `hosting-client` capability is
-reserved for a client-hosted scenario; this dedicated-server campaign only assigns `server` and `client` recipes.
+if an earlier choice leaves a later actor without a compatible host. A recipe's `roles` is `["server"]` or `["client"]`.
 Run `valheim-test env preflight` first to see each chosen recipe and its reason. `--hosts` adds read-only checks of
 the selected installs, ValheimCLI ports and signed-in Steam accounts. Preparation writes
-`environment-assignments.json` beside its generated private profile so the choice is reviewable afterwards. Successful
-teardown deletes the generated profile, which contains the observed Steam IDs; it keeps the assignment report. The
-source installs remain untouched and all actor runtime copies are made after the full preflight passes.
+`environment-assignments.json` to the output's `prepared/` so the choice is reviewable afterwards; the observed Steam IDs
+are never written. The source installs remain untouched and all actor runtime copies are made after the full preflight passes.
 Rented GPU VM client environments are experimental in this campaign flow; start with local or known SSH desktops.
 They still require an interactive desktop, a signed-in Steam client and the same preflight and lease checks.
 
-Legacy fixed-profile campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool;
-inventory campaigns discover the IDs from the selected hosts instead. Preparation checks identity before copying;
+Campaigns discover the Steam IDs from the selected hosts; no account file or pinned ID exists. Preparation checks identity before copying;
 launch repeats that check under the account lease, then verifies the game's
 own identity. Unix's remembered Steam login alone is not proof of the running game's account. Identity values are redacted
 from the recorded identity reply. The FullLifecycle runner opts into `TestAccess.Ensure`: dedicated servers acknowledge
@@ -271,17 +268,17 @@ dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- camp
 
 The first line is the candidate `valheim-test env preflight MANIFEST` command, run from the NativeSmoke project until
 #259's `valheim-test env` owns it; the same lines work in any shell (a sandbox with a blocked NuGet cache: see the recipe in [AGENTS.md](../../AGENTS.md)). Use `--json` for a machine-readable report. It
-reports all independent local lock, loader, character, fixture and profile problems it can find in one pass, plus the
+reports all independent local lock, loader, character, fixture and inventory problems it can find in one pass, plus the
 selected actors and hosts. Add `--hosts` to read the selected source installs and Steam sessions on their hosts,
 and to check the combined copy size of actors sharing a target volume against its free space;
 it does not copy or launch anything. Without that flag it does not contact hosts or assert their current readiness.
-The scenario's `check` adds its own plan requirements without touching a host. A ready host result is still checked
+`campaign check` adds the plan's agreement with the campaign (world and join set, pinned plugins selected, no placeholder argument) without touching a host; the example's own plan rules run once the plan is bound to its prepared actors; `campaign run` starts with the same two checks as its Preflight steps. A ready host result is still checked
 again under leases before launch. The run
 takes one lock per host, checks for conflicting client or owned-runtime processes, and prepares all named actors concurrently, even when a server and
 client share a host. Each actor gets its own clean install copy, selected mod and ValheimCLI files, and the clients get
 separate registered character names. The runner waits for every preparation to settle before it starts the server;
-on failure it retires every copy whose ownership was established. It then derives strict pins and calls the usual
-`PinnedServerRun`. The campaign also copies the manifest's one-world fixture into the dedicated server's
+on failure it retires every copy whose ownership was established. It then derives strict pins and runs the plan through
+`PinnedServerRun.RunCampaignAsync`, with the prepared environment in memory. The campaign also copies the manifest's one-world fixture into the dedicated server's
 `worlds_local` layout. The original fixture stays read-only; this layout matters because Valheim silently creates a
 new world when a world of the requested name is absent from `-savedir/worlds_local`.
 It attempts to retire the prepared copies after the runner stops. If a process is still active or a stop cannot be
@@ -289,8 +286,8 @@ established, the guarded cleanup refuses to remove its character or install and 
 Ctrl+C or SIGTERM cancels preparation as well as the game phase. Preparation waits for sibling actors to settle,
 then attempts cleanup without the cancelled token; it reports any unproven cleanup rather than claiming the host is free.
 An abrupt runner crash still needs the durable recovery workflow tracked in #257.
-The output holds the generated plan, role-specific CLI manifests, normal `result.json` and JUnit evidence, plus
-`campaign-times.json` with preparation, scenario and cleanup seconds. No game
+The output holds the normal `result.json` and JUnit evidence, whose Preflight, Setup and Cleanup steps carry the
+preparation and retirement seconds, and `prepared/` with the assignment report and role-specific CLI manifests. No game
 startup is part of the `check` result.
 
 1. **Builds.** Build MyMod twice: normally, and with `-p:MyModNetVersion=2` into another folder (`-o`), for the refused client; for the two content-census controls, build separate copies with `-p:MyModOmit=recipe` and `-p:MyModOmit=status-effect`. Build the adapter and the controls you run (FieldOnlyState needs `-p:CliDll=`, as the adapter does). Pin every DLL by MD5 in the plans.

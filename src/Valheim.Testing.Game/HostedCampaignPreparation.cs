@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using valheimCLI;
 
 namespace Valheim.Testing.Game;
 
@@ -20,14 +21,14 @@ public sealed class HostedCampaignRole
 }
 
 /// <summary>
-/// Private setup input for one dedicated server and named clients. The profile supplies hosts, source installs and
-/// account leases; each role has its own dependency lock so server-only mods never appear on a client by accident.
+/// Private setup input for one dedicated server and named clients: the campaign's actor declaration. The inventory supplies hosts,
+/// source installs and the Steam lease location; each role has its own dependency lock so server-only mods never appear on a
+/// client by accident.
 /// Paths to local inputs may be relative to this manifest. No code or dependencies are downloaded implicitly.
 /// </summary>
 public sealed class HostedCampaignManifest
 {
-    public string Profile { get; set; } = "";
-    /// <summary>Private ordered host/environment inventory. Use this instead of a fixed profile.</summary>
+    /// <summary>The private ordered host/environment inventory (<see cref="EnvironmentInventory"/>) the actors are assigned from.</summary>
     public string Inventory { get; set; } = "";
     /// <summary>Optional pinned world fixture for a scenario runner built on this preparation.</summary>
     public string World { get; set; } = "";
@@ -47,12 +48,16 @@ public sealed class HostedCampaignManifest
     public static HostedCampaignManifest Read(string path)
     {
         string directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
-        var manifest = JsonSerializer.Deserialize<HostedCampaignManifest>(File.ReadAllText(path), Json)
+        string json = File.ReadAllText(path);
+        using (var document = JsonDocument.Parse(json))
+            if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("profile", out _))
+                throw new InvalidDataException("A campaign no longer takes a fixed environment profile: replace profile with inventory, " +
+                    "a private environment inventory listing the hosts and environments its actors are assigned from.");
+        var manifest = JsonSerializer.Deserialize<HostedCampaignManifest>(json, Json)
             ?? throw new InvalidDataException("Empty hosted campaign manifest.");
-        if (string.IsNullOrWhiteSpace(manifest.Profile) == string.IsNullOrWhiteSpace(manifest.Inventory))
-            throw new InvalidDataException("Name exactly one of profile (fixed legacy assignment) or inventory (ordered environments).");
-        if (manifest.Profile.Length != 0) manifest.Profile = Path.GetFullPath(manifest.Profile, directory);
-        if (manifest.Inventory.Length != 0) manifest.Inventory = Path.GetFullPath(manifest.Inventory, directory);
+        if (string.IsNullOrWhiteSpace(manifest.Inventory))
+            throw new InvalidDataException("Name the private environment inventory (inventory) the campaign's actors are assigned from.");
+        manifest.Inventory = Path.GetFullPath(manifest.Inventory, directory);
         if (manifest.World.Length != 0) manifest.World = Path.GetFullPath(manifest.World, directory);
         if (manifest.Server == null || manifest.Clients == null) throw new InvalidDataException("A hosted campaign needs a server and named clients.");
         void Resolve(HostedCampaignRole role)
@@ -75,8 +80,9 @@ public sealed class HostedCampaignManifest
 }
 
 /// <summary>
-/// Prepares every role, writes a private profile naming only the new immutable installs, and retires those installs
-/// after the caller's normal pinned runner stops its processes. Run the scenario while this object is alive.
+/// Every role prepared: the resolved environment, in memory, names only the new immutable installs and the observed Steam
+/// identities. <see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/> runs a plan on it and retires those installs after its
+/// processes stop. Run the scenario while this object is alive.
 /// </summary>
 public sealed class PreparedHostedCampaign : IAsyncDisposable
 {
@@ -87,15 +93,18 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     private readonly TimeSpan _timeout;
     private bool _retired;
 
-    internal PreparedHostedCampaign(EnvironmentProfile profile, string profileFile, IReadOnlyDictionary<string, HostListing> listings,
+    internal PreparedHostedCampaign(HostedCampaignManifest manifest, EnvironmentProfile profile, IReadOnlyDictionary<string, HostListing> listings,
         IReadOnlyDictionary<string, HostedRuntimeFile[]> selections,
         IReadOnlyList<(string Host, string Runtime, string Stage)> copies,
         IReadOnlyList<(string Host, HostedCampaignCharacter Character)> characters, Func<string, IGameHost>? hostFactory, TimeSpan timeout)
     {
-        _profile = profile; ProfileFile = profileFile; Listings = listings; Selections = selections;
+        Manifest = manifest; _profile = profile; Listings = listings; Selections = selections;
         _copies = copies; _characters = characters; _hostFactory = hostFactory; _timeout = timeout;
     }
-    public string ProfileFile { get; }
+    /// <summary>The campaign as it was read for this preparation: binding uses it, not the file read again later.</summary>
+    internal HostedCampaignManifest Manifest { get; }
+    /// <summary>The resolved environment the runner places the server and clients with; never written to a file.</summary>
+    internal EnvironmentProfile Environment => _profile;
     public IReadOnlyDictionary<string, HostListing> Listings { get; }
     /// <summary>Local reviewed files selected for each process, for deriving ValheimCLI MD5 pins and provenance.</summary>
     public IReadOnlyDictionary<string, HostedRuntimeFile[]> Selections { get; }
@@ -104,18 +113,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     public Dictionary<string, string> PluginPins(string role)
     {
         if (!Selections.TryGetValue(role, out var files)) throw new ArgumentException("No prepared role " + role, nameof(role));
-        var pins = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var file in files.Where(file => file.RelativePath.StartsWith("BepInEx/plugins/", StringComparison.OrdinalIgnoreCase) &&
-                                               file.RelativePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
-        {
-            PluginAssembly metadata;
-            try { metadata = PluginMetadata.Read(file.Source); }
-            catch (Exception error) when (error is BadImageFormatException or InvalidDataException) { continue; }
-            foreach (var plugin in metadata.Plugins)
-                if (!pins.TryAdd(plugin.Guid, Valheim.Testing.Game.PluginPins.Md5(file.Source)))
-                    throw new InvalidDataException($"The {role} runtime selects BepInEx plugin {plugin.Guid} more than once.");
-        }
-        return pins;
+        return HostedCampaignPreparation.PluginPins(role, files);
     }
 
     /// <summary>
@@ -154,7 +152,8 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         plan.Runtime = new PinnedDirectory { Source = _profile.Server!.Install,
             Sha256 = new Dictionary<string, string>(Listings["server"].Files, StringComparer.Ordinal) };
         plan.RuntimePins = HostInstall.Pins(Listings["server"]);
-        plan.Pins = PluginPins("server");
+        // The selected files' own hashes replace the plan's plugin pins; its world expectations stay, worlduid is the fixture's.
+        plan.Pins = Bound(plan.Pins, PluginPins("server"));
         plan.Pins["worlduid"] = identity.UidText;
         plan.Port = _profile.Server.CliPort;
         foreach (var (name, client) in clients)
@@ -164,7 +163,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             client.Install = role.Install;
             client.Port = role.CliPort;
             client.InstallPins = HostInstall.Pins(Listings[name]);
-            client.Pins = PluginPins(name);
+            client.Pins = Bound(client.Pins, PluginPins(name));
             client.Character = manifest.Clients[name].Character?.FileName ??
                 throw new ArgumentException($"Client {name} has no registered character.");
             client.Join = manifest.Join;
@@ -172,6 +171,14 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             NativeDependencyLock.ReadReady(manifest.Clients[name].DependencyLock).CliManifest.Write(path);
             client.CliManifest = path;
         }
+    }
+
+    // A plan's own world keys and absent plugins, then the role's selected plugins by their files' MD5.
+    private static Dictionary<string, string> Bound(IReadOnlyDictionary<string, string> planned, Dictionary<string, string> selected)
+    {
+        foreach (var (key, value) in planned.Where(pin => Expectations.IsWorldKey(pin.Key) || pin.Value == "absent"))
+            if (!selected.ContainsKey(key)) selected[key] = value;
+        return selected;
     }
 
     public async ValueTask DisposeAsync()
@@ -203,9 +210,6 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             catch (Exception error) { failures.Add(new IOException($"Failed to retire the prepared {copy.Host} runtime {copy.Runtime}", error)); }
         }
         if (failures.Count != 0) throw new AggregateException("Some prepared runtimes remain; inspect them before another run.", failures);
-        // The generated profile contains the observed Steam IDs for launch-time verification. Its caller has
-        // finished using it by teardown; keep the assignment report, but do not retain the private account map.
-        if (ProfileFile.Length != 0 && File.Exists(ProfileFile)) File.Delete(ProfileFile);
         _retired = true;
     }
 }
@@ -213,7 +217,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
 /// <summary>One command's setup half: reviewed inputs become pinned, separate disposable server/client installs.</summary>
 public static class HostedCampaignPreparation
 {
-    private sealed record Inputs(HostedCampaignManifest Manifest, EnvironmentProfile Profile,
+    internal sealed record Inputs(HostedCampaignManifest Manifest, EnvironmentProfile Profile,
         List<(string Name, GameRole Role, HostedCampaignRole Input)> Roles,
         Dictionary<string, HostedRuntimeFile[]> Selections, Dictionary<string, HostedCharacterSelection> Characters);
 
@@ -231,17 +235,16 @@ public static class HostedCampaignPreparation
         return (await InspectHostsAsync(inspection, timeout, hostFactory, cancellation).ConfigureAwait(false)).Report;
     }
 
-    private sealed record HostInspection(CampaignPreflightReport Report, IReadOnlyDictionary<string, string> Accounts,
+    private sealed record HostInspection(CampaignPreflightReport Report,
         IReadOnlyDictionary<string, string> ObservedSteamIds, IReadOnlyDictionary<string, HostListing> SourceListings);
 
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
     {
-        if (inspection.Inputs == null) return new HostInspection(inspection.Report, new Dictionary<string, string>(),
+        if (inspection.Inputs == null) return new HostInspection(inspection.Report,
             new Dictionary<string, string>(), new Dictionary<string, HostListing>());
         var inputs = inspection.Inputs!;
         var failures = new ConcurrentBag<CampaignPreflightProblem>(inspection.Report.Problems);
-        var matchedAccounts = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var observedSteamIds = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var sourceListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var hostChecks = inputs.Roles.GroupBy(role => role.Role.Host, StringComparer.Ordinal).Select(async group =>
@@ -296,27 +299,13 @@ public static class HostedCampaignPreparation
                     { failures.Add(new(item.Name, "game and loader", error.Message)); }
                 }
                 if (item.Name == "server") return;
-                if (inputs.Profile.SteamAccounts == null) return; // The static report already names the missing pool.
                 try
                 {
+                    // The client's Steam identity is the one signed in on its host, never one written in a file.
                     var observed = await SteamSignedInUsers.ReadAsync(host, timeout, cancellation).ConfigureAwait(false);
-                    if (inputs.Profile.SteamAccounts!.ObservedLeaseDirectory != null)
-                    {
-                        if (observed.State != SteamSignedInState.Matches || observed.AccountId is not { } id)
-                            throw new InvalidOperationException($"Client {item.Name} has no verifiable signed-in Steam identity on {host.Name}.");
-                        string steamId = SteamPoolAccount.SteamId64(id);
-                        observedSteamIds[item.Name] = steamId;
-                        matchedAccounts[item.Name] = SteamPoolAccount.LeaseKey(steamId);
-                    }
-                    else
-                    {
-                        var matching = inputs.Profile.SteamAccounts.Candidates(item.Role)
-                            .Where(account => observed.State == SteamSignedInState.Matches &&
-                                SteamPoolAccount.AccountId(account.SteamId) == observed.AccountId).ToArray();
-                        if (matching.Length != 1)
-                            throw new InvalidOperationException($"Client {item.Name} Steam identity is unverified or does not uniquely match its expected account on {host.Name}.");
-                        matchedAccounts[item.Name] = matching[0].Name;
-                    }
+                    if (observed.State != SteamSignedInState.Matches || observed.AccountId is not { } id)
+                        throw new InvalidOperationException($"Client {item.Name} has no verifiable signed-in Steam identity on {host.Name}.");
+                    observedSteamIds[item.Name] = SteamPoolAccount.SteamId64(id);
                 }
                 catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
                 { failures.Add(new(item.Name, "Steam identity", error.Message)); }
@@ -326,21 +315,83 @@ public static class HostedCampaignPreparation
         });
         await Task.WhenAll(hostChecks).ConfigureAwait(false);
         cancellation.ThrowIfCancellationRequested();
-        if (inputs.Profile.SteamAccounts?.ObservedLeaseDirectory != null)
-            foreach (var shared in observedSteamIds.GroupBy(account => account.Value, StringComparer.Ordinal).Where(group => group.Count() > 1))
-                failures.Add(new("clients", "Steam identities", "Clients " + string.Join(", ", shared.Select(account => account.Key).Order(StringComparer.Ordinal)) +
-                    " use the same signed-in Steam account; choose different client environments before launch."));
+        foreach (var shared in observedSteamIds.GroupBy(account => account.Value, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            failures.Add(new("clients", "Steam identities", "Clients " + string.Join(", ", shared.Select(account => account.Key).Order(StringComparer.Ordinal)) +
+                " use the same signed-in Steam account; choose different client environments before launch."));
         return new HostInspection(new CampaignPreflightReport(failures.OrderBy(problem => problem.Actor, StringComparer.Ordinal)
             .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = inspection.Report.Actors },
-            matchedAccounts, observedSteamIds, sourceListings);
+            observedSteamIds, sourceListings);
+    }
+
+    /// <summary>The BepInEx plugins among a role's selected files, by GUID, with each DLL's MD5.</summary>
+    internal static Dictionary<string, string> PluginPins(string role, IEnumerable<HostedRuntimeFile> files)
+    {
+        var pins = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in files.Where(file => file.RelativePath.StartsWith("BepInEx/plugins/", StringComparison.OrdinalIgnoreCase) &&
+                                               file.RelativePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
+        {
+            PluginAssembly metadata;
+            try { metadata = PluginMetadata.Read(file.Source); }
+            catch (Exception error) when (error is BadImageFormatException or InvalidDataException) { continue; }
+            foreach (var plugin in metadata.Plugins)
+                if (!pins.TryAdd(plugin.Guid, Valheim.Testing.Game.PluginPins.Md5(file.Source)))
+                    throw new InvalidDataException($"The {role} runtime selects BepInEx plugin {plugin.Guid} more than once.");
+        }
+        return pins;
+    }
+
+    /// <summary>
+    /// Stage-1 agreement of a plan with the campaign, before any host is contacted: the campaign names the fixture world and
+    /// direct-join address binding needs; the plan binds exactly the campaign's clients; every plugin the plan (or a client
+    /// section) pins by hash is one its role's dependency lock selects, since binding replaces those pins with the selected
+    /// files' own hashes and would otherwise drop one, and none it pins <c>absent</c> is selected; and no launch argument still
+    /// holds an angle-bracket placeholder such as <c>&lt;fixture password&gt;</c>. Every problem is reported at once, after the
+    /// campaign's own preflight (<see cref="Check"/>) passed.
+    /// </summary>
+    public static void CheckPlan(string manifestFile, ServerRunPlan plan, IReadOnlyDictionary<string, ClientRunPlan> clients) =>
+        CheckPlan(InspectInputs(manifestFile), plan, clients);
+
+    internal static void CheckPlan(Inspection inspection, ServerRunPlan plan, IReadOnlyDictionary<string, ClientRunPlan> clients)
+    {
+        ArgumentNullException.ThrowIfNull(plan); ArgumentNullException.ThrowIfNull(clients);
+        inspection.Report.RequireReady();
+        var inputs = inspection.Inputs!;
+        var problems = new List<string>();
+        if (inputs.Manifest.World.Length == 0 || inputs.Manifest.Join.Length == 0)
+            problems.Add("Set world (the fixture) and join (the server's address) in the campaign manifest.");
+        if (!clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(inputs.Manifest.Clients.Keys))
+            problems.Add($"The plan binds clients {string.Join(", ", clients.Keys.Order(StringComparer.Ordinal))}; the campaign declares {string.Join(", ", inputs.Manifest.Clients.Keys.Order(StringComparer.Ordinal))}.");
+        void Pins(string role, IReadOnlyDictionary<string, string> pins)
+        {
+            if (!inputs.Selections.TryGetValue(role, out var files)) return;
+            var selected = PluginPins(role, files);
+            foreach (var (guid, value) in pins.Where(pin => !Expectations.IsWorldKey(pin.Key)).OrderBy(pin => pin.Key, StringComparer.Ordinal))
+                if (value == "absent" && selected.ContainsKey(guid))
+                    problems.Add($"The plan pins plugin {guid} absent for {role}, but its dependency lock selects it.");
+                else if (value != "absent" && !selected.ContainsKey(guid))
+                    problems.Add($"The plan pins plugin {guid} for {role}, which its dependency lock does not select.");
+        }
+        void Placeholders(string role, IEnumerable<string> arguments)
+        {
+            foreach (string argument in arguments.Where(argument => argument.Contains('<') || argument.Contains('>')))
+                problems.Add($"Replace the {role}'s placeholder argument {argument} before preparing any host.");
+        }
+        Pins("server", plan.Pins);
+        Placeholders("server", plan.Arguments);
+        foreach (var (name, client) in clients.Where(client => inputs.Manifest.Clients.ContainsKey(client.Key)))
+        {
+            Pins(name, client.Pins);
+            Placeholders(name, client.LaunchArguments);
+        }
+        if (problems.Count != 0) throw new ArgumentException("The plan does not agree with the campaign: " + string.Join(" ", problems));
     }
 
     /// <summary>Require the same shared preflight used by preparation, before any host is contacted.</summary>
     public static void Check(string manifestFile) => Inspect(manifestFile).RequireReady();
 
-    private sealed record Inspection(Inputs? Inputs, CampaignPreflightReport Report);
+    internal sealed record Inspection(Inputs? Inputs, CampaignPreflightReport Report);
 
-    private static Inspection InspectInputs(string manifestFile)
+    internal static Inspection InspectInputs(string manifestFile)
     {
         var problems = new List<CampaignPreflightProblem>();
         static bool Expected(Exception error) => error is ArgumentException or IOException or InvalidDataException or
@@ -361,44 +412,13 @@ public static class HostedCampaignPreparation
 
         EnvironmentProfile? profile = null;
         ResolvedEnvironmentInventory? resolved = null;
-        if (manifest.Inventory.Length != 0)
-            Try("campaign", "inventory", () =>
-            {
-                resolved = EnvironmentInventory.Read(manifest.Inventory).Resolve(manifest);
-                profile = resolved.Profile;
-            });
-        else
-            Try("campaign", "profile", () => profile = EnvironmentProfile.Read(manifest.Profile));
-        if (profile != null)
+        if (manifest.Clients.ContainsKey("server"))
+            problems.Add(new("server", "role", "The actor name server is reserved for the dedicated server."));
+        else Try("campaign", "inventory", () =>
         {
-            if (profile.Server == null) problems.Add(new("server", "role", "A hosted campaign needs a dedicated server."));
-            if (profile.Clients.ContainsKey("server"))
-                problems.Add(new("server", "role", "The role name server is reserved for the dedicated server."));
-            if (!manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))
-                problems.Add(new("campaign", "roles", "The campaign's clients must match the profile's named clients exactly."));
-            if (profile.Clients.Count > 0 && profile.SteamAccounts is not { CheckSignedIn: true })
-                problems.Add(new("clients", "Steam identities", "Native clients require checked Steam leases: fixed profiles pin accounts, inventories discover signed-in accounts."));
-            if (profile.Clients.Count > 1 && profile.SteamAccounts is { ObservedLeaseDirectory: null } accounts)
-            {
-                var choices = profile.Clients.Select(client =>
-                    accounts.Candidates(client.Value).Select(account => account.SteamId!).ToArray())
-                    .OrderBy(names => names.Length).ToArray();
-                var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                bool Assign(int index)
-                {
-                    if (index == choices.Length) return true;
-                    foreach (string name in choices[index])
-                        if (used.Add(name))
-                        {
-                            if (Assign(index + 1)) return true;
-                            used.Remove(name);
-                        }
-                    return false;
-                }
-                if (!Assign(0)) problems.Add(new("clients", "Steam identities",
-                    "The Steam account pool cannot assign a different account to every simultaneous client."));
-            }
-        }
+            resolved = EnvironmentInventory.Read(manifest.Inventory).Resolve(manifest);
+            profile = resolved.Profile;
+        });
         if (manifest.Server.Character != null)
             problems.Add(new("server", "character", "A dedicated server has no character."));
 
@@ -409,18 +429,6 @@ public static class HostedCampaignPreparation
                 .Select(client => (Name: client.Key, Input: client.Value))).ToArray();
         foreach (var (name, input) in manifestRoles)
         {
-            if (manifest.Profile.Length != 0 && input.EnvironmentCandidates.Count != 0)
-                problems.Add(new(name, "environment candidates", "environmentCandidates needs an inventory, not a fixed profile."));
-            if (manifest.Profile.Length != 0)
-                foreach (string other in input.DifferentHostFrom)
-                {
-                    var otherRole = other == "server" ? profile?.Server : profile?.Clients.GetValueOrDefault(other);
-                    var thisRole = name == "server" ? profile?.Server : profile?.Clients.GetValueOrDefault(name);
-                    if (other == name || otherRole == null)
-                        problems.Add(new(name, "host constraint", $"differentHostFrom names unknown or self actor {other}."));
-                    else if (thisRole?.Host == otherRole.Host)
-                        problems.Add(new(name, "host constraint", $"differentHostFrom requires a different host than {other}."));
-                }
             string? loaderPackage = resolved?.LoaderPackages.GetValueOrDefault(name) ?? input.LoaderPackage;
             if (loaderPackage != null)
                 Try(name, "loader", () => _ = BepInExLoaderPackage.Read(loaderPackage));
@@ -509,27 +517,25 @@ public static class HostedCampaignPreparation
         profile.Validate();
     }
 
-    public static async Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
+    public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
+        Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
+        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation);
+
+    internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
+        Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
     {
-        var inspection = InspectInputs(manifestFile);
         inspection.Report.RequireReady();
         var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation).ConfigureAwait(false);
         readiness.Report.RequireReady();
         var inputs = inspection.Inputs!;
         var (manifest, profile, roles, selections, characters) = inputs;
-        if (profile.SteamAccounts?.ObservedLeaseDirectory != null)
-            CompleteObservedSteamAccounts(profile, readiness.ObservedSteamIds);
-        else
-            foreach (var client in profile.Clients)
-                client.Value.SteamAccount = readiness.Accounts[client.Key];
+        if (profile.SteamAccounts != null) CompleteObservedSteamAccounts(profile, readiness.ObservedSteamIds);
         profile.Validate();
         string output = Path.GetFullPath(outputDirectory);
         if (Directory.Exists(output) || File.Exists(output)) throw new InvalidOperationException("Use a new private campaign output directory: " + output);
         Directory.CreateDirectory(output);
-        if (manifest.Inventory.Length != 0)
-            File.WriteAllText(Path.Combine(output, "environment-assignments.json"),
-                JsonSerializer.Serialize(readiness.Report.Actors, new JsonSerializerOptions { WriteIndented = true }) + "\n");
+        File.WriteAllText(Path.Combine(output, "environment-assignments.json"),
+            JsonSerializer.Serialize(readiness.Report.Actors, new JsonSerializerOptions { WriteIndented = true }) + "\n");
         foreach (var (name, role, _) in roles)
         {
             const string configName = "BepInEx/config/valheimCLI.valheimCLI.cfg";
@@ -579,21 +585,13 @@ public static class HostedCampaignPreparation
                     role.Install = runtime;
                 })).ConfigureAwait(false);
             })).ConfigureAwait(false);
-            // The pool is relative to the original profile. Preserve its absolute resolved path in the generated copy.
-            if (profile.SteamAccounts?.PoolFile is { } pool) profile.SteamAccounts.Pool = pool;
-            string preparedProfile = Path.Combine(output, "profile.json");
-            File.WriteAllText(preparedProfile, JsonSerializer.Serialize(profile, new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true,
-            }) + "\n");
-            _ = EnvironmentProfile.Read(preparedProfile);
-            return new PreparedHostedCampaign(profile, preparedProfile, listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout);
+            return new PreparedHostedCampaign(manifest, profile, listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout);
         }
         catch (Exception original)
         {
             try
             {
-                await new PreparedHostedCampaign(profile, "", listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout).DisposeAsync().ConfigureAwait(false);
+                await new PreparedHostedCampaign(manifest, profile, listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout).DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception cleanup) { throw new AggregateException("Campaign preparation failed and cleanup was not proven.", original, cleanup); }
             throw;

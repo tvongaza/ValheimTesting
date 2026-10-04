@@ -35,14 +35,14 @@ public sealed class HostCopyCapacityTests : IDisposable
     [Fact]
     public async Task CampaignPreflightReportsCopySpaceBeforeAnyHostWrite()
     {
-        string profile = Path.Combine(_root, "profile.json");
-        File.WriteAllText(profile, """
+        string inventory = Path.Combine(_root, "inventory.json");
+        File.WriteAllText(inventory, """
             {"hosts":{"pc":{"kind":"ssh","platform":"windows","shell":"powershell","lock":"C:\\locks\\test.lock","destination":"test@pc"}},
-             "server":{"host":"pc","install":"C:\\game","runtime":"C:\\runs","cliPort":5577,"localCliPort":6577,"gamePort":2456}}
+             "environments":[{"name":"pc-server","host":"pc","roles":["server"],"install":"C:\\game","runtime":"C:\\runs","cliPort":5577,"localCliPort":6577,"gamePort":2456}]}
             """);
         string manifest = Path.Combine(_root, "campaign.json");
         File.WriteAllText(manifest, """
-            {"profile":"profile.json","server":{"dependencyLock":"missing-lock.json"},"clients":{}}
+            {"inventory":"inventory.json","server":{"dependencyLock":"missing-lock.json"},"clients":{}}
             """);
         var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true)
         { AvailableCopyBytes = 0 };
