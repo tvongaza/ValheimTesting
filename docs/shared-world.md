@@ -15,15 +15,9 @@ var ground = new CompositeTerrain(new PlaneTerrain(40, .25f),
 
 This declares a slope, a cliff at x=100, and a terrace in the cliff's upper surface. Rectangles include their minimum and exclude their maximum coordinates. A predicate can describe a causeway, narrow channel or irregular boundary without making another fake `WorldGenerator` class. Region terrain uses world coordinates, not coordinates relative to its region. Keep inputs/predicates pure and stable if multiple workers read them; composition copies the region list but does not freeze mutable underlying models.
 
-## Declare state separately from the generator
+## Zone state belongs to the terrain doubles
 
-`TerrainGrid<T>` is a row-major grid (x fastest). Its origin is the **first sample**, with explicit count and spacing. Heights are absolute world y values in metres. Use `PaintRgba` for raw linear channels; it validates [0,1], but supplies no dirt/paved meaning or byte quantization.
-
-`TerrainZoneState` pairs height and paint grids. Their counts, origins and spacing are independent: a vertex and a texture texel need not refer to the same position. Nothing in the library assumes the native paint texture matches compiler arrays. A mod adapter must make that mapping explicitly.
-
-`TerrainWorldState` stores zones by integer x/z identity. Add only the zones the fixture intends to load. Missing or duplicate zones throw. The state is mutable and test-owned; it is not a concurrent simulation. Adjacent zones keep separate copies of edge samples so a missing neighbour update produces a visible seam. There is no automatic seam repair.
-
-`Clone()` copies the grids and zone collection for before/after comparison or another isolated test phase. It is **not** native serialization or evidence that a mod survives a save/restart. Generic grids should contain value-only sample types, such as float or `PaintRgba`; their clones copy values, not arbitrary referenced objects.
+The state a terrain writer changes is the game's own: each loaded zone's `Heightmap` and its `TerrainComp` arrays (level and smooth deltas, modified-height flags, paint mask, modified-paint flags). The [terrain doubles](testing-toolkit.md) in `Valheim.Testing.Doubles` hold exactly those arrays: `ValheimWorldScope.WithTerrain(ground).WithZdos()` generates zones from the terrain declared above, `RegisterHeightmap(new Vector2s(x, z))` loads one, `TerrainSnapshot.Of(compiler)` records it, and `TerrainAssert.Unchanged`, `OnlyChangedWithin` and `SeamAgrees(west, east)` say what a write changed and whether two neighbours still agree on their shared vertices. Each zone keeps its own copy of the shared edge, as in the game, so a write applied to one side only fails `SeamAgrees`; nothing repairs a seam for you. [SharedWorld](../examples/SharedWorld/README.md) runs that check, its failure and the fix.
 
 ## Read a grid dump
 
@@ -35,7 +29,7 @@ x,z,height,biome,river,river_width,base_height
 ...
 ```
 
-- A header row names the columns, in any order and any case. `x`, `z` and `height` (metres) are required. `biome` is optional and holds a biome name (`AshLands` and `Ashlands` both work; `None`, `Unknown` or a number are refused). `river` (weight) and `river_width` are optional but only together. `base_height` is optional and is **Valheim's unitless generator value**, not elevation in metres. It is available through `GetBaseHeight` when present; a missing layer is refused.
+- A header row names the columns, in any order and any case. `x`, `z` and `height` (metres) are required. `biome` is optional and holds a biome name exactly as the game writes it (`Meadows`, `AshLands`; another case, `None`, `Unknown` or a number is refused). `river` (weight) and `river_width` are optional but only together. `base_height` is optional and is **Valheim's unitless generator value**, not elevation in metres. It is available through `GetBaseHeight` when present; a missing layer is refused.
 - One row per node, in any order. The nodes must fill one evenly spaced grid exactly once, with the same spacing on x and z. The origin is the smallest x and z. Numbers use the invariant culture; empty lines are skipped.
 - A row with the wrong number of cells, a missing or repeated node (a ragged grid), uneven or unequal spacing, a non-numeric or non-finite value or an unknown biome is refused with an `InvalidDataException` naming the line.
 
@@ -68,16 +62,17 @@ WorldDumpSource source = terrain.SourceAt(siteX, siteZ);
 
 ## Render a terrain for review
 
-`TerrainRenderer` draws any `ITerrain` over a `TerrainArea` at a chosen metres per pixel (the area must be a whole number of pixels, at most 8192 a side). +x points right and +z up. Each pixel samples its centre once. Colour by `TerrainColoring.Height` (blue below `WaterLevel`, default 30; green, brown, white from there to `HighHeight`) or `TerrainColoring.Biome` (one fixed colour per biome). `Polyline` and `Point` overlays are drawn in world coordinates and clipped at the edge; polylines first, then points.
+`TerrainRenderer` draws any `ITerrain` over a `TerrainArea` at a chosen metres per pixel (the area must be a whole number of pixels, at most 8192 a side). +x points right and +z up. Each pixel samples its centre once. Colour by `TerrainColoring.Height` (blue below `WaterLevel`, default the game's sea level of 30 m; green, brown, white from there to `HighHeight`) or `TerrainColoring.Biome` (one fixed colour per biome). `Contours(interval, colour)` draws one-pixel contour lines at `WaterLevel` (sea level when it is null) and every `interval` metres above and below it, in either colouring, so the coastline line and the water colour agree. `Polyline` and `Point` overlays are drawn in world coordinates and clipped at the edge; contours first, then polylines, then points.
 
 ```csharp
 new TerrainRenderer(new TerrainArea(-512,-512,512,512), 2) { Coloring = TerrainColoring.Biome }
+    .Contours(10, new RenderColor(90,74,48))
     .Polyline(road, new RenderColor(255,0,0)) // road: the (x, z) points a mod planned
     .Point(0,0,new RenderColor(0,0,0))
     .Render(GridDumpTerrain.Load("world.csv")).WritePng("review.png");
 ```
 
-The output is a PNG written without a compression library: its image data uses uncompressed deflate blocks, so the bytes are identical on every platform and runtime for the same heights, at about three bytes per pixel. A terrain that refuses a coordinate fails the render; no pixel is painted in place of missing data. A picture of an input shows what the fixture declares, not what the game does.
+The output is a PNG written without a compression library: its image data uses uncompressed deflate blocks, so the bytes are identical on every platform and runtime for the same heights, at about three bytes per pixel. A terrain that refuses a coordinate fails the render; no pixel is painted in place of missing data. A picture of an input shows what the fixture declares, not what the game does. For the topographic review map (biome tints, rivers, a world-disc mask, location and route overlays), use ValheimCLI's [`examples/world-map.py`](https://github.com/tvongaza/valheimCLI/blob/b68949c/examples/world-map.py), which reads the same dump CSV; this library keeps one palette and does not version a map style.
 
 ## Compare two terrain sources
 
@@ -85,7 +80,7 @@ The output is a PNG written without a compression library: its image data uses u
 
 ## Call real mod code
 
-Keep adapters, expected outcomes and mod-specific assertions in the mod repository:
+Keep adapters, expected outcomes and mod-specific assertions in the mod repository. Both tests below were written against the removed `TerrainWorldState`; they move to the terrain doubles in [#330](https://github.com/tvongaza/ValheimTesting/issues/330).
 
 - [Roads shared-zone writer test](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.Tests/SharedZoneWriterTests.cs) feeds declared slope/paint into its own compiler double, calls the real road writer in both zone orders and checks the shared edge, an earlier off-road edit, paint preservation and repeat application. [TerrainTestWorld](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.Tests/TerrainTestWorld.cs) is the thin game-type adapter used by existing grade/search tests.
 - [MWL shared-zone conversion test](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.Tests/SharedZoneConversionTests.cs) runs the real authored level/smooth/paint conversion across two zones, checks matching edge results and untouched regions, and verifies that the same operation is not applied twice.

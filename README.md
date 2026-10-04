@@ -22,7 +22,7 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 
 | Package | Purpose | Runtime |
 |---|---|---|
-| `Valheim.Testing` | Composable terrain, multi-zone height/paint fixtures, exact recorded-input replay, grid dumps, terrain rendering and parity checks; no ValheimCLI dependency | netstandard2.0 |
+| `Valheim.Testing` | Composable terrain, exact recorded-input replay, pinned grid dumps, terrain rendering with contours, parity checks and `StaticOverride` (scoped static and environment overrides for any test); no ValheimCLI dependency | netstandard2.0 |
 | `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net10.0 |
 | `Valheim.Testing.Cli` | ValheimCLI's client transport and YAML runner, packaged unchanged from pinned ValheimCLI source (MIT, warp) | net10.0 |
 | `Valheim.Testing.Doubles` | Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, compiled into your test project; every type is partial | source (C# 10); [member index](docs/packages/Valheim.Testing.Doubles.members.txt) |
@@ -100,6 +100,6 @@ Both build locally; the bounded paved paint/reload check passed, while human wal
 
 MIT, copyright © 2026 Tys von Gaza. See [LICENSE](LICENSE). Attribution for imported and adapted code is retained in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); both files are included in the library packages.
 
-Shared-world fixtures: [guide and mod consumers](docs/shared-world.md), [runnable example](examples/SharedWorld/README.md). Height and paint grids are independent; snapshots are in-memory test state, not native saves.
+Shared-world fixtures: [guide and mod consumers](docs/shared-world.md), [runnable example](examples/SharedWorld/README.md). Zone state is the terrain doubles' `TerrainComp` arrays; snapshots are in-memory test state, not native saves.
 
 The [27 September native follow-up](docs/native-validation-20260927.md) covers strict reloads, terrain capture/replay, session controls, controlled mutation draining and dirt/fade paint persistence. It records the remaining limits explicitly.

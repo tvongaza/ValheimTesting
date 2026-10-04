@@ -66,9 +66,11 @@ public sealed class TerrainCapture
             float h=row.GetProperty("height").GetSingle();TerrainBiome biome=TerrainBiome.Unknown;float? weight=null,width=null;
             if(expected.Layer=="generator")
             {
-                string? name=row.GetProperty("biome").GetString();
-                if(!Enum.GetNames<TerrainBiome>().Any(n=>string.Equals(n,name,StringComparison.OrdinalIgnoreCase)) ||
-                    !Enum.TryParse(name,true,out biome)||biome==TerrainBiome.Unknown)throw new InvalidDataException("Unsupported captured biome.");
+                // The game's own names, exactly (AshLands); a number, another case or Unknown is refused.
+                var cell=row.GetProperty("biome");string? name=cell.ValueKind==JsonValueKind.String?cell.GetString():null;
+                if(name==null||name==nameof(TerrainBiome.Unknown)||!Enum.GetNames<TerrainBiome>().Contains(name,StringComparer.Ordinal))
+                    throw new InvalidDataException("Unsupported captured biome.");
+                biome=Enum.Parse<TerrainBiome>(name);
                 weight=row.GetProperty("riverWeight").GetSingle();width=row.GetProperty("riverWidth").GetSingle();
                 if(!float.IsFinite(weight.Value)||!float.IsFinite(width.Value)||weight<0||weight>1||width<0)throw new InvalidDataException("Invalid river sample.");
             }

@@ -25,7 +25,7 @@ namespace Valheim.Testing.Doubles
             TerrainBiome.Plains => Heightmap.Biome.Plains,
             TerrainBiome.Mistlands => Heightmap.Biome.Mistlands,
             TerrainBiome.Ocean => Heightmap.Biome.Ocean,
-            TerrainBiome.Ashlands => Heightmap.Biome.AshLands,
+            TerrainBiome.AshLands => Heightmap.Biome.AshLands,
             TerrainBiome.DeepNorth => Heightmap.Biome.DeepNorth,
             _ => throw new System.NotSupportedException("Fixture biome is unknown."),
         };

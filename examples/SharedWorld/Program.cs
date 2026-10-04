@@ -1,23 +1,30 @@
 using Valheim.Testing;
+using Valheim.Testing.Doubles;
 
 // A slope with a declared terrace. Last matching region wins for every fact.
 var terrain = new CompositeTerrain(new PlaneTerrain(40,.125f),
     TerrainRegion.Rectangle(28,-4,36,4,new PlaneTerrain(46)));
-var world = new TerrainWorldState();
-var originalPaint = new PaintRgba(.2f,.4f,.6f,.3f);
-for (int zone=0; zone<2; zone++)
-    world.Add(zone,0,new TerrainZoneState(
-        new TerrainGrid<float>(65,65,zone*64-32,-32,1,terrain.GetHeight),
-        // 32x32 texel centres, deliberately different from the height grid.
-        new TerrainGrid<PaintRgba>(32,32,zone*64-31,-31,2,(x,z)=>originalPaint)));
-var before = world.Clone();
-// Stand-in for a mod-owned writer. The library does not emulate TerrainComp.
-world[0,0].Heights[64,32] = 47;
-Equal(before[0,0].Heights[64,32],46);
-Equal(world[1,0].Heights[0,32],46); // missed neighbour writes remain observable
-world[1,0].Heights[0,32] = 47;
-Equal(world[0,0].Heights[64,32],world[1,0].Heights[0,32]);
-if (!world[1,0].Paint[0,0].Equals(originalPaint)) throw new Exception("Paint changed.");
+
+// Two neighbouring zones as the game holds them: a Heightmap and its TerrainComp per zone, generated from the terrain
+// above. Zone (0,0) spans x -32..32 and zone (1,0) x 32..96, so the terrace straddles their shared column at x = 32.
+using (var scope = new ValheimWorldScope().WithTerrain(terrain).WithZdos())
+{
+    var west = scope.RegisterHeightmap(new Vector2s(0,0));
+    var east = scope.RegisterHeightmap(new Vector2s(1,0));
+    west.RebuildTerrain(); east.RebuildTerrain();
+    TerrainAssert.SeamAgrees(west, east);
+    var eastBefore = TerrainSnapshot.Of(east.m_terrainComp!);
+    // Stand-in for a mod's terrain writer: raise the shared column by 1 m, but only in the west zone's compiler.
+    // The game applies and saves a delta only where its modified flag is set, so a writer sets both.
+    for (int z=0; z<=64; z++) Raise(west.m_terrainComp!, z*65+64);
+    west.RebuildTerrain();
+    if (!Fails(() => TerrainAssert.SeamAgrees(west, east))) throw new Exception("A write to one side of a seam went unnoticed.");
+    TerrainAssert.Unchanged(eastBefore, east.m_terrainComp!, "east zone");
+    // The writer's fix: the neighbour's copy of the shared vertices gets the same write.
+    for (int z=0; z<=64; z++) Raise(east.m_terrainComp!, z*65);
+    east.RebuildTerrain();
+    TerrainAssert.SeamAgrees(west, east);
+}
 
 // The same ground as a grid dump (cli_world_dump's CSV layout, 4 m nodes), checked against its source at the nodes.
 // Heights are written at full precision, so tolerance 0 holds; a real cli_world_dump rounds height to 0.1 m and
@@ -33,7 +40,7 @@ var picture = new TerrainRenderer(new TerrainArea(0,-8,64,8), .5f) { LowHeight =
     .Polyline(new[] { (28f,-4f), (36f,-4f), (36f,4f), (28f,4f), (28f,-4f) }, new RenderColor(255,0,0))
     .Render(dump);
 if (args.Length > 0) picture.WritePng(args[0]);
-Console.WriteLine("PASS: composed terrain, independent height/paint grids, explicit seam write and isolated snapshot, grid dump parity with a shifted-grid control. No game used.");
+Console.WriteLine("PASS: composed terrain, a one-sided seam write caught by the terrain doubles and then fixed, grid dump parity with a shifted-grid control. No game used.");
 
 string Csv(int offsetX)
 {
@@ -43,7 +50,14 @@ string Csv(int offsetX)
     return text.ToString();
 }
 
-static void Equal(float actual,float expected)
+static void Raise(TerrainComp compiler, int vertex)
 {
-    if (actual != expected) throw new Exception($"Expected {expected}, observed {actual}.");
+    compiler.m_levelDelta[vertex] = 1;
+    compiler.m_modifiedHeight[vertex] = true;
+}
+
+static bool Fails(Action check)
+{
+    try { check(); return false; }
+    catch (TerrainAssertException) { return true; }
 }

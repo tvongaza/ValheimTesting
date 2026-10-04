@@ -40,6 +40,18 @@ public class TerrainCaptureTests
             case "layer":d["layer"]="loaded-ground";break;case "units":d["units"]="feet";break;case "version":d["formatVersion"]=2;break;}
         Assert.Throws<InvalidDataException>(()=>Read(d));
     }
+    [Theory] [InlineData("AshLands",true)] [InlineData("Ashlands",false)] [InlineData("meadows",false)] [InlineData("8",false)] [InlineData("Unknown",false)]
+    public void CapturedBiomesUseTheGamesExactNames(string name,bool accepted)
+    {
+        var d=Payload();d["samples"]!.AsArray()[0]!["biome"]=name;
+        if(accepted)Assert.Equal(TerrainBiome.AshLands,Read(d).Terrain.GetBiome(-4,8));
+        else Assert.Contains("biome",Assert.Throws<InvalidDataException>(()=>Read(d)).Message);
+    }
+    [Fact] public void ANumericBiomeIsRefusedAsBadData()
+    {
+        var d=Payload();d["samples"]!.AsArray()[0]!["biome"]=8;
+        Assert.Contains("biome",Assert.Throws<InvalidDataException>(()=>Read(d)).Message);
+    }
     [Fact] public void LoadedGroundDoesNotInventBiomeOrRiverSamples()
     {
         var d=Payload();d["layer"]="loaded-ground";foreach(var row in d["samples"]!.AsArray()){row!["biome"]=null;row["riverWeight"]=null;row["riverWidth"]=null;}
