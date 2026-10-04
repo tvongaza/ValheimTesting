@@ -1,8 +1,8 @@
-// Checks the published packages the way a new mod author meets them. Needs NuGet.org; never launches Valheim.
+// Checks the versions a release names. pins needs NuGet.org; never launches Valheim. The fresh consumer of a release is
+// scripts/consumer.cs --feed nuget.
 //
 //   dotnet run scripts/release-consumer.cs -- pins
 //   dotnet run scripts/release-consumer.cs -- versions
-//   dotnet run scripts/release-consumer.cs -- consumer [--wait-minutes 30]
 //
 // pins: every copyable version pin in the README, CONTRIBUTING, docs and examples must name a version served by
 // NuGet.org. A missing version fails; an older tested version remains valid and reproducible. Copyable pins are
@@ -13,23 +13,11 @@
 // versions: offline. Refuses a release whose manifest or packed dependencies name a `-candidate.<sha>` version: a candidate
 // is a local build identity, and NuGet.org never lets a published id/version be replaced. Checked are each packed
 // project's <Version> and Valheim.Testing* PackageReferences, and the Cli packageVersion in cli-dependency.json.
-// release.yml runs it before building; consumer runs it first. A candidate may sit on main between releases.
-//
-// consumer: the release manifest is this checkout's package versions (the <Version> of each packed project and the Cli
-// packageVersion in cli-dependency.json), so run it on the release tag. It waits up to --wait-minutes for NuGet.org to
-// serve each one (a package still missing then is reported as pending, and the run fails), then, outside this checkout
-// with NuGet.org as the only source and a new package cache: builds and runs a program using Valheim.Testing,
-// Valheim.Testing.Game and Valheim.Testing.Bindings, runs a copy of ModWithTests pinned to the Doubles version, compiles
-// the Adapter source package as a net48 game-side adapter against tests/Valheim.Testing.Adapter.CompileCheck's reference
-// stubs, and installs the Bindings tool and runs it. Every Valheim.Testing* package must have been restored from
-// NuGet.org at exactly the manifest version. For tools, wait for registration as well as the package file:
-// dotnet tool install consults registration, which can lag behind the flat-container URL.
-using System.Diagnostics;
+// release.yml runs it before building. A candidate may sit on main between releases.
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-const string NuGetOrg = "https://api.nuget.org/v3/index.json";
 const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
 string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
@@ -38,23 +26,17 @@ using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 bool actions = Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true";
 
 string mode = args.Length > 0 ? args[0] : "";
-int waitMinutes = 0;
-for (int i = 1; i < args.Length; i++)
-{
-    if (args[i] == "--wait-minutes" && i + 1 < args.Length && int.TryParse(args[++i], out waitMinutes) && waitMinutes >= 0) continue;
-    return Usage($"unknown or invalid argument '{args[i]}'");
-}
+if (args.Length > 1) return Usage($"unknown argument '{args[1]}'");
 return mode switch
 {
     "pins" => await Pins(),
     "versions" => Versions(),
-    "consumer" => Versions() == 0 ? await Consumer() : 1,
     _ => Usage(mode == "" ? "no mode" : $"unknown mode '{mode}'"),
 };
 
 int Usage(string problem)
 {
-    Console.Error.WriteLine($"release-consumer: {problem}. Usage: dotnet run scripts/release-consumer.cs -- (pins | versions | consumer [--wait-minutes N])");
+    Console.Error.WriteLine($"release-consumer: {problem}. Usage: dotnet run scripts/release-consumer.cs -- (pins | versions)");
     return 2;
 }
 
@@ -120,169 +102,6 @@ int Versions()
     return 0;
 }
 
-async Task<int> Consumer()
-{
-    var manifest = packed.ToDictionary(id => id, SourceVersion, StringComparer.OrdinalIgnoreCase);
-    manifest["Valheim.Testing.Cli"] = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "cli-dependency.json"))).RootElement.GetProperty("packageVersion").GetString()
-        ?? throw new InvalidOperationException("cli-dependency.json has no packageVersion.");
-    foreach (var (id, version) in manifest.OrderBy(p => p.Key, StringComparer.Ordinal)) Console.WriteLine($"manifest: {id} {version}");
-
-    // The exact package URL usually appears first. Tool installation also needs NuGet's registration entry,
-    // which can lag behind the package URL; neither check depends on the slower search index.
-    DateTime deadline = DateTime.UtcNow.AddMinutes(waitMinutes);
-    var pending = manifest.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
-    while (true)
-    {
-        foreach (var (id, version) in pending.ToList())
-        {
-            if (!await Served(id, version)) continue;
-            if (id is "Valheim.Testing.Bindings.Tool" or "Valheim.Testing.NativeSmoke" &&
-                !await ToolRegistered(id, version)) continue;
-            Console.WriteLine($"served: {id} {version}");
-            pending.Remove(id);
-        }
-        if (pending.Count == 0) break;
-        if (DateTime.UtcNow >= deadline)
-        {
-            foreach (var (id, version) in pending) Console.Error.WriteLine($"PENDING: NuGet.org does not serve {id} {version} after {waitMinutes} min.");
-            Console.Error.WriteLine("Not a pass: rerun once NuGet.org has finished validating the packages.");
-            return 1;
-        }
-        await Task.Delay(TimeSpan.FromSeconds(30));
-    }
-
-    string work = Path.Combine(Path.GetTempPath(), "valheim-release-consumer-" + Guid.NewGuid().ToString("N"));
-    try
-    {
-        Directory.CreateDirectory(work);
-        string cache = Path.Combine(work, "packages");
-        string config = Path.Combine(work, "NuGet.Config");
-        File.WriteAllText(config, $"""
-            <?xml version="1.0" encoding="utf-8"?>
-            <configuration><packageSources><clear/><add key="nuget.org" value="{NuGetOrg}"/></packageSources></configuration>
-            """);
-        // The nearest NuGet.Config clears every other source for the projects below. A new global package folder and HTTP cache: nothing restored or listed earlier on this machine can stand in.
-        var env = new Dictionary<string, string>
-        {
-            ["NUGET_PACKAGES"] = cache,
-            ["NUGET_HTTP_CACHE_PATH"] = Path.Combine(work, "http-cache"),
-            ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
-            ["DOTNET_NOLOGO"] = "1",
-        };
-
-        // Libraries: the pure package, the external game package (with its Cli dependency) and the binding-check library.
-        string app = Path.Combine(work, "app");
-        Directory.CreateDirectory(app);
-        File.WriteAllText(Path.Combine(app, "Consumer.csproj"), $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
-              <ItemGroup>
-                <PackageReference Include="Valheim.Testing" Version="[{manifest["Valheim.Testing"]}]" />
-                <PackageReference Include="Valheim.Testing.Game" Version="[{manifest["Valheim.Testing.Game"]}]" />
-                <PackageReference Include="Valheim.Testing.Bindings" Version="[{manifest["Valheim.Testing.Bindings"]}]" />
-              </ItemGroup>
-            </Project>
-            """);
-        File.WriteAllText(Path.Combine(app, "Program.cs"), """
-            using Valheim.Testing;
-            using Valheim.Testing.Bindings;
-            using Valheim.Testing.Game;
-
-            // 40 m at the origin, rising 0.5 m per metre in x: 41 m at x = 2.
-            var plane = new PlaneTerrain(40, 0.5f, 0);
-            if (plane.GetHeight(2, 0) != 41f) { Console.Error.WriteLine("PlaneTerrain returned " + plane.GetHeight(2, 0)); return 1; }
-            foreach (Type type in new[] { typeof(PlaneTerrain), typeof(GameActor), typeof(BindingCheck) })
-                Console.WriteLine($"{type.FullName}: {type.Assembly.GetName().Name} {type.Assembly.GetName().Version}");
-            return 0;
-            """);
-        Run(env, app, "dotnet", "run", "--project", "Consumer.csproj", "-c", "Release");
-
-        // Doubles: the introductory mod example, pinned to the manifest version.
-        string mod = Path.Combine(work, "mod");
-        CopyDirectory(Path.Combine(root, "examples", "ModWithTests"), mod);
-        string modProject = Path.Combine(mod, "MyMod.Tests", "MyMod.Tests.csproj");
-        string doublesPin = $"Include=\"Valheim.Testing.Doubles\" Version=\"[{manifest["Valheim.Testing.Doubles"]}]\"";
-        string modText = Regex.Replace(File.ReadAllText(modProject), @"Include=""Valheim\.Testing\.Doubles"" Version=""\[[^\]]+\]""", doublesPin);
-        if (!modText.Contains(doublesPin)) throw new InvalidOperationException("ModWithTests no longer pins an exact Valheim.Testing.Doubles version.");
-        File.WriteAllText(modProject, modText);
-        Run(env, mod, "dotnet", "test", "MyMod.Tests/MyMod.Tests.csproj", "-c", "Release");
-
-        // Adapter: the source package compiled into a net48 game-side adapter, as in the compile check but from the package.
-        string adapter = Path.Combine(work, "adapter");
-        Directory.CreateDirectory(adapter);
-        File.Copy(Path.Combine(root, "tests", "Valheim.Testing.Adapter.CompileCheck", "ReferenceStubs.cs"), Path.Combine(adapter, "ReferenceStubs.cs"));
-        File.WriteAllText(Path.Combine(adapter, "MyMod.TestAdapter.csproj"), $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
-                <TreatWarningsAsErrors>true</TreatWarningsAsErrors><WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
-              </PropertyGroup>
-              <ItemGroup>
-                <PackageReference Include="Valheim.Testing.Adapter" Version="[{manifest["Valheim.Testing.Adapter"]}]" PrivateAssets="all" />
-                <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
-                <PackageReference Include="HarmonyX" Version="[2.9.0]" />
-              </ItemGroup>
-            </Project>
-            """);
-        Run(env, adapter, "dotnet", "build", "MyMod.TestAdapter.csproj", "-c", "Release");
-        string adapterAssets = File.ReadAllText(Path.Combine(adapter, "obj", "project.assets.json"));
-        if (!adapterAssets.Contains("contentFiles/cs/any/ValheimTestingAdapter/", StringComparison.Ordinal))
-            throw new InvalidOperationException("The adapter project compiled no ValheimTestingAdapter sources from the package.");
-
-        // Tool: installed as a mod's CI installs it, then run on its own library against the Mono.Cecil it ships with, a real
-        // assembly whose every Cecil reference must bind (exit 0), as validate.cs does for the locally packed tool.
-        string tools = Path.Combine(work, "tools");
-        string toolVersion = manifest["Valheim.Testing.Bindings.Tool"];
-        Run(env, work, "dotnet", "tool", "install", "Valheim.Testing.Bindings.Tool", "--version", toolVersion, "--tool-path", tools, "--configfile", config);
-        string exe = Path.Combine(tools, OperatingSystem.IsWindows() ? "valheim-bindings.exe" : "valheim-bindings");
-        Run(env, work, exe, "--help");
-        string library = Directory.GetFiles(Path.Combine(tools, ".store"), "Valheim.Testing.Bindings.dll", SearchOption.AllDirectories).Single();
-        string libraryDir = Path.GetDirectoryName(library)!;
-        Run(env, work, exe, library, "--game-dir", libraryDir, "--only", "Mono.Cecil", "--require", "Mono.Cecil");
-
-        // The installed native-smoke tool must work without a repository checkout. Its init command creates and
-        // builds an editable consumer from the just-published Game package, with NuGet.org as its only feed.
-        string smokeTools = Path.Combine(work, "smoke-tools");
-        Run(env, work, "dotnet", "tool", "install", "Valheim.Testing.NativeSmoke", "--version",
-            manifest["Valheim.Testing.NativeSmoke"], "--tool-path", smokeTools, "--configfile", config);
-        string smoke = Path.Combine(smokeTools, OperatingSystem.IsWindows() ? "valheim-test.exe" : "valheim-test");
-        Run(env, work, smoke, "help");
-        string smokeOutput = Path.Combine(work, "smoke-consumer");
-        Run(env, work, smoke, "init", "--output", smokeOutput);
-        if (!File.Exists(Path.Combine(smokeOutput, "consumer", "SmokeCheck.csproj")))
-            throw new InvalidOperationException("The installed native-smoke tool wrote no editable consumer.");
-
-        // Every Valheim.Testing* package restored came from NuGet.org at the manifest version, and nothing else.
-        var restored = Directory.GetDirectories(cache, "valheim.testing*")
-            .SelectMany(Directory.GetDirectories)
-            .Select(d => (Id: Path.GetFileName(Path.GetDirectoryName(d)!), Version: Path.GetFileName(d), Dir: d))
-            .ToList();
-        var toolStore = new[] { tools, smokeTools }.SelectMany(toolRoot =>
-            Directory.GetDirectories(Path.Combine(toolRoot, ".store"), "valheim.testing*")
-                .SelectMany(Directory.GetDirectories)
-                .Select(d => (Id: Path.GetFileName(Path.GetDirectoryName(d)!), Version: Path.GetFileName(d), Dir: Path.Combine(d, Path.GetFileName(Path.GetDirectoryName(d)!), Path.GetFileName(d)))))
-            .ToList();
-        int wrong = 0;
-        foreach (var (id, version) in manifest.OrderBy(p => p.Key, StringComparer.Ordinal))
-        {
-            var found = restored.Concat(toolStore).Where(r => r.Id.Equals(id, StringComparison.OrdinalIgnoreCase)).ToList();
-            string? problem = found.Count == 0 ? "not restored"
-                : found.Any(r => !r.Version.Equals(version, StringComparison.OrdinalIgnoreCase)) ? "restored at " + string.Join(", ", found.Select(r => r.Version))
-                : found.Select(r => SourceOf(r.Dir)).FirstOrDefault(s => s != NuGetOrg) is { } other ? "restored from " + other
-                : null;
-            Console.WriteLine($"{(problem == null ? "ok  " : "FAIL")} restored {id} {version}{(problem == null ? " from NuGet.org" : ": " + problem)}");
-            if (problem != null) wrong++;
-        }
-        if (wrong > 0) return 1;
-        Console.WriteLine("A fresh consumer restored, built and ran the release from NuGet.org only.");
-        return 0;
-    }
-    finally
-    {
-        if (Directory.Exists(work)) Directory.Delete(work, recursive: true);
-    }
-}
-
 // The copyable pins in the introductory files.
 List<Pin> FindPins()
 {
@@ -339,81 +158,9 @@ async Task<List<string>> PublishedVersions(string id)
     }
 }
 
-async Task<bool> Served(string id, string version)
-{
-    string lower = id.ToLowerInvariant(), v = version.ToLowerInvariant();
-    using var request = new HttpRequestMessage(HttpMethod.Head, $"{FlatContainer}/{lower}/{v}/{lower}.{v}.nupkg");
-    try
-    {
-        using HttpResponseMessage response = await http.SendAsync(request);
-        if (response.IsSuccessStatusCode) return true;
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
-        Console.Error.WriteLine($"{id} {version}: HTTP {(int)response.StatusCode}; retrying.");
-    }
-    catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
-    {
-        Console.Error.WriteLine($"{id} {version}: {e.Message}; retrying.");
-    }
-    return false;
-}
-
-async Task<bool> ToolRegistered(string id, string version)
-{
-    // NuGet's v3 service index advertises this semver2 registration base. A published .nupkg can
-    // return 200 while this entry is still 404, and dotnet tool install then says "not found".
-    string url = $"https://api.nuget.org/v3/registration5-gz-semver2/{id.ToLowerInvariant()}/{version.ToLowerInvariant()}.json";
-    using var request = new HttpRequestMessage(HttpMethod.Head, url);
-    try
-    {
-        using HttpResponseMessage response = await http.SendAsync(request);
-        if (response.IsSuccessStatusCode) return true;
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
-        Console.Error.WriteLine($"{id} {version}: registration HTTP {(int)response.StatusCode}; retrying.");
-    }
-    catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
-    {
-        Console.Error.WriteLine($"{id} {version}: registration {e.Message}; retrying.");
-    }
-    return false;
-}
-
-// NuGet writes the source a package came from into .nupkg.metadata beside it.
-static string? SourceOf(string packageDir)
-{
-    string metadata = Path.Combine(packageDir, ".nupkg.metadata");
-    if (!File.Exists(metadata)) return null;
-    using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(metadata));
-    return doc.RootElement.TryGetProperty("source", out JsonElement source) ? source.GetString() : null;
-}
-
 static string ProjectFile(string name) => name == "Valheim.Testing.NativeSmoke"
     ? "examples/NativeSmoke/NativeSmoke.csproj"
     : $"src/{name}/{name}.csproj";
-
-string SourceVersion(string name) =>
-    Regex.Match(File.ReadAllText(Path.Combine(root, ProjectFile(name))), "<Version>([^<]+)</Version>") is { Success: true } m
-        ? m.Groups[1].Value
-        : throw new InvalidOperationException("No <Version> in " + name + ".csproj");
-
-static void Run(Dictionary<string, string> env, string directory, string file, params string[] arguments)
-{
-    Console.WriteLine($"> {file} {string.Join(' ', arguments)}");
-    var start = new ProcessStartInfo(file) { WorkingDirectory = directory, UseShellExecute = false };
-    foreach (string argument in arguments) start.ArgumentList.Add(argument);
-    foreach (var (name, value) in env) start.Environment[name] = value;
-    using Process process = Process.Start(start) ?? throw new InvalidOperationException("Could not start " + file);
-    process.WaitForExit();
-    if (process.ExitCode != 0) throw new InvalidOperationException($"{file} {string.Join(' ', arguments)} exited {process.ExitCode}.");
-}
-
-// Copies an example's sources only; build output from an earlier in-place run stays behind.
-static void CopyDirectory(string from, string to)
-{
-    Directory.CreateDirectory(to);
-    foreach (string file in Directory.GetFiles(from)) File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
-    foreach (string dir in Directory.GetDirectories(from))
-        if (Path.GetFileName(dir) is not ("bin" or "obj")) CopyDirectory(dir, Path.Combine(to, Path.GetFileName(dir)));
-}
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
 
