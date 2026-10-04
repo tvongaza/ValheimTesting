@@ -3,9 +3,9 @@ using System.Buffers.Binary;
 
 namespace Valheim.Testing.Game;
 
-// The game-side PlayerProfile format is not a public contract. Keep this byte-level editor internal and
-// version-gated; the native join check establishes the 1.0.16 path, not compatibility with later formats.
-internal static class CharacterSavePosition
+// The game-side PlayerProfile format is not a public contract. Keep this byte-level reader internal and version-gated:
+// it reads a disposable character's identity and whether it has spawned; it never edits a save (#298 removed that).
+internal static class CharacterSaveReader
 {
     private const int SupportedVersion = 46; // Valheim 1.0.16
     private const int StatCount = 205;
@@ -13,69 +13,6 @@ internal static class CharacterSavePosition
     private const int EnemyStatGroups = 5;
     private const int MaxPayloadBytes = 64 * 1024 * 1024;
     private const int MaxEntries = 100_000;
-
-    internal static byte[] AtWorld(byte[] file, long worldUid, float x, float y, float z) =>
-        Position(file, worldUid, x, y, z, addWorld: false);
-
-    // Only a version-gated, fully parsed disposable save can gain a world entry. This is separate from AtWorld so
-    // callers cannot silently add a world when they intended to update an existing one.
-    internal static byte[] AtNewWorld(byte[] file, long worldUid, float x, float y, float z) =>
-        Position(file, worldUid, x, y, z, addWorld: true);
-
-    private static byte[] Position(byte[] file, long worldUid, float x, float y, float z, bool addWorld)
-    {
-        ArgumentNullException.ThrowIfNull(file);
-        if (worldUid == 0) throw new ArgumentOutOfRangeException(nameof(worldUid), "A real world UID is required.");
-        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z))
-            throw new ArgumentOutOfRangeException(nameof(x), "The start position must be finite.");
-
-        byte[] payload = ReadEnvelope(file);
-        Layout layout = Walk(payload, worldUid);
-        if (layout.FirstSpawn)
-            throw new InvalidDataException("The character has not completed its first spawn; the game would ignore a saved logout point.");
-        if (addWorld)
-        {
-            if (layout.World != null) throw new InvalidOperationException("The character already has an entry for this world UID; update it instead.");
-            if (layout.WorldCount >= MaxEntries) throw new InvalidDataException("The character has too many world entries to add another.");
-            if (payload.Length > MaxPayloadBytes - 60) throw new InvalidDataException("The character payload is too large to add a world entry.");
-            using var expanded = new MemoryStream(payload.Length + 60);
-            using (var entryWriter = new BinaryWriter(expanded, System.Text.Encoding.UTF8, leaveOpen: true))
-            {
-                entryWriter.Write(payload.AsSpan(0, layout.WorldCountOffset));
-                entryWriter.Write(layout.WorldCount + 1);
-                entryWriter.Write(payload.AsSpan(layout.WorldCountOffset + 4, layout.WorldEndOffset - layout.WorldCountOffset - 4));
-                entryWriter.Write(worldUid);
-                entryWriter.Write(false); // no custom spawn
-                WritePoint(entryWriter, 0, 0, 0);
-                entryWriter.Write(true); // logout point present
-                WritePoint(entryWriter, x, y, z);
-                entryWriter.Write(false); // no death point
-                WritePoint(entryWriter, 0, 0, 0);
-                WritePoint(entryWriter, 0, 0, 0); // home point
-                entryWriter.Write(false); // no map data
-                entryWriter.Write(payload.AsSpan(layout.WorldEndOffset));
-            }
-            payload = expanded.ToArray();
-            _ = Walk(payload, worldUid); // The finished save must still parse through its trailing player data.
-        }
-        else
-        {
-            (int flagOffset, int pointOffset) = layout.World ?? throw new KeyNotFoundException("The character has no entry for the requested world UID.");
-            payload[flagOffset] = 1;
-            WriteFloat(payload, pointOffset, x);
-            WriteFloat(payload, pointOffset + 4, y);
-            WriteFloat(payload, pointOffset + 8, z);
-        }
-
-        using var output = new MemoryStream(file.Length);
-        using var writer = new BinaryWriter(output);
-        writer.Write(payload.Length);
-        writer.Write(payload);
-        byte[] hash = SHA512.HashData(payload);
-        writer.Write(hash.Length);
-        writer.Write(hash);
-        return output.ToArray();
-    }
 
     private static byte[] ReadEnvelope(byte[] file)
     {
@@ -210,14 +147,6 @@ internal static class CharacterSavePosition
         if (bytes < 0 || bytes > stream.Length - stream.Position)
             throw new EndOfStreamException();
         stream.Position += bytes;
-    }
-
-    private static void WriteFloat(byte[] payload, int offset, float value) =>
-        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(offset, sizeof(float)), value);
-
-    private static void WritePoint(BinaryWriter writer, float x, float y, float z)
-    {
-        writer.Write(x); writer.Write(y); writer.Write(z);
     }
 }
 

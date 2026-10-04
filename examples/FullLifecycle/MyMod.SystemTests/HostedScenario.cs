@@ -21,8 +21,6 @@ public sealed class HostedPlan
     public ClientRunPlan Client { get; set; } = new();
     public Site DrySite { get; set; } = new();
     public Site WetSite { get; set; } = new();
-    /// <summary>Required for direct start: dry ground where the prepared character first appears.</summary>
-    public Site? Arrival { get; set; }
     /// <summary>Exact known log lines and reasons for this disposable run; other errors still fail teardown.</summary>
     public Dictionary<string, LogClassification> LogScan { get; set; } = [];
     /// <summary>The word the host's greeting changes to for the broadcast check; it is set back afterwards.</summary>
@@ -44,13 +42,6 @@ public sealed class HostedPlan
         if (ControlPlugins.All.FirstOrDefault(c => plan.Client.Pins.TryGetValue(c.Guid, out var value) && value != "absent") is { } control)
             throw new ArgumentException($"The hosted scenario has no control run: remove {control.Guid}.");
         LifecyclePlan.CheckSites(plan.DrySite, plan.WetSite);
-        if (plan.Client.DirectStart)
-        {
-            if (plan.Arrival == null) throw new ArgumentException("A direct-start hosted run needs an arrival point matching the prepared character.");
-            plan.Arrival.Validate("arrival point", requireGround: true);
-            if (plan.Arrival.Ground < LifecyclePlan.WaterLevel + LifecyclePlan.Clearance)
-                throw new ArgumentException("The direct-start arrival must be dry ground.");
-        }
         if (!Word.IsMatch(plan.NewGreeting)) throw new ArgumentException("Set newGreeting to one word (letters, digits, - or _): the host's greeting changes to it for the broadcast check.");
         return plan;
     }
@@ -76,8 +67,7 @@ public static class HostedScenario
     {
         var timeout = TimeSpan.FromSeconds(plan.Client.JoinSeconds);
         report.Provenance["hostBroadcast"] = hostLog == null ? "not observed: an attached host's log is its operator's" : "the owned host's live BepInEx log";
-        new HostRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation, SimulatedClient = simulatedClient,
-            Arrival = plan.Arrival == null ? null : new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground) }.Run(openClient, round =>
+        new HostRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation, SimulatedClient = simulatedClient }.Run(openClient, round =>
         {
             var host = round.Server; // The same actor as round.Client.
             if (round.Index > 0)

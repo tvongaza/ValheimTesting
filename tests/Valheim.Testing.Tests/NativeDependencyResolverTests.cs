@@ -281,7 +281,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         };
         string Store(string name, long id)
         {
-            string local = _rig.Write("characters_local/" + name + ".fch", CharacterSavePositionTests.Profile(playerId: id).File);
+            string local = _rig.Write("characters_local/" + name + ".fch", CharacterSaveReaderTests.Profile(playerId: id).File);
             string store = Path.Combine(_rig.Root, "registered-" + name);
             DisposableCharacterStore.Create(store).Register(name, local);
             return store;
@@ -308,7 +308,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
 
     [Fact] public async Task LostCharacterInstallReplyNamesThePossibleSaveWithoutDeletingIt()
     {
-        string original = _rig.Write("characters_local/tester.fch", CharacterSavePositionTests.Profile(playerId: 919).File);
+        string original = _rig.Write("characters_local/tester.fch", CharacterSaveReaderTests.Profile(playerId: 919).File);
         string store = Path.Combine(_rig.Root, "ambiguous-store");
         DisposableCharacterStore.Create(store).Register("tester", original);
         var host = new FakeServerHost("client", Path.Combine(_rig.Root, "ambiguous-host"), windows: true);
@@ -332,7 +332,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
     [InlineData(true)]
     public async Task PartialCharacterUploadReportsWhetherStagingCleanupWasProven(bool cleanupFails)
     {
-        string original = _rig.Write("characters_local/stage-seed.fch", CharacterSavePositionTests.Profile(playerId: 920).File);
+        string original = _rig.Write("characters_local/stage-seed.fch", CharacterSaveReaderTests.Profile(playerId: 920).File);
         string store = Path.Combine(_rig.Root, "stage-store");
         DisposableCharacterStore.Create(store).Register("stage-seed", original);
         var host = new FakeServerHost("client", Path.Combine(_rig.Root, "stage-host"), windows: true);

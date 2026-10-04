@@ -72,28 +72,17 @@ public sealed class ClientRounds
         Check();
         Report.Provenance["clientRounds"] = string.Join(",", Rounds);
         Report.Provenance["clientJoin"] = Client.Crossplay ? "crossplay" : "address";
-        Report.Provenance["clientStart"] = Client.StartAtCharacterSave ? "characterSave" : "teleport";
         Report.Provenance["arrivalWait"] = Client.EventDrivenArrival ? "game-side signal" : "remote observations";
         Report.Provenance["testFastTeleport"] = Client.FastTestTeleports.ToString();
         // What an owned client is launched as (never another slice); an attached client's is its operator's.
         Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
         Report.Provenance["cliPreflight"] = Client.CliPreflight;
-        if (Client.StartAtCharacterSave) Report.Provenance["clientStartSha256"] = Client.CharacterStart!.Sha256;
         var completed = new List<string>();
         ClientSession? session = null;
-        CharacterStartStage? stage = null;
         bool passed = false;
         try
         {
-            if (Client.StartAtCharacterSave)
-                Report.Step("stage the pinned disposable local character", () => stage = CharacterStartStage.Install(
-                    Client.CharacterStart!, Client.Character, long.Parse(WorldUid, System.Globalization.CultureInfo.InvariantCulture), Arrival!));
-            // A direct-start client joins as part of opening. Prepare the menu-start comparison under the same
-            // ready-server condition, so its startup timing does not include a different readiness wait.
-            if (Client.DirectStart || Client.StartAtCharacterSave)
-                Report.Step("the server accepts connections before client launch", () => WaitUntilJoinable(server));
-            Report.Step(OpenStep ?? (Client.DirectStart ? "launch the owned client directly into its pinned world" :
-                Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
+            Report.Step(OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
                 () => session = openClient());
             for (int i = 0; i < Rounds.Count; i++)
             {
@@ -116,38 +105,18 @@ public sealed class ClientRounds
         }
         finally
         {
-            try
-            {
-                if (session != null)
-                    try { Report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); }
-                    catch when (!passed) { } // Keep the original failure.
-                    finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
-            }
-            finally
-            {
-                if (stage != null)
-                    try { Report.Step("remove only the staged character and its game-made backups", stage.Dispose); }
-                    catch when (!passed) { } // Cleanup's failure is recorded without masking the original one.
-            }
+            if (session != null)
+                try { Report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); }
+                catch when (!passed) { } // Keep the original failure.
+                finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
         }
     }
 
     private void Join(ClientRound round)
     {
         var session = new SessionControl(round.Client);
-        bool directFirst = Client.DirectStart && round.Index == 0;
-        if (!(round.Index == 0 && (Client.DirectStart || Client.StartAtCharacterSave)))
-            round.Step("the server accepts game connections", () => WaitUntilJoinable(round.Server));
-        bool preparedStart = Client.StartAtCharacterSave && round.Index == 0;
-        if (directFirst)
-        {
-            round.Step("verify the direct-start client is in the pinned world" + (ProtectPlayer ? ", protected" : ""), () =>
-            {
-                round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
-                session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
-            });
-        }
-        else if (Client.Crossplay)
+        round.Step("the server accepts game connections", () => WaitUntilJoinable(round.Server));
+        if (Client.Crossplay)
         {
             CrossplayLobby? lobby = null;
             round.Step("the server's crossplay lobby is open", () => lobby = Lobby!(round.Server));
@@ -155,19 +124,14 @@ public sealed class ClientRounds
             {
                 // Devcommands first; the join command exactly once, then the connection is awaited on the session state.
                 session.JoinCrossplay(lobby!.RemotePlayerId, Client.Character, WorldUid, Client.MenuExpectations, TimeSpan.FromSeconds(Client.JoinSeconds), cancellation: Cancellation,
-                    worldExpectations: Client.WorldExpectations(WorldUid), requiredLocalFilename: preparedStart ? Client.Character : null);
+                    worldExpectations: Client.WorldExpectations(WorldUid));
                 round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
                 session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
             });
         }
         else round.Step("join the owned server with the disposable character" + (ProtectPlayer ? ", protected" : ""), () =>
         {
-            if (preparedStart)
-            {
-                session.EnableDevcommands();
-                session.RequireLocalCharacter(Client.Character);
-            }
-            session.Join(Client.Join, Client.Character, Client.PasswordVariable, enableDevcommands: !preparedStart); // Join exactly once.
+            session.Join(Client.Join, Client.Character, Client.PasswordVariable); // Join exactly once.
             round.Client.VerifyEnvironment(Client.WorldExpectations(WorldUid));
             // When requested, protects the player once the world is ready (god, ghost, debug mode, read back); fly stays off.
             session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
@@ -178,11 +142,9 @@ public sealed class ClientRounds
             round.Step("establish test access on the owned client", () => TestAccess.Ensure(round.Client, TestActorRole.ClientInWorld));
         if (Arrival is { } point)
         {
-            round.Step(preparedStart ? "verify prepared character start at the measurement point" : ArriveStep, () =>
+            round.Step(ArriveStep, () =>
             {
-                if (preparedStart)
-                    round.Write("arrival", PlayerPlacement.ObserveArrival(round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation));
-                else if (Client.EventDrivenArrival)
+                if (Client.EventDrivenArrival)
                 {
                     var result = PlayerPlacement.ArriveOnSignals(round.Server, round.Client, point,
                         TimeSpan.FromSeconds(Client.ArrivalSeconds), Client.FastTestTeleports, Cancellation);
@@ -203,15 +165,9 @@ public sealed class ClientRounds
     {
         CheckRoundNames(Rounds);
         Client.CheckTestTeleportOptions();
-        if (Client.StartAtCharacterSave && Arrival == null)
-            throw new ArgumentException("startAtCharacterSave needs an arrival point to verify on the client.");
-        if (Client.StartAtCharacterSave && (!Client.Owned || Client.CharacterStart == null))
-            throw new ArgumentException("startAtCharacterSave needs an owned client and pinned characterStart staging details.");
         if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
         if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with HostRounds.");
         if (Client.Crossplay && Lobby == null) throw new ArgumentException("Lobby: a crossplay client joins the server's PlayFab lobby; supply Lobby, for example with CrossplayServer.WaitForLobby.");
-        if (Client.DirectStart && Client.DirectStartWorldUid != WorldUid)
-            throw new ArgumentException("Client.directStartWorldUid must match the owned server's world UID.");
     }
 
     internal static void CheckRoundNames(IReadOnlyList<string> rounds)

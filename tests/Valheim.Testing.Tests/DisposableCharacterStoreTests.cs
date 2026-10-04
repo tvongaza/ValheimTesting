@@ -19,7 +19,7 @@ public sealed class DisposableCharacterStoreTests : IDisposable
     private string Local(string name, long playerId, long secondUid = 200)
     {
         string file = Path.Combine(_local, name + ".fch");
-        File.WriteAllBytes(file, CharacterSavePositionTests.Profile(secondUid: secondUid, playerId: playerId).File);
+        File.WriteAllBytes(file, CharacterSaveReaderTests.Profile(secondUid: secondUid, playerId: playerId).File);
         return file;
     }
 
@@ -47,7 +47,7 @@ public sealed class DisposableCharacterStoreTests : IDisposable
         byte[] original = File.ReadAllBytes(Path.Combine(_local, "seed.fch"));
         try
         {
-            using var stage = CharacterStartStage.InstallRegistered(StoreDirectory, "tester", _local, _steam, "smoke-only");
+            using var stage = RegisteredCharacterStage.InstallRegistered(StoreDirectory, "tester", _local, _steam, "smoke-only");
             Assert.Equal(original, File.ReadAllBytes(Path.Combine(_local, "smoke-only.fch")));
             throw new InvalidOperationException("simulate a failing native scenario");
         }
@@ -65,7 +65,7 @@ public sealed class DisposableCharacterStoreTests : IDisposable
         string cloud = Path.Combine(_steam, "12345", "892970", "remote", "characters");
         Directory.CreateDirectory(cloud);
         File.WriteAllText(Path.Combine(cloud, "smoke-only.fch"), "someone else's character");
-        Assert.Throws<IOException>(() => CharacterStartStage.InstallRegistered(StoreDirectory, "tester", _local, _steam, "smoke-only"));
+        Assert.Throws<IOException>(() => RegisteredCharacterStage.InstallRegistered(StoreDirectory, "tester", _local, _steam, "smoke-only"));
         Assert.False(File.Exists(Path.Combine(_local, "smoke-only.fch")));
     }
 
@@ -77,20 +77,8 @@ public sealed class DisposableCharacterStoreTests : IDisposable
         string personal = Local("personal", 99);
         Assert.Throws<KeyNotFoundException>(() => store.Get("personal"));
 
-        // Even a positioned copy made without the public API is refused at staging, before anything is written.
-        string prepared = Path.Combine(_evidence, "fresh.fch");
-        File.WriteAllBytes(prepared, CharacterSavePosition.AtWorld(File.ReadAllBytes(personal), 200, 10, 40, -20));
-        var plan = new CharacterStartPlan { PreparedFile = prepared, Sha256 = Sha256(prepared),
-            CharactersLocalDirectory = _local, SteamUserDataDirectory = _steam, CharacterStore = StoreDirectory };
-        var error = Assert.Throws<InvalidDataException>(() => CharacterStartStage.Install(plan, "fresh", 200, new HeightExpectation(10, -20, 40)));
-        Assert.Contains("not a registered disposable character", error.Message);
-        Assert.False(File.Exists(Path.Combine(_local, "fresh.fch")));
-
-        // A plan must name the store; an ordinary directory is not one.
-        plan.CharacterStore = "";
-        Assert.Throws<ArgumentException>(() => CharacterStartStage.Install(plan, "fresh", 200, new HeightExpectation(10, -20, 40)));
-        plan.CharacterStore = _evidence;
-        Assert.Throws<FileNotFoundException>(() => CharacterStartStage.Install(plan, "fresh", 200, new HeightExpectation(10, -20, 40)));
+        // Staging takes only a registered name: there is no way to stage the personal file.
+        Assert.Throws<KeyNotFoundException>(() => RegisteredCharacterStage.InstallRegistered(StoreDirectory, "personal", _local, _steam, "fresh"));
         Assert.False(File.Exists(Path.Combine(_local, "fresh.fch")));
     }
 
@@ -111,20 +99,16 @@ public sealed class DisposableCharacterStoreTests : IDisposable
         var old = store.Register("tester", source);
 
         // The game re-saved the same character after a visit: Refresh accepts it, and the earlier handle no longer does.
-        File.WriteAllBytes(source, CharacterSavePositionTests.Profile(mapBytes: 16, playerId: 11).File);
+        File.WriteAllBytes(source, CharacterSaveReaderTests.Profile(mapBytes: 16, playerId: 11).File);
         var fresh = store.Refresh("tester", source);
         Assert.NotEqual(old.Sha256, fresh.Sha256);
-        string output = Path.Combine(_evidence, "copy.fch");
-        Assert.Contains("changed since", Assert.Throws<InvalidDataException>(() => CharacterStartCopy.Prepare(old, output, 200, 1, 2, 3)).Message);
-        Assert.False(File.Exists(output));
-        CharacterStartCopy.Prepare(fresh, output, 200, 1, 2, 3);
-        Assert.True(File.Exists(output));
+        Assert.Contains("changed since", Assert.Throws<InvalidDataException>(() => store.Read(old)).Message);
+        Assert.NotEmpty(store.Read(fresh));
 
         // A registration removed from the manifest after the handle was taken.
         string manifest = Path.Combine(StoreDirectory, DisposableCharacterStore.ManifestFile);
         File.WriteAllText(manifest, "{ \"format\": 1, \"characters\": [] }");
-        Assert.Throws<KeyNotFoundException>(() => CharacterStartCopy.Prepare(fresh, Path.Combine(_evidence, "again.fch"), 200, 1, 2, 3));
-        Assert.False(File.Exists(Path.Combine(_evidence, "again.fch")));
+        Assert.Throws<KeyNotFoundException>(() => store.Read(fresh));
     }
 
     [Fact]
@@ -174,16 +158,6 @@ public sealed class DisposableCharacterStoreTests : IDisposable
         Assert.Equal(manifest, File.ReadAllText(Path.Combine(StoreDirectory, DisposableCharacterStore.ManifestFile)));
         Assert.Equal(new[] { DisposableCharacterStore.ManifestFile, "tester.fch" },
             Directory.EnumerateFiles(StoreDirectory).Select(Path.GetFileName).Order(StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public void AFailedPreparationWritesNothing()
-    {
-        var store = DisposableCharacterStore.Create(StoreDirectory);
-        var character = store.Register("tester", Local("seed", 11));
-        string output = Path.Combine(_evidence, "copy.fch");
-        Assert.Throws<KeyNotFoundException>(() => CharacterStartCopy.Prepare(character, output, 300, 1, 2, 3));
-        Assert.False(File.Exists(output));
     }
 
     [Fact]

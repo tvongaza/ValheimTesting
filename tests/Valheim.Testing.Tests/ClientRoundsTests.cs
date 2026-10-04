@@ -49,25 +49,6 @@ public sealed class ClientRoundsTests : IDisposable
         Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), ["my.mod"] = "absent" },
     };
 
-    private ClientRunPlan PreparedPlan()
-    {
-        var plan = Plan();
-        plan.Character = "tester-copy";
-        plan.StartAtCharacterSave = true;
-        string local = Path.Combine(_output, "characters_local"), evidence = Path.Combine(_output, "evidence");
-        string steam = Path.Combine(_output, "userdata");
-        Directory.CreateDirectory(local); Directory.CreateDirectory(evidence); Directory.CreateDirectory(steam);
-        string source = Path.Combine(local, "seed.fch"), prepared = Path.Combine(evidence, "tester-copy.fch");
-        File.WriteAllBytes(source, CharacterSavePositionTests.Profile(secondUid: 4242).File);
-        string hash = CharacterStartCopy.Prepare(CharacterSavePositionTests.Register(_output, source), prepared, 4242, Point.X, Point.Height, Point.Z);
-        plan.CharacterStart = new CharacterStartPlan
-        {
-            PreparedFile = prepared, Sha256 = hash, CharactersLocalDirectory = local, SteamUserDataDirectory = steam,
-            CharacterStore = Path.Combine(_output, "store"),
-        };
-        return plan;
-    }
-
     private GameActor Server()
     {
         var transport = new ScriptedTransport().Saves(_saves)
@@ -237,101 +218,6 @@ public sealed class ClientRoundsTests : IDisposable
         Rounds(report, plan, names: ["only"]).Run(Server(), Open(plan), Measure());
         Assert.True(report.Passed, string.Join("; ", Failed(report)));
         Assert.Equal(recorded, report.Provenance["clientArchitecture"]);
-    }
-
-    [Fact] public void StagedCharacterStartIsObservedWithoutAFirstTeleport()
-    {
-        var plan = PreparedPlan();
-        var report = new ScenarioReport("rounds");
-        Rounds(report, plan).Run(Server(), Open(plan), Measure());
-        Assert.True(report.Passed);
-        Assert.Equal(new[] { 0, 1 }, _servers.Select(s => s.Count("cli_teleport_peer")));
-        Assert.Equal("characterSave", report.Provenance["clientStart"]);
-        Assert.Contains(report.Steps, step => step.Name == "stage the pinned disposable local character" && step.Passed);
-        var stepNames = report.Steps.Select(step => step.Name).ToArray();
-        int ready = Array.IndexOf(stepNames, "the server accepts connections before client launch");
-        int opened = Array.IndexOf(stepNames, "launch the owned client to its menu, plugins pinned");
-        Assert.True(ready >= 0 && opened > ready);
-        Assert.DoesNotContain(report.Steps, step => step.Name == "first: the server accepts game connections");
-        Assert.Contains(report.Steps, step => step.Name == "remove only the staged character and its game-made backups" && step.Passed);
-        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
-        Assert.Equal(1, _client.Count("cli_select_character tester-copy"));
-        Assert.True(Wrote("first-arrival.json"));
-        Assert.True(Wrote("after-restart-arrival.json"));
-    }
-
-    [Fact] public void AFailedClientLaunchRemovesTheStagedCharacter()
-    {
-        var plan = PreparedPlan();
-        var report = new ScenarioReport("rounds");
-        Assert.Throws<IOException>(() => Rounds(report, plan).Run(Server(), () => throw new IOException("client did not start"), Measure()));
-        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
-        Assert.True(File.Exists(plan.CharacterStart.PreparedFile));
-        Assert.Contains(report.Steps, step => step.Name == "remove only the staged character and its game-made backups" && step.Passed);
-    }
-
-    [Fact] public void AnUnregisteredPreparedCharacterIsRefusedBeforeTheClientOpens()
-    {
-        var plan = PreparedPlan();
-        plan.CharacterStart!.CharacterStore = DisposableCharacterStore.Create(Path.Combine(_output, "other-store")).Root;
-        var report = new ScenarioReport("rounds");
-        bool opened = false;
-        Assert.Throws<InvalidDataException>(() => Rounds(report, plan).Run(Server(), () => { opened = true; throw new IOException("must not open"); }, Measure()));
-        Assert.False(opened);
-        Assert.False(File.Exists(Path.Combine(plan.CharacterStart.CharactersLocalDirectory, "tester-copy.fch")));
-    }
-
-    [Fact] public void AMissingRegisteredCopyIsRefusedBeforeTheClientOpens()
-    {
-        var plan = PreparedPlan();
-        File.Delete(Path.Combine(plan.CharacterStart!.CharacterStore, "tester.fch"));
-        AssertRefusedBeforeOpening<FileNotFoundException>(plan);
-    }
-
-    [Fact] public void ASwappedRegisteredCopyIsRefusedBeforeTheClientOpens()
-    {
-        var plan = PreparedPlan();
-        File.WriteAllBytes(Path.Combine(plan.CharacterStart!.CharacterStore, "tester.fch"), CharacterSavePositionTests.Profile(playerId: 99).File);
-        AssertRefusedBeforeOpening<InvalidDataException>(plan);
-    }
-
-    private void AssertRefusedBeforeOpening<T>(ClientRunPlan plan) where T : Exception
-    {
-        var report = new ScenarioReport("rounds");
-        bool opened = false;
-        Assert.Throws<T>(() => Rounds(report, plan).Run(Server(), () => { opened = true; throw new IOException("must not open"); }, Measure()));
-        Assert.False(opened);
-        Assert.Equal(new[] { "stage the pinned disposable local character" }, Failed(report));
-        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
-    }
-
-    [Fact] public void WrongStagedStartFailsRatherThanTeleportingOrMeasuring()
-    {
-        _atPoint = false;
-        var plan = PreparedPlan();
-        plan.ArrivalSeconds = 10;
-        var report = new ScenarioReport("rounds");
-        var error = Assert.Throws<InvalidOperationException>(() => Rounds(report, plan).Run(Server(), Open(plan), Measure()));
-        Assert.Contains("No teleport was sent", error.Message);
-        Assert.Contains("settled away", error.Message);
-        Assert.Equal(new[] { "first: verify prepared character start at the measurement point" }, Failed(report));
-        Assert.Equal(0, _servers.Sum(s => s.Count("cli_teleport_peer")));
-        Assert.False(File.Exists(Path.Combine(plan.CharacterStart!.CharactersLocalDirectory, "tester-copy.fch")));
-        Assert.False(Wrote("first-reading.json"));
-    }
-
-    [Fact] public void StagedStartWithoutAnArrivalPointIsRefusedBeforeOpeningTheClient()
-    {
-        var plan = Plan();
-        plan.StartAtCharacterSave = true;
-        var report = new ScenarioReport("rounds");
-        var error = Assert.Throws<ArgumentException>(() => new ClientRounds
-        {
-            Client = plan, WorldUid = WorldUid, Report = report, Output = _output,
-            WaitUntilJoinable = _ => { }, RestartServer = Server,
-        }.Run(Server(), Open(plan), Measure()));
-        Assert.Contains("needs an arrival point", error.Message);
-        Assert.Equal(0, _opens);
     }
 
     [Fact] public void AFailedSaveStopsBeforeTheLeaveAndRestartAndLeavesTheFirstRoundsEvidence()

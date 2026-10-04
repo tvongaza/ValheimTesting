@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using valheimCLI;
 
@@ -48,21 +49,19 @@ public sealed class ClientRunPlan
     public HostWorldPlan? HostWorld { get; set; }
     /// <summary>An existing, disposable local character (never a cloud character).</summary>
     public string Character { get; set; } = "";
-    /// <summary>
-    /// Owned client only: ValheimCLI's Standard pack selects <see cref="Character"/> and enters the planned world on
-    /// startup. The runner waits for that world instead of the menu. For a dedicated join, set
-    /// <see cref="DirectStartWorldUid"/> to the server fixture's UID; a hosted client's UID comes from
-    /// <see cref="HostWorld"/>. The startup request is a small password-free file in the run's private evidence.
-    /// </summary>
-    public bool DirectStart { get; set; }
-    /// <summary>The exact destination world UID when <see cref="DirectStart"/> joins a dedicated server.</summary>
-    public string DirectStartWorldUid { get; set; } = "";
-    /// <summary>
-    /// Opt in only after staging a positioned copy of this disposable local character while the game is stopped.
-    /// The first client round verifies arrival from the client's support reading without teleporting; later rounds
-    /// and zone-cycle movements still use <see cref="PlayerPlacement.Arrive"/>. A wrong or missing start fails the run.
-    /// </summary>
-    public bool StartAtCharacterSave { get; set; }
+    // Removed (#298): direct start and prepared-character start saved 0.07 s over the menu start. A plan that still names
+    // one is refused with what to do instead of the generic unknown-field error.
+    [JsonInclude, JsonPropertyName("directStart"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedDirectStart { get => null; set => throw Removed("directStart"); }
+    [JsonInclude, JsonPropertyName("directStartWorldUid"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedDirectStartWorldUid { get => null; set => throw Removed("directStartWorldUid"); }
+    [JsonInclude, JsonPropertyName("startAtCharacterSave"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedStartAtCharacterSave { get => null; set => throw Removed("startAtCharacterSave"); }
+    [JsonInclude, JsonPropertyName("characterStart"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedCharacterStart { get => null; set => throw Removed("characterStart"); }
+    private static ArgumentException Removed(string field) => new(
+        $"The client plan's {field} was removed (ValheimTesting #298): an owned client launches to its menu and joins (or hosts), " +
+        "and the first arrival teleports. Delete directStart, directStartWorldUid, startAtCharacterSave and characterStart from the plan.");
     /// <summary>
     /// Use ValheimCLI's bounded, game-side teleport readiness and support waits for arrival instead of repeated
     /// remote observations. Requires the current Standard and World Tools packs. The ordinary game teleport timing
@@ -78,8 +77,6 @@ public sealed class ClientRunPlan
     /// not arrived, so joined clients are refused before launch.
     /// </summary>
     public bool FastTestTeleports { get; set; }
-    /// <summary>Required with <see cref="StartAtCharacterSave"/>: the prepared copy and the owned client's character folders.</summary>
-    public CharacterStartPlan? CharacterStart { get; set; }
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
     public string? PasswordVariable { get; set; }
     public int StartSeconds { get; set; } = 300;
@@ -181,29 +178,8 @@ public sealed class ClientRunPlan
             throw new ArgumentException("A hosting client runs on this machine, where the runner places the fixture world in its save directory; its ValheimCLI host is 127.0.0.1.");
         if (Crossplay && (Join.Length != 0 || PasswordVariable != null))
             throw new ArgumentException("A crossplay client joins the server's PlayFab lobby, not an address, and the crossplay join command would carry a password as text: leave out join and passwordVariable, and run the crossplay fixture server private without a password.");
-        if (DirectStart)
-        {
-            if (!Owned || Crossplay) throw new ArgumentException("directStart requires an owned client joining by address or hosting a local fixture; crossplay lobby discovery is not available at launch.");
-            if (Character.Contains('=')) throw new ArgumentException("A direct-start character filename cannot contain '='; the startup request uses one key=value per line.");
-            if (HostWorld == null && (string.IsNullOrWhiteSpace(Join) ||
-                !long.TryParse(DirectStartWorldUid, System.Globalization.NumberStyles.Integer,
-                    System.Globalization.CultureInfo.InvariantCulture, out _)))
-                throw new ArgumentException("A direct-start join needs join and directStartWorldUid for the pinned server fixture.");
-            if (HostWorld != null && DirectStartWorldUid.Length != 0)
-                throw new ArgumentException("A direct-start host takes its world UID from hostWorld; leave out directStartWorldUid.");
-            if (!StartAtCharacterSave)
-                throw new ArgumentException("A direct-start client needs a prepared character so the first spawn is at the planned dry point.");
-        }
-        else if (DirectStartWorldUid.Length != 0) throw new ArgumentException("directStartWorldUid is unused without directStart.");
         foreach (string? token in new[] { HostWorld == null && !Crossplay ? Join : null, Character, PasswordVariable })
             if (token != null && (token.Length == 0 || token.Any(char.IsWhiteSpace))) throw new ArgumentException("Join address, character and password variable must be single tokens.");
-        if (StartAtCharacterSave && HostWorld != null && !DirectStart)
-            throw new ArgumentException("startAtCharacterSave for a hosted world requires directStart and a HostRounds arrival point.");
-        if (StartAtCharacterSave && (!Owned || CharacterStart == null))
-            throw new ArgumentException("startAtCharacterSave requires an owned client and characterStart staging details.");
-        if (!StartAtCharacterSave && CharacterStart != null)
-            throw new ArgumentException("characterStart is unused without startAtCharacterSave.");
-        CharacterStart?.Validate(Character);
         if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600 || BepInExSeconds is < 5 or > 1800) throw new ArgumentException("Client timeouts are out of range.");
         HostWorld?.Validate(pinned);
         if (Capabilities == null || Capabilities.Any(path => path == null || path.Split('/') is not [{ Length: > 0 }, { Length: > 0 }] || path.Any(char.IsWhiteSpace)) || Capabilities.Distinct(StringComparer.Ordinal).Count() != Capabilities.Length)
@@ -271,7 +247,6 @@ public sealed class ClientRunPlan
 
     /// <summary>Everything the launch and arrival code needs from the pinned ValheimCLI set.</summary>
     internal IEnumerable<string> RequiredCliCapabilities => Capabilities
-        .Concat(DirectStart ? [CliCapabilities.DirectStart] : [])
         .Concat(EventDrivenArrival ? ["valheim.world/player-support-wait", CliCapabilities.TeleportSignals] : []);
 
     /// <summary>

@@ -28,7 +28,7 @@ public static class DefaultSmokeCharacter
     public static DisposableCharacterStore Prepare(string newRoot)
     {
         newRoot = Path.GetFullPath(newRoot);
-        CharacterStartCopy.RejectLinkedAncestors(newRoot);
+        DisposableCharacterStore.RejectLinkedAncestors(newRoot);
         if (Path.Exists(newRoot)) throw new IOException("Use a new directory for the default character; an existing character store is never replaced.");
         Directory.CreateDirectory(newRoot);
         try
@@ -53,7 +53,7 @@ public static class DefaultSmokeCharacter
         string steamUserDataDirectory)
     {
         ArgumentNullException.ThrowIfNull(store);
-        return CharacterStartStage.InstallRegistered(store.Root, Name, charactersLocalDirectory,
+        return RegisteredCharacterStage.InstallRegistered(store.Root, Name, charactersLocalDirectory,
             steamUserDataDirectory, Name);
     }
 
@@ -64,7 +64,7 @@ public static class DefaultSmokeCharacter
     public static DisposableCharacterStore Ensure(string root)
     {
         root = Path.GetFullPath(root);
-        CharacterStartCopy.RejectLinkedAncestors(root);
+        DisposableCharacterStore.RejectLinkedAncestors(root);
         if (!Path.Exists(root)) return Prepare(root);
         if (!Directory.Exists(root)) throw new IOException("The default character path is not a directory.");
         string marker = Path.Combine(root, Marker), storePath = Path.Combine(root, "store");
@@ -73,7 +73,7 @@ public static class DefaultSmokeCharacter
         foreach (string entry in Directory.EnumerateFileSystemEntries(root))
             if (entry != marker && entry != storePath)
                 throw new IOException("The default character directory has an unfamiliar entry: " + Path.GetFileName(entry));
-        CharacterStartCopy.RejectLinkedAncestors(storePath);
+        DisposableCharacterStore.RejectLinkedAncestors(storePath);
         if (Path.Exists(storePath) && !Directory.Exists(storePath)) throw new IOException("The default character store is not a directory.");
         if (Directory.Exists(storePath))
             foreach (string entry in Directory.EnumerateFileSystemEntries(storePath))
@@ -119,7 +119,7 @@ public static class DefaultSmokeCharacter
         input.CopyTo(output);
         byte[] bytes = output.ToArray();
         if (!Convert.ToHexString(SHA256.HashData(bytes)).Equals(Sha256, StringComparison.OrdinalIgnoreCase) ||
-            CharacterSavePosition.ReadIdentity(bytes).Name != "VTSeedClean" || !CharacterSavePosition.IsFreshSmokeSeed(bytes))
+            CharacterSaveReader.ReadIdentity(bytes).Name != "VTSeedClean" || !CharacterSaveReader.IsFreshSmokeSeed(bytes))
             throw new InvalidDataException("The packaged default character changed from its verified game save.");
         return bytes;
     }
