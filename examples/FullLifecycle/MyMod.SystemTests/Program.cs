@@ -15,7 +15,6 @@ var options = new PinnedServerRunOptions<LifecyclePlan>
     Name = "mymod-system-test",
     ReadPlan = LifecyclePlan.ReadValidated,
     SessionCapability = "mymod.testing/session",
-    AcknowledgeCheats = true,
     SessionTokenVariable = LifecyclePlan.SessionTokenVariable,
     CheckMode = (mode, plan) =>
     {

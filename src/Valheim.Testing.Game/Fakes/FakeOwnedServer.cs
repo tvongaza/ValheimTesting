@@ -38,6 +38,11 @@ public sealed class FakeOwnedServer
     public bool ExitOnLaunch { get; set; }
     /// <summary>Connecting throws <see cref="IOException"/>, as before the CLI listens.</summary>
     public bool RefuseConnections { get; set; }
+    /// <summary>The server's test access as ValheimCLI's <c>cli_access</c> reports it; <c>devcommands</c> toggles it, <c>confirmcheats</c> acknowledges cheats.</summary>
+    public bool Devcommands { get; set; }
+    public bool CheatsAcknowledged { get; set; }
+    /// <summary>Accept <c>confirmcheats</c> without acknowledging cheats: a server whose access never becomes ready.</summary>
+    public bool IgnoreConfirmCheats { get; set; }
     /// <summary>How long each readiness probe takes (blocking).</summary>
     public TimeSpan ProbeDelay { get; set; }
     /// <summary>Held connections and pin checks wait for these gates (at most 30 s).</summary>
@@ -93,6 +98,15 @@ public sealed class FakeOwnedServer
                 server.PinGate?.Wait(TimeSpan.FromSeconds(30));
                 return new() { Ok = !server.RefusePins, Output = [server.RefusePins ? "ERROR: pins" : "OK: EXPECT"] };
             }
+            // Test access (PinnedServerRunOptions.TestAccess), as ValheimCLI's cli_access and the game's commands answer it.
+            if (command == "cli_access")
+                return new() { Ok = true, Output = ["ACCESS " + JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1, complete = true, devcommands = server.Devcommands, cheatsAcknowledged = server.CheatsAcknowledged,
+                    allowOnServerClients = false, server = true, dedicated = true, joinedClient = false, localPlayer = false, profileAvailable = true,
+                })] };
+            if (command == "devcommands") { server.Record("devcommands" + process.Id); server.Devcommands = !server.Devcommands; return new() { Ok = true, Output = ["Dev commands: " + server.Devcommands] }; }
+            if (command == "confirmcheats") { server.Record("confirmcheats" + process.Id); if (!server.IgnoreConfirmCheats) server.CheatsAcknowledged = true; return new() { Ok = true, Output = [] }; }
             if (command != "cli_extension " + server.SessionCapability) throw new InvalidOperationException("Unexpected command during startup: " + command);
             server.Record("probe" + process.Id);
             if (server.ProbeDelay > TimeSpan.Zero) Thread.Sleep(server.ProbeDelay);

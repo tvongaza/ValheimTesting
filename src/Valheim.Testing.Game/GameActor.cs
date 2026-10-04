@@ -67,7 +67,7 @@ public sealed record Capability(string Path, string Instance, bool ReadOnly, int
 /// using var actor = new GameActor("session", new CliTransport("127.0.0.1", 5577));
 /// actor.VerifyEnvironment(pins);
 /// var capability = actor.RequireCapability("mymod.testing/session");
-/// bool enabled = actor.Observe(capability).Data.GetProperty("devcommands").GetBoolean();
+/// bool complete = actor.Observe(capability).Complete;
 /// </code>
 /// The pin file comes from the test plan, not from the running game. After a world or plugin transition, verify the new
 /// expected pins and rediscover capabilities before another action. See the compiling

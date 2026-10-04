@@ -45,12 +45,12 @@ public sealed class PinnedServerRunTests : IDisposable
         return path;
     }
     private static PinnedServerRunOptions<ServerRunPlan> Options(Func<PinnedServerRunContext<ServerRunPlan>, Task>? scenario = null,
-        FakeOwnedServer? server = null, Action<string, ServerRunPlan>? checkMode = null) => new()
+        FakeOwnedServer? server = null, Action<string, ServerRunPlan>? checkMode = null, bool testAccess = false) => new()
     {
         Name = "toolkit-smoke",
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-        PrepareModes = ["prepare-fixture"], CheckMode = checkMode, EnableDevcommands = false,
+        PrepareModes = ["prepare-fixture"], CheckMode = checkMode, TestAccess = testAccess,
         Scenario = scenario ?? (_ => Task.CompletedTask),
         SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60)),
     };
@@ -65,7 +65,7 @@ public sealed class PinnedServerRunTests : IDisposable
             plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); plan.Client?.Validate();
             return plan;
         },
-        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", EnableDevcommands = false,
+        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
         Scenario = _ => Task.CompletedTask,
         SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60)),
     };
@@ -121,6 +121,20 @@ public sealed class PinnedServerRunTests : IDisposable
         string nativePlan = WritePlan(linux: HostRunsLinux, client: MacClient(native.Root, "arm64"));
         Assert.Equal(ClientArchitecture.Arm64, ClientOptions().ReadPlan(nativePlan).Client!.LaunchArchitecture);
         Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", nativePlan, Output], ClientOptions()));
+    }
+    [Fact] public async Task TheDefaultRunEstablishesTestAccessOnceAndAServerThatNeverAcknowledgesFails()
+    {
+        if (OperatingSystem.IsMacOS()) return; // This fake runtime is Windows or Linux, which a Mac cannot run.
+        string plan = WritePlan(linux: HostRunsLinux);
+        var server = new FakeOwnedServer("test.mod");
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: server, testAccess: true)));
+        Assert.Equal(new[] { "devcommands1", "confirmcheats1" }, server.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")));
+        Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString() == "verify test access on the disposable server" && step.GetProperty("Passed").GetBoolean());
+        Directory.Delete(Output, true);
+        var stubborn = new FakeOwnedServer("test.mod") { IgnoreConfirmCheats = true };
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: stubborn, testAccess: true)));
+        Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString() == "verify test access on the disposable server" && !step.GetProperty("Passed").GetBoolean());
+        Assert.Single(stubborn.Events.Where(e => e.StartsWith("confirmcheats"))); // once, never retried
     }
     [Fact] public async Task ExistingEvidenceIsNeverOverwrittenAndBadUsageIsRefused()
     {
@@ -221,7 +235,7 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
         {
             Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
-            EnableDevcommands = false, Scenario = options.Scenario, SessionOverride = options.SessionOverride, KeepRuntime = true,
+            TestAccess = false, Scenario = options.Scenario, SessionOverride = options.SessionOverride, KeepRuntime = true,
         }));
         var kept = Result();
         Assert.True(Directory.Exists(Copy(kept, "runtime"))); Assert.Contains("kept on request", Copy(kept, "runtimeCopy"));
@@ -255,7 +269,7 @@ public sealed class PinnedServerRunTests : IDisposable
     private static PinnedServerRunOptions<ServerRunPlan> WithStaged(PinnedServerRunOptions<ServerRunPlan> options, WorldFixture staged) => new()
     {
         Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
-        EnableDevcommands = false, Scenario = options.Scenario, SessionOverride = options.SessionOverride, StagedRuntime = staged,
+        TestAccess = false, Scenario = options.Scenario, SessionOverride = options.SessionOverride, StagedRuntime = staged,
     };
     [Fact] public async Task AStagedRuntimeIsRunInPlaceAndRetiredAgainstItsStagedState()
     {
@@ -432,7 +446,7 @@ public sealed class KeepRuntimeVariableTests : IDisposable
         }));
         var options = new PinnedServerRunOptions<ServerRunPlan>
         {
-            Name = "toolkit-smoke", SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", EnableDevcommands = false,
+            Name = "toolkit-smoke", SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
             ReadPlan = path => { var read = ServerRunPlan.Read<ServerRunPlan>(path); read.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return read; },
             Scenario = _ => Task.CompletedTask,
         };
