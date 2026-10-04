@@ -203,6 +203,9 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             catch (Exception error) { failures.Add(new IOException($"Failed to retire the prepared {copy.Host} runtime {copy.Runtime}", error)); }
         }
         if (failures.Count != 0) throw new AggregateException("Some prepared runtimes remain; inspect them before another run.", failures);
+        // The generated profile contains the observed Steam IDs for launch-time verification. Its caller has
+        // finished using it by teardown; keep the assignment report, but do not retain the private account map.
+        if (ProfileFile.Length != 0 && File.Exists(ProfileFile)) File.Delete(ProfileFile);
         _retired = true;
     }
 }

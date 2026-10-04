@@ -303,7 +303,8 @@ if an earlier choice leaves a later actor without a compatible host. A recipe wi
 reserved for a client-hosted scenario; this dedicated-server campaign only assigns `server` and `client` recipes.
 Run `valheim-test env preflight` first to see each chosen recipe and its reason. `--hosts` adds read-only checks of
 the selected installs, ValheimCLI ports and signed-in Steam accounts. Preparation writes
-`environment-assignments.json` beside its generated private profile so the choice is reviewable afterwards. The
+`environment-assignments.json` beside its generated private profile so the choice is reviewable afterwards. Successful
+teardown deletes the generated profile, which contains the observed Steam IDs; it keeps the assignment report. The
 source installs remain untouched and all actor runtime copies are made after the full preflight passes.
 Rented GPU VM client environments are experimental in this campaign flow; start with local or known SSH desktops.
 They still require an interactive desktop, a signed-in Steam client and the same preflight and lease checks.

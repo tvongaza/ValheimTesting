@@ -224,6 +224,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(File.Exists(hosts["client-a"].Local(@"C:\save\characters_local\vt-one.fch")));
         Assert.False(File.Exists(hosts["client-b"].Local(@"C:\save\characters_local\vt-two.fch")));
         Assert.False(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
+        Assert.False(File.Exists(Path.Combine(output, "profile.json")));
 
         // A dedicated server and one client may share a machine. Their installs are separate, but setup should
         // still overlap under one host claim rather than serialising two full game copies.
@@ -324,6 +325,45 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains("not proven", error.Message);
         Assert.Contains("vt-ambiguous", error.Message);
         Assert.DoesNotContain("character-retire", host.Scripts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PartialCharacterUploadReportsWhetherStagingCleanupWasProven(bool cleanupFails)
+    {
+        string original = _rig.Write("characters_local/stage-seed.fch", CharacterSavePositionTests.Profile(playerId: 920).File);
+        string store = Path.Combine(_rig.Root, "stage-store");
+        DisposableCharacterStore.Create(store).Register("stage-seed", original);
+        var host = new FakeServerHost("client", Path.Combine(_rig.Root, "stage-host"), windows: true);
+        Directory.CreateDirectory(host.Local(@"C:\save\characters_local"));
+        Directory.CreateDirectory(host.Local(@"C:\Steam\userdata"));
+        string stage = @"C:\runs\vt-prep-test\character-stage";
+        host.AfterShip = _ => throw new IOException("upload reply lost after files arrived");
+        if (cleanupFails) host.Failures["character-drop"] = FakeServerHost.TransportFailure;
+        var chosen = HostedCharacterStage.Select(new HostedCampaignCharacter
+        {
+            Store = store, RegisteredName = "stage-seed", FileName = "vt-stage-seed",
+            CharactersLocalDirectory = @"C:\save\characters_local", SteamUserDataDirectory = @"C:\Steam\userdata",
+        }, _rig.Root);
+
+        if (cleanupFails)
+        {
+            var error = await Assert.ThrowsAsync<AggregateException>(() => HostedCharacterStage.StageAsync(host, chosen,
+                stage, TimeSpan.FromSeconds(5), CancellationToken.None));
+            Assert.Contains("upload reply lost", error.InnerExceptions[0].Message);
+            Assert.Contains("Removing character staging", error.InnerExceptions[1].Message);
+            Assert.True(Directory.Exists(host.Local(stage)));
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<IOException>(() => HostedCharacterStage.StageAsync(host, chosen,
+                stage, TimeSpan.FromSeconds(5), CancellationToken.None));
+            Assert.Contains("upload reply lost", error.Message);
+            Assert.False(Directory.Exists(host.Local(stage)));
+        }
+        Assert.Contains("character-drop", host.Scripts);
+        Assert.False(File.Exists(Path.Combine(host.Local(@"C:\save\characters_local"), "vt-stage-seed.fch")));
     }
 
     [Fact] public void AnEditedLockCannotStageAnExtraCliPackOutsideTheSelectedManifest()

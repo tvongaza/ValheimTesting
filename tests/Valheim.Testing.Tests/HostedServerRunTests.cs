@@ -50,6 +50,8 @@ internal sealed class FakeServerHost : IGameHost
     public Action<string>? AfterCopy { get; set; }
     /// <summary>Controlled delay for tests that prove independent actors prepare concurrently.</summary>
     public Func<Task>? BeforeShip { get; set; }
+    /// <summary>Simulates a transport failure after the remote staging directory has been populated.</summary>
+    public Action<string>? AfterShip { get; set; }
     public List<(string Game, string Start)> Stops { get; } = [];
     public IReadOnlyList<string> Scripts { get { lock (_sync) return Runs.Select(run => run.Script).ToList(); } }
 
@@ -338,6 +340,7 @@ internal sealed class FakeServerHost : IGameHost
         lock (_sync) Runs.Add(("ship", new Dictionary<string, string> { ["dest"] = hostDirectory }));
         CopyDirectory(localDirectory, Local(hostDirectory));
         File.WriteAllText(Path.Combine(Local(hostDirectory), "SOURCE.txt"), "files=world\n");
+        AfterShip?.Invoke(Local(hostDirectory));
         return new Shipment(hostDirectory, new string('a', 64), 1, null, null);
     }
     public Task<long> LogOffsetAsync(string logPath, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
@@ -555,6 +558,80 @@ public sealed partial class HostedServerRunTests : IDisposable
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30)));
         Assert.True(File.Exists(unrelated));
         Assert.False(Directory.Exists(host.Local(runtime)));
+        Assert.False(Directory.Exists(host.Local(staging)));
+        Assert.Contains("cleanup-stage", host.Scripts);
+    }
+
+    [Theory]
+    [InlineData("ship")]
+    [InlineData("copy")]
+    public async Task PartialPreparationIsCleanedAfterTheRemoteOperationThrows(string operation)
+    {
+        var host = new FakeServerHost("windows-server", Mirror, windows: true);
+        const string source = @"C:\game\server", runtime = @"C:\runs\partial\runtime", staging = @"C:\runs\partial\staging";
+        string install = host.Local(source);
+        FakeInstalls.Server(install);
+        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        StageLoader(install);
+        string chosen = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(chosen, "selected");
+        if (operation == "ship") host.AfterShip = _ => throw new IOException("ship reply lost after copy");
+        else host.AfterCopy = _ => throw new IOException("copy reply lost after copy");
+
+        var error = await Assert.ThrowsAsync<IOException>(() => HostedRuntimeStage.PrepareAsync(host,
+            HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30)));
+
+        Assert.Contains("reply lost", error.Message);
+        Assert.False(Directory.Exists(host.Local(runtime)));
+        Assert.False(Directory.Exists(host.Local(staging)));
+        Assert.Contains("cleanup-stage", host.Scripts);
+        Assert.True(File.Exists(Path.Combine(install, ServerLaunch.WindowsExecutable)));
+    }
+
+    [Fact] public async Task FailedCleanupKeepsBothTheOriginalErrorAndTheUnprovenResidue()
+    {
+        var host = new FakeServerHost("windows-server", Mirror, windows: true);
+        const string source = @"C:\game\server", runtime = @"C:\runs\residue\runtime", staging = @"C:\runs\residue\staging";
+        string install = host.Local(source);
+        FakeInstalls.Server(install);
+        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        StageLoader(install);
+        string chosen = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(chosen, "selected");
+        host.AfterShip = _ => throw new IOException("ship reply lost after copy");
+        host.Failures["cleanup-stage"] = FakeServerHost.TransportFailure;
+
+        var error = await Assert.ThrowsAsync<AggregateException>(() => HostedRuntimeStage.PrepareAsync(host,
+            HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30)));
+
+        Assert.Contains("reply lost", error.InnerExceptions[0].Message);
+        Assert.Contains("Cleaning failed preparation", error.InnerExceptions[1].Message);
+        Assert.True(Directory.Exists(host.Local(staging)));
+    }
+
+    [Fact] public async Task CancelledPreparationStillCleansAStagedRemoteCopy()
+    {
+        var host = new FakeServerHost("windows-server", Mirror, windows: true);
+        const string source = @"C:\game\server", runtime = @"C:\runs\cancelled\runtime", staging = @"C:\runs\cancelled\staging";
+        string install = host.Local(source);
+        FakeInstalls.Server(install);
+        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        StageLoader(install);
+        string chosen = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(chosen, "selected");
+        using var cancellation = new CancellationTokenSource();
+        host.AfterShip = _ =>
+        {
+            cancellation.Cancel();
+            throw new OperationCanceledException(cancellation.Token);
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => HostedRuntimeStage.PrepareAsync(host,
+            HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30), cancellation.Token));
+
         Assert.False(Directory.Exists(host.Local(staging)));
         Assert.Contains("cleanup-stage", host.Scripts);
     }
