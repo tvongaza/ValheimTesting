@@ -181,6 +181,9 @@ public sealed class OwnershipHandoffTests
             OwnershipHandoffScenario.Run(run);
             Assert.True(report.Passed, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Error)));
             Assert.Equal("202", JsonDocument.Parse(report.Provenance["server-owner-b"]).RootElement.GetProperty("owner").GetString());
+            // B's landing was judged at the loaded ground it measured, not at the generator's height.
+            string loaded = (plan.SecondArrival.Ground + loadedOffset).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Contains(second.Commands, c => c.StartsWith("cli_extension valheim.world/player-support-wait 100 " + loaded + " -32 ", StringComparison.Ordinal));
         }
         Assert.True(first.Disposed);
         Assert.True(second.Disposed);
@@ -217,11 +220,13 @@ public sealed class OwnershipHandoffTests
             .On("cli_acknowledge_local_cheats", _ => { acknowledged = true; return ScriptedTransport.Ok("OK: localCharacterCheated=True"); })
             .On("cli_access", _ => ScriptedTransport.Ok("ACCESS " + JsonSerializer.Serialize(new { schemaVersion = 1, complete = true, devcommands, cheatsAcknowledged = acknowledged, allowOnServerClients = true, server = false, dedicated = false, joinedClient = joined, localPlayer = joined, profileAvailable = joined })))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
-            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=1"))
-            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=2"))
             .OnPrefix("cli_teleport ", _ => ScriptedTransport.Ok("OK: Teleported to test point"))
-            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=2 distant=False requestedMs=0 movedMs=0 areaReadyMs=0 floorReadyMs=0 doneMs=0 floorAtDone=True final=0,0,0"))
-            .Extension("valheim.session", "teleport-signals", _ => new { source = "teleport-signals", complete = true })
+            // The toolkit's arrival signals; the landing is supported at the loaded ground (the generator's height plus loadedOffset).
+            .ArrivalSignals(() => new
+            {
+                source = "local-player-support", complete = true, x = plan.SecondArrival!.X, y = plan.SecondArrival.Ground + loadedOffset, z = plan.SecondArrival.Z,
+                speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })
             .Extension("valheim.world", "player-support", _ => new
             {
                 source = "local-player-support", complete = true, x = 0f, y = 40f, z = 0f, speed = 0f,
@@ -230,15 +235,6 @@ public sealed class OwnershipHandoffTests
             .Extension("valheim.world", "terrain", _ => new
             {
                 source = "loaded-ground", complete = true, units = "metres", x = plan.SecondArrival!.X, z = plan.SecondArrival.Z, height = plan.SecondArrival.Ground + loadedOffset,
-            })
-            .Extension("valheim.world", "player-support-wait", args =>
-            {
-                Assert.Equal(plan.SecondArrival!.Ground + loadedOffset, float.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture));
-                return new
-                {
-                    source = "local-player-support", complete = true, x = plan.SecondArrival.X, y = plan.SecondArrival.Ground + loadedOffset, z = plan.SecondArrival.Z,
-                    speed = 0f, grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
-                };
             })
             .Extension("mymod.testing", "markers", _ => new
             {
