@@ -56,10 +56,6 @@ public static class LifecycleWorldScenario
         }.Run(run.Server, () => run.OpenClient(client, null),
             measure: round =>
             {
-                // The first prepared round uses a fresh, disposable copy. Valheim 1.0.16 gates even read-only
-                // cheat-classified console commands until that character acknowledges cheats.
-                if (round.Index == 0 && client.StartAtCharacterSave)
-                    round.Step("acknowledge cheat use on the disposable joined character", () => CampaignSteps.AcknowledgeLocalCheats(round.Client));
                 round.Step("the client sees the marker at the dry site", () => DrySiteScenario.RequireClientMarkers(round.Client, plan.DrySite, 1));
                 if (round.Index == 0) First(run, round, zoneCycle, key, timeout);
                 else AfterRestart(run, round, logout, key, timeout);

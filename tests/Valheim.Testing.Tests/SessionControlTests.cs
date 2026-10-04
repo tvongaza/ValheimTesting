@@ -17,6 +17,8 @@ public class SessionControlTests
             Commands.Add(command);
             if (command.StartsWith("cli_expect ")) return new() { Ok = true, Output = ["OK: EXPECT"] };
             if (command == "devcommands") { Devcommands = !Devcommands; return new() { Ok = true, Output = [DevcommandsReply ?? "Dev commands: " + Devcommands] }; }
+            // ValheimCLI's access observation for a client at its menu (TestAccess).
+            if (command == "cli_access") return new() { Ok = true, Output = ["ACCESS " + JsonSerializer.Serialize(new { schemaVersion = 1, complete = true, devcommands = Devcommands, cheatsAcknowledged = false, allowOnServerClients = true, server = false, dedicated = false, joinedClient = false, localPlayer = false, profileAvailable = false })] };
             // ValheimCLI refuses the join (a mutating extension command) until devcommands is on.
             if (!Devcommands && command.StartsWith("cli_extension valheim.session/join"))
                 return new() { Ok = true, Output = ["EXTENSION_RESULT " + JsonSerializer.Serialize(new { schemaVersion = 1, ok = false, extension = "valheim.session", instance = "a", code = "extension_precondition", message = "Enable devcommands for mutating extension commands.", data = new { } })] };
@@ -63,19 +65,20 @@ public class SessionControlTests
         Assert.Throws<TimeoutException>(() => new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(20)));
         Assert.All(fake.Commands.Where(x => x.StartsWith("cli_extension ")), x => Assert.Equal("cli_extension valheim.session/state", x));
     }
-    [Theory] [InlineData(false, 1)] [InlineData(true, 2)]
+    // TestAccess reads the state first, so devcommands already on are left alone (the English reply used to need a second toggle).
+    [Theory] [InlineData(false, 1)] [InlineData(true, 0)]
     public void JoinTurnsDevcommandsOnFirstWhateverTheirState(bool alreadyOn, int toggles)
     {
         var fake = new Fake { Devcommands = alreadyOn }; using var actor = fake.Actor();
         new SessionControl(actor).Join("localhost:2456", "Tester");
         Assert.True(fake.Devcommands);
         Assert.Equal(toggles, fake.Commands.Count(x => x == "devcommands"));
-        Assert.True(fake.Commands.LastIndexOf("devcommands") < fake.Commands.FindIndex(x => x.StartsWith("cli_extension valheim.session/join")));
+        Assert.True(fake.Commands.LastIndexOf("cli_access") < fake.Commands.FindIndex(x => x.StartsWith("cli_extension valheim.session/join")));
     }
     [Fact] public void AnUnrecognisedDevcommandsReplyStopsBeforeTheJoin()
     {
         var fake = new Fake { DevcommandsReply = "Unknown command devcommands" }; using var actor = fake.Actor();
-        Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).Join("localhost:2456", "Tester"));
+        Assert.Equal("devcommands was refused: Unknown command devcommands", Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).Join("localhost:2456", "Tester")).Message);
         Assert.DoesNotContain(fake.Commands, x => x.StartsWith("cli_extension valheim.session/join"));
     }
     [Fact] public void AJoinLeftToTheOperatorsDevcommandsFailsWhenTheyAreOff()
@@ -90,9 +93,9 @@ public class SessionControlTests
     private const string Protected = "OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True";
     private static ScriptedTransport JoiningClient(string? safetyReply, int notReadyReadings = 0)
     {
-        bool devcommands = false, joined = false; int readings = 0;
+        bool joined = false; int readings = 0;
         var transport = new ScriptedTransport()
-            .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .ClientAccess(() => joined)
             .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
             .Extension("valheim.session", "state", _ =>
             {

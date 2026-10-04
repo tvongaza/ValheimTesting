@@ -39,9 +39,9 @@ public sealed class SessionVariantTests : IDisposable
     // A later join succeeds into world 7.
     private static ScriptedTransport Client(string status, string? refusalCode = "join_failed", int loadingReadings = 2)
     {
-        bool devcommands = false, joined = false, refused = false; int joins = 0, readings = 0;
+        bool joined = false, refused = false; int joins = 0, readings = 0;
         var transport = new ScriptedTransport()
-            .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .ClientAccess(() => joined)
             .Extension("valheim.session", "join", _ => throw new InvalidOperationException("answered by the prefix"), readOnly: false)
             .OnPrefix("cli_extension valheim.session/join ", _ =>
             {
@@ -171,7 +171,7 @@ public sealed class SessionVariantTests : IDisposable
     // loadingReadings readings, then either connects into world 7 or returns to the menu with failWith.
     private static ScriptedTransport CrossplayClient(string? connectReply = null, string? failWith = null, bool startInWorld = false, int loadingReadings = 2, bool strictWorld = false)
     {
-        bool devcommands = false, started = startInWorld; int readings = 0;
+        bool started = startInWorld; int readings = 0;
         var transport = new ScriptedTransport();
         // Like ValheimCLI's strict cli_expect: once the join has loaded world 7 (after loadingReadings readings; 0 = as it
         // starts), pins that do not list it are refused, and pins for another world do not hold.
@@ -181,7 +181,7 @@ public sealed class SessionVariantTests : IDisposable
             : command.Contains("worlduid=", StringComparison.Ordinal) ? Mismatch("MISMATCH worlduid: 7, expected 8")
             : Mismatch(NotListed));
         return transport
-            .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .ClientAccess(() => started)
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
             .OnPrefix("cli_connect_playfab_user ", command =>
             {

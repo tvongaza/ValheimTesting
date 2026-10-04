@@ -21,9 +21,9 @@ public sealed class ClientRoundsTests : IDisposable
 
     public ClientRoundsTests()
     {
-        bool devcommands = false, joined = false;
+        bool joined = false;
         _client = new ScriptedTransport()
-            .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .ClientAccess(() => joined)
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Test character' (tester-copy, Local)"))
             .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
             .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
@@ -136,10 +136,12 @@ public sealed class ClientRoundsTests : IDisposable
         {
             "launch the owned client to its menu, plugins pinned",
             "first: the server accepts game connections", "first: join the owned server with the disposable character, protected",
+            "first: establish test access on the owned client",
             "first: arrive at the measurement point", "first: measure",
             "confirmed world save", "first: the client leaves to its menu", "restart only the owned server",
             "after-restart: the server kept the change",
             "after-restart: the server accepts game connections", "after-restart: join the owned server with the disposable character, protected",
+            "after-restart: establish test access on the owned client",
             "after-restart: arrive at the measurement point", "after-restart: measure",
             "after-restart: the client leaves to its menu",
             "stop only the owned client",
@@ -388,6 +390,20 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("attach to the operator's client at its menu, plugins pinned", report.Steps[0].Name);
         Assert.Equal("detach from the operator's client", report.Steps[^1].Name);
         Assert.Equal(0, _process.Stops); Assert.True(_client.Disposed);
+        // The operator's character keeps devcommands only: it is never marked as cheated.
+        Assert.Equal(0, _client.Count("cli_acknowledge_local_cheats")); Assert.False(_client.Access.CheatsAcknowledged);
+        Assert.True(_client.Access.Devcommands);
+    }
+    [Fact] public void AnOwnedClientTurnsDevcommandsOnAtItsMenuAndAcknowledgesCheatsOnceInTheWorld()
+    {
+        var report = new ScenarioReport("rounds");
+        Rounds(report, Plan()).Run(Server(), Open(Plan()), Measure());
+        Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
+        // Two joins, one toggle and one acknowledgement: the second round reads the state and changes nothing.
+        Assert.Equal(1, _client.Count("devcommands")); Assert.Equal(1, _client.Count("cli_acknowledge_local_cheats"));
+        Assert.True(_client.Access.Devcommands && _client.Access.CheatsAcknowledged);
+        var commands = _client.Commands.ToList();
+        Assert.True(commands.IndexOf("cli_acknowledge_local_cheats") > commands.FindIndex(x => x.StartsWith("cli_extension valheim.session/join", StringComparison.Ordinal)));
     }
 
     [Fact] public void AClientThatNeverOpensIsNotClosedAndNothingJoins()

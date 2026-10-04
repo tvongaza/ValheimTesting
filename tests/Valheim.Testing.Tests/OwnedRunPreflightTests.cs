@@ -357,7 +357,6 @@ public sealed class OwnedRunPreflightTests : IDisposable
     // A game whose world is present from the first read after the start, as ValheimCLI's strict cli_expect judges pins.
     private static ScriptedTransport HostingTransport(Func<bool> hosting, Action start, string loaded)
     {
-        bool devcommands = false;
         return new ScriptedTransport()
             .OnPrefix("cli_expect", command =>
             {
@@ -368,7 +367,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
                     : $"MISMATCH world: HostFixture (uid {loaded}) is loaded but not listed (strict); add world=, worlduid= or world=any";
                 return new CommandResult { Ok = false, ErrorCode = "command_failed", Message = problem, Output = [problem, "ERROR: code=expectation_mismatch mismatches=1"] };
             })
-            .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
+            .ClientAccess(hosting, hosting)
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
             .OnPrefix("cli_start_host_world ", command =>
             {

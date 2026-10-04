@@ -62,7 +62,7 @@ public static class ThreeActorSmokeScenario
         {
             new SessionControl(actor).Join(plan.Join, plan.Character, plan.PasswordVariable);
             RequireWorld(actor, plan, worldUid, name);
-            CampaignSteps.AcknowledgeLocalCheats(actor);
+            TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: true); // joined outside ClientRounds
             PlayerPlacement.Protect(actor);
             _ = actor.RequireCapability(Capabilities.Markers);
         });

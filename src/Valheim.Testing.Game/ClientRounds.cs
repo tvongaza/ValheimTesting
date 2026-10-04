@@ -172,6 +172,10 @@ public sealed class ClientRounds
             // When requested, protects the player once the world is ready (god, ghost, debug mode, read back); fly stays off.
             session.WaitForWorld(WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
         });
+        // An owned client's disposable character acknowledges cheats once it is in the world; an operator's client keeps
+        // devcommands only (set at its menu by the join).
+        if (Client.Owned)
+            round.Step("establish test access on the owned client", () => TestAccess.Ensure(round.Client, TestActorRole.ClientInWorld));
         if (Arrival is { } point)
         {
             round.Step(preparedStart ? "verify prepared character start at the measurement point" : ArriveStep, () =>
