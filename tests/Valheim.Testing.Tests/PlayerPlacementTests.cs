@@ -97,6 +97,86 @@ public class PlayerPlacementTests
         Assert.All(clientTransport.Commands.Concat(serverTransport.Commands), c => Assert.StartsWith("cli_expect", c)); // the actors' own pin checks only
     }
 
+    // Without a server the client teleports its own player (two players: the server cannot name one); no peer is read.
+    [Fact] public void WithoutAServerTheClientTeleportsItselfOnce()
+    {
+        var (_, clientTransport) = SignalTransports();
+        clientTransport.OnPrefix("cli_teleport ", _ => ScriptedTransport.Ok("OK: Teleported to (100.0, 43.0, -40.0)"));
+        using var client = clientTransport.Actor();
+        var result = PlayerPlacement.Arrive(null, client, Point, TimeSpan.FromSeconds(30));
+        Assert.Equal(new[] { "cli_teleport 100 43 -40" }, clientTransport.Commands.Where(c => c.StartsWith("cli_teleport ", StringComparison.Ordinal)));
+        Assert.Equal(0, clientTransport.Count("cli_peers"));
+        Assert.Equal(Point, result.Target);
+        var commands = clientTransport.Commands.ToList();
+        Assert.True(commands.IndexOf("cli_teleport_trace_arm") < commands.IndexOf("cli_teleport 100 43 -40"));
+        Assert.True(commands.IndexOf("cli_teleport 100 43 -40") < commands.FindIndex(c => c.StartsWith("cli_teleport_trace_wait ", StringComparison.Ordinal)));
+    }
+
+    // A client without test access is refused by ValheimCLI: that fails the arrival, and nothing is retried or awaited.
+    [Fact] public void ARefusedSelfTeleportFailsWithoutWaitingOrRetrying()
+    {
+        var (_, clientTransport) = SignalTransports();
+        clientTransport.OnPrefix("cli_teleport ", _ => ScriptedTransport.Ok("REFUSED: cheats are not acknowledged on this client"));
+        using var client = clientTransport.Actor();
+        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(null, client, Point, TimeSpan.FromSeconds(30)));
+        Assert.Equal(1, clientTransport.Count("cli_teleport"));
+        Assert.Equal(0, clientTransport.Count("cli_teleport_trace_wait"));
+    }
+
+    // With loadedGround the landing is judged at the loaded ground measured after the floor is ready, 1.05 m below the
+    // target here (a location's levelling); without it the same landing fails, so the measured ground is what passes it.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void LoadedGroundJudgesTheLandingAtTheMeasuredHeight(bool loadedGround)
+    {
+        const float loaded = 41.45f;
+        var (serverTransport, clientTransport) = SignalTransports(landed: () => Standing(y: loaded));
+        clientTransport.Extension("valheim.world", "terrain", _ => new { source = "loaded-ground", complete = true, units = "metres", x = 100f, z = -40f, height = loaded });
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        // The support wait's height argument: cli_extension valheim.world/player-support-wait <x> <height> <z> <seconds>.
+        IEnumerable<string> supportHeights() => clientTransport.Commands
+            .Where(c => c.StartsWith("cli_extension valheim.world/player-support-wait ", StringComparison.Ordinal)).Select(c => c.Split(' ')[3]);
+        if (!loadedGround)
+        {
+            Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30)));
+            Assert.Equal(new[] { "42.5" }, supportHeights());
+            Assert.Equal(0, clientTransport.Count("cli_extension valheim.world/terrain"));
+            return;
+        }
+        var result = PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), loadedGround: true);
+        Assert.Equal(new[] { "41.45" }, supportHeights());
+        Assert.Equal(new HeightExpectation(100, -40, loaded), result.Target);
+        Assert.Contains("cli_teleport_peer 1 100 43 -40", serverTransport.Commands); // the target is still the requested point
+        var commands = clientTransport.Commands.ToList();
+        Assert.True(commands.FindIndex(c => c.StartsWith("cli_teleport_trace_wait ", StringComparison.Ordinal)) < commands.FindIndex(c => c.StartsWith("cli_extension valheim.world/terrain ", StringComparison.Ordinal)));
+    }
+
+    [Fact] public void LoadedGroundNeedsTheTerrainReadingBeforeAnythingIsSent()
+    {
+        var (serverTransport, clientTransport) = SignalTransports();
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.Contains("valheim.world/terrain", Assert.Throws<InvalidOperationException>(() =>
+            PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), loadedGround: true)).Message);
+        Assert.All(clientTransport.Commands, c => Assert.True(c.StartsWith("cli_expect", StringComparison.Ordinal) || c == "cli_extensions", c));
+        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+    }
+
+    [Fact] public void PeerCountReadsOneConsistentListing()
+    {
+        using var two = new ScriptedTransport().On("cli_peers", _ => ScriptedTransport.Ok("OK: 2 peer(s)",
+            "PEER 1 character position=0.0,40.00,0.0 zone=0,0", "PEER 2 reference position=0.0,0.00,0.0 zone=0,0")).Actor();
+        Assert.Equal(2, PlayerPlacement.PeerCount(two));
+        using var none = new ScriptedTransport().On("cli_peers", _ => ScriptedTransport.Ok("OK: 0 peer(s)")).Actor();
+        Assert.Equal(0, PlayerPlacement.PeerCount(none));
+        // A count line that disagrees with the listed peers is refused, by PeerCount and OnlyPeer alike.
+        using var torn = new ScriptedTransport().On("cli_peers", _ => ScriptedTransport.Ok("OK: 2 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0")).Actor();
+        Assert.Contains("inconsistent", Assert.Throws<InvalidOperationException>(() => PlayerPlacement.PeerCount(torn)).Message);
+        Assert.Contains("inconsistent", Assert.Throws<InvalidOperationException>(() => PlayerPlacement.OnlyPeer(torn)).Message);
+        using var silent = new ScriptedTransport().On("cli_peers", _ => ScriptedTransport.Ok()).Actor();
+        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.PeerCount(silent));
+    }
+
     [Fact] public void ProtectionMustBeReadBack()
     {
         using var ok = new ScriptedTransport().On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True")).Actor();

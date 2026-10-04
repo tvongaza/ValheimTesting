@@ -97,6 +97,7 @@
       "mymod.testing/marker-owner-claim",
       "valheim.world/terrain",
       "valheim.world/player-support-wait",
+      "valheim.world/player-support",
       "valheim.session/teleport-signals"
     ]
   },
@@ -134,6 +135,7 @@
       "mymod.testing/marker-owner-claim",
       "valheim.world/terrain",
       "valheim.world/player-support-wait",
+      "valheim.world/player-support",
       "valheim.session/teleport-signals"
     ]
   },

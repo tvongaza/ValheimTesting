@@ -16,10 +16,11 @@ namespace Valheim.Testing.Game;
 /// <see cref="Run(GameActor, Func{ClientSession}, Action{ClientRound}, Action{ClientRound})"/> opens the client, then for each of <see cref="Rounds"/>:
 /// <list type="number">
 /// <item>waits until the server accepts game connections (<see cref="IOwnedServer.WaitUntilJoinable"/>);</item>
-/// <item>joins with the plan's disposable character (devcommands first, exactly once), verifies the client's world pins and
-/// waits for the world; a <see cref="ClientRunPlan.Crossplay"/> client first reads the server's lobby (<see cref="Lobby"/>)
-/// and joins it (<see cref="SessionControl.JoinCrossplay"/>);</item>
-/// <item>joins, which protects the player once the world is ready (<see cref="SessionControl.WaitForWorld"/>), and, with an <see cref="Arrival"/>, has it arrive there with <see cref="PlayerPlacement.Arrive"/> (<c>{round}-arrival.json</c> and <c>{round}-teleport-trace.json</c>);</item>
+/// <item>joins with the plan's disposable character (<see cref="SessionControl.JoinWorld"/>: devcommands first, the join exactly
+/// once, the client's world pins verified, the world awaited, which protects the player, and test access on an owned client's
+/// character), as one step; a <see cref="ClientRunPlan.Crossplay"/> client first reads the server's lobby (<see cref="Lobby"/>)
+/// and joins it;</item>
+/// <item>with an <see cref="Arrival"/>, has the player arrive there with <see cref="PlayerPlacement.Arrive"/> (<c>{round}-arrival.json</c> and <c>{round}-teleport-trace.json</c>);</item>
 /// <item>runs the mod's measurement, which adds its own steps and evidence through <see cref="ClientRound"/>;</item>
 /// <item>between rounds: a confirmed world save, the client leaves to its menu, only the owned server restarts
 /// (<see cref="IOwnedServer.Restart"/>), and the optional after-restart check runs; after the last round the client leaves.</item>
@@ -267,33 +268,15 @@ public sealed class ClientRounds
 
     private void Join(ClientRound round)
     {
-        var session = new SessionControl(round.Client);
-        string worldUid = WorldUid!; // CheckJoined requires it.
         round.Step("the server accepts game connections", () => OwnedServer!.WaitUntilJoinable(round.Server));
-        if (Client.Crossplay)
-        {
-            CrossplayLobby? lobby = null;
-            round.Step("the server's crossplay lobby is open", () => lobby = Lobby!(round.Server));
-            round.Step("join the owned server's crossplay lobby with the disposable character" + (ProtectPlayer ? ", protected" : ""), () =>
-            {
-                // Devcommands first; the join command exactly once, then the connection is awaited on the session state.
-                session.JoinCrossplay(lobby!.RemotePlayerId, Client.Character, worldUid, Client.MenuExpectations, TimeSpan.FromSeconds(Client.JoinSeconds), cancellation: Cancellation,
-                    worldExpectations: Client.WorldExpectations(worldUid));
-                round.Client.VerifyEnvironment(Client.WorldExpectations(worldUid));
-                session.WaitForWorld(worldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
-            });
-        }
-        else round.Step("join the owned server with the disposable character" + (ProtectPlayer ? ", protected" : ""), () =>
-        {
-            session.Join(Client.Join, Client.Character, Client.PasswordVariable); // Join exactly once.
-            round.Client.VerifyEnvironment(Client.WorldExpectations(worldUid));
-            // When requested, protects the player once the world is ready (god, ghost, debug mode, read back); fly stays off.
-            session.WaitForWorld(worldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation, ProtectPlayer);
-        });
-        // An owned client's disposable character acknowledges cheats once it is in the world; an operator's client keeps
-        // devcommands only (set at its menu by the join).
-        if (Client.Owned)
-            round.Step("establish test access on the owned client", () => TestAccess.Ensure(round.Client, TestActorRole.ClientInWorld));
+        CrossplayLobby? lobby = null;
+        if (Client.Crossplay) round.Step("the server's crossplay lobby is open", () => lobby = Lobby!(round.Server));
+        // The one join (SessionControl.JoinWorld): devcommands first, the join exactly once, world pins, the world awaited and,
+        // when requested, the player protected; an owned client's disposable character then gets test access. An operator's
+        // client keeps devcommands only.
+        round.Step((Client.Crossplay ? "join the owned server's crossplay lobby with the disposable character" : "join the owned server with the disposable character") +
+            (ProtectPlayer ? ", protected" : ""),
+            () => new SessionControl(round.Client).JoinWorld(Client, WorldUid!, lobby, ProtectPlayer, Cancellation)); // CheckJoined requires WorldUid.
         if (Arrival is { } point)
         {
             round.Step(ArriveStep, () =>

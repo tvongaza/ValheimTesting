@@ -124,6 +124,13 @@ public static class CampaignSteps
         report.Step($"{side}: one marker at the dry site, none at the wet site", () => RequireMarkers(server, plan, dry: 1));
     }
 
+    /// <summary>The server lists exactly <paramref name="expected"/> connected peers (<see cref="PlayerPlacement.PeerCount"/>).</summary>
+    public static void RequirePeers(GameActor server, int expected)
+    {
+        int connected = PlayerPlacement.PeerCount(server);
+        if (connected != expected) throw new InvalidOperationException($"Expected {expected} connected peer(s); the server lists {connected}.");
+    }
+
     public static void RequireMarkers(GameActor server, LifecyclePlan plan, int dry)
     {
         DrySiteScenario.RequireServerMarkers(server, plan.DrySite, dry);

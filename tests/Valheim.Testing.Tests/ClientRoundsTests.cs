@@ -211,12 +211,10 @@ public sealed class ClientRoundsTests : IDisposable
         {
             "launch the owned client to its menu, plugins pinned",
             "first: the server accepts game connections", "first: join the owned server with the disposable character, protected",
-            "first: establish test access on the owned client",
             "first: arrive at the measurement point", "first: measure",
             "confirmed world save", "first: the client leaves to its menu", "restart only the owned server",
             "after-restart: the server kept the change",
             "after-restart: the server accepts game connections", "after-restart: join the owned server with the disposable character, protected",
-            "after-restart: establish test access on the owned client",
             "after-restart: arrive at the measurement point", "after-restart: measure",
             "after-restart: the client leaves to its menu",
             "stop only the owned client",

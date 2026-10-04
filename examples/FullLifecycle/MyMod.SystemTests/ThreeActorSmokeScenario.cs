@@ -21,17 +21,17 @@ public static class ThreeActorSmokeScenario
             RequireMenu(a.Actor, run.Plan.Client!, "client A");
             RequireMenu(b.Actor, run.Plan.SecondClient!, "client B");
         });
-        Join(a.Actor, run.Plan.Client!, run.Plan.WorldUid, run.Report, "client A");
-        Join(b.Actor, run.Plan.SecondClient!, run.Plan.WorldUid, run.Report, "client B");
-        run.Report.Step("both clients joined: server sees two peers", () => RequirePeers(run.Server, 2));
+        Join(a.Actor, run.Plan.Client!, run.Plan.WorldUid, run, "client A");
+        Join(b.Actor, run.Plan.SecondClient!, run.Plan.WorldUid, run, "client B");
+        run.Report.Step("both clients joined: server sees two peers", () => CampaignSteps.RequirePeers(run.Server, 2));
         run.Report.Step("client B leaves and returns to its pinned menu", () =>
         {
             new SessionControl(b.Actor).Leave();
             RequireMenu(b.Actor, run.Plan.SecondClient!, "client B");
         });
         run.Report.Step("client A remains joined while B is away", () => RequireWorld(a.Actor, run.Plan.Client!, run.Plan.WorldUid, "client A"));
-        Join(b.Actor, run.Plan.SecondClient!, run.Plan.WorldUid, run.Report, "client B rejoins");
-        run.Report.Step("both clients rejoined: server sees two peers", () => RequirePeers(run.Server, 2));
+        Join(b.Actor, run.Plan.SecondClient!, run.Plan.WorldUid, run, "client B rejoins");
+        run.Report.Step("both clients rejoined: server sees two peers", () => CampaignSteps.RequirePeers(run.Server, 2));
     }
 
     private static void RequireMenu(GameActor actor, ClientRunPlan plan, string name)
@@ -50,20 +50,10 @@ public static class ThreeActorSmokeScenario
             throw new InvalidOperationException(name + " did not enter the expected fixture world.");
     }
 
-    private static void RequirePeers(GameActor server, int count)
-    {
-        var reply = server.Execute("cli_peers");
-        if (!reply.Output.Contains($"OK: {count} peer(s)") || reply.Output.Count(line => line.StartsWith("PEER ", StringComparison.Ordinal)) != count)
-            throw new InvalidOperationException("The server did not see " + count + " joined clients: " + string.Join(" | ", reply.Output));
-    }
-
-    private static void Join(GameActor actor, ClientRunPlan plan, string worldUid, ScenarioReport report, string name) =>
-        report.Step(name + " joins the pinned world with its mod and adapter", () =>
+    private static void Join(GameActor actor, ClientRunPlan plan, string worldUid, CampaignRun run, string name) =>
+        run.Report.Step(name + " joins the pinned world with its mod and adapter", () =>
         {
-            new SessionControl(actor).Join(plan.Join, plan.Character, plan.PasswordVariable);
-            RequireWorld(actor, plan, worldUid, name);
-            TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: true); // joined outside ClientRounds
-            PlayerPlacement.Protect(actor);
+            new SessionControl(actor).JoinWorld(plan, worldUid, cancellation: run.Cancellation); // The toolkit's one join: pins, world, protection, test access.
             _ = actor.RequireCapability(Capabilities.Markers);
         });
 }
