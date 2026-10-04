@@ -257,7 +257,7 @@ public sealed class DoublesTests : IDisposable
     }
     [Fact] public void ACommandRegistersByLowerCaseNameAndRunsWithItsArguments()
     {
-        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithCommands();
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithCommands().WithNetwork().WithCheats();
         Terminal.ConsoleEventArgs? seen = null;
         new Terminal.ConsoleCommand("Mod_Mark", "Adds a mark.", args => { seen = args; args.Context.AddString("marked " + args.ArgsAll); }, isCheat: true);
         var console = new Terminal();
@@ -266,6 +266,50 @@ public sealed class DoublesTests : IDisposable
         Assert.Equal("add  10 -2.5", seen.ArgsAll); Assert.Equal(10, seen.TryParameterInt(2)); Assert.Equal(-2.5f, seen.TryParameterFloat(3));
         Assert.Same(console, seen.Context); Assert.Equal(new[] { "marked add  10 -2.5" }, console.Output);
         Assert.True(Terminal.commands["mod_mark"].IsCheat);
+    }
+    [Fact] public void ACheatCommandPassesBothGamesGatesOnTheServerOnly()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithCommands().WithNetwork(server: true);
+        int runs = 0;
+        new Terminal.ConsoleCommand("mod_cheat", "", _ => { runs++; }, isCheat: true);
+        var console = new Terminal();
+        // Gate one: devcommands is off, so the command is not valid here.
+        console.TryRunCommand("mod_cheat"); console.TryRunCommand("mod_cheat", silentFail: true);
+        Assert.Equal(new[] { "'mod_cheat' is not valid in the current context.", Terminal.ConfirmCheat }, console.Output);
+        // Gate two: devcommands on, cheats not acknowledged (the game's confirmcheats).
+        console.Output.Clear(); Terminal.m_cheat = true;
+        console.TryRunCommand("mod_cheat");
+        Assert.Equal(new[] { Terminal.ConfirmCheat }, console.Output);
+        Assert.Equal(0, runs);
+        console.Output.Clear(); Achievements.CheatedAtAll = true;
+        console.TryRunCommand("mod_cheat");
+        Assert.Equal(1, runs); Assert.Empty(console.Output);
+        // A client with both gates open still cannot: cheats are enabled only on the server.
+        ZNet.instance.Server = false;
+        console.TryRunCommand("mod_cheat");
+        Assert.Equal(1, runs); Assert.Equal(new[] { "'mod_cheat' is not valid in the current context." }, console.Output);
+    }
+    [Fact] public void AServerOnlyCommandIsRefusedOnAClientAndARemoteOneIsSentToTheServer()
+    {
+        using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithCommands().WithNetwork(server: false);
+        int local = 0;
+        new Terminal.ConsoleCommand("mod_server", "", _ => { local++; }, onlyServer: true);
+        new Terminal.ConsoleCommand("mod_remote", "", _ => { local++; }, onlyServer: true, remoteCommand: true);
+        var console = new Terminal();
+        console.TryRunCommand("mod_server"); console.TryRunCommand("mod_remote 1 2");
+        Assert.Equal(0, local);
+        Assert.Equal(new[] { "'mod_server' is not valid in the current context." }, console.Output);
+        Assert.Equal(new[] { "mod_remote 1 2" }, ZNet.instance.RemoteCommands);
+        ZNet.instance.Server = true;
+        console.TryRunCommand("mod_server"); console.TryRunCommand("mod_remote");
+        Assert.Equal(2, local);
+    }
+    [Fact] public void TheCheatGatesStartClosedAndAScopeRestoresThem()
+    {
+        Assert.False(Terminal.m_cheat); Assert.False(Achievements.IsCheatedAtAll());
+        using (new Valheim.Testing.Doubles.ValheimWorldScope().WithCheats())
+            Assert.True(Terminal.m_cheat && Achievements.IsCheatedAtAll());
+        Assert.False(Terminal.m_cheat); Assert.False(Achievements.IsCheatedAtAll());
     }
     [Fact] public void AnUnknownCommandOrAFailedFailableIsPrinted()
     {

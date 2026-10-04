@@ -12,11 +12,26 @@ using System.Linq;
 /// <summary>
 /// The game's console. Constructing a <see cref="ConsoleCommand"/> registers it in <see cref="commands"/> under its
 /// lower-case name, as in the game. <see cref="TryRunCommand"/> runs a registered command with this terminal as its
-/// context, and <see cref="Output"/> holds every line the command printed. Cheat, server-only and admin gating is not
-/// modelled: a test decides which checks it exercises, and the mod's own checks (for example ZNet.IsServer) still run.
+/// context, and <see cref="Output"/> holds every line the command printed. It gates commands as Valheim 1.0.16 does
+/// (<c>Terminal.TryRunCommand</c>, <c>ConsoleCommand.IsValid</c> and <c>RunAction</c>): a cheat command runs only with
+/// devcommands on (<see cref="m_cheat"/>) on the server, and then only once cheats are acknowledged
+/// (<see cref="Achievements.IsCheatedAtAll"/>, the game's <c>confirmcheats</c>); a server-only command only on the server;
+/// a network command only with a <c>ZNet</c>; an invalid remote command on a client is sent to the server
+/// (<see cref="ZNet.RemoteCommands"/>). Both cheat gates start closed, as on a fresh dedicated server: a test of a cheat
+/// command opens them (<c>ValheimWorldScope.WithCheats</c>). Admin checks are not modelled.
 /// </summary>
 public partial class Terminal
 {
+    /// <summary>The game's text when cheats are not acknowledged (<c>$achievements_confirm_cheat</c>, English, 1.0.16).</summary>
+    public const string ConfirmCheat = "That command is a cheat, please enter 'confirmcheats' in the console to use cheats. " +
+        "<color=red>Using cheats will permanently disable the ability to unlock achievements for this character and this world.</color>";
+
+    /// <summary>Devcommands (the game's first cheat gate), static as in the game; the <c>devcommands</c> command toggles it there.</summary>
+    public static bool m_cheat;
+
+    /// <summary>As in the game: devcommands on, and this side is the server.</summary>
+    public bool IsCheatsEnabled() => m_cheat && ZNet.instance != null && ZNet.instance.IsServer();
+
     public delegate void ConsoleEvent(ConsoleEventArgs args);
     public delegate object? ConsoleEventFailable(ConsoleEventArgs args);
     public delegate List<string> ConsoleOptionsFetcher();
@@ -29,14 +44,23 @@ public partial class Terminal
 
     public void AddString(string text) => Output.Add(text);
 
-    /// <summary>Runs the command named by the line's first word, or prints that it is unknown, as the game does.</summary>
+    /// <summary>
+    /// Runs the command named by the line's first word if it is valid here, sends an invalid remote command from a client
+    /// to the server, or prints why not, as the game does; an unknown command prints that it is unknown.
+    /// </summary>
     public void TryRunCommand(string text, bool silentFail = false, bool skipAllowedCheck = false)
     {
         var args = new ConsoleEventArgs(text, this);
         if (args.Length == 0) return;
         if (commands.TryGetValue(args[0].ToLowerInvariant(), out var command))
         {
-            if (command.RunAction(args) is string failure) AddString("Error executing command: " + failure);
+            if (command.IsValid(this, skipAllowedCheck))
+            {
+                if (command.RunAction(args) is string failure) AddString("Error executing command: " + failure);
+            }
+            else if (command.RemoteCommand && ZNet.instance != null && !ZNet.instance.IsServer()) ZNet.instance.RemoteCommand(text);
+            else if (!silentFail) AddString("'" + args[0] + "' is not valid in the current context.");
+            else if (!IsCheatsEnabled() && command.IsCheat) AddString(ConfirmCheat);
         }
         else if (!silentFail) AddString("Unknown command: " + args[0]);
     }
@@ -95,12 +119,35 @@ public partial class Terminal
             commands[command.ToLowerInvariant()] = this;
         }
 
-        /// <summary>Runs the action; a failable action's non-true result is its failure message.</summary>
+        /// <summary>
+        /// As in the game: a cheat command needs devcommands on the server (or the caller skipped that check), a network
+        /// command a <c>ZNet</c>, a server-only command the server.
+        /// </summary>
+        public bool IsValid(Terminal context, bool skipAllowedCheck = false) =>
+            (!IsCheat || context.IsCheatsEnabled()) && (!IsNetwork || ZNet.instance != null)
+            && (!OnlyServer || (ZNet.instance != null && ZNet.instance.IsServer()));
+
+        /// <summary>
+        /// Runs the action; a failable action's non-true result is its failure message. A cheat command (other than
+        /// <c>confirmcheats</c>) prints <see cref="ConfirmCheat"/> and does nothing until cheats are acknowledged, as in the game.
+        /// </summary>
         public object? RunAction(ConsoleEventArgs args)
         {
+            if (IsCheat && !Achievements.IsCheatedAtAll() && args[0].ToLowerInvariant() != "confirmcheats") { args.Context.AddString(ConfirmCheat); return true; }
             if (_action != null) { _action(args); return true; }
             object? result = _actionFailable!(args);
             return result is true ? (object)true : result?.ToString();
         }
     }
+}
+
+/// <summary>
+/// The game's achievement state, as far as console commands see it: <see cref="IsCheatedAtAll"/> is the second cheat gate,
+/// which the game's <c>confirmcheats</c> opens for the world and character. Closed by default, as on a fresh server.
+/// </summary>
+public partial class Achievements : UnityEngine.MonoBehaviour
+{
+    /// <summary>Whether cheats were acknowledged; a test sets it (or uses <c>ValheimWorldScope.WithCheats</c>).</summary>
+    public static bool CheatedAtAll;
+    public static bool IsCheatedAtAll() => CheatedAtAll;
 }
