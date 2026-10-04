@@ -12,6 +12,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Valheim.Testing.Doubles;
 
 public partial class ZDO
 {
@@ -106,7 +107,7 @@ public partial class ZDO
         (ZDOMan.instance ?? throw new InvalidOperationException("AddSessionHash needs a ZDOMan: session-only hashes belong to the world.")).SessionOnlyHashes.Add(hash);
 
     /// <summary>Which world file a reload reads: one this game version saved, or one an older game saved and 1.0.16 upgrades on first load.</summary>
-    public enum SavedWorld
+    [TestOnly] public enum SavedWorld
     {
         /// <summary>A world saved by Valheim 1.0 (chunked save). Loading strips nothing.</summary>
         Current,
@@ -123,7 +124,7 @@ public partial class ZDO
     /// first-load upgrade is applied instead of the session filter. Throws for a ZDO that is not persistent: the game
     /// does not save it, so after a restart it does not exist. <see cref="ZDOMan.RoundTripThroughSave"/> does a whole world.
     /// </summary>
-    public void RoundTripThroughSave(SavedWorld savedBy = SavedWorld.Current)
+    [TestOnly] public void RoundTripThroughSave(SavedWorld savedBy = SavedWorld.Current)
     {
         if (!Persistent)
             throw new InvalidOperationException("A non-persistent ZDO is not saved; after a reload it does not exist.");
@@ -217,10 +218,10 @@ public partial class ZDOMan
     /// <c>support</c>, <c>vel</c> and <c>InUse</c>) plus any registered with <see cref="ZDO.AddSessionHash"/>.
     /// A new world, or a reload, starts again from the game's list.
     /// </summary>
-    public HashSet<int> SessionOnlyHashes { get; private set; } = DefaultSessionOnlyHashes();
+    [TestOnly] public HashSet<int> SessionOnlyHashes { get; private set; } = DefaultSessionOnlyHashes();
 
     /// <summary>The game's session-only keys (ZDOVars.s_sessionHashes in 1.0.16).</summary>
-    public static HashSet<int> DefaultSessionOnlyHashes()
+    [TestOnly] public static HashSet<int> DefaultSessionOnlyHashes()
     {
         var hashes = new HashSet<int>();
         foreach (string name in new[] { "CatchID_u", "CatchID_i", "alert", "animation_speed", "body_avel", "body_vel", "BodyVelocity", "haveTarget", "InUse", "landed", "LookTarget", "noise", "support", "tiltrot", "vel", "velRel" })
@@ -234,7 +235,7 @@ public partial class ZDOMan
     /// saved, so it comes back), and hashes registered with <see cref="ZDO.AddSessionHash"/> are forgotten. With an
     /// older <paramref name="savedBy"/>, see <see cref="ZDO.RoundTripThroughSave"/>. Returns how many ZDOs came back.
     /// </summary>
-    public int RoundTripThroughSave(ZDO.SavedWorld savedBy = ZDO.SavedWorld.Current)
+    [TestOnly] public int RoundTripThroughSave(ZDO.SavedWorld savedBy = ZDO.SavedWorld.Current)
     {
         var sessionOnly = SessionOnlyHashes;
         DestroyQueue.Clear();

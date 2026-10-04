@@ -8,6 +8,7 @@
 // reports it, the platform-prefixed ids of the game's 1.0.16 admin, ban and permit lists, and ZNet's checks against them.
 using System;
 using System.Collections.Generic;
+using Valheim.Testing.Doubles;
 
 /// <summary>The game's connection under a peer's <see cref="ZRpc"/> (1.0.16).</summary>
 public partial interface ISocket
@@ -37,9 +38,9 @@ public partial interface ISocket
 /// An in-process connection end. <see cref="Link"/> joins two ends: a package sent on one arrives on the other, in order,
 /// when that side's <see cref="ZRpc.Update"/> reads it, so a test decides the order in which two sides handle their
 /// messages. An unlinked end is connected and keeps what it sends in <see cref="Sent"/>. Closing either end closes both
-/// (the game's remote side notices a little later). Sizes, compression, timing and loss are not modelled. Not a game type.
+/// (the game's remote side notices a little later). Sizes, compression, timing and loss are not modelled.
 /// </summary>
-public abstract partial class SocketDouble : ISocket, IDisposable
+[TestOnly] public abstract partial class SocketDouble : ISocket, IDisposable
 {
     private readonly Queue<byte[]> m_inbox = new();
     private SocketDouble? m_remote;
@@ -90,7 +91,7 @@ public partial class ZSteamSocket : SocketDouble
 {
     private readonly ulong m_steamID;
     /// <summary>A connection to the Steam user <paramref name="steamID"/> (a test constructor; the game's take a Steam connection).</summary>
-    public ZSteamSocket(ulong steamID) => m_steamID = steamID;
+    [TestOnly] public ZSteamSocket(ulong steamID) => m_steamID = steamID;
     public Steamworks.CSteamID GetPeerID() => new(m_steamID);
     public override string GetHostName() => m_steamID.ToString();
     public override string GetEndPointString() => m_steamID.ToString();
@@ -110,13 +111,13 @@ public partial class ZPlayFabSocket : SocketDouble
     /// A connection to the player whose platform sent <paramref name="platformUserID"/>, with PlayFab entity
     /// <paramref name="remotePlayerID"/> (a test constructor; the game's take a PlayFab player or a server id).
     /// </summary>
-    public ZPlayFabSocket(string platformUserID, string remotePlayerID = "")
+    [TestOnly] public ZPlayFabSocket(string platformUserID, string remotePlayerID = "")
     {
         m_platformPlayerId = new Splatform.PlatformUserID(platformUserID);
         m_remotePlayerId = remotePlayerID;
     }
-    /// <summary>True once <see cref="VersionMatch"/> ran: the game compresses a PlayFab peer's traffic from then on. A test switch, not a game field.</summary>
-    public bool Compressing { get; private set; }
+    /// <summary>True once <see cref="VersionMatch"/> ran: the game compresses a PlayFab peer's traffic from then on.</summary>
+    [TestOnly] public bool Compressing { get; private set; }
     public override string GetHostName() => m_platformPlayerId.ToString();
     public override string GetEndPointString() => "playfab/" + m_remotePlayerId;
     public override void VersionMatch() => Compressing = true;
@@ -243,12 +244,12 @@ public enum OnlineBackendType { Steamworks, PlayFab, EOS, CustomSocket, None }
 public partial class SyncedList
 {
     private readonly List<string> m_list = new();
-    public SyncedList(params string[] entries) { foreach (var entry in entries) Add(entry); }
+    [TestOnly] public SyncedList(params string[] entries) { foreach (var entry in entries) Add(entry); }
     /// <summary>
     /// Replaces the entries with a file's lines, as the game reads it: empty lines and lines starting with <c>//</c> are
     /// skipped and nothing is trimmed, so a line with a stray space never matches.
     /// </summary>
-    public void Load(string fileText)
+    [TestOnly] public void Load(string fileText)
     {
         m_list.Clear();
         using var reader = new System.IO.StringReader(fileText);
@@ -266,7 +267,7 @@ public partial class SyncedList
 public sealed partial class ZNet
 {
     /// <summary>The network this ZNet runs on: static in the game (<c>m_onlineBackend</c>), one per ZNet here.</summary>
-    public OnlineBackendType OnlineBackend = OnlineBackendType.Steamworks;
+    [TestOnly] public OnlineBackendType OnlineBackend = OnlineBackendType.Steamworks;
     public static OnlineBackendType m_onlineBackend { get => instance.OnlineBackend; set => instance.OnlineBackend = value; }
     /// <summary>Private in the game (1.0.16); public here for mods built against publicized assemblies.</summary>
     public SyncedList m_adminList = new(), m_bannedList = new(), m_permittedList = new();

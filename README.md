@@ -25,7 +25,7 @@ Start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md).
 | `Valheim.Testing` | Composable terrain, multi-zone height/paint fixtures, exact recorded-input replay, grid dumps, terrain rendering and parity checks; no ValheimCLI dependency | netstandard2.0 |
 | `Valheim.Testing.Game` | Typed observations, fixtures, owned server sessions, comparisons and JSON/JUnit reports | net10.0 |
 | `Valheim.Testing.Cli` | ValheimCLI's client transport and YAML runner, packaged unchanged from pinned ValheimCLI source (MIT, warp) | net10.0 |
-| `Valheim.Testing.Doubles` | Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, compiled into your test project; every type is partial | source (C# 10) |
+| `Valheim.Testing.Doubles` | Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, compiled into your test project; every type is partial | source (C# 10); [member index](docs/packages/Valheim.Testing.Doubles.members.txt) |
 | `Valheim.Testing.Bindings` | Offline check that a built mod's references into the game assemblies still bind (Mono.Cecil); missing members fail, access changes are reported separately | netstandard2.0 |
 | `Valheim.Testing.Bindings.Tool` | The same check as the `valheim-bindings` .NET tool, for a mod's CI before any native run | net10.0 |
 | `Valheim.Testing.NativeSmoke` | `valheim-test`: one-command disposable mod-load checks and an editable NuGet-only consumer project | .NET 10 tool |

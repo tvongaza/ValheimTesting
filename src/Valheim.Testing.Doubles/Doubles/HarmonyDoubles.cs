@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Valheim.Testing.Doubles;
 
 namespace HarmonyLib
 {
@@ -211,8 +212,9 @@ namespace HarmonyLib
             if (string.IsNullOrEmpty(id)) throw new ArgumentException("id cannot be null or empty");
             Id = id;
         }
-        /// <summary>The patch classes this id has "applied", with the target their attributes name. Not a HarmonyX member.</summary>
-        public IReadOnlyList<(Type PatchClass, HarmonyMethod Target)> Patches => s_patches.TryGetValue(Id, out var list) ? list : new List<(Type PatchClass, HarmonyMethod Target)>();
+        /// <summary>The patch classes this id has "applied", with the target their attributes name.</summary>
+        [TestOnly] public IReadOnlyList<(Type PatchClass, HarmonyMethod Target)> Patches => s_patches.TryGetValue(Id, out var list) ? list : new List<(Type PatchClass, HarmonyMethod Target)>();
+        /// <summary>Records the calling assembly's patch classes. Patches nothing and checks no target: <see cref="HasAnyPatches"/> turns true even when the target method does not exist in the game.</summary>
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         public void PatchAll() => PatchAll(Assembly.GetCallingAssembly());
         public void PatchAll(Assembly assembly)
@@ -243,6 +245,7 @@ namespace HarmonyLib
         public static void UnpatchAll() => s_patches.Clear();
         [Obsolete("Use UnpatchSelf() to unpatch the current instance. The functionality to unpatch either other ids or EVERYTHING has been moved the static methods UnpatchID() and UnpatchAll() respectively", true)]
         public void UnpatchAll(string? harmonyID = null) { if (harmonyID == null) s_patches.Clear(); else if (harmonyID.Length > 0) s_patches.Remove(harmonyID); }
+        /// <summary>Whether this id recorded a patch class. Recorded, not applied: true says nothing about whether the target exists in the game.</summary>
         public static bool HasAnyPatches(string harmonyID) => s_patches.TryGetValue(harmonyID, out var list) && list.Count > 0;
         void IDisposable.Dispose() => UnpatchSelf();
     }

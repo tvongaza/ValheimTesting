@@ -331,7 +331,6 @@ public sealed class TerrainModifierOrderTests
         Assert.True(zone.CheckTerrainModIsContained(inside));
         Assert.False(zone.CheckTerrainModIsContained(edge));
         Assert.Equal(2, zone.PokeCount); // edge and inside; the disabled one does not poke
-        Assert.Equal(2, zone.LastPokeDelayed);
     }
 }
 

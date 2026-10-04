@@ -6,11 +6,12 @@ using Xunit;
 // The doubles share process-wide singletons (ZDOMan.instance, ZNetScene.instance, ...), as the game does.
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
 
-// A consumer's partial Heightmap: this assembly's implementation of the rebuild hooks, switched on per test.
+// A consumer's partial Heightmap: this assembly's implementation of the rebuild hooks, switched on per test. Properties, not
+// fields: the member index (MemberIndexTests) tells a test file's members from the doubles' by their code.
 public partial class Heightmap
 {
-    public static Func<float, float, float>? TestBaseHeight;
-    public static Action<List<float>>? TestTerrainPass;
+    public static Func<float, float, float>? TestBaseHeight { get; set; }
+    public static Action<List<float>>? TestTerrainPass { get; set; }
     partial void ModBaseHeight(float wx, float wz, ref float height) { if (TestBaseHeight != null) height = TestBaseHeight(wx, wz); }
     partial void ModTerrainPass(List<float> heights) => TestTerrainPass?.Invoke(heights);
 }

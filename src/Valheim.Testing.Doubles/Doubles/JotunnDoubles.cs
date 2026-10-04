@@ -9,15 +9,17 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using Valheim.Testing.Doubles;
 
 namespace Jotunn.Entities
 {
     /// <summary>A registered Jotunn RPC: records what it sends; a test delivers a package by running Server or Client.</summary>
     public sealed partial class CustomRPC
     {
+        [TestOnly] public CustomRPC() { }
         public string Name = "";
-        public readonly List<(long Peer, ZPackage Package)> Sent = new();
-        public Jotunn.Managers.NetworkManager.CoroutineHandler Server = null!, Client = null!;
+        [TestOnly] public readonly List<(long Peer, ZPackage Package)> Sent = new();
+        [TestOnly] public Jotunn.Managers.NetworkManager.CoroutineHandler Server = null!, Client = null!;
         public void Initiate() { }
         public void SendPackage(long peer, ZPackage package) => Sent.Add((peer, package));
         public void SendPackage(List<ZNetPeer> peers, ZPackage package) { foreach (var peer in peers) SendPackage(peer.m_uid, package); }
@@ -30,9 +32,9 @@ namespace Jotunn.Managers
         public delegate IEnumerator CoroutineHandler(long sender, ZPackage package);
         public static NetworkManager Instance = new();
         /// <summary>Every registered RPC by name; <c>ValheimWorldScope.WithNetwork</c> gives a test a fresh manager.</summary>
-        public readonly Dictionary<string, Jotunn.Entities.CustomRPC> Rpcs = new();
+        [TestOnly] public readonly Dictionary<string, Jotunn.Entities.CustomRPC> Rpcs = new();
         /// <summary>The RPC registered last; a mod with more than one looks them up in <see cref="Rpcs"/>.</summary>
-        public Jotunn.Entities.CustomRPC Rpc = null!;
+        [TestOnly] public Jotunn.Entities.CustomRPC Rpc = null!;
         public Jotunn.Entities.CustomRPC AddRPC(string name, CoroutineHandler server, CoroutineHandler client)
             => Rpc = Rpcs[name] = new Jotunn.Entities.CustomRPC { Name = name, Server = server, Client = client };
     }

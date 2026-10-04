@@ -8,6 +8,7 @@
 // command line on a Terminal and reads what it printed.
 using System.Collections.Generic;
 using System.Linq;
+using Valheim.Testing.Doubles;
 
 /// <summary>
 /// The game's console. Constructing a <see cref="ConsoleCommand"/> registers it in <see cref="commands"/> under its
@@ -23,7 +24,7 @@ using System.Linq;
 public partial class Terminal
 {
     /// <summary>The game's text when cheats are not acknowledged (<c>$achievements_confirm_cheat</c>, English, 1.0.16).</summary>
-    public const string ConfirmCheat = "That command is a cheat, please enter 'confirmcheats' in the console to use cheats. " +
+    [TestOnly] public const string ConfirmCheat = "That command is a cheat, please enter 'confirmcheats' in the console to use cheats. " +
         "<color=red>Using cheats will permanently disable the ability to unlock achievements for this character and this world.</color>";
 
     /// <summary>Devcommands (the game's first cheat gate), static as in the game; the <c>devcommands</c> command toggles it there.</summary>
@@ -40,7 +41,7 @@ public partial class Terminal
     public static Dictionary<string, ConsoleCommand> commands = new();
 
     /// <summary>Every line printed to this terminal, in order.</summary>
-    public readonly List<string> Output = new();
+    [TestOnly] public readonly List<string> Output = new();
 
     public void AddString(string text) => Output.Add(text);
 
@@ -75,7 +76,7 @@ public partial class Terminal
         public int Length => Args.Length;
         public string this[int i] => Args[i];
 
-        public ConsoleEventArgs(string line, Terminal context)
+        [TestOnly] public ConsoleEventArgs(string line, Terminal context)
         {
             FullLine = line;
             Context = context;
@@ -96,26 +97,26 @@ public partial class Terminal
     {
         public string Command;
         public string Description;
-        public bool IsCheat, IsNetwork, OnlyServer, IsSecret, AllowInDevBuild, RemoteCommand, OnlyAdmin;
+        public bool IsCheat, IsNetwork, OnlyServer, IsSecret, AllowInDevBuild, RemoteCommand, OnlyAdmin, HideBehindDevCommands;
         private readonly ConsoleEvent? _action;
         private readonly ConsoleEventFailable? _actionFailable;
 
         public ConsoleCommand(string command, string description, ConsoleEvent action, bool isCheat = false, bool isNetwork = false,
-            bool onlyServer = false, bool isSecret = false, bool allowInDevBuild = false, ConsoleOptionsFetcher? optionsFetcher = null,
+            bool onlyServer = false, bool isSecret = false, bool allowInDevBuild = false, bool hideBehindDevCommands = false, ConsoleOptionsFetcher? optionsFetcher = null,
             bool alwaysRefreshTabOptions = false, bool remoteCommand = false, bool onlyAdmin = false)
-            : this(command, description, isCheat, isNetwork, onlyServer, isSecret, allowInDevBuild, remoteCommand, onlyAdmin) => _action = action;
+            : this(command, description, isCheat, isNetwork, onlyServer, isSecret, allowInDevBuild, remoteCommand, onlyAdmin, hideBehindDevCommands) => _action = action;
 
         public ConsoleCommand(string command, string description, ConsoleEventFailable action, bool isCheat = false, bool isNetwork = false,
-            bool onlyServer = false, bool isSecret = false, bool allowInDevBuild = false, ConsoleOptionsFetcher? optionsFetcher = null,
+            bool onlyServer = false, bool isSecret = false, bool allowInDevBuild = false, bool hideBehindDevCommands = false, ConsoleOptionsFetcher? optionsFetcher = null,
             bool alwaysRefreshTabOptions = false, bool remoteCommand = false, bool onlyAdmin = false)
-            : this(command, description, isCheat, isNetwork, onlyServer, isSecret, allowInDevBuild, remoteCommand, onlyAdmin) => _actionFailable = action;
+            : this(command, description, isCheat, isNetwork, onlyServer, isSecret, allowInDevBuild, remoteCommand, onlyAdmin, hideBehindDevCommands) => _actionFailable = action;
 
         private ConsoleCommand(string command, string description, bool isCheat, bool isNetwork, bool onlyServer, bool isSecret,
-            bool allowInDevBuild, bool remoteCommand, bool onlyAdmin)
+            bool allowInDevBuild, bool remoteCommand, bool onlyAdmin, bool hideBehindDevCommands)
         {
             Command = command; Description = description;
             IsCheat = isCheat; IsNetwork = isNetwork; OnlyServer = onlyServer; IsSecret = isSecret;
-            AllowInDevBuild = allowInDevBuild; RemoteCommand = remoteCommand; OnlyAdmin = onlyAdmin;
+            AllowInDevBuild = allowInDevBuild; RemoteCommand = remoteCommand; OnlyAdmin = onlyAdmin; HideBehindDevCommands = hideBehindDevCommands;
             commands[command.ToLowerInvariant()] = this;
         }
 
@@ -131,7 +132,7 @@ public partial class Terminal
         /// Runs the action; a failable action's non-true result is its failure message. A cheat command (other than
         /// <c>confirmcheats</c>) prints <see cref="ConfirmCheat"/> and does nothing until cheats are acknowledged, as in the game.
         /// </summary>
-        public object? RunAction(ConsoleEventArgs args)
+        [TestOnly] public object? RunAction(ConsoleEventArgs args)
         {
             if (IsCheat && !Achievements.IsCheatedAtAll() && args[0].ToLowerInvariant() != "confirmcheats") { args.Context.AddString(ConfirmCheat); return true; }
             if (_action != null) { _action(args); return true; }
@@ -148,6 +149,6 @@ public partial class Terminal
 public partial class Achievements : UnityEngine.MonoBehaviour
 {
     /// <summary>Whether cheats were acknowledged; a test sets it (or uses <c>ValheimWorldScope.WithCheats</c>).</summary>
-    public static bool CheatedAtAll;
+    [TestOnly] public static bool CheatedAtAll;
     public static bool IsCheatedAtAll() => CheatedAtAll;
 }

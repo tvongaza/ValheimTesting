@@ -15,3 +15,14 @@ namespace System.Runtime.CompilerServices
     internal sealed class ModuleInitializerAttribute : Attribute { }
 }
 #endif
+
+namespace Valheim.Testing.Doubles
+{
+    /// <summary>
+    /// Marks a doubles type or member the game does not have: a test switch, a recorder or a fixture shorthand. Mod code
+    /// that calls one compiles against the doubles and fails against the game. The doubles' tests refuse an unmarked
+    /// member the game lacks and a marked one it has (docs/packages/Valheim.Testing.Doubles.members.txt lists both).
+    /// </summary>
+    [System.AttributeUsage(System.AttributeTargets.All, Inherited = false)]
+    public sealed class TestOnlyAttribute : System.Attribute { }
+}

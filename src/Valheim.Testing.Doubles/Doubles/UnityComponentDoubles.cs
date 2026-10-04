@@ -12,6 +12,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using Valheim.Testing.Doubles;
 
 namespace UnityEngine
 {
@@ -117,7 +118,7 @@ namespace UnityEngine
         /// Unity orders behaviours of different objects, or of equal script execution order, as it likes.
         /// <c>ValheimWorldScope.WithUnityOrder(UnityOrder.Reversed)</c> runs them the other way round.
         /// </summary>
-        public static void RunFrame(float deltaTime = 0.02f)
+        [TestOnly] public static void RunFrame(float deltaTime = 0.02f)
         {
             if (!(deltaTime >= 0f) || float.IsInfinity(deltaTime)) throw new ArgumentOutOfRangeException(nameof(deltaTime));
             Time.deltaTime = deltaTime; Time.time += deltaTime; Time.realtimeSinceStartup += deltaTime; Time.frameCount++;
@@ -135,21 +136,21 @@ namespace UnityEngine
         /// <summary>A copy of <paramref name="original"/>: a GameObject with its components and children, the matching component of a copied object, or a copy of any other object's serialized fields.</summary>
         public static T Instantiate<T>(T original) where T : Object => (T)CloneObject(original, null, false);
         /// <summary>A copy under <paramref name="parent"/>, keeping the original's local position (Unity's default).</summary>
-        public static T Instantiate<T>(T original, global::Transform parent) where T : Object => (T)CloneObject(original, parent, false);
+        public static T Instantiate<T>(T original, Transform parent) where T : Object => (T)CloneObject(original, parent, false);
         /// <summary>A copy under <paramref name="parent"/>; with <paramref name="instantiateInWorldSpace"/> it keeps the original's world position.</summary>
-        public static T Instantiate<T>(T original, global::Transform parent, bool instantiateInWorldSpace) where T : Object => (T)CloneObject(original, parent, instantiateInWorldSpace);
-        public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation, global::Transform parent)
+        public static T Instantiate<T>(T original, Transform parent, bool instantiateInWorldSpace) where T : Object => (T)CloneObject(original, parent, instantiateInWorldSpace);
+        [TestOnly] public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation, Transform parent)
         {
             s_unityPendingParent = parent; s_unityPendingWorldStays = true;
             try { return original.Clone(position, rotation); }
             finally { s_unityPendingParent = null; }
         }
 
-        [ThreadStatic] internal static global::Transform? s_unityPendingParent;
+        [ThreadStatic] internal static Transform? s_unityPendingParent;
         [ThreadStatic] internal static bool s_unityPendingWorldStays;
         [ThreadStatic] internal static Dictionary<Object, Object>? s_unityLastCloneMap;
 
-        private static Object CloneObject(Object original, global::Transform? parent, bool worldStays)
+        private static Object CloneObject(Object original, Transform? parent, bool worldStays)
         {
             if (original is null) throw new ArgumentNullException(nameof(original));
             original.ThrowIfDestroyed();
@@ -172,7 +173,7 @@ namespace UnityEngine
     public partial class Component
     {
         /// <summary>The transform of the object this component sits on; a transform's own is itself.</summary>
-        public global::Transform transform => this is global::Transform self ? self : gameObject?.transform!;
+        public Transform transform => this is Transform self ? self : gameObject?.transform!;
         public string tag { get => gameObject.tag; set => gameObject.tag = value; }
         public bool CompareTag(string tag) => gameObject.CompareTag(tag);
         public T[] GetComponents<T>() where T : class { ThrowIfDestroyed(); return m_gameObject is { } owner ? owner.GetComponents<T>() : new T[0]; }
@@ -431,7 +432,7 @@ namespace UnityEngine
     public partial class GameObject
     {
         private readonly List<Component> m_components = new();
-        private global::Transform? m_transform;
+        private Transform? m_transform;
         internal bool m_activeSelf = true;
         public int layer;
         private string m_tag = "Untagged";
@@ -440,12 +441,12 @@ namespace UnityEngine
         public GameObject(string name, params Type[] components) : this(name) { foreach (var type in components) AddComponent(type); }
 
         /// <summary>The object's transform, made on first use. Throws once the object is destroyed.</summary>
-        public global::Transform transform { get { ThrowIfDestroyed(); return OwnTransform; } }
-        internal global::Transform OwnTransform => m_transform ??= new global::Transform { gameObject = this };
-        /// <summary>The world position (the transform's). Not a Unity member: the doubles' shorthand, kept for existing tests.</summary>
-        public Vector3 Position { get => OwnTransform.position; set => OwnTransform.position = value; }
-        /// <summary>The rotation (the transform's). Not a Unity member.</summary>
-        public Quaternion Rotation { get => OwnTransform.rotation; set => OwnTransform.rotation = value; }
+        public Transform transform { get { ThrowIfDestroyed(); return OwnTransform; } }
+        internal Transform OwnTransform => m_transform ??= new Transform { gameObject = this };
+        /// <summary>The world position (the transform's).</summary>
+        [TestOnly] public Vector3 Position { get => OwnTransform.position; set => OwnTransform.position = value; }
+        /// <summary>The rotation (the transform's).</summary>
+        [TestOnly] public Quaternion Rotation { get => OwnTransform.rotation; set => OwnTransform.rotation = value; }
 
         public string tag { get { ThrowIfDestroyed(); return m_tag; } set { ThrowIfDestroyed(); m_tag = value; } }
         public bool CompareTag(string tag) { ThrowIfDestroyed(); return m_tag == tag; }
@@ -538,11 +539,11 @@ namespace UnityEngine
         }
 
         /// <summary>
-        /// Not a Unity member: true for an object that stands for one of the game's assets, such as a prefab loaded from
+        /// True for an object that stands for one of the game's assets, such as a prefab loaded from
         /// its asset bundles (<see cref="global::ZNetScene.AddPrefab"/> sets it). An asset, its children and their
         /// components are not in the scene, so FindObjectsByType does not find them; <c>Instantiate</c>'s copies are.
         /// </summary>
-        public bool IsAsset;
+        [TestOnly] public bool IsAsset;
         /// <summary>In the scene: neither it nor any parent is an asset.</summary>
         internal bool InScene
         {
@@ -796,88 +797,88 @@ namespace UnityEngine
             }
         }
     }
-}
 
-/// <summary>
-/// The transform hierarchy. Parent rotation composes with child rotation, but does not rotate child position;
-/// world position is the parent's position plus its scale times local position. New transforms start unrotated.
-/// Re-parenting keeps world position and rotation by default and sends OnEnable/OnDisable when it changes
-/// whether the object is active in its hierarchy, as Unity does.
-/// </summary>
-public partial class Transform : UnityEngine.Component, IEnumerable
-{
-    internal Transform? m_parent;
-    internal readonly List<Transform> m_children = new();
-    private UnityEngine.Vector3 m_localPosition;
-    private UnityEngine.Vector3 m_localScale = new(1f, 1f, 1f);
-
-    public UnityEngine.Vector3 position
+    /// <summary>
+    /// The transform hierarchy. Parent rotation composes with child rotation, but does not rotate child position;
+    /// world position is the parent's position plus its scale times local position. New transforms start unrotated.
+    /// Re-parenting keeps world position and rotation by default and sends OnEnable/OnDisable when it changes
+    /// whether the object is active in its hierarchy, as Unity does.
+    /// </summary>
+    public partial class Transform : UnityEngine.Component, IEnumerable
     {
-        get => m_parent is null ? m_localPosition : m_parent.TransformPoint(m_localPosition);
-        set => m_localPosition = m_parent is null ? value : m_parent.InverseTransformPoint(value);
-    }
-    public UnityEngine.Vector3 localPosition { get => m_localPosition; set => m_localPosition = value; }
-    private UnityEngine.Quaternion m_localRotation = UnityEngine.Quaternion.identity;
-    public UnityEngine.Quaternion rotation
-    {
-        get => m_parent is { } up ? up.rotation * m_localRotation : m_localRotation;
-        set => m_localRotation = m_parent is { } up ? UnityEngine.Quaternion.Inverse(up.rotation) * value : value;
-    }
-    /// <summary>The rotation relative to the parent.</summary>
-    public UnityEngine.Quaternion localRotation { get => m_localRotation; set => m_localRotation = value; }
-    /// <summary>The world rotation as Euler angles in degrees (<see cref="UnityEngine.Quaternion.eulerAngles"/>).</summary>
-    public UnityEngine.Vector3 eulerAngles { get => rotation.eulerAngles; set => rotation = UnityEngine.Quaternion.Euler(value); }
-    public UnityEngine.Vector3 localScale { get => m_localScale; set => m_localScale = value; }
-    public UnityEngine.Vector3 lossyScale => m_parent is null ? m_localScale : Scale(m_parent.lossyScale, m_localScale);
+        internal Transform? m_parent;
+        internal readonly List<Transform> m_children = new();
+        private UnityEngine.Vector3 m_localPosition;
+        private UnityEngine.Vector3 m_localScale = new(1f, 1f, 1f);
 
-    /// <summary>A local point in world space: position plus scale times the point (no rotation).</summary>
-    public UnityEngine.Vector3 TransformPoint(UnityEngine.Vector3 point) => position + Scale(lossyScale, point);
-    /// <summary>A world point in local space (no rotation).</summary>
-    public UnityEngine.Vector3 InverseTransformPoint(UnityEngine.Vector3 point)
-    {
-        var offset = point - position; var scale = lossyScale;
-        return new UnityEngine.Vector3(offset.x / scale.x, offset.y / scale.y, offset.z / scale.z);
-    }
-    private static UnityEngine.Vector3 Scale(UnityEngine.Vector3 a, UnityEngine.Vector3 b) => new(a.x * b.x, a.y * b.y, a.z * b.z);
-
-    public Transform? parent { get => m_parent; set => SetParent(value, true); }
-    public Transform root { get { var t = this; while (t.m_parent is { } up) t = up; return t; } }
-    public int childCount => m_children.Count;
-    public Transform GetChild(int index) => m_children[index];
-    public IEnumerator GetEnumerator() => m_children.ToArray().GetEnumerator();
-    public bool IsChildOf(Transform parent) { for (Transform? t = this; t is not null; t = t.m_parent) if (ReferenceEquals(t, parent)) return true; return false; }
-    public int GetSiblingIndex() => m_parent is null ? 0 : m_parent.m_children.IndexOf(this);
-
-    /// <summary>The child with that name, or a descendant by a path of names separated by '/'; null when there is none.</summary>
-    public Transform? Find(string n)
-    {
-        Transform? at = this;
-        foreach (var part in n.Split('/'))
+        public UnityEngine.Vector3 position
         {
-            at = at!.m_children.Find(c => c.m_gameObject is { Destroyed: false } child && child.name == part);
-            if (at is null) return null;
+            get => m_parent is null ? m_localPosition : m_parent.TransformPoint(m_localPosition);
+            set => m_localPosition = m_parent is null ? value : m_parent.InverseTransformPoint(value);
         }
-        return at;
-    }
+        public UnityEngine.Vector3 localPosition { get => m_localPosition; set => m_localPosition = value; }
+        private UnityEngine.Quaternion m_localRotation = UnityEngine.Quaternion.identity;
+        public UnityEngine.Quaternion rotation
+        {
+            get => m_parent is { } up ? up.rotation * m_localRotation : m_localRotation;
+            set => m_localRotation = m_parent is { } up ? UnityEngine.Quaternion.Inverse(up.rotation) * value : value;
+        }
+        /// <summary>The rotation relative to the parent.</summary>
+        public UnityEngine.Quaternion localRotation { get => m_localRotation; set => m_localRotation = value; }
+        /// <summary>The world rotation as Euler angles in degrees (<see cref="UnityEngine.Quaternion.eulerAngles"/>).</summary>
+        public UnityEngine.Vector3 eulerAngles { get => rotation.eulerAngles; set => rotation = UnityEngine.Quaternion.Euler(value); }
+        public UnityEngine.Vector3 localScale { get => m_localScale; set => m_localScale = value; }
+        public UnityEngine.Vector3 lossyScale => m_parent is null ? m_localScale : Scale(m_parent.lossyScale, m_localScale);
 
-    public void SetParent(Transform? parent) => SetParent(parent, true);
-    /// <summary>Moves this transform under <paramref name="parent"/> (or to the root); with <paramref name="worldPositionStays"/> the world position and rotation are kept, otherwise the local ones.</summary>
-    public void SetParent(Transform? parent, bool worldPositionStays)
-    {
-        if (parent is not null && parent.IsChildOf(this)) throw new InvalidOperationException("A transform cannot become a child of itself or of one of its children.");
-        var go = m_gameObject;
-        bool wasActive = go?.activeInHierarchy ?? false;
-        var world = position;
-        var worldRotation = rotation;
-        Detach();
-        m_parent = parent;
-        parent?.m_children.Add(this);
-        if (worldPositionStays) { position = world; rotation = worldRotation; }
-        if (go is { Destroyed: false } && go.activeInHierarchy != wasActive) UnityEngine.GameObject.HierarchyActivityChanged(go, !wasActive);
-    }
-    internal void Detach()
-    {
-        m_parent?.m_children.Remove(this);
-        m_parent = null;
+        /// <summary>A local point in world space: position plus scale times the point (no rotation).</summary>
+        public UnityEngine.Vector3 TransformPoint(UnityEngine.Vector3 point) => position + Scale(lossyScale, point);
+        /// <summary>A world point in local space (no rotation).</summary>
+        public UnityEngine.Vector3 InverseTransformPoint(UnityEngine.Vector3 point)
+        {
+            var offset = point - position; var scale = lossyScale;
+            return new UnityEngine.Vector3(offset.x / scale.x, offset.y / scale.y, offset.z / scale.z);
+        }
+        private static UnityEngine.Vector3 Scale(UnityEngine.Vector3 a, UnityEngine.Vector3 b) => new(a.x * b.x, a.y * b.y, a.z * b.z);
+
+        public Transform? parent { get => m_parent; set => SetParent(value, true); }
+        public Transform root { get { var t = this; while (t.m_parent is { } up) t = up; return t; } }
+        public int childCount => m_children.Count;
+        public Transform GetChild(int index) => m_children[index];
+        public IEnumerator GetEnumerator() => m_children.ToArray().GetEnumerator();
+        public bool IsChildOf(Transform parent) { for (Transform? t = this; t is not null; t = t.m_parent) if (ReferenceEquals(t, parent)) return true; return false; }
+        public int GetSiblingIndex() => m_parent is null ? 0 : m_parent.m_children.IndexOf(this);
+
+        /// <summary>The child with that name, or a descendant by a path of names separated by '/'; null when there is none.</summary>
+        public Transform? Find(string n)
+        {
+            Transform? at = this;
+            foreach (var part in n.Split('/'))
+            {
+                at = at!.m_children.Find(c => c.m_gameObject is { Destroyed: false } child && child.name == part);
+                if (at is null) return null;
+            }
+            return at;
+        }
+
+        public void SetParent(Transform? parent) => SetParent(parent, true);
+        /// <summary>Moves this transform under <paramref name="parent"/> (or to the root); with <paramref name="worldPositionStays"/> the world position and rotation are kept, otherwise the local ones.</summary>
+        public void SetParent(Transform? parent, bool worldPositionStays)
+        {
+            if (parent is not null && parent.IsChildOf(this)) throw new InvalidOperationException("A transform cannot become a child of itself or of one of its children.");
+            var go = m_gameObject;
+            bool wasActive = go?.activeInHierarchy ?? false;
+            var world = position;
+            var worldRotation = rotation;
+            Detach();
+            m_parent = parent;
+            parent?.m_children.Add(this);
+            if (worldPositionStays) { position = world; rotation = worldRotation; }
+            if (go is { Destroyed: false } && go.activeInHierarchy != wasActive) UnityEngine.GameObject.HierarchyActivityChanged(go, !wasActive);
+        }
+        internal void Detach()
+        {
+            m_parent?.m_children.Remove(this);
+            m_parent = null;
+        }
     }
 }

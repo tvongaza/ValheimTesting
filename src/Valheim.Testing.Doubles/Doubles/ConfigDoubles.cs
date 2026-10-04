@@ -18,6 +18,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using BepInEx.Configuration;
 using BepInEx.Logging;
+using Valheim.Testing.Doubles;
 
 namespace BepInEx.Logging
 {
@@ -27,7 +28,7 @@ namespace BepInEx.Logging
     public partial class ManualLogSource
     {
         public string SourceName { get; } = "";
-        public ManualLogSource() { }
+        [TestOnly] public ManualLogSource() { }
         public ManualLogSource(string sourceName) { SourceName = sourceName; }
         public void LogFatal(object data) => Write("FATAL", data);
         public void LogMessage(object data) => Write("MSG  ", data);
@@ -315,8 +316,8 @@ namespace BepInEx.Configuration
         public string ConfigFilePath { get; }
         /// <summary>Save after every change and every new binding (on by default, as in BepInEx).</summary>
         public bool SaveOnConfigSet { get; set; } = true;
-        /// <summary>How many times this file was saved. Not a BepInEx member.</summary>
-        public int SaveCount { get; private set; }
+        /// <summary>How many times this file was saved.</summary>
+        [TestOnly] public int SaveCount { get; private set; }
 
         public ConfigFile(string configPath, bool saveOnInit) : this(configPath, saveOnInit, null) { }
         public ConfigFile(string configPath, bool saveOnInit, BepInPlugin? ownerMetadata)
@@ -329,11 +330,11 @@ namespace BepInEx.Configuration
         }
 
         /// <summary>The file on the in-memory disk at a path (null when there is none).</summary>
-        public static string? ReadFile(string configPath) => s_files.TryGetValue(Path.GetFullPath(configPath), out var text) ? text : null;
+        [TestOnly] public static string? ReadFile(string configPath) => s_files.TryGetValue(Path.GetFullPath(configPath), out var text) ? text : null;
         /// <summary>Writes (or, with null, deletes) a file on the in-memory disk, as an edit outside the game would.</summary>
-        public static void WriteFile(string configPath, string? text) { if (text == null) s_files.Remove(Path.GetFullPath(configPath)); else s_files[Path.GetFullPath(configPath)] = text; }
+        [TestOnly] public static void WriteFile(string configPath, string? text) { if (text == null) s_files.Remove(Path.GetFullPath(configPath)); else s_files[Path.GetFullPath(configPath)] = text; }
         /// <summary>This file's text on the in-memory disk; null before it is first saved.</summary>
-        public string? FileText { get => ReadFile(ConfigFilePath); set => WriteFile(ConfigFilePath, value); }
+        [TestOnly] public string? FileText { get => ReadFile(ConfigFilePath); set => WriteFile(ConfigFilePath, value); }
 
         /// <summary>Reads the file again: unsaved changes are lost, changed values raise <c>SettingChanged</c>, then <see cref="ConfigReloaded"/> fires. A missing file throws, as reading it would.</summary>
         public void Reload()
