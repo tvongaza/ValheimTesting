@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using valheim_cli.Testing;
@@ -42,7 +41,7 @@ public sealed record AreaObjectSnapshot(string Site, string WorldUid, int X, int
         var commands = new List<ObservedCommand>();
         SiteObservation.CheckWorld(server, worldUid, "server");
         SiteObservation.CheckWorld(client, worldUid, "client");
-        SiteObservation.WaitAreaReady(client, "client", x, z, readinessTimeout, Stopwatch.StartNew(), commands, cancellation);
+        SiteObservation.WaitAreasReady([(client, "client", x, z)], readinessTimeout, commands, cancellation);
 
         var zdos = SiteObservation.Lines(server, "server", $"cli_zdos_at {x} {z} {radius}", commands);
         int saved = Count(zdos, Zdos, "ZDO ", x, z, radius);

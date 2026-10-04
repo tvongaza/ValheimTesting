@@ -73,9 +73,10 @@ public static class SyncedConfig
         TimeSpan timeout, TimeSpan interval, Func<TimeSpan, CancellationToken, Task>? changed = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(expected);
-        return ObservedWait.Until(() => Read(actor, capabilityPath, guid, section, key), value => value.Value == expected,
-            value => !value.Installed ? $"{guid} is not loaded in {actor.Name}" : !value.Found ? $"{guid} has no config entry [{section}] {key} in {actor.Name}" : null,
-            value => value.ToString(), $"{actor.Name}'s {guid} [{section}] {key} to read {expected}", timeout, interval, changed, cancellation);
+        return ObservedWait.UntilAsync($"{actor.Name}'s {guid} [{section}] {key} to read {expected}", () => Read(actor, capabilityPath, guid, section, key),
+            value => value.Value == expected, timeout, interval, cancellation,
+            fails: value => !value.Installed ? $"{guid} is not loaded in {actor.Name}" : !value.Found ? $"{guid} has no config entry [{section}] {key} in {actor.Name}" : null,
+            changed: changed);
     }
 
     /// <summary>

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -196,20 +195,14 @@ public sealed class LogoutCycle
 
     private (ProfileFileState After, ProfileFileState Old, TimeSpan Seen) WaitForWrite(ProfileFileState before, CancellationToken cancellation)
     {
-        var clock = Stopwatch.StartNew();
         string name = Path.GetFileName(before.Path);
         using var changed = new ChangeSignal(Path.GetDirectoryName(before.Path)!);
-        var last = ProfileFileState.Read(before.Path);
-        while (!(last.Exists && last.Sha256 != before.Sha256))
-        {
-            var remaining = WriteTimeout - clock.Elapsed;
-            if (remaining <= TimeSpan.Zero)
-                throw new WaitTimeoutException($"the character file {name} to be rewritten by the logout (its SHA256 to differ from {before.Sha256})", clock.Elapsed,
-                    last + ". The game did not save the character on logout: a mod may have blocked or broken the save (look for \"Character save blocked\" or an exception at logout in the client's log)");
-            changed.Wait(remaining < RereadInterval ? remaining : RereadInterval, cancellation);
-            last = ProfileFileState.Read(before.Path);
-        }
-        return (last, ProfileFileState.Read(before.Path + ".old"), clock.Elapsed);
+        // The watcher wakes the wait on any write in the directory; the re-read interval covers a dropped watcher event.
+        var written = ObservedWait.RunBlocking($"the character file {name} to be rewritten by the logout (its SHA256 to differ from {before.Sha256})",
+            _ => ProfileFileState.Read(before.Path), file => file.Exists && file.Sha256 != before.Sha256, WriteTimeout, RereadInterval, cancellation,
+            describe: file => file + ". The game did not save the character on logout: a mod may have blocked or broken the save (look for \"Character save blocked\" or an exception at logout in the client's log)",
+            changed: (wait, token) => changed.Wait(wait, token));
+        return (written.Value, ProfileFileState.Read(before.Path + ".old"), written.Elapsed);
     }
 
     // The one join (devcommands first, exactly once; pins, world, protection, an owned client's test access).

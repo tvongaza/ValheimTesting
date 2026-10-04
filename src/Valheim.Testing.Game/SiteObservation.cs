@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using valheim_cli.Testing;
@@ -49,20 +48,28 @@ internal static class SiteObservation
         return match;
     }
 
-    /// <summary>Polls <c>cli_area_ready</c> until the point's area is ready and loaded with every saved object instantiated.</summary>
-    internal static void WaitAreaReady(GameActor actor, string role, int x, int z, TimeSpan timeout, Stopwatch clock,
+    /// <summary>
+    /// Waits until each area, in order, is ready and loaded with every saved object instantiated (<c>cli_area_ready</c>),
+    /// within one deadline for them all. The game raises no event for a loaded area, so the pending area is re-read every
+    /// 100 ms (<see cref="ObservedWait"/>); a ready area is not read again.
+    /// </summary>
+    internal static void WaitAreasReady(IReadOnlyList<(GameActor Actor, string Role, int X, int Z)> areas, TimeSpan timeout,
         List<ObservedCommand> commands, CancellationToken cancellation)
     {
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            var reply = Lines(actor, role, $"cli_area_ready {x} {z} 0", commands);
-            var match = One(reply, Area, x, z);
-            if (match.Groups["ready"].Value == "True" && match.Groups["loaded"].Value == "True" && match.Groups["missing"].Value == "0") return;
-            if (clock.Elapsed >= timeout)
-                throw new TimeoutException($"{role} area at {x},{z} did not become ready within {timeout}. Last state: {string.Join(" | ", reply)}");
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (timeout - clock.Elapsed).TotalMilliseconds))));
-        }
+        int next = 0;
+        string last = "no area reply";
+        ObservedWait.Until(areas.Count == 1 ? $"the {areas[0].Role}'s area at {areas[0].X},{areas[0].Z} ready" : "every site point's area ready", () =>
+            {
+                for (; next < areas.Count; next++)
+                {
+                    var (actor, role, x, z) = areas[next];
+                    var reply = Lines(actor, role, $"cli_area_ready {x} {z} 0", commands);
+                    last = $"{role} area at {x},{z}: {string.Join(" | ", reply)}";
+                    var match = One(reply, Area, x, z);
+                    if (match.Groups["ready"].Value != "True" || match.Groups["loaded"].Value != "True" || match.Groups["missing"].Value != "0") break;
+                }
+                return next;
+            }, ready => ready == areas.Count, timeout, TimeSpan.FromMilliseconds(100), cancellation, describe: _ => last);
     }
 
     /// <summary>

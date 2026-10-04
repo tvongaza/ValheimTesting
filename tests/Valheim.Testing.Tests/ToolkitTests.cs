@@ -42,14 +42,6 @@ public class ToolkitTests
     [Theory] [InlineData(double.NaN)] [InlineData(double.PositiveInfinity)]
     public void NonfiniteIsNotNear(double value) => Assert.Throws<InvalidOperationException>(() => Check.Near(value, 1, 1));
     [Fact] public void IncompleteCannotMeanEmpty() => Assert.Throws<InvalidOperationException>(() => new Observation("zdo-store", false, default).RequireComplete("zdo-store"));
-    [Fact] public async Task EventualWaitObservesUntilMatch()
-    {
-        // The wait returns as soon as the value matches; the long deadline only guards against a loaded machine
-        // (a 1 s deadline timed out on a busy CI runner).
-        int reads = 0; Assert.Equal(3, await Check.Eventually(() => ++reads, n => n == 3, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(1)));
-    }
-    [Fact] public async Task EventualWaitTimesOut()
-    { await Assert.ThrowsAsync<TimeoutException>(() => Check.Eventually(() => false, x => x, TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(2))); }
     [Fact] public void FixtureHashMismatchCannotCreateACopy()
     {
         using var dirs = new Directories(); File.WriteAllText(Path.Combine(dirs.Source, "world.db"), "original");

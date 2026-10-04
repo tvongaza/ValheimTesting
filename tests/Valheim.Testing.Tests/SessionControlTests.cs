@@ -47,7 +47,7 @@ public class SessionControlTests
         var fake = new Fake { World = "8" }; using var actor = fake.Actor(); var session = new SessionControl(actor);
         Assert.Throws<InvalidOperationException>(() => session.Save("7", TimeSpan.FromSeconds(10)));
         Assert.DoesNotContain(fake.Commands, x => x.StartsWith("cli_extension valheim.session/save"));
-        Assert.Throws<InvalidOperationException>(() => session.WaitForWorld("7", TimeSpan.FromSeconds(1)));
+        Assert.Throws<WaitFailedException>(() => session.WaitForWorld("7", TimeSpan.FromSeconds(1)));
     }
     [Theory] [InlineData(false)] [InlineData(true)]
     public void TransitionInvalidatesPinsEvenWhenReplyIsLost(bool lost)
@@ -62,7 +62,7 @@ public class SessionControlTests
     [Fact] public void ReadinessWaitOnlyPollsAndDoesNotResubmitMutations()
     {
         var fake = new Fake { Ready = false }; using var actor = fake.Actor();
-        Assert.Throws<TimeoutException>(() => new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(20)));
+        Assert.Throws<WaitTimeoutException>(() => new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(20)));
         Assert.All(fake.Commands.Where(x => x.StartsWith("cli_extension ")), x => Assert.Equal("cli_extension valheim.session/state", x));
     }
     // TestAccess reads the state first, so devcommands already on are left alone (the English reply used to need a second toggle).
@@ -192,7 +192,7 @@ public class SessionControlTests
     {
         var transport = Host(readingsWithoutPlayer: int.MaxValue, safetyReply: null); // Unscripted: a protection command would throw.
         using var actor = transport.Actor("host", "cli_expect worlduid=7");
-        var error = Assert.Throws<TimeoutException>(() => new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(300)));
+        var error = Assert.Throws<WaitTimeoutException>(() => new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(300)));
         Assert.Contains("local player did not spawn", error.Message);
         Assert.Equal(0, transport.Count("cli_set_player_safety"));
     }

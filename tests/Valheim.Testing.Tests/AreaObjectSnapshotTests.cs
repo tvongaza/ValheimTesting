@@ -119,7 +119,7 @@ public sealed class AreaObjectSnapshotTests
         var ct = Transport(false).On("cli_area_ready 16 -8 0", _ => ScriptedTransport.Ok(
             "OK: AREA_READY 16.0,-8.0 ready=False zone=0,0 loaded=False objects=1 without_instance=1"));
         using var server = st.Actor(); using var client = ct.Actor();
-        var error = Assert.Throws<TimeoutException>(() => AreaObjectSnapshot.Capture(server, client, "site", "7", 16, -8, 8, TimeSpan.FromMilliseconds(1)));
+        var error = Assert.Throws<WaitTimeoutException>(() => AreaObjectSnapshot.Capture(server, client, "site", "7", 16, -8, 8, TimeSpan.FromMilliseconds(1)));
         Assert.Contains("ready=False", error.Message);
         Assert.Equal(0, st.Count("cli_zdos_at"));
     }

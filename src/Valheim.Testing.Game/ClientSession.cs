@@ -223,13 +223,13 @@ public sealed class ClientSession : IDisposable
             {
                 var exited = process.WaitForExitAsync(abandon.Token);
                 var waiting = ready(deadline, abandon.Token);
-                var first = Task.WhenAny(waiting, exited, Elapsed(clock, deadline, abandon.Token)).GetAwaiter().GetResult();
+                var end = ExitRace.RunAsync(waiting, exited, clock, deadline, abandon.Token).GetAwaiter().GetResult();
                 abandon.Cancel();
                 // An exit counts even when readiness completed too: a client that is gone is not ready.
                 if (exited.IsCompletedSuccessfully)
                     throw new WaitFailedException("client at its main menu", "the owned client exited with code " + exited.Result + exitHint?.Invoke(), clock.Elapsed, null);
                 cancellation.ThrowIfCancellationRequested();
-                if (first != waiting) throw new WaitTimeoutException("client at its main menu within the start deadline", clock.Elapsed, null);
+                if (end != RaceEnd.Completed) throw new WaitTimeoutException("client at its main menu within the start deadline", clock.Elapsed, null);
                 waiting.GetAwaiter().GetResult(); // A readiness failure (a plugin-load error, a closed state connection) ends startup.
             }
             var transport = connect();
@@ -250,17 +250,6 @@ public sealed class ClientSession : IDisposable
             try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
             throw;
         }
-    }
-
-    /// <summary>
-    /// Completes once <paramref name="clock"/> has passed <paramref name="deadline"/>. Timers can fire slightly before a
-    /// Stopwatch agrees (Windows' coarse timer: a 1 s delay measured 0.9999 s), so an early wake-up waits out the rest
-    /// instead of reporting a timeout before the deadline. No polling: at most one more short delay.
-    /// </summary>
-    private static async Task Elapsed(Stopwatch clock, TimeSpan deadline, CancellationToken cancellation)
-    {
-        for (var left = deadline - clock.Elapsed; left > TimeSpan.Zero; left = deadline - clock.Elapsed)
-            await Task.Delay(left < TimeSpan.FromMilliseconds(1) ? TimeSpan.FromMilliseconds(1) : left, cancellation).ConfigureAwait(false);
     }
 
     private static string CommandLog(string output)

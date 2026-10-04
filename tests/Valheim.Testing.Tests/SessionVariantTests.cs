@@ -246,7 +246,7 @@ public sealed class SessionVariantTests : IDisposable
     {
         var transport = CrossplayClient(failWith: "ErrorConnectFailed");
         using var actor = transport.Actor("client", Menu);
-        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10)));
+        var error = Assert.Throws<WaitFailedException>(() => new SessionControl(actor).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10)));
         Assert.Contains("ErrorConnectFailed", error.Message);
         Assert.Equal(1, transport.Count("cli_connect_playfab_user"));
     }

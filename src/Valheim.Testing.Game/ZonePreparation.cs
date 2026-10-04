@@ -32,6 +32,8 @@ public static class ZonePreparation
         foreach (var (x, z) in zones)
             await report.StepAsync(FormattableString.Invariant($"prepared generated zone {x},{z}"), async () =>
             {
+                // Not an ObservedWait: each round repeats the ghost-zone request (a mutation) until the game reports the zone
+                // generated, and ObservedWait only re-reads. Fixture authoring, never an acceptance result.
                 var clock = Stopwatch.StartNew();
                 while (true)
                 {

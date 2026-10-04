@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 
 namespace Valheim.Testing.Game;
@@ -46,12 +45,9 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
         if (server is not null) SiteObservation.CheckWorld(server, worldUid, "server");
         var layers = client.RequireCapabilities(Layers); // One listing.
         Capability ground = layers[0], surface = layers[1], paint = layers[2];
-        var clock = Stopwatch.StartNew();
-        foreach (var point in points)
-        {
-            SiteObservation.WaitAreaReady(client, "client", point.X, point.Z, readinessTimeout, clock, commands, cancellation);
-            if (server is not null) SiteObservation.WaitAreaReady(server, "server", point.X, point.Z, readinessTimeout, clock, commands, cancellation);
-        }
+        // Point by point, the client's area then the server's.
+        SiteObservation.WaitAreasReady([.. points.SelectMany(point => server is null ? [(client, "client", point.X, point.Z)]
+            : new[] { (client, "client", point.X, point.Z), (server, "server", point.X, point.Z) })], readinessTimeout, commands, cancellation);
         var readings = new List<TerrainSiteReading>(points.Count);
         foreach (var point in points)
         {

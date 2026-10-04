@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 
@@ -232,23 +231,17 @@ public sealed class ZoneCycle
 
     private (ZoneReading, TimeSpan) WaitFor(GameActor client, Capability capability, bool unload, CancellationToken cancellation)
     {
-        var clock = Stopwatch.StartNew();
-        ZoneReading? last = null;
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            last = ZoneReading.Read(client, capability, Zones);
-            if (unload) RequireFarEnough(last.Range, last.Reference, "The player");
-            if (last.Zones.All(z => unload ? z.Unloaded : z.Loaded)) return (last, clock.Elapsed);
-            if (clock.Elapsed >= StepTimeout)
+        var done = ObservedWait.RunBlocking(unload ? $"the client to unload zone(s) {string.Join(" ", Zones)} (no terrain, no object instance)"
+                : $"the client to load zone(s) {string.Join(" ", Zones)} again (terrain, and an instance for every saved object)",
+            _ =>
             {
-                var pending = last.Zones.Where(z => unload ? !z.Unloaded : !z.Loaded);
-                throw new WaitTimeoutException(unload ? $"the client to unload zone(s) {string.Join(" ", Zones)} (no terrain, no object instance)"
-                    : $"the client to load zone(s) {string.Join(" ", Zones)} again (terrain, and an instance for every saved object)", clock.Elapsed,
-                    $"still {(unload ? "loaded" : "not loaded")}: {string.Join("; ", pending)}; player in zone {last.Reference}. The teleport was not repeated");
-            }
-            cancellation.WaitHandle.WaitOne(Interval);
-        }
+                var reading = ZoneReading.Read(client, capability, Zones);
+                if (unload) RequireFarEnough(reading.Range, reading.Reference, "The player");
+                return reading;
+            },
+            reading => reading.Zones.All(z => unload ? z.Unloaded : z.Loaded), StepTimeout, Interval, cancellation,
+            describe: reading => $"still {(unload ? "loaded" : "not loaded")}: {string.Join("; ", reading.Zones.Where(z => unload ? !z.Unloaded : !z.Loaded))}; player in zone {reading.Reference}. The teleport was not repeated");
+        return (done.Value, done.Elapsed);
     }
 
     private void Validate()
