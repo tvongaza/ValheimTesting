@@ -67,7 +67,7 @@ else
     // A candidate is a local build identity that NuGet.org never serves; say so now rather than after the wait.
     if (manifest.FirstOrDefault(p => p.Value.Contains("-candidate", StringComparison.OrdinalIgnoreCase)) is { Key: not null } candidate)
     {
-        Console.Error.WriteLine($"{candidate.Key} {candidate.Value} is a candidate version, never published; see release-consumer.cs versions.");
+        Console.Error.WriteLine($"{candidate.Key} {candidate.Value} is a candidate version, never published; see pins.cs versions.");
         return 1;
     }
     if (!await WaitUntilServed()) return 1;

@@ -578,7 +578,7 @@ public sealed class TargetedRegression
         Directory.Delete(install, recursive: true);
     }
 
-    /// <summary>This toolkit's package and version, as a run's provenance records it (<c>Valheim.Testing.Game 0.1.0-preview.17</c>).</summary>
+    /// <summary>This toolkit's package and version, as a run's provenance records it (<c>Valheim.Testing.Game</c> and the package version, without build metadata).</summary>
     public static string ToolkitVersion =>
         "Valheim.Testing.Game " + (typeof(TargetedRegression).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
             .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "unknown");

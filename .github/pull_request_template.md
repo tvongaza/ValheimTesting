@@ -20,3 +20,4 @@ State what remains unverified. If native validation is needed, give a small disp
 - [ ] Added or updated relevant tests/examples/docs, or explained why none are needed.
 - [ ] Described meaningful failure/missing-data handling and compatibility changes, where applicable.
 - [ ] Removed private data, game binaries/source, secrets and investigation artifacts; preserved source attribution.
+- [ ] Game version unchanged, or both game captures retaken (`tests/Valheim.Testing.Doubles.Tests/GameBytes/game-members.txt` and `zpackage-capture.tsv`) and `DoubledGame.Version`/`NetworkVersion` moved with the game pin.

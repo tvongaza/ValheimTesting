@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text.Json;
 
 /// <summary>
 /// Leave an editable native scenario beside the evidence. Prove it builds from the published package before copying
@@ -7,8 +8,10 @@ using System.Net;
 /// </summary>
 internal static class SmokeProject
 {
-    // The generated consumer only uses the already published runner API; keep its independent known-good pin.
-    internal const string GameVersion = "0.1.0-preview.20";
+    // The generated consumer only uses the already published runner API: it pins the newest Game package released when this
+    // tool was built, read from the repository's toolkit-versions.json (embedded at build). A tool released together with
+    // a new Game therefore pins the Game before it; its next release moves with the file.
+    internal static readonly string GameVersion = ReleasedGameVersion();
     private const string Feed = "https://api.nuget.org/v3/index.json";
 
     internal static async Task<int> InitAsync(string[] args)
@@ -191,5 +194,14 @@ internal static class SmokeProject
             if (!File.Exists(metadata) || !File.ReadAllText(metadata).Contains(Feed, StringComparison.Ordinal))
                 throw new InvalidOperationException("The generated consumer did not restore Valheim.Testing.Game from NuGet.org; its source metadata is absent or different.");
         }
+    }
+
+    private static string ReleasedGameVersion()
+    {
+        using Stream stream = typeof(SmokeProject).Assembly.GetManifestResourceStream("toolkit-versions.json")
+            ?? throw new InvalidOperationException("toolkit-versions.json is not embedded in this build.");
+        using JsonDocument versions = JsonDocument.Parse(stream);
+        return versions.RootElement.GetProperty("released").GetProperty("Valheim.Testing.Game").GetString()
+            ?? throw new InvalidOperationException("toolkit-versions.json names no released Valheim.Testing.Game.");
     }
 }

@@ -17,6 +17,7 @@
     <Compile Include="../../examples/NativeSmoke/EnvCommand.cs" Link="NativeSmoke/EnvCommand.cs" />
     <Compile Include="../../examples/NativeSmoke/SmokeInputs.cs" Link="NativeSmoke/SmokeInputs.cs" />
     <Compile Include="../../examples/NativeSmoke/SmokeProject.cs" Link="NativeSmoke/SmokeProject.cs" />
+    <EmbeddedResource Include="../../toolkit-versions.json" LogicalName="toolkit-versions.json" />
     <Compile Include="../../tools/dev-loop/dev-loop.cs" Link="DevLoop/dev-loop.cs" />
     <!-- The ObserveCheck example's flow without its CliTransport entry point (ObserveCheckTests). -->
     <Compile Include="../../examples/ObserveCheck/ObserveCheck.cs" Link="ObserveCheck/ObserveCheck.cs" />
