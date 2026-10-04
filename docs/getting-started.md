@@ -20,15 +20,15 @@ For supported hosts and runtime requirements, see the [platform table](../README
 
 ### Package versions and feeds
 
-The toolkit packages are all on NuGet.org. The exact versions below are **known-good pins used by these examples**, not a claim that they are the newest releases. Open a package's NuGet page to choose a newer version, then update and run your own test project before changing its pin. The release workflow separately tests every newly published version from NuGet.org.
+The toolkit packages are all on NuGet.org. The versions below are the **newest releases**, and every copyable snippet and example in these docs pins exactly them: they come from [`toolkit-versions.json`](../toolkit-versions.json), the one record of what is released, and follow each release (CI fails while a documented pin is older). Pin exact versions in your own test project and move them when you choose; a newly published package does not change a passing test. The release workflow separately tests every newly published version from NuGet.org.
 
-| Package | Tested example version | Use |
+| Package | Released version | Use |
 |---|---|---|
 | [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing) | `0.1.0-preview.7` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
-| [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) | `0.1.0-preview.17` | External game observations, owned sessions, comparisons and reports |
-| [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) | `0.1.0-preview.5` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
+| [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) | `0.1.0-preview.20` | External game observations, owned sessions, comparisons and reports |
+| [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) | `0.1.0-preview.6` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
 | [Valheim.Testing.Adapter](https://www.nuget.org/packages/Valheim.Testing.Adapter) | `0.1.0-preview.3` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
-| [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.1.0-preview.7` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
+| [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.1.0-preview.8` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
 | [Valheim.Testing.Bindings](https://www.nuget.org/packages/Valheim.Testing.Bindings) | `0.1.0-preview.1` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member (see [the binding check](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1)) |
 | [Valheim.Testing.Bindings.Tool](https://www.nuget.org/packages/Valheim.Testing.Bindings.Tool) | `0.1.0-preview.1` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
 
@@ -46,7 +46,7 @@ Pin only the package your test project needs:
 <!-- Pure test project; not the production mod project. -->
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.7]" />
 <!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.17]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.20]" />
 <!-- A game-side test adapter plugin compiles the adapter source: -->
 <PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.3]" PrivateAssets="all" />
 <!-- A test that checks a built mod DLL against the game's assemblies in code: -->

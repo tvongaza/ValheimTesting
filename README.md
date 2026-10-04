@@ -48,7 +48,7 @@ dotnet run scripts/validate.cs
 dotnet run --project examples/SharedWorld -c Release
 ```
 
-`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Choose the packages in [getting started](docs/getting-started.md#package-versions-and-feeds): its exact versions are known-good example pins, while the linked NuGet pages show current releases. Pin the versions your mod tests actually use; a newly published package does not silently change a passing test. Use the local feed only to try a build that is not yet published.
+`validate.cs` runs the local library tests, builds all external examples and packs the libraries to `.packages`. It never starts Valheim. The ValheimCLI transport and its tests remain upstream-owned, not copied here. Choose the packages in [getting started](docs/getting-started.md#package-versions-and-feeds): its exact versions are the newest releases, recorded once in [`toolkit-versions.json`](toolkit-versions.json). Pin the versions your mod tests actually use; a newly published package does not silently change a passing test. Use the local feed only to try a build that is not yet published.
 
 The same commands work in any shell on Windows, macOS and Linux; there is no per-shell launcher. A sandbox that blocks the NuGet caches or the SDK's file-based app directory needs the sandbox recipe in [AGENTS.md](AGENTS.md).
 

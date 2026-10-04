@@ -89,33 +89,57 @@ jobs:
       - run: cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
       - run: dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
         working-directory: ${{ runner.temp }}/mod
-  doc-pins:
-    name: doc pins (published versions)
-    # Every copyable pin must resolve on NuGet.org. Examples keep their tested exact versions until intentionally upgraded;
-    # a new package release alone does not invalidate them. This reads NuGet.org and needs no build.
+  pins:
+    name: pins (toolkit-versions.json)
+    # toolkit-versions.json records the released versions; docs, examples and tools pin exactly those and follow every release
+    # (#86). Fails on a pin that differs from the file, a recorded version NuGet.org does not serve or has superseded, a
+    # released package whose Valheim.Testing* dependency the released set does not meet, or a source version older than
+    # its release. Reads NuGet.org; needs no build.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - run: dotnet run scripts/release-consumer.cs -- pins
-      # Candidates may sit on main between releases; release.yml refuses them. This only proves the refusal works.
-      - name: A candidate version is refused at release (negative control)
+      - run: dotnet run scripts/pins.cs -- check
+      # Negative controls. Each edits tracked files, expects a refusal that names the file (and line), and restores them.
+      # GITHUB_ACTIONS is unset so the expected failures do not become annotations on the run.
+      - name: Refusals (negative controls)
         run: |
-          refused() { # $1 file, $2 sed expression
-            git checkout -- cli-dependency.json src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
-            sed -i -E "$2" "$1"
-            if out=$(dotnet run scripts/release-consumer.cs -- versions 2>&1); then
-              echo "$out"; echo "::error::release-consumer versions accepted a candidate in $1."; return 1
+          refused() { # $1 mode, $2 a pattern the refusal must match
+            if out=$(env -u GITHUB_ACTIONS dotnet run scripts/pins.cs -- "$1" 2>&1); then
+              echo "$out"; echo "::error::pins $1 passed; expected a refusal matching: $2"; return 1
             fi
             echo "$out"
-            case "$out" in *"$1:"*"-candidate.0000000"*) ;; *) echo "::error::The refusal does not name $1."; return 1 ;; esac
+            case "$out" in *$2*) ;; *) echo "::error::pins $1 refused, but not with: $2"; return 1 ;; esac
+            git checkout -- .
           }
-          refused cli-dependency.json 's/("packageVersion": "[^"]+)"/\1-candidate.0000000"/'
-          refused src/Valheim.Testing.Game/Valheim.Testing.Game.csproj 's/(Include="Valheim\.Testing\.Cli" Version="\[[^]]+)\]/\1-candidate.0000000]/'
-          git checkout -- cli-dependency.json src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
+          # A pin changed by hand, without the file, fails with its file and line; write puts it back.
+          doubles=examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj
+          sed -i -E 's/(Include="Valheim\.Testing\.Doubles" Version="\[)[^]]+\]/\10.1.0-preview.5]/' "$doubles"
+          line=$(grep -n 'Include="Valheim.Testing.Doubles"' "$doubles" | cut -d: -f1)
+          refused check "FAIL $doubles:$line: Valheim.Testing.Doubles 0.1.0-preview.5 differs from toolkit-versions.json"
+          sed -i -E 's/(Include="Valheim\.Testing\.Doubles" Version="\[)[^]]+\]/\10.1.0-preview.5]/' "$doubles"
+          dotnet run scripts/pins.cs -- write
+          git diff --exit-code
+          # Docs that lag a release: the file (and every pin written from it) names an older Game than NuGet.org serves.
+          sed -i -E 's/("Valheim\.Testing\.Game": ")[^"]+"/\10.1.0-preview.17"/' toolkit-versions.json
+          dotnet run scripts/pins.cs -- write
+          refused check "Valheim.Testing.Game 0.1.0-preview.17 is superseded"
+          # The pairing (#336): a released Valheim.Testing older than the released Doubles depends on.
+          sed -i -E 's/("Valheim\.Testing": ")[^"]+"/\10.1.0-preview.6"/' toolkit-versions.json
+          dotnet run scripts/pins.cs -- write
+          refused check "depends on Valheim.Testing [0-9]*, but the released Valheim.Testing is 0.1.0-preview.6: a page pinning both"
+          # Candidates may sit on main between releases; release.yml refuses them.
+          sed -i -E 's/("packageVersion": "[^"]+)"/\1-candidate.0000000"/' cli-dependency.json
+          refused versions "cli-dependency.json:[0-9]*: names the candidate version"
+          sed -i -E 's/(Include="Valheim\.Testing\.Cli" Version="\[[^]]+)\]/\1-candidate.0000000]/' src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
+          refused versions "src/Valheim.Testing.Game/Valheim.Testing.Game.csproj:[0-9]*: names the candidate version"
+          # A source version older than its release.
+          sed -i -E 's#<Version>[^<]+</Version>#<Version>0.1.0-preview.1</Version>#' src/Valheim.Testing.Doubles/Valheim.Testing.Doubles.csproj
+          refused versions "Valheim.Testing.Doubles 0.1.0-preview.1 in source is older than the release"
+          git diff --exit-code
   game-hosts:
     name: game hosts (ssh to localhost, container)
     # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only

@@ -407,7 +407,7 @@ Setup, in the unit-test project (not the mod project):
 ```xml
 <PropertyGroup><LangVersion>10</LangVersion></PropertyGroup> <!-- or newer; net48 test legs default to C# 7.3 -->
 <ItemGroup>
-  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.7]" PrivateAssets="all" />
+  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.8]" PrivateAssets="all" />
   <Compile Include="../MyMod/Src/RoadMath.cs" /> <!-- the mod's pure-logic sources -->
 </ItemGroup>
 ```
@@ -523,7 +523,7 @@ The doubles normally compile into the test assembly, so a type's assembly is the
 ```xml
 <!-- MyMod.Doubles/MyMod.Doubles.csproj -->
 <PropertyGroup><AssemblyName>assembly_valheim</AssemblyName><RootNamespace></RootNamespace><LangVersion>10</LangVersion></PropertyGroup>
-<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.7]" /></ItemGroup>
+<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.8]" /></ItemGroup>
 ```
 
 ```csharp

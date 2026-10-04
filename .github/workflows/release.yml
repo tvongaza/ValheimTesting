@@ -40,9 +40,10 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
-      # A `-candidate.<sha>` version is a local build identity; NuGet.org would keep it forever. Refused before building.
+      # A `-candidate.<sha>` version is a local build identity; NuGet.org would keep it forever. Refused before building, as is a
+      # source version older than the release recorded in toolkit-versions.json.
       - name: Refuse candidate versions
-        run: dotnet run scripts/release-consumer.cs -- versions
+        run: dotnet run scripts/pins.cs -- versions
       - run: dotnet run scripts/bootstrap-cli.cs
       - run: dotnet run scripts/validate.cs
       - name: Pack release packages
