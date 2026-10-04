@@ -105,8 +105,8 @@ public sealed class SteamAccountHold : IAsyncDisposable
     /// <see cref="SteamPoolAccount.SteamId"/>). Windows reads the signed-in user from <c>HKCU\Software\Valve\Steam\ActiveProcess\ActiveUser</c>;
     /// Linux and macOS read the account Steam last signed in from the host user's <c>loginusers.vdf</c> (its <c>MostRecent</c> user, or
     /// with current clients that write no <c>MostRecent</c>, the single newest <c>Timestamp</c>). Another account, none, or a state that
-    /// cannot be read throws <see cref="SteamSignedInException"/>: unreadable is refused, never passed. The SteamIDs are compared here and
-    /// never written anywhere.
+    /// cannot be read throws <see cref="SteamSignedInException"/>: unreadable is refused, never passed. The SteamID is kept in
+    /// the private prepared profile for the later in-game check, but never written to the run report.
     /// </summary>
     public async Task CheckSignedInAsync(IGameHost clientHost, CancellationToken cancellation = default)
     {
@@ -246,8 +246,8 @@ internal static class SteamSignedInUsers
         return parts[0] switch
         {
             // A SteamID64's low 32 bits are its account id, which the Windows registry records.
-            "id" when parts.Length == 2 && ulong.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out ulong id) => (SteamSignedInState.Matches, (uint?)(uint)id, ""),
-            "account" when parts.Length == 2 && uint.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out uint account) => (SteamSignedInState.Matches, (uint?)account, ""),
+            "id" when parts.Length == 2 && SteamPoolAccount.AccountId(parts[1]) is { } id => (SteamSignedInState.Matches, (uint?)id, ""),
+            "account" when parts.Length == 2 && uint.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out uint account) && account != 0 => (SteamSignedInState.Matches, (uint?)account, ""),
             "none" => (SteamSignedInState.NotSignedIn, (uint?)null, ""),
             "unreadable" when parts.Length == 2 => (SteamSignedInState.Unknown, (uint?)null, parts[1]),
             _ => (SteamSignedInState.Unknown, (uint?)null, $"unexpected reply from {host.Name}"),

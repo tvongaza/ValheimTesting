@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -218,7 +220,8 @@ public sealed class SteamPoolAccount
     public string? PasswordVariable { get; set; }
     /// <summary>
     /// The account's SteamID64 as a string of digits, for the optional signed-in check (<see cref="SteamAccountsProfile.CheckSignedIn"/>)
-    /// only: an identifier, not a credential. It is compared on this machine and never sent to a host or written to a report.
+    /// only: an identifier, not a credential. Inventory-derived profiles store it privately for the in-game identity
+    /// check; lease filenames and run reports use a stable opaque key instead.
     /// </summary>
     public string? SteamId { get; set; }
 
@@ -227,6 +230,15 @@ public sealed class SteamPoolAccount
     internal static uint? AccountId(string? steamId) =>
         steamId is { Length: 17 } && steamId.All(char.IsAsciiDigit) && ulong.TryParse(steamId, NumberStyles.None, CultureInfo.InvariantCulture, out ulong id)
             && id >> 32 == 0x01100001UL && (uint)id != 0 ? (uint)id : null;
+
+    internal static string SteamId64(uint accountId) => accountId == 0
+        ? throw new ArgumentOutOfRangeException(nameof(accountId), "A signed-in Steam account needs a nonzero account id.")
+        : ((0x01100001UL << 32) | accountId).ToString(CultureInfo.InvariantCulture);
+
+    // A stable lease key across inventories without printing the observed SteamID in lease filenames or reports.
+    internal static string LeaseKey(string steamId) => AccountId(steamId) == null
+        ? throw new ArgumentException("A lease key needs an individual SteamID64.", nameof(steamId))
+        : "steam_" + Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes(steamId)))[..40].ToLowerInvariant();
 }
 
 public enum SteamAccountState { Free, Held, Contended, Unreadable }

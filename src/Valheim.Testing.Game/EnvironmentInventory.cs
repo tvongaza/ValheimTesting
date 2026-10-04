@@ -17,13 +17,11 @@ public sealed class EnvironmentRecipe
     public int LocalCliPort { get; set; }
     public int GamePort { get; set; }
     public string? LoaderPackage { get; set; }
-    public string? SteamAccount { get; set; }
-    public string? SteamId { get; set; }
 
     internal GameRole Role() => new()
     {
         Host = Host, Install = Install, Runtime = Runtime, CliPort = CliPort,
-        LocalCliPort = LocalCliPort, GamePort = GamePort, SteamAccount = SteamAccount,
+        LocalCliPort = LocalCliPort, GamePort = GamePort,
     };
 }
 
@@ -35,7 +33,7 @@ public sealed record ResolvedEnvironmentInventory(EnvironmentProfile Profile,
     IReadOnlyList<EnvironmentAssignment> Assignments);
 
 /// <summary>
-/// Ordered, private operator inventory. It separates transport hosts from launch recipes and account identities;
+/// Ordered, private operator inventory. Client identities are discovered from their signed-in Steam environments;
 /// a campaign supplies actors and its own dependency locks. Resolution is deterministic and has no host effects.
 /// </summary>
 public sealed class EnvironmentInventory
@@ -52,17 +50,12 @@ public sealed class EnvironmentInventory
     public List<EnvironmentRecipe> Environments { get; set; } = [];
     /// <summary>The host that stores Steam-account leases; required if any client recipe exists.</summary>
     public string LeaseHost { get; set; } = "";
-    /// <summary>The names and SteamID64 values used to verify and lease client identities; never credentials.</summary>
-    public SteamAccountPool? AccountPool { get; set; }
+    /// <summary>An absolute lease directory on <see cref="LeaseHost"/>, shared by inventories using these Steam accounts.</summary>
+    public string LeaseDirectory { get; set; } = "";
 
     public static EnvironmentInventory Read(string path)
     {
         string content = File.ReadAllText(path);
-        // Use the pool's own credential-field rejection, including nested fields, before the general JSON reader.
-        using (var document = JsonDocument.Parse(content, new JsonDocumentOptions
-               { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }))
-            if (document.RootElement.TryGetProperty("accountPool", out var pool) && pool.ValueKind == JsonValueKind.Object)
-                _ = SteamAccountPool.Parse(pool.GetRawText());
         var inventory = JsonSerializer.Deserialize<EnvironmentInventory>(content, Json)
             ?? throw new InvalidDataException("Empty environment inventory.");
         inventory.Validate(Path.GetDirectoryName(Path.GetFullPath(path))!);
@@ -106,28 +99,15 @@ public sealed class EnvironmentInventory
                 recipe.Role().Validate(role == "server" ? "server" : "client " + recipe.Name, host, errors);
             if (recipe.Roles.Contains("server") && host.Platform == "macos")
                 errors.Add($"Environment {recipe.Name}: remote macOS dedicated servers are not supported by this campaign runner.");
-            bool client = recipe.Roles.Contains("client") || recipe.Roles.Contains("hosting-client");
-            if (client && (string.IsNullOrWhiteSpace(recipe.SteamAccount) || SteamPoolAccount.AccountId(recipe.SteamId) == null))
-                errors.Add($"Environment {recipe.Name} needs a named account and SteamID64 for client roles.");
-            if (!client && (recipe.SteamAccount != null || recipe.SteamId != null))
-                errors.Add($"Environment {recipe.Name}: a dedicated server has no Steam identity.");
             if (recipe.LoaderPackage != null)
                 recipe.LoaderPackage = Path.GetFullPath(recipe.LoaderPackage, directory);
         }
         foreach (var duplicate in Environments.GroupBy(recipe => recipe.Name, StringComparer.Ordinal).Where(group => group.Count() > 1))
             errors.Add("Environment " + duplicate.Key + " is listed twice.");
         bool hasClients = Environments.Any(recipe => recipe.Roles.Contains("client") || recipe.Roles.Contains("hosting-client"));
-        if (hasClients && (AccountPool == null || !Hosts.ContainsKey(LeaseHost)))
-            errors.Add("Client environments need an embedded accountPool and a listed leaseHost.");
-        if (AccountPool != null)
-        {
-            try { AccountPool.Validate(); }
-            catch (ArgumentException error) { errors.Add(error.Message); }
-            foreach (var recipe in Environments.Where(recipe => recipe.SteamAccount != null))
-                if (!AccountPool.Accounts.Any(account => account.Name == recipe.SteamAccount &&
-                    account.SteamId == recipe.SteamId && (account.Host == null || account.Host == recipe.Host)))
-                    errors.Add($"Environment {recipe.Name} does not match an account, SteamID64 and host in accountPool.");
-        }
+        if (hasClients && (string.IsNullOrWhiteSpace(LeaseHost) || !Hosts.TryGetValue(LeaseHost, out var leaseHost) ||
+            string.IsNullOrWhiteSpace(LeaseDirectory) || !leaseHost.IsAbsolutePath(LeaseDirectory)))
+            errors.Add("Client environments need a listed leaseHost and an absolute leaseDirectory on it.");
         if (errors.Count != 0) throw new ArgumentException("Invalid environment inventory: " + string.Join(" ", errors));
     }
 
@@ -178,10 +158,12 @@ public sealed class EnvironmentInventory
             Clients = campaign.Clients.Keys.ToDictionary(name => name, name => chosen[name].Role(), StringComparer.Ordinal),
         };
         if (profile.Clients.Count > 0)
+        {
             profile.SteamAccounts = new SteamAccountsProfile
             {
-                InlinePool = AccountPool, Accounts = AccountPool, LeaseHost = LeaseHost, CheckSignedIn = true,
+                LeaseHost = LeaseHost, CheckSignedIn = true, ObservedLeaseDirectory = LeaseDirectory,
             };
+        }
         profile.Validate();
         foreach (var actor in actors)
             if (actor.Input.LoaderPackage == null) actor.Input.LoaderPackage = chosen[actor.Name].LoaderPackage;
@@ -208,8 +190,6 @@ public sealed class EnvironmentInventory
         {
             if (chosen.Any(other => other.Key != "server" && other.Value.Host == recipe.Host))
                 return "another client uses this host's desktop session";
-            if (chosen.Values.Any(other => other.SteamId == recipe.SteamId && other.SteamId != null))
-                return "Steam identity is already assigned";
         }
         foreach (var other in chosen)
         {

@@ -229,16 +229,17 @@ public static class HostedCampaignPreparation
     }
 
     private sealed record HostInspection(CampaignPreflightReport Report, IReadOnlyDictionary<string, string> Accounts,
-        IReadOnlyDictionary<string, HostListing> SourceListings);
+        IReadOnlyDictionary<string, string> ObservedSteamIds, IReadOnlyDictionary<string, HostListing> SourceListings);
 
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
     {
         if (inspection.Inputs == null) return new HostInspection(inspection.Report, new Dictionary<string, string>(),
-            new Dictionary<string, HostListing>());
+            new Dictionary<string, string>(), new Dictionary<string, HostListing>());
         var inputs = inspection.Inputs!;
         var failures = new ConcurrentBag<CampaignPreflightProblem>(inspection.Report.Problems);
         var matchedAccounts = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        var observedSteamIds = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var sourceListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var hostChecks = inputs.Roles.GroupBy(role => role.Role.Host, StringComparer.Ordinal).Select(async group =>
         {
@@ -288,12 +289,23 @@ public static class HostedCampaignPreparation
                 try
                 {
                     var observed = await SteamSignedInUsers.ReadAsync(host, timeout, cancellation).ConfigureAwait(false);
-                    var matching = inputs.Profile.SteamAccounts!.Candidates(item.Role)
-                        .Where(account => observed.State == SteamSignedInState.Matches &&
-                            SteamPoolAccount.AccountId(account.SteamId) == observed.AccountId).ToArray();
-                    if (matching.Length != 1)
-                        throw new InvalidOperationException($"Client {item.Name} Steam identity is unverified or does not uniquely match its expected account on {host.Name}.");
-                    matchedAccounts[item.Name] = matching[0].Name;
+                    if (inputs.Profile.SteamAccounts!.ObservedLeaseDirectory != null)
+                    {
+                        if (observed.State != SteamSignedInState.Matches || observed.AccountId is not { } id)
+                            throw new InvalidOperationException($"Client {item.Name} has no verifiable signed-in Steam identity on {host.Name}.");
+                        string steamId = SteamPoolAccount.SteamId64(id);
+                        observedSteamIds[item.Name] = steamId;
+                        matchedAccounts[item.Name] = SteamPoolAccount.LeaseKey(steamId);
+                    }
+                    else
+                    {
+                        var matching = inputs.Profile.SteamAccounts.Candidates(item.Role)
+                            .Where(account => observed.State == SteamSignedInState.Matches &&
+                                SteamPoolAccount.AccountId(account.SteamId) == observed.AccountId).ToArray();
+                        if (matching.Length != 1)
+                            throw new InvalidOperationException($"Client {item.Name} Steam identity is unverified or does not uniquely match its expected account on {host.Name}.");
+                        matchedAccounts[item.Name] = matching[0].Name;
+                    }
                 }
                 catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
                 { failures.Add(new(item.Name, "Steam identity", error.Message)); }
@@ -301,9 +313,13 @@ public static class HostedCampaignPreparation
         });
         await Task.WhenAll(hostChecks).ConfigureAwait(false);
         cancellation.ThrowIfCancellationRequested();
+        if (inputs.Profile.SteamAccounts?.ObservedLeaseDirectory != null)
+            foreach (var shared in observedSteamIds.GroupBy(account => account.Value, StringComparer.Ordinal).Where(group => group.Count() > 1))
+                failures.Add(new("clients", "Steam identities", "Clients " + string.Join(", ", shared.Select(account => account.Key).Order(StringComparer.Ordinal)) +
+                    " use the same signed-in Steam account; choose different client environments before launch."));
         return new HostInspection(new CampaignPreflightReport(failures.OrderBy(problem => problem.Actor, StringComparer.Ordinal)
             .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = inspection.Report.Actors },
-            matchedAccounts, sourceListings);
+            matchedAccounts, observedSteamIds, sourceListings);
     }
 
     /// <summary>Require the same shared preflight used by preparation, before any host is contacted.</summary>
@@ -348,8 +364,8 @@ public static class HostedCampaignPreparation
             if (!manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))
                 problems.Add(new("campaign", "roles", "The campaign's clients must match the profile's named clients exactly."));
             if (profile.Clients.Count > 0 && profile.SteamAccounts is not { CheckSignedIn: true })
-                problems.Add(new("clients", "Steam identities", "Native clients require steamAccounts.checkSignedIn=true and pinned Steam identities."));
-            if (profile.Clients.Count > 1 && profile.SteamAccounts is { } accounts)
+                problems.Add(new("clients", "Steam identities", "Native clients require checked Steam leases: fixed profiles pin accounts, inventories discover signed-in accounts."));
+            if (profile.Clients.Count > 1 && profile.SteamAccounts is { ObservedLeaseDirectory: null } accounts)
             {
                 var choices = profile.Clients.Select(client =>
                     accounts.Candidates(client.Value).Select(account => account.SteamId!).ToArray())
@@ -445,6 +461,28 @@ public static class HostedCampaignPreparation
         return new Inspection(new Inputs(manifest, profile, roles, selected, characters), report);
     }
 
+    /// <summary>Turn observed, distinct signed-in identities into the private fixed profile used by the runner.</summary>
+    internal static void CompleteObservedSteamAccounts(EnvironmentProfile profile, IReadOnlyDictionary<string, string> observedIds)
+    {
+        var section = profile.SteamAccounts ?? throw new ArgumentException("The inventory has no Steam lease section.", nameof(profile));
+        string directory = section.ObservedLeaseDirectory ?? throw new ArgumentException("This profile does not use observed Steam identities.", nameof(profile));
+        if (!profile.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(observedIds.Keys) ||
+            observedIds.Values.Distinct(StringComparer.Ordinal).Count() != observedIds.Count)
+            throw new ArgumentException("Every client needs a different, verified signed-in Steam identity.", nameof(observedIds));
+        var pool = new SteamAccountPool
+        {
+            Pool = "steam-clients", LeaseDirectory = directory, SteamGuard = SteamAccountPool.SignedIn,
+            Accounts = observedIds.Values.Select(id => new SteamPoolAccount
+            { Name = SteamPoolAccount.LeaseKey(id), SteamId = id }).ToList(),
+        };
+        section.ObservedLeaseDirectory = null;
+        section.InlinePool = pool;
+        section.Accounts = pool;
+        foreach (var (client, id) in observedIds)
+            profile.Clients[client].SteamAccount = SteamPoolAccount.LeaseKey(id);
+        profile.Validate();
+    }
+
     public static async Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
     {
@@ -454,8 +492,12 @@ public static class HostedCampaignPreparation
         readiness.Report.RequireReady();
         var inputs = inspection.Inputs!;
         var (manifest, profile, roles, selections, characters) = inputs;
-        foreach (var client in profile.Clients)
-            client.Value.SteamAccount = readiness.Accounts[client.Key];
+        if (profile.SteamAccounts?.ObservedLeaseDirectory != null)
+            CompleteObservedSteamAccounts(profile, readiness.ObservedSteamIds);
+        else
+            foreach (var client in profile.Clients)
+                client.Value.SteamAccount = readiness.Accounts[client.Key];
+        profile.Validate();
         string output = Path.GetFullPath(outputDirectory);
         if (Directory.Exists(output) || File.Exists(output)) throw new InvalidOperationException("Use a new private campaign output directory: " + output);
         Directory.CreateDirectory(output);

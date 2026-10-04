@@ -33,9 +33,7 @@
       "install": "C:\\test-installs\\client",
       "runtime": "C:\\test-runs\\client",
       "cliPort": 5578,
-      "localCliPort": 6578,
-      "steamAccount": "first_user",
-      "steamId": "<replace with first SteamID64>"
+      "localCliPort": 6578
     },
     {
       "name": "client-second",
@@ -44,19 +42,9 @@
       "install": "C:\\test-installs\\client",
       "runtime": "C:\\test-runs\\client",
       "cliPort": 5579,
-      "localCliPort": 6579,
-      "steamAccount": "second_user",
-      "steamId": "<replace with second SteamID64>"
+      "localCliPort": 6579
     }
   ],
   "leaseHost": "first",
-  "accountPool": {
-    "pool": "two-test-accounts",
-    "leaseDirectory": "C:\\test-leases",
-    "steamGuard": "signed-in",
-    "accounts": [
-      { "name": "first_user", "host": "first", "steamId": "<replace with first SteamID64>" },
-      { "name": "second_user", "host": "second", "steamId": "<replace with second SteamID64>" }
-    ]
-  }
+  "leaseDirectory": "C:\\test-leases"
 }

@@ -288,7 +288,11 @@ applies them only to the disposable copy. Do not repair the live source install 
 A nested `BepInEx/core/core` can make the preloader load Harmony twice and abort before writing its main log.
 
 For an ordered set of reusable machines, copy [the environment inventory template](MyMod.SystemTests/sample-environment-inventory.json)
-to that private directory. Replace its host addresses, paths, Steam account names and SteamID64 placeholders. Set
+to that private directory. Replace its host addresses and paths. Sign into Steam on each client host beforehand;
+the runner reads the signed-in identity during host preflight, refuses two clients on the same account, and checks
+the running game's own identity after launch. It never changes the login. The private prepared profile derives
+one lease entry per observed identity. Inventories that may use the same accounts must use the same `leaseHost` and
+`leaseDirectory` to coordinate their leases. Set
 `"inventory": "environment-inventory.json"` in the campaign manifest **instead of** `profile`. Each campaign role
 may list `environmentCandidates` in preference order, or omit it to consider all compatible recipes in inventory
 order. `differentHostFrom` names actors that must run on another host; for example, client B may require a host
@@ -299,9 +303,12 @@ Run `valheim-test env preflight` first to see each chosen recipe and its reason.
 the selected installs, ValheimCLI ports and signed-in Steam accounts. Preparation writes
 `environment-assignments.json` beside its generated private profile so the choice is reviewable afterwards. The
 source installs remain untouched and all actor runtime copies are made after the full preflight passes.
+Rented GPU VM client environments are experimental in this campaign flow; start with local or known SSH desktops.
+They still require an interactive desktop, a signed-in Steam client and the same preflight and lease checks.
 
-Campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool. Preparation
-matches each host's account before copying; launch repeats that check under the account lease, then verifies the game's
+Fixed-profile campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool;
+inventory campaigns discover the IDs from the selected hosts instead. Preparation checks identity before copying;
+launch repeats that check under the account lease, then verifies the game's
 own identity. Unix's remembered Steam login alone is not proof of the running game's account. Identity values are redacted
 from the recorded identity reply. The FullLifecycle runner opts into `TestAccess.Ensure`: dedicated servers acknowledge
 cheats locally, and clients acknowledge their disposable character after joining. `AllowOnServerClients` must already be

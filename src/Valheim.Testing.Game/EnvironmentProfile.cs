@@ -261,9 +261,23 @@ public sealed class SteamAccountsProfile
     [JsonIgnore] public string? PoolFile { get; internal set; }
     /// <summary>The pool, once <see cref="EnvironmentProfile.Read"/> or <see cref="EnvironmentProfile.Parse(string)"/> has read it; set it yourself for a profile built in code.</summary>
     [JsonIgnore] public SteamAccountPool? Accounts { get; set; }
+    // Inventory resolution uses this only before host preflight. Preparation replaces it with a
+    // concrete inline pool derived from the observed signed-in identities before writing a profile.
+    [JsonIgnore] internal string? ObservedLeaseDirectory { get; set; }
 
     internal void Validate(EnvironmentProfile profile, List<string> errors)
     {
+        if (ObservedLeaseDirectory != null)
+        {
+            if (Pool.Length != 0 || InlinePool != null || Accounts != null)
+                errors.Add("steamAccounts: observed identities cannot also name an account pool.");
+            if (!CheckSignedIn) errors.Add("steamAccounts: observed identities require checkSignedIn.");
+            if (!profile.Hosts.TryGetValue(LeaseHost ?? "", out var host) || !host.IsAbsolutePath(ObservedLeaseDirectory))
+                errors.Add("steamAccounts: observed identities need an absolute lease directory on the listed lease host.");
+            if (profile.Clients.Values.Any(client => client.SteamAccount != null))
+                errors.Add("steamAccounts: observed identities must not preselect a client account.");
+            return;
+        }
         if (string.IsNullOrWhiteSpace(Pool) && InlinePool == null) errors.Add("steamAccounts: name the pool file or inlinePool.");
         if (!string.IsNullOrWhiteSpace(Pool) && InlinePool != null) errors.Add("steamAccounts: choose either pool or inlinePool.");
         if (!profile.Hosts.TryGetValue(LeaseHost ?? "", out var leaseHost)) errors.Add($"steamAccounts: the lease host '{LeaseHost}' is not listed under hosts.");
