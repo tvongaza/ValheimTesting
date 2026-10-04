@@ -1,4 +1,3 @@
-using System.Diagnostics;
 
 namespace Valheim.Testing.Game;
 
@@ -61,21 +60,8 @@ public static class ExtensionReload
     public static Task WaitForRemoval(GameActor actor, string id, TimeSpan timeout, TimeSpan interval, CancellationToken cancellation = default) =>
         Until(actor, id, live => live == null, id + " unregistered", timeout, interval, cancellation);
 
-    private static async Task<ExtensionInstance?> Until(GameActor actor, string id, Func<ExtensionInstance?, bool> done, string target,
-        TimeSpan timeout, TimeSpan interval, CancellationToken cancellation)
-    {
-        WaitText.RequireTimeout(timeout);
-        if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval), "Give a positive interval.");
-        var clock = Stopwatch.StartNew();
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            var live = Find(actor, id);
-            if (done(live)) return live;
-            var remaining = timeout - clock.Elapsed;
-            if (remaining <= TimeSpan.Zero)
-                throw new WaitTimeoutException(target, clock.Elapsed, live == null ? "no live " + id : $"{id} {live.Version} instance {live.Instance}");
-            await Task.Delay(remaining < interval ? remaining : interval, cancellation).ConfigureAwait(false);
-        }
-    }
+    private static Task<ExtensionInstance?> Until(GameActor actor, string id, Func<ExtensionInstance?, bool> done, string target,
+        TimeSpan timeout, TimeSpan interval, CancellationToken cancellation) =>
+        ObservedWait.UntilAsync(target, () => Find(actor, id), done, timeout, interval, cancellation,
+            describe: live => live == null ? "no live " + id : $"{id} {live.Version} instance {live.Instance}");
 }

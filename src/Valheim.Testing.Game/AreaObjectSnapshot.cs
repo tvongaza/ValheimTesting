@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using valheim_cli.Testing;
@@ -17,6 +16,8 @@ public sealed record AreaObjectSnapshot(string Site, string WorldUid, int X, int
     DateTimeOffset StartedUtc, DateTimeOffset FinishedUtc, int SavedObjects, int Containers,
     int LoadedPrefabs, int Pieces, IReadOnlyList<AreaObjectCommand> Commands)
 {
+    // The game raises no event for a loaded area: cli_area_ready is re-read at this interval.
+    internal static readonly TimeSpan AreaReadInterval = TimeSpan.FromMilliseconds(100);
     private static readonly Regex Ready = new(@"^OK: AREA_READY (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) ready=(?<ready>True|False) zone=-?\d+,-?\d+ loaded=(?<loaded>True|False) objects=\d+ without_instance=(?<missing>\d+)$", RegexOptions.CultureInvariant);
     private static readonly Regex Zdos = new(@"^OK: ZDOS_AT (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) r=(?<radius>\d+\.\d) zones=(?<zones>\d+) objects=(?<count>\d+)$", RegexOptions.CultureInvariant);
     private static readonly Regex ContainersAt = new(@"^OK: CONTAINERS_AT (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) r=(?<radius>\d+\.\d) containers=(?<count>\d+) unreadable=(?<unreadable>\d+)$", RegexOptions.CultureInvariant);
@@ -45,16 +46,14 @@ public sealed record AreaObjectSnapshot(string Site, string WorldUid, int X, int
         var commands = new List<AreaObjectCommand>();
         CheckWorld(server, worldUid, "server");
         CheckWorld(client, worldUid, "client");
-        var clock = Stopwatch.StartNew();
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            var reply = Lines(client, "client", $"cli_area_ready {x} {z} 0", commands);
-            var match = ExactlyOneSummary(reply, Ready, x, z);
-            if (match.Groups["ready"].Value == "True" && match.Groups["loaded"].Value == "True" && match.Groups["missing"].Value == "0") break;
-            if (clock.Elapsed >= readinessTimeout) throw new TimeoutException($"Client area at {x},{z} did not become ready. Last reply: {string.Join(" | ", reply)}");
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (readinessTimeout - clock.Elapsed).TotalMilliseconds))));
-        }
+        string last = "no area reply";
+        ObservedWait.Until($"the client's area at {x},{z} ready", () =>
+            {
+                var reply = Lines(client, "client", $"cli_area_ready {x} {z} 0", commands);
+                last = string.Join(" | ", reply);
+                var match = ExactlyOneSummary(reply, Ready, x, z);
+                return match.Groups["ready"].Value == "True" && match.Groups["loaded"].Value == "True" && match.Groups["missing"].Value == "0";
+            }, ready => ready, readinessTimeout, AreaReadInterval, cancellation, describe: _ => last);
 
         var zdos = Lines(server, "server", $"cli_zdos_at {x} {z} {radius}", commands);
         int saved = Count(zdos, Zdos, "ZDO ", x, z, radius);

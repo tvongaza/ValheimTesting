@@ -1,9 +1,8 @@
-using System.Diagnostics;
 using System.Globalization;
 
 namespace Valheim.Testing.Game;
 
-// Waits block on an event (a log line, a process exit, a pushed game state) under an explicit deadline.
+// Waits block on an event (a log line, a process exit, a pushed game state) or re-observe a source (ObservedWait) under an explicit deadline.
 // Expiry and early failure both say what was awaited, how long it ran and the last thing seen, so a failed
 // startup explains itself without being rerun.
 public sealed class WaitTimeoutException(string target, TimeSpan elapsed, string? lastSeen)
@@ -36,24 +35,3 @@ internal static class WaitText
         lines is not { Count: > 0 } ? "" : " Lines before it:" + string.Concat(lines.Select(line => Environment.NewLine + "  " + line));
 }
 
-public static class ProcessWait
-{
-    /// <summary>
-    /// Waits for the process to exit and returns its exit code. Expiry throws <see cref="WaitTimeoutException"/> and leaves
-    /// the process running; stopping it is the owner's decision. <paramref name="lastSeen"/> supplies context for the report,
-    /// for example a <see cref="LogWait"/>'s last line.
-    /// </summary>
-    public static async Task<int> ForExitAsync(Process process, TimeSpan timeout, CancellationToken cancellation = default, Func<string?>? lastSeen = null)
-    {
-        ArgumentNullException.ThrowIfNull(process);
-        WaitText.RequireTimeout(timeout);
-        string target = "exit of process " + process.Id.ToString(CultureInfo.InvariantCulture);
-        var clock = Stopwatch.StartNew();
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        deadline.CancelAfter(timeout);
-        try { await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
-        { throw new WaitTimeoutException(target, clock.Elapsed, lastSeen?.Invoke()); }
-        return process.ExitCode;
-    }
-}

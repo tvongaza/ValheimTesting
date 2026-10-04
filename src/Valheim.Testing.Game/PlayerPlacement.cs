@@ -162,9 +162,11 @@ public static class PlayerPlacement
     /// <paramref name="readings"/> client observations <paramref name="interval"/> apart (default three, half a second),
     /// each of which must show the player settled on <paramref name="point"/>: stationary support, not walking usability.
     /// A reading that shows the player flying refuses the check (an <see cref="InvalidOperationException"/>, not a
-    /// <see cref="SupportException"/>): support cannot be measured while fly is on.
+    /// <see cref="SupportException"/>): support cannot be measured while fly is on. <paramref name="cancellation"/> also ends
+    /// the pause between readings.
     /// </summary>
-    public static IReadOnlyList<JsonElement> RequireSupported(GameActor client, HeightExpectation point, int readings = 3, TimeSpan? interval = null)
+    public static IReadOnlyList<JsonElement> RequireSupported(GameActor client, HeightExpectation point, int readings = 3, TimeSpan? interval = null,
+        CancellationToken cancellation = default)
     {
         if (readings < 1) throw new ArgumentOutOfRangeException(nameof(readings));
         var wait = interval ?? TimeSpan.FromMilliseconds(500);
@@ -172,7 +174,9 @@ public static class PlayerPlacement
         var states = new List<JsonElement>();
         for (int i = 0; i < readings; i++)
         {
-            if (i > 0) Thread.Sleep(wait);
+            // Not a wait for a change: every reading must already show support, so this is a fixed spacing, not ObservedWait.
+            if (i > 0) cancellation.WaitHandle.WaitOne(wait);
+            cancellation.ThrowIfCancellationRequested();
             var state = client.Observe(support);
             RefuseFlying(state);
             states.Add(state.Data.Clone());

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -107,53 +106,65 @@ public class LogWaitTests
     }
 }
 
-public class ProcessWaitTests
+// ObservedWait is the one polling wait; these pin its rules once for every caller (sessions, placement, fixtures, startup).
+public class ObservedWaitTests
 {
     private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
-    [Fact] public async Task ReturnsAShellsExitCode()
+    [Fact] public async Task ReturnsTheFirstMatchingObservation()
     {
-        using var process = Process.Start(Shell("exit 3"))!;
-        Assert.Equal(3, await ProcessWait.ForExitAsync(process, Generous));
+        int reads = 0;
+        Assert.Equal(3, await ObservedWait.UntilAsync("three reads", () => ++reads, n => n == 3, Generous, TimeSpan.FromMilliseconds(1)));
+        reads = 0;
+        Assert.Equal(3, ObservedWait.Until("three reads", () => ++reads, n => n == 3, Generous, TimeSpan.FromMilliseconds(1)));
     }
-    [Fact] public async Task ADotnetChildExitsCleanly()
+    [Fact] public async Task ExpiryNamesTheTargetAndTheLastObservation()
     {
-        // The SDK tells child processes which host runs them; PATH is the fallback.
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet", "--version") { RedirectStandardOutput = true };
-        using var process = Process.Start(start)!;
-        var output = process.StandardOutput.ReadToEndAsync();
-        Assert.Equal(0, await ProcessWait.ForExitAsync(process, Generous));
-        Assert.Matches(@"^\d+\.\d+", (await output).Trim());
+        int reads = 0;
+        var error = await Assert.ThrowsAsync<WaitTimeoutException>(() => ObservedWait.UntilAsync("a value that never comes", () => ++reads, _ => false,
+            TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(5), describe: n => "read " + n));
+        Assert.Equal("a value that never comes", error.Target); Assert.Equal("read " + reads, error.LastSeen);
+        Assert.Throws<WaitTimeoutException>(() => ObservedWait.Until("a value that never comes", () => false, x => x, TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(5)));
     }
-    [Fact] public async Task ExpiryReportsWhatItWaitedForAndLeavesTheProcessRunning()
+    [Fact] public void AFailingObservationEndsTheWaitAtOnce()
     {
-        using var process = Process.Start(LongRunning())!;
-        try
-        {
-            var error = await Assert.ThrowsAsync<WaitTimeoutException>(() => ProcessWait.ForExitAsync(process, TimeSpan.FromMilliseconds(200), lastSeen: () => "still booting"));
-            Assert.Contains(process.Id.ToString(CultureInfo.InvariantCulture), error.Target); Assert.Equal("still booting", error.LastSeen);
-            Assert.False(process.HasExited);
-        }
-        finally { process.Kill(entireProcessTree: true); process.WaitForExit(); }
+        int reads = 0;
+        var error = Assert.Throws<WaitFailedException>(() => ObservedWait.Until("ready", () => ++reads, _ => false, Generous, TimeSpan.FromMilliseconds(1),
+            fails: n => n == 2 ? "the source broke" : null));
+        Assert.Equal("the source broke", error.Reason); Assert.Equal(2, reads); Assert.True(error.Elapsed < Generous);
     }
-    [Fact] public async Task CancellationIsNotReportedAsExpiry()
+    [Fact] public async Task TheChangeEventEndsThePauseEarly()
     {
-        using var process = Process.Start(LongRunning())!;
-        using var cancel = new CancellationTokenSource(); cancel.Cancel();
-        try { await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ProcessWait.ForExitAsync(process, Generous, cancel.Token)); }
-        finally { process.Kill(entireProcessTree: true); process.WaitForExit(); }
+        int reads = 0;
+        // The interval is a minute: only the event can bring the second observation within the test's lifetime.
+        Assert.Equal(2, await ObservedWait.UntilAsync("the second read", () => ++reads, n => n == 2, Generous, Generous, changed: (_, _) => Task.CompletedTask));
+        reads = 0;
+        int woken = 0;
+        Assert.Equal(2, ObservedWait.RunBlocking("the second read", _ => ++reads, n => n == 2, Generous, Generous, default, changed: (_, _) => woken++).Value);
+        Assert.Equal(1, woken);
     }
-    internal static ProcessStartInfo Shell(string command)
+    [Fact] public async Task AnExpiredOrFailedEventOnlyEndsTheInterval()
     {
-        var start = OperatingSystem.IsWindows() ? new ProcessStartInfo("cmd.exe") : new ProcessStartInfo("/bin/sh");
-        start.ArgumentList.Add(OperatingSystem.IsWindows() ? "/c" : "-c"); start.ArgumentList.Add(command);
-        return start;
+        int reads = 0;
+        Assert.Equal(3, await ObservedWait.UntilAsync("the third read", () => ++reads, n => n == 3, Generous, TimeSpan.FromMilliseconds(5),
+            changed: (left, token) => Task.Delay(Timeout.Infinite, token)));
     }
-    // Runs for minutes; the tests kill it. Output is redirected so it stays out of the test log.
-    private static ProcessStartInfo LongRunning()
+    [Fact] public async Task CancellationEndsThePauseNotTheDeadline()
     {
-        var start = OperatingSystem.IsWindows() ? new ProcessStartInfo("ping", "-n 300 127.0.0.1") : new ProcessStartInfo("/bin/sleep", "300");
-        start.RedirectStandardOutput = true;
-        return start;
+        // A minute's interval and deadline: only the token can end these waits quickly.
+        using var cancel = new CancellationTokenSource();
+        int reads = 0;
+        var waiting = ObservedWait.UntilAsync("never", () => { if (++reads == 1) cancel.CancelAfter(20); return false; }, x => x, Generous, Generous, cancel.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+        using var blocking = new CancellationTokenSource();
+        Assert.ThrowsAny<OperationCanceledException>(() => ObservedWait.Until("never", () => { blocking.CancelAfter(20); return false; }, x => x, Generous, Generous, blocking.Token));
+        using var during = new CancellationTokenSource();
+        Assert.ThrowsAny<OperationCanceledException>(() => ObservedWait.RunBlocking("never", _ => false, x => x, Generous, Generous, during.Token,
+            changed: (wait, token) => { during.Cancel(); token.WaitHandle.WaitOne(wait); }));
+    }
+    [Fact] public async Task EveryWaitStatesAFiniteTimeoutAndInterval()
+    {
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => ObservedWait.UntilAsync("x", () => true, x => x, TimeSpan.Zero, Generous));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ObservedWait.Until("x", () => true, x => x, Generous, TimeSpan.Zero));
     }
 }
 

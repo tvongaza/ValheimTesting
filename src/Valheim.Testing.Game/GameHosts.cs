@@ -351,32 +351,21 @@ internal static class GameHostPorts
 
     public static async Task WaitUntilListeningAsync(IOwnedProcess process, int port, TimeSpan timeout, CancellationToken cancellation)
     {
-        var clock = Stopwatch.StartNew();
         var exited = process.WaitForExitAsync(CancellationToken.None);
         string target = "the forward to listen on 127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture);
-        Exception Exited() => new WaitFailedException(target, "ssh exited with code " + process.ExitCode.ToString(CultureInfo.InvariantCulture), clock.Elapsed, LastLine(process.Stderr));
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            if (process.HasExited) throw Exited();
-            using (var client = new TcpClient(AddressFamily.InterNetwork))
-            using (var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
+        // ssh announces its listener only in debug output, so it is probed: a local connection every 100 ms, the pause
+        // raced against ssh's exit (a refused forward ends it at once).
+        await ObservedWait.Run(target, async (_, token) =>
             {
+                if (process.HasExited) return false;
+                using var client = new TcpClient(AddressFamily.InterNetwork);
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(token);
                 attempt.CancelAfter(TimeSpan.FromSeconds(1));
-                try
-                {
-                    await client.ConnectAsync(IPAddress.Loopback, port, attempt.Token).ConfigureAwait(false);
-                    if (process.HasExited) throw Exited();
-                    return;
-                }
-                catch (Exception error) when (error is SocketException || (error is OperationCanceledException && !cancellation.IsCancellationRequested)) { }
-            }
-            var left = timeout - clock.Elapsed;
-            if (left <= TimeSpan.Zero) throw new WaitTimeoutException(target, clock.Elapsed, LastLine(process.Stderr));
-            // ssh announces its listener only in debug output, so it is probed: a local connection every 100 ms, raced against
-            // ssh's exit (a refused forward ends it at once).
-            await Task.WhenAny(Task.Delay(left < TimeSpan.FromMilliseconds(100) ? left : TimeSpan.FromMilliseconds(100), cancellation), exited).ConfigureAwait(false);
-        }
+                try { await client.ConnectAsync(IPAddress.Loopback, port, attempt.Token).ConfigureAwait(false); return !process.HasExited; }
+                catch (Exception error) when (error is SocketException || (error is OperationCanceledException && !token.IsCancellationRequested)) { return false; }
+            }, listening => listening, timeout, TimeSpan.FromMilliseconds(100), cancellation,
+            _ => process.HasExited ? "ssh exited with code " + process.ExitCode.ToString(CultureInfo.InvariantCulture) : null, _ => LastLine(process.Stderr) ?? "nothing",
+            (wait, token) => Task.WhenAny(Task.Delay(wait, token), exited)).ConfigureAwait(false);
     }
 
     private static string? LastLine(string text) => text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();

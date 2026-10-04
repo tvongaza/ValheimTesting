@@ -67,9 +67,9 @@ public static class UnresolvedPrefabs
     /// <paramref name="interval"/> apart, and returns it; unresolved hashes do not end the wait early, they are the answer.
     /// </summary>
     public static Task<UnresolvedPrefabScan> WaitForComplete(GameActor actor, string capabilityPath, float radius, TimeSpan timeout, TimeSpan interval, CancellationToken cancellation = default) =>
-        ObservedWait.Until(() => Read(actor, capabilityPath, radius), scan => scan.Complete && scan.Scanned > 0, _ => null,
-            scan => $"{scan.ZonesLoaded} of {scan.Zones} zones loaded, {scan.Scanned} objects read", "a complete census of unresolved prefab hashes",
-            timeout, interval, null, cancellation);
+        ObservedWait.UntilAsync("a complete census of unresolved prefab hashes", () => Read(actor, capabilityPath, radius),
+            scan => scan.Complete && scan.Scanned > 0, timeout, interval, cancellation,
+            describe: scan => $"{scan.ZonesLoaded} of {scan.Zones} zones loaded, {scan.Scanned} objects read");
 
     /// <summary>Parses census data; anything malformed throws rather than reading as "nothing unresolved".</summary>
     public static UnresolvedPrefabScan Parse(JsonElement data)

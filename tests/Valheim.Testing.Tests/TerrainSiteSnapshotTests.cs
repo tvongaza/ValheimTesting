@@ -81,7 +81,7 @@ public sealed class TerrainSiteSnapshotTests
         var transport = Transport().On("cli_area_ready 16 -8 0", _ => ScriptedTransport.Ok(
             "OK: AREA_READY 16.0,-8.0 ready=False zone=0,0 loaded=False objects=0 without_instance=0"));
         using var actor = transport.Actor();
-        var error = Assert.Throws<TimeoutException>(() => TerrainSiteSnapshot.Capture(actor, "site", "7", [Point], TimeSpan.FromMilliseconds(1)));
+        var error = Assert.Throws<WaitTimeoutException>(() => TerrainSiteSnapshot.Capture(actor, "site", "7", [Point], TimeSpan.FromMilliseconds(1)));
         Assert.Contains("ready=False", error.Message);
         Assert.Equal(0, transport.Count("cli_ground_height"));
     }

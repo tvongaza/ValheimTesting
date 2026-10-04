@@ -226,64 +226,62 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
             const string stage = "owned server readiness";
             string last = "No CLI connection";
             // Retry incomplete read-only startup observations only (and, without a listening line, the connection). Never retry a mutation.
-            while (true)
-            {
-                _cancellation.ThrowIfCancellationRequested();
-                if (exited.IsCompleted) throw await Exited(stage).ConfigureAwait(false);
-                IGameTransport? transport = null;
-                try
+            // The adapter's readiness has no event: it is re-probed every poll interval, and the process exit ends the pause at once.
+            var started = await ObservedWait.Run(stage + " within the startup deadline", async (_, _) =>
                 {
-                    var connected = transport = await Bounded(stage, _connect, last).ConfigureAwait(false);
-                    var timeout = Left(stage);
-                    if (timeout > _command) timeout = _command;
-                    // Bootstrap exception: this adapter capability MUST be read-only. World pins cannot
-                    // hold before loading completes. Prove our token/PID/save root first, then strict-pin
-                    // before returning an actor or issuing any gameplay action.
-                    var reply = await Bounded(stage, () => connected.Execute("cli_extension " + _sessionCapability, timeout), last).ConfigureAwait(false);
-                    if (!reply.Ok)
+                    if (exited.IsCompleted) throw await Exited(stage).ConfigureAwait(false);
+                    IGameTransport? transport = null;
+                    try
                     {
-                        // The core may answer before the optional adapter is registered.
-                        if (StartupUnavailable(reply))
-                            last = "Console or session adapter not ready yet";
-                        else throw new InvalidOperationException("Session observation refused: " + reply.ErrorCode);
-                    }
-                    else
-                    {
-                        using var document = GameActor.ParseLine(reply, "EXTENSION_RESULT ");
-                        bool ready = CheckIdentity(document.RootElement, token, process.Id, _saveRoot, _extension);
-                        if (ready)
+                        var connected = transport = await Bounded(stage, _connect, last).ConfigureAwait(false);
+                        var timeout = Left(stage);
+                        if (timeout > _command) timeout = _command;
+                        // Bootstrap exception: this adapter capability MUST be read-only. World pins cannot
+                        // hold before loading completes. Prove our token/PID/save root first, then strict-pin
+                        // before returning an actor or issuing any gameplay action.
+                        var reply = await Bounded(stage, () => connected.Execute("cli_extension " + _sessionCapability, timeout), last).ConfigureAwait(false);
+                        if (!reply.Ok)
                         {
-                            // Verification gets the time left, not a full command timeout.
-                            var verify = Left(stage);
-                            var actor = new GameActor("owned-server", transport) { CommandTimeout = verify < _command ? verify : _command };
-                            var attached = transport!; transport = null;
-                            // Disposing the actor waits for its running command, so an abandoned verification closes the
-                            // transport at once (ending the command) and disposes the actor once the command returns.
-                            bool abandoned = false;
-                            try
-                            {
-                                await Bounded(stage, () => { actor.VerifyEnvironment(_expectations); return true; },
-                                    abandon: () => { abandoned = true; attached.Dispose(); }, afterAbandoned: actor.Dispose).ConfigureAwait(false);
-                                if (exited.IsCompleted || clock.Elapsed >= _startup) throw new InvalidOperationException("Server exited or startup deadline expired during verification.");
-                                actor.CommandTimeout = _command;
-                                _actor = actor; return actor;
-                            }
-                            catch { if (!abandoned) actor.Dispose(); throw; }
+                            // The core may answer before the optional adapter is registered.
+                            if (StartupUnavailable(reply))
+                                last = "Console or session adapter not ready yet";
+                            else throw new InvalidOperationException("Session observation refused: " + reply.ErrorCode);
+                            return null;
                         }
-                        last = "Owned server has not completed world/network loading";
+                        using var document = GameActor.ParseLine(reply, "EXTENSION_RESULT ");
+                        if (!CheckIdentity(document.RootElement, token, process.Id, _saveRoot, _extension))
+                        {
+                            last = "Owned server has not completed world/network loading";
+                            return null;
+                        }
+                        // Verification gets the time left, not a full command timeout.
+                        var verify = Left(stage);
+                        var actor = new GameActor("owned-server", transport) { CommandTimeout = verify < _command ? verify : _command };
+                        var attached = transport!; transport = null;
+                        // Disposing the actor waits for its running command, so an abandoned verification closes the
+                        // transport at once (ending the command) and disposes the actor once the command returns.
+                        bool abandoned = false;
+                        try
+                        {
+                            await Bounded(stage, () => { actor.VerifyEnvironment(_expectations); return true; },
+                                abandon: () => { abandoned = true; attached.Dispose(); }, afterAbandoned: actor.Dispose).ConfigureAwait(false);
+                            if (exited.IsCompleted || clock.Elapsed >= _startup) throw new InvalidOperationException("Server exited or startup deadline expired during verification.");
+                            actor.CommandTimeout = _command;
+                            return actor;
+                        }
+                        catch { if (!abandoned) actor.Dispose(); throw; }
                     }
-                }
-                catch (Exception error) when (error is IOException or System.Net.Sockets.SocketException)
-                {
-                    // After the listening line a failed connection is a fault, not a startup race.
-                    if (log != null || hostWait != null) throw new WaitFailedException(stage, "ValheimCLI announced its listener but the connection failed: " + error.Message, clock.Elapsed, log?.Refresh());
-                    last = error is IOException ? "CLI transport unavailable" : "CLI socket unavailable";
-                }
-                finally { transport?.Dispose(); }
-                var remaining = _startup - clock.Elapsed;
-                if (remaining <= TimeSpan.Zero) throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, last);
-                if (_poll > TimeSpan.Zero) await Task.WhenAny(Task.Delay(remaining < _poll ? remaining : _poll, stop.Token), exited).ConfigureAwait(false);
-            }
+                    catch (Exception error) when (error is IOException or System.Net.Sockets.SocketException)
+                    {
+                        // After the listening line a failed connection is a fault, not a startup race.
+                        if (log != null || hostWait != null) throw new WaitFailedException(stage, "ValheimCLI announced its listener but the connection failed: " + error.Message, clock.Elapsed, log?.Refresh());
+                        last = error is IOException ? "CLI transport unavailable" : "CLI socket unavailable";
+                        return null;
+                    }
+                    finally { transport?.Dispose(); }
+                }, (GameActor? actor) => actor != null, Left(stage), _poll > TimeSpan.Zero ? _poll : TimeSpan.FromTicks(1), _cancellation, null, _ => last,
+                (wait, token) => Task.WhenAny(Task.Delay(wait, token), exited)).ConfigureAwait(false);
+            return _actor = started.Value!;
         }
         finally { stop.Cancel(); }
     }
@@ -321,27 +319,24 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     {
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
         Capability? capability = null;
-        var clock = Stopwatch.StartNew();
         string last = "none";
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            try
+        ObservedWait.Until("server accepting game connections", () =>
             {
-                capability ??= server.RequireCapability(sessionCapability);
-                var reading = server.Observe(capability);
-                last = reading.Data.GetRawText();
-                if (!reading.Data.TryGetProperty("acceptingConnections", out var accepting) || accepting.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                    throw new InvalidOperationException("The session capability does not report acceptingConnections; update the adapter to Valheim.Testing.Adapter's TestExtension.");
-                if (accepting.GetBoolean()) return;
-            }
-            catch (InvalidOperationException error) when (GameActor.IsUnstartedCommandTimeout(error))
-            {
-                last = "ValheimCLI readiness observation expired in its queue before execution; retrying after the game thread resumes";
-            }
-            if (clock.Elapsed >= timeout) throw new WaitTimeoutException("server accepting game connections", clock.Elapsed, last);
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromSeconds(1));
-        }
+                try
+                {
+                    capability ??= server.RequireCapability(sessionCapability);
+                    var reading = server.Observe(capability);
+                    last = reading.Data.GetRawText();
+                    if (!reading.Data.TryGetProperty("acceptingConnections", out var accepting) || accepting.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                        throw new InvalidOperationException("The session capability does not report acceptingConnections; update the adapter to Valheim.Testing.Adapter's TestExtension.");
+                    return accepting.GetBoolean();
+                }
+                catch (InvalidOperationException error) when (GameActor.IsUnstartedCommandTimeout(error))
+                {
+                    last = "ValheimCLI readiness observation expired in its queue before execution; retrying after the game thread resumes";
+                    return false;
+                }
+            }, accepting => accepting, timeout, TimeSpan.FromSeconds(1), cancellation, describe: _ => last);
     }
 
     /// <summary>

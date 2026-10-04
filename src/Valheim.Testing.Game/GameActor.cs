@@ -123,42 +123,40 @@ public sealed class GameActor : IDisposable
     /// waits for the reload's own event.
     /// </summary>
     public Task WaitForEnvironment(string expectations, TimeSpan timeout, CancellationToken cancellation = default) =>
-        WaitForEnvironment(expectations, timeout, (left, token) => Task.Delay(left < ReloadFallback ? left : ReloadFallback, token), cancellation);
-    private static readonly TimeSpan ReloadFallback = TimeSpan.FromMilliseconds(200);
+        WaitForEnvironment(expectations, timeout, ReloadFallback, ObservedWait.Delay, cancellation);
+    private static readonly TimeSpan ReloadFallback = TimeSpan.FromMilliseconds(200), LastCheck = TimeSpan.FromMilliseconds(100);
     /// <summary>
     /// Wait only for an explicitly specified reload's pins; never retry a gameplay action or relax the expected set.
     /// Checks now, then again each time <paramref name="changed"/> completes. It receives the remaining time and should
     /// await the event that follows the change, for example the reloaded plugin's load line through a <see cref="LogWait"/>:
     /// <c>(left, token) =&gt; log.WaitAsync(loadLine, left, cancellation: token)</c>. A failure it throws ends the wait.
     /// </summary>
-    public async Task WaitForEnvironment(string expectations, TimeSpan timeout, Func<TimeSpan, CancellationToken, Task> changed, CancellationToken cancellation = default)
+    public Task WaitForEnvironment(string expectations, TimeSpan timeout, Func<TimeSpan, CancellationToken, Task> changed, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(changed);
+        // The event's own deadline is ours: one interval spans the whole wait, so its expiry is this wait's expiry.
+        return WaitForEnvironment(expectations, timeout, timeout, ObservedWait.EndsEarlyOn(changed), cancellation);
+    }
+    private async Task WaitForEnvironment(string expectations, TimeSpan timeout, TimeSpan interval, Func<TimeSpan, CancellationToken, Task> pause, CancellationToken cancellation)
+    {
         InvalidateEnvironment();
         if (expectations == EnvironmentPinning.None) { VerifyEnvironment(expectations); return; } // Nothing to wait for.
         expectations = StrictExpectations.Normalize(expectations);
         WaitText.RequireTimeout(timeout);
-        var clock = System.Diagnostics.Stopwatch.StartNew();
         var prior = CommandTimeout;
         string last = "pins not checked";
+        int checks = 0;
         try
         {
-            while (clock.Elapsed < timeout)
+            // The observation is the pin check (null once it holds), bounded by the time left; only explicit expectation checks are retried during reload.
+            await ObservedWait.Run("the expected strict environment (no gameplay action was issued)", (left, _) =>
             {
-                cancellation.ThrowIfCancellationRequested();
-                CommandTimeout = timeout - clock.Elapsed;
-                if (CommandTimeout > prior) CommandTimeout = prior;
-                try { VerifyEnvironment(expectations); return; }
-                catch (InvalidOperationException error) { last = error.Message; /* Only explicit expectation checks are retried during reload. */ }
-                var remaining = timeout - clock.Elapsed;
-                if (remaining <= TimeSpan.Zero) break;
-                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-                deadline.CancelAfter(remaining);
-                // The event's own deadline is ours: its expiry is this wait's expiry.
-                try { await changed(remaining, deadline.Token).WaitAsync(remaining, cancellation).ConfigureAwait(false); }
-                catch (Exception error) when (!cancellation.IsCancellationRequested && error is TimeoutException or OperationCanceledException) { break; }
-            }
-            throw new WaitTimeoutException("the expected strict environment (no gameplay action was issued)", clock.Elapsed, last);
+                // After an expired event, next to no time is left: another pin check would only time out and hide the last mismatch.
+                if (checks++ > 0 && left < LastCheck) return new ValueTask<string?>(last);
+                CommandTimeout = left < prior ? left : prior;
+                try { VerifyEnvironment(expectations); return new ValueTask<string?>((string?)null); }
+                catch (InvalidOperationException error) { return new ValueTask<string?>(last = error.Message); }
+            }, failure => failure == null, timeout, interval, cancellation, null, failure => failure ?? "pins hold", pause).ConfigureAwait(false);
         }
         finally { CommandTimeout = prior; }
     }

@@ -626,7 +626,7 @@ public sealed class ClientRoundsTests : IDisposable
     {
         // What the game does when the named world is missing: it creates a fresh one, with another UID.
         var game = new Game(Worlds) { LoadedUid = "999" }; var report = new ScenarioReport("host");
-        var error = Assert.Throws<InvalidOperationException>(() => RunHosted(report, HostPlan(), game, Measure()));
+        var error = Assert.Throws<WaitFailedException>(() => RunHosted(report, HostPlan(), game, Measure()));
         Assert.Contains("different world", error.Message);
         Assert.Equal(0, game.Transport.Count("cli_set_player_safety"));
         Assert.Equal(1, _process.Stops);

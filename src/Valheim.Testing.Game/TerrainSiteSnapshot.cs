@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using valheim_cli.Testing;
@@ -45,12 +44,7 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
         var commands = new List<TerrainSiteCommand>();
         CheckWorld(client, worldUid, "client");
         if (server is not null) CheckWorld(server, worldUid, "server");
-        var clock = Stopwatch.StartNew();
-        foreach (var point in points)
-        {
-            WaitReady(client, "client", point, readinessTimeout, clock, commands, cancellation);
-            if (server is not null) WaitReady(server, "server", point, readinessTimeout, clock, commands, cancellation);
-        }
+        WaitReady(client, server, points, readinessTimeout, commands, cancellation);
         var readings = new List<TerrainSiteReading>(points.Count);
         foreach (var point in points)
         {
@@ -91,20 +85,25 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
             throw new InvalidOperationException("The supplied server actor is not hosting the world.");
     }
 
-    private static void WaitReady(GameActor actor, string role, TerrainSitePoint point, TimeSpan timeout, Stopwatch clock,
+    // Point by point, the client's area then the server's; one deadline for them all. A ready area is not read again.
+    private static void WaitReady(GameActor client, GameActor? server, IReadOnlyList<TerrainSitePoint> points, TimeSpan timeout,
         List<TerrainSiteCommand> commands, CancellationToken cancellation)
     {
+        var areas = points.SelectMany(point => server is null ? [(client, "client", point)] : new[] { (client, "client", point), (server, "server", point) }).ToArray();
+        int next = 0;
         string last = "no area reply";
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            var reply = Lines(actor, role, $"cli_area_ready {point.X} {point.Z} 0", commands);
-            last = string.Join(" | ", reply);
-            var match = Only(reply, Area, point);
-            if (match.Groups["ready"].Value == "True" && match.Groups["loaded"].Value == "True" && match.Groups["missing"].Value == "0") return;
-            if (clock.Elapsed >= timeout) throw new TimeoutException($"{role} area at {point.X},{point.Z} did not become ready within {timeout}. Last state: {last}");
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (timeout - clock.Elapsed).TotalMilliseconds))));
-        }
+        ObservedWait.Until("every site point's area ready", () =>
+            {
+                for (; next < areas.Length; next++)
+                {
+                    var (actor, role, point) = areas[next];
+                    var reply = Lines(actor, role, $"cli_area_ready {point.X} {point.Z} 0", commands);
+                    last = $"{role} area at {point.X},{point.Z}: {string.Join(" | ", reply)}";
+                    var match = Only(reply, Area, point);
+                    if (match.Groups["ready"].Value != "True" || match.Groups["loaded"].Value != "True" || match.Groups["missing"].Value != "0") break;
+                }
+                return next;
+            }, ready => ready == areas.Length, timeout, AreaObjectSnapshot.AreaReadInterval, cancellation, describe: _ => last);
     }
 
     private static IReadOnlyList<string> Lines(GameActor actor, string role, string command, List<TerrainSiteCommand> commands)

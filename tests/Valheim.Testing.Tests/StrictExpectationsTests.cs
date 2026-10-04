@@ -69,7 +69,8 @@ public class StrictExpectationsTests
         var transport = new Fake { Drift = true }; using var actor = new GameActor("test", transport);
         var error = await Assert.ThrowsAsync<WaitTimeoutException>(() => actor.WaitForEnvironment("cli_expect worlduid=7", TimeSpan.FromMilliseconds(200),
             (left, token) => Task.Delay(Timeout.InfiniteTimeSpan, token)));
-        Assert.Contains("strict environment", error.Target); Assert.Single(transport.Commands);
+        // The expired event ends the wait: no second pin check with next to no time left, and the mismatch stays the last thing seen.
+        Assert.Contains("strict environment", error.Target); Assert.Single(transport.Commands); Assert.NotEqual("pins not checked", error.LastSeen);
     }
     [Fact] public void ReloadPinsChangeOnlyExplicitPluginAndRetainStrictWorldAndOtherPins()
     {

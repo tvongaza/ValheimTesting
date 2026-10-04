@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace Valheim.Testing.Game;
 public static class Check
 {
@@ -13,24 +11,5 @@ public static class Check
     {
         if (!actual.OrderBy(x => x, StringComparer.Ordinal).SequenceEqual(expected.OrderBy(x => x, StringComparer.Ordinal)))
             throw new InvalidOperationException("Semantic identities or their multiplicities differ.");
-    }
-    /// <summary>
-    /// Bounded fallback for a source that has no event to wait on, such as an adapter's readiness flag or a count in the
-    /// world: re-observes every <paramref name="interval"/> until it matches or the deadline passes. When the change
-    /// announces itself, wait for that instead: <see cref="LogWait"/> for a log line, <see cref="ProcessWait"/> for an exit,
-    /// <see cref="StateWait"/> for a ValheimCLI game state. <paramref name="observe"/> must be read-only.
-    /// </summary>
-    public static async Task<T> Eventually<T>(Func<T> observe, Func<T, bool> matches, TimeSpan timeout, TimeSpan interval, CancellationToken cancellation = default)
-    {
-        if (timeout <= TimeSpan.Zero || interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        var clock = Stopwatch.StartNew();
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested(); T value = observe(); cancellation.ThrowIfCancellationRequested();
-            if (clock.Elapsed <= timeout && matches(value)) return value;
-            var remaining = timeout - clock.Elapsed;
-            if (remaining <= TimeSpan.Zero) throw new TimeoutException("Observation did not satisfy the condition before the deadline.");
-            await Task.Delay(remaining < interval ? remaining : interval, cancellation);
-        }
     }
 }

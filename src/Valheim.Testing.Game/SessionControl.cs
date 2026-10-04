@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -52,27 +51,19 @@ public sealed class SessionControl(GameActor actor)
         ValidateWorldUid(worldUid);
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
         var capability = actor.RequireCapability("valheim.session/state");
-        var timer = Stopwatch.StartNew();
-        bool lastReady = false;
-        while (timer.Elapsed < timeout)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            var state = Read(capability);
-            lastReady = state.WorldReady;
-            if (state.LoadError) throw new InvalidOperationException("The game reports a world load error.");
-            if (state.WorldPresent && state.WorldUid != worldUid) throw new InvalidOperationException($"A different world is loaded: UID {state.WorldUid}, expected {worldUid}. The world loaded, so this is the wrong world (another fixture or a fresh one), not a load failure.");
-            if (state.WorldReady)
-            {
-                if (!protectPlayer || state.Dedicated) return state;
-                if (state.LocalPlayer) { PlayerPlacement.Protect(actor); return state; }
-                // A hosting game: its world is ready before its own player spawns. Wait for the player.
-            }
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (timeout - timer.Elapsed).TotalMilliseconds))));
-        }
-        if (lastReady)
-            throw new TimeoutException("The world is ready but its local player did not spawn, so it was not protected; no action was retried. Pass protectPlayer: false to wait for the world alone.");
-        throw new TimeoutException("World readiness was not established; no action was retried.");
+        // A hosting game's world is ready before its own player spawns, so a protected wait goes on until that player exists.
+        var state = ObservedWait.Until(protectPlayer ? $"world {worldUid} ready with its local player (to protect it)" : $"world {worldUid} ready",
+            () => Read(capability), s => s.WorldReady && (!protectPlayer || s.Dedicated || s.LocalPlayer), timeout, ReadInterval, cancellation,
+            fails: s => s.LoadError ? "the game reports a world load error" : s.WorldPresent && s.WorldUid != worldUid
+                ? $"a different world is loaded: UID {s.WorldUid}, expected {worldUid}. The world loaded, so this is the wrong world (another fixture or a fresh one), not a load failure" : null,
+            describe: s => $"phase {s.Phase}, world {s.WorldUid ?? "none"}, ready {s.WorldReady}, local player {s.LocalPlayer}, connection {s.ConnectionStatus}" +
+                (s.WorldReady && s.WorldUid == worldUid ? ": the world is ready but its local player did not spawn, so it was not protected. Pass protectPlayer: false to wait for the world alone" : "") +
+                "; no action was retried");
+        if (protectPlayer && !state.Dedicated) PlayerPlacement.Protect(actor);
+        return state;
     }
+    // Session state has no push the runner can wait on (ValheimCLI's state is a scene fact, not the session's readiness).
+    private static readonly TimeSpan ReadInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
     /// Turns the client's devcommands on at its menu: <see cref="TestAccess.Ensure"/> as <see cref="TestActorRole.ClientMenu"/>,
@@ -144,22 +135,13 @@ public sealed class SessionControl(GameActor actor)
         if (code != "join_failed")
             throw new InvalidOperationException($"The join ended with ValheimCLI code {code ?? "none"}, not a refusal by the server; {expected} ({(int)expected}) was expected. Nothing was retried.");
         actor.VerifyEnvironment(menuExpectations);
-        var clock = Stopwatch.StartNew();
         var state = actor.RequireCapability("valheim.session/state");
-        SessionState reading;
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            reading = Read(state);
-            if (reading.Phase == "menu" && !reading.WorldPresent) break;
-            if (clock.Elapsed >= timeout)
-                throw new WaitTimeoutException("the refused client back at its main menu", clock.Elapsed, $"phase {reading.Phase}, connection {reading.ConnectionStatus}");
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (timeout - clock.Elapsed).TotalMilliseconds))));
-        }
+        var back = ObservedWait.RunBlocking("the refused client back at its main menu", _ => Read(state), reading => reading.Phase == "menu" && !reading.WorldPresent,
+            timeout, ReadInterval, cancellation, describe: reading => $"phase {reading.Phase}, connection {reading.ConnectionStatus}");
         var status = ConnectionStatusReading.Read(actor);
         if (status.Status != expected)
             throw new InvalidOperationException($"The join was refused with {status}, not the expected {expected} ({(int)expected}).");
-        return new JoinRefusal(status.Status, status.Server, clock.Elapsed);
+        return new JoinRefusal(status.Status, status.Server, back.Elapsed);
     }
 
     /// <summary>
@@ -210,30 +192,26 @@ public sealed class SessionControl(GameActor actor)
             worldPinned = true;
             capability = actor.RequireCapability("valheim.session/state");
         }
-        var clock = Stopwatch.StartNew();
         bool left = false;
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            SessionState state;
-            try { state = Read(capability); }
-            catch (Exception error) when (!worldPinned && worldExpectations != null && LoadedButNotListed(error))
+        return ObservedWait.Until("the crossplay join", () =>
             {
-                actor.VerifyEnvironment(worldExpectations); // Throws for another world than the server's.
-                worldPinned = true;
-                continue;
-            }
-            if (state.LoadError) throw new InvalidOperationException("The game reports a world load error.");
-            if (state.WorldPresent && state.WorldUid != worldUid) throw new InvalidOperationException("A different world is loaded.");
-            if (state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected") return state;
-            // A status left over from an earlier join stays until this one connects, so an error counts only once the menu was left.
-            left |= state.Phase != "menu" || state.ConnectionStatus == "Connecting";
-            if (left && state.Phase == "menu" && state.ConnectionStatus.StartsWith("Error", StringComparison.Ordinal))
-                throw new InvalidOperationException($"The crossplay join failed: the client is back at its menu with {state.ConnectionStatus}. Nothing was retried.");
-            if (clock.Elapsed >= timeout)
-                throw new WaitTimeoutException("the crossplay join", clock.Elapsed, $"phase {state.Phase}, connection {state.ConnectionStatus}");
-            cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(100, Math.Max(0, (timeout - clock.Elapsed).TotalMilliseconds))));
-        }
+                SessionState state;
+                try { state = Read(capability); }
+                catch (Exception error) when (!worldPinned && worldExpectations != null && LoadedButNotListed(error))
+                {
+                    actor.VerifyEnvironment(worldExpectations); // Throws for another world than the server's.
+                    worldPinned = true;
+                    state = Read(capability);
+                }
+                // A status left over from an earlier join stays until this one connects, so an error counts only once the menu was left.
+                left |= state.Phase != "menu" || state.ConnectionStatus == "Connecting";
+                return state;
+            },
+            state => state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected", timeout, ReadInterval, cancellation,
+            fails: state => state.LoadError ? "the game reports a world load error" : state.WorldPresent && state.WorldUid != worldUid ? "a different world is loaded"
+                : left && state.Phase == "menu" && state.ConnectionStatus.StartsWith("Error", StringComparison.Ordinal)
+                    ? $"the crossplay join failed: the client is back at its menu with {state.ConnectionStatus}. Nothing was retried" : null,
+            describe: state => $"phase {state.Phase}, connection {state.ConnectionStatus}");
     }
 
     // ValheimCLI's strict cli_expect refusal once a world is loaded that the pins do not list.

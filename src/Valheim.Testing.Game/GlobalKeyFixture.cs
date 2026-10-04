@@ -75,9 +75,9 @@ public static class GlobalKeyFixture
     {
         ArgumentNullException.ThrowIfNull(server);
         ArgumentNullException.ThrowIfNull(client);
-        var both = await ObservedWait.Until(() => (Server: Read(server, listPath), Client: Read(client, listPath)),
-            keys => Compare(keys.Server, keys.Client).Same, _ => null, keys => Compare(keys.Server, keys.Client).ToString(),
-            "the client's global keys to equal the server's", timeout, interval, changed, cancellation).ConfigureAwait(false);
+        var both = await ObservedWait.UntilAsync("the client's global keys to equal the server's", () => (Server: Read(server, listPath), Client: Read(client, listPath)),
+            keys => Compare(keys.Server, keys.Client).Same, timeout, interval, cancellation,
+            describe: keys => Compare(keys.Server, keys.Client).ToString(), changed: changed).ConfigureAwait(false);
         return both.Server;
     }
 

@@ -209,6 +209,17 @@ public class PlayerPlacementTests
         Assert.Equal(3, PlayerPlacement.RequireSupported(client, Point, interval: TimeSpan.Zero).Count);
     }
 
+    // #270: the pause between readings was an uncancellable Thread.Sleep. A minute's spacing ends with the token instead.
+    [Fact] public void CancellationEndsThePauseBetweenSupportReadings()
+    {
+        using var cancel = new CancellationTokenSource();
+        int reads = 0;
+        using var client = NoIntro().Extension("valheim.world", "player-support", _ => { if (++reads == 1) cancel.CancelAfter(20); return Standing(); }).Actor();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Assert.ThrowsAny<OperationCanceledException>(() => PlayerPlacement.RequireSupported(client, Point, interval: TimeSpan.FromMinutes(1), cancellation: cancel.Token));
+        Assert.Equal(1, reads); Assert.True(clock.Elapsed < TimeSpan.FromSeconds(30));
+    }
+
     // The flying reading is the settled standing one with only "flying" changed.
     [Fact] public void SupportIsRefusedWhileFlyIsOnNotReportedAsUnsupported()
     {

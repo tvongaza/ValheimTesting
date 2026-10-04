@@ -59,9 +59,9 @@ Wait for the event that announces a change, not for time to pass. Every wait tak
 | Source | Wait | Notes |
 |---|---|---|
 | A log line | `LogWait` | Opens at the file's current end (or a given byte offset), so earlier lines never match; the file may not exist yet. Matches complete lines only, checks optional failure patterns first, and re-reads a truncated or replaced file from its start. A `FileSystemWatcher` wakes the wait; a 2 s re-read covers filesystems that drop watcher events (network shares, container mounts). |
-| A process exit | `ProcessWait.ForExitAsync` | Returns the exit code; expiry leaves the process running for its owner to stop. |
+| A process exit | Raced for you | The owned server and client sessions race every startup stage against their process's exit, so an exit ends startup at once with its exit code instead of at the deadline. For a process you start yourself, `Process.WaitForExitAsync` with a token from `new CancellationTokenSource(timeout)`. |
 | A game state | `StateWait` | Subscribes to ValheimCLI's state pushes on a connection used for nothing else, asks the current state once, then awaits `STATE_CHANGED` pushes with a pending read; nothing is sent while it waits. A push that arrives during the question counts. A dedicated server's loaded world is `InWorldNoPlayer`. A state is not mod readiness. The transport keeps no history: a wait sees the current state and pushes from its own subscription on, not pushes sent before it connected. |
-| No event | `Check.Eventually` | Bounded fallback: re-observes a read-only source at an interval, for example an adapter's `complete` flag. |
+| No event | `ObservedWait.Until` / `UntilAsync` | The one polling fallback: re-observes a read-only source at most an interval apart until it matches, for example an adapter's `complete` flag. An optional `fails` ends the wait at once with a reason, `describe` names the last observation on expiry, and an optional `changed` event (such as a `LogWait` for the line the change writes) ends each pause early. The token cancels the pause too. |
 
 ```csharp
 using var log = new LogWait(Path.Combine(runtime, "BepInEx", "LogOutput.log")); // before launching
