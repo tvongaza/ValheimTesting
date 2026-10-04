@@ -69,6 +69,8 @@ var output = new List<string>
     "# differs (the game has the name with the signatures in the last column) or absent. Written by",
     "# tools/doubles-members/capture-game-members.cs from metadata; MemberIndexTests reads it. Inputs:",
     "# game assembly_valheim.dll sha256 " + Sha256(game) + " (" + Path.GetFileName(Path.GetDirectoryName(managed)) + ")",
+    "# game version " + GameVersion(game),
+    "# game network version " + NetworkVersion(context.LoadFromAssemblyPath(game)),
     "# loader BepInEx.dll " + AssemblyName.GetAssemblyName(Path.Combine(core, "BepInEx.dll")).Version + ", 0Harmony.dll " + AssemblyName.GetAssemblyName(Path.Combine(core, "0Harmony.dll")).Version,
     "# jotunn Jotunn.dll " + AssemblyName.GetAssemblyName(jotunn).Version,
 };
@@ -107,6 +109,52 @@ File.WriteAllText(capturePath, string.Join("\n", output) + "\n");
 if (unreadable > 0) Console.Error.WriteLine($"warning: {unreadable} game members name a type in an assembly that is not in the inputs and were skipped");
 Console.WriteLine($"{counted} index lines: {output.Count(l => l.EndsWith("\tgame"))} game, {output.Count(l => l.Contains("\tdiffers"))} differ, {output.Count(l => l.EndsWith("\tabsent"))} absent -> {capturePath}");
 return 0;
+
+// The game's version string as Version.CurrentVersion builds it: the three int constants its static constructor passes to
+// the GameVersion that it stores in CurrentVersion's backing field. Read from the IL, so no game code runs.
+static string GameVersion(string assemblyPath)
+{
+    using var stream = File.OpenRead(assemblyPath);
+    using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+    var md = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+    foreach (var typeHandle in md.TypeDefinitions)
+    {
+        var type = md.GetTypeDefinition(typeHandle);
+        if (md.GetString(type.Name) != "Version" || md.GetString(type.Namespace).Length != 0) continue;
+        foreach (var methodHandle in type.GetMethods())
+        {
+            var method = md.GetMethodDefinition(methodHandle);
+            if (md.GetString(method.Name) != ".cctor") continue;
+            var il = System.Reflection.Metadata.PEReaderExtensions.GetMethodBody(pe, method.RelativeVirtualAddress).GetILBytes()!;
+            var ints = new List<int>();
+            for (int i = 0; i < il.Length;)
+            {
+                byte op = il[i++];
+                if (op >= 0x16 && op <= 0x1E) ints.Add(op - 0x16);                                   // ldc.i4.0 .. ldc.i4.8
+                else if (op == 0x15) ints.Add(-1);                                                    // ldc.i4.m1
+                else if (op == 0x1F) ints.Add((sbyte)il[i++]);                                       // ldc.i4.s
+                else if (op == 0x20) { ints.Add(BitConverter.ToInt32(il, i)); i += 4; }              // ldc.i4
+                else if (op == 0x73) i += 4;                                                          // newobj: keep the arguments
+                else if (op is 0x72 or 0x28 or 0x7E or 0x8D or 0xD0 or 0x7D or 0x7B) { i += 4; ints.Clear(); } // ldstr call ldsfld newarr ldtoken stfld ldfld
+                else if (op is 0x00 or 0x25 or 0x26 or 0x2A || (op >= 0x9B && op <= 0xA2)) ints.Clear();       // nop dup pop ret stelem.*
+                else if (op == 0x80)                                                                  // stsfld
+                {
+                    int token = BitConverter.ToInt32(il, i); i += 4;
+                    var field = md.GetFieldDefinition(System.Reflection.Metadata.Ecma335.MetadataTokens.FieldDefinitionHandle(token & 0xFFFFFF));
+                    if (md.GetString(field.Name) == "<CurrentVersion>k__BackingField" && ints.Count >= 3)
+                        return string.Join(".", ints.Skip(ints.Count - 3));
+                    ints.Clear();
+                }
+                else throw new InvalidOperationException($"Version's static constructor uses IL opcode 0x{op:X2}, which this reader does not know; read CurrentVersion another way.");
+            }
+        }
+    }
+    throw new InvalidOperationException("assembly_valheim has no Version.CurrentVersion set in its static constructor.");
+}
+
+static string NetworkVersion(Assembly game) =>
+    game.GetType("Version")?.GetField("c_networkVersion") is { IsLiteral: true } field ? field.GetRawConstantValue()!.ToString()!
+        : throw new InvalidOperationException("assembly_valheim's Version has no const c_networkVersion; read the network version another way.");
 
 static string Sha256(string path) { using var s = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(s)).ToLowerInvariant(); }
 static string Root([CallerFilePath] string file = "") => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(file)!, "..", ".."));

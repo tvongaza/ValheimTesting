@@ -204,10 +204,10 @@ public sealed partial class ZNet
     /// </summary>
     [TestOnly] public ConnectionStatus Status;
     public static ConnectionStatus GetConnectionStatus() => instance.Status;
-    /// <summary>The game version this side sends and reports (1.0.16's by default).</summary>
-    [TestOnly] public string VersionString = "1.0.16";
-    /// <summary>The network version this side sends and requires (1.0.16's is 40).</summary>
-    [TestOnly] public uint NetworkVersion = 40;
+    /// <summary>The game version this side sends and reports (<see cref="Valheim.Testing.Doubles.DoubledGame.Version"/> by default).</summary>
+    [TestOnly] public string VersionString = Valheim.Testing.Doubles.DoubledGame.Version;
+    /// <summary>The network version this side sends and requires (<see cref="Valheim.Testing.Doubles.DoubledGame.NetworkVersion"/> by default).</summary>
+    [TestOnly] public uint NetworkVersion = Valheim.Testing.Doubles.DoubledGame.NetworkVersion;
     /// <summary>This side's id (the game's static <c>GetUID()</c>): the ZDOMan session id unless set. Give each side of a two-sided test its own.</summary>
     [TestOnly] public long? Uid;
     public static long GetUID() => instance.OwnUid;

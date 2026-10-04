@@ -111,6 +111,9 @@ public sealed class MemberIndexTests
         var index = IndexLines().Select(l => { var f = l.Split('\t'); return f[0] + "\t" + f[1] + "\t" + f[2]; }).ToHashSet(StringComparer.Ordinal);
         Assert.Empty(verdicts.Keys.Where(k => !index.Contains(k)).OrderBy(k => k, StringComparer.Ordinal));
         Assert.Contains("# game assembly_valheim.dll sha256 ", header);
+        // The game the doubles copy, by its version string and network version (#308): a game update fails until recaptured.
+        Assert.Contains("\n# game version " + DoubledGame.Version + "\n", "\n" + header + "\n");
+        Assert.Contains("\n# game network version " + DoubledGame.NetworkVersion + "\n", "\n" + header + "\n");
     }
 
     // The check's negative side: an unmarked member the game lacks, an unmarked drifted signature, a marked member the game
