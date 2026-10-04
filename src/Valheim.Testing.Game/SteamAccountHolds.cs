@@ -24,7 +24,7 @@ public sealed class SteamSignedInException(SteamSignedInState state, string acco
 }
 
 /// <summary>
-/// One profile client's Steam account for a run (<see cref="EnvironmentProfile.SteamAccounts"/>): the lease on it, renewed while the
+/// One campaign client's Steam account for a run (<see cref="ResolvedEnvironment.SteamAccounts"/>): the lease on it, renewed while the
 /// run lasts, and the optional signed-in check. <see cref="AcquireAsync"/> leases the account the client names, or the first free one
 /// for its host, and refuses at once when another run holds it, naming that holder; nothing waits. Renewals then run on a timer, every
 /// third of the lease time. A renewal that finds the lease no longer this run's, or that cannot be proven before the lease runs out,
@@ -50,7 +50,7 @@ public sealed class SteamAccountHold : IAsyncDisposable
         _renewing = renewEvery == Timeout.InfiniteTimeSpan ? Task.CompletedTask : Task.Run(() => RenewAsync(renewEvery));
     }
 
-    /// <summary>The profile client this account is for.</summary>
+    /// <summary>The campaign client this account is for.</summary>
     public string Client { get; }
     /// <summary>The profile host the client runs on.</summary>
     public string ClientHost { get; }
@@ -62,7 +62,7 @@ public sealed class SteamAccountHold : IAsyncDisposable
     public string LeaseHostName => _lease.LeaseHostName;
     /// <summary>When the lease ends by the lease host's clock unless renewed again.</summary>
     public DateTimeOffset ExpiresUtc => _lease.ExpiresUtc;
-    /// <summary>Whether the profile asks for the signed-in check (<see cref="SteamAccountsProfile.CheckSignedIn"/>).</summary>
+    /// <summary>Whether the client's host must be signed in to this account before it starts (always, outside controlled tests).</summary>
     public bool CheckSignedIn { get; }
     /// <summary>Whether <see cref="CheckSignedInAsync"/> found the client's host signed in to this account.</summary>
     public bool SignedInChecked { get; private set; }
@@ -72,32 +72,30 @@ public sealed class SteamAccountHold : IAsyncDisposable
     public string? LostReason => _lostReason;
 
     /// <summary>
-    /// Leases <paramref name="client"/>'s account from the profile's pool on <paramref name="leaseHost"/> (the profile's
+    /// Leases <paramref name="client"/>'s observed Steam identity on <paramref name="leaseHost"/> (the environment's
     /// <see cref="SteamAccountsProfile.LeaseHost"/>) for <paramref name="owner"/> (a run id; other runs see it as the holder), and
     /// starts renewing it. Throws <see cref="SteamAccountLeaseException"/> when the account is held (<see cref="SteamAccountLeaseState.NoneFree"/>,
-    /// with its holder) or the claim is not proven.
+    /// with its holder) or the claim is not proven. A campaign's runner calls it for each client it opens.
     /// </summary>
-    public static Task<SteamAccountHold> AcquireAsync(EnvironmentProfile profile, string client, string owner, IGameHost leaseHost, CancellationToken cancellation = default) =>
-        AcquireAsync(profile, client, owner, leaseHost, DefaultTimeout, null, null, cancellation);
-
     // leaseTime and renewEvery shorten both for tests; Timeout.InfiniteTimeSpan never renews (a crashed holder).
-    internal static async Task<SteamAccountHold> AcquireAsync(EnvironmentProfile profile, string client, string owner, IGameHost leaseHost, TimeSpan timeout,
-        TimeSpan? leaseTime, TimeSpan? renewEvery, CancellationToken cancellation)
+    internal static async Task<SteamAccountHold> AcquireAsync(ResolvedEnvironment profile, string client, string owner, IGameHost leaseHost, TimeSpan? timeout = null,
+        TimeSpan? leaseTime = null, TimeSpan? renewEvery = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(leaseHost);
-        var section = profile.SteamAccounts ?? throw new InvalidOperationException("The environment profile has no steamAccounts pool.");
-        var pool = section.Accounts ?? throw new InvalidOperationException("The steamAccounts pool has not been read; EnvironmentProfile.Read reads it.");
-        if (!profile.Clients.TryGetValue(client, out var role)) throw new ArgumentException($"No client '{client}' in the environment profile.", nameof(client));
+        var section = profile.SteamAccounts ?? throw new InvalidOperationException("The environment has no Steam leases.");
+        var pool = section.Accounts ?? throw new InvalidOperationException("The environment's Steam identities have not been observed yet.");
+        if (!profile.Clients.TryGetValue(client, out var role)) throw new ArgumentException($"No client '{client}' in the environment.", nameof(client));
         if (leaseHost.Name != section.LeaseHost)
             throw new ArgumentException($"The leases of pool {pool.Pool} live on host '{section.LeaseHost}', not '{leaseHost.Name}'.", nameof(leaseHost));
         var candidates = section.Candidates(role);
         if (candidates.Count == 0) throw new ArgumentException($"No account of pool {pool.Pool} is for the client {client} on host '{role.Host}'.", nameof(client));
         // A named account is leased by itself, from the same pool name and directory as every other run of the pool.
         var source = role.SteamAccount != null ? pool.Only(candidates[0]) : pool;
-        var lease = await source.AcquireAsync(leaseHost, owner, timeout, role.Host, leaseTime, cancellation).ConfigureAwait(false);
+        var wait = timeout ?? DefaultTimeout;
+        var lease = await source.AcquireAsync(leaseHost, owner, wait, role.Host, leaseTime, cancellation).ConfigureAwait(false);
         var every = renewEvery ?? lease.LeaseTime / 3;
-        return new SteamAccountHold(lease, candidates.First(account => account.Name == lease.Account), client, role.Host, section.CheckSignedIn, timeout, every);
+        return new SteamAccountHold(lease, candidates.First(account => account.Name == lease.Account), client, role.Host, section.CheckSignedIn, wait, every);
     }
 
     /// <summary>

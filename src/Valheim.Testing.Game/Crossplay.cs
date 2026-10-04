@@ -96,7 +96,7 @@ public static class CrossplayServer
 
     /// <summary>
     /// <see cref="WaitForLobby(GameActor, string, TimeSpan, CancellationToken)"/> for a server on another machine
-    /// (<c>PinnedServerRun --profile</c>): the lobby line is awaited on <paramref name="host"/> in <paramref name="serverLog"/>,
+    /// (<c>PinnedServerRun --inventory</c> or a campaign): the lobby line is awaited on <paramref name="host"/> in <paramref name="serverLog"/>,
     /// the host's path of this boot's log (<see cref="HostBepInExLog"/> of the run's host runtime), from its start, with
     /// the host's event-driven <see cref="IGameHost.WaitForLogAsync"/>.
     /// </summary>

@@ -36,7 +36,7 @@ internal static class BepInExLoader
         if (!File.Exists(path)) throw new FileNotFoundException($"BepInEx's Doorstop configuration is missing from the {kind}: " + WindowsConfig, path);
         RequireWindowsLoader(File.ReadAllBytes(Path.Combine(root, WindowsProxy)), File.ReadAllText(path), root, kind);
     }
-    // Shared by the local install and a remote profile client's bounded file read. Only the input transport differs.
+    // Shared by the local install and a remote client's bounded file read. Only the input transport differs.
     internal static void RequireWindowsLoader(byte[] proxy, string config, string root, string kind) =>
         RequireConfig(root, kind, config.Split('\n'), proxy);
     internal static readonly string Patchers = Path.Combine("BepInEx", "patchers");

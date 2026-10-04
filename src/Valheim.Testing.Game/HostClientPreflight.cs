@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Valheim.Testing.Game;
 
-// Reads only the few loader and CLI settings needed before a profile client starts. The remote host remains the authority
+// Reads only the few loader and CLI settings needed before a campaign client starts. The remote host remains the authority
 // for its files; no game install or host-global expectation file is copied into the runner's workspace.
 internal static class HostClientPreflight
 {
@@ -40,7 +40,7 @@ internal static class HostClientPreflight
 
     private static async Task<byte[]> Required(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation) =>
         await Read(host, path, timeout, cancellation).ConfigureAwait(false) ??
-        throw new FileNotFoundException($"The profile client on {host.Name} lacks {path}; install a coherent BepInExPack before launch.", path);
+        throw new FileNotFoundException($"The client on {host.Name} lacks {path}; install a coherent BepInExPack before launch.", path);
 
     internal static async Task<byte[]?> Read(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation)
     {

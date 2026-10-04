@@ -44,12 +44,12 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// of a second copy of it: the plan's runtime source must be this copy. The run verifies it against the plan's hashes,
     /// runs the server from it and retires it at the end like its own copy, comparing against the staged state, so a run
     /// needs room for one runtime, not two. The copy becomes the run's: the run sets its <see cref="WorldFixture.Preserve"/>, so
-    /// the caller's Dispose never removes one the run keeps. Not for a <c>--profile</c> run, whose runtime is copied on its host.
+    /// the caller's Dispose never removes one the run keeps. Not for a run on another host, whose runtime is copied there.
     /// </summary>
     public WorldFixture? StagedRuntime { get; init; }
     /// <summary>Test seam: builds the owned session instead of launching the copied runtime.</summary>
     internal Func<PinnedServerRunContext<TPlan>, OwnedServerSession>? SessionOverride { get; init; }
-    /// <summary>Test seam for <c>--profile</c> runs: fake hosts and transports.</summary>
+    /// <summary>Test seam for runs on other hosts: fake hosts and transports.</summary>
     internal HostedSeams? HostSeams { get; init; }
 }
 
@@ -66,9 +66,12 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
     /// <summary>The world copy the server saves to: a path on <see cref="ServerHost"/> when the run has one.</summary>
     public required string WorldDirectory { get; init; }
     public required CancellationToken Cancellation { get; init; }
-    /// <summary>The environment profile given with <c>--profile</c>, or null for a run on this machine.</summary>
-    public EnvironmentProfile? Profile => Hosted?.Profile;
-    /// <summary>The host the dedicated server runs on (<c>--profile</c>), or null when it runs on this machine.</summary>
+    /// <summary>The campaign's client names (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), each on its assigned host; empty when clients open on this machine.</summary>
+    public IReadOnlyList<string> CampaignClients => Hosted?.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList() ?? [];
+    /// <summary>The host a campaign client runs on, for reading its files or capturing there.</summary>
+    public IGameHost ClientHost(string campaignClient) => Hosted?.ClientHost(campaignClient)
+        ?? throw new ArgumentException("This run is not a campaign with named clients.", nameof(campaignClient));
+    /// <summary>The host the dedicated server runs on (<c>--inventory</c> or a campaign), or null when it runs on this machine.</summary>
     public IGameHost? ServerHost => Hosted?.Host;
     internal HostedServerRun? Hosted { get; init; }
     public OwnedServerSession Session { get; internal set; } = null!;
@@ -81,39 +84,40 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 
     /// <summary>
     /// Opens the plan's game client and adds its logs to <see cref="Logs"/>, also when its startup fails after the process
-    /// started (a client that never reached its menu is still scanned and listed in the result). With a profile that names clients, an owned client
-    /// starts on its profile host, inside that host's desktop session (<see cref="InteractiveClient"/>): the install, CLI port
-    /// and host come from the profile (the plan's <c>install</c> is not read), the install's patchers and pins are checked on the
-    /// host, the host's lock is held for the rest of the run, and ValheimCLI is reached through the host's loopback tunnel.
-    /// <paramref name="profileClient"/> names the profile's client when it lists several. With the profile's <c>steamAccounts</c>,
-    /// that client's Steam account is leased first, owned or attached (<see cref="SteamAccountHold"/>): a held account refuses the
-    /// client, a lost lease stops it and cancels the run, and the lease is released at teardown. Otherwise, and for an attached
-    /// client, this is <see cref="ClientSession.Open(ClientRunPlan, string, CancellationToken)"/>. Disposing the session stops only
-    /// the client it started.
+    /// started (a client that never reached its menu is still scanned and listed in the result). In a campaign
+    /// (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), an owned client starts on the host its environment was assigned,
+    /// inside that host's desktop session (<see cref="InteractiveClient"/>), or in this runner's GUI session for a local macOS
+    /// host: the install and CLI port are its prepared ones, the install's patchers and pins are checked on the host, the host's
+    /// lock is held for the rest of the run, and ValheimCLI is reached through the host's loopback tunnel.
+    /// <paramref name="campaignClient"/> names the campaign's client when it declares several. That client's observed Steam
+    /// identity is leased first, owned or attached (<see cref="SteamAccountHold"/>), and its host must still be signed in to it: a
+    /// held account refuses the client, a lost lease stops it and cancels the run, and the lease is released at teardown.
+    /// Otherwise this is <see cref="ClientSession.Open(ClientRunPlan, string, CancellationToken)"/> on this machine. Disposing the
+    /// session stops only the client it started.
     /// </summary>
-    public ClientSession OpenClient(ClientRunPlan client, string? profileClient = null)
+    public ClientSession OpenClient(ClientRunPlan client, string? campaignClient = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ClientSession session;
         if (Hosted != null && Hosted.Profile.Clients.Count != 0 && (client.Owned || Hosted.Profile.SteamAccounts != null))
         {
             var clients = Hosted.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList();
-            string name = profileClient ?? (clients.Count == 1 ? clients[0]
-                : throw new ArgumentException($"The environment profile names clients {string.Join(", ", clients)}; say which one opens.", nameof(profileClient)));
+            string name = campaignClient ?? (clients.Count == 1 ? clients[0]
+                : throw new ArgumentException($"The campaign declares clients {string.Join(", ", clients)}; say which one opens.", nameof(campaignClient)));
             // A startup that fails after the client started still kept its logs: they are scanned and listed like an opened client's.
             try { session = client.Owned ? Hosted.OpenClient(Report, Output, client, name, Cancellation) : Hosted.AttachClient(Report, Output, client, name, Cancellation); }
             catch (Exception error) { lock (Logs) Logs.AddRange(ClientSession.KeptLogs(error)); throw; }
             lock (Logs) Logs.AddRange(session.Logs); // Scanned at teardown, after all parallel client opens settle.
             return session;
         }
-        if (profileClient != null) throw new ArgumentException("A profile client opens only for an owned client in a run with an environment profile that names clients.", nameof(profileClient));
+        if (campaignClient != null) throw new ArgumentException("A named client opens only in a campaign that declares clients (PinnedServerRun.RunCampaignAsync).", nameof(campaignClient));
         return ClientSession.Open(client, Output, Logs, Cancellation);
     }
 }
 
 /// <summary>
 /// The lifecycle of a mod's owned dedicated-server test runner, so the mod supplies only its plan fields, modes and
-/// scenarios. Usage: <c>&lt;runner&gt; [--profile &lt;environment.json&gt;] validate|run|&lt;prepare modes&gt; &lt;plan.json&gt; &lt;new-output-directory&gt;</c>.
+/// scenarios. Usage: <c>&lt;runner&gt; [--inventory &lt;environments.json&gt;] validate|run|&lt;prepare modes&gt; &lt;plan.json&gt; &lt;new-output-directory&gt;</c>.
 /// <list type="number">
 /// <item>Refuses an existing output directory (evidence is never overwritten) and one inside a pinned source.</item>
 /// <item>Reads the plan, detects the runtime's platform and checks the host before copying anything.</item>
@@ -134,15 +138,17 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// runtime's hashes without checking them, and marks <c>result.json</c>, <c>junit.xml</c>, <c>input-hashes.json</c>,
 /// <c>boot-N.process.json</c>, <c>connection-N.jsonl</c> and the result banner "environment not pinned".
 /// <para>
-/// With <c>--profile &lt;environment.json&gt;</c> the dedicated server runs on the profile's server host (a Linux host over SSH,
-/// a container, or this Linux machine) instead: the runner takes that host's lock for the run, copies the host's install into
+/// With <c>--inventory &lt;environments.json&gt;</c> the dedicated server runs on a host of the private environment inventory instead:
+/// the first server environment in inventory order whose host (Linux with bash over SSH, in a container or this machine, or
+/// Windows with PowerShell) and ports fit the plan, its choice and reason recorded as <c>serverEnvironment</c>. The runner takes that host's lock for the run, copies the host's install into
 /// a new run directory there and verifies every file against the plan's runtime manifest, ships the verified world copy and
 /// verifies it there, makes the executable, patcher and <see cref="ServerRunPlan.RuntimePins"/> checks on the host's copy,
 /// checks the CLI port on the host, reaches ValheimCLI only through a loopback tunnel (<see cref="IGameHost.OpenCliTunnelAsync"/>),
 /// starts each boot with <see cref="HostServer"/> and waits for its listening line in the host's log, and at teardown stops only
 /// the process it started, fetches each boot's logs (<c>boot-N/</c>) and the world copy (<c>host-world/</c>), closes the tunnel
-/// and releases the lock. <see cref="PinnedServerRunContext{TPlan}.OpenClient"/> starts a profile client in its host's desktop
-/// session, on a leased Steam account when the profile has <c>steamAccounts</c>, released at teardown after the client stopped.
+/// and releases the lock. Clients open on this machine; remote clients and several actors are a campaign's
+/// (<see cref="RunCampaignAsync{TPlan}"/>), where <see cref="PinnedServerRunContext{TPlan}.OpenClient"/> starts each in its host's
+/// desktop session on its leased, observed Steam identity.
 /// A host operation whose outcome is unknown (a lost reply, a transport failure, an unproven lock or lease release), when nothing else
 /// failed for certain, prints UNKNOWN and returns 3: neither a pass nor a failure.
 /// </para>
@@ -180,8 +186,8 @@ public static class PinnedServerRun
         NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals,
     };
 
-    /// <summary>The option that names an environment profile; it comes before the mode.</summary>
-    public const string ProfileOption = "--profile";
+    /// <summary>The option that names the private environment inventory the dedicated server is placed from; it comes before the mode.</summary>
+    public const string InventoryOption = "--inventory";
 
     /// <summary>Set to <c>1</c> to keep a run's whole runtime copy (<see cref="PinnedServerRunOptions{TPlan}.KeepRuntime"/>).</summary>
     public const string KeepRuntimeVariable = "VALHEIM_TESTING_KEEP_RUNTIME";
@@ -234,17 +240,33 @@ public static class PinnedServerRun
     public static async Task<int> MainAsync<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
     {
         string[] modes = ["validate", "run", .. options.PrepareModes];
-        string? profilePath = null;
-        if (args.Length >= 2 && args[0] == ProfileOption) { profilePath = args[1]; args = args[2..]; }
+        if (args.Length >= 1 && args[0] == "--profile")
+        {
+            Console.Error.WriteLine($"{options.Name}: --profile was removed. Place the dedicated server with {InventoryOption} <environments.json> " +
+                "(a private environment inventory), or run remote clients and several actors as a campaign (PinnedServerRun.RunCampaignAsync).");
+            return 2;
+        }
+        string? inventoryPath = null;
+        if (args.Length >= 2 && args[0] == InventoryOption) { inventoryPath = args[1]; args = args[2..]; }
         if (args.Length != 3 || !modes.Contains(args[0]))
         {
-            Console.Error.WriteLine($"Usage: {options.Name} [{ProfileOption} <environment.json>] {string.Join("|", modes)} <plan.json> <new-output-directory>");
+            Console.Error.WriteLine($"Usage: {options.Name} [{InventoryOption} <environments.json>] {string.Join("|", modes)} <plan.json> <new-output-directory>");
             return 2;
         }
         string planFile = args[1];
         using var cancellation = new RunCancellation();
         return await RunAsync(args[0], () => options.ReadPlan(planFile), () => WorldFixture.Hash(planFile), Path.GetFileName(planFile),
-            args[2], options, cancellation, profilePath, campaign: null).ConfigureAwait(false);
+            args[2], options, cancellation, inventoryPath, campaign: null).ConfigureAwait(false);
+    }
+
+    /// <summary>Test seam: a run on an environment resolved in code, as a campaign hands it over (remote clients included).</summary>
+    internal static async Task<int> MainAsync<TPlan>(ResolvedEnvironment environment, string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
+    {
+        if (args.Length != 3) throw new ArgumentException("mode, plan and output.", nameof(args));
+        string planFile = args[1];
+        using var cancellation = new RunCancellation();
+        return await RunAsync(args[0], () => options.ReadPlan(planFile), () => WorldFixture.Hash(planFile), Path.GetFileName(planFile),
+            args[2], options, cancellation, inventoryPath: null, campaign: null, environment).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -266,12 +288,12 @@ public static class PinnedServerRun
         // The bound plan is kept as evidence (prepared/plan.json, never read back): its hash is the run's planSha256.
         string full = Path.GetFullPath(output);
         return await RunAsync("run", () => plan, () => WorldFixture.Hash(Path.Combine(full, "prepared", "plan.json")),
-            Path.GetFileName(manifestFile), output, options, cancellation, profilePath: null, campaign: (manifestFile, clients)).ConfigureAwait(false);
+            Path.GetFileName(manifestFile), output, options, cancellation, inventoryPath: null, campaign: (manifestFile, clients)).ConfigureAwait(false);
     }
 
     private static async Task<int> RunAsync<TPlan>(string mode, Func<TPlan> readPlan, Func<string> planHash, string planName, string outputArgument,
-        PinnedServerRunOptions<TPlan> options, RunCancellation cancellation, string? profilePath,
-        (string Manifest, Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> Clients)? campaign) where TPlan : ServerRunPlan
+        PinnedServerRunOptions<TPlan> options, RunCancellation cancellation, string? inventoryPath,
+        (string Manifest, Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> Clients)? campaign, ResolvedEnvironment? given = null) where TPlan : ServerRunPlan
     {
         var report = new ScenarioReport(options.Name);
         OwnedServerSession? session = null;
@@ -297,7 +319,7 @@ public static class PinnedServerRun
                 EnvironmentPinning.Warn($"{options.Name} with plan {planName}");
                 report.MarkNotPinned("the plan sets pinning \"none\"");
             }
-            EnvironmentProfile? environment = null;
+            ResolvedEnvironment? environment = given;
             if (campaign is var (manifestFile, bind))
             {
                 // Stages 1 and 2 never copy: every independent problem is reported before the first host write.
@@ -324,10 +346,13 @@ public static class PinnedServerRun
                 environment = prepared!.Environment;
             }
             ServerPlatform platform;
-            if (profilePath != null)
+            if (inventoryPath != null)
             {
-                environment = EnvironmentProfile.Read(profilePath);
-                report.Provenance["profileSha256"] = WorldFixture.Hash(profilePath);
+                // A standalone run has one actor to place: its dedicated server. Clients are a campaign's.
+                var (placed, assignment) = EnvironmentInventory.Read(inventoryPath).PlaceServer(plan);
+                environment = placed;
+                report.Provenance["inventorySha256"] = WorldFixture.Hash(inventoryPath);
+                report.Provenance["serverEnvironment"] = assignment.Environment + ": " + assignment.Reason;
             }
             if (environment != null)
             {
@@ -344,7 +369,7 @@ public static class PinnedServerRun
                 platform = ServerLaunch.Detect(plan.Runtime.Source); plan.CheckExecutable(platform);
                 if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);
             }
-            if (hosted != null && options.StagedRuntime != null) throw new ArgumentException("A --profile run copies its runtime on the server host; a staged local runtime copy cannot stand in for it.");
+            if (hosted != null && options.StagedRuntime != null) throw new ArgumentException("A run on another host copies its runtime on the server host; a staged local runtime copy cannot stand in for it.");
             options.CheckMode?.Invoke(mode, plan);
             report.Provenance["planSha256"] = planHash();
             report.Provenance["scenario"] = plan.Scenario;

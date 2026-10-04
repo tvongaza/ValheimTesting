@@ -15,7 +15,7 @@ public sealed class OwnershipHandoffTests
         var report = new ScenarioReport("parallel-client-setup");
         using var bothStarted = new CountdownEvent(2);
         ClientSession? first = null;
-        var run = world.Run(plan, report, profileClient: (requested, name) =>
+        var run = world.Run(plan, report, campaignClient: (requested, name) =>
         {
             bothStarted.Signal();
             if (!bothStarted.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("Named actors did not start concurrently.");
@@ -23,7 +23,7 @@ public sealed class OwnershipHandoffTests
             return first = ClientSession.Attach(requested, Directory.CreateDirectory(Path.Combine(world.Output, name)).FullName,
                 new ScriptedTransport());
         });
-        var failure = Assert.Throws<InvalidOperationException>(() => run.OpenProfileClientsParallel(new Dictionary<string, ClientRunPlan>
+        var failure = Assert.Throws<InvalidOperationException>(() => run.OpenCampaignClientsParallel(new Dictionary<string, ClientRunPlan>
         {
             ["client-a"] = CampaignWorld.ClientPlan(), ["client-b"] = CampaignWorld.ClientPlan(port: 5557),
         }));
@@ -60,7 +60,7 @@ public sealed class OwnershipHandoffTests
         var report = new ScenarioReport("ownership-startup-failure");
         var client = ReadyClient(world, plan);
         var opened = new List<string>();
-        var run = world.Run(plan, report, profileClient: (requested, name) =>
+        var run = world.Run(plan, report, campaignClient: (requested, name) =>
         {
             opened.Add(name);
             if (name == "client-b") throw new InvalidOperationException("Second account lease lost during startup.");
@@ -88,7 +88,7 @@ public sealed class OwnershipHandoffTests
         var report = new ScenarioReport("ownership-unknown-stop");
         var client = ReadyClient(world, plan);
         var process = new FakeOwnedProcess(101) { StopFailure = () => new IOException("A process stop was unproven") };
-        var run = world.Run(plan, report, profileClient: (requested, name) => name == "client-b"
+        var run = world.Run(plan, report, campaignClient: (requested, name) => name == "client-b"
             ? throw new InvalidOperationException("B startup failed")
             : ClientSession.Launch(requested, world.Output, () => process, () => client, (_, _) => Task.CompletedTask));
         ServerOwnership(world);
@@ -134,7 +134,7 @@ public sealed class OwnershipHandoffTests
             })));
         }
         bool openedB = false;
-        var run = world.Run(plan, report, profileClient: (_, name) =>
+        var run = world.Run(plan, report, campaignClient: (_, name) =>
         {
             if (name == "client-b") { openedB = true; throw new InvalidOperationException("B must not open"); }
             return ClientSession.Attach(CampaignWorld.ClientPlan(), world.Output, first);
@@ -165,7 +165,7 @@ public sealed class OwnershipHandoffTests
         var report = new ScenarioReport("ownership-handoff");
         var first = ReadyClient(world, plan);
         var second = ReadySecond(plan, wrongOwner, loadedOffset);
-        var run = world.Run(plan, report, profileClient: (_, name) =>
+        var run = world.Run(plan, report, campaignClient: (_, name) =>
             ClientSession.Attach(CampaignWorld.ClientPlan(port: name == "client-a" ? 5556 : 5557), world.Output,
                 name == "client-a" ? first : second));
         ServerOwnership(world);

@@ -34,14 +34,14 @@ public static class OwnershipHandoffScenario
         try
         {
             report.Step(StepPhase.Setup, "the dedicated server accepts both clients", () => run.OwnedServer.WaitUntilJoinable(run.Server));
-            report.Step(StepPhase.Setup, "open pinned client A on its leased account", () => a = run.OpenProfileClient(first, "client-a"));
+            report.Step(StepPhase.Setup, "open pinned client A on its leased account", () => a = run.OpenCampaignClient(first, "client-a"));
             JoinAndArrive(run, a!.Actor, first, plan.Arrival, "A");
             report.Step("A sees one labelled marker", () => CampaignSteps.RequireLabelledMarker(a.Actor, plan.DrySite));
             string aId = "";
             report.Step("A explicitly claims the example marker once", () => aId = Claim(a.Actor, plan.DrySite));
             report.Step("server observes A's owner-change notification", () => WaitForOwner(run.Server, plan.DrySite, aId, report, "server-owner-a"));
 
-            report.Step("open pinned client B on its separate leased account", () => b = run.OpenProfileClient(second, "client-b"));
+            report.Step("open pinned client B on its separate leased account", () => b = run.OpenCampaignClient(second, "client-b"));
             JoinAndArrive(run, b!.Actor, second, plan.SecondArrival!, "B");
             report.Step("two clients remain connected at once", () => CampaignSteps.RequirePeers(run.Server, 2));
             report.Step("B sees A as the marker's only owner", () =>

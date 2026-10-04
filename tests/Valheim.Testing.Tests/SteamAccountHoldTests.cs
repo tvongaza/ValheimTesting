@@ -18,12 +18,12 @@ internal static class LeaseBox
     public static object Profile => new { kind = "local", platform = HostProfile.CurrentPlatform, shell = Shell, @lock = OperatingSystem.IsWindows() ? @"C:\vt\lease-lock" : "/var/tmp/vt/lease-lock" };
 
     /// <summary>Writes <c>steam-accounts.json</c> in <paramref name="directory"/>, its leases in <paramref name="leases"/>; one account with a steamId by default.</summary>
-    public static string WritePool(string directory, string leases, object[]? accounts = null, string steamGuard = SteamAccountPool.SignedIn)
+    public static string WritePool(string directory, string leases, object[]? accounts = null)
     {
         string path = Path.Combine(directory, "steam-accounts.json");
         File.WriteAllText(path, JsonSerializer.Serialize(new
         {
-            pool = Pool, leaseDirectory = leases, leaseMinutes = 5, steamGuard, accounts = accounts ?? [new { name = Account, steamId = SteamId }],
+            pool = Pool, leaseDirectory = leases, leaseMinutes = 5, accounts = accounts ?? [new { name = Account, steamId = SteamId }],
         }));
         return path;
     }
@@ -37,7 +37,7 @@ internal static class LeaseBox
     }
 
     public static async Task<SteamAccountStatus> StatusAsync(string poolFile, string account = Account) =>
-        (await SteamAccountPool.Read(poolFile).ListAsync(Host(), Timeout)).Single(status => status.Account == account);
+        (await TestEnvironment.Pool(File.ReadAllText(poolFile)).ListAsync(Host(), Timeout)).Single(status => status.Account == account);
 
     /// <summary>Completes when <paramref name="token"/> is cancelled; fails after <paramref name="timeout"/>.</summary>
     public static Task CancelledAsync(CancellationToken token, TimeSpan timeout)
@@ -48,7 +48,7 @@ internal static class LeaseBox
     }
 }
 
-// The profile's steamAccounts section and the pool's steamId: every inconsistency is refused when the profile is read.
+// The environment's Steam leases and the pool's steamId: every inconsistency is refused when the environment is validated.
 public sealed class SteamAccountProfileTests : IDisposable
 {
     private readonly TempDirectory _root = new();
@@ -78,45 +78,29 @@ public sealed class SteamAccountProfileTests : IDisposable
         return path;
     }
 
-    private static object Section(string pool = "steam-accounts.json", string leaseHost = LeaseBox.Name, bool check = false) => new { pool, leaseHost, checkSignedIn = check };
-
-    [Fact] public void TheSectionReadsThePoolBesideTheProfile()
-    {
-        var profile = EnvironmentProfile.Read(Write(Section(check: true), LeaseBox.Account));
-        Assert.Equal(Path.Combine(_root.Path, "steam-accounts.json"), profile.SteamAccounts!.PoolFile);
-        Assert.Equal(LeaseBox.Pool, profile.SteamAccounts.Accounts!.Pool);
-        Assert.Equal(LeaseBox.SteamId, profile.SteamAccounts.Accounts.Accounts[0].SteamId);
-        Assert.True(profile.SteamAccounts.CheckSignedIn);
-        Assert.Equal(LeaseBox.Account, profile.Clients["player"].SteamAccount);
-        // Without the section nothing is read or required.
-        Assert.Null(EnvironmentProfile.Read(Write(null)).SteamAccounts);
-    }
+    private static object Section(string leaseHost = LeaseBox.Name, bool check = false) => new { pool = "steam-accounts.json", leaseHost, checkSignedIn = check };
 
     [Theory]
     [InlineData("lease host", "the lease host 'nowhere' is not listed")]
-    [InlineData("missing pool", "cannot be read")]
-    [InlineData("unknown account", "names Steam account vt_nobody, which pool ci-clients does not list")]
-    [InlineData("account for another host", "keeps for host 'linux-gpu', not 'gaming-pc'")]
-    [InlineData("no account for the host", "No account of pool ci-clients is for the client player's host 'gaming-pc'")]
-    [InlineData("check without steamId", "give account vt_client_one its steamId")]
-    [InlineData("account without pool", "has no steamAccounts pool to lease it from")]
+    [InlineData("unknown account", "names Steam identity vt_nobody, which the observed identities do not list")]
+    [InlineData("no account for the host", "No observed Steam identity is for the client player's host 'gaming-pc'")]
+    [InlineData("check without steamId", "identity vt_client_one, which has no SteamID64")]
+    [InlineData("account without leases", "the environment has no Steam leases to lease it from")]
     [InlineData("server account", "a dedicated server needs no Steam account")]
     [InlineData("bad steamId", "steamId must be the account's SteamID64")]
-    public void AnInconsistentSectionIsRefused(string problem, string expected)
+    public void AnInconsistentEnvironmentIsRefused(string problem, string expected)
     {
         string path = problem switch
         {
             "lease host" => Write(Section(leaseHost: "nowhere")),
-            "missing pool" => Write(Section(pool: "no-such-pool.json")),
             "unknown account" => Write(Section(), "vt_nobody"),
-            "account for another host" => Write(Section(), LeaseBox.Account, [new { name = LeaseBox.Account, host = "linux-gpu" }]),
             "no account for the host" => Write(Section(), null, [new { name = LeaseBox.Account, host = "linux-gpu" }]),
             "check without steamId" => Write(Section(check: true), null, [new { name = LeaseBox.Account }]),
-            "account without pool" => Write(null, LeaseBox.Account),
+            "account without leases" => Write(null, LeaseBox.Account),
             "server account" => Write(Section(), serverAccount: true),
             _ => Write(Section(), null, [new { name = LeaseBox.Account, steamId = "12345" }]),
         };
-        var error = Assert.ThrowsAny<ArgumentException>(() => EnvironmentProfile.Read(path));
+        var error = Assert.ThrowsAny<ArgumentException>(() => TestEnvironment.Read(path));
         Assert.Contains(expected, error.Message);
     }
 
@@ -235,7 +219,7 @@ public sealed class SteamAccountHoldTests : IDisposable
     public void Dispose() => _root.Dispose();
 
     // One client on one host per profile; both profiles use the same pool and lease host.
-    private EnvironmentProfile Profile(string clientHost, string client, bool check = false)
+    private ResolvedEnvironment Profile(string clientHost, string client, bool check = false)
     {
         var hosts = new Dictionary<string, object> { [LeaseBox.Name] = LeaseBox.Profile };
         object role;
@@ -254,10 +238,10 @@ public sealed class SteamAccountHoldTests : IDisposable
         {
             hosts, clients = new Dictionary<string, object> { [client] = role }, steamAccounts = new { pool = "steam-accounts.json", leaseHost = LeaseBox.Name, checkSignedIn = check },
         }));
-        return EnvironmentProfile.Read(path);
+        return TestEnvironment.Read(path);
     }
 
-    private static async Task<SteamAccountHold?> TryAcquireAsync(EnvironmentProfile profile, string client, string owner)
+    private static async Task<SteamAccountHold?> TryAcquireAsync(ResolvedEnvironment profile, string client, string owner)
     {
         try { return await SteamAccountHold.AcquireAsync(profile, client, owner, LeaseBox.Host()); }
         catch (SteamAccountLeaseException error) when (error.State == SteamAccountLeaseState.NoneFree) { return null; }

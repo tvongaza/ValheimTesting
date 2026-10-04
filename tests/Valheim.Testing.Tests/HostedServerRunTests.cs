@@ -382,7 +382,7 @@ internal sealed class FakeServerHost : IGameHost
     }
 }
 
-// PinnedServerRun --profile: the dedicated server on the profile's server host, against a fake host (no shell, no game).
+// The hosted runner: the dedicated server on its environment's server host, against a fake host (no shell, no game).
 public sealed partial class HostedServerRunTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("hosted-run-").FullName;
@@ -404,7 +404,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var host = NewHost();
         var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "powershell");
-        var profile = EnvironmentProfile.Read(profilePath);
+        var profile = TestEnvironment.Read(profilePath);
         var hosted = HostedServerRun.Create(profile, ServerRunPlan.Read<ServerRunPlan>(planPath), "test", new HostedSeams { Host = _ => host, RunId = RunId });
         Assert.Equal("windows", hosted.HostProfile.Platform);
         Assert.Empty(host.Runs);
@@ -416,7 +416,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var server = new FakeOwnedServer("test.mod", saveRoot: windowsRuns + @"\run-test\world");
         var host = new FakeServerHost("windows-server", Mirror, server, windows: true);
         var (plan, profile) = Write(host, hostPlatform: "windows", hostShell: "powershell");
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.Equal(host.Claims, host.Releases);
         Assert.Contains("start", host.Scripts);
         Assert.Contains("stop", host.Scripts);
@@ -718,7 +718,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             string cache = Path.Combine(host.Local(run.RuntimeDirectory), "BepInEx", "cache");
             Directory.CreateDirectory(cache); File.WriteAllText(Path.Combine(cache, "audit.txt"), "written on the host");
@@ -734,7 +734,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         // the host's lock is released.
         Directory.Delete(Output, true); Directory.Delete(host.Local(RunDirectory), true);
         host.Failures["retire"] = new HostResult(HostOutcome.Exited, 3, "", "rm: cannot remove", TimeSpan.Zero, false);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.StartsWith("cleanup failed", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
         // This scenario records no step of its own, so the runtime-ready state is the one that says the run got that far.
         Assert.Equal((false, true, false), (Result().GetProperty("Passed").GetBoolean(), Result().GetProperty("RuntimeReady").GetBoolean(), Result().GetProperty("CleanupVerified").GetBoolean()));
@@ -746,7 +746,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         // Kept on request: no retire script, and the report names the copy.
         Directory.Delete(Output, true); Directory.Delete(host.Local(RunDirectory), true);
         var kept = Options(host, server); // the fake host launches through the server it was made with
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
         {
             Name = kept.Name, ReadPlan = kept.ReadPlan, SessionCapability = kept.SessionCapability, SessionTokenVariable = kept.SessionTokenVariable,
             TestAccess = false, Scenario = kept.Scenario, HostSeams = kept.HostSeams, KeepRuntime = true,
@@ -760,7 +760,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var (plan, profile) = Write(host);
         using var staged = WorldFixture.Copy(host.Local(Install), Path.Combine(_root, "staged"), WorldFixture.Manifest(host.Local(Install)));
         var options = Options(host, server);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
         {
             Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
             TestAccess = false, Scenario = options.Scenario, HostSeams = options.HostSeams, StagedRuntime = staged,
@@ -772,7 +772,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host);
         IGameHost? seenHost = null; string? seenRuntime = null;
-        int code = await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             seenHost = run.ServerHost; seenRuntime = run.RuntimeDirectory;
             run.Session.Restart(); // A second boot: its own boot directory and log, and a stop of only the first.
@@ -836,7 +836,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host, crossplay: crossplay);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         var arguments = FakeServerHost.Spec(Assert.Single(host.Runs, run => run.Script == "start").Variables["spec"])
             .Where(line => line.Kind == "arg").Select(line => line.Text).ToList();
         if (crossplay) Assert.Equal("-crossplay", arguments.Last()); else Assert.DoesNotContain("-crossplay", arguments);
@@ -848,7 +848,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var server = NewServer(); var host = NewHost(server);
         host.IgnoreQuit = true;
         var (plan, profile) = Write(host, crossplay: true);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         var step = Step("every boot quit cleanly and retired its crossplay lobby");
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.Contains("boot-1 was killed", step.GetProperty("Error").GetString());
@@ -861,7 +861,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host, crossplay: true);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.True(Step("every boot quit cleanly and retired its crossplay lobby").GetProperty("Passed").GetBoolean());
         var provenance = Result().GetProperty("Provenance");
         Assert.StartsWith("boot-1 clean", provenance.GetProperty("serverStops").GetString());
@@ -878,7 +878,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var server = NewServer(); var host = NewHost(server);
         host.PartyReply = "VT-LDD \tlibpulse.so.0 => not found\nVT-LDD \tlibc.so.6 => /lib/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 1\n";
         var (plan, profile) = Write(host, crossplay: true);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, mode, plan, Output], Options(host, server)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), [mode, plan, Output], Options(host, server)));
         var step = Step("the server host can load crossplay's libraries");
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.Contains("libpulse.so.0 (package libpulse0) is missing", step.GetProperty("Error").GetString());
@@ -893,7 +893,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host, crossplay: crossplay);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         var provenance = Result().GetProperty("Provenance");
         if (crossplay)
         {
@@ -914,7 +914,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var host = NewHost();
         var (plan, profile) = Write(host, portOption: "-Port", gamePort: "2457");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, null)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, null)));
         Assert.False(Directory.Exists(Output)); Assert.Empty(host.Runs);
     }
 
@@ -922,7 +922,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var host = NewHost();
         var (plan, profile) = Write(host);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "validate", plan, Output], Options(host, null)));
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["validate", plan, Output], Options(host, null)));
         Assert.Contains("prepared only; no game launched", StepNames());
         Assert.DoesNotContain(host.Runs, run => run.Script is "port" or "tunnel" or "start" or "fetch");
         Assert.Equal(host.Claims, host.Releases); Assert.Single(host.Claims);
@@ -936,7 +936,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var host = NewHost(NewServer());
         var (plan, profile) = Write(host);
         host.AfterCopy = runtime => File.WriteAllText(Path.Combine(runtime, "BepInEx", "core", "BepInEx.dll"), "another bepinex");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, NewServer())));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, NewServer())));
         var copy = Step("copy and verify pinned runtime on the server host");
         Assert.False(copy.GetProperty("Passed").GetBoolean());
         Assert.Contains("different hash: BepInEx/core/BepInEx.dll", copy.GetProperty("Error").GetString());
@@ -948,7 +948,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var host = NewHost(NewServer()); host.HeldBy = "other-runner run-x [0123]";
         var (plan, profile) = Write(host);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, NewServer())));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, NewServer())));
         var step = Step("take the server host's lock");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("other-runner run-x [0123]", step.GetProperty("Error").GetString());
         Assert.Empty(host.Runs);
@@ -961,7 +961,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var server = NewServer(); var host = NewHost(server);
         host.Failures["start"] = FakeServerHost.TransportFailure;
         var (plan, profile) = Write(host);
-        Assert.Equal(3, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         var result = Result();
         Assert.False(result.GetProperty("Passed").GetBoolean());
         Assert.StartsWith("unknown: ", result.GetProperty("Provenance").GetProperty("outcome").GetString());
@@ -977,7 +977,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var server = NewServer(); var host = NewHost(server);
         host.Failures["stop"] = new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(45), true);
         var (plan, profile) = Write(host);
-        Assert.Equal(3, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.False(Step("stop only owned server").GetProperty("Passed").GetBoolean());
         Assert.Empty(host.Releases);
         Assert.DoesNotContain("fetch the server host's world copy", StepNames());
@@ -989,7 +989,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var server = NewServer(); var host = NewHost(server);
         host.Failures["stop"] = FakeServerHost.TransportFailure;
         var (plan, profile) = Write(host);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, _ => throw new InvalidOperationException("marker missing"))));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, _ => throw new InvalidOperationException("marker missing"))));
         Assert.False(Result().GetProperty("Provenance").TryGetProperty("outcome", out _));
     }
 
@@ -998,7 +998,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var server = NewServer(); var host = NewHost(server);
         host.TunnelFailure = new WaitFailedException("the forward to listen on 127.0.0.1:15577", "ssh exited with code 255", TimeSpan.FromSeconds(1), "bind [127.0.0.1]:15577: Address already in use");
         var (plan, profile) = Write(host);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.False(Step("open the loopback CLI tunnel to the server host").GetProperty("Passed").GetBoolean());
         Assert.DoesNotContain(host.Runs, run => run.Script == "start");
         Assert.Empty(server.Events);
@@ -1009,7 +1009,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var host = NewHost(NewServer()); host.PortBusy = true;
         var (plan, profile) = Write(host);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, NewServer())));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, NewServer())));
         Assert.Contains("already listens on port 5577", Step("CLI port is free on the server host").GetProperty("Error").GetString());
         Assert.DoesNotContain(host.Runs, run => run.Script is "tunnel" or "start");
     }
@@ -1018,9 +1018,61 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var host = NewHost();
         var (plan, profile) = Write(host, planPort: 5590);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, null)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, null)));
         Assert.False(Directory.Exists(Output)); Assert.Empty(host.Runs);
-        Assert.Equal(2, await PinnedServerRun.MainAsync(["--profile", profile], Options(host, null)));
+    }
+
+    // --inventory: a standalone run places its one actor, the dedicated server, on the first server environment in inventory
+    // order that can run the plan, records why, and refuses before anything is written when none can. --profile is gone.
+    [Fact] public async Task AnInventoryPlacesTheServerOnTheFirstEnvironmentThatFitsThePlan()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, _) = Write(host);
+        string inventory = Path.Combine(_root, "environments.json");
+        object Environment(string name, int cliPort) => new { name, host = "linux-box", roles = new[] { "server" }, install = Install, runtime = Runs, cliPort, gamePort = 2456 };
+        void Inventory(params object[] environments) => File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object> { ["linux-box"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-box.example", @lock = "/var/tmp/vt/lock" } },
+            environments,
+        }));
+        // Skipped in order: a Windows host for this Linux runtime, a local host of another platform than this machine's, an
+        // environment whose loader package only a campaign applies, and a CLI port that is not the plan's.
+        string other = HostProfile.CurrentPlatform == "linux" ? "windows" : "linux";
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object>
+            {
+                ["linux-box"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-box.example", @lock = "/var/tmp/vt/lock" },
+                ["windows-box"] = new { kind = "ssh", platform = "windows", shell = "powershell", destination = "tester@windows-box.example", @lock = @"C:\vt\lock" },
+                ["elsewhere"] = new { kind = "local", platform = other, shell = other == "windows" ? "powershell" : "bash", @lock = other == "windows" ? @"C:\vt\lock" : "/var/tmp/vt/lock" },
+            },
+            environments = new object[]
+            {
+                new { name = "windows", host = "windows-box", roles = new[] { "server" }, install = @"C:\valheim\server", runtime = @"C:\vt\runs", cliPort = 5577, gamePort = 2456 },
+                new { name = "local-other", host = "elsewhere", roles = new[] { "server" }, install = other == "windows" ? @"C:\valheim\server" : Install,
+                      runtime = other == "windows" ? @"C:\vt\runs" : Runs, cliPort = 5577, gamePort = 2456 },
+                new { name = "packaged", host = "linux-box", roles = new[] { "server" }, install = Install, runtime = Runs, cliPort = 5577, gamePort = 2456, loaderPackage = "/srv/loader.json" },
+                Environment("other-port", 5590), Environment("fits", 5577),
+            },
+        }));
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["--inventory", inventory, "run", plan, Output], Options(host, server)));
+        var provenance = Result().GetProperty("Provenance");
+        string placed = provenance.GetProperty("serverEnvironment").GetString()!;
+        Assert.StartsWith("fits: first server recipe that can run the plan after windows: the plan's runtime is a linux server, but the host is windows.", placed);
+        Assert.Contains($"local-other: it is a local {other} host, but this machine is {HostProfile.CurrentPlatform}.", placed);
+        Assert.Contains("packaged: it names a loaderPackage, which only a campaign's preparation applies", placed);
+        Assert.Contains("other-port: the plan's ValheimCLI port 5577 is not its cliPort 5590", placed);
+        Assert.Equal(WorldFixture.Hash(inventory), provenance.GetProperty("inventorySha256").GetString());
+        Assert.Contains("start", host.Scripts);
+
+        Inventory(Environment("other-port", 5590));
+        string refused = Path.Combine(_root, "refused");
+        int scripts = host.Runs.Count;
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--inventory", inventory, "run", plan, refused], Options(host, server)));
+        Assert.False(Directory.Exists(refused)); Assert.Equal(scripts, host.Runs.Count);
+        // The removed option is refused as bad usage, never read as a file.
+        Assert.Equal(2, await PinnedServerRun.MainAsync(["--profile", inventory, "run", plan, refused], Options(host, server)));
+        Assert.False(Directory.Exists(refused));
     }
 
     [Fact] public async Task AProfileClientStartsInItsHostsDesktopSessionAndStopsOnlyThatClient()
@@ -1036,8 +1088,11 @@ public sealed partial class HostedServerRunTests : IDisposable
         var clientTransport = new ScriptedTransport();
         var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
         int? pid = null;
-        int code = await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
+            // A scenario reaches a campaign client's host by its name.
+            Assert.Equal(["player"], run.CampaignClients);
+            Assert.Same(clientHost, run.ClientHost("player"));
             using (var session = run.OpenClient(client)) pid = session.ProcessId;
             return Task.CompletedTask;
         }, clientHost, clientTransport));
@@ -1125,7 +1180,7 @@ public sealed partial class HostedServerRunTests : IDisposable
             Mode = "owned", Install = _root, Port = 5578, StartSeconds = 30, Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) }, InstallPins = InstallPins.Of(clientInstall),
         };
         Exception? failed = null;
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             failed = Record.Exception(() => run.OpenClient(client));
             return Task.CompletedTask;
@@ -1149,7 +1204,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var (plan, profile) = Write(host, withClient: true);
         var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
         Exception? failure = null;
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             failure = Record.Exception(() => run.OpenClient(client));
             return Task.CompletedTask;
@@ -1167,7 +1222,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var (plan, profile) = Write(host, withClient: true);
         var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, Architecture = "arm64" };
         Exception? refused = null;
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server, run =>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             refused = Record.Exception(() => run.OpenClient(client));
             return Task.CompletedTask;

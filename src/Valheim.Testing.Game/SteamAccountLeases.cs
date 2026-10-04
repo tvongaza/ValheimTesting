@@ -9,27 +9,14 @@ namespace Valheim.Testing.Game;
 
 /// <summary>
 /// The Steam accounts a set of test runs share, by name only: one lease per account at a time, so two runs never use the same
-/// signed-in account simultaneously. Legacy fixed profiles may read this from a JSON file; environment inventories derive it
-/// from the client hosts and need no account file. <see cref="Parse"/> refuses credential fields. The runner never signs into Steam.
+/// signed-in account simultaneously. A campaign builds it in memory from the identities observed signed in on its client hosts
+/// (<see cref="SteamPoolAccount.LeaseKey"/>); there is no account file. The runner never signs into Steam: each host's Steam
+/// client is signed in by a person ahead of time.
 /// </summary>
 public sealed class SteamAccountPool
 {
-    /// <summary>Each host's Steam client is signed in to its account by a person ahead of time; runs never sign in and need no password.</summary>
-    public const string SignedIn = "signed-in";
-
     internal static readonly Regex AccountName = new("^[A-Za-z0-9_]{3,64}$", RegexOptions.CultureInvariant);
     private static readonly Regex Name = new("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", RegexOptions.CultureInvariant);
-    // Compared without case, '_' or '-': a pool file names accounts and never carries what signs them in.
-    private static readonly HashSet<string> CredentialFields =
-    [
-        "password", "passwd", "pass", "pwd", "secret", "sharedsecret", "identitysecret", "token", "accesstoken", "refreshtoken", "guardcode",
-        "authcode", "twofactorcode", "totp", "credential", "credentials", "loginkey",
-    ];
-    private static readonly JsonSerializerOptions Json = new()
-    {
-        PropertyNameCaseInsensitive = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-        ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true,
-    };
 
     /// <summary>The pool's name; its leases live in <c>&lt;leaseDirectory&gt;/&lt;pool&gt;</c>.</summary>
     public string Pool { get; set; } = "";
@@ -37,24 +24,7 @@ public sealed class SteamAccountPool
     public string LeaseDirectory { get; set; } = "";
     /// <summary>How long a lease lasts without renewal; a crashed run's lease expires after it. 1 to 1440, 120 by default.</summary>
     public int LeaseMinutes { get; set; } = 120;
-    /// <summary>Signed-in hosts only. Legacy pool files may omit this now that the runner has no other login mode.</summary>
-    public string SteamGuard { get; set; } = SignedIn;
     public List<SteamPoolAccount> Accounts { get; set; } = [];
-
-    public static SteamAccountPool Read(string path) => Parse(File.ReadAllText(path));
-
-    /// <summary>Reads and validates a pool file. A field that could hold a credential is refused by name; its value is never repeated.</summary>
-    public static SteamAccountPool Parse(string json)
-    {
-        var found = new List<string>();
-        using (var document = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }))
-            FindCredentialFields(document.RootElement, "$", found);
-        if (found.Count != 0)
-            throw new ArgumentException($"A pool file names signed-in accounts only and never holds credentials; remove {string.Join(", ", found)}.");
-        var pool = JsonSerializer.Deserialize<SteamAccountPool>(json, Json) ?? throw new ArgumentException("Empty account pool.");
-        pool.Validate();
-        return pool;
-    }
 
     /// <summary>Every problem at once, as one <see cref="ArgumentException"/>.</summary>
     public void Validate()
@@ -65,13 +35,11 @@ public sealed class SteamAccountPool
             || !(ScriptedGameHost.IsAbsolute(HostShellKind.Bash, LeaseDirectory) || ScriptedGameHost.IsAbsolute(HostShellKind.PowerShell, LeaseDirectory)))
             errors.Add("leaseDirectory must be an absolute path on the lease host.");
         if (LeaseMinutes is < 1 or > 1440) errors.Add("leaseMinutes must be 1 to 1440.");
-        if (SteamGuard != SignedIn)
-            errors.Add($"steamGuard supports only \"{SignedIn}\". Sign in on the host before a run; the runner never signs in or enters a Steam Guard code.");
         if (Accounts == null || Accounts.Count == 0) errors.Add("List at least one account.");
         foreach (var account in Accounts ?? [])
         {
             if (!AccountName.IsMatch(account.Name ?? "")) { errors.Add($"Account name '{account.Name}' must be a Steam account name: 3 to 64 letters, digits or '_'."); continue; }
-            if (account.Host != null && !Name.IsMatch(account.Host)) errors.Add($"Account {account.Name}: host must be a host name from the environment profile.");
+            if (account.Host != null && !Name.IsMatch(account.Host)) errors.Add($"Account {account.Name}: host must be a host name from the environment.");
             if (account.SteamId != null && SteamPoolAccount.AccountId(account.SteamId) == null)
                 errors.Add($"Account {account.Name}: steamId must be the account's SteamID64, 17 digits starting 7656119 (an individual account).");
         }
@@ -88,7 +56,7 @@ public sealed class SteamAccountPool
     /// can win; an account whose latest claim was released or has expired is free. An unproven claim that did happen expires after
     /// <paramref name="leaseTime"/>.
     /// </summary>
-    /// <param name="clientHost">Only accounts for this profile host (or for any host): with <see cref="SignedIn"/>, the host whose Steam client is signed in to it.</param>
+    /// <param name="clientHost">Only accounts for this environment host (or for any host): the host whose Steam client is signed in to it.</param>
     /// <param name="leaseTime">The lease's life without renewal; <see cref="LeaseMinutes"/> by default. Renew well before it ends.</param>
     public async Task<SteamAccountLease> AcquireAsync(IGameHost leaseHost, string owner, TimeSpan timeout, string? clientHost = null, TimeSpan? leaseTime = null,
         CancellationToken cancellation = default)
@@ -147,7 +115,7 @@ public sealed class SteamAccountPool
         }, timeout, cancellation);
 
     /// <summary>This pool with only <paramref name="account"/>: the same pool name, lease directory and lease time, so its lease is the one every run of the pool sees.</summary>
-    internal SteamAccountPool Only(SteamPoolAccount account) => new() { Pool = Pool, LeaseDirectory = LeaseDirectory, LeaseMinutes = LeaseMinutes, SteamGuard = SteamGuard, Accounts = [account] };
+    internal SteamAccountPool Only(SteamPoolAccount account) => new() { Pool = Pool, LeaseDirectory = LeaseDirectory, LeaseMinutes = LeaseMinutes, Accounts = [account] };
 
     internal static string Seconds(TimeSpan life) => ((long)Math.Ceiling(life.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
 
@@ -179,22 +147,6 @@ public sealed class SteamAccountPool
             _ => null,
         };
     }
-
-    private static void FindCredentialFields(JsonElement element, string path, List<string> found)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-            foreach (var property in element.EnumerateObject())
-            {
-                string where = path + "." + property.Name;
-                if (CredentialFields.Contains(property.Name.Replace("_", "").Replace("-", "").ToLowerInvariant())) found.Add($"'{property.Name}' at {where}");
-                FindCredentialFields(property.Value, where, found);
-            }
-        else if (element.ValueKind == JsonValueKind.Array)
-        {
-            int index = 0;
-            foreach (var item in element.EnumerateArray()) FindCredentialFields(item, $"{path}[{index++}]", found);
-        }
-    }
 }
 
 /// <summary>One account of a pool: its Steam account name, never its password.</summary>
@@ -202,12 +154,11 @@ public sealed class SteamPoolAccount
 {
     /// <summary>The Steam account name (3 to 64 letters, digits or '_'). Recorded in reports; never a credential.</summary>
     public string Name { get; set; } = "";
-    /// <summary>The environment profile host this account is for (with <see cref="SteamAccountPool.SignedIn"/>, the host whose Steam client is signed in to it); any host when null.</summary>
+    /// <summary>The environment host this account is for (the host whose Steam client is signed in to it); any host when null.</summary>
     public string? Host { get; set; }
     /// <summary>
-    /// The account's SteamID64 as a string of digits, for the optional signed-in check (<see cref="SteamAccountsProfile.CheckSignedIn"/>)
-    /// only: an identifier, not a credential. Inventory-derived profiles store it privately for the in-game identity
-    /// check; lease filenames and run reports use a stable opaque key instead.
+    /// The account's SteamID64 as a string of digits, for the signed-in check only: an identifier, not a
+    /// credential, observed on the client's host and kept in memory for the in-game identity check; lease filenames and run reports use a stable opaque key instead.
     /// </summary>
     public string? SteamId { get; set; }
 
@@ -290,10 +241,8 @@ public sealed class SteamAccountLease : IAsyncDisposable
     public string Pool => _pool.Pool;
     /// <summary>The leased Steam account's name.</summary>
     public string Account { get; }
-    /// <summary>The profile host the account is for, if the pool names one.</summary>
+    /// <summary>The environment host the account is for, if the pool names one.</summary>
     public string? AccountHost { get; }
-    /// <summary>The name of the environment variable holding the account's password, if it has one; never the password.</summary>
-    public string SteamGuard => _pool.SteamGuard;
     public string Owner { get; }
     /// <summary>This lease's own id, written in its claim file; only a holder with it can renew or release the claim.</summary>
     public string LeaseId { get; }

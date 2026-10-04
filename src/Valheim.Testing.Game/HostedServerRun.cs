@@ -5,10 +5,10 @@ using System.Text.Json;
 
 namespace Valheim.Testing.Game;
 
-/// <summary>Test seams for a <see cref="PinnedServerRun"/> on a profile's hosts: fake hosts and transports instead of ssh and sockets.</summary>
+/// <summary>Test seams for a <see cref="PinnedServerRun"/> on an environment's hosts: fake hosts and transports instead of ssh and sockets.</summary>
 internal sealed class HostedSeams
 {
-    /// <summary>Builds the host of that profile name instead of <see cref="EnvironmentProfile.CreateHost"/>.</summary>
+    /// <summary>Builds the host of that name instead of <see cref="ResolvedEnvironment.CreateHost"/>.</summary>
     public Func<string, IGameHost>? Host { get; init; }
     /// <summary>Connects to ValheimCLI at a tunnel's local port instead of a <c>CliTransport</c>.</summary>
     public Func<int, IGameTransport>? Connect { get; init; }
@@ -25,11 +25,11 @@ internal sealed class HostedSeams
 }
 
 /// <summary>
-/// The parts of a <see cref="PinnedServerRun"/> that differ when its dedicated server runs on the environment profile's server
-/// host (<c>--profile</c>): the host lock, the runtime copied from the host's install and verified there, the world copy
+/// The parts of a <see cref="PinnedServerRun"/> that differ when its dedicated server runs on the environment's server
+/// host (<c>--inventory</c> or a campaign): the host lock, the runtime copied from the host's install and verified there, the world copy
 /// shipped and verified there, the port check, the loopback CLI tunnel, the owned session through <see cref="HostServer"/>,
 /// remote clients through <see cref="InteractiveClient"/> and a local macOS GUI client through <see cref="ClientSession"/>,
-/// each client's Steam account lease when the profile has a pool, and the teardown
+/// each client's Steam identity lease in a campaign, and the teardown
 /// that fetches evidence, closes the tunnel and releases the leases and locks.
 /// </summary>
 internal sealed class HostedServerRun
@@ -50,7 +50,7 @@ internal sealed class HostedServerRun
     private bool _worldShipped, _serverMayRun;
     private int _clients;
 
-    private HostedServerRun(EnvironmentProfile profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, HostedSeams seams)
+    private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, HostedSeams seams)
     {
         Profile = profile; Role = role; HostProfile = hostProfile; Host = host; RunId = runId; _seams = seams; _owner = runner + " " + runId;
         RunDirectory = HostInstall.Join(role.Runtime, runId);
@@ -58,7 +58,7 @@ internal sealed class HostedServerRun
         WorldDirectory = HostInstall.Join(RunDirectory, "world");
     }
 
-    public EnvironmentProfile Profile { get; }
+    public ResolvedEnvironment Profile { get; }
     public GameRole Role { get; }
     public HostProfile HostProfile { get; }
     public IGameHost Host { get; }
@@ -75,24 +75,38 @@ internal sealed class HostedServerRun
     /// <summary>Runs when a client's Steam account lease is lost: the runner cancels the run (its client was stopped already).</summary>
     public Action? AccountLost { get; set; }
 
-    /// <summary>Refuses a profile and plan that cannot run a server on the profile's server host, before anything is touched.</summary>
-    public static HostedServerRun Create(EnvironmentProfile profile, ServerRunPlan plan, string runner, HostedSeams? seams)
+    /// <summary>Refuses an environment and plan that cannot run a server on the environment's server host, before anything is touched.</summary>
+    public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams)
     {
-        var role = profile.Server ?? throw new ArgumentException("The environment profile names no server; --profile runs the dedicated server on the profile's server host.");
+        var role = profile.Server ?? throw new ArgumentException("The environment places no dedicated server.");
         var hostProfile = profile.Hosts[role.Host];
-        if (!((hostProfile.Platform == "linux" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
-              (hostProfile.Platform == "windows" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.PowerShell)))
-            throw new PlatformNotSupportedException($"The profile's server host '{role.Host}' is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash or Windows/PowerShell.");
-        if (role.CliPort != plan.Port)
-            throw new ArgumentException($"The plan's ValheimCLI port {plan.Port} is not the profile server's cliPort {role.CliPort}; the runtime's [Server] Port must be both.");
-        // The game reads its arguments lowercased, so -Port names the game port too.
-        int at = Array.FindIndex(plan.Arguments, argument => argument.Equals("-port", StringComparison.OrdinalIgnoreCase));
-        if (at >= 0 && at + 1 < plan.Arguments.Length && int.TryParse(plan.Expand(plan.Arguments[at + 1], "", ""), NumberStyles.None, CultureInfo.InvariantCulture, out int gamePort) && gamePort != role.GamePort)
-            throw new ArgumentException($"The plan's -port {gamePort} is not the profile server's gamePort {role.GamePort}.");
+        if (Refusal(hostProfile, role, plan) is { } refusal) throw new ArgumentException($"The server environment on host '{role.Host}': {refusal}");
         seams ??= new HostedSeams();
         string runId = seams.RunId ?? "run-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8];
         var host = seams.Host?.Invoke(role.Host) ?? profile.CreateHost(role.Host);
         return new HostedServerRun(profile, role, hostProfile, host, runId, runner, seams);
+    }
+
+    /// <summary>Why a server environment cannot run <paramref name="plan"/>, or null: its host's platform and shell, and the plan's ports.</summary>
+    internal static string? Refusal(HostProfile hostProfile, GameRole role, ServerRunPlan plan)
+    {
+        if (!((hostProfile.Platform == "linux" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
+              (hostProfile.Platform == "windows" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.PowerShell)))
+            return $"it is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash or Windows/PowerShell.";
+        if (hostProfile.Kind == "local" && hostProfile.Platform != HostProfile.CurrentPlatform)
+            return $"it is a local {hostProfile.Platform} host, but this machine is {HostProfile.CurrentPlatform}.";
+        // The plan's runtime names its platform by its server executable; a pinned manifest lists it.
+        string? planned = plan.Executable == ServerLaunch.WindowsExecutable || plan.Runtime.Sha256.ContainsKey(ServerLaunch.WindowsExecutable) ? "windows"
+            : plan.Executable == ServerLaunch.LinuxExecutable || plan.Runtime.Sha256.ContainsKey(ServerLaunch.LinuxExecutable) ? "linux" : null;
+        if (planned != null && planned != hostProfile.Platform)
+            return $"the plan's runtime is a {planned} server, but the host is {hostProfile.Platform}.";
+        if (role.CliPort != plan.Port)
+            return $"the plan's ValheimCLI port {plan.Port} is not its cliPort {role.CliPort}; the runtime's [Server] Port must be both.";
+        // The game reads its arguments lowercased, so -Port names the game port too.
+        int at = Array.FindIndex(plan.Arguments, argument => argument.Equals("-port", StringComparison.OrdinalIgnoreCase));
+        if (at >= 0 && at + 1 < plan.Arguments.Length && int.TryParse(plan.Expand(plan.Arguments[at + 1], "", ""), NumberStyles.None, CultureInfo.InvariantCulture, out int gamePort) && gamePort != role.GamePort)
+            return $"the plan's -port {gamePort} is not its gamePort {role.GamePort}.";
+        return null;
     }
 
     public void Record(IDictionary<string, string> provenance)
@@ -250,31 +264,34 @@ internal sealed class HostedServerRun
     private IGameTransport Connect(CliTunnel tunnel) => _seams.Connect?.Invoke(tunnel.LocalPort) ?? new CliTransport(tunnel.Address, tunnel.LocalPort);
 
     /// <summary>
-    /// An owned client on the profile's client host, started in its desktop session (<see cref="InteractiveClient"/>) with the
+    /// An owned client on its environment's client host, started in its desktop session (<see cref="InteractiveClient"/>) with the
     /// checks <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/> makes locally, made on the host: the
     /// install's patchers and pins, a free CLI port. ValheimCLI is reached through the host's tunnel. Disposing the session stops
-    /// only that client, keeps its logs, fetches them to <c>client-N</c> in the output and closes the tunnel. With the profile's
-    /// <c>steamAccounts</c>, the client's account is leased (and its host's signed-in user checked, when asked) before anything
+    /// only that client, keeps its logs, fetches them to <c>client-N</c> in the output and closes the tunnel. With the environment's
+    /// Steam leases, the client's observed identity is leased (and its host's signed-in user checked, when asked) before anything
     /// else on its host is touched, and released at teardown once the client is gone.
     /// </summary>
     public ClientSession OpenClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
         OpenClientAsync(report, output, plan, name, cancellation).GetAwaiter().GetResult();
 
-    /// <summary>An attached client with the profile's <c>steamAccounts</c>: its account is leased (and checked) before the session assumes the client.</summary>
+    /// <summary>An attached campaign client: its account is leased (and checked) before the session assumes the client.</summary>
     public ClientSession AttachClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
         AttachClientAsync(report, output, plan, name, cancellation).GetAwaiter().GetResult();
 
     private async Task<ClientSession> AttachClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation)
     {
-        if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment profile.", nameof(name));
+        if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
         var account = await HoldAccountAsync(report, name, () => ClientHost(role), cancellation).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("The profile has no steamAccounts pool; attach with ClientSession.Attach.");
+            ?? throw new InvalidOperationException("The environment has no Steam leases; attach with ClientSession.Attach.");
         return account.Session = ClientSession.Attach(plan, output, account.Hold, _seams.Connect?.Invoke(plan.Port));
     }
 
     private IGameHost ClientHost(GameRole role) => role.Host == Role.Host ? Host : _seams.Host?.Invoke(role.Host) ?? Profile.CreateHost(role.Host);
+    /// <summary>The named client's host, as its client is reached.</summary>
+    public IGameHost ClientHost(string name) => Profile.Clients.TryGetValue(name, out var role) ? ClientHost(role)
+        : throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
 
-    // With steamAccounts: leases the client's account and, when the profile asks, checks its host's signed-in user, each as its own
+    // With Steam leases: leases the client's account and, when the environment asks, checks its host's signed-in user, each as its own
     // step, before the client starts or is attached. A held account refuses the client here, naming its holder.
     private async Task<ClientAccount?> HoldAccountAsync(ScenarioReport report, string name, Func<IGameHost> clientHost, CancellationToken cancellation)
     {
@@ -303,7 +320,7 @@ internal sealed class HostedServerRun
 
     private async Task<ClientSession> OpenClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation)
     {
-        if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment profile.", nameof(name));
+        if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
         var hostProfile = Profile.Hosts[role.Host];
         var platform = hostProfile.Platform switch { "windows" => ClientPlatform.Windows, "linux" => ClientPlatform.Linux, _ => ClientPlatform.MacOS };
         if (platform == ClientPlatform.MacOS)
@@ -564,7 +581,7 @@ internal sealed class HostedServerRun
     }
 }
 
-/// <summary>A profile client's leased Steam account, with what must be gone before its lease is released.</summary>
+/// <summary>A campaign client's leased Steam account, with what must be gone before its lease is released.</summary>
 internal sealed class ClientAccount(string client, SteamAccountHold hold)
 {
     public string Client { get; } = client;

@@ -460,7 +460,7 @@ public class GameHostTests
     }
 }
 
-public class EnvironmentProfileTests
+public class ResolvedEnvironmentTests
 {
     private static string Platform => OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
     private static string Sample => """
@@ -483,7 +483,7 @@ public class EnvironmentProfileTests
 
     [Fact] public void AProfileNamesTheHostOfTheServerAndOfEachClient()
     {
-        var profile = EnvironmentProfile.Parse(Sample);
+        var profile = TestEnvironment.Parse(Sample);
         var server = Assert.IsType<SshGameHost>(profile.CreateServerHost());
         Assert.Equal("tester@linux-box.example", server.Destination); Assert.Equal(2222, server.Port); Assert.Equal(HostShellKind.Bash, server.Shell.Kind);
         var client = Assert.IsType<SshGameHost>(profile.CreateClientHost("player"));
@@ -499,9 +499,9 @@ public class EnvironmentProfileTests
         string Fill(string platform) => json.Replace("PLATFORM", platform).Replace("SHELL", platform == "windows" ? "powershell" : "bash")
             .Replace("LOCK", platform == "windows" ? "C:/vt/lock" : "/tmp/vt/lock").Replace("INSTALL", platform == "windows" ? "C:/Games/Valheim" : "/games/valheim")
             .Replace("RUNTIME", platform == "windows" ? "C:/vt/runs" : "/tmp/vt/runs");
-        Assert.IsType<LocalGameHost>(EnvironmentProfile.Parse(Fill(Platform)).CreateHost("here"));
+        Assert.IsType<LocalGameHost>(TestEnvironment.Parse(Fill(Platform)).CreateHost("here"));
         string other = Platform == "linux" ? "windows" : "linux";
-        Assert.Throws<PlatformNotSupportedException>(() => EnvironmentProfile.Parse(Fill(other)).CreateHost("here"));
+        Assert.Throws<PlatformNotSupportedException>(() => TestEnvironment.Parse(Fill(other)).CreateHost("here"));
     }
 
     [Theory]
@@ -528,7 +528,7 @@ public class EnvironmentProfileTests
     {
         string json = Sample.Replace(find, replace);
         Assert.NotEqual(Sample, json);
-        var error = Record.Exception(() => EnvironmentProfile.Parse(json));
+        var error = Record.Exception(() => TestEnvironment.Parse(json));
         Assert.NotNull(error);
         Assert.Contains(expected, error.Message);
     }
@@ -546,16 +546,16 @@ public class EnvironmentProfileTests
                            "far": { "host": "far", "install": "/games/valheim", "runtime": "/tmp/runs", "cliPort": 5577, "localCliPort": FARPORT } } }
             """;
         Assert.Contains("server and client me would all be reached on local port 5577",
-            Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json.Replace("CLIENTPORT", "5577").Replace("FARPORT", "0"))).Message);
+            Assert.Throws<ArgumentException>(() => TestEnvironment.Parse(json.Replace("CLIENTPORT", "5577").Replace("FARPORT", "0"))).Message);
         Assert.Contains("client me and client far would all be reached on local port 5578",
-            Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json.Replace("CLIENTPORT", "5578").Replace("FARPORT", "5578"))).Message);
-        EnvironmentProfile.Parse(json.Replace("CLIENTPORT", "5578").Replace("FARPORT", "15577"));
+            Assert.Throws<ArgumentException>(() => TestEnvironment.Parse(json.Replace("CLIENTPORT", "5578").Replace("FARPORT", "5578"))).Message);
+        TestEnvironment.Parse(json.Replace("CLIENTPORT", "5578").Replace("FARPORT", "15577"));
     }
 
     [Fact] public void TwoClientsNeverShareAHost()
     {
         string json = Sample.Replace("\"clients\": {", "\"clients\": { \"second\": { \"host\": \"windows-pc\", \"install\": \"C:/Games/Valheim\", \"runtime\": \"C:/vt/runs\", \"cliPort\": 5579 },");
-        Assert.Contains("share host 'windows-pc'", Assert.Throws<ArgumentException>(() => EnvironmentProfile.Parse(json)).Message);
+        Assert.Contains("share host 'windows-pc'", Assert.Throws<ArgumentException>(() => TestEnvironment.Parse(json)).Message);
     }
 }
 
