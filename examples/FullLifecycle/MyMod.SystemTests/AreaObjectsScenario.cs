@@ -14,7 +14,7 @@ public static class AreaObjectsScenario
             Client = client, WorldUid = plan.WorldUid, Report = run.Report, Output = run.Output,
             OwnedServer = run.OwnedServer,
             Arrival = CampaignSteps.At(plan.Arrival), Rounds = ["joined"],
-            SettleFor = run.SettleFor, Cancellation = run.Cancellation,
+            Cancellation = run.Cancellation,
         }.Run(run.Server, () => run.OpenClient(client, null), round =>
             round.Step("capture read-only saved and loaded objects at the arrival site", () =>
             {

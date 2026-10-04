@@ -65,12 +65,12 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("result version 2", Assert.Throws<InvalidOperationException>(() => future.ForCapabilities(["valheim.world/terrain-grid"])).Message);
     }
 
-    [Fact] public void SignalArrivalRefusesAPreviousStandardPackBeforeLaunch()
+    [Fact] public void ArrivalCapabilitiesRefuseAPreviousStandardPackBeforeLaunch()
     {
         var builds = new Builds();
         using var current = Staged(builds, (Core, builds.Core), (Standard, builds.Standard), (WorldTools, builds.WorldTools));
         var plan = PlanFor(current, Manifest(builds));
-        plan.EventDrivenArrival = true;
+        plan.Capabilities = [.. PlayerPlacement.ArrivalCapabilities]; // what an arriving run lists to have it checked before launch
         var checkedSet = plan.CheckCliManifest()!;
         Assert.Contains(CliCapabilities.TeleportSignals, checkedSet.Capabilities);
         Assert.Contains("valheim.world/player-support-wait", checkedSet.Capabilities);
@@ -78,7 +78,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         using var previous = Staged(builds, (Core, builds.Core), (Standard, builds.PreviousStandard), (WorldTools, builds.WorldTools));
         var previousPlan = PlanFor(previous, Manifest(builds, "previous Standard", (Core, builds.Core),
             (Standard, builds.PreviousStandard), (WorldTools, builds.WorldTools)));
-        previousPlan.EventDrivenArrival = true;
+        previousPlan.Capabilities = [.. PlayerPlacement.ArrivalCapabilities];
         Assert.Contains(CliCapabilities.TeleportSignals,
             Assert.Throws<InvalidOperationException>(() => previousPlan.CheckCliManifest()).Message);
     }
@@ -290,7 +290,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("lacks valheim.session/save, valheim.session/leave", Assert.Throws<InvalidOperationException>(() => ClientSession.Attach(plan, _root, older)).Message);
         var current = new ScriptedTransport().Extension("valheim.session", "state", _ => new { }).Extension("valheim.session", "save", _ => new { }).Extension("valheim.session", "leave", _ => new { });
         using (ClientSession.Attach(plan, _root, current)) { }
-        plan.EventDrivenArrival = true;
+        plan.Capabilities = [.. plan.Capabilities, .. PlayerPlacement.ArrivalCapabilities];
         var missingSignal = new ScriptedTransport().Extension("valheim.session", "state", _ => new { })
             .Extension("valheim.session", "save", _ => new { }).Extension("valheim.session", "leave", _ => new { })
             .Extension("valheim.world", "player-support-wait", _ => new { });
@@ -298,7 +298,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
             Assert.Throws<InvalidOperationException>(() => ClientSession.Attach(plan, _root, missingSignal)).Message);
         var signal = new ScriptedTransport().Extension("valheim.session", "state", _ => new { })
             .Extension("valheim.session", "save", _ => new { }).Extension("valheim.session", "leave", _ => new { })
-            .Extension("valheim.world", "player-support-wait", _ => new { })
+            .Extension("valheim.world", "player-support-wait", _ => new { }).Extension("valheim.world", "player-support", _ => new { })
             .Extension("valheim.session", "teleport-signals", _ => new { });
         using (ClientSession.Attach(plan, _root, signal)) { }
         plan.CliManifest = Path.Combine(_root, "manifest.json");

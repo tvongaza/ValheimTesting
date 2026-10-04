@@ -62,11 +62,9 @@ public sealed class ClientRunPlan
     private const string StartInstead = "an owned client launches to its menu and joins (or hosts), and the first arrival teleports";
     private static ArgumentException Removed(string field, int issue, string instead) =>
         new($"The client plan's {field} was removed (ValheimTesting #{issue}): {instead}. Delete {field} from the plan.");
-    /// <summary>
-    /// Use ValheimCLI's bounded, game-side teleport readiness and support waits for arrival instead of repeated
-    /// remote observations. Requires the current Standard and World Tools packs. The game's ordinary teleport timing applies.
-    /// </summary>
-    public bool EventDrivenArrival { get; set; }
+    // Removed (#299): arrival has one procedure, the game-side signal waits that were opt-in here (PlayerPlacement.Arrive).
+    [JsonInclude, JsonPropertyName("eventDrivenArrival"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedEventDrivenArrival { get => null; set => throw Removed("eventDrivenArrival", 299, "every arrival now uses the game-side signal waits it switched on (PlayerPlacement.Arrive), which were faster than the polling arrival at the game's ordinary timing"); }
     // Removed (#299): no library runner could reach fastTestTeleports after #239 (it required hostWorld.local, which
     // a joining client's ClientRounds refuses, and the hosted rounds never used signal arrival).
     [JsonInclude, JsonPropertyName("fastTestTeleports"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -230,9 +228,6 @@ public sealed class ClientRunPlan
     /// </summary>
     public void Preflight() => Preflight([]);
 
-    /// <summary>Everything the launch and arrival code needs from the pinned ValheimCLI set.</summary>
-    internal IEnumerable<string> RequiredCliCapabilities => Capabilities
-        .Concat(EventDrivenArrival ? ["valheim.world/player-support-wait", CliCapabilities.TeleportSignals] : []);
 
     /// <summary>
     /// <see cref="Preflight()"/>, with <paramref name="capabilities"/> (<c>owner/command</c>) that the runner itself uses
@@ -271,7 +266,7 @@ public sealed class ClientRunPlan
     {
         if (!Owned || CliManifest == null) return null;
         var manifest = CliCapabilityManifest.Read(CliManifest);
-        return manifest.Check(Install, RequiredCliCapabilities.Concat(capabilities ?? []).Where(CliCapabilities.IsPackCapability));
+        return manifest.Check(Install, Capabilities.Concat(capabilities ?? []).Where(CliCapabilities.IsPackCapability));
     }
 
     /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>

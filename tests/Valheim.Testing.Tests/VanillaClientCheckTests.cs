@@ -26,6 +26,11 @@ public sealed class VanillaClientCheckTests : IDisposable
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => new
             {
+                source = "local-player-support", complete = true, x = 0f, y = 40f, z = 0f, speed = 0f,
+                grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })
+            .ArrivalSignals(() => new
+            {
                 source = "local-player-support", complete = true, x = Point.X, y = Point.Height, z = Point.Z, speed = 0f,
                 grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
             })
@@ -56,7 +61,7 @@ public sealed class VanillaClientCheckTests : IDisposable
 
     private VanillaClientCheck Check(string? log = null, bool points = true) => new()
     {
-        Capability = Census, Points = points ? new[] { Point } : Array.Empty<HeightExpectation>(), KnownPrefabs = [ServerPiece], SettleFor = TimeSpan.Zero,
+        Capability = Census, Points = points ? new[] { Point } : Array.Empty<HeightExpectation>(), KnownPrefabs = [ServerPiece],
         CensusInterval = TimeSpan.FromMilliseconds(5), CensusTimeout = TimeSpan.FromSeconds(5),
         ClientLogs = log == null ? null : new Func<IReadOnlyList<RunLog>>(() => new[] { new RunLog("client BepInEx log", log, Required: true) }),
     };

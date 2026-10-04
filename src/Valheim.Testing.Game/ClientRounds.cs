@@ -19,7 +19,7 @@ namespace Valheim.Testing.Game;
 /// <item>joins with the plan's disposable character (devcommands first, exactly once), verifies the client's world pins and
 /// waits for the world; a <see cref="ClientRunPlan.Crossplay"/> client first reads the server's lobby (<see cref="Lobby"/>)
 /// and joins it (<see cref="SessionControl.JoinCrossplay"/>);</item>
-/// <item>joins, which protects the player once the world is ready (<see cref="SessionControl.WaitForWorld"/>), and, with an <see cref="Arrival"/>, has it arrive there (<c>{round}-arrival.json</c>);</item>
+/// <item>joins, which protects the player once the world is ready (<see cref="SessionControl.WaitForWorld"/>), and, with an <see cref="Arrival"/>, has it arrive there with <see cref="PlayerPlacement.Arrive"/> (<c>{round}-arrival.json</c> and <c>{round}-teleport-trace.json</c>);</item>
 /// <item>runs the mod's measurement, which adds its own steps and evidence through <see cref="ClientRound"/>;</item>
 /// <item>between rounds: a confirmed world save, the client leaves to its menu, only the owned server restarts
 /// (<see cref="IOwnedServer.Restart"/>), and the optional after-restart check runs; after the last round the client leaves.</item>
@@ -81,8 +81,6 @@ public sealed class ClientRounds
     /// <c>server =&gt; CrossplayServer.WaitForLobby(server, CrossplayServer.BepInExLog(runtime), timeout)</c>.
     /// </summary>
     public Func<GameActor, CrossplayLobby>? Lobby { get; init; }
-    /// <summary>How long the player must stand still before the arrival teleport (<see cref="PlayerPlacement.Arrive"/>); tests pass zero. A joining client only.</summary>
-    public TimeSpan? SettleFor { get; init; }
     public CancellationToken Cancellation { get; init; }
 
     /// <summary>
@@ -122,7 +120,12 @@ public sealed class ClientRounds
         {
             world.Prepare();
             Report.Step(OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
-                () => session = openClient());
+                () =>
+                {
+                    session = openClient();
+                    // Arrival's in-game waits, checked once at the menu so a missing pack fails before any join.
+                    if (Arrival != null) CliCapabilities.Require(session.Actor, PlayerPlacement.ArrivalCapabilities);
+                });
             var client = session!.Actor;
             world.Opened(client);
             for (int i = 0; i < Rounds.Count; i++)
@@ -190,9 +193,14 @@ public sealed class ClientRounds
         {
             rounds.Report.Provenance["clientRounds"] = string.Join(",", rounds.Rounds);
             rounds.Report.Provenance["clientJoin"] = rounds.Client.Crossplay ? "crossplay" : "address";
-            rounds.Report.Provenance["arrivalWait"] = rounds.Client.EventDrivenArrival ? "game-side signal" : "remote observations";
         }
-        public void Prepare() { }
+        public void Prepare()
+        {
+            // An owned client's staged ValheimCLI set, read from its manifest before the launch, when the plan names one.
+            if (rounds.Arrival != null && rounds.Client.Owned && rounds.Client.CliManifest != null)
+                rounds.Report.Step("the owned client's ValheimCLI manifest offers the arrival waits, before launch",
+                    () => rounds.Client.CheckCliManifest(PlayerPlacement.ArrivalCapabilities));
+        }
         public void Opened(GameActor client) { }
         public GameActor ServerFor(GameActor client) => _server;
         public void Enter(ClientRound round) => rounds.Join(round);
@@ -290,15 +298,9 @@ public sealed class ClientRounds
         {
             round.Step(ArriveStep, () =>
             {
-                if (Client.EventDrivenArrival)
-                {
-                    var result = PlayerPlacement.ArriveOnSignals(round.Server, round.Client, point,
-                        TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation);
-                    round.Write("arrival", result.Support);
-                    round.Write("teleport-trace", result.Timing);
-                }
-                else round.Write("arrival", PlayerPlacement.Arrive(round.Server, round.Client, point,
-                    TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation, SettleFor));
+                var arrival = PlayerPlacement.Arrive(round.Server, round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation);
+                round.Write("arrival", arrival.Support);
+                round.Write("teleport-trace", arrival.Timing);
             });
         }
     }
@@ -325,7 +327,6 @@ public sealed class ClientRounds
         if (OwnedServer != null) throw new ArgumentException("OwnedServer: a hosting client is its own server; leave OwnedServer out.");
         if (Lobby != null) throw new ArgumentException("Lobby: a hosting client joins no lobby; leave Lobby out.");
         if (Arrival != null) throw new ArgumentException("Arrival: a hosting client's rounds have no arrival step; place the player in the measurement.");
-        if (SettleFor != null) throw new ArgumentException("SettleFor: it times the arrival teleport, which a hosting client's rounds do not have; leave SettleFor out.");
         if (ArriveStep != DefaultArriveStep) throw new ArgumentException("ArriveStep: a hosting client's rounds have no arrival step to name; leave ArriveStep out.");
         if (WorldUid != null && WorldUid != plan.WorldUid)
             throw new ArgumentException($"WorldUid: {WorldUid} is not the hosted fixture's world UID {plan.WorldUid}; leave WorldUid out for a hosting client.");

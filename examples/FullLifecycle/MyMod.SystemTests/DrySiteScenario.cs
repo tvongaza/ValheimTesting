@@ -40,7 +40,7 @@ public static class DrySiteScenario
     /// address (the crossplay scenario: <see cref="ClientRounds.Lobby"/>).
     /// </summary>
     public static void Run(LifecyclePlan plan, GameActor server, IOwnedServer ownedServer, Func<ClientSession> openClient,
-        ScenarioReport report, string output, CancellationToken cancellation = default, TimeSpan? settleFor = null,
+        ScenarioReport report, string output, CancellationToken cancellation = default,
         Func<GameActor, CrossplayLobby>? lobby = null)
     {
         var client = plan.Client ?? throw new ArgumentException("The run mode needs the plan's client section.");
@@ -57,7 +57,7 @@ public static class DrySiteScenario
         {
             Client = client, WorldUid = plan.WorldUid, Report = report, Output = output, OwnedServer = ownedServer,
             Arrival = new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
-            ArriveStep = "arrive beside the marker", SettleFor = settleFor, Cancellation = cancellation, Lobby = lobby,
+            ArriveStep = "arrive beside the marker", Cancellation = cancellation, Lobby = lobby,
         }.Run(server, openClient,
             measure: round =>
             {

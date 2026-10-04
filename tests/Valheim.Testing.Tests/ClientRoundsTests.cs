@@ -20,11 +20,10 @@ public sealed class ClientRoundsTests : IDisposable
     private string Save => Path.Combine(_root, "client-data");
     private string Worlds => Path.Combine(Save, "worlds_local");
     private readonly List<ScriptedTransport> _servers = [];
-    private readonly ScriptedTransport _client;
+    private ScriptedTransport _client;
     private readonly RoundProcess _process = new();
     private readonly PreflightInstall _install = PreflightInstall.Create(); // An owned hosting client's install that passes the preflight.
     private bool _saves = true;
-    private bool _atPoint = true;
     private int _restarts, _opens;
     public void Dispose() { _install.Dispose(); Directory.Delete(_root, recursive: true); }
 
@@ -52,7 +51,15 @@ public sealed class ClientRoundsTests : IDisposable
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => new
             {
-                source = "local-player-support", complete = true, x = _atPoint ? Point.X : 0f, y = Point.Height, z = _atPoint ? Point.Z : 0f, speed = 0f,
+                source = "local-player-support", complete = true, x = 0f, y = 40f, z = 0f, speed = 0f,
+                grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
+            })
+            .OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
+            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
+            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3400 floorReadyMs=3450 doneMs=3500 floorAtDone=True final=100,42.5,-40"))
+            .Extension("valheim.world", "player-support-wait", _ => new
+            {
+                source = "local-player-support", complete = true, x = Point.X, y = Point.Height, z = Point.Z, speed = 0f,
                 grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
             });
     }
@@ -77,7 +84,7 @@ public sealed class ClientRoundsTests : IDisposable
     {
         Client = plan, WorldUid = WorldUid, Report = report, Output = Output,
         OwnedServer = new TestOwnedServer(restart ?? (() => { _restarts++; return Server(); })),
-        Arrival = arrival ?? Point, SettleFor = TimeSpan.Zero, Rounds = names ?? ["first", "after-restart"],
+        Arrival = arrival ?? Point, Rounds = names ?? ["first", "after-restart"],
     };
 
     private Func<ClientSession> Open(ClientRunPlan plan) => () =>
@@ -227,27 +234,16 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("x64", report.Provenance["clientArchitecture"]);
     }
 
-    [Fact] public void JoinedEventDrivenRoundsKeepOneWaitAndTracePerHop()
+    [Fact] public void EachRoundsArrivalMakesOneWaitPerPhaseAndWritesItsTrace()
     {
         var plan = Plan();
-        plan.EventDrivenArrival = true;
-        _client.OnPrefix("cli_wait_teleportable ", _ => ScriptedTransport.Ok("OK: TELEPORTABLE ms=500"))
-            .On("cli_teleport_trace_arm", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE_ARM id=7"))
-            .OnPrefix("cli_teleport_trace_wait ", _ => ScriptedTransport.Ok("OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3400 floorReadyMs=3450 doneMs=3500 floorAtDone=True final=100,42.5,-40"))
-            .Extension("valheim.world", "player-support-wait", _ => new
-            {
-                source = "local-player-support", complete = true, x = Point.X, y = Point.Height, z = Point.Z, speed = 0f,
-                grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
-            });
         var report = new ScenarioReport("signal-rounds");
         Rounds(report, plan).Run(Server(), Open(plan), Measure());
         Assert.True(report.Passed);
         Assert.Equal(2, _client.Count("cli_wait_teleportable"));
         Assert.Equal(2, _client.Count("cli_teleport_trace_wait"));
         Assert.Equal(2, _client.Count("cli_extension valheim.world/player-support-wait"));
-        Assert.Equal(0, _client.Count("cli_teleport_test_mode on"));
-        Assert.Equal(0, _client.Count("cli_teleport_test_mode off"));
-        Assert.Equal(0, _client.Count("cli_extension valheim.world/player-support"));
+        Assert.Equal(2, _client.Count("cli_extension valheim.world/player-support")); // one flying check per arrival, no polling
         Assert.True(Wrote("first-teleport-trace.json"));
         Assert.True(Wrote("after-restart-teleport-trace.json"));
         using var trace = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "first-teleport-trace.json")));
@@ -255,7 +251,22 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(3400, trace.RootElement.GetProperty("AreaReadyMs").GetInt64());
         Assert.Equal(3450, trace.RootElement.GetProperty("FloorReadyMs").GetInt64());
         Assert.Equal(3500, trace.RootElement.GetProperty("DoneMs").GetInt64());
-        Assert.Equal("game-side signal", report.Provenance["arrivalWait"]);
+        Assert.False(report.Provenance.ContainsKey("arrivalWait")); // one procedure, nothing to record
+    }
+
+    // A client whose packs lack the arrival waits is refused at its menu, before any join or teleport.
+    [Fact] public void AClientWithoutTheArrivalSignalsIsRefusedBeforeJoining()
+    {
+        var older = new ScriptedTransport().ClientAccess(() => false)
+            .Extension("valheim.session", "state", _ => new { source = "session-state", complete = true, phase = "menu", worldPresent = false, worldReady = false, server = false, dedicated = false, localPlayer = false, playerReady = false, saving = false, loadError = false, connectionStatus = "None" })
+            .Extension("valheim.world", "player-support", _ => new { });
+        _client = older;
+        var report = new ScenarioReport("rounds");
+        Assert.ThrowsAny<Exception>(() => Rounds(report, Plan("attach")).Run(Server(), Open(Plan("attach")), Measure()));
+        var failed = Assert.Single(report.Steps, s => !s.Passed);
+        Assert.Contains(CliCapabilities.TeleportSignals, failed.Error);
+        Assert.Equal(0, older.Count("cli_extension valheim.session/join"));
+        Assert.Equal(0, _servers[0].Count("cli_teleport_peer"));
     }
 
     [Theory] [InlineData("owned", "arm64", "arm64")] [InlineData("owned", "x64", "x64")] [InlineData("attach", "", "attached")]
@@ -383,7 +394,7 @@ public sealed class ClientRoundsTests : IDisposable
         new ClientRounds
         {
             Client = Plan("attach"), WorldUid = WorldUid, Report = report, Output = Output, OwnedServer = new TestOwnedServer(Server, _ => { }),
-            Arrival = Point, ArriveStep = "arrive on the dry support point", SettleFor = TimeSpan.Zero, Rounds = ["only"],
+            Arrival = Point, ArriveStep = "arrive on the dry support point", Rounds = ["only"],
         }.Run(Server(), Open(Plan("attach")), _ => { });
         Assert.True(report.Passed);
         Assert.Contains(report.Steps, s => s.Name == "only: arrive on the dry support point");
@@ -502,7 +513,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(0, _opens);
     }
 
-    public static TheoryData<string> JoinedOnly => new() { "OwnedServer", "Lobby", "Arrival", "SettleFor", "ArriveStep", "WorldUid" };
+    public static TheoryData<string> JoinedOnly => new() { "OwnedServer", "Lobby", "Arrival", "ArriveStep", "WorldUid" };
     [Theory] [MemberData(nameof(JoinedOnly))]
     public void AHostingClientRefusesWhatOnlyAJoiningClientUses(string option)
     {
@@ -512,7 +523,6 @@ public sealed class ClientRoundsTests : IDisposable
             "OwnedServer" => new ClientRounds { Client = plan, Report = report, Output = Output, OwnedServer = new TestOwnedServer(Server) },
             "Lobby" => new ClientRounds { Client = plan, Report = report, Output = Output, Lobby = _ => new CrossplayLobby("E", "L") },
             "Arrival" => new ClientRounds { Client = plan, Report = report, Output = Output, Arrival = Point },
-            "SettleFor" => new ClientRounds { Client = plan, Report = report, Output = Output, SettleFor = TimeSpan.Zero },
             "ArriveStep" => new ClientRounds { Client = plan, Report = report, Output = Output, ArriveStep = "arrive at the marker" },
             _ => new ClientRounds { Client = plan, Report = report, Output = Output, WorldUid = "999" },
         };

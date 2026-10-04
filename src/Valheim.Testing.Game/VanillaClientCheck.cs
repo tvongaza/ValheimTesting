@@ -41,9 +41,8 @@ public sealed class VanillaClientCheck
     public IReadOnlyList<string> KnownPrefabs { get; init; } = [];
     /// <summary>The client's logs to scan after the census, for example an owned <see cref="ClientSession.Logs"/>; null skips the scan.</summary>
     public Func<IReadOnlyList<RunLog>>? ClientLogs { get; init; }
+    /// <summary>Each arrival's deadline (<see cref="PlayerPlacement.Arrive"/>): more than zero, at most 10 minutes.</summary>
     public TimeSpan ArrivalTimeout { get; init; } = TimeSpan.FromMinutes(2);
-    /// <summary>How long the player must stand still before each teleport (<see cref="PlayerPlacement.Arrive"/>); tests pass zero.</summary>
-    public TimeSpan? SettleFor { get; init; }
     /// <summary>How long the area around the player may take to load before the census is complete.</summary>
     public TimeSpan CensusTimeout { get; init; } = TimeSpan.FromMinutes(1);
     /// <summary>How often the census is re-read while the area loads.</summary>
@@ -56,6 +55,7 @@ public sealed class VanillaClientCheck
         ArgumentNullException.ThrowIfNull(round);
         if (string.IsNullOrWhiteSpace(Capability)) throw new ArgumentException("Capability: name the adapter's unresolved-prefabs capability.");
         if (!(Radius > 0 && Radius <= 256)) throw new ArgumentException("Radius: 0 < radius <= 256 m.");
+        if (ArrivalTimeout <= TimeSpan.Zero || ArrivalTimeout > TimeSpan.FromMinutes(10)) throw new ArgumentException("ArrivalTimeout: more than zero and at most 10 minutes (an arrival's limit).");
         int count = Math.Max(1, Points.Count);
         for (int i = 0; i < count; i++)
         {
@@ -66,7 +66,7 @@ public sealed class VanillaClientCheck
                 var point = Points[i];
                 where = $"at vanilla-client point {n} ({F(point.X)}, {F(point.Z)})";
                 round.Step("arrive " + where, () => round.Write($"vanilla-client-{n}-arrival",
-                    PlayerPlacement.Arrive(round.Server, round.Client, point, ArrivalTimeout, Cancellation, SettleFor)));
+                    PlayerPlacement.Arrive(round.Server, round.Client, point, ArrivalTimeout, Cancellation).Support));
             }
             round.Step("the client resolves every prefab hash " + where, () =>
             {

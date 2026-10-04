@@ -24,7 +24,7 @@ public sealed class DrySiteScenarioTests : IDisposable
         Func<ClientSession> open = plan.Client!.Owned
             ? () => ClientSession.Launch(plan.Client, _output, () => _process, () => _world.Client(plan), (_, _) => Task.CompletedTask)
             : () => ClientSession.Attach(plan.Client, _output, _world.Client(plan));
-        try { DrySiteScenario.Run(plan, server, _world, open, report, _output, settleFor: TimeSpan.Zero); }
+        try { DrySiteScenario.Run(plan, server, _world, open, report, _output); }
         catch (Exception) { Assert.False(report.Passed); }
         return report;
     }
@@ -131,7 +131,7 @@ public sealed class DrySiteScenarioTests : IDisposable
         var clock = System.Diagnostics.Stopwatch.StartNew();
         Assert.ThrowsAny<OperationCanceledException>(() => DrySiteScenario.Run(plan, _world.Server(), _world,
             () => ClientSession.Launch(plan.Client, _output, () => process, () => _world.Client(plan), (_, _) => Task.Delay(Timeout.Infinite), cancel.Token),
-            report, _output, settleFor: TimeSpan.Zero, cancellation: cancel.Token));
+            report, _output, cancellation: cancel.Token));
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(9), "cancellation, not the start deadline, ended the wait");
         Assert.Equal(1, process.Stops);
     }

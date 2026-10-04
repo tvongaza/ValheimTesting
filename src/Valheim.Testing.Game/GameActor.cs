@@ -197,22 +197,27 @@ public sealed class GameActor : IDisposable
     internal static bool IsUnstartedCommandTimeout(InvalidOperationException error) =>
         error.Message.StartsWith("command_failed: ERROR: code=command_timeout ", StringComparison.Ordinal) &&
         error.Message.Contains("had not started and will not run", StringComparison.Ordinal);
-    public Capability RequireCapability(string path, int schemaVersion = 1)
+    public Capability RequireCapability(string path, int schemaVersion = 1) => RequireCapabilities([path], schemaVersion)[0];
+    /// <summary><see cref="RequireCapability"/> for each of <paramref name="paths"/>, in order, from one <c>cli_extensions</c> listing.</summary>
+    internal IReadOnlyList<Capability> RequireCapabilities(IReadOnlyList<string> paths, int schemaVersion = 1)
     {
         var reply = CliCapabilities.ListingReply(this); // An old ValheimCLI without cli_extensions is named as one.
         using var doc = ParseLine(reply, "EXTENSIONS ");
         if (doc.RootElement.GetProperty("apiVersion").GetInt32() != 1) throw new InvalidOperationException("Unsupported extension API.");
-        foreach (var extension in doc.RootElement.GetProperty("extensions").EnumerateArray())
+        return paths.Select(path =>
         {
-            if (extension.GetProperty("closing").GetBoolean()) continue;
-            foreach (var command in extension.GetProperty("commands").EnumerateArray())
-                if (extension.GetProperty("id").GetString() + "/" + command.GetProperty("name").GetString() == path)
-                {
-                    if (command.GetProperty("resultVersion").GetInt32() != schemaVersion) throw new InvalidOperationException("Unsupported command result schema.");
-                    return new Capability(path, extension.GetProperty("instance").GetString()!, command.GetProperty("readOnly").GetBoolean(), schemaVersion);
-                }
-        }
-        throw new InvalidOperationException("Required capability is absent: " + path + ". " + CliCapabilities.Provider(path.Split('/')[0]));
+            foreach (var extension in doc.RootElement.GetProperty("extensions").EnumerateArray())
+            {
+                if (extension.GetProperty("closing").GetBoolean()) continue;
+                foreach (var command in extension.GetProperty("commands").EnumerateArray())
+                    if (extension.GetProperty("id").GetString() + "/" + command.GetProperty("name").GetString() == path)
+                    {
+                        if (command.GetProperty("resultVersion").GetInt32() != schemaVersion) throw new InvalidOperationException("Unsupported command result schema.");
+                        return new Capability(path, extension.GetProperty("instance").GetString()!, command.GetProperty("readOnly").GetBoolean(), schemaVersion);
+                    }
+            }
+            throw new InvalidOperationException("Required capability is absent: " + path + ". " + CliCapabilities.Provider(path.Split('/')[0]));
+        }).ToArray();
     }
     public JsonElement Invoke(Capability command, params string[] arguments)
     {

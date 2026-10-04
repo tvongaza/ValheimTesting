@@ -75,7 +75,6 @@
       "720"
     ],
     "port": 5556,
-    "eventDrivenArrival": true,
     "pins": {
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
@@ -97,7 +96,8 @@
       "mymod.testing/marker-owner-wait",
       "mymod.testing/marker-owner-claim",
       "valheim.world/terrain",
-      "valheim.world/player-support-wait"
+      "valheim.world/player-support-wait",
+      "valheim.session/teleport-signals"
     ]
   },
   "secondClient": {
@@ -112,7 +112,6 @@
       "720"
     ],
     "port": 5557,
-    "eventDrivenArrival": true,
     "pins": {
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
@@ -134,7 +133,8 @@
       "mymod.testing/marker-owner-wait",
       "mymod.testing/marker-owner-claim",
       "valheim.world/terrain",
-      "valheim.world/player-support-wait"
+      "valheim.world/player-support-wait",
+      "valheim.session/teleport-signals"
     ]
   },
   "secondArrival": {
