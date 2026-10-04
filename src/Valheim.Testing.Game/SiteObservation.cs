@@ -10,12 +10,11 @@ public sealed record ObservedCommand(string Role, string Command, DateTimeOffset
 
 /// <summary>
 /// What the terrain and object snapshots share: the world and role check, a recorded command, one coordinate-checked
-/// reply line, the area-readiness wait and the loaded ground height.
+/// reply line, a recorded capability observation, the area-readiness wait and the loaded ground height.
 /// </summary>
 internal static class SiteObservation
 {
     private static readonly Regex Area = new(@"^OK: AREA_READY (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) ready=(?<ready>True|False) zone=-?\d+,-?\d+ loaded=(?<loaded>True|False) objects=\d+ without_instance=(?<missing>\d+)$", RegexOptions.CultureInvariant);
-    private static readonly Regex Ground = new(@"^GROUND (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) h=(?<height>-?\d+\.\d+)$", RegexOptions.CultureInvariant);
 
     /// <summary>The actor is ready in <paramref name="worldUid"/>; a client has a ready player, a server hosts the world.</summary>
     internal static void CheckWorld(GameActor actor, string worldUid, string role)
@@ -66,9 +65,30 @@ internal static class SiteObservation
         }
     }
 
-    /// <summary>The loaded ground height at the point (<c>cli_ground_height</c>).</summary>
-    internal static double GroundHeight(GameActor actor, string role, int x, int z, List<ObservedCommand> commands) =>
-        Number(One(Lines(actor, role, $"cli_ground_height {x} {z}", commands), Ground, x, z).Groups["height"].Value);
+    /// <summary>
+    /// Observes a read-only capability and records the command with its complete reply lines before judging them, so a
+    /// refusal is evidence too. A command refused before any reply (a pin drift, say) is recorded with the error. The
+    /// caller reads the observation with the probe that owns its source.
+    /// </summary>
+    internal static Observation Observe(GameActor actor, string role, Capability capability, List<ObservedCommand> commands, params string[] arguments)
+    {
+        string command = "cli_extension " + capability.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments));
+        bool recorded = false;
+        try
+        {
+            return actor.Observe(capability, lines => { commands.Add(new(role, command, DateTimeOffset.UtcNow, lines)); recorded = true; }, arguments);
+        }
+        catch (Exception error) when (!recorded)
+        {
+            commands.Add(new(role, command, DateTimeOffset.UtcNow, ["ERROR: " + error.Message]));
+            throw;
+        }
+    }
+
+    /// <summary>The loaded ground height at an integer point, read as <see cref="TerrainProbe.Height"/> reads it.</summary>
+    internal static float GroundHeight(GameActor actor, string role, int x, int z, List<ObservedCommand> commands) =>
+        TerrainProbe.Height(Observe(actor, role, actor.RequireCapability("valheim.world/terrain"), commands,
+            x.ToString(CultureInfo.InvariantCulture), z.ToString(CultureInfo.InvariantCulture), "loaded-ground"), x, z, "loaded-ground");
 
     internal static double Number(string text)
     {
