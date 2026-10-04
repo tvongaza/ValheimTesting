@@ -1,0 +1,2 @@
+# Byte-exact native dumps: their SHA-256 is pinned in the manifests, so no line-ending conversion.
+* -text

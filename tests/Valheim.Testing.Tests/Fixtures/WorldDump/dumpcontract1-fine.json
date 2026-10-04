@@ -1,0 +1,15 @@
+{
+  "Name": "dumpcontract1-fine",
+  "Path": "dumpcontract1-fine.csv",
+  "WorldUid": "-18372600",
+  "Seed": "DumpProbe1",
+  "GameBuild": "1.0.16",
+  "Command": "cli_world_dump 8 C:/dumps --window 0,0,64",
+  "Reply": "OK: WORLD_DUMP samples=289 step=8 window=0,0,64 extent=-64,-64..64,64 ms=1 world=C:/dumps\\world.win_0_0_64_s8.csv",
+  "Sha256": "1ec878d8376a42ca90786c1377a36fd33d0a8cd79d49ff75b042f5f526d0dd66",
+  "Step": 8,
+  "MinX": -64,
+  "MinZ": -64,
+  "MaxX": 64,
+  "MaxZ": 64
+}

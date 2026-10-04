@@ -18,6 +18,8 @@
     <Compile Include="../../examples/NativeSmoke/SmokeProject.cs" Link="NativeSmoke/SmokeProject.cs" />
     <Compile Include="../../tools/dev-loop/dev-loop.cs" Link="DevLoop/dev-loop.cs" />
     <!-- Compiles small ValheimCLI-shaped assemblies at test time for the capability manifest tests; none is committed. -->
+    <!-- Real native dumps and the manifests the capture writes for them; byte-exact (see the directory's .gitattributes). -->
+    <None Include="Fixtures/WorldDump/*.csv;Fixtures/WorldDump/*.json" CopyToOutputDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
   </ItemGroup>

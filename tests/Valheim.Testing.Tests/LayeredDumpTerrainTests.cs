@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Valheim.Testing;
 using Xunit;
 
@@ -18,32 +16,12 @@ public class LayeredDumpTerrainTests
         "-16,-8,120,Plains,0.7,70,9.3\n" +
         "-8,-8,130,Plains,0.8,80,9.4\n";
 
-    private sealed class Files : IDisposable
-    {
-        private readonly string _directory = Directory.CreateTempSubdirectory("layered-dump-").FullName;
-        public WorldDumpLayerSpec Add(string name, string csv, int step, int min, int max, string uid = "fixture-world")
-        {
-            string path = Path.Combine(_directory, name + ".csv");
-            File.WriteAllText(path, csv);
-            var m = new WorldDumpManifest
-            {
-                WorldUid = uid, Seed = "fixture-seed", GameBuild = "fixture-build",
-                Command = $"cli_world_dump {step} fixture",
-                Reply = $"OK: WORLD_DUMP samples=4 step={step} world=fixture",
-                Sha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(csv))).ToLowerInvariant(),
-                Step = step, MinX = min, MinZ = min, MaxX = max, MaxZ = max
-            };
-            return new WorldDumpLayerSpec(name, path, m);
-        }
-        public void Dispose() => Directory.Delete(_directory, true);
-    }
-
     [Fact]
     public void FinestLayerWinsForOrdinaryFactsButNeverForBaseHeight()
     {
-        using var files = new Files();
-        var coarse = files.Add("coarse", Coarse, 128, -16, 112);
-        var fine = files.Add("fine", Fine, 8, -16, -8);
+        using var files = new PinnedDumpFixture();
+        var coarse = files.Capture("coarse", Coarse, 128);
+        var fine = files.Capture("fine", Fine, 8);
         var layered = LayeredDumpTerrain.Load(new[] { coarse, fine }, "coarse");
         Assert.Equal(100f, layered.GetHeight(-16, -16));
         Assert.Equal(115f, layered.GetHeight(-12, -12));
@@ -54,18 +32,18 @@ public class LayeredDumpTerrainTests
         Assert.Equal(GridDumpTerrain.Load(coarse.Path).GetBaseHeight(-12, -12), layered.GetBaseHeight(-12, -12));
         Assert.Equal(40f, layered.GetHeight(112, 112)); // outside fine: coarse fallback
         Assert.Equal(TerrainBiome.Meadows, layered.GetBiome(112, 112));
-        Assert.Equal(("fine", 8f, true), (layered.SourceAt(-16, -16).Layer, layered.SourceAt(-16, -16).Spacing, layered.SourceAt(-16, -16).ExactNode));
-        Assert.Equal(("fine", false), (layered.SourceAt(-12, -12).Layer, layered.SourceAt(-12, -12).ExactNode));
-        Assert.Equal(("coarse", true), (layered.BaseHeightSourceAt(-16, -16).Layer, layered.BaseHeightSourceAt(-16, -16).ExactNode));
-        Assert.False(layered.BaseHeightSourceAt(-12, -12).ExactNode);
+        Assert.Equal(("fine", 8f, true), (layered.LayerAt(-16, -16).Provenance, layered.LayerAt(-16, -16).Spacing, layered.LayerAt(-16, -16).IsSampleNode(-16, -16)));
+        Assert.Equal(("fine", false), (layered.LayerAt(-12, -12).Provenance, layered.LayerAt(-12, -12).IsSampleNode(-12, -12)));
+        Assert.Equal(("coarse", true), (layered.BaseHeightLayer.Provenance, layered.BaseHeightLayer.IsSampleNode(-16, -16)));
+        Assert.False(layered.BaseHeightLayer.IsSampleNode(-12, -12));
     }
 
     [Fact]
     public void EveryFineNodeAndCoarseOnlyNodeMatchesItsSource()
     {
-        using var files = new Files();
-        var coarse = files.Add("coarse", Coarse, 128, -16, 112);
-        var fine = files.Add("fine", Fine, 8, -16, -8);
+        using var files = new PinnedDumpFixture();
+        var coarse = files.Capture("coarse", Coarse, 128);
+        var fine = files.Capture("fine", Fine, 8);
         var layered = LayeredDumpTerrain.Load(new[] { fine, coarse }, "coarse"); // input order must not decide precedence
         var fineGrid = GridDumpTerrain.Load(fine.Path);
         foreach (float z in new[] { -16f, -8f }) foreach (float x in new[] { -16f, -8f })
@@ -85,26 +63,26 @@ public class LayeredDumpTerrainTests
     [Fact]
     public void BoundsAndEqualResolutionOverlapAreNotGuessed()
     {
-        using var files = new Files();
-        var coarse = files.Add("coarse", Coarse, 128, -16, 112);
-        var fine = files.Add("fine", Fine, 8, -16, -8);
+        using var files = new PinnedDumpFixture();
+        var coarse = files.Capture("coarse", Coarse, 128);
+        var fine = files.Capture("fine", Fine, 8);
         var layered = LayeredDumpTerrain.Load(new[] { coarse, fine }, "coarse");
-        Assert.Equal("fine", layered.SourceAt(-8, -8).Layer); // closed fine boundary
-        Assert.Equal("coarse", layered.SourceAt(-7.9f, -8).Layer);
+        Assert.Equal("fine", layered.LayerAt(-8, -8).Provenance); // closed fine boundary
+        Assert.Equal("coarse", layered.LayerAt(-7.9f, -8).Provenance);
         Assert.Throws<ArgumentOutOfRangeException>(() => layered.GetHeight(113, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => layered.GetBaseHeight(113, 0));
-        var duplicate = files.Add("duplicate", Fine, 8, -16, -8);
+        var duplicate = files.Capture("duplicate", Fine, 8);
         Assert.Contains("overlap", Assert.Throws<InvalidDataException>(() => LayeredDumpTerrain.Load(new[] { coarse, fine, duplicate }, "coarse")).Message);
     }
 
     [Fact]
     public void MixedWorldMissingSourceAndCorruptFileAreRefusedBeforeUse()
     {
-        using var files = new Files();
-        var coarse = files.Add("coarse", Coarse, 128, -16, 112);
-        var foreign = files.Add("foreign", Fine, 8, -16, -8, uid: "another-world");
+        using var files = new PinnedDumpFixture();
+        var coarse = files.Capture("coarse", Coarse, 128);
+        var foreign = files.Capture("foreign", Fine, 8, uid: "999");
         Assert.Contains("different world", Assert.Throws<InvalidDataException>(() => LayeredDumpTerrain.Load(new[] { coarse, foreign }, "coarse")).Message);
-        var fine = files.Add("fine", Fine, 8, -16, -8);
+        var fine = files.Capture("fine", Fine, 8);
         Assert.Contains("was not supplied", Assert.Throws<InvalidDataException>(() => LayeredDumpTerrain.Load(new[] { coarse, fine }, "missing")).Message);
         File.AppendAllText(fine.Path, "damaged");
         Assert.Contains("SHA-256", Assert.Throws<InvalidDataException>(() => LayeredDumpTerrain.Load(new[] { coarse, fine }, "coarse")).Message);

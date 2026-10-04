@@ -46,18 +46,17 @@ Queries follow a written rule, not a guess:
 
 The constructor declares a grid directly from row-major arrays (x fastest), which suits hand-written fixtures. `ReplayTerrain` stays exact lookup; use `GridDumpTerrain` when interpolation between regular samples is what the test means.
 
-For a **native ValheimCLI dump** used as a pinned offline input, use `WorldDumpContract.Verify(path, manifest)` rather than `GridDumpTerrain.Load` alone. The strict contract checks the exact seven-column native header, SHA-256, complete rectangular lattice, bounds, sample count and step against the `OK: WORLD_DUMP` reply. The manifest's world UID, seed and game build must come from a strict `cli_world` observation in the **same native session**; they are not embedded in the CSV and cannot be reconstructed from it. `RequireSameWorld` refuses layers with different declared identities. Retain the command, full reply and file hash as evidence. A later ValheimCLI or game build must recheck the native header and semantics before updating that contract; do not fill in an absent field or convert `base_height` to metres. See [the bounded dump capture procedure](world-dump-contract.md).
+For a **native ValheimCLI dump** used as a pinned offline input, capture it with `WorldDump.CaptureAsync` (Valheim.Testing.Game) and load it through its manifest rather than with `GridDumpTerrain.Load` alone; see [pinned world dumps](world-dump-contract.md). `WorldDumpManifest.Verify()` checks the CSV against the manifest the capture wrote: SHA-256, the exact seven-column native header, the biome, river and base-height layers, a complete grid, the recorded spacing and bounds, and ValheimCLI's lattice. The world UID, seed and game build come from the same pinned session; the CSV holds no identity of its own. Do not fill in an absent field or convert `base_height` to metres.
 
-For a coarse world layer plus fine windows, use `LayeredDumpTerrain.Load(specs, baseHeightLayer: "coarse")`. Each `WorldDumpLayerSpec` names a CSV and its verified `WorldDumpManifest`; all must have the same declared world UID, seed and game build. Normal height, biome and river queries take the **finest containing grid**, even at its closed edge; equal-spacing grids that overlap are refused. `GetBaseHeight` uses **only** the named base-height lattice, so a fine height window cannot silently become its source. `SourceAt` and `BaseHeightSourceAt` name the selected layer and report whether the query landed on an exact CSV node. Outside every layer, or outside the designated base lattice for base-height queries, the reader throws. A node retains the file's rounded value; between nodes height, river and base height are bilinear approximations and biome comes from the nearest selected node. The layer choice is deterministic and independent of the order of the specs.
+For a coarse world layer plus fine windows, use `LayeredDumpTerrain.Load(manifests, baseHeightLayer)`. Every manifest is verified, and all must name the same world UID, seed and game build. Normal height, biome and river queries take the **finest containing grid**, even at its closed edge; equal-spacing grids that overlap are refused. `GetBaseHeight` uses **only** the named base-height lattice (`BaseHeightLayer`), so a fine height window cannot silently become its source. `LayerAt(x, z)` returns the grid that answers a query; its `Provenance` is the layer's name and `IsSampleNode(x, z)` says whether the query landed on an exact CSV node. Outside every layer, or outside the base lattice for base-height queries, the reader throws. A node retains the file's rounded value; between nodes height, river and base height are bilinear approximations and biome comes from the nearest selected node. The layer choice does not depend on the order of the manifests.
 
 ```csharp
 var terrain = LayeredDumpTerrain.Load(new[] {
-    new WorldDumpLayerSpec("coarse", "coarse.csv", coarseManifest),
-    new WorldDumpLayerSpec("fine", "fine.csv", fineManifest)
-}, baseHeightLayer: "coarse");
-float ground = terrain.GetHeight(siteX, siteZ); // finest containing layer
+    WorldDump.ReadManifest("dumps/world-128.json"), WorldDump.ReadManifest("dumps/site-8.json")
+}, baseHeightLayer: "world-128");
+float ground = terrain.GetHeight(siteX, siteZ);        // finest containing layer
 float baseValue = terrain.GetBaseHeight(siteX, siteZ); // designated coarse lattice, unitless
-WorldDumpSource source = terrain.SourceAt(siteX, siteZ);
+bool exact = terrain.LayerAt(siteX, siteZ).IsSampleNode(siteX, siteZ);
 ```
 
 ## Render a terrain for review
