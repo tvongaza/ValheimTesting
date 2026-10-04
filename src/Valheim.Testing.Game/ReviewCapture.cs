@@ -73,7 +73,7 @@ public static class ReviewCapture
             cancellation.ThrowIfCancellationRequested();
             arrive();
             string tod = plan.TimeOfDay.ToString("R", CultureInfo.InvariantCulture);
-            Require(client.Execute($"cli_env {tod} {plan.Weather}"), "OK: ENV ", "environment did not settle");
+            client.Execute($"cli_env {tod} {plan.Weather}").RequireLine("OK: ENV ", "environment did not settle");
             if (mistOff != null) RequireState(client.Invoke(mistOff, plan.Id), plan.Id, "mist-off");
             if (clutterOff != null) RequireState(client.Invoke(clutterOff, plan.Id), plan.Id, "clutter-off");
             double radians = plan.CameraAzimuthDegrees * Math.PI / 180;
@@ -88,7 +88,7 @@ public static class ReviewCapture
             try
             {
                 client.CommandTimeout = TimeSpan.FromSeconds(60);
-                capture = Require(client.Execute(command), "OK: CAPTURE ", "capture did not complete");
+                capture = client.Execute(command).RequireLine("OK: CAPTURE ", "capture did not complete");
             }
             finally { client.CommandTimeout = previousTimeout; }
             if (!capture.Contains("path=" + hostImage + " ", StringComparison.Ordinal))
@@ -164,10 +164,6 @@ public static class ReviewCapture
             data.GetProperty("state").GetString() != state || !data.GetProperty("complete").GetBoolean())
             throw new InvalidDataException("The review adapter did not confirm " + state + " for " + id + ".");
     }
-
-    private static string Require(valheim_cli.Testing.CommandResult reply, string prefix, string failure) =>
-        reply.Output.SingleOrDefault(line => line.StartsWith(prefix, StringComparison.Ordinal))
-            ?? throw new InvalidOperationException(failure + ": " + string.Join(" | ", reply.Output));
 
     private static bool CompletePng(byte[] bytes) => bytes.Length >= 20 &&
         bytes.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }) &&

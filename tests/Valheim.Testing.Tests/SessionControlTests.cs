@@ -143,7 +143,8 @@ public class SessionControlTests
     {
         var transport = JoiningClient(reply);
         var error = Assert.Throws<InvalidOperationException>(() => JoinAndWait(transport));
-        Assert.StartsWith("Player protection was not confirmed", error.Message);
+        // A refusal fails as one (#269); a reply that is neither refused nor confirmed fails the protection check.
+        Assert.StartsWith(reply.StartsWith("ERROR:", StringComparison.Ordinal) ? "cli_set_player_safety true was refused: " + reply : "Player protection was not confirmed", error.Message);
         Assert.Equal(1, transport.Count("cli_set_player_safety"));
     }
     [Fact] public void ADedicatedServerHasNoPlayerToProtect()

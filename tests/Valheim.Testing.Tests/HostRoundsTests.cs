@@ -181,7 +181,7 @@ public sealed class HostRoundsTests : IDisposable
     {
         var game = new Game(Worlds) { StartReply = "ERROR: Main menu is not available" }; var report = new ScenarioReport("host");
         var error = Assert.Throws<InvalidOperationException>(() => Rounds(report, Plan()).Run(Open(Plan(), game), Measure()));
-        Assert.Contains("did not start as planned", error.Message);
+        Assert.Contains("failed: ERROR: Main menu is not available", error.Message);
         Assert.Equal(new[] { "first: host the fixture world with the disposable character, protected" }, Failed(report));
         Assert.Equal(1, game.Transport.Count("cli_start_host_world"));
         Assert.Equal(1, game.Transport.Count("cli_extension valheim.session/state")); // Only the menu check before the start.

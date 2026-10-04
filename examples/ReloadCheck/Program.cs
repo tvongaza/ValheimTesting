@@ -29,7 +29,7 @@ try
     int port = int.Parse(args[0]);
     using var control = new GameActor("reload-control", new CliTransport("127.0.0.1", port)) { CommandTimeout = TimeSpan.FromSeconds(15) };
     control.VerifyEnvironment(baselinePins);
-    CommandResult Run(string command)
+    GameReply Run(string command)
     {
         var result = control.Execute(command);
         evidence.Add(new { command, result.Ok, result.ErrorCode, result.Output });
@@ -72,7 +72,7 @@ try
     Run("cli_extension example.probe/removed");
     using var waitingConnection = new GameActor("reload-wait", new CliTransport("127.0.0.1", port)) { CommandTimeout = TimeSpan.FromSeconds(90) };
     waitingConnection.VerifyEnvironment(pinsA);
-    var pending = Task.Run(() => waitingConnection.Execute("cli_extension example.probe/wait", requireSuccess: false));
+    var pending = Task.Run(() => waitingConnection.Execute("cli_extension example.probe/wait", requireAccepted: false));
     var pendingTimer = Stopwatch.StartNew();
     while (Hello().GetProperty("data").GetProperty("waiting").GetInt32() != 1)
     {
@@ -91,7 +91,7 @@ try
     var helloB = Hello();
     Require(helloB.GetProperty("data").GetProperty("revision").GetString() == "0.2.0" && helloB.GetProperty("data").GetProperty("leases").GetInt32() == 1,
         "B answers on the existing connection and A's resource is gone");
-    var removed = control.Execute("cli_extension example.probe/removed", requireSuccess: false);
+    var removed = control.Execute("cli_extension example.probe/removed", requireAccepted: false);
     evidence.Add(new { removed.Ok, removed.ErrorCode, removed.Output });
     using (var doc = GameActor.ParseLine(removed, "EXTENSION_RESULT "))
         Require(!removed.Ok && doc.RootElement.GetProperty("code").GetString() == "no_extension_command", "Removed command cannot invoke A's code");

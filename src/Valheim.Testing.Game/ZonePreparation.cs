@@ -13,7 +13,7 @@ public static class CliReply
         if (values.Length != 1 || (values[0] != "VALUE true" && values[0] != "VALUE false")) throw new InvalidOperationException("Expected one boolean value.");
         return values[0] == "VALUE true";
     }
-    public static bool Bool(CommandResult reply) => Bool(reply.Output);
+    public static bool Bool(GameReply reply) => Bool(reply.Output);
 }
 
 /// <summary>Fixture authoring: make zones exist in a world before a scenario relies on them. Never an acceptance result.</summary>

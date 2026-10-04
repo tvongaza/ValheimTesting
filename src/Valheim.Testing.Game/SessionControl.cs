@@ -112,15 +112,13 @@ public sealed class SessionControl(GameActor actor)
     {
         if (string.IsNullOrWhiteSpace(filename) || filename.Any(char.IsWhiteSpace))
             throw new ArgumentException("Give a single character filename.", nameof(filename));
-        var selected = actor.Execute("cli_select_character " + filename, requireSuccess: false);
-        RequireSelectedLocal(selected, filename);
+        RequireSelectedLocal(actor.Execute("cli_select_character " + filename), filename);
     }
 
-    private static void RequireSelectedLocal(CommandResult selected, string filename)
+    private static void RequireSelectedLocal(GameReply selected, string filename)
     {
-        if (!selected.Output.Any(line => line.StartsWith("OK: Selected character '", StringComparison.Ordinal) &&
-            line.EndsWith(" (" + filename + ", Local)", StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("The prepared character was not selected as the exact local file " + filename + ": " + string.Join(" | ", selected.Output));
+        if (!selected.Lines("OK: Selected character '").Any(line => line.EndsWith(" (" + filename + ", Local)", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("The prepared character was not selected as the exact local file " + filename + ". Reply: " + selected.Describe());
     }
 
     /// <summary>
@@ -153,7 +151,7 @@ public sealed class SessionControl(GameActor actor)
         {
             actor.CommandTimeout = TimeSpan.FromSeconds(130);
             // Exactly once, and a refusal is the expected outcome, so the reply is read here rather than required to succeed.
-            var reply = actor.Execute("cli_extension " + capability.Path + " " + string.Join(" ", arguments), requireSuccess: false);
+            var reply = actor.Execute("cli_extension " + capability.Path + " " + string.Join(" ", arguments), requireAccepted: false);
             using var document = GameActor.ParseLine(reply, "EXTENSION_RESULT ");
             var root = document.RootElement;
             if (root.GetProperty("schemaVersion").GetInt32() != capability.SchemaVersion || root.GetProperty("instance").GetString() != capability.Instance ||
@@ -215,15 +213,13 @@ public sealed class SessionControl(GameActor actor)
         var before = Read(capability);
         if (before.Phase != "menu" || before.WorldPresent) throw new InvalidOperationException("A crossplay join starts from the client's idle main menu.");
         if (enableDevcommands) EnableDevcommands();
-        var selected = actor.Execute("cli_select_character " + character, requireSuccess: false);
-        if (!selected.Output.Any(line => line.StartsWith("OK: Selected character '", StringComparison.Ordinal)))
-            throw new InvalidOperationException("The character was not selected: " + string.Join(" | ", selected.Output));
+        var selected = actor.Execute("cli_select_character " + character);
+        selected.RequireLine("OK: Selected character '", "The character was not selected");
         if (requiredLocalFilename != null) RequireSelectedLocal(selected, requiredLocalFilename);
         try
         {
-            var started = actor.Execute("cli_connect_playfab_user " + remotePlayerId, requireSuccess: false); // Exactly once.
-            if (!started.Output.Any(line => line.StartsWith($"OK: PlayFab user join started for {remotePlayerId} using ", StringComparison.Ordinal)))
-                throw new InvalidOperationException("The crossplay join did not start: " + string.Join(" | ", started.Output));
+            actor.Execute("cli_connect_playfab_user " + remotePlayerId) // Exactly once.
+                .RequireLine($"OK: PlayFab user join started for {remotePlayerId} using ", "The crossplay join did not start");
         }
         finally { actor.InvalidateEnvironment(); } // A join that may have started can change the world.
         bool worldPinned = false;

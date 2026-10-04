@@ -21,9 +21,8 @@ public static class VanillaClientScenario
         if (control != null)
             report.Step($"control {control.Name}: the server spawns its server-only object beside the dry site", () =>
             {
-                var reply = run.Server.Execute($"mymodcontrol_spawn {CampaignSteps.Number(plan.DrySite.X + 3)} {CampaignSteps.Number(plan.DrySite.Z)}");
-                if (!reply.Output.Any(line => line.StartsWith("OK: spawned " + ControlPlugins.ServerOnlyPrefabName, StringComparison.Ordinal)))
-                    throw new InvalidOperationException("The control did not spawn its object: " + string.Join(" | ", reply.Output));
+                run.Server.Execute($"mymodcontrol_spawn {CampaignSteps.Number(plan.DrySite.X + 3)} {CampaignSteps.Number(plan.DrySite.Z)}")
+                    .RequireLine("OK: spawned " + ControlPlugins.ServerOnlyPrefabName, "The control did not spawn its object");
             });
 
         string? log = run.ClientLog(client);

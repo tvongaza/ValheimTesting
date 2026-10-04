@@ -79,8 +79,4 @@ public class TestAccessTests
         Assert.Throws<KeyNotFoundException>(() => TestAccess.Ensure(actor, TestActorRole.DedicatedServer));
         Assert.DoesNotContain("devcommands", transport.Commands);
     }
-    [Fact] public void GenericModCommandsKeepTheirOwnAcceptanceContract()
-    {
-        Assert.Throws<ArgumentException>(() => TestAccess.RequireAccepted(ScriptedTransport.Ok("fine"), "my_mod_command"));
-    }
 }

@@ -109,10 +109,11 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
 
     private static IReadOnlyList<string> Lines(GameActor actor, string role, string command, List<TerrainSiteCommand> commands)
     {
-        CommandResult reply = actor.Execute(command, requireSuccess: false);
+        // Recorded before judging, so a refused command is in the evidence.
+        var reply = actor.Execute(command, requireAccepted: false);
         string[] lines = reply.Output.ToArray();
         commands.Add(new(role, command, DateTimeOffset.UtcNow, lines));
-        if (!reply.Ok || lines.Length == 0 || lines.Any(line => line.StartsWith("ERROR:", StringComparison.Ordinal)))
+        if (!reply.Accepted || lines.Length == 0)
             throw new InvalidOperationException($"{role} returned an incomplete or error reply for {command}: {string.Join(" | ", lines)}");
         return lines;
     }

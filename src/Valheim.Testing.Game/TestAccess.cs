@@ -39,7 +39,7 @@ public static class TestAccess
             throw new InvalidOperationException("This scenario needs client mutations: stage AllowOnServerClients=true before launch.");
         if (!state.Devcommands)
         {
-            RequireAccepted(actor.Execute("devcommands"), "devcommands"); // One toggle; verify the resulting state.
+            actor.Execute("devcommands"); // One toggle, which must be accepted; verify the resulting state.
             state = Read(actor);
             RequireRole(state, role);
             if (!state.Devcommands) throw new InvalidOperationException("The actor did not enable devcommands.");
@@ -49,7 +49,7 @@ public static class TestAccess
         {
             if (!state.ProfileAvailable) throw new InvalidOperationException("No disposable profile is loaded to acknowledge cheats.");
             string command = role == TestActorRole.DedicatedServer ? "confirmcheats" : "cli_acknowledge_local_cheats";
-            RequireAccepted(actor.Execute(command), command);
+            actor.Execute(command); // must be accepted; the state read below decides
             state = Read(actor);
         }
         RequireRole(state, role);
@@ -68,19 +68,5 @@ public static class TestAccess
             _ => false,
         };
         if (!matches) throw new InvalidOperationException("The actor is not in the requested test-access role: " + role);
-    }
-
-    /// <summary>
-    /// Recognises known console refusals for the three access setup commands only. Raw output remains in the trace.
-    /// The caller must still verify state after acceptance; this is not a general parser for arbitrary mod replies.
-    /// </summary>
-    public static void RequireAccepted(CommandResult result, string command)
-    {
-        if (command is not ("devcommands" or "confirmcheats" or "cli_acknowledge_local_cheats"))
-            throw new ArgumentException("Use the command's own structured result or semantic assertion for " + command, nameof(command));
-        if (!result.Ok || result.Output.Any(line => line.Contains("That command is a cheat", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("Error executing command", StringComparison.OrdinalIgnoreCase) ||
-            line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase) || line.StartsWith("Unknown command", StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException(command + " was refused: " + string.Join(" | ", result.Output));
     }
 }

@@ -114,8 +114,12 @@ public sealed class GameActor : IDisposable
     }
     /// <summary>After an attempted world transition, require fresh explicit environment pins.</summary>
     public void InvalidateEnvironment() { lock (_sync) _verified = false; }
-    /// <summary>Every command rechecks strict pins. False permits inspecting an expected command refusal, never a pin mismatch.</summary>
-    public CommandResult Execute(string command, bool requireSuccess = true)
+    /// <summary>
+    /// Every command rechecks strict pins. By default the reply must be accepted (<see cref="GameReply.RequireAccepted"/>):
+    /// the transport completed and the game did not refuse it. <paramref name="requireAccepted"/> false permits inspecting
+    /// an expected refusal, never a pin mismatch.
+    /// </summary>
+    public GameReply Execute(string command, bool requireAccepted = true)
     {
         lock (_sync)
         {
@@ -133,9 +137,8 @@ public sealed class GameActor : IDisposable
                     throw;
                 }
             }
-            CommandResult result = _transport.Execute(command, CommandTimeout);
-            if (requireSuccess) RequireSuccess(result);
-            return result;
+            var reply = new GameReply(command, _transport.Execute(command, CommandTimeout));
+            return requireAccepted ? reply.RequireAccepted() : reply;
         }
     }
     private void CheckEnvironment()
@@ -215,8 +218,8 @@ public sealed class GameActor : IDisposable
     {
         if (arguments.Any(x => x.Any(char.IsWhiteSpace) || x.Length == 0)) throw new ArgumentException("Extension arguments must be single tokens in preview 1.");
         // ParseInvocation checks success itself, after reading a failed extension's own code and message.
-        var reply = Execute("cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments)), requireSuccess: false);
-        return ParseInvocation(command, reply);
+        var reply = Execute("cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments)), requireAccepted: false);
+        return ParseInvocation(command, reply.Result);
     }
     /// <summary>
     /// Issue one extension mutation on a fresh, strictly pinned CLI connection. Cancellation closes that socket, which
@@ -281,10 +284,10 @@ public sealed class GameActor : IDisposable
     /// </summary>
     public string SaveConfirmed()
     {
-        var reply = Execute("cli_save");
-        return reply.Output.FirstOrDefault(line => line.StartsWith("OK: SAVE ", StringComparison.Ordinal))
-            ?? throw new InvalidOperationException("No confirmed world save.");
+        return Execute("cli_save").RequireLine("OK: SAVE ", "No confirmed world save");
     }
+    /// <summary>The one structured line starting with <paramref name="prefix"/>, parsed; none or several is a failure.</summary>
+    public static JsonDocument ParseLine(GameReply reply, string prefix) => ParseLine(reply.Result, prefix);
     public static JsonDocument ParseLine(CommandResult reply, string prefix)
     {
         string[] lines = reply.Output.Where(x => x.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
