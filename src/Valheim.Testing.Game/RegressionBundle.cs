@@ -533,10 +533,11 @@ public static class RegressionBundle
         if (result.Passed != stepsPassed)
             throw new InvalidOperationException($"{where}: result.json says Passed={result.Passed}, but its steps say {(stepsPassed ? "every step passed" : "a step failed")}: the file was edited after the run.");
         var suite = XDocument.Load(junitPath).Root ?? throw new InvalidDataException($"{where}: junit.xml is empty.");
-        var cases = suite.Elements("testcase").Where(test => test.Attribute("name")?.Value != EnvironmentPinning.NotPinned).ToList();
+        // junit.xml holds one suite per phase, in phase order (a schema-1 report has one suite and every step in Scenario).
+        var cases = suite.Descendants("testcase").Where(test => test.Attribute("name")?.Value != EnvironmentPinning.NotPinned).ToList();
         var disagreements = new List<string>();
         if (cases.Count != result.Steps.Count) disagreements.Add($"{cases.Count} test cases for {result.Steps.Count} steps");
-        foreach (var (step, test) in result.Steps.Zip(cases))
+        foreach (var (step, test) in result.Steps.OrderBy(step => step.Phase).Zip(cases))
         {
             if (test.Attribute("name")?.Value != step.Name) disagreements.Add($"step \"{step.Name}\" is test case \"{test.Attribute("name")?.Value}\"");
             else if ((test.Element("failure") == null) != step.Passed) disagreements.Add($"\"{step.Name}\" is {(step.Passed ? "passed" : "failed")} in result.json and {(step.Passed ? "failed" : "passed")} in junit.xml");

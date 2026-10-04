@@ -287,7 +287,7 @@ public sealed class ClientRoundsTests : IDisposable
         report.Write(Output);
         var junit = System.Xml.Linq.XDocument.Load(Path.Combine(Output, "junit.xml")).Root!;
         Assert.Equal("1", junit.Attribute("failures")!.Value);
-        Assert.NotNull(junit.Elements("testcase").Single(c => c.Attribute("name")!.Value == "confirmed world save").Element("failure"));
+        Assert.NotNull(junit.Descendants("testcase").Single(c => c.Attribute("name")!.Value == "confirmed world save").Element("failure"));
         Assert.False(JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "result.json"))).RootElement.GetProperty("Passed").GetBoolean());
     }
 
