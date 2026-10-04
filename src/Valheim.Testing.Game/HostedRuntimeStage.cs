@@ -177,7 +177,7 @@ public static class HostedRuntimeStage
         var sourceListing = inspectedSource ?? await InspectSourceAsync(host, kind, source, loaderPackage, timeout, cancellation).ConfigureAwait(false);
         string payload = Path.Combine(Path.GetTempPath(), "valheim-host-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(payload);
-        bool shipped = false, copied = false, prepared = false;
+        bool shipped = false, copied = false;
         try
         {
             foreach (var (relative, value) in selected)
@@ -188,14 +188,14 @@ public static class HostedRuntimeStage
                 if (!WorldFixture.Hash(target).Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("The local staging copy changed: " + relative);
             }
-            await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
             shipped = true;
+            await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
             var shippedListing = await HostInstall.ListAsync(host, staging, timeout, cancellation: cancellation).ConfigureAwait(false);
             foreach (var (relative, value) in selected)
                 if (!shippedListing.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException($"The staged file {relative} on {host.Name} differs from the reviewed local file.");
-            await HostInstall.CopyAsync(host, source, destination, timeout, cancellation).ConfigureAwait(false);
             copied = true;
+            await HostInstall.CopyAsync(host, source, destination, timeout, cancellation).ConfigureAwait(false);
             var copy = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
             if (sourceListing.Files.Count != copy.Files.Count || sourceListing.Files.Any(file =>
                 !copy.Files.TryGetValue(file.Key, out string? hash) || !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase)))
@@ -225,15 +225,14 @@ public static class HostedRuntimeStage
                     if (runtime.Files.Keys.Any(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !selected.ContainsKey(name)))
                         throw new IOException("An unselected loader file survived preparation: " + prefix);
             }
-            prepared = true;
             return runtime;
         }
-        finally
+        catch (Exception original)
         {
-            if (!prepared && (shipped || copied))
+            if (shipped || copied)
             {
-                // The source is never a cleanup target. An unproven host cleanup is left visible as a failed disposable
-                // copy so the caller can investigate it; the original preparation failure remains the primary error.
+                // These are intended owned paths, recorded before each effect. A ship/copy can partly succeed before
+                // losing its reply. Cleanup is uncancelled and its failure must stay alongside the original failure.
                 try
                 {
                     var cleanup = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
@@ -241,9 +240,15 @@ public static class HostedRuntimeStage
                             ["parent"] = destination[..destination.LastIndexOfAny(['/', '\\'])] },
                         timeout, CancellationToken.None).ConfigureAwait(false);
                     cleanup.EnsureSuccess($"Cleaning failed preparation on {host.Name}");
+                    if (InteractiveClient.Line(cleanup.Stdout, "VT-STAGE-CLEANED") == null)
+                        throw new HostOperationException($"Cleanup of failed preparation on {host.Name} was not proven", cleanup);
                 }
-                catch { /* The caller's host lock and failed copy remain for inspection. */ }
+                catch (Exception cleanup) { throw new AggregateException("Preparation failed and cleanup of its owned paths was not proven.", original, cleanup); }
             }
+            throw;
+        }
+        finally
+        {
             Directory.Delete(payload, recursive: true);
         }
     }
