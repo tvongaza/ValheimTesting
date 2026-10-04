@@ -5,7 +5,11 @@ namespace Valheim.Testing.Game;
 /// <c>terrain-site</c>, <c>area-objects</c>, <c>review-still</c>, <c>review-clip</c>), the site or capture id, the world
 /// it was taken in, the file (relative to the report directory when it lies inside it) and that file's SHA-256.
 /// </summary>
-public sealed record EvidenceReference(string Kind, string Site, string WorldUid, string File, string Sha256);
+public sealed record EvidenceReference(string Kind, string Site, string WorldUid, string File, string Sha256)
+{
+    /// <summary>The phase of the step it was attached in, set by <see cref="ScenarioReport.Write"/> from where it was attached (<see cref="StepPhase.Scenario"/> outside any step).</summary>
+    public StepPhase Phase { get; internal init; } = StepPhase.Scenario;
+}
 
 /// <summary>
 /// Evidence that <see cref="ScenarioReport.Write"/> serializes itself, to <c>evidence/&lt;kind&gt;-NNN.json</c> beside

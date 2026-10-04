@@ -82,8 +82,14 @@ public sealed class PinnedServerRunTests : IDisposable
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
         Assert.Equal(new[] { "enough free disk space for the copies", "copy and verify pinned runtime", "copy and verify pinned world", "copied runtime has the plan's server executable",
-                "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers", "prepared only; no game launched" },
+                "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers", "prepared only; no game launched",
+                "remove the runtime copy, keeping what the run changed" },
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
+        // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
+        Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
+            result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
+        Assert.Equal(new[] { "Preflight", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup" },
+            result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
         Assert.Equal("validate", result.GetProperty("Provenance").GetProperty("mode").GetString());
         Assert.Equal(InstallPins.Of(Runtime).Game, result.GetProperty("Provenance").GetProperty("runtimeGameSha256").GetString());
         Assert.Equal("strict", result.GetProperty("Pinning").GetString());
@@ -186,7 +192,10 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.False(stop.GetProperty("Passed").GetBoolean()); Assert.Equal("Fake server refused to stop.", stop.GetProperty("Error").GetString());
         var junit = System.Xml.Linq.XDocument.Load(Path.Combine(Output, "junit.xml")).Root!;
         Assert.Equal("1", junit.Attribute("failures")!.Value);
-        Assert.Contains(junit.Elements("testcase"), c => c.Attribute("name")!.Value == "stop only owned server" && c.Element("failure") != null);
+        // The failed stop is in the Cleanup suite; the runtime was ready, and cleanup is not verified.
+        var cleanup = junit.Elements("testsuite").Single(s => s.Attribute("name")!.Value.EndsWith(" / cleanup", StringComparison.Ordinal));
+        Assert.Contains(cleanup.Elements("testcase"), c => c.Attribute("name")!.Value == "stop only owned server" && c.Element("failure") != null);
+        Assert.Equal((true, false), (result.GetProperty("RuntimeReady").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
         Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json")));
         server.RefuseStop = false;
     }

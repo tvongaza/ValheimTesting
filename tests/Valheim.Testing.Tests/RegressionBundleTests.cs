@@ -243,7 +243,7 @@ public sealed class RegressionBundleTests : IDisposable
         _rig.WriteTemplate();
         var spec = _rig.RetainedSpec(native);
         spec.Arms["candidate"].Commit = null;
-        Assert.Contains("no run-manifest.json records the build's source commit", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(spec, _rig.Output(), _rig.Sources)).Message);
+        Assert.Contains("neither run-manifest.json nor the environment records the build's source commit", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(spec, _rig.Output(), _rig.Sources)).Message);
     }
 
     [Fact] public void TheSampleBundleSpecNamesOnlyKnownFields()

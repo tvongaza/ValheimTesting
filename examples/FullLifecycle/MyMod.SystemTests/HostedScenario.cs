@@ -157,7 +157,7 @@ public static class HostedRun
             {
                 // The run's first step, alone: a wrong fixture or install fails here as it would before the run copies anything.
                 report.Provenance["cliPreflight"] = plan.Client.CliPreflight;
-                report.Step(plan.Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
+                report.Step(StepPhase.Preflight, plan.Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
                     () => plan.Client.Preflight(CliCapabilities.HostedRounds));
             }
             else

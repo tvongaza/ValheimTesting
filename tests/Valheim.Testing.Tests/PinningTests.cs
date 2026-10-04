@@ -328,7 +328,8 @@ public sealed class PinningTests : IDisposable
         Assert.Contains("copy unpinned runtime as found", names); Assert.Contains("copy unpinned world as found", names);
         Assert.Contains("record the unpinned runtime's game build, BepInEx core and patchers", names);
         if (mode == "run") Assert.DoesNotContain(server.Events, e => e.StartsWith("pins", StringComparison.Ordinal)); // No cli_expect was sent.
-        var junit = XDocument.Load(Path.Combine(output, "junit.xml")).Root!;
+        // The marker sits in the Preflight suite: the pinning decision is made before anything is copied.
+        var junit = XDocument.Load(Path.Combine(output, "junit.xml")).Root!.Elements("testsuite").Single(s => s.Attribute("name")!.Value.EndsWith(" / preflight", StringComparison.Ordinal));
         Assert.Equal("1", junit.Attribute("skipped")!.Value);
         Assert.Contains(junit.Elements("properties").Elements("property"), p => p.Attribute("name")!.Value == "environment" && p.Attribute("value")!.Value.StartsWith("environment not pinned"));
         Assert.Contains(junit.Elements("testcase"), c => c.Attribute("name")!.Value == "environment not pinned" && c.Element("skipped") != null);

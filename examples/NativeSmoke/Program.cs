@@ -30,6 +30,7 @@ using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); };
 var elapsed = Stopwatch.StartNew();
 RegressionEnvironment? environment = null;
+ScenarioReport? lastArm = null; string? lastArmOutput = null;
 int exitCode = 3;
 string? outcome = null;
 try
@@ -95,7 +96,8 @@ try
             CharacterStore = character.Root, SteamUserDataDirectory = steamUserdata },
         Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
             { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = WorldFixture.Hash(mod),
-                Commit = options.TryGetValue("--source", out string? source) ? source : "artifact-sha256:" + WorldFixture.Hash(mod) } } },
+                // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
+                Commit = options.GetValueOrDefault("--source") } } },
         LoaderPackage = loader,
     };
     if (options.TryGetValue("--expected-log-error", out string? expectedError))
@@ -113,10 +115,12 @@ try
     bool passed = true;
     foreach (string arm in environment.Mod.Arms.Keys)
     {
-        var report = runner.Run(arm, Path.Combine(output, "evidence", arm), "selected plugin loads in a hosted fixture",
+        string armOutput = Path.Combine(output, "evidence", arm);
+        var report = runner.Run(arm, armOutput, "selected plugin loads in a hosted fixture",
             ["first"], _ => { }, cancel.Token, afterPinnedClientOpened: ready =>
                 ready.Provenance["firstModLoadedSecondsFromCommand"] =
                     elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
+        lastArm = report; lastArmOutput = armOutput; // Only an arm whose report was written records the removal.
         passed &= report.Passed;
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.
         if (!report.Passed) break;
@@ -131,7 +135,8 @@ catch (Exception failure) when (failure is ArgumentException or IOException or I
 finally
 {
     if (environment != null)
-        try { TargetedRegression.Remove(environment); }
+        // With a run, its last arm's result.json records the removal as its Cleanup step; before any run there is no report.
+        try { if (lastArm != null) TargetedRegression.Remove(environment, lastArm, lastArmOutput!); else TargetedRegression.Remove(environment); }
         catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             // A partially copied install may not yet have its ownership marker. Never delete it by path alone.

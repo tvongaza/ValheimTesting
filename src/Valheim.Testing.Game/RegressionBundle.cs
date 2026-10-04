@@ -505,7 +505,7 @@ public static class RegressionBundle
             foreach (var result in results)
             {
                 var arm = template.Mod.Arms[result.Arm];
-                if (arm.Commit.Length != 0 && !IsPlaceholder(arm.Commit) && arm.Commit != result.Commit)
+                if (arm.Commit is { Length: > 0 } && !IsPlaceholder(arm.Commit) && arm.Commit != result.Commit)
                     throw new InvalidOperationException($"{TemplateFile}: arm {result.Arm} names commit {arm.Commit}, and the evidence ran {result.Commit}.");
                 if (arm.Sha256.Length != 0 && !IsPlaceholder(arm.Sha256) && result.Sha256 != null && !arm.Sha256.Equals(result.Sha256, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException($"{TemplateFile}: arm {result.Arm} pins sha256 {arm.Sha256}, and the evidence ran {result.Sha256}.");
@@ -533,10 +533,11 @@ public static class RegressionBundle
         if (result.Passed != stepsPassed)
             throw new InvalidOperationException($"{where}: result.json says Passed={result.Passed}, but its steps say {(stepsPassed ? "every step passed" : "a step failed")}: the file was edited after the run.");
         var suite = XDocument.Load(junitPath).Root ?? throw new InvalidDataException($"{where}: junit.xml is empty.");
-        var cases = suite.Elements("testcase").Where(test => test.Attribute("name")?.Value != EnvironmentPinning.NotPinned).ToList();
+        // junit.xml holds one suite per phase, in phase order (a schema-1 report has one suite and every step in Scenario).
+        var cases = suite.Descendants("testcase").Where(test => test.Attribute("name")?.Value != EnvironmentPinning.NotPinned).ToList();
         var disagreements = new List<string>();
         if (cases.Count != result.Steps.Count) disagreements.Add($"{cases.Count} test cases for {result.Steps.Count} steps");
-        foreach (var (step, test) in result.Steps.Zip(cases))
+        foreach (var (step, test) in result.Steps.OrderBy(step => step.Phase).Zip(cases))
         {
             if (test.Attribute("name")?.Value != step.Name) disagreements.Add($"step \"{step.Name}\" is test case \"{test.Attribute("name")?.Value}\"");
             else if ((test.Element("failure") == null) != step.Passed) disagreements.Add($"\"{step.Name}\" is {(step.Passed ? "passed" : "failed")} in result.json and {(step.Passed ? "failed" : "passed")} in junit.xml");
@@ -560,7 +561,7 @@ public static class RegressionBundle
             return given.Count == 0 ? (null, null) : (given[0].Value, given[0].Source);
         }
         string commit = Agree("commit", ("run-manifest.json", run?.ModCommit), ("the environment manifest", declared?.Commit), ("the spec", arm.Commit)).Value
-            ?? throw new InvalidOperationException($"{where}: no run-manifest.json records the build's source commit; set the arm's commit in the spec.");
+            ?? throw new InvalidOperationException($"{where}: neither run-manifest.json nor the environment records the build's source commit; set the arm's commit in the spec.");
         string md5 = Agree("md5", ("run-manifest.json", run?.Arms.FirstOrDefault(entry => entry.Arm == name)?.Md5), ("the spec", arm.Md5)).Value?.ToLowerInvariant()
             ?? throw new InvalidOperationException($"{where}: no run-manifest.json records the build's MD5; set the arm's md5 in the spec (the value its strict pins name).");
         var (sha256, sha256Source) = Agree("sha256", ("run-manifest.json", run?.ModSha256), ("the environment manifest", declared?.Sha256),

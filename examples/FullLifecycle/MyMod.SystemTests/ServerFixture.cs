@@ -70,7 +70,7 @@ public static class ServerFixture
             if (session == null) return;
             var owned = session; session = null;
             report.Provenance["ownedPids"] = string.Join(",", owned.StartedProcesses);
-            try { report.Step("stop only the owned server", owned.Dispose); }
+            try { report.Step(StepPhase.Cleanup, "stop only the owned server", owned.Dispose); }
             catch { if (copy != null) copy.Preserve = true; throw; }
         }
         try
@@ -87,9 +87,9 @@ public static class ServerFixture
 
             IReadOnlyDictionary<string, string> runtimeHashes = null!;
             Dictionary<string, string> pins = [];
-            report.Step("pin the runtime and its five plugins", () => { runtimeHashes = WorldFixture.Manifest(runtime); pins = PluginPins(runtime); });
+            report.Step(StepPhase.Preflight, "pin the runtime and its five plugins", () => { runtimeHashes = WorldFixture.Manifest(runtime); pins = PluginPins(runtime); });
             report.Provenance["pins"] = string.Join(" ", pins.Select(pin => pin.Key + "=" + pin.Value));
-            report.Step("copy the runtime; the source is never launched", () =>
+            report.Step(StepPhase.Setup, "copy the runtime; the source is never launched", () =>
             {
                 copy = WorldFixture.Copy(runtime, output, runtimeHashes);
                 ServerLaunch.RequireExecutable(copy.DirectoryPath);
@@ -102,8 +102,8 @@ public static class ServerFixture
             var plan = new LifecyclePlan { Scenario = LifecyclePlan.ServerScenario, Arguments = arguments, Port = CliPort };
             var started = session = Session(plan, copy!.DirectoryPath, world, pins, output, cancellation.Token);
             GameActor server = null!;
-            report.Step("start the owned server on a new world, plugins pinned", () => server = started.Start());
-            report.Step("verify test access on the disposable server", () => TestAccess.Ensure(server, TestActorRole.DedicatedServer));
+            report.Step(StepPhase.Setup, "start the owned server on a new world, plugins pinned", () => server = started.Start());
+            report.Step(StepPhase.Setup, "verify test access on the disposable server", () => TestAccess.Ensure(server, TestActorRole.DedicatedServer));
             WorldFacts facts = new();
             report.Step("read the new world's uid", () => facts = ReadWorld(server));
             report.Provenance["worldUid"] = facts.Uid; report.Provenance["worldSeed"] = facts.Seed;
@@ -130,7 +130,9 @@ public static class ServerFixture
             Console.CancelKeyPress -= onCancel;
             try { StopOwned(); } catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
             // The copy only served this boot; its logs were copied into the output when the server stopped.
-            try { copy?.Dispose(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Console.Error.WriteLine("Could not remove the runtime copy: " + error.Message); }
+            if (copy != null)
+                try { report.Step(StepPhase.Cleanup, "remove the runtime copy", copy.Dispose); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Console.Error.WriteLine("Could not remove the runtime copy: " + error.Message); }
             if (ownOutput) report.Write(output);
         }
         Console.WriteLine(report.Passed ? "PREPARED (a new world and its dry-site-server plan; not an acceptance test)" : "FAIL");

@@ -106,10 +106,10 @@ internal sealed class HostedServerRun
     /// <summary>Takes the server host's lock, then copies the host's install into this run's runtime and verifies every file there.</summary>
     public async Task LockAndCopyRuntimeAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, CancellationToken cancellation)
     {
-        await report.StepAsync("take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
+        await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         // Only an unpinned plan may leave out the manifest; the copy is then recorded as found.
         bool verified = pinned || plan.Runtime.Sha256.Count != 0;
-        await report.StepAsync(verified ? "copy and verify pinned runtime on the server host" : "copy unpinned runtime on the server host as found", async () =>
+        await report.StepAsync(StepPhase.Setup, verified ? "copy and verify pinned runtime on the server host" : "copy unpinned runtime on the server host as found", async () =>
         {
             await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, Long, cancellation).ConfigureAwait(false);
             _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, Long, null, cancellation).ConfigureAwait(false);
@@ -123,7 +123,7 @@ internal sealed class HostedServerRun
         if (!plan.Crossplay) return Task.CompletedTask;
         if (Host.Shell.Kind == HostShellKind.PowerShell)
         {
-            report.Step("the Windows runtime has crossplay's native library", () =>
+            report.Step(StepPhase.Setup, "the Windows runtime has crossplay's native library", () =>
             {
                 const string party = "valheim_server_Data/Plugins/x86_64/Party.dll";
                 if (!(_runtime?.Files.ContainsKey(party) ?? false))
@@ -132,13 +132,13 @@ internal sealed class HostedServerRun
             });
             return Task.CompletedTask;
         }
-        return report.StepAsync("the server host can load crossplay's libraries", async () =>
+        return report.StepAsync(StepPhase.Setup, "the server host can load crossplay's libraries", async () =>
             report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, RuntimeDirectory, Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
     }
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
     public Task ShipWorldAsync(ScenarioReport report, string localWorld, CancellationToken cancellation) =>
-        report.StepAsync("ship and verify the world copy on the server host", async () =>
+        report.StepAsync(StepPhase.Setup, "ship and verify the world copy on the server host", async () =>
         {
             var manifest = WorldFixture.Manifest(localWorld);
             await Host.ShipFilesAsync(localWorld, WorldDirectory, Long, cancellation).ConfigureAwait(false);
@@ -152,7 +152,7 @@ internal sealed class HostedServerRun
     {
         var runtime = _runtime ?? throw new InvalidOperationException("Copy the runtime first.");
         // Hashes do not cover file modes: a launch also requires the copy's execute bit.
-        report.Step("copied runtime has the plan's server executable", () =>
+        report.Step(StepPhase.Setup, "copied runtime has the plan's server executable", () =>
         {
             var platform = HostInstall.DetectServer(runtime);
             plan.CheckExecutable(platform);
@@ -160,8 +160,8 @@ internal sealed class HostedServerRun
             if (platform == ServerPlatform.Linux && !runtime.Executables.Contains(ServerLaunch.LinuxExecutable))
                 throw new InvalidOperationException($"{ServerLaunch.LinuxExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
         });
-        report.Step("copied runtime's BepInEx patchers are the plan's", () => HostInstall.RequirePatchers(runtime, plan.Patchers, "runtime"));
-        report.Step(pinned ? "copied runtime is the pinned game build, BepInEx core and patchers" : "record the unpinned runtime's game build, BepInEx core and patchers", () =>
+        report.Step(StepPhase.Setup, "copied runtime's BepInEx patchers are the plan's", () => HostInstall.RequirePatchers(runtime, plan.Patchers, "runtime"));
+        report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, BepInEx core and patchers" : "record the unpinned runtime's game build, BepInEx core and patchers", () =>
             (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, BepInEx core and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, "runtime")
                 : HostInstall.Pins(runtime)).Record(report.Provenance, "runtime"));
     }
@@ -169,7 +169,7 @@ internal sealed class HostedServerRun
     /// <summary>Refuses an incoherent Windows Doorstop pair in the copied runtime before its server can start.</summary>
     public Task CheckWindowsLoaderAsync(ScenarioReport report, CancellationToken cancellation) => Host.Shell.Kind != HostShellKind.PowerShell
         ? Task.CompletedTask
-        : report.StepAsync("copied Windows runtime has a coherent Doorstop loader", async () =>
+        : report.StepAsync(StepPhase.Setup, "copied Windows runtime has a coherent Doorstop loader", async () =>
         {
             string proxyPath = HostInstall.Join(RuntimeDirectory, BepInExLoader.WindowsProxy);
             string configPath = HostInstall.Join(RuntimeDirectory, BepInExLoader.WindowsConfig);
@@ -184,8 +184,8 @@ internal sealed class HostedServerRun
     public async Task OpenAsync(ScenarioReport report, CancellationToken cancellation)
     {
         // Catch an occupied port without issuing even a read to an unrelated server.
-        await report.StepAsync("CLI port is free on the server host", () => HostInstall.RequirePortFreeAsync(Host, Role.CliPort, Quick, cancellation)).ConfigureAwait(false);
-        await report.StepAsync("open the loopback CLI tunnel to the server host", async () =>
+        await report.StepAsync(StepPhase.Setup, "CLI port is free on the server host", () => HostInstall.RequirePortFreeAsync(Host, Role.CliPort, Quick, cancellation)).ConfigureAwait(false);
+        await report.StepAsync(StepPhase.Setup, "open the loopback CLI tunnel to the server host", async () =>
         {
             _tunnel = await Host.OpenCliTunnelAsync(Role.CliPort, Quick, Role.LocalCliPort, cancellation).ConfigureAwait(false);
             report.Provenance["cliTunnel"] = $"{_tunnel.Address}:{_tunnel.LocalPort} -> {Role.Host} 127.0.0.1:{_tunnel.HostPort}" + (_tunnel.Forwarded ? " (ssh forward)" : "");
@@ -281,7 +281,7 @@ internal sealed class HostedServerRun
         var section = Profile.SteamAccounts;
         if (section == null) return null;
         ClientAccount? held = null;
-        await report.StepAsync($"lease a Steam account for client {name}", async () =>
+        await report.StepAsync(StepPhase.Setup, $"lease a Steam account for client {name}", async () =>
         {
             IGameHost leaseHost;
             lock (_clientState)
@@ -296,7 +296,7 @@ internal sealed class HostedServerRun
             hold.Lost.Register(() => AccountLost?.Invoke());
         }).ConfigureAwait(false);
         if (section.CheckSignedIn)
-            await report.StepAsync($"client {name}'s host is signed in to Steam account {held!.Hold.Account} (signed-in check)",
+            await report.StepAsync(StepPhase.Setup, $"client {name}'s host is signed in to Steam account {held!.Hold.Account} (signed-in check)",
                 () => held.Hold.CheckSignedInAsync(clientHost(), cancellation)).ConfigureAwait(false);
         return held;
     }
@@ -438,12 +438,12 @@ internal sealed class HostedServerRun
         var failures = new List<Exception>();
         async Task Try(string step, Func<Task> action)
         {
-            try { await report.StepAsync(step, action).ConfigureAwait(false); }
+            try { await report.StepAsync(StepPhase.Cleanup, step, action).ConfigureAwait(false); }
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         }
         if (launched && _worldShipped && serverStopped)
             await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long)).ConfigureAwait(false);
-        if (_runtime != null) await RetireRuntimeAsync(report, output, launched, serverStopped, keepRuntime).ConfigureAwait(false);
+        if (_runtime != null) await Try("remove the server host's runtime copy, keeping what the run changed", () => RetireRuntimeAsync(report, output, launched, serverStopped, keepRuntime)).ConfigureAwait(false);
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         foreach (var account in _accounts)
         {
@@ -477,7 +477,8 @@ internal sealed class HostedServerRun
     // As on this machine (PinnedServerRun.RetireRuntime): after a clean stop, keep what the run added or changed in the host's
     // runtime copy (by its hashes against the listing made after copying) and remove the copy, which is about 2 GB of the
     // host install's own files. A copy whose server may still run, or one kept on request, stays and the report says where.
-    // A cleanup problem is reported, never a test failure. Still under the server host's lock.
+    // A cleanup problem is recorded and rethrown, so it fails the Cleanup step (the scenario's own result stands). Still
+    // under the server host's lock.
     private async Task RetireRuntimeAsync(ScenarioReport report, string output, bool launched, bool serverStopped, bool keep)
     {
         string where = Host.Name + ":" + RuntimeDirectory;
@@ -536,7 +537,7 @@ internal sealed class HostedServerRun
         catch (Exception error) when (error is HostOperationException or IOException or InvalidOperationException or FormatException or UnauthorizedAccessException)
         {
             report.Provenance["runtimeCopy"] = $"cleanup failed, {where} may remain: {error.Message}";
-            Console.Error.WriteLine("Warning: " + report.Provenance["runtimeCopy"]);
+            throw;
         }
     }
 

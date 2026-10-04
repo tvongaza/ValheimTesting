@@ -220,12 +220,13 @@ public sealed class RegressionArm
 {
     public string File { get; set; } = "";
     public string Sha256 { get; set; } = "";
-    public string Commit { get; set; } = "";
+    /// <summary>The source commit the arm was built from, when known; never a stand-in such as a file hash.</summary>
+    public string? Commit { get; set; }
     public void Validate(string field)
     {
         if (!Path.IsPathFullyQualified(File)) throw new ArgumentException($"{field}.file: give the arm's built DLL.");
         if (Sha256.Length != 64 || !Sha256.All(Uri.IsHexDigit)) throw new ArgumentException($"{field}.sha256: pin the arm's build by its full SHA256; the hash is what tells the arms apart.");
-        if (Commit.Length == 0 || Commit.Any(char.IsWhiteSpace)) throw new ArgumentException($"{field}.commit: give the source commit the arm was built from.");
+        if (Commit != null && (Commit.Length == 0 || Commit.Any(char.IsWhiteSpace))) throw new ArgumentException($"{field}.commit: give the source commit the arm was built from, or leave it out when it is not known.");
     }
 }
 
@@ -239,13 +240,13 @@ public sealed record StagedFile(string Role, string Path, string Sha256, string 
 /// <param name="Capabilities">Every ValheimCLI extension command the run uses: checked against <c>cli.manifest</c> before launch, when set, and live.</param>
 /// <param name="LiveOnlyCapabilities">The scenario's commands of other owners (a probe's or the mod's extensions): checked live only.</param>
 /// <param name="CliManifest">What the static ValheimCLI check found, or why none ran.</param>
-public sealed record RunManifest(string Name, string Arm, string ModPlugin, string ModCommit, string ModSha256, bool Repeatability,
+public sealed record RunManifest(string Name, string Arm, string ModPlugin, string? ModCommit, string ModSha256, bool Repeatability,
     IReadOnlyList<RunManifestArm> Arms, IReadOnlyList<StagedFile> Allowlist, IReadOnlyList<StagedFile> Configs,
     InstallPins InstallPins, string World, string WorldUid, int FixtureFiles, IReadOnlyList<string> Capabilities,
     IReadOnlyList<string> LiveOnlyCapabilities, string CliManifest);
 
 /// <summary>One arm of the comparison: its name, commit, distinct artifact name and SHA256.</summary>
-public sealed record RunManifestArm(string Arm, string Commit, string Artifact, string Sha256, string Md5);
+public sealed record RunManifestArm(string Arm, string? Commit, string Artifact, string Sha256, string Md5);
 
 /// <summary>
 /// One arm staged into the disposable install and preflighted: the strict client plan the runner hands to
@@ -282,8 +283,8 @@ public sealed class StagedArm
     /// <summary>The arm table and allowlist as lines for a person to review.</summary>
     public IEnumerable<string> Describe()
     {
-        yield return $"{Manifest.Name}: arm {Arm}, mod {Manifest.ModPlugin} at {Manifest.ModCommit}, sha256 {Manifest.ModSha256}{(Manifest.Repeatability ? " (repeatability run)" : "")}";
-        foreach (var arm in Manifest.Arms) yield return $"  arm {arm.Arm,-12} commit {arm.Commit,-12} artifact {arm.Artifact}  sha256 {arm.Sha256}  md5 {arm.Md5}";
+        yield return $"{Manifest.Name}: arm {Arm}, mod {Manifest.ModPlugin} at {Manifest.ModCommit ?? "an unrecorded commit"}, sha256 {Manifest.ModSha256}{(Manifest.Repeatability ? " (repeatability run)" : "")}";
+        foreach (var arm in Manifest.Arms) yield return $"  arm {arm.Arm,-12} commit {arm.Commit ?? "unrecorded",-12} artifact {arm.Artifact}  sha256 {arm.Sha256}  md5 {arm.Md5}";
         foreach (var file in Manifest.Allowlist) yield return $"  {file.Role,-12} {file.Path}  md5 {file.Md5}  {string.Join(", ", file.Plugins)}";
         yield return $"  fixture      {Manifest.World} uid {Manifest.WorldUid} ({Manifest.FixtureFiles} files)";
         yield return $"  capabilities {string.Join(", ", Manifest.Capabilities)}{(Manifest.LiveOnlyCapabilities.Count == 0 ? "" : "; live only: " + string.Join(", ", Manifest.LiveOnlyCapabilities))}";
@@ -296,7 +297,7 @@ public sealed class StagedArm
         provenance["regression"] = Manifest.Name;
         provenance["arm"] = Arm;
         provenance["modPlugin"] = Manifest.ModPlugin;
-        provenance["modCommit"] = Manifest.ModCommit;
+        if (Manifest.ModCommit != null) provenance["modCommit"] = Manifest.ModCommit;
         provenance["modSha256"] = Manifest.ModSha256;
         provenance["allowlist"] = string.Join(", ", Manifest.Allowlist.Select(file => $"{file.Path}={file.Md5}"));
         provenance["worldUid"] = Manifest.WorldUid;
@@ -500,13 +501,13 @@ public sealed class TargetedRegression
             if (Environment.Client.CharacterStore is { } store)
             {
                 string save = Environment.Client.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(Environment.Game));
-                report.Step("stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
+                report.Step(StepPhase.Setup, "stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
                     store, Environment.Client.Character, Path.Combine(save, "characters_local"),
                     Environment.Client.SteamUserDataDirectory!, Environment.Client.Character));
                 report.Provenance["characterSource"] = "registered disposable store";
             }
             StagedArm? stagedArm = null;
-            report.Step($"stage arm {arm} from the allowlist and preflight it, before the game starts", () => stagedArm = Stage(arm));
+            report.Step(StepPhase.Setup, $"stage arm {arm} from the allowlist and preflight it, before the game starts", () => stagedArm = Stage(arm));
             var staged = stagedArm!;
             staged.Record(report.Provenance);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
@@ -525,7 +526,7 @@ public sealed class TargetedRegression
             {
                 // ValheimCLI's own commands were required when the client answered; a probe's are live once it registered them.
                 if (round.Index == 0 && LiveOnlyCapabilities.Count != 0)
-                    round.Step("the client offers the scenario's probe and mod commands", () => CliCapabilities.Require(round.Client, LiveOnlyCapabilities));
+                    round.Step(StepPhase.Setup, "the client offers the scenario's probe and mod commands", () => CliCapabilities.Require(round.Client, LiveOnlyCapabilities));
                 measure(round);
             });
         }
@@ -537,13 +538,35 @@ public sealed class TargetedRegression
         finally
         {
             if (characterStage != null)
-                try { report.Step("remove only the staged test character", characterStage.Dispose); }
-                catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure("character cleanup failed", error); }
+                try { report.Step(StepPhase.Cleanup, "remove only the staged test character", characterStage.Dispose); }
+                catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure(StepPhase.Cleanup, "character cleanup failed", error); }
             if (logs.Count != 0) report.ScanLogs(logs, Environment.LogScan);
-            report.Provenance["disposableInstall"] = "kept for the next arm; remove it with TargetedRegression.Remove";
+            // Kept for the next arm. Whoever removes it (TargetedRegression.Remove) records that in the last arm's report.
+            report.Provenance["disposableInstall"] = "kept after this arm";
             report.Write(output);
         }
         return report;
+    }
+
+    /// <summary>
+    /// Deletes the disposable install as a <see cref="StepPhase.Cleanup"/> step of the last arm's report, records what
+    /// happened to it (<c>disposableInstall</c>) and writes that report again to <paramref name="lastArmOutput"/>, so its
+    /// <c>result.json</c> says whether cleanup was verified. Rethrows a refusal after recording it.
+    /// </summary>
+    public static void Remove(RegressionEnvironment environment, ScenarioReport lastArm, string lastArmOutput)
+    {
+        ArgumentNullException.ThrowIfNull(lastArm);
+        try
+        {
+            lastArm.Step(StepPhase.Cleanup, "remove the disposable install", () => Remove(environment));
+            lastArm.Provenance["disposableInstall"] = "removed";
+        }
+        catch (Exception error)
+        {
+            lastArm.Provenance["disposableInstall"] = "kept, removal refused: " + error.Message;
+            throw;
+        }
+        finally { lastArm.Write(lastArmOutput); }
     }
 
     /// <summary>Deletes the disposable install, only when it carries this tool's marker.</summary>
@@ -723,11 +746,11 @@ public sealed class TargetedRegression
 
     private static void RequireArm(string name, RegressionArm arm)
     {
-        if (!File.Exists(arm.File)) throw new FileNotFoundException($"mod.arms.{name}: {arm.File} does not exist. Build commit {arm.Commit}, or correct the path.", arm.File);
+        if (!File.Exists(arm.File)) throw new FileNotFoundException($"mod.arms.{name}: {arm.File} does not exist. Build {(arm.Commit != null ? "commit " + arm.Commit : "it")}, or correct the path.", arm.File);
         string actual = WorldFixture.Hash(arm.File);
         if (!actual.Equals(arm.Sha256, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"mod.arms.{name}: {arm.File} is sha256 {actual}, but the manifest pins {arm.Sha256.ToLowerInvariant()} for commit {arm.Commit}: " +
-                $"the file is another build. Rebuild {name} from {arm.Commit} and stage that file, or review this one and pin {actual}.");
+            throw new InvalidOperationException($"mod.arms.{name}: {arm.File} is sha256 {actual}, but the manifest pins {arm.Sha256.ToLowerInvariant()}{(arm.Commit != null ? " for commit " + arm.Commit : "")}: " +
+                $"the file is another build. Rebuild {name}{(arm.Commit != null ? " from " + arm.Commit : "")} and stage that file, or review this one and pin {actual}.");
     }
 
     private static void RequireCopied(string target, string sha256)

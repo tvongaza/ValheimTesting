@@ -2,7 +2,7 @@
 
 *Assistant-written (Claude).*
 
-A run's `result.json` lists every piece of evidence the scenario attached in its `Evidence` array: what it is, where it was taken, in which world, the file and the file's SHA-256. There is one record, `EvidenceReference(Kind, Site, WorldUid, File, Sha256)`, and one way in, `ScenarioReport.Attach`. A file inside the report directory is listed by its path relative to that directory; one outside it keeps its full path.
+A run's `result.json` lists every piece of evidence the scenario attached in its `Evidence` array: what it is, where it was taken, in which world, the file and the file's SHA-256. There is one record, `EvidenceReference(Kind, Site, WorldUid, File, Sha256)`, and one way in, `ScenarioReport.Attach`. A file inside the report directory is listed by its path relative to that directory; one outside it keeps its full path. Each reference also records the `Phase` of the step it was attached in (`Scenario` outside any step), so evidence taken while setting up is told apart from the scenario's own.
 
 | Evidence | Kind | Site | File | Attached by |
 |---|---|---|---|---|

@@ -22,7 +22,7 @@ public static class OwnershipHandoffScenario
         var report = run.Report;
         ClientSession? a = null, b = null;
         Exception? failure = null;
-        report.Step("fixture arrival heights are dry and measured before either client starts", () =>
+        report.Step(StepPhase.Setup, "fixture arrival heights are dry and measured before either client starts", () =>
         {
             var samples = new[] { CampaignSteps.At(plan.Arrival), CampaignSteps.At(plan.SecondArrival!) };
             var measured = TerrainProbe.Compare(run.Server, "generator", "declared fixture arrival points", samples, 0.5f);
@@ -33,8 +33,8 @@ public static class OwnershipHandoffScenario
         CampaignSteps.MarkSites(plan, run.Server, report);
         try
         {
-            report.Step("the dedicated server accepts both clients", () => run.OwnedServer.WaitUntilJoinable(run.Server));
-            report.Step("open pinned client A on its leased account", () => a = run.OpenProfileClient(first, "client-a"));
+            report.Step(StepPhase.Setup, "the dedicated server accepts both clients", () => run.OwnedServer.WaitUntilJoinable(run.Server));
+            report.Step(StepPhase.Setup, "open pinned client A on its leased account", () => a = run.OpenProfileClient(first, "client-a"));
             JoinAndArrive(run, a!.Actor, first, plan.Arrival, "A");
             report.Step("A sees one labelled marker", () => CampaignSteps.RequireLabelledMarker(a.Actor, plan.DrySite));
             string aId = "";
@@ -76,10 +76,10 @@ public static class OwnershipHandoffScenario
             // uncertain stop visible to the runner; it must not report a failed observation as a clean teardown.
             var cleanup = new List<Exception>();
             if (b != null && !b.Closed)
-                try { report.Step("stop only owned client B before lease teardown", b.Dispose); }
+                try { report.Step(StepPhase.Cleanup, "stop only owned client B before lease teardown", b.Dispose); }
                 catch (Exception error) { cleanup.Add(error); }
             if (a != null && !a.Closed)
-                try { report.Step("stop only owned client A before lease teardown", a.Dispose); }
+                try { report.Step(StepPhase.Cleanup, "stop only owned client A before lease teardown", a.Dispose); }
                 catch (Exception error) { cleanup.Add(error); }
             if (cleanup.Count > 0)
                 failure = failure == null ? new AggregateException("Client teardown was not established.", cleanup)
@@ -91,9 +91,9 @@ public static class OwnershipHandoffScenario
     private static void JoinAndArrive(CampaignRun run, GameActor actor, ClientRunPlan plan, Site site, string name)
     {
         // The toolkit's one join: the join once, world pins, the world awaited and the player protected, test access.
-        run.Report.Step($"{name} joins the pinned world once and is protected",
+        run.Report.Step(StepPhase.Setup, $"{name} joins the pinned world once and is protected",
             () => new SessionControl(actor).JoinWorld(plan, run.Plan.WorldUid, cancellation: run.Cancellation));
-        run.Report.Step($"{name} arrives on dry ground by game-side signals", () =>
+        run.Report.Step(StepPhase.Setup, $"{name} arrives on dry ground by game-side signals", () =>
         {
             var point = CampaignSteps.At(site);
             PlayerPlacement.TeleportArrival arrival;

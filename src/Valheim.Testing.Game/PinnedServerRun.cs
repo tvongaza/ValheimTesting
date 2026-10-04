@@ -218,9 +218,9 @@ public static class PinnedServerRun
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            // A cleanup problem is reported, never turned into a test failure: the run's result stands.
+            // A cleanup problem fails the Cleanup step; the scenario's own result (ScenarioPassed) stands.
             report.Provenance["runtimeCopy"] = "cleanup failed: " + error.Message;
-            Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message);
+            throw;
         }
     }
 
@@ -244,6 +244,7 @@ public static class PinnedServerRun
         string output = Path.GetFullPath(args[2]);
         bool ownOutput = false, pinned = true, definite = false, unknownOutcome = false;
         string? unknown = null;
+        var phase = StepPhase.Preflight; // Where a failure outside any step happened: before copying, until the scenario, or in it.
         // A host operation with an unknown outcome is not a failure of the test; anything else is.
         void Classify(Exception error) { if (HostedServerRun.UnknownOutcome(error) is { } why) unknown ??= why; else definite = true; }
         try
@@ -292,19 +293,20 @@ public static class PinnedServerRun
             // the end, after a clean stop, keeping what the run changed in it.
             Directory.CreateDirectory(output); ownOutput = true;
             // Before copying: a drive that fills part-way through a copy leaves a broken runtime behind.
-            report.Step("enough free disk space for the copies", () =>
+            report.Step(StepPhase.Preflight, "enough free disk space for the copies", () =>
             {
                 long bytes = DiskSpace.DirectoryBytes(plan.World.Source) + (hosted == null && options.StagedRuntime == null ? DiskSpace.DirectoryBytes(plan.Runtime.Source) : 0);
                 if (DiskSpace.Require(output, bytes, hosted == null ? "this run's runtime and world copies" : "this run's world copy") is { } free)
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
+            phase = StepPhase.Setup;
             // Only an unpinned plan may leave out a manifest; its copy is then recorded as found.
             bool Verified(PinnedDirectory fixture) => pinned || fixture.Sha256.Count != 0;
             WorldFixture CopyOf(PinnedDirectory fixture) =>
                 Verified(fixture) ? WorldFixture.Copy(fixture.Source, output, fixture.Sha256) : WorldFixture.CopyAsFound(fixture.Source, output);
             if (hosted != null) await hosted.LockAndCopyRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
             else if (options.StagedRuntime is { } staged)
-                report.Step("verify the staged runtime copy", () =>
+                report.Step(StepPhase.Setup, "verify the staged runtime copy", () =>
                 {
                     var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
                     if (!Path.GetFullPath(plan.Runtime.Source).TrimEnd(Path.DirectorySeparatorChar).Equals(staged.DirectoryPath, comparison))
@@ -316,8 +318,8 @@ public static class PinnedServerRun
                     runtime = WorldFixture.Existing(staged.DirectoryPath, new Dictionary<string, string>(Verified(plan.Runtime) ? plan.Runtime.Sha256 : WorldFixture.Manifest(staged.DirectoryPath), StringComparer.Ordinal));
                     runtime.Preserve = true;
                 });
-            else report.Step(Verified(plan.Runtime) ? "copy and verify pinned runtime" : "copy unpinned runtime as found", () => { runtime = CopyOf(plan.Runtime); runtime.Preserve = true; });
-            report.Step(Verified(plan.World) ? "copy and verify pinned world" : "copy unpinned world as found", () => { world = CopyOf(plan.World); world.Preserve = true; });
+            else report.Step(StepPhase.Setup, Verified(plan.Runtime) ? "copy and verify pinned runtime" : "copy unpinned runtime as found", () => { runtime = CopyOf(plan.Runtime); runtime.Preserve = true; });
+            report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : "copy unpinned world as found", () => { world = CopyOf(plan.World); world.Preserve = true; });
             if (hosted != null) await hosted.ShipWorldAsync(report, world!.DirectoryPath, cancellation.Token).ConfigureAwait(false);
             string runtimeDirectory = hosted?.RuntimeDirectory ?? runtime!.DirectoryPath, worldDirectory = hosted?.WorldDirectory ?? world!.DirectoryPath;
             report.Provenance["runtime"] = runtimeDirectory; report.Provenance["world"] = world!.DirectoryPath;
@@ -333,27 +335,27 @@ public static class PinnedServerRun
             else
             {
                 // Hashes do not cover file modes: a launch also requires the copy's Linux or macOS execute bit.
-                report.Step("copied runtime has the plan's server executable", () =>
+                report.Step(StepPhase.Setup, "copied runtime has the plan's server executable", () =>
                 {
                     plan.CheckExecutable(ServerLaunch.Detect(runtime!.DirectoryPath));
                     if (mode != "validate") ServerLaunch.RequireExecutable(runtime.DirectoryPath);
                 });
-                report.Step("copied runtime's BepInEx patchers are the plan's", () => plan.CheckRuntimePatchers(runtime!.DirectoryPath));
+                report.Step(StepPhase.Setup, "copied runtime's BepInEx patchers are the plan's", () => plan.CheckRuntimePatchers(runtime!.DirectoryPath));
                 // What the game cannot report in game: its build and the loader, pinned on disk before anything launches.
-                report.Step(pinned ? "copied runtime is the pinned game build, BepInEx core and patchers" : "record the unpinned runtime's game build, BepInEx core and patchers",
+                report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, BepInEx core and patchers" : "record the unpinned runtime's game build, BepInEx core and patchers",
                     () => plan.CheckRuntimePins(runtime!.DirectoryPath).Record(report.Provenance, "runtime"));
                 // Only this machine's own loader can say whether a Linux runtime's libparty.so loads here.
                 if (plan.Crossplay && platform == ServerPlatform.Linux && OperatingSystem.IsLinux())
-                    await report.StepAsync("this machine can load crossplay's libraries", async () =>
+                    await report.StepAsync(StepPhase.Setup, "this machine can load crossplay's libraries", async () =>
                         report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(new LocalGameHost("this machine", HostShell.Bash), runtime!.DirectoryPath,
                             TimeSpan.FromMinutes(1), cancellation.Token).ConfigureAwait(false) + " loads on this machine").ConfigureAwait(false);
             }
-            if (mode == "validate") report.Step("prepared only; no game launched", () => { });
+            if (mode == "validate") report.Step(StepPhase.Setup, "prepared only; no game launched", () => { });
             else await Launch(plan, runtimeDirectory, worldDirectory).ConfigureAwait(false);
         }
         catch (Exception error)
         {
-            report.RecordFailure("runner failed", error);
+            report.RecordFailure(phase, "runner failed", error);
             Console.Error.WriteLine(error.Message);
             Classify(error);
         }
@@ -362,7 +364,7 @@ public static class PinnedServerRun
             bool stopped = true;
             if (session != null)
             {
-                try { report.Step("stop only owned server", session.Dispose); }
+                try { report.Step(StepPhase.Cleanup, "stop only owned server", session.Dispose); }
                 catch (Exception error) { stopped = false; Console.Error.WriteLine("Teardown: " + error.Message); Classify(error); }
                 report.Provenance["ownedPids"] = string.Join(",", session.StartedProcesses);
                 // How each boot ended, restarts included: asked to quit, then killed only after the plan's quitSeconds.
@@ -372,7 +374,7 @@ public static class PinnedServerRun
                 if (stopped && launched is { Plan.Crossplay: true } crossplayRun)
                     try
                     {
-                        report.Step("every boot quit cleanly and retired its crossplay lobby", () =>
+                        report.Step(StepPhase.Cleanup, "every boot quit cleanly and retired its crossplay lobby", () =>
                         {
                             // Each boot's kept logs: BepInEx's, Unity's (-logFile) and the process output, wherever the game wrote its lines.
                             var logs = crossplayRun.Logs.Select(log => (Match: Regex.Match(log.Role, @"^boot-(\d+) "), log.Path)).Where(log => log.Match.Success)
@@ -388,9 +390,12 @@ public static class PinnedServerRun
             // After the stop, which keeps each boot's logs; a client's were kept when the scenario closed it. Logs missing after
             // an unknown outcome are explained by it, so the scan then decides nothing on its own.
             if (launched != null && launched.Logs.Count != 0 && !report.ScanLogs(launched.Logs, launched.Plan.LogScan) && unknown == null) definite = true;
+            // A copy that could not be removed is a definite (local) failure, so it comes before the outcome is decided.
+            if (runtime != null)
+                try { report.Step(StepPhase.Cleanup, "remove the runtime copy, keeping what the run changed", () => RetireRuntime(report, runtime, output, stopped, options.KeepRuntime, launchedNothing: session == null)); }
+                catch (Exception error) { Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message); definite = true; } // Recorded as its failed step.
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
-            if (runtime != null) RetireRuntime(report, runtime, output, stopped, options.KeepRuntime, launchedNothing: session == null);
             // The run ends here: it no longer holds the copies it keeps (their owner records go; see OwnedCopies).
             runtime?.Dispose(); world?.Dispose();
             if (ownOutput)
@@ -417,7 +422,7 @@ public static class PinnedServerRun
             else
             {
                 // Catch an occupied port without issuing even a read to an unrelated server.
-                report.Step("CLI port is free", () =>
+                report.Step(StepPhase.Setup, "CLI port is free", () =>
                 {
                     var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
                     try { reservation.Start(); } finally { reservation.Stop(); }
@@ -430,9 +435,10 @@ public static class PinnedServerRun
             };
             launched = context;
             session = context.Session = options.SessionOverride?.Invoke(context) ?? hosted?.Session(context, options) ?? OwnedSession(context, options);
-            report.Step("start and verify owned dedicated fixture", () => context.Server = session.Start());
+            report.Step(StepPhase.Setup, "start and verify owned dedicated fixture", () => context.Server = session.Start());
             if (options.TestAccess)
-                report.Step("verify test access on the disposable server", () => Game.TestAccess.Ensure(context.Server, TestActorRole.DedicatedServer));
+                report.Step(StepPhase.Setup, "verify test access on the disposable server", () => Game.TestAccess.Ensure(context.Server, TestActorRole.DedicatedServer));
+            phase = StepPhase.Scenario;
             await options.Scenario(context).ConfigureAwait(false);
         }
     }
