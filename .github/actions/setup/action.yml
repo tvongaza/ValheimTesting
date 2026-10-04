@@ -1,0 +1,22 @@
+name: Set up a .NET runner
+description: The .NET 10 SDK on every OS and, on a throwaway Windows runner, no real-time malware scanning. Every job in test.yml uses it after its checkout.
+runs:
+  using: composite
+  steps:
+    # Runner images carry a .NET SDK, but not necessarily 10; pin the channel on every OS.
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '10.0.x'
+    # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
+    # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
+    # an image ever refuses the change.
+    - name: Stop real-time scanning on this throwaway Windows runner
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        try
+        {
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+          "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
+        }
+        catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
