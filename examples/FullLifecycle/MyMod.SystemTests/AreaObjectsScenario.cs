@@ -21,7 +21,7 @@ public static class AreaObjectsScenario
                 var snapshot = AreaObjectSnapshot.Capture(round.Server, round.Client, "arrival", plan.WorldUid,
                     (int)plan.Arrival.X, (int)plan.Arrival.Z, radius: 16, TimeSpan.FromSeconds(30),
                     includeContainers: true, includeSupport: true, run.Cancellation);
-                run.Report.AttachAreaObjectSnapshot(snapshot);
+                run.Report.Attach(snapshot);
             }));
     }
 }

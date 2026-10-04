@@ -134,11 +134,6 @@ public sealed class ClientRoundsTests : IDisposable
                     Hosting = true; Readings = 0;
                     return ScriptedTransport.Ok($"OK: Starting hosted world '{words[1]}' using character 'Tester' (tester, Local); open=true, public=False, crossplay={(crossplay ? "True" : "False")}, backend={(crossplay ? "PlayFab" : "Steamworks")}, passwordSet=False");
                 })
-                .OnPrefix("cli_start_local_world ", command =>
-                {
-                    Hosting = true; Readings = 0;
-                    return ScriptedTransport.Ok($"OK: Starting local world '{command.Split(' ')[1]}' using character 'Tester' (tester, Local)");
-                })
                 .Extension("valheim.session", "state", _ =>
                 {
                     int reading = Hosting ? ++Readings : 0;
@@ -583,6 +578,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("host", report.Provenance["role"]);
         Assert.Equal(Name, report.Provenance["hostWorld"]);
         Assert.Equal("false", report.Provenance["hostCrossplay"]);
+        Assert.False(report.Provenance.ContainsKey("hostMode")); // #301: a host always opens a listen server.
         Assert.Equal("first,after-restart", report.Provenance["hostRoundsCompleted"]);
         Assert.Equal("x64", report.Provenance["clientArchitecture"]); // The plan asked for none.
         // The world, with what the game wrote for it, left the client's worlds for the evidence; the user's world stayed.
@@ -608,17 +604,6 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(0, _opens); Assert.Empty(game.Transport.Commands);
         Assert.Equal("the user's own", File.ReadAllText(Path.Combine(Worlds, existing)));
         Assert.Equal(new[] { existing }, Directory.EnumerateFiles(Worlds).Select(Path.GetFileName).Where(f => !f!.StartsWith("MyWorld", StringComparison.Ordinal)));
-    }
-
-    [Fact] public void LocalFixtureUsesTheLocalStartCommandAcrossRounds()
-    {
-        var plan = HostPlan(); plan.HostWorld!.Local = true;
-        var game = new Game(Worlds); var report = new ScenarioReport("local");
-        RunHosted(report, plan, game, Measure());
-        Assert.True(report.Passed);
-        Assert.Equal(2, game.Transport.Count("cli_start_local_world"));
-        Assert.Equal(0, game.Transport.Count("cli_start_host_world"));
-        Assert.Equal("local", report.Provenance["hostMode"]);
     }
 
     [Fact] public void AHostStartTheGameRefusesStopsBeforeAnyWaitAndStillCleansUp()

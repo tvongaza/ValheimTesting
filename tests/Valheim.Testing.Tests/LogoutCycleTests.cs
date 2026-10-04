@@ -217,7 +217,7 @@ public sealed class LogoutCycleTests : IDisposable
         var (_, _, client) = Joined();
         var server = new ScriptedTransport().Actor("server", "cli_expect worlduid=" + WorldUid);
         var report = new ScenarioReport("logout");
-        Cycle().Run(new ClientRound("first", 0, true, server, client, report, output), Plan(), WorldUid);
+        Cycle().Run(new ClientRound("first", 0, true, server, client, report, output, WorldUid), Plan(), WorldUid);
         Assert.Equal(new[]
         {
             "first: the custom data is set and the profile file hashed before the logout", "first: the client leaves to its menu and the profile file is rewritten",

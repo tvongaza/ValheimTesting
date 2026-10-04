@@ -179,6 +179,53 @@ public sealed class DoublesTests : IDisposable
         Assert.Equal(51f, hm.LastRenderedHeights![0], 3);
         Assert.Equal(58f, hm.LastRenderedHeights[1], 3); // +20 clamped to the game's +8 m
     }
+    // TerrainComp.ApplyToHeightmap (1.0.16) touches only vertices with a non-zero delta: the mod's pass elsewhere is not clamped.
+    [Fact] public void OnlyVerticesWithACompilerDeltaAreClamped()
+    {
+        Heightmap.TestBaseHeight = (_, _) => 50f;
+        Heightmap.TestTerrainPass = heights => { heights[0] += 12f; heights[1] += 12f; };
+        var hm = Heightmap.CreateForZone(new Vector2s(1, 0), width: 4);
+        hm.m_terrainComp!.m_smoothDelta[1] = 1f;
+        hm.RebuildTerrain();
+        Assert.Equal(62f, hm.LastRenderedHeights![0], 3); // no delta: the pass's +12 stands
+        Assert.Equal(58f, hm.LastRenderedHeights[1], 3);  // +12 +1 clamped to the base height +8
+        Assert.Equal(50f, hm.LastRenderedHeights[2], 3);
+    }
+    // The game applies a delta whether or not m_modifiedHeight flags it; the flag decides only what Save keeps.
+    [Fact] public void AnUnflaggedDeltaShowsUntilTheTerrainIsSavedAndLoaded()
+    {
+        Heightmap.TestBaseHeight = (_, _) => 50f;
+        var hm = Heightmap.CreateForZone(new Vector2s(1, 0), width: 4);
+        var comp = hm.m_terrainComp!;
+        comp.m_levelDelta[1] = 3f;                               // unflagged
+        comp.m_levelDelta[2] = 3f; comp.m_modifiedHeight[2] = true;
+        hm.RebuildTerrain();
+        Assert.Equal((53f, 53f), (hm.LastRenderedHeights![1], hm.LastRenderedHeights[2]));
+        comp.Save(); Assert.True(comp.Load());
+        hm.RebuildTerrain();
+        Assert.Equal((50f, 53f), (hm.LastRenderedHeights![1], hm.LastRenderedHeights[2]));
+    }
+    [Fact] public void AnUninitializedCompilerAddsNothingToARebuild()
+    {
+        Heightmap.TestBaseHeight = (_, _) => 50f;
+        var hm = Heightmap.CreateForZone(new Vector2s(1, 0), width: 4);
+        hm.m_terrainComp!.m_levelDelta[1] = 3f; hm.m_terrainComp.m_modifiedHeight[1] = true;
+        hm.m_terrainComp.m_initialized = false;
+        Heightmap.TestTerrainPass = heights => heights[2] += 1f; // a prefix runs before the method's own early return
+        hm.RebuildTerrain();
+        Assert.Equal((50f, 51f), (hm.LastRenderedHeights![1], hm.LastRenderedHeights[2]));
+    }
+    // Heightmap.ApplyModifiers calls ApplyToHeightmap (and so a mod's prefix on it) only when the zone has a compiler.
+    [Fact] public void AZoneWithoutACompilerRendersItsBaseHeights()
+    {
+        Heightmap.TestBaseHeight = (_, _) => 50f;
+        Heightmap.TestTerrainPass = heights => heights[0] += 1f;
+        var hm = Heightmap.CreateForZone(new Vector2s(1, 0), width: 4, withCompiler: false);
+        hm.RebuildTerrain();
+        Assert.Equal(25, hm.LastRenderedHeights!.Count);
+        Assert.All(hm.LastRenderedHeights, h => Assert.Equal(50f, h, 3));
+        Assert.Equal(4, hm.GetAndCreateTerrainCompiler().m_width); // the game sizes the compiler from its heightmap
+    }
     [Fact] public void ACompilerSavesOnlyWhenOwned()
     {
         var comp = Heightmap.CreateForZone(new Vector2s(0, 0)).m_terrainComp!;

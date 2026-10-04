@@ -67,10 +67,10 @@ public static class ReviewCaptureScenario
             Rounds = ["joined"], Cancellation = run.Cancellation,
         }.Run(run.Server, () => run.OpenClient(client, null), round =>
         {
+            // Each still is linked from result.json (kind review-still) with its SHA-256; inspect both images by eye.
             foreach (var shot in Shots(plan, run.Output))
-                round.Step($"capture {shot.Id} view for human review", () => ReviewCapture.Capture(round.Server, round.Client, host, shot,
-                    TimeSpan.FromSeconds(client.ArrivalSeconds), TimeSpan.FromSeconds(30), run.Cancellation));
-            run.Report.Provenance["reviewCapture"] = "review-first/first.png and review-second/second.png; inspect both images by eye";
+                round.Step($"capture {shot.Id} view for human review", () => run.Report.Attach(ReviewCapture.Capture(round.Server, round.Client, host, shot,
+                    TimeSpan.FromSeconds(client.ArrivalSeconds), TimeSpan.FromSeconds(30), run.Cancellation).Evidence));
         });
     }
 }

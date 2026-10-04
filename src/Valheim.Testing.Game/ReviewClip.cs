@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -16,7 +15,14 @@ public sealed record ReviewClipPlan(string Id, string ExtensionId, string HostDi
 /// milliseconds, bytes and SHA-256 of every frame) and the JSON sidecar. <see cref="ManifestSha256"/> is the SHA-256 of
 /// <c>frames.csv</c>, which in turn lists every frame's digest. Visual correctness remains for a person to judge.
 /// </summary>
-public sealed record ReviewClipReceipt(string FramesDirectory, string MetadataPath, string ManifestSha256, long Bytes, int Frames, int DurationMs);
+public sealed record ReviewClipReceipt(string FramesDirectory, string MetadataPath, string ManifestSha256, long Bytes, int Frames, int DurationMs)
+{
+    /// <summary>
+    /// Links the clip's sidecar, which records <c>frames.csv</c>'s and every frame's SHA-256 with the world, build and pins,
+    /// for <see cref="ScenarioReport.Attach(EvidenceReference)"/> (kind <c>review-clip</c>, site = the clip id).
+    /// </summary>
+    public required EvidenceReference Evidence { get; init; }
+}
 
 /// <summary>Capture only after an owned, pinned client has entered its intended world; remove partial local evidence on any failure.</summary>
 public static class ReviewClip
@@ -40,8 +46,7 @@ public static class ReviewClip
         ArgumentNullException.ThrowIfNull(fetch);
         Validate(plan);
         if (!client.Pinned) throw new InvalidOperationException("A review clip requires strict client pins.");
-        if (Directory.Exists(plan.EvidenceDirectory) || File.Exists(plan.EvidenceDirectory))
-            throw new IOException("Review evidence already exists: " + plan.EvidenceDirectory);
+        string staging = ReviewLease.Stage(plan.EvidenceDirectory);
         var state = new SessionControl(client).Read();
         if (!state.WorldReady || !state.PlayerReady || state.Dedicated || state.WorldUid != plan.WorldUid)
             throw new InvalidOperationException("The pinned client has not entered the declared review world with a ready player.");
@@ -50,7 +55,6 @@ public static class ReviewClip
         var restore = client.RequireCapability(plan.ExtensionId + "/review-restore");
         if (!begin.ReadOnly || clip.ReadOnly || restore.ReadOnly)
             throw new InvalidOperationException("The review adapter's capture access modes are wrong.");
-        string staging = plan.EvidenceDirectory + ".partial-" + Guid.NewGuid().ToString("N");
         string hostFrames = plan.HostDirectory.TrimEnd('\\', '/') + (clientHostSeparator(plan.HostDirectory)) + plan.Id + "-frames";
         Exception? failure = null;
         ReviewClipReceipt? receipt = null;
@@ -58,7 +62,7 @@ public static class ReviewClip
         try
         {
             beginAttempted = true;
-            RequireState(client.Invoke(begin, plan.Id), plan.Id, "begun");
+            ReviewLease.RequireState(client.Invoke(begin, plan.Id), plan.Id, "begun");
             cancellation.ThrowIfCancellationRequested();
             TimeSpan previousTimeout = client.CommandTimeout;
             JsonElement result;
@@ -85,23 +89,20 @@ public static class ReviewClip
             string manifestSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(staging, "frames.csv")))).ToLowerInvariant();
             long bytes = frames.Sum(f => f.Bytes);
             int duration = frames[^1].ElapsedMs - frames[0].ElapsedMs;
-            var metadata = new
+            string sidecarSha = ReviewLease.WriteSidecar(Path.Combine(staging, plan.Id + ".json"), "human-review-world-clip", plan.Id, plan.WorldUid, plan.GameBuild, plan.PluginPins, new
             {
-                schema = 1, kind = "human-review-world-clip", visualVerdict = "not asserted", plan.Id,
-                worldUid = plan.WorldUid, gameBuild = plan.GameBuild, pluginPins = plan.PluginPins,
                 plan.Width, plan.Height, requestedFps = plan.FramesPerSecond, frameCount = plan.Frames,
                 durationMs = duration, actualFps = Math.Round((plan.Frames - 1) * 1000d / duration, 2),
                 frameSha256 = frames.Select(f => f.Sha256).ToArray(), manifestSha256 = manifestSha, frameBytes = bytes,
-                recordedUtc = DateTimeOffset.UtcNow,
-            };
-            File.WriteAllText(Path.Combine(staging, plan.Id + ".json"), JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
+            });
             receipt = new ReviewClipReceipt(plan.EvidenceDirectory, Path.Combine(plan.EvidenceDirectory, plan.Id + ".json"),
-                manifestSha, bytes, plan.Frames, duration);
+                manifestSha, bytes, plan.Frames, duration)
+            { Evidence = new("review-clip", plan.Id, plan.WorldUid, Path.Combine(plan.EvidenceDirectory, plan.Id + ".json"), sidecarSha) };
         }
         catch (Exception error) { failure = error; }
         try
         {
-            if (beginAttempted) RequireState(client.Invoke(restore, plan.Id), plan.Id, "restored");
+            if (beginAttempted) ReviewLease.RequireState(client.Invoke(restore, plan.Id), plan.Id, "restored");
         }
         catch (Exception cleanup)
         {
@@ -109,17 +110,7 @@ public static class ReviewClip
         }
         if (failure == null && cancellation.IsCancellationRequested)
             failure = new OperationCanceledException("Clip capture was canceled before publication.", cancellation);
-        if (failure != null)
-        {
-            if (Directory.Exists(staging)) Directory.Delete(staging, true);
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-        try { Directory.Move(staging, plan.EvidenceDirectory); }
-        catch
-        {
-            if (Directory.Exists(staging)) Directory.Delete(staging, true);
-            throw;
-        }
+        ReviewLease.Publish(failure, staging, plan.EvidenceDirectory);
         return receipt!;
     }
 
@@ -161,16 +152,9 @@ public static class ReviewClip
         return frames;
     }
 
-    private static void RequireState(JsonElement data, string id, string state)
-    {
-        if (data.GetProperty("source").GetString() != "review-state" || data.GetProperty("id").GetString() != id ||
-            data.GetProperty("state").GetString() != state || !data.GetProperty("complete").GetBoolean())
-            throw new InvalidDataException("The review adapter did not confirm " + state + " for " + id + ".");
-    }
-
     private static void Validate(ReviewClipPlan plan)
     {
-        if (!Regex.IsMatch(plan.Id ?? "", "^[A-Za-z0-9-]{1,64}$", RegexOptions.CultureInvariant) ||
+        if (!ReviewLease.ValidId(plan.Id) ||
             !Regex.IsMatch(plan.ExtensionId ?? "", "^[A-Za-z0-9_.-]+$", RegexOptions.CultureInvariant) ||
             plan.Width is < 160 or > 640 || plan.Height is < 90 or > 360 ||
             plan.FramesPerSecond is < 2 or > 10 || plan.Frames is < 2 or > 60 || plan.Frames > plan.FramesPerSecond * 10 ||

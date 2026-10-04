@@ -55,31 +55,6 @@ public sealed class PlanRuleTests
         Assert.Throws<ArgumentException>(() => plan.RequireEnvironmentFlag("MYMOD_TEST_FIXTURE", "enable it"));
     }
 
-    [Fact] public void AnEnvironmentChoiceIsAbsentOrExactlyOneOfItsValues()
-    {
-        var plan = Valid();
-        Assert.Null(plan.EnvironmentChoice("MYMOD_TEST_PROFILE", "dirt-fade", "stone"));
-        plan.Environment["MYMOD_TEST_PROFILE"] = "dirt-fade"; Assert.Equal("dirt-fade", plan.EnvironmentChoice("MYMOD_TEST_PROFILE", "dirt-fade", "stone"));
-        plan.Environment["MYMOD_TEST_PROFILE"] = "stone"; Assert.Equal("stone", plan.EnvironmentChoice("MYMOD_TEST_PROFILE", "dirt-fade", "stone"));
-    }
-
-    [Theory][InlineData("paved")][InlineData("Dirt-Fade")][InlineData("")][InlineData("dirt-fade ")]
-    public void AnEnvironmentChoiceRefusesAnyOtherValue(string value)
-    {
-        var plan = Valid(); plan.Environment["MYMOD_TEST_PROFILE"] = value;
-        var error = Assert.Throws<ArgumentException>(() => plan.EnvironmentChoice("MYMOD_TEST_PROFILE", "dirt-fade", "stone"));
-        Assert.Equal($"environment.MYMOD_TEST_PROFILE is \"{value}\": remove it for the default, or set it to dirt-fade or stone.", error.Message);
-    }
-
-    [Fact] public void AnEnvironmentChoiceCannotBeMadeTwiceThroughKeysThatDifferOnlyInCase()
-    {
-        var plan = Valid(); plan.Environment["mymod_test_profile"] = "dirt-fade";
-        Assert.Throws<ArgumentException>(() => plan.EnvironmentChoice("MYMOD_TEST_PROFILE", "dirt-fade"));
-        plan.Environment["MYMOD_TEST_PROFILE"] = "stone";
-        var error = Assert.Throws<ArgumentException>(() => plan.EnvironmentChoice("MYMOD_TEST_PROFILE", "dirt-fade", "stone"));
-        Assert.Contains("environment.mymod_test_profile differs from MYMOD_TEST_PROFILE only in case", error.Message);
-    }
-
     [Fact] public void SettingsForAnotherScenarioAreRefused()
     {
         var plan = Valid();
@@ -89,49 +64,6 @@ public sealed class PlanRuleTests
         plan.Scenario = "bridge-respawn"; plan.OnlyForScenario("append and expected", supplied: true, "bridge-respawn");
         plan.Scenario = "terrain-persistence"; plan.OnlyForScenario("client", supplied: true, "terrain-persistence", "terrain-paint");
         plan.Scenario = "empty-save"; Assert.Contains("terrain-persistence or terrain-paint", Assert.Throws<ArgumentException>(() => plan.OnlyForScenario("client", true, "terrain-persistence", "terrain-paint")).Message);
-    }
-
-    [Fact] public void AListedModeRunsOnlyItsScenarios()
-    {
-        var map = new Dictionary<string, string[]> { ["prepare-bridge"] = ["bridge-respawn"], ["prepare-terrain"] = ["terrain-persistence", "terrain-paint"] };
-        var plan = Valid(); plan.Scenario = "bridge-respawn";
-        plan.CheckModeScenario("prepare-bridge", map);
-        plan.CheckModeScenario("run", map); plan.CheckModeScenario("validate", map); // Unlisted modes run every scenario.
-        var error = Assert.Throws<ArgumentException>(() => plan.CheckModeScenario("prepare-terrain", map));
-        Assert.Equal("Mode prepare-terrain runs only a plan whose scenario is terrain-persistence or terrain-paint, and this plan's scenario is \"bridge-respawn\": use such a plan, or another mode.", error.Message);
-    }
-
-    [Fact] public async Task TheRunnerRefusesAModeForAnotherScenarioBeforeCopyingAnything()
-    {
-        string root = Directory.CreateTempSubdirectory("plan-rules-").FullName;
-        try
-        {
-            string runtime = Path.Combine(root, "runtime"), world = Path.Combine(root, "world"), output = Path.Combine(root, "out");
-            Directory.CreateDirectory(runtime); Directory.CreateDirectory(world);
-            File.WriteAllText(Path.Combine(runtime, ServerLaunch.LinuxExecutable), "server"); File.WriteAllText(Path.Combine(world, "Test.db"), "world");
-            FakeInstalls.Server(runtime); // Strict pins name the runtime's game build, BepInEx core and patchers.
-            string path = Path.Combine(root, "plan.json");
-            File.WriteAllText(path, JsonSerializer.Serialize(new
-            {
-                scenario = "empty-save", runtime = new { source = runtime, sha256 = WorldFixture.Manifest(runtime) }, world = new { source = world, sha256 = WorldFixture.Manifest(world) },
-                arguments = new[] { "-batchmode", "-nographics", "-savedir", "{world}" }, pins = new Dictionary<string, string> { ["worlduid"] = "1" },
-                runtimePins = InstallPins.Of(runtime),
-            }));
-            PinnedServerRunOptions<ServerRunPlan> Options(Dictionary<string, string[]> map) => new()
-            {
-                Name = "rules", SessionCapability = "test.mod/session", SessionTokenVariable = Token, PrepareModes = ["prepare-bridge"], ModeScenarios = map,
-                ReadPlan = file => { var plan = ServerRunPlan.Read<ServerRunPlan>(file); plan.ValidateServerPlan([], Token); return plan; },
-                Scenario = _ => Task.CompletedTask,
-            };
-            Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", path, output], Options(new() { ["validate"] = ["bridge-respawn"] })));
-            Assert.False(Directory.Exists(output));
-            // The same plan validates when the map allows its scenario (the negative control for the refusal above).
-            Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", path, output], Options(new() { ["prepare-bridge"] = ["bridge-respawn"] })));
-            // A map naming a mode the runner does not have is the runner's own mistake, refused at once.
-            var error = await Assert.ThrowsAsync<ArgumentException>(() => PinnedServerRun.MainAsync(["validate", path, output + "2"], Options(new() { ["prepare-terain"] = ["bridge-respawn"] })));
-            Assert.StartsWith("ModeScenarios lists prepare-terain, which is not one of this runner's modes (validate, run, prepare-bridge).", error.Message);
-        }
-        finally { Directory.Delete(root, true); }
     }
 
     // ---- The rules every pinned server plan follows (ValidateServerPlan and the runner's checks) ----

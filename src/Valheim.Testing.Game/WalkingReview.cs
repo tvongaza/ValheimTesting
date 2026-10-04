@@ -2,7 +2,23 @@ using System.Text.Json;
 namespace Valheim.Testing.Game;
 
 public sealed record WalkCheckpoint(float X, float Y, float Z, float Radius = 2, float HeightTolerance = 1);
-public sealed record WalkSample(double Seconds, float X, float Y, float Z, float Speed, bool Grounded, bool Flying, bool Attached, bool Dead, bool Teleporting);
+public sealed record WalkSample(double Seconds, float X, float Y, float Z, float Speed, bool Grounded, bool Flying, bool Attached, bool Dead, bool Teleporting)
+{
+    /// <summary>
+    /// Settled on the ground at <paramref name="point"/>: within the horizontal and vertical tolerances, no faster than
+    /// <paramref name="maximumSpeed"/>, grounded, and not flying, attached, dead or teleporting.
+    /// </summary>
+    public bool SupportedAt(HeightExpectation point, float horizontalTolerance = 2, float verticalTolerance = .3f, float maximumSpeed = .15f)
+    {
+        TerrainProbe.Validate("loaded-ground", "support point", new[] { point }, verticalTolerance);
+        if (!float.IsFinite(horizontalTolerance) || horizontalTolerance < 0 || !float.IsFinite(maximumSpeed) || maximumSpeed < 0)
+            throw new ArgumentException("Invalid support tolerances.");
+        // A non-finite position or speed is not support; every comparison below would be false for it anyway.
+        return float.IsFinite(X) && float.IsFinite(Y) && float.IsFinite(Z) && float.IsFinite(Speed) && Speed >= 0 &&
+            Math.Sqrt(Math.Pow((double)X - point.X, 2) + Math.Pow((double)Z - point.Z, 2)) <= horizontalTolerance &&
+            Math.Abs(Y - point.Height) <= verticalTolerance && Speed <= maximumSpeed && Grounded && !Flying && !Attached && !Dead && !Teleporting;
+    }
+}
 public sealed record WalkEvidence(int ReachedCheckpoints, int PlannedCheckpoints, double TravelledMetres, double GroundedFraction, IReadOnlyList<string> Issues)
 {
     public bool Sufficient => Issues.Count == 0;
@@ -25,11 +41,16 @@ public static class WalkingProbe
     }
     public static WalkSample Read(Observation observation, double seconds)
     {
+        var sample=Parse(observation,seconds);
+        CheckSample(sample); return sample;
+    }
+    /// <summary>The one parser of a <c>valheim.world/player-support</c> observation; <see cref="Read"/> also refuses non-finite values.</summary>
+    internal static WalkSample Parse(Observation observation, double seconds)
+    {
         observation.RequireComplete("local-player-support"); var d=observation.Data;
         if(d.GetProperty("units").GetString()!="metres") throw new InvalidOperationException("Wrong walking units.");
-        var sample=new WalkSample(seconds,d.GetProperty("x").GetSingle(),d.GetProperty("y").GetSingle(),d.GetProperty("z").GetSingle(),d.GetProperty("speed").GetSingle(),
+        return new WalkSample(seconds,d.GetProperty("x").GetSingle(),d.GetProperty("y").GetSingle(),d.GetProperty("z").GetSingle(),d.GetProperty("speed").GetSingle(),
             d.GetProperty("grounded").GetBoolean(),d.GetProperty("flying").GetBoolean(),d.GetProperty("attached").GetBoolean(),d.GetProperty("dead").GetBoolean(),d.GetProperty("teleporting").GetBoolean());
-        CheckSample(sample); return sample;
     }
     private static void CheckSample(WalkSample s)
     {

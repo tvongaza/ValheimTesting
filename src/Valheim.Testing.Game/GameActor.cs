@@ -189,11 +189,14 @@ public sealed class GameActor : IDisposable
             throw new InvalidOperationException("Required capability is absent: " + path + ". " + CliCapabilities.Provider(path.Split('/')[0]));
         }).ToArray();
     }
-    public JsonElement Invoke(Capability command, params string[] arguments)
+    public JsonElement Invoke(Capability command, params string[] arguments) => Invoke(command, null, arguments);
+    /// <summary><see cref="Invoke(Capability, string[])"/>, handing the complete reply lines to <paramref name="replied"/> before judging them.</summary>
+    internal JsonElement Invoke(Capability command, Action<IReadOnlyList<string>>? replied, string[] arguments)
     {
         if (arguments.Any(x => x.Any(char.IsWhiteSpace) || x.Length == 0)) throw new ArgumentException("Extension arguments must be single tokens in preview 1.");
         // ParseInvocation checks success itself, after reading a failed extension's own code and message.
         var reply = Execute("cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments)), requireAccepted: false);
+        replied?.Invoke(reply.Result.Output.ToArray());
         return ParseInvocation(command, reply.Result);
     }
     private static JsonElement ParseInvocation(Capability command, CommandResult reply)
@@ -217,10 +220,12 @@ public sealed class GameActor : IDisposable
         static string? Text(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         return new InvalidOperationException($"{command.Path} failed: {Text(result, "code") ?? "no code"}: {Text(result, "message") ?? "no message"}");
     }
-    public Observation Observe(Capability command, params string[] arguments)
+    public Observation Observe(Capability command, params string[] arguments) => Observe(command, null, arguments);
+    /// <summary><see cref="Observe(Capability, string[])"/>, handing the complete reply lines to <paramref name="replied"/> before judging them.</summary>
+    internal Observation Observe(Capability command, Action<IReadOnlyList<string>>? replied, string[] arguments)
     {
         if (!command.ReadOnly) throw new InvalidOperationException("Polling requires a read-only capability; issue mutations once.");
-        var data = Invoke(command, arguments);
+        var data = Invoke(command, replied, arguments);
         return new Observation(data.GetProperty("source").GetString()!, data.GetProperty("complete").GetBoolean(), data);
     }
     /// <summary>Observes and requires a complete observation from <paramref name="source"/>.</summary>

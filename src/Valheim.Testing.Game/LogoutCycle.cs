@@ -127,7 +127,7 @@ public sealed class LogoutCycle
     {
         ArgumentNullException.ThrowIfNull(round);
         ArgumentNullException.ThrowIfNull(plan);
-        ArgumentException.ThrowIfNullOrWhiteSpace(evidence);
+        if (!ScenarioReport.ValidKind(evidence)) throw new ArgumentException("Name the evidence with 1-40 lower-case letters, digits or hyphens.", nameof(evidence));
         Validate(plan);
         CustomDataReading? before = null, after = null;
         ProfileFileState? fileBefore = null, fileAfter = null, oldAfter = null;

@@ -1,12 +1,11 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace Valheim.Testing.Game;
 public sealed record StepResult(string Name, bool Passed, double Seconds, string Error);
-public sealed record TerrainSnapshotReference(string Site, string WorldUid, string File, string Sha256);
-public sealed record AreaObjectSnapshotReference(string Site, string WorldUid, string File, string Sha256);
 public sealed class ScenarioReport
 {
     private readonly object _stepGate = new();
@@ -15,12 +14,14 @@ public sealed class ScenarioReport
     public List<StepResult> Steps { get; } = new();
     /// <summary>The teardown log scans (<see cref="ScanLogs"/>), one per log.</summary>
     public List<LogFileScan> Logs { get; } = new();
-    /// <summary>Bounded read-only terrain evidence written beside this report.</summary>
-    public List<TerrainSnapshotReference> TerrainSnapshots { get; } = new();
-    private readonly List<TerrainSiteSnapshot> _terrainCaptures = new();
-    /// <summary>Optional saved-object and loaded-structure evidence, separate from terrain samples.</summary>
-    public List<AreaObjectSnapshotReference> AreaObjectSnapshots { get; } = new();
-    private readonly List<AreaObjectSnapshot> _areaObjectCaptures = new();
+    /// <summary>
+    /// Every piece of evidence attached with <see cref="Attach(IEvidence)"/> or <see cref="Attach(EvidenceReference)"/>, in
+    /// attachment order, filled in by <see cref="Write"/>: snapshots, review stills and clips, each with its SHA-256.
+    /// </summary>
+    public List<EvidenceReference> Evidence { get; } = new();
+    private readonly List<object> _attached = new(); // IEvidence to serialize, or an EvidenceReference already written
+    private static readonly Regex EvidenceKind = new("^[a-z0-9-]{1,40}$", RegexOptions.CultureInvariant);
+    internal static bool ValidKind(string? kind) => EvidenceKind.IsMatch(kind ?? "");
     public bool Passed => Steps.Count > 0 && Steps.All(x => x.Passed);
     /// <summary><c>strict</c>, or <c>none</c> once <see cref="MarkNotPinned"/> recorded an explicit opt-out.</summary>
     public string Pinning { get; private set; } = EnvironmentPinning.Strict;
@@ -41,38 +42,40 @@ public sealed class ScenarioReport
         try { action(); lock (_stepGate) Steps.Add(new(name, true, clock.Elapsed.TotalSeconds, "")); }
         catch (Exception error) { lock (_stepGate) Steps.Add(new(name, false, clock.Elapsed.TotalSeconds, error.Message)); throw; }
     }
-    /// <summary>Attach a site capture to the next <see cref="Write"/>. The capture retains exact ValheimCLI replies.</summary>
-    public void AttachTerrainSnapshot(TerrainSiteSnapshot snapshot)
+    /// <summary>
+    /// Attach evidence for the next <see cref="Write"/> to serialize to <c>evidence/&lt;kind&gt;-NNN.json</c> and link from
+    /// <c>result.json</c>, such as a <see cref="TerrainSiteSnapshot"/> or <see cref="AreaObjectSnapshot"/> with its exact replies.
+    /// </summary>
+    public void Attach(IEvidence evidence)
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        _terrainCaptures.Add(snapshot);
+        ArgumentNullException.ThrowIfNull(evidence);
+        if (!ValidKind(evidence.Kind)) throw new ArgumentException("Evidence kind must be 1-40 lower-case letters, digits or hyphens.", nameof(evidence));
+        lock (_stepGate) _attached.Add(evidence);
     }
-    /// <summary>Attach a complete area-object capture to the next <see cref="Write"/>.</summary>
-    public void AttachAreaObjectSnapshot(AreaObjectSnapshot snapshot)
+    /// <summary>
+    /// Link evidence already written elsewhere, such as <see cref="ReviewCaptureReceipt.Evidence"/> or
+    /// <see cref="ReviewClipReceipt.Evidence"/>. <see cref="Write"/> stores its path relative to the report directory when it
+    /// lies inside it.
+    /// </summary>
+    public void Attach(EvidenceReference published)
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        _areaObjectCaptures.Add(snapshot);
+        ArgumentNullException.ThrowIfNull(published);
+        if (!ValidKind(published.Kind) || string.IsNullOrWhiteSpace(published.File) ||
+            !Regex.IsMatch(published.Sha256 ?? "", "^[a-f0-9]{64}$", RegexOptions.CultureInvariant))
+            throw new ArgumentException("Name the evidence kind, its file and the file's lower-case SHA-256.", nameof(published));
+        lock (_stepGate) _attached.Add(published);
     }
-    /// <summary>Keep the original assertion failure and attach area-object evidence if capture succeeds.</summary>
-    public void StepWithAreaObjectsOnFailure(string name, Action assertion, Func<AreaObjectSnapshot> capture)
+    /// <summary>
+    /// Run an assertion, capturing evidence only if it fails. A failed capture is recorded as its own failed step; the
+    /// original assertion failure remains the thrown exception.
+    /// </summary>
+    public void StepWithEvidenceOnFailure(string name, Action assertion, Func<IEvidence> capture)
     {
         try { Step(name, assertion); }
         catch
         {
-            try { AttachAreaObjectSnapshot(capture()); }
-            catch (Exception error) { RecordFailure("capture area objects after " + name, error); }
-            throw;
-        }
-    }
-    /// <summary>Run an assertion, optionally capturing the site if it fails. A failed capture is recorded separately;
-    /// the original assertion failure remains the thrown exception.</summary>
-    public void StepWithTerrainOnFailure(string name, Action assertion, Func<TerrainSiteSnapshot> capture)
-    {
-        try { Step(name, assertion); }
-        catch
-        {
-            try { AttachTerrainSnapshot(capture()); }
-            catch (Exception error) { RecordFailure("capture terrain after " + name, error); }
+            try { Attach(capture()); }
+            catch (Exception error) { RecordFailure("capture evidence after " + name, error); }
             throw;
         }
     }
@@ -125,34 +128,27 @@ public sealed class ScenarioReport
     public void Write(string directory)
     {
         Directory.CreateDirectory(directory);
-        TerrainSnapshots.Clear();
-        AreaObjectSnapshots.Clear();
-        if (_terrainCaptures.Count > 0)
+        Evidence.Clear();
+        object[] attached;
+        lock (_stepGate) attached = _attached.ToArray();
+        var numbers = new Dictionary<string, int>(StringComparer.Ordinal);
+        string root = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        foreach (var item in attached)
         {
-            string captures = Path.Combine(directory, "terrain-snapshots");
-            Directory.CreateDirectory(captures);
-            for (int i = 0; i < _terrainCaptures.Count; i++)
+            if (item is EvidenceReference published)
             {
-                string file = $"terrain-snapshots/site-{i + 1:D3}.json";
-                string path = Path.Combine(directory, file);
-                string content = JsonSerializer.Serialize(_terrainCaptures[i], new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(path, content);
-                TerrainSnapshots.Add(new(_terrainCaptures[i].Site, _terrainCaptures[i].WorldUid, file,
-                    Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant()));
+                string full = Path.GetFullPath(published.File);
+                Evidence.Add(published with { File = full.StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+                    ? Path.GetRelativePath(root, full).Replace(Path.DirectorySeparatorChar, '/') : full });
+                continue;
             }
-        }
-        if (_areaObjectCaptures.Count > 0)
-        {
-            string captures = Path.Combine(directory, "area-object-snapshots");
-            Directory.CreateDirectory(captures);
-            for (int i = 0; i < _areaObjectCaptures.Count; i++)
-            {
-                string file = $"area-object-snapshots/site-{i + 1:D3}.json";
-                string path = Path.Combine(directory, file);
-                File.WriteAllText(path, JsonSerializer.Serialize(_areaObjectCaptures[i], new JsonSerializerOptions { WriteIndented = true }));
-                AreaObjectSnapshots.Add(new(_areaObjectCaptures[i].Site, _areaObjectCaptures[i].WorldUid, file,
-                    Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant()));
-            }
+            var evidence = (IEvidence)item;
+            int number = numbers[evidence.Kind] = numbers.GetValueOrDefault(evidence.Kind) + 1;
+            string file = $"evidence/{evidence.Kind}-{number:D3}.json";
+            string path = Path.Combine(directory, file);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, JsonSerializer.Serialize(evidence, evidence.GetType(), new JsonSerializerOptions { WriteIndented = true }));
+            Evidence.Add(new(evidence.Kind, evidence.Site, evidence.WorldUid, file, WorldFixture.Hash(path)));
         }
         File.WriteAllText(Path.Combine(directory, "result.json"), JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         bool unpinned = Pinning != EnvironmentPinning.Strict;
