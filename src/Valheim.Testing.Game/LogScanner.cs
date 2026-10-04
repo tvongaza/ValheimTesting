@@ -7,18 +7,33 @@ namespace Valheim.Testing.Game;
 [JsonConverter(typeof(JsonStringEnumConverter<LogSeverity>))]
 public enum LogSeverity { Failure, Warning }
 
+/// <summary>When a pattern applies: the teardown scan of a run's logs, an owned process's startup, or both.</summary>
+[Flags]
+public enum LogPhase { Teardown = 1, Startup = 2 }
+
 /// <summary>
 /// A known log problem. <see cref="Line"/> matches one line; with <see cref="Frame"/>, the line counts only when a line of
-/// its stack trace (up to a blank line, the next log message or the next exception) matches the frame.
+/// its stack trace (up to a blank line, the next log message or the next exception) matches the frame. A
+/// <see cref="LogPhase.Startup"/> pattern also ends an owned startup at once (<see cref="StartupEvents.RuntimeLoadFailures"/>);
+/// startup matching reads its <see cref="Line"/> only, so a startup pattern has no <see cref="Frame"/>.
 /// </summary>
-public sealed record LogPattern(string Name, LogSeverity Severity, Regex Line, Regex? Frame = null);
+public sealed record LogPattern(string Name, LogSeverity Severity, Regex Line, Regex? Frame = null, LogPhase Phase = LogPhase.Teardown);
 
 /// <summary>
 /// A run's own classification of a known pattern, with the written reason it differs from the default: another severity,
-/// named lines the run expects, or both.
+/// named lines the run expects, or both. Under a name that is not built in, it is a pattern of the run's own: its
+/// <see cref="Line"/> (and optional <see cref="Frame"/>) regex and its <see cref="Severity"/>, for a mod's own known-bad line
+/// or another mod's known noise, counted like the built-in patterns at teardown.
 /// </summary>
 public sealed class LogClassification
 {
+    /// <summary>
+    /// For a pattern of the run's own (a name that is not built in): the regex a line must match (.NET syntax,
+    /// culture-invariant, ordinal). A built-in pattern's regex cannot be replaced.
+    /// </summary>
+    public string? Line { get; set; }
+    /// <summary>For a pattern of the run's own: a regex one of the matching line's stack frames must match, as <see cref="LogPattern.Frame"/>.</summary>
+    public string? Frame { get; set; }
     /// <summary><c>Failure</c> or <c>Warning</c>; absent keeps the pattern's default.</summary>
     public LogSeverity? Severity { get; set; }
     /// <summary>
@@ -84,8 +99,7 @@ public static class LogScanner
     // Frames that say where the runtime was, not which code threw: skipped when choosing FirstFrame.
     private static readonly Regex RuntimeFrame = new(@"^\s*(?:at\s+)?(?:\(wrapper |System\.|Mono\.)", Options);
 
-    /// <summary>The known patterns and their default severities.</summary>
-    public static IReadOnlyList<LogPattern> Patterns { get; } =
+    private static readonly LogPattern[] Problems =
     [
         // HarmonyX's warning when a mod calls UnpatchAll() without an id: every mod's patches are removed. Not its
         // "Legacy UnpatchAll has been called AND DisallowLegacyGlobalUnpatchAll=true. Skipping execution", which removes nothing.
@@ -98,9 +112,11 @@ public static class LogScanner
         // target's trace in the one log every run keeps, so it fails. A mod that probes optional members this way names
         // those lines as expected in its plan (LogClassification.Expected), which keeps the check for every other line.
         new("accesstools-not-found", LogSeverity.Failure, new(@"AccessTools\.\w+: Could not find ", Options)),
-        new("missing-method", LogSeverity.Failure, new(@"\bMissingMethodException\b", Options)),
-        new("missing-field", LogSeverity.Failure, new(@"\bMissingFieldException\b", Options)),
-        new("type-load", LogSeverity.Failure, new(@"\bTypeLoadException\b", Options)),
+        // The runtime's assemblies do not fit the game: a leftover preloader patcher or a mod built for another game version.
+        // At startup they also end an owned process's start at once (StartupEvents.RuntimeLoadFailures uses these regexes).
+        new("missing-method", LogSeverity.Failure, new(@"\bMissingMethodException\b", Options), Phase: LogPhase.Teardown | LogPhase.Startup),
+        new("missing-field", LogSeverity.Failure, new(@"\bMissingFieldException\b", Options), Phase: LogPhase.Teardown | LogPhase.Startup),
+        new("type-load", LogSeverity.Failure, new(@"\bTypeLoadException\b", Options), Phase: LogPhase.Teardown | LogPhase.Startup),
         // A mod destroying networked objects the scene still tracks.
         new("nre-remove-objects", LogSeverity.Failure, new(@"\bNullReferenceException\b", Options), new(@"\bZNetScene\.RemoveObjects\b", Options)),
         // The game's warning for a per-object RPC that no component registered (a mod missing on one side, or a typo).
@@ -113,7 +129,15 @@ public static class LogScanner
         // Unity: a bundle's shader was not built for this graphics API (magenta objects on Vulkan or OpenGL clients). The
         // wording is as the Valheim-Modding wiki's Valheim-Unity-Project-Guide quotes it.
         new("shader-unsupported", LogSeverity.Warning, new(@"not supported on this GPU|Shader Unsupported\b|Desired shader compiler platform \d+ is not available in shader blob", Options)),
-        // The macOS game's own Apple plugins (GameKitWrapper, AppleCoreNativeMac) failing to load at startup: these
+    ];
+
+    /// <summary>
+    /// The game's own lines on a given platform that are not a mod's problem, each measured on the game version its comment
+    /// names. A run can allow a newer one from its plan without a toolkit release: a <see cref="LogClassification"/> with a
+    /// new name, a <see cref="LogClassification.Line"/> and <see cref="LogSeverity.Warning"/>.
+    /// </summary>
+    public static IReadOnlyList<LogPattern> KnownGameNoise { get; } =
+    [        // The macOS game's own Apple plugins (GameKitWrapper, AppleCoreNativeMac) failing to load at startup: these
         // DllNotFoundExceptions were in the Unity log of every macOS client and dedicated server run kept from 18 to 30 Sep
         // 2026 (Valheim 1.0.16, native arm64 and Rosetta, with or without mods). The game continues; they are the game's own,
         // so they do not count as UnityException.
@@ -130,16 +154,41 @@ public static class LogScanner
             + @"|Could not find video decode shader pass \w+ in shader <not found>|\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}: Failed to play intro cinematic)$", Options)),
     ];
 
-    /// <summary>Every name a classification may use: the patterns, <see cref="UnityException"/>, <see cref="UnknownWarning"/> and <see cref="UnknownError"/>.</summary>
+    /// <summary>The known patterns and their default severities: the problems, then <see cref="KnownGameNoise"/>.</summary>
+    public static IReadOnlyList<LogPattern> Patterns { get; } = [.. Problems, .. KnownGameNoise];
+
+    /// <summary>
+    /// The built-in names a classification may use: the patterns, <see cref="UnityException"/>, <see cref="UnknownWarning"/>
+    /// and <see cref="UnknownError"/>. Any other name defines a pattern of the run's own (<see cref="LogClassification.Line"/>).
+    /// </summary>
     public static IReadOnlyList<string> Names { get; } = [.. Patterns.Select(pattern => pattern.Name), UnityException, UnknownWarning, UnknownError];
 
-    /// <summary>Refuses a classification of an unknown name or without a written reason.</summary>
-    public static void CheckClassifications(IReadOnlyDictionary<string, LogClassification>? classifications)
+    /// <summary>
+    /// Refuses a classification without a written reason, a built-in pattern given a regex, and a pattern of the run's own
+    /// without a line regex or a severity, or whose regex does not parse.
+    /// </summary>
+    public static void CheckClassifications(IReadOnlyDictionary<string, LogClassification>? classifications) => RunPatterns(classifications);
+
+    // The run's own patterns, after checking every classification; a user regex gets a match timeout.
+    private static List<LogPattern> RunPatterns(IReadOnlyDictionary<string, LogClassification>? classifications)
     {
+        var own = new List<LogPattern>();
         foreach (var entry in classifications ?? new Dictionary<string, LogClassification>())
         {
-            if (!Names.Contains(entry.Key)) throw new ArgumentException($"Log scan: {entry.Key} is not a known pattern ({string.Join(", ", Names)}).");
             var classification = entry.Value;
+            if (string.IsNullOrWhiteSpace(entry.Key)) throw new ArgumentException("Log scan: a pattern needs a name.");
+            if (Names.Contains(entry.Key))
+            {
+                if (classification?.Line != null || classification?.Frame != null)
+                    throw new ArgumentException($"Log scan: {entry.Key} is built in; its regex cannot be replaced. Give a pattern of your own a new name.");
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(classification?.Line) || classification.Severity == null || string.IsNullOrWhiteSpace(classification.Reason))
+                    throw new ArgumentException($"Log scan: {entry.Key} is not a built-in pattern ({string.Join(", ", Names)}); a pattern of your own needs a line regex, a severity and a written reason.");
+                own.Add(new(entry.Key, classification.Severity.Value, UserRegex(entry.Key, "line", classification.Line),
+                    classification.Frame == null ? null : UserRegex(entry.Key, "frame", classification.Frame)));
+            }
             if (classification == null || (classification.Severity is { } severity && !Enum.IsDefined(severity)) || string.IsNullOrWhiteSpace(classification.Reason)
                 || (classification.Severity == null && (classification.Expected == null || classification.Expected.Count == 0)))
                 throw new ArgumentException($"Log scan: classify {entry.Key} as Failure or Warning, or name the lines it expects, with a written reason.");
@@ -151,13 +200,20 @@ public static class LogScanner
                     Header.Match(line) is not { Success: true } match || match.Groups[1].Value is not ("Error" or "Fatal")))
                 throw new ArgumentException("Log scan: unknown-error needs the exact expected BepInEx Error or Fatal header line.");
         }
+        return own;
+    }
+
+    private static Regex UserRegex(string name, string field, string text)
+    {
+        try { return new Regex(text, Options, TimeSpan.FromSeconds(1)); }
+        catch (ArgumentException e) { throw new ArgumentException($"Log scan: {name}'s {field} regex does not parse: {e.Message}"); }
     }
 
     /// <summary>Counts every pattern in one log. A missing log has no counts; a missing required log is a <see cref="LogFileScan.Problem"/>.</summary>
     public static LogFileScan Scan(RunLog log, IReadOnlyDictionary<string, LogClassification>? classifications = null)
     {
         ArgumentNullException.ThrowIfNull(log);
-        CheckClassifications(classifications);
+        var patterns = Patterns.Where(pattern => pattern.Phase.HasFlag(LogPhase.Teardown)).Concat(RunPatterns(classifications)).ToList();
         if (!File.Exists(log.Path)) return new(log.Role, log.Path, false, log.Required ? Missing(log) : null, []);
         List<string> lines;
         using (var reader = new StreamReader(new FileStream(log.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)))
@@ -165,13 +221,13 @@ public static class LogScanner
             lines = [];
             for (string? line; (line = reader.ReadLine()) != null;) lines.Add(line);
         }
-        var names = Names;
+        var names = patterns.Select(pattern => pattern.Name).Concat([UnityException, UnknownWarning, UnknownError]).ToList();
         var counts = new int[names.Count];
         var first = new (int Line, string Text)?[names.Count];
         var expectedCounts = new int[names.Count];
         var firstExpected = new string?[names.Count];
         var firstFrame = new string?[names.Count];
-        int unityException = Patterns.Count, unknownWarning = names.Count - 2, unknownError = names.Count - 1;
+        int unityException = patterns.Count, unknownWarning = names.Count - 2, unknownError = names.Count - 1;
         var expected = names.Select(name => classifications != null && classifications.TryGetValue(name, out var chosen) ? chosen.Expected ?? [] : []).ToArray();
         string Text(int line) => lines[line].Length > TextLimit ? lines[line][..TextLimit] + " [truncated]" : lines[line];
         // A UnityException is expected when the named text is in its first line or in one of its frames, because the first
@@ -202,10 +258,11 @@ public static class LogScanner
             else if (UnityTimestamp.IsMatch(line)) EndRecord();
             else if (line.Trim().Length == 0) { EndRecord(); continue; }
             bool named = false;
-            for (int p = 0; p < Patterns.Count; p++)
+            for (int p = 0; p < patterns.Count; p++)
             {
-                var pattern = Patterns[p];
-                if (!pattern.Line.IsMatch(line) || (pattern.Frame != null && !HasFrame(lines, i, pattern.Frame))) continue;
+                var pattern = patterns[p];
+                try { if (!pattern.Line.IsMatch(line) || (pattern.Frame != null && !HasFrame(lines, i, pattern.Frame))) continue; }
+                catch (RegexMatchTimeoutException) { throw new InvalidOperationException($"Log scan: {pattern.Name}'s regex took over {pattern.Line.MatchTimeout.TotalSeconds:0.#} s on line {i + 1} of {log.Role}; simplify it."); }
                 Hit(p, i); known = true; named = true;
             }
             // Inside a BepInEx warning or error record the exception is already counted, by a pattern or as unknown. Info,
@@ -217,7 +274,7 @@ public static class LogScanner
         var result = new List<LogPatternCount>(names.Count);
         for (int n = 0; n < names.Count; n++)
         {
-            var severity = n < Patterns.Count ? Patterns[n].Severity : n == unityException || n == unknownError ? LogSeverity.Failure : LogSeverity.Warning;
+            var severity = n < patterns.Count ? patterns[n].Severity : n == unityException || n == unknownError ? LogSeverity.Failure : LogSeverity.Warning;
             string? reason = null;
             if (classifications != null && classifications.TryGetValue(names[n], out var chosen)) { severity = chosen.Severity ?? severity; reason = chosen.Reason; }
             result.Add(new(names[n], severity, reason, counts[n], first[n]?.Line, first[n]?.Text, expectedCounts[n], firstExpected[n], firstFrame[n]));
