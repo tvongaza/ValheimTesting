@@ -5,8 +5,13 @@ using valheim_cli.Testing;
 
 namespace Valheim.Testing.Game;
 
-// The seam lets fast tests drive the actual restart/identity rules without Unity.
-public interface IServerProcess : IDisposable
+/// <summary>
+/// A process this run started and must stop: an owned dedicated server (<see cref="DirectServerProcess"/>,
+/// <see cref="HostServerProcess"/>), an owned client (<see cref="ClientSession"/>'s launch, <see cref="InteractiveClientProcess"/>)
+/// or a helper such as a <see cref="CliTunnel"/>'s ssh forward. The seam lets fast tests drive the real startup, restart and
+/// stop rules without Unity: use <see cref="Fakes.FakeOwnedProcess"/>.
+/// </summary>
+public interface IOwnedProcess : IDisposable
 {
     int Id { get; }
     bool HasExited { get; }
@@ -120,12 +125,12 @@ public interface IOwnedServer
 
 public sealed class OwnedServerSession : IOwnedServer, IDisposable
 {
-    private readonly Func<string, IServerProcess> _launch;
+    private readonly Func<string, IOwnedProcess> _launch;
     private readonly Func<IGameTransport> _connect;
     private readonly string _saveRoot, _expectations, _sessionCapability, _extension;
     private readonly TimeSpan _startup, _command, _poll;
     private readonly CancellationToken _cancellation;
-    private IServerProcess? _process;
+    private IOwnedProcess? _process;
     private GameActor? _actor;
     public List<int> StartedProcesses { get; } = [];
     /// <summary>
@@ -137,7 +142,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     public List<ProcessStop> Stops { get; } = [];
     /// <summary>Events startup waits on; null keeps bounded connection retries. The process exit is watched either way.</summary>
     public StartupEvents? Events { get; init; }
-    public OwnedServerSession(Func<string, IServerProcess> launch, Func<IGameTransport> connect,
+    public OwnedServerSession(Func<string, IOwnedProcess> launch, Func<IGameTransport> connect,
         string saveRoot, string expectations, string sessionCapability, TimeSpan startup, TimeSpan command, TimeSpan? poll = null, CancellationToken cancellation = default)
     {
         var parts = sessionCapability.Split('/');
@@ -370,7 +375,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
 // Starts one direct executable (an owned server, or an owned client through ClientSession); launch scripts must exec/wait, never detach a child.
 // The PID handshake refuses a daemonized server. No process-name discovery/kill. A clean stop asks only this process to quit
 // (Quit); the kill fallback ends this process and its children.
-public sealed class DirectServerProcess : IServerProcess
+public sealed class DirectServerProcess : IOwnedProcess
 {
     private readonly Process _process;
     // The profile's account and host lock still need a conservative exit answer after ClientSession disposes this handle.

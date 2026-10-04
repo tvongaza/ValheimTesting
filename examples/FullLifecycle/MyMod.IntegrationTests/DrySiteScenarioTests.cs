@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MyMod.SystemTests;
 using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
 using Xunit;
 
 namespace MyMod.IntegrationTests;
@@ -13,12 +14,12 @@ public sealed class DrySiteScenarioTests : IDisposable
 {
     private readonly string _output = Directory.CreateTempSubdirectory("mymod-integration-").FullName;
     private readonly TestWorld _world = new();
-    private FakeClientProcess? _process;
+    private FakeOwnedProcess? _process;
     public void Dispose() => Directory.Delete(_output, recursive: true);
 
-    private ScenarioReport Run(LifecyclePlan plan, FakeClientProcess? process = null)
+    private ScenarioReport Run(LifecyclePlan plan, FakeOwnedProcess? process = null)
     {
-        _process = process ?? new FakeClientProcess();
+        _process = process ?? new FakeOwnedProcess(7331);
         var report = new ScenarioReport("mymod-system-test");
         var server = _world.Server();
         Func<ClientSession> open = plan.Client!.Owned
@@ -114,7 +115,7 @@ public sealed class DrySiteScenarioTests : IDisposable
 
     [Fact] public void AnOwnedClientThatExitsDuringStartupFailsFastAndIsCleanedUp()
     {
-        var report = Run(_world.Plan(), new FakeClientProcess(exitDuringStartup: 3));
+        var report = Run(_world.Plan(), FakeOwnedProcess.Exited(3, 7331));
         Assert.Equal(new[] { "launch the owned client to its menu, plugins pinned" }, Failed(report));
         Assert.Contains("exited with code 3", report.Steps.Single(s => !s.Passed).Error);
         Assert.Equal(1, _process!.Stops);
@@ -125,7 +126,7 @@ public sealed class DrySiteScenarioTests : IDisposable
     [Fact] public void CancellingAWaitForTheMenuStopsTheOwnedClientAtOnce()
     {
         var plan = _world.Plan(); plan.Client!.StartSeconds = 10;
-        var process = new FakeClientProcess();
+        var process = new FakeOwnedProcess(7331);
         var report = new ScenarioReport("mymod-system-test");
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
         var clock = System.Diagnostics.Stopwatch.StartNew();

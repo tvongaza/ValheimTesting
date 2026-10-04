@@ -234,7 +234,7 @@ public class LocalGameHostShellTests
     {
         public Task<ProcessExit> RunAsync(ProcessCall call, CancellationToken cancellation) =>
             SystemProcessLauncher.Instance.RunAsync(call with { Environment = new Dictionary<string, string>(call.Environment) { ["XDG_CACHE_HOME"] = cache } }, cancellation);
-        public IOwnedProcess Start(string executable, IReadOnlyList<string> arguments) => SystemProcessLauncher.Instance.Start(executable, arguments);
+        public IStartedProcess Start(string executable, IReadOnlyList<string> arguments) => SystemProcessLauncher.Instance.Start(executable, arguments);
     }
 
     [Theory, MemberData(nameof(Shells))] public Task RunPassesValuesLiterallyAndReportsTheExitCode(string shell) => GameHostChecks.RunPassesValuesLiterallyAndReportsTheExitCode(Host(shell));

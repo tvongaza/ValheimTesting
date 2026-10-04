@@ -361,12 +361,12 @@ public static class InteractiveClient
 
 /// <summary>
 /// A game client <see cref="InteractiveClient"/> started, identified by process ID and start time on its host: the identity an
-/// owned session checks against its adapter's reported process ID. It implements <see cref="IServerProcess"/>, so it can be given
+/// owned session checks against its adapter's reported process ID. It implements <see cref="IOwnedProcess"/>, so it can be given
 /// to the <see cref="ClientSession"/> launch that takes its process, connection and readiness as functions.
 /// Stopping it stops only that process, and only while its start time still matches: a process ID reused by another program
 /// is never touched. Disposing stops it if it was not stopped yet.
 /// </summary>
-public sealed class InteractiveClientProcess : IServerProcess, IAsyncDisposable
+public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
 {
     private readonly IGameHost _host;
     private readonly ClientPlatform _platform;
@@ -457,13 +457,13 @@ public sealed class InteractiveClientProcess : IServerProcess, IAsyncDisposable
         }
     }
 
-    /// <summary>The <see cref="IServerProcess"/> stop: <see cref="StopAsync(TimeSpan, CancellationToken)"/>, waited for.</summary>
+    /// <summary>The <see cref="IOwnedProcess"/> stop: <see cref="StopAsync(TimeSpan, CancellationToken)"/>, waited for.</summary>
     public void Stop(TimeSpan timeout) => StopAsync(timeout).GetAwaiter().GetResult();
 
     /// <summary>How the last stop asked the game to quit.</summary>
     public string LastQuitRequest { get; private set; } = "not asked";
 
-    /// <summary>The <see cref="IServerProcess"/> clean stop: <see cref="StopAsync(TimeSpan, TimeSpan, CancellationToken)"/>, waited for.</summary>
+    /// <summary>The <see cref="IOwnedProcess"/> clean stop: <see cref="StopAsync(TimeSpan, TimeSpan, CancellationToken)"/>, waited for.</summary>
     public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();

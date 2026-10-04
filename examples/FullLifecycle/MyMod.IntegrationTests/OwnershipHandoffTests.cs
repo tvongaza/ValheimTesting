@@ -87,7 +87,7 @@ public sealed class OwnershipHandoffTests
         plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
         var report = new ScenarioReport("ownership-unknown-stop");
         var client = ReadyClient(world, plan);
-        var process = new UnprovenStop();
+        var process = new FakeOwnedProcess(101) { StopFailure = () => new IOException("A process stop was unproven") };
         var run = world.Run(plan, report, profileClient: (requested, name) => name == "client-b"
             ? throw new InvalidOperationException("B startup failed")
             : ClientSession.Launch(requested, world.Output, () => process, () => client, (_, _) => Task.CompletedTask));
@@ -273,13 +273,4 @@ public sealed class OwnershipHandoffTests
         });
     }
 
-    private sealed class UnprovenStop : IServerProcess
-    {
-        public int Stops;
-        public int Id => 101;
-        public bool HasExited => false;
-        public Task<int> WaitForExitAsync(CancellationToken cancellation) => Task.Delay(Timeout.Infinite, cancellation).ContinueWith(_ => 0, cancellation);
-        public void Stop(TimeSpan timeout) { Stops++; throw new IOException("A process stop was unproven"); }
-        public void Dispose() { }
-    }
 }

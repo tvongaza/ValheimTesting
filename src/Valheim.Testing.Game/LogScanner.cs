@@ -80,7 +80,7 @@ public sealed record LogFileScan(string Role, string Path, bool Present, string?
 /// Player.log has no levels; there an exception Unity printed (a line that starts with the exception's type name, outside
 /// a BepInEx warning or error record) that no known pattern names is counted as <see cref="UnityException"/>, which fails.
 /// The same Unity message may appear in both logs.
-/// Owned processes are asked to quit at teardown and killed only if they do not (<see cref="IServerProcess.StopCleanly"/>):
+/// Owned processes are asked to quit at teardown and killed only if they do not (<see cref="IOwnedProcess.StopCleanly"/>):
 /// after a clean stop the logs include what the game and its mods logged while shutting down, for example an UnpatchAll a
 /// mod calls when the game quits; after a kill they do not.
 /// </summary>

@@ -21,7 +21,7 @@ internal sealed class HostedSeams
     /// <summary>Overrides the local macOS GUI-session probe in controlled tests.</summary>
     public Action? RequireMacGui { get; init; }
     /// <summary>Starts a local macOS client without opening the real game in controlled tests.</summary>
-    public Func<ClientRunPlan, string, SteamAccountHold?, CancellationToken, Action<IServerProcess>?, ClientSession>? LocalMacLaunch { get; init; }
+    public Func<ClientRunPlan, string, SteamAccountHold?, CancellationToken, Action<IOwnedProcess>?, ClientSession>? LocalMacLaunch { get; init; }
 }
 
 /// <summary>
@@ -41,7 +41,7 @@ internal sealed class HostedServerRun
     private readonly SemaphoreSlim _clientLockGate = new(1, 1);
     private readonly string _owner;
     private readonly List<(string Host, HostLock Lock)> _clientLocks = [];
-    private readonly List<(string Host, IServerProcess Process)> _localMacProcesses = [];
+    private readonly List<(string Host, IOwnedProcess Process)> _localMacProcesses = [];
     private readonly List<ClientAccount> _accounts = [];
     private IGameHost? _leaseHost;
     private HostLock? _lock;
@@ -412,7 +412,7 @@ internal sealed class HostedServerRun
         }
         // ClientSession owns the direct child process and its logs. No SSH-launched GUI process or remote task is involved.
         ClientSession session;
-        Action<IServerProcess> processStarted = process =>
+        Action<IOwnedProcess> processStarted = process =>
         {
             lock (_clientState) _localMacProcesses.Add((role.Host, process));
             if (account != null) account.Process = process;
@@ -570,7 +570,7 @@ internal sealed class ClientAccount(string client, SteamAccountHold hold)
     public string Client { get; } = client;
     public SteamAccountHold Hold { get; } = hold;
     public ClientSession? Session { get; set; }
-    public IServerProcess? Process { get; set; }
+    public IOwnedProcess? Process { get; set; }
 }
 
 /// <summary>
@@ -578,7 +578,7 @@ internal sealed class ClientAccount(string client, SteamAccountHold hold)
 /// clean stop asks it to quit first),
 /// keeps its BepInEx log and Player.log in its launch directory, fetches that directory here and closes its CLI tunnel.
 /// </summary>
-internal sealed class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence) : IServerProcess
+internal sealed class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence) : IOwnedProcess
 {
     private bool _kept;
     public int Id => process.Id;

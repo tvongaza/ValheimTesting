@@ -5,6 +5,22 @@ using Xunit;
 // The public fakes behave like the real protocol where scenario code depends on it.
 public class FakesTests
 {
+    // #270: the one fake process, standalone. A failing stop counts, throws and leaves the process running, as an unproven real stop does.
+    [Fact] public async Task AStandaloneFakeProcessCountsStopsAndCanRefuseThem()
+    {
+        var process = new FakeOwnedProcess(42) { StopFailure = () => new IOException("stop could not be proven") };
+        Assert.Throws<IOException>(() => process.Stop(TimeSpan.FromSeconds(1)));
+        Assert.Throws<IOException>(() => process.StopCleanly(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)));
+        Assert.Equal((42, 2, false), (process.Id, process.Stops, process.HasExited));
+        var crashed = FakeOwnedProcess.Exited(3);
+        crashed.StopFailure = () => new IOException("stop could not be proven");
+        Assert.Throws<IOException>(() => crashed.StopCleanly(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1))); // Even an exited process's stop fails.
+        process.StopFailure = null;
+        Assert.Equal(StopOutcome.Clean, process.StopCleanly(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)).Outcome);
+        Assert.Equal(0, await process.WaitForExitAsync(default));
+        process.Dispose();
+        Assert.Equal((3, 1), (process.Stops, process.Disposals));
+    }
     [Fact] public void AScriptedExtensionIsDiscoveredAndObservedLikeARealOne()
     {
         var transport = new ScriptedTransport().Extension("my.mod", "state", args => new { source = "memory", complete = true, zone = args.Count == 0 ? "none" : args[0] });

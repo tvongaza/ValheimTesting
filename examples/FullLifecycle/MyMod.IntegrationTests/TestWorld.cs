@@ -162,18 +162,3 @@ internal sealed class TestWorld : IOwnedServer
     }
 }
 
-/// <summary>An owned client process for <see cref="ClientSession.Launch(ClientRunPlan, string, Func{IServerProcess}, Func{IGameTransport}, Func{TimeSpan, CancellationToken, Task}, CancellationToken)"/>.</summary>
-internal sealed class FakeClientProcess(int? exitDuringStartup = null) : IServerProcess
-{
-    private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    public int Stops { get; private set; }
-    public int Id => 7331;
-    public bool HasExited => _exit.Task.IsCompleted;
-    public Task<int> WaitForExitAsync(CancellationToken cancellation)
-    {
-        if (exitDuringStartup is int code) _exit.TrySetResult(code);
-        return _exit.Task.WaitAsync(cancellation);
-    }
-    public void Stop(TimeSpan timeout) { Stops++; _exit.TrySetResult(-1); }
-    public void Dispose() { }
-}

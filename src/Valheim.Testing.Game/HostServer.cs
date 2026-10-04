@@ -202,13 +202,13 @@ public enum HostServerStop { Stopped, AlreadyGone, Quit }
 
 /// <summary>
 /// A dedicated server <see cref="HostServer"/> started, identified by process ID and start time on its host. It is an
-/// <see cref="IServerProcess"/>, so an <see cref="OwnedServerSession"/> launches, checks and stops it like a local one. Stopping
+/// <see cref="IOwnedProcess"/>, so an <see cref="OwnedServerSession"/> launches, checks and stops it like a local one. Stopping
 /// touches only that process, and only while its start time still matches (a process ID reused by another program is never
 /// touched): a clean stop (<see cref="StopCleanly"/>) sends it SIGINT, on which the game saves, retires its PlayFab lobby and
 /// quits, and kills it only if it has not exited in time. Then it keeps the boot's logs in its boot directory and, when an
 /// evidence directory was given, fetches that directory here. Disposing kills it if it was not stopped yet.
 /// </summary>
-public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
+public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
 {
     private readonly IGameHost _host;
     private readonly IReadOnlyList<string> _logs;
@@ -308,10 +308,10 @@ public sealed class HostServerProcess : IServerProcess, IAsyncDisposable
         finally { _stopping.Release(); }
     }
 
-    /// <summary>The <see cref="IServerProcess"/> stop: <see cref="StopAsync(TimeSpan, CancellationToken)"/>, waited for.</summary>
+    /// <summary>The <see cref="IOwnedProcess"/> stop: <see cref="StopAsync(TimeSpan, CancellationToken)"/>, waited for.</summary>
     public void Stop(TimeSpan timeout) => StopAsync(timeout).GetAwaiter().GetResult();
 
-    /// <summary>The <see cref="IServerProcess"/> clean stop: <see cref="StopAsync(TimeSpan, TimeSpan, CancellationToken)"/>, waited for.</summary>
+    /// <summary>The <see cref="IOwnedProcess"/> clean stop: <see cref="StopAsync(TimeSpan, TimeSpan, CancellationToken)"/>, waited for.</summary>
     public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
