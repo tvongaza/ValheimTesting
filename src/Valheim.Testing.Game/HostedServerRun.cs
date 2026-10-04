@@ -78,9 +78,9 @@ internal sealed class HostedServerRun
     {
         var role = profile.Server ?? throw new ArgumentException("The environment profile names no server; --profile runs the dedicated server on the profile's server host.");
         var hostProfile = profile.Hosts[role.Host];
-        if (hostProfile.Platform != "linux" || hostProfile.Shell != "bash")
-            throw new PlatformNotSupportedException($"The profile's server host '{role.Host}' is {hostProfile.Platform} with {hostProfile.Shell}. A dedicated server on a host runs on Linux through bash " +
-                "(over SSH, in a container or on this Linux machine); for a Windows server, run the runner on that machine without --profile.");
+        if (!((hostProfile.Platform == "linux" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
+              (hostProfile.Platform == "windows" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.PowerShell)))
+            throw new PlatformNotSupportedException($"The profile's server host '{role.Host}' is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash or Windows/PowerShell.");
         if (role.CliPort != plan.Port)
             throw new ArgumentException($"The plan's ValheimCLI port {plan.Port} is not the profile server's cliPort {role.CliPort}; the runtime's [Server] Port must be both.");
         // The game reads its arguments lowercased, so -Port names the game port too.
@@ -116,9 +116,23 @@ internal sealed class HostedServerRun
     }
 
     /// <summary>For a crossplay plan: the runtime copy's <c>libparty.so</c> loads on the server host (<see cref="CrossplayLibraries"/>).</summary>
-    public Task CheckCrossplayAsync(ScenarioReport report, ServerRunPlan plan, CancellationToken cancellation) => !plan.Crossplay ? Task.CompletedTask :
-        report.StepAsync("the server host can load crossplay's libraries", async () =>
+    public Task CheckCrossplayAsync(ScenarioReport report, ServerRunPlan plan, CancellationToken cancellation)
+    {
+        if (!plan.Crossplay) return Task.CompletedTask;
+        if (Host.Shell.Kind == HostShellKind.PowerShell)
+        {
+            report.Step("the Windows runtime has crossplay's native library", () =>
+            {
+                const string party = "valheim_server_Data/Plugins/x86_64/Party.dll";
+                if (!(_runtime?.Files.ContainsKey(party) ?? false))
+                    throw new FileNotFoundException($"The copied Windows server on {Host.Name} has no {party}; crossplay cannot start.");
+                report.Provenance["crossplayLibraries"] = party + " present on " + Host.Name + "; game startup verifies it loads";
+            });
+            return Task.CompletedTask;
+        }
+        return report.StepAsync("the server host can load crossplay's libraries", async () =>
             report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, RuntimeDirectory, Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
+    }
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
     public Task ShipWorldAsync(ScenarioReport report, string localWorld, CancellationToken cancellation) =>
@@ -140,8 +154,8 @@ internal sealed class HostedServerRun
         {
             var platform = HostInstall.DetectServer(runtime);
             plan.CheckExecutable(platform);
-            ServerRunPlan.CheckLaunchHost(platform, windowsHost: false);
-            if (!runtime.Executables.Contains(ServerLaunch.LinuxExecutable))
+            ServerRunPlan.CheckLaunchHost(platform, Host.Shell.Kind == HostShellKind.PowerShell);
+            if (platform == ServerPlatform.Linux && !runtime.Executables.Contains(ServerLaunch.LinuxExecutable))
                 throw new InvalidOperationException($"{ServerLaunch.LinuxExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
         });
         report.Step("copied runtime's BepInEx patchers are the plan's", () => HostInstall.RequirePatchers(runtime, plan.Patchers, "runtime"));
@@ -149,6 +163,20 @@ internal sealed class HostedServerRun
             (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, BepInEx core and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, "runtime")
                 : HostInstall.Pins(runtime)).Record(report.Provenance, "runtime"));
     }
+
+    /// <summary>Refuses an incoherent Windows Doorstop pair in the copied runtime before its server can start.</summary>
+    public Task CheckWindowsLoaderAsync(ScenarioReport report, CancellationToken cancellation) => Host.Shell.Kind != HostShellKind.PowerShell
+        ? Task.CompletedTask
+        : report.StepAsync("copied Windows runtime has a coherent Doorstop loader", async () =>
+        {
+            string proxyPath = HostInstall.Join(RuntimeDirectory, BepInExLoader.WindowsProxy);
+            string configPath = HostInstall.Join(RuntimeDirectory, BepInExLoader.WindowsConfig);
+            byte[] proxy = await HostClientPreflight.Read(Host, proxyPath, Quick, cancellation).ConfigureAwait(false) ??
+                throw new FileNotFoundException("Windows Doorstop proxy is missing from the server runtime copy.", proxyPath);
+            byte[] config = await HostClientPreflight.Read(Host, configPath, Quick, cancellation).ConfigureAwait(false) ??
+                throw new FileNotFoundException("Windows Doorstop config is missing from the server runtime copy.", configPath);
+            BepInExLoader.RequireWindowsLoader(proxy, Encoding.UTF8.GetString(config), RuntimeDirectory, "server runtime");
+        });
 
     /// <summary>Refuses a busy CLI port on the host, then opens the loopback tunnel to it.</summary>
     public async Task OpenAsync(ScenarioReport report, CancellationToken cancellation)
@@ -173,7 +201,9 @@ internal sealed class HostedServerRun
         {
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, RuntimeDirectory, WorldDirectory));
             environment[options.SessionTokenVariable] = token;
-            var launch = HostServerLaunch.Create(RuntimeDirectory, plan.LaunchArguments(RuntimeDirectory, WorldDirectory), environment);
+            var launch = Host.Shell.Kind == HostShellKind.PowerShell
+                ? HostServerLaunch.CreateWindows(RuntimeDirectory, plan.LaunchArguments(RuntimeDirectory, WorldDirectory), environment)
+                : HostServerLaunch.Create(RuntimeDirectory, plan.LaunchArguments(RuntimeDirectory, WorldDirectory), environment);
             int n = ++boot;
             string local = Path.Combine(run.Output, "boot-" + n), bootDirectory = HostInstall.Join(RunDirectory, "boot-" + n);
             HostServerProcess process;
@@ -445,7 +475,7 @@ internal sealed class HostedServerRun
             // the logs of any client still open), so keep as much as a failed run would.
             var (perFile, total) = PinnedServerRun.RetainLimits(passed: false);
             string keepDirectory = HostInstall.Join(RunDirectory, "runtime-changes");
-            var result = (await Host.RunAsync(HostedRunScripts.Retire, new Dictionary<string, string>
+            var result = (await Host.RunAsync(Host.Shell.Kind == HostShellKind.PowerShell ? HostedRunScripts.WindowsRetire : HostedRunScripts.Retire, new Dictionary<string, string>
             {
                 ["runtime"] = RuntimeDirectory, ["keep"] = keepDirectory, ["run"] = RunId,
                 ["files"] = string.Join('\n', added.Concat(changed).Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name)))),
@@ -471,7 +501,8 @@ internal sealed class HostedServerRun
             string local = Path.Combine(output, "runtime-changes");
             await Host.FetchDirectoryAsync(keepDirectory, local, Long).ConfigureAwait(false);
             // Fetched: the host's copy of the changes is not needed twice.
-            (await Host.RunAsync(HostedRunScripts.DropKept, new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = RunId }, Quick).ConfigureAwait(false))
+            (await Host.RunAsync(Host.Shell.Kind == HostShellKind.PowerShell ? HostedRunScripts.WindowsDropKept : HostedRunScripts.DropKept,
+                new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = RunId }, Quick).ConfigureAwait(false))
                 .EnsureSuccess($"Removing {Host.Name}:{keepDirectory} after fetching it");
             var retired = new RetiredCopy(where, local, added, changed, missing, notKept, long.Parse(kept, CultureInfo.InvariantCulture), long.Parse(freed, CultureInfo.InvariantCulture));
             File.WriteAllText(Path.Combine(local, "changes.json"), JsonSerializer.Serialize(retired, new JsonSerializerOptions { WriteIndented = true }));
@@ -606,6 +637,52 @@ internal static class HostedClientScripts
 
 internal static class HostedRunScripts
 {
+    // Windows counterpart of Retire. Only this run's own runtime copy may be removed, and retained files must resolve
+    // below it without a reparse point. Variables: runtime, keep, run, files, perfile, total.
+    public static readonly string WindowsRetire = """
+        if (-not $run -or $run -match '[\\/]' -or $run -eq '.' -or $run -eq '..') { exit 3 }
+        $parent = [IO.Path]::GetDirectoryName($runtime)
+        if ([IO.Path]::GetFileName($runtime) -cne 'runtime' -or [IO.Path]::GetFileName($parent) -cne $run -or
+            [IO.Path]::GetFileName($keep) -cne 'runtime-changes' -or [IO.Path]::GetDirectoryName($keep) -cne $parent) { exit 3 }
+        if ([IO.Directory]::Exists($keep) -or [IO.File]::Exists($keep)) { exit 3 }
+        [void][IO.Directory]::CreateDirectory($keep)
+        if (-not [IO.Directory]::Exists($runtime)) { 'VT-RETIRED 0 0'; exit 0 }
+        if ([IO.File]::GetAttributes($runtime) -band [IO.FileAttributes]::ReparsePoint) { exit 3 }
+        $root = [IO.Path]::GetFullPath($runtime).TrimEnd('\', '/') + '\'
+        $kept = [long]0
+        foreach ($line in ($files -split "`n")) {
+            if (-not $line) { continue }
+            $relative = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line))
+            if ([IO.Path]::IsPathRooted($relative) -or $relative.Split([char[]]'\/') -contains '..') { 'VT-NOTKEPT ' + $line + ' -1'; continue }
+            $source = [IO.Path]::GetFullPath((Join-Path $runtime $relative))
+            if (-not $source.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or -not [IO.File]::Exists($source)) { 'VT-NOTKEPT ' + $line + ' -1'; continue }
+            $walk = [IO.Path]::GetDirectoryName($source)
+            $linked = $false
+            while ($walk -and $walk.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+                if ([IO.File]::GetAttributes($walk) -band [IO.FileAttributes]::ReparsePoint) { $linked = $true; break }
+                $walk = [IO.Path]::GetDirectoryName($walk)
+            }
+            if ($linked -or ([IO.File]::GetAttributes($source) -band [IO.FileAttributes]::ReparsePoint)) { 'VT-NOTKEPT ' + $line + ' -1'; continue }
+            $size = (New-Object IO.FileInfo $source).Length
+            if ($size -gt [long]$perfile -or $kept + $size -gt [long]$total) { 'VT-NOTKEPT ' + $line + ' ' + $size; continue }
+            $target = Join-Path $keep $relative
+            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
+            [IO.File]::Copy($source, $target)
+            $kept += $size
+        }
+        $bytes = [long]0
+        foreach ($file in [IO.Directory]::EnumerateFiles($runtime, '*', [IO.SearchOption]::AllDirectories)) { $bytes += (New-Object IO.FileInfo $file).Length }
+        [IO.Directory]::Delete($runtime, $true)
+        'VT-RETIRED ' + $bytes + ' ' + $kept
+        """.ReplaceLineEndings("\n");
+
+    public static readonly string WindowsDropKept = """
+        if (-not $run -or $run -match '[\\/]' -or $run -eq '.' -or $run -eq '..') { exit 3 }
+        if ([IO.Path]::GetFileName($keep) -cne 'runtime-changes' -or [IO.Path]::GetFileName([IO.Path]::GetDirectoryName($keep)) -cne $run) { exit 3 }
+        if ([IO.Directory]::Exists($keep)) { [IO.Directory]::Delete($keep, $true) }
+        'VT-DROPPED'
+        """.ReplaceLineEndings("\n");
+
     // Keeps the listed files (base64 relative paths, one per line) from a run's runtime copy in $keep, within the size
     // limits, then removes the copy. Only a directory named runtime directly inside the run's own directory ($run) is
     // ever removed; a path that leaves the copy, a link or anything but a regular file is listed, never copied.

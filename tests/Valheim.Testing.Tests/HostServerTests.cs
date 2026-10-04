@@ -61,6 +61,95 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal("7", HostServerLaunch.Create("/srv/rt", [], new Dictionary<string, string> { ["SteamAppId"] = "7" }).Environment["SteamAppId"]);
     }
 
+    [Fact] public async Task WindowsServerLaunchUsesHeadlessTaskAndStopsOnlyTheOwnedIdentity()
+    {
+        var host = new QueueHost(HostShell.Pwsh);
+        var launch = HostServerLaunch.CreateWindows(@"C:\runs\r\runtime", ["-batchmode", "-name", "with spaces"]);
+        Assert.True(launch.Windows);
+        Assert.Equal(@"C:\runs\r\runtime\valheim_server.exe", launch.Executable);
+        Assert.Contains("winhttp.dll", launch.RequiredFiles);
+        Assert.Contains("-name \"with spaces\"", WindowsCommandLine.Join(launch.Arguments));
+        Assert.Throws<ArgumentException>(() => HostServerLaunch.CreateWindows(@"C:\r", [], new Dictionary<string, string> { ["doorstop_enabled"] = "0" }));
+        host.Replies.Enqueue(Reply("VT-SERVER started 701 123456789\n"));
+        var process = await HostServer.StartAsync(host, launch, @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60));
+        Assert.Same(HostServerScripts.WindowsStart, host.Runs[0].Script);
+        Assert.Contains("VT-Server-", host.Runs[0].Variables["task"]);
+        Assert.DoesNotContain("Steam", host.Runs[0].Variables["launcher"]);
+        host.Replies.Enqueue(Reply("VT-STOP quit\n"));
+        host.Replies.Enqueue(Reply("VT-KEPT\n"));
+        Assert.Equal(HostServerStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)));
+        Assert.Same(HostServerScripts.WindowsStop, host.Runs[1].Script);
+        Assert.Equal("701", host.Runs[1].Variables["game"]);
+        Assert.Equal("123456789", host.Runs[1].Variables["start"]);
+        Assert.Same(HostServerScripts.WindowsKeep, host.Runs[2].Script);
+    }
+
+    [Fact] public async Task WindowsServerRefusesAReplyLostDuringLaunchAsUnknown()
+    {
+        var host = new QueueHost(HostShell.Pwsh);
+        host.Replies.Enqueue(new HostResult(HostOutcome.TransportFailed, null, "", "ssh disconnected", TimeSpan.FromSeconds(1), false));
+        var error = await Assert.ThrowsAsync<HostOperationException>(() => HostServer.StartAsync(host,
+            HostServerLaunch.CreateWindows(@"C:\runs\r\runtime", []), @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60)));
+        Assert.Contains("may have started", error.Message);
+    }
+
+    [Fact] public async Task WindowsHeadlessTaskKeepsItsChildAfterTheTaskEndsAndStopsByIdentity()
+    {
+        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("VT_TEST_WINDOWS_HOST_SERVER") != "1") return;
+        string runtime = Path.Combine(_root, "runtime"), boot = Path.Combine(_root, "boot");
+        Directory.CreateDirectory(runtime);
+        File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), Path.Combine(runtime, ServerLaunch.WindowsExecutable));
+        foreach (string file in HostServerLaunch.CreateWindows(runtime, []).RequiredFiles.Skip(1))
+        {
+            string path = Path.Combine(runtime, file.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "test-only placeholder");
+        }
+        var host = new LocalGameHost("windows-task-check", HostShell.WindowsPowerShell);
+        var launch = HostServerLaunch.CreateWindows(runtime, ["-n", "60", "127.0.0.1"]);
+        var process = await HostServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(75));
+        try
+        {
+            Assert.False(process.HasExited);
+            using var child = System.Diagnostics.Process.GetProcessById(process.Id);
+            Assert.False(child.HasExited);
+            // A wrong start identity must not kill a live process with this PID.
+            string foreignBoot = Path.Combine(_root, "foreign");
+            Directory.CreateDirectory(foreignBoot);
+            var foreign = new HostServerProcess(host, process.Id, "0", foreignBoot, runtime, [], null);
+            Assert.Equal(HostServerStop.AlreadyGone, await foreign.StopAsync(TimeSpan.FromSeconds(1)));
+            Assert.False(child.HasExited);
+        }
+        finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
+        Assert.DoesNotContain(System.Diagnostics.Process.GetProcesses(), other => other.Id == process.Id);
+    }
+
+    [Fact] public async Task WindowsHostCopiesAndRetiresOnlyThisRunsRuntime()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("windows-copy", HostShell.WindowsPowerShell);
+        string install = Path.Combine(_root, "install"), run = Path.Combine(_root, "run-test");
+        string runtime = Path.Combine(run, "runtime"), keep = Path.Combine(run, "runtime-changes");
+        Directory.CreateDirectory(install);
+        File.WriteAllText(Path.Combine(install, "base.txt"), "source");
+        await HostInstall.CopyAsync(host, install, runtime, TimeSpan.FromSeconds(30));
+        Assert.Equal("source", File.ReadAllText(Path.Combine(runtime, "base.txt")));
+        File.WriteAllText(Path.Combine(runtime, "new.txt"), "evidence");
+        var result = await host.RunAsync(HostedRunScripts.WindowsRetire, new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["keep"] = keep, ["run"] = "run-test",
+            ["files"] = Convert.ToBase64String(Encoding.UTF8.GetBytes("new.txt")), ["perfile"] = "1000", ["total"] = "1000",
+        }, TimeSpan.FromSeconds(30));
+        Assert.True(result.Succeeded, result.Describe() + " " + result.Stderr);
+        Assert.Contains("VT-RETIRED", result.Stdout);
+        Assert.False(Directory.Exists(runtime));
+        Assert.Equal("evidence", File.ReadAllText(Path.Combine(keep, "new.txt")));
+        Assert.Equal("source", File.ReadAllText(Path.Combine(install, "base.txt")));
+        var drop = await host.RunAsync(HostedRunScripts.WindowsDropKept, new Dictionary<string, string> { ["keep"] = keep, ["run"] = "run-test" }, TimeSpan.FromSeconds(30));
+        Assert.True(drop.Succeeded, drop.Describe() + " " + drop.Stderr);
+        Assert.False(Directory.Exists(keep));
+    }
+
     [Fact] public void ALaunchRefusesWhatWouldRedirectTheLoaderOrCannotRun()
     {
         Assert.Throws<ArgumentException>(() => HostServerLaunch.Create("/srv/rt", [], new Dictionary<string, string> { ["DOORSTOP_ENABLED"] = "0" }));
@@ -352,7 +441,10 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal("5577", host.Runs[^1].Variables["port"]);
         host.Replies.Enqueue(Reply("VT-PORT busy\n"));
         await Assert.ThrowsAsync<InvalidOperationException>(() => HostInstall.RequirePortFreeAsync(host, 5577, TimeSpan.FromSeconds(30)));
-        await Assert.ThrowsAsync<NotSupportedException>(() => HostInstall.CopyAsync(new QueueHost(HostShell.Pwsh), "/a", "/b", TimeSpan.FromSeconds(30)));
+        var windows = new QueueHost(HostShell.Pwsh);
+        windows.Replies.Enqueue(Reply("VT-COPY copied\n"));
+        await HostInstall.CopyAsync(windows, @"C:\server", @"C:\runs\r\runtime", TimeSpan.FromSeconds(30));
+        Assert.Same(HostInstallScripts.PowerShellCopy, windows.Runs[0].Script);
     }
 
     [Fact] public void HostPathsJoinInTheHostsOwnStyle()

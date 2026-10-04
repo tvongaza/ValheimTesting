@@ -279,7 +279,7 @@ public static class PinnedServerRun
                 hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };
                 report.Provenance["profileSha256"] = WorldFixture.Hash(profilePath);
                 hosted.Record(report.Provenance);
-                platform = ServerPlatform.Linux;
+                platform = hosted.HostProfile.Platform == "windows" ? ServerPlatform.Windows : ServerPlatform.Linux;
             }
             else
             {
@@ -338,6 +338,7 @@ public static class PinnedServerRun
             if (hosted != null)
             {
                 hosted.CheckRuntime(report, plan, pinned);
+                await hosted.CheckWindowsLoaderAsync(report, cancellation.Token).ConfigureAwait(false);
                 await hosted.CheckCrossplayAsync(report, plan, cancellation.Token).ConfigureAwait(false);
             }
             else
