@@ -105,7 +105,7 @@ Inspect evidence before publishing: logs may expose account identifiers, local p
 
 ## Captured inputs and session capabilities
 
-Use [TerrainCapture](../examples/TerrainCapture/README.md) for a bounded `valheim.world/terrain-grid` observation and validated exact replay. Keep generator and loaded-ground layers distinct. A replay is input, not an independent expected result.
+Use [TerrainCapture](../examples/TerrainCapture/README.md) for a bounded `valheim.world/terrain-grid` observation and validated exact replay. Keep generator and loaded-ground layers distinct. A replay is input, not an independent expected result. To choose test sites on a world the game has just created, `SiteSearch.Find(server, worldUid, grids, enough)` reads generator grids through `TerrainCapture` in order, each required to come from the pinned world, until the mod's own rule is satisfied, and `SiteSearch.Nearest` picks the sample closest to the world's centre with an order-independent tie-break ([FullLifecycle](../examples/FullLifecycle/README.md)'s `prepare-server`).
 
 Use [SessionControl](../examples/SessionControl/README.md) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. These capabilities passed the [bounded native campaign](native-validation-20260927.md); mod readiness and human usability remain separate.
 

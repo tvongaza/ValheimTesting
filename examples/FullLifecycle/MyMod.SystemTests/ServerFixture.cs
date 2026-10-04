@@ -3,13 +3,11 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Valheim.Testing;
 using Valheim.Testing.Game;
 using valheimCLI;
 
 namespace MyMod.SystemTests;
-
-/// <summary>One height from the world generator, as ValheimCLI's <c>valheim.world/terrain-grid</c> reports it.</summary>
-public sealed record GeneratorSample(float X, float Z, float Height);
 
 /// <summary>
 /// Prepares a <c>dry-site-server</c> plan on a world the game creates now, so the server scenario can run where nobody
@@ -45,9 +43,9 @@ public static class ServerFixture
         (LifecyclePlan.ModPlugin, "MyMod.dll"), (LifecyclePlan.AdapterPlugin, "MyMod.TestAdapter.dll"),
     ];
     /// <summary>Generator grids of 16 by 16 samples (centre and spacing in metres), read in order until both sites are found.</summary>
-    public static readonly IReadOnlyList<(float X, float Z, float Spacing)> SearchGrids =
-        [(0, 0, 32), (0, 0, 96), (0, 0, 256), (2048, 2048, 256), (-2048, 2048, 256), (-2048, -2048, 256), (2048, -2048, 256)];
-    public const int GridSide = 16;
+    public static readonly IReadOnlyList<TerrainGridRequest> SearchGrids =
+        [.. new (float X, float Z, float Spacing)[] { (0, 0, 32), (0, 0, 96), (0, 0, 256), (2048, 2048, 256), (-2048, 2048, 256), (-2048, -2048, 256), (2048, -2048, 256) }
+            .Select(grid => SiteSearch.Around(grid.X, grid.Z, grid.Spacing, 16))];
 
     public static int Run(string[] args)
     {
@@ -110,7 +108,7 @@ public static class ServerFixture
             report.Step("read the new world's uid", () => facts = ReadWorld(server));
             report.Provenance["worldUid"] = facts.Uid; report.Provenance["worldSeed"] = facts.Seed;
             (Site Dry, Site Wet) sites = (new(), new());
-            report.Step("choose the sites from the world generator's heights", () => sites = ChooseSites(server));
+            report.Step("choose the sites from the world generator's heights", () => sites = ChooseSites(server, facts.Uid));
             report.Provenance["drySite"] = Describe(sites.Dry); report.Provenance["wetSite"] = Describe(sites.Wet);
             report.Step("confirmed world save", () => server.SaveConfirmed());
             StopOwned();
@@ -167,46 +165,29 @@ public static class ServerFixture
         return worlds[0];
     }
 
-    /// <summary>Reads <see cref="SearchGrids"/> in order until <see cref="TryChooseSites"/> finds both sites.</summary>
-    public static (Site Dry, Site Wet) ChooseSites(GameActor server)
+    /// <summary>Searches <see cref="SearchGrids"/> in order (<see cref="SiteSearch.Find"/>) until <see cref="TryChooseSites"/> finds both sites.</summary>
+    public static (Site Dry, Site Wet) ChooseSites(GameActor server, string worldUid)
     {
-        var grid = server.RequireCapability("valheim.world/terrain-grid");
-        var samples = new List<GeneratorSample>();
-        foreach (var (x, z, spacing) in SearchGrids)
+        try { return TryChooseSites(SiteSearch.Find(server, worldUid, SearchGrids, samples => TryChooseSites(samples) != null))!.Value; }
+        catch (SiteNotFoundException error)
         {
-            samples.AddRange(ReadGrid(server, grid, x, z, spacing));
-            if (TryChooseSites(samples) is { } sites) return sites;
+            throw new InvalidOperationException($"No dry site (generator ground at least {DryAtLeast} m) with a wet site (at most {WetAtMost} m) 50 m from it among {error.Samples} generator samples within about 4 km of the world's centre.", error);
         }
-        throw new InvalidOperationException($"No dry site (generator ground at least {DryAtLeast} m) with a wet site (at most {WetAtMost} m) 50 m from it among {samples.Count} generator samples within about 4 km of the world's centre.");
     }
 
     /// <summary>
-    /// The dry site: the sample closest to the world's centre with ground at least <see cref="DryAtLeast"/>. The wet site:
-    /// the closest with ground at most <see cref="WetAtMost"/> that is not within 50 m of the dry site on both axes (the
-    /// plan's own rule). Null until both exist. Ties go to the smaller x, then z, so the choice never depends on order.
+    /// MyMod's rule for the two sites, on the samples closest to the world's centre (<see cref="SiteSearch.Nearest"/>). The dry
+    /// site: ground at least <see cref="DryAtLeast"/>. The wet site: ground at most <see cref="WetAtMost"/> and not within 50 m
+    /// of the dry site on both axes (the plan's own rule). Null until both exist.
     /// </summary>
-    public static (Site Dry, Site Wet)? TryChooseSites(IEnumerable<GeneratorSample> samples)
+    public static (Site Dry, Site Wet)? TryChooseSites(IEnumerable<TerrainSample> samples)
     {
-        var closest = samples.Where(s => float.IsFinite(s.X) && float.IsFinite(s.Z) && float.IsFinite(s.Height) && MathF.Abs(s.X) <= 10000 && MathF.Abs(s.Z) <= 10000)
-            .OrderBy(s => (double)s.X * s.X + (double)s.Z * s.Z).ThenBy(s => s.X).ThenBy(s => s.Z).ToList();
-        var dry = closest.FirstOrDefault(s => s.Height >= DryAtLeast && s.Height <= 1000);
+        var all = samples as IReadOnlyCollection<TerrainSample> ?? samples.ToList();
+        var dry = SiteSearch.Nearest(all, s => s.Height >= DryAtLeast && s.Height <= 1000);
         if (dry == null) return null;
-        var wet = closest.FirstOrDefault(s => s.Height <= WetAtMost && s.Height >= -100 && (MathF.Abs(s.X - dry.X) >= 50 || MathF.Abs(s.Z - dry.Z) >= 50));
+        var wet = SiteSearch.Nearest(all, s => s.Height <= WetAtMost && s.Height >= -100 && (MathF.Abs(s.X - dry.X) >= 50 || MathF.Abs(s.Z - dry.Z) >= 50));
         if (wet == null) return null;
         return (ToSite(dry), ToSite(wet));
-    }
-
-    private static IEnumerable<GeneratorSample> ReadGrid(GameActor server, Capability grid, float centreX, float centreZ, float spacing)
-    {
-        float half = (GridSide - 1) / 2f * spacing;
-        string side = GridSide.ToString(CultureInfo.InvariantCulture);
-        var data = server.ObserveComplete(grid, "terrain-grid", Number(centreX - half), Number(centreZ - half), Number(spacing), side, side, "generator").Data;
-        if (data.GetProperty("layer").GetString() != "generator" || data.GetProperty("units").GetString() != "metres")
-            throw new InvalidOperationException("The terrain grid is not the generator's heights in metres.");
-        var samples = data.GetProperty("samples").EnumerateArray().Select(sample => new GeneratorSample(
-            sample.GetProperty("x").GetSingle(), sample.GetProperty("z").GetSingle(), sample.GetProperty("height").GetSingle())).ToList();
-        if (samples.Count != GridSide * GridSide) throw new InvalidOperationException($"The terrain grid has {samples.Count} samples, not {GridSide * GridSide}.");
-        return samples;
     }
 
     private static OwnedServerSession Session(LifecyclePlan plan, string runtime, string world, IReadOnlyDictionary<string, string> pins, string output, CancellationToken cancellation)
@@ -248,9 +229,8 @@ public static class ServerFixture
         File.WriteAllText(path, JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    private static Site ToSite(GeneratorSample sample) => new() { X = sample.X, Z = sample.Z, Ground = MathF.Round(sample.Height, 2) };
+    private static Site ToSite(TerrainSample sample) => new() { X = sample.X, Z = sample.Z, Ground = MathF.Round(sample.Height, 2) };
     private static string Describe(Site site) => string.Create(CultureInfo.InvariantCulture, $"x={site.X} z={site.Z} ground={site.Ground}");
-    private static string Number(float value) => value.ToString("R", CultureInfo.InvariantCulture);
     private static string SteamBuildId(string runtime)
     {
         string manifest = Path.Combine(runtime, "steamapps", "appmanifest_896660.acf");

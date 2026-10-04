@@ -27,11 +27,13 @@ public sealed class TerrainCapture
     public string GameVersion { get; }
     public string Provenance { get; }
     public ReplayTerrain Terrain { get; }
-    private TerrainCapture(JsonElement data,TerrainGridRequest grid,string provenance,IEnumerable<TerrainSample> samples)
+    /// <summary>The captured samples in the grid's order (x fastest), each checked to be where the grid puts it.</summary>
+    public IReadOnlyList<TerrainSample> Samples { get; }
+    private TerrainCapture(JsonElement data,TerrainGridRequest grid,string provenance,IReadOnlyList<TerrainSample> samples)
     {
         payload=data.Clone();Grid=grid;Provenance=provenance;
         WorldUid=data.GetProperty("worldUid").GetString()!;GameVersion=data.GetProperty("gameVersion").GetString()!;
-        Terrain=new ReplayTerrain(provenance,grid.Layer,samples);
+        Samples=samples;Terrain=new ReplayTerrain(provenance,grid.Layer,samples);
     }
     public static TerrainCapture Read(GameActor actor,TerrainGridRequest grid,string provenance)
     {
@@ -79,7 +81,7 @@ public sealed class TerrainCapture
             if(!float.IsFinite(h))throw new InvalidDataException("Non-finite terrain sample.");
             samples.Add(new TerrainSample(x,z,h,biome,weight,width));
         }
-        return new TerrainCapture(d,expected,provenance,samples);
+        return new TerrainCapture(d,expected,provenance,samples.AsReadOnly());
     }
     private static string Digest(JsonElement data)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(data))));
     public void Save(string path)
