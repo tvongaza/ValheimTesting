@@ -47,7 +47,8 @@ namespace Valheim.Testing.Adapter
         /// <summary>
         /// A read-only extension command <paramref name="name"/>: <c>&lt;owner-guid&gt; &lt;prefix&gt; [&lt;prefix&gt; ...]</c>.
         /// The owner is the plugin whose build the reply names; the prefixes say which names are that mod's content. It
-        /// replies <see cref="Observe"/>'s data.
+        /// replies <see cref="Observe"/>'s data, or fails <c>result_too_large</c> with the counts when that data would
+        /// exceed ValheimCLI's result bound (<see cref="ResultBudget"/>).
         /// </summary>
         public static ExtensionCommand Command(string name = "content-census") =>
             new ExtensionCommand(name, "List registered items, recipes, pieces, status effects and prefabs whose names start with a prefix: <owner-guid> <prefix> [<prefix> ...]",
@@ -58,8 +59,17 @@ namespace Valheim.Testing.Adapter
             var arguments = context.Arguments;
             if (arguments.Count < 2 || arguments.Count > MaxPrefixes + 1 || arguments.Any(string.IsNullOrEmpty))
             { context.Fail("usage", "content-census <owner-guid> <prefix> [<prefix> ...], at most " + MaxPrefixes + " prefixes"); yield break; }
-            context.Succeed(Observe(arguments[0], arguments.Skip(1).ToArray()));
+            string[] prefixes = arguments.Skip(1).ToArray();
+            var data = Observe(arguments[0], prefixes);
+            // A large content mod can outgrow ValheimCLI's result bound with every list under MaxEntries.
+            string? tooLarge = ResultBudget.Exceeds(data, ExtensionJson.Write, "The census of " + string.Join(", ", prefixes) + " (" + Counts(data) + ")");
+            if (tooLarge != null) { context.Fail("result_too_large", tooLarge + " Name fewer or narrower prefixes."); yield break; }
+            context.Succeed(data);
         }
+
+        private static string Counts(Dictionary<string, object?> data) => string.Join(", ",
+            new[] { "items", "prefabs", "recipes", "pieces", "statusEffects", "collisions" }
+                .Select(kind => (data.TryGetValue(kind, out object? list) && list is ICollection c ? c.Count : 0) + " " + kind));
 
         /// <summary>
         /// <c>{source, complete, ready, reason, side, dedicated, owner: {guid, installed, version, md5}, scope,

@@ -381,6 +381,7 @@ namespace valheimCLI.Extensions
         public ExtensionCommand(string name, string help, System.Func<ExtensionContext, System.Collections.IEnumerator> execute,
             bool readOnly = false, ExtensionRole role = ExtensionRole.Any, bool needsWorld = false, int resultVersion = 1) => throw null!;
     }
+    public static class ExtensionJson { public static string Write(object? value) => throw null!; }
     public sealed class ExtensionContext
     {
         public System.Collections.Generic.IReadOnlyList<string> Arguments => throw null!;
