@@ -38,6 +38,9 @@ public sealed partial class ZNet : UnityEngine.MonoBehaviour
     public bool Server;
     public readonly Dictionary<long, ZNetPeer> Peers = new();
     public bool IsServer() => Server;
+    /// <summary>Console lines this client sent to the server as remote commands (the game's <c>ZNet.RemoteCommand</c>), in order.</summary>
+    public readonly List<string> RemoteCommands = new();
+    public void RemoteCommand(string command) => RemoteCommands.Add(command);
     /// <summary>The ready peer with that id, or null, as the game finds a peer by its id.</summary>
     public ZNetPeer? GetPeer(long id) => Peers.TryGetValue(id, out var p) && Sync(id, p).Ready ? p : null;
     /// <summary>

@@ -79,6 +79,7 @@ namespace Valheim.Testing.Doubles
         private readonly System.Collections.Generic.Dictionary<string, Terminal.ConsoleCommand> _commands = Terminal.commands;
         private readonly Player? _localPlayer = Player.m_localPlayer;
         private readonly bool _server = ZNet.instance?.Server ?? false;
+        private readonly bool _cheat = Terminal.m_cheat, _cheatedAtAll = Achievements.CheatedAtAll;
         private readonly float _time = UnityEngine.Time.realtimeSinceStartup;
 
         public ValheimWorldScope WithWorld(WorldGenerator world) { WorldGenerator.instance = world; return this; }
@@ -111,6 +112,11 @@ namespace Valheim.Testing.Doubles
         }
         /// <summary>No console commands yet: the mod's registration in this test fills a fresh table.</summary>
         public ValheimWorldScope WithCommands() { Terminal.commands = new System.Collections.Generic.Dictionary<string, Terminal.ConsoleCommand>(); return this; }
+        /// <summary>
+        /// Opens both cheat gates (restored on dispose), as <c>devcommands</c> and <c>confirmcheats</c> do on a server:
+        /// <see cref="Terminal.m_cheat"/> and <see cref="Achievements.CheatedAtAll"/>. Cheat commands still need the server side.
+        /// </summary>
+        public ValheimWorldScope WithCheats() { Terminal.m_cheat = true; Achievements.CheatedAtAll = true; return this; }
         /// <summary>A local player standing at <paramref name="position"/>, as on a client or a host; without it there is none, as on a dedicated server.</summary>
         public Player WithLocalPlayer(UnityEngine.Vector3 position) { var player = new Player(); player.transform.position = position; return Player.m_localPlayer = player; }
         /// <summary>Sets the server flag on the current <c>ZNet</c> (restored on dispose).</summary>
@@ -144,7 +150,7 @@ namespace Valheim.Testing.Doubles
             WorldGenerator.instance = _world; ZDOMan.instance = _zdos; ZoneSystem.instance = _zones; ZNetScene.instance = _scene;
             global::Heightmap.s_heightmaps = _heightmaps; BepInEx.Logging.ManualLogSource.Captured = _captured;
             Terminal.commands = _commands; Player.m_localPlayer = _localPlayer;
-            ZNet.instance = _net; ZRoutedRpc.instance = _rpc; Jotunn.Managers.NetworkManager.Instance = _jotunn; if (_net != null) _net.Server = _server; UnityEngine.Time.realtimeSinceStartup = _time;
+            ZNet.instance = _net; ZRoutedRpc.instance = _rpc; Jotunn.Managers.NetworkManager.Instance = _jotunn; if (_net != null) _net.Server = _server; Terminal.m_cheat = _cheat; Achievements.CheatedAtAll = _cheatedAtAll; UnityEngine.Time.realtimeSinceStartup = _time;
             RestoreTerrainModifiers();
         }
         /// <summary>Puts back what the role presets, registries, config and Unity doubles changed (WorldScopePresets.cs).</summary>
