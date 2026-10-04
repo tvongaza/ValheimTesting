@@ -347,6 +347,9 @@ on failure it retires every copy whose ownership was established. It then derive
 new world when a world of the requested name is absent from `-savedir/worlds_local`.
 It attempts to retire the prepared copies after the runner stops. If a process is still active or a stop cannot be
 established, the guarded cleanup refuses to remove its character or install and names what remains for inspection.
+Ctrl+C or SIGTERM cancels preparation as well as the game phase. Preparation waits for sibling actors to settle,
+then attempts cleanup without the cancelled token; it reports any unproven cleanup rather than claiming the host is free.
+An abrupt runner crash still needs the durable recovery workflow tracked in #257.
 The output holds the generated plan, role-specific CLI manifests, normal `result.json` and JUnit evidence, plus
 `campaign-times.json` with preparation, scenario and cleanup seconds. No game
 startup is part of the `check` result.

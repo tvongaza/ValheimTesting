@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -244,10 +243,7 @@ public static class PinnedServerRun
             return 2;
         }
         string mode = args[0];
-        using var cancellation = new CancellationTokenSource();
-        ConsoleCancelEventHandler onCancel = (_, e) => { e.Cancel = true; cancellation.Cancel(); };
-        Console.CancelKeyPress += onCancel;
-        using var sigterm = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => { context.Cancel = true; cancellation.Cancel(); });
+        using var cancellation = new RunCancellation();
         var report = new ScenarioReport(options.Name);
         OwnedServerSession? session = null;
         WorldFixture? runtime = null, world = null;
@@ -372,7 +368,6 @@ public static class PinnedServerRun
         }
         finally
         {
-            Console.CancelKeyPress -= onCancel;
             bool stopped = true;
             if (session != null)
             {
