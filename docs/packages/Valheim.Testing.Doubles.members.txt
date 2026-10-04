@@ -1247,15 +1247,12 @@ UnityEngine.GameObject	type	class : UnityEngine.Object	game
 UnityEngine.GameObject	ctor	.ctor()	game
 UnityEngine.GameObject	ctor	.ctor(string)	game
 UnityEngine.GameObject	ctor	.ctor(string, params Type[])	game
-UnityEngine.GameObject	field	Health : float?	test-only
 UnityEngine.GameObject	field	IsAsset : bool	test-only
-UnityEngine.GameObject	field	Networked : bool	test-only
-UnityEngine.GameObject	field	View : ZNetView	test-only
-UnityEngine.GameObject	field	Wear : WearNTear	test-only
 UnityEngine.GameObject	field	layer : int	game
 UnityEngine.GameObject	field	m_activeSelf : bool	internal
 UnityEngine.GameObject	method	AddComponent(Type) : UnityEngine.Component	game
 UnityEngine.GameObject	method	AddComponent<T>() : T	game
+UnityEngine.GameObject	method	AddComponent<T>(Action<T>) : T	internal
 UnityEngine.GameObject	method	Attach(UnityEngine.Component) : void	internal
 UnityEngine.GameObject	method	Clone(UnityEngine.Vector3, UnityEngine.Quaternion) : UnityEngine.GameObject	internal
 UnityEngine.GameObject	method	CompareTag(string) : bool	game
@@ -1266,16 +1263,20 @@ UnityEngine.GameObject	method	GetComponentInChildren<T>(bool) : T	game
 UnityEngine.GameObject	method	GetComponentInParent<T>(bool) : T	game
 UnityEngine.GameObject	method	GetComponents<T>() : T[]	game
 UnityEngine.GameObject	method	GetComponentsInChildren<T>(bool) : T[]	game
-UnityEngine.GameObject	method	OnDestroyed() : void	internal
+UnityEngine.GameObject	method	Own<T>() : T	internal
 UnityEngine.GameObject	method	SetActive(bool) : void	game
 UnityEngine.GameObject	method	TryGetComponent<T>(out T) : bool	game
 UnityEngine.GameObject	method	UnityDestroying() : void	internal
 UnityEngine.GameObject	method	static CheckComponentType(Type) : void	internal
 UnityEngine.GameObject	method	static HierarchyActivityChanged(UnityEngine.GameObject, bool) : void	internal
+UnityEngine.GameObject	property	Health : float?	test-only
 UnityEngine.GameObject	property	InScene : bool	internal
+UnityEngine.GameObject	property	Networked : bool	test-only
 UnityEngine.GameObject	property	OwnTransform : UnityEngine.Transform	internal
 UnityEngine.GameObject	property	Position : UnityEngine.Vector3	test-only
 UnityEngine.GameObject	property	Rotation : UnityEngine.Quaternion	test-only
+UnityEngine.GameObject	property	View : ZNetView	test-only
+UnityEngine.GameObject	property	Wear : WearNTear	test-only
 UnityEngine.GameObject	property	activeInHierarchy : bool	game
 UnityEngine.GameObject	property	activeSelf : bool	game
 UnityEngine.GameObject	property	tag : string	game
@@ -1795,6 +1796,8 @@ ZDOVars	field	static s_location : int	game
 ZDOVars	field	static s_picked : int	game
 ZDOVars	field	static s_playerID : int	game
 ZDOVars	field	static s_playerName : int	game
+ZDOVars	field	static s_scaleHash : int	game
+ZDOVars	field	static s_scaleScalarHash : int	game
 ZDOVars	field	static s_terrainModifierTimeCreated : int	game
 ZInput	type	class	game
 ZInput	ctor	.ctor()	game
@@ -1918,6 +1921,9 @@ ZNetView	field	m_functions : Dictionary<int, ValueTuple<string, Delegate>>	inter
 ZNetView	field	m_persistent : bool	game
 ZNetView	field	m_syncInitialScale : bool	game
 ZNetView	field	static Everybody : long	game
+ZNetView	field	static m_forceDisableInit : bool	game
+ZNetView	field	static m_initZDO : ZDO	game
+ZNetView	field	static m_useInitZDO : bool	game
 ZNetView	method	ClaimOwnership() : void	game
 ZNetView	method	GetZDO() : ZDO	game
 ZNetView	method	HandleRoutedRPC(ZRoutedRpc.RoutedRPCData) : void	game

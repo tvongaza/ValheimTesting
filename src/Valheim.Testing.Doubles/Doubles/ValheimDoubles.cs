@@ -244,7 +244,7 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
     public static void FinishGhostInit() => GhostInit = false;
     /// <summary>Whether the object's ZDO is saved with the world. The game's default is false; a prefab sets it.</summary>
     public bool m_persistent;
-    /// <summary>Whether the object's authored scale is sent with its ZDO (the game's default is false).</summary>
+    /// <summary>Whether the object's authored scale is sent with its ZDO, and a loaded ZDO's scale applied when the view wakes (the game's default is false).</summary>
     public bool m_syncInitialScale;
     [TestOnly] public ZNetView(ZDO zdo) { Zdo = zdo; if (zdo != null) zdo.m_view = this; }
     /// <summary>A view with no ZDO yet, as <c>AddComponent&lt;ZNetView&gt;()</c> on a prefab makes one; a test gives it a ZDO with <see cref="Zdo"/>.</summary>
@@ -256,6 +256,57 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
     public ZDO GetZDO() => Zdo;
     /// <summary>As the game's: the view lets go of its ZDO, so GetZDO() returns null and IsValid() false.</summary>
     public void ResetZDO() => Zdo = null!;
+
+    /// <summary>Set by the game's ZNetScene while it instantiates the object for a loaded ZDO (<see cref="m_initZDO"/>).</summary>
+    public static bool m_useInitZDO;
+    /// <summary>The loaded ZDO the next view to wake takes instead of a new one, as ZNetScene sets it before <c>Instantiate</c>.</summary>
+    public static ZDO? m_initZDO;
+    /// <summary>While true, a view that wakes destroys itself, as in the game.</summary>
+    public static bool m_forceDisableInit;
+    private UnityEngine.Vector3 m_lastLocalScale = new(1f, 1f, 1f);
+
+    // As the game's ZNetView.Awake (1.0.16) when an object with a view comes alive (Instantiate, or AddComponent on an
+    // active scene object; a prefab asset never wakes): with no ZDOMan, or while init is disabled, the view destroys
+    // itself. It takes m_initZDO when one is set (and its scale, with m_syncInitialScale); otherwise a new ZDO of its
+    // object's prefab name at the object's position and rotation, owned by this session, persistent as m_persistent says
+    // (with the authored scale, with m_syncInitialScale), which stays out of the live scene under ghost initialisation.
+    // The object then joins the live scene. The ZDO's type and distant flags are not modelled.
+    private void Awake()
+    {
+        if (m_forceDisableInit || ZDOMan.instance == null) { Destroy(this); return; }
+        if (m_useInitZDO && m_initZDO == null) ZLog.LogWarning("Double ZNetview when initializing object " + gameObject.name);
+        if (m_initZDO != null)
+        {
+            Zdo = m_initZDO; m_initZDO = null;
+            if (m_syncInitialScale)
+            {
+                var scale = Zdo.GetVec3(ZDOVars.s_scaleHash, UnityEngine.Vector3.zero);
+                if (!scale.Equals(UnityEngine.Vector3.zero)) transform.localScale = scale;
+                else
+                {
+                    float scalar = Zdo.GetFloat(ZDOVars.s_scaleScalarHash, transform.localScale.x);
+                    if (!transform.localScale.x.Equals(scalar)) transform.localScale = new UnityEngine.Vector3(scalar, scalar, scalar);
+                }
+            }
+        }
+        else
+        {
+            int prefab = Utils.GetPrefabName(gameObject).GetStableHashCode();
+            Zdo = ZDOMan.instance.CreateNewZDO(transform.position, prefab);
+            Zdo.SetOwner(ZDOMan.instance.m_sessionID); // the game's CreateNewZDO makes this session the owner
+            Zdo.Persistent = m_persistent;
+            Zdo.SetRotation(transform.rotation);
+            if (m_syncInitialScale) SyncScale();
+            if (GhostInit) return;
+        }
+        ZNetScene.instance?.Live.Add(gameObject);
+    }
+    private void SyncScale()
+    {
+        if (m_lastLocalScale.Equals(transform.localScale)) return;
+        m_lastLocalScale = transform.localScale;
+        Zdo.Set(ZDOVars.s_scaleHash, m_lastLocalScale);
+    }
 }
 
 /// <summary>
@@ -527,6 +578,9 @@ public static partial class ZDOVars
     public static readonly int s_creator = "creator".GetStableHashCode();
     /// <summary>The location a LocationProxy stands for, by prefab hash.</summary>
     public static readonly int s_location = "location".GetStableHashCode();
+    /// <summary>A synced object's scale (a ZNetView with <c>m_syncInitialScale</c>), and its one-number form.</summary>
+    public static readonly int s_scaleHash = "scale".GetStableHashCode();
+    public static readonly int s_scaleScalarHash = "scaleScalar".GetStableHashCode();
 }
 
 /// <summary>

@@ -95,6 +95,7 @@ namespace Valheim.Testing.Doubles
             .AndKeep(() => ZNetScene.AwakePostfix).AndKeep(() => HeightmapBuilder.m_instance)
             .AndKeep(() => global::Heightmap.s_heightmaps).AndKeep(() => global::TerrainModifier.s_instances)
             .AndKeep(() => global::TerrainModifier.s_needsSorting).AndKeep(() => ZNetView.GhostInit)
+            .AndKeep(() => ZNetView.m_useInitZDO).AndKeep(() => ZNetView.m_initZDO).AndKeep(() => ZNetView.m_forceDisableInit)
             .AndKeep(() => UnityEngine.Object.s_unityComponents).AndKeep(() => UnityEngine.Object.s_unityGameObjects)
             .AndKeep(() => UnityEngine.Object.s_pendingDestroy).AndKeep(() => UnityEngine.Object.s_unityReversedOrder)
             .AndKeep(() => UnityEngine.Time.time).AndKeep(() => UnityEngine.Time.deltaTime).AndKeep(() => UnityEngine.Time.frameCount)

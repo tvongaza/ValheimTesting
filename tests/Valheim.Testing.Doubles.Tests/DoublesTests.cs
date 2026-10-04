@@ -66,7 +66,7 @@ public sealed class DoublesTests : IDisposable
         Assert.True(ours.Destroyed); Assert.True(theirs.Destroyed);
         Assert.Equal(new[] { ourZdo }, ZDOMan.instance!.DestroyQueue);
         Assert.Null(ZNetScene.instance.GetPrefab("missing"));
-        Assert.Null(prefab.GetComponent<ZNetView>());
+        Assert.False(prefab.GetComponent<ZNetView>().IsValid()); // the prefab carries a view, but an asset never wakes, so it has no ZDO
     }
     [Fact] public void ADestroyedObjectEqualsNullOnlyThroughUnitysOperators()
     {
