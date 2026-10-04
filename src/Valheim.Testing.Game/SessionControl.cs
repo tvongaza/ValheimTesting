@@ -96,20 +96,6 @@ public sealed class SessionControl(GameActor actor)
         Transition("join", args);
     }
 
-    /// <summary>Before a prepared-save join, require ValheimCLI to select this exact local filename, never a cloud
-    /// character or a display-name collision. Run with devcommands enabled while still at the menu.</summary>
-    public void RequireLocalCharacter(string filename)
-    {
-        if (string.IsNullOrWhiteSpace(filename) || filename.Any(char.IsWhiteSpace))
-            throw new ArgumentException("Give a single character filename.", nameof(filename));
-        RequireSelectedLocal(actor.Execute("cli_select_character " + filename), filename);
-    }
-
-    private static void RequireSelectedLocal(GameReply selected, string filename)
-    {
-        if (!selected.Lines("OK: Selected character '").Any(line => line.EndsWith(" (" + filename + ", Local)", StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("The prepared character was not selected as the exact local file " + filename + ". Reply: " + selected.Describe());
-    }
 
     /// <summary>
     /// Joins a server that must refuse this client with <paramref name="expected"/>, for example
@@ -192,7 +178,7 @@ public sealed class SessionControl(GameActor actor)
     /// first checked. Found in the native crossplay run: the join completes within a read.
     /// </summary>
     public SessionState JoinCrossplay(string remotePlayerId, string character, string worldUid, string menuExpectations, TimeSpan timeout,
-        bool enableDevcommands = true, CancellationToken cancellation = default, string? worldExpectations = null, string? requiredLocalFilename = null)
+        bool enableDevcommands = true, CancellationToken cancellation = default, string? worldExpectations = null)
     {
         ValidateWorldUid(worldUid);
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
@@ -205,7 +191,6 @@ public sealed class SessionControl(GameActor actor)
         if (enableDevcommands) EnableDevcommands();
         var selected = actor.Execute("cli_select_character " + character);
         selected.RequireLine("OK: Selected character '", "The character was not selected");
-        if (requiredLocalFilename != null) RequireSelectedLocal(selected, requiredLocalFilename);
         try
         {
             actor.Execute("cli_connect_playfab_user " + remotePlayerId) // Exactly once.

@@ -492,7 +492,7 @@ public sealed class TargetedRegression
         var report = new ScenarioReport(scenario);
         report.Provenance["toolkit"] = ToolkitVersion; // A public bundle must not pin an older toolkit than this.
         var logs = new List<RunLog>();
-        CharacterStartStage? characterStage = null;
+        RegisteredCharacterStage? characterStage = null;
         try
         {
             if (Environment.LoaderPackage is { } loaderPath)
@@ -500,7 +500,7 @@ public sealed class TargetedRegression
             if (Environment.Client.CharacterStore is { } store)
             {
                 string save = Environment.Client.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(Environment.Game));
-                report.Step("stage only the registered disposable character", () => characterStage = CharacterStartStage.InstallRegistered(
+                report.Step("stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
                     store, Environment.Client.Character, Path.Combine(save, "characters_local"),
                     Environment.Client.SteamUserDataDirectory!, Environment.Client.Character));
                 report.Provenance["characterSource"] = "registered disposable store";

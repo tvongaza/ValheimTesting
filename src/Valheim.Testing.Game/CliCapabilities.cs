@@ -11,20 +11,8 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public static class CliCapabilities
 {
-    /// <summary>The Standard-pack capability that advertises startup-file support.</summary>
-    public const string DirectStart = "valheim.session/direct-start";
     /// <summary>The Standard pack's manifest-visible contract for the bounded teleport commands used by signal arrival.</summary>
     public const string TeleportSignals = "valheim.session/teleport-signals";
-    /// <summary>Requires the Standard pack to confirm that this process consumed its one-use startup request.</summary>
-    internal static void RequireDirectStartClaimed(GameActor actor)
-    {
-        var reading = actor.Observe(actor.RequireCapability(DirectStart));
-        reading.RequireComplete("direct-start");
-        var data = reading.Data;
-        if (data.GetProperty("source").GetString() != "direct-start" ||
-            !data.GetProperty("supported").GetBoolean() || !data.GetProperty("claimed").GetBoolean())
-            throw new InvalidOperationException("The owned client reached a world, but ValheimCLI did not confirm consuming its direct-start request.");
-    }
     /// <summary>What <see cref="HostRounds"/> uses on the host: its session state, a confirmed save and the leave to its menu.</summary>
     public static readonly IReadOnlyList<string> HostedRounds = ["valheim.session/state", "valheim.session/save", "valheim.session/leave"];
 

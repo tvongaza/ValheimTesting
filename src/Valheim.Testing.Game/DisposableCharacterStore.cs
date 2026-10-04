@@ -8,7 +8,7 @@ namespace Valheim.Testing.Game;
 /// <summary>
 /// The registered disposable test characters: a directory outside every game character folder holding one copy of each
 /// character and a manifest of their names and the game's player IDs. Registering is the one explicit step that declares
-/// a character disposable; <see cref="CharacterStartCopy.Prepare"/> and character-start staging accept only characters
+/// a character disposable; staging a character for an owned client accepts only characters
 /// registered here, so pointing a test at a personal character file is refused rather than edited.
 /// </summary>
 /// <remarks>
@@ -29,8 +29,7 @@ namespace Valheim.Testing.Game;
 /// </code>
 /// After the game saves this same character again, use <see cref="Refresh"/> and then take a new handle with
 /// <see cref="Get"/>. The store must be outside the game's character folders.
-/// Pass <c>character</c> to <see cref="CharacterStartCopy.Prepare"/>. Copies keep the same player ID; they are not
-/// independent characters for simultaneous players.
+/// Copies keep the same player ID; they are not independent characters for simultaneous players.
 /// </example>
 public sealed class DisposableCharacterStore
 {
@@ -81,7 +80,7 @@ public sealed class DisposableCharacterStore
     {
         CheckName(name);
         byte[] bytes = ReadLocalCharacter(localCharacterFile);
-        CharacterIdentity identity = CharacterSavePosition.ReadIdentity(bytes);
+        CharacterIdentity identity = CharacterSaveReader.ReadIdentity(bytes);
         Manifest manifest = ReadManifest();
         if (manifest.Characters.Any(entry => entry.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
             throw new IOException($"The store already registers {name}; use Refresh to take a newer save of it.");
@@ -123,7 +122,7 @@ public sealed class DisposableCharacterStore
     {
         Entry entry = Find(ReadManifest(), name);
         byte[] bytes = ReadLocalCharacter(localCharacterFile);
-        if (CharacterSavePosition.ReadIdentity(bytes).PlayerId != entry.PlayerId)
+        if (CharacterSaveReader.ReadIdentity(bytes).PlayerId != entry.PlayerId)
             throw new InvalidDataException($"That save is a different character from the registered {entry.Name}; the stored copy is unchanged.");
         string file = StoredFile(entry.Name), temporary = file + ".new";
         File.Delete(temporary);
@@ -147,7 +146,7 @@ public sealed class DisposableCharacterStore
     /// </summary>
     public bool Registers(byte[] characterFile)
     {
-        long playerId = CharacterSavePosition.ReadIdentity(characterFile).PlayerId;
+        long playerId = CharacterSaveReader.ReadIdentity(characterFile).PlayerId;
         if (ReadManifest().Characters.FirstOrDefault(entry => entry.PlayerId == playerId) is not { } entry) return false;
         ReadStored(entry);
         return true;
@@ -175,7 +174,7 @@ public sealed class DisposableCharacterStore
         if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException($"{entry.Name}'s stored copy is a link; the store keeps plain copies only.");
         byte[] bytes = File.ReadAllBytes(file);
-        if (CharacterSavePosition.ReadIdentity(bytes).PlayerId != entry.PlayerId)
+        if (CharacterSaveReader.ReadIdentity(bytes).PlayerId != entry.PlayerId)
             throw new InvalidDataException($"{entry.Name}'s stored copy is a different character from the one registered.");
         return bytes;
     }
@@ -188,7 +187,7 @@ public sealed class DisposableCharacterStore
             throw new ArgumentException("The character must be a .fch file.");
         if (!string.Equals(Path.GetFileName(Path.GetDirectoryName(file)), "characters_local", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Register a characters_local character, never one from a cloud characters folder.");
-        CharacterStartCopy.RejectLinkedAncestors(Path.GetDirectoryName(file)!, allowLiveCharacterLeaf: true);
+        RejectLinkedAncestors(Path.GetDirectoryName(file)!, allowLiveCharacterLeaf: true);
         return File.ReadAllBytes(file);
     }
 
@@ -196,7 +195,7 @@ public sealed class DisposableCharacterStore
     {
         if (!Path.IsPathFullyQualified(directory)) throw new ArgumentException("The character store must be a full path.");
         directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
-        CharacterStartCopy.RejectLinkedAncestors(directory);
+        RejectLinkedAncestors(directory);
         if (new DirectoryInfo(directory) is { Exists: true } info && (info.Attributes & FileAttributes.ReparsePoint) != 0)
             throw new ArgumentException("The character store may not itself be a link.");
         return directory;
@@ -254,6 +253,33 @@ public sealed class DisposableCharacterStore
     {
         public string Name { get; set; } = "";
         public long PlayerId { get; set; }
+    }
+
+    // A lexical parent check alone lets a junction named "evidence/link" write into characters_local. Inspect every
+    // link's resolved target as well as the spelling the caller supplied. Harmless system links (for example macOS's
+    // /var -> /private/var) remain usable. Windows short-name aliases can hide a live directory, so refuse those.
+    internal static void RejectLinkedAncestors(string directory, bool allowLiveCharacterLeaf = false)
+    {
+        bool leaf = true;
+        for (var parent = new DirectoryInfo(directory); parent != null; parent = parent.Parent, leaf = false)
+        {
+            if (!(allowLiveCharacterLeaf && leaf) &&
+                (parent.Name.Equals("characters_local", StringComparison.OrdinalIgnoreCase) ||
+                 parent.Name.Equals("characters", StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("Write the copy to a new evidence directory, never a live character directory.");
+            if (OperatingSystem.IsWindows() && parent.Name.Contains('~'))
+                throw new ArgumentException("Windows short-name aliases are not accepted in character paths.");
+            if (parent.Exists && (parent.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                if (allowLiveCharacterLeaf && leaf)
+                    throw new ArgumentException("The source characters_local directory may not itself be a link.");
+                for (var target = parent.ResolveLinkTarget(returnFinalTarget: true); target != null; target = target is DirectoryInfo dir ? dir.Parent : null)
+                    if (target.Name.Equals("characters_local", StringComparison.OrdinalIgnoreCase) ||
+                        target.Name.Equals("characters", StringComparison.OrdinalIgnoreCase) ||
+                        OperatingSystem.IsWindows() && target.Name.Contains('~'))
+                        throw new ArgumentException("A character path resolves through a live character directory or short-name alias.");
+            }
+        }
     }
 }
 

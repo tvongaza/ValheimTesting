@@ -8,7 +8,6 @@ using Valheim.Testing.Game;
 // plan exists, so it is outside the pinned runner. A hosted run has no dedicated server to pin, so validate-host and host
 // have their own entry point (HostedRun).
 if (args.Length > 0 && args[0] == ServerFixture.Mode) return ServerFixture.Run(args);
-if (args.Length > 0 && CharacterFixture.Handles(args[0])) return CharacterFixture.Run(args);
 if (args.Length > 0 && args[0] is HostedRun.RunMode or HostedRun.ValidateMode) return HostedRun.Run(args);
 var options = new PinnedServerRunOptions<LifecyclePlan>
 {

@@ -343,8 +343,6 @@ public sealed class HostRounds
     /// save directory on a Mac test host. Native runs leave this false so the Mac save-location check runs before placement.
     /// </summary>
     public bool SimulatedClient { get; init; }
-    /// <summary>Required for direct start: a dry point matching the prepared character's logout point.</summary>
-    public HeightExpectation? Arrival { get; init; }
     /// <summary>The client's opening step's name; the default says whether it is launched or attached, with plugins pinned.</summary>
     public string? OpenStep { get; init; }
     /// <summary>The rounds' names, which prefix their steps and evidence files: letters, digits, <c>-</c> and <c>_</c>, all different.</summary>
@@ -356,8 +354,6 @@ public sealed class HostRounds
     {
         var plan = Client.HostWorld ?? throw new ArgumentException("Client: the plan has no hostWorld section; a client that joins a server runs with ClientRounds.");
         ClientRounds.CheckRoundNames(Rounds);
-        if (Client.DirectStart && (Arrival == null || !Client.StartAtCharacterSave || Client.CharacterStart == null))
-            throw new ArgumentException("A direct-start hosted world needs an arrival point and staged prepared character.");
         Report.Provenance["role"] = "host";
         Report.Provenance["hostMode"] = plan.Local ? "local" : "listen";
         Report.Provenance["hostCrossplay"] = plan.Crossplay ? "true" : "false";
@@ -367,7 +363,6 @@ public sealed class HostRounds
         var completed = new List<string>();
         HostedWorld? world = null;
         ClientSession? session = null;
-        CharacterStartStage? stage = null;
         bool passed = false;
         try
         {
@@ -382,28 +377,14 @@ public sealed class HostRounds
             Report.Step("place the disposable fixture world in the client's local worlds", () => world = HostedWorld.Place(plan, saveDirectory, Output, Client.Pinned));
             var placed = world!;
             Report.Provenance["hostWorld"] = placed.Name;
-            if (Client.DirectStart)
-                Report.Step("stage the pinned disposable local character", () => stage = CharacterStartStage.Install(
-                    Client.CharacterStart!, Client.Character, long.Parse(placed.WorldUid, CultureInfo.InvariantCulture), Arrival!));
-            Report.Step(OpenStep ?? (Client.DirectStart ? "launch the owned client directly into its pinned fixture" :
-                Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
+            Report.Step(OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
                 () => session = openClient());
             var host = session!.Actor;
             Report.Step("the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(host, CliCapabilities.HostedRounds));
             for (int i = 0; i < Rounds.Count; i++)
             {
                 var round = new ClientRound(Rounds[i], i, i == Rounds.Count - 1, host, host, Report, Output);
-                if (i == 0 && Client.DirectStart)
-                {
-                    round.Step("verify the direct-start fixture and player", () =>
-                    {
-                        host.VerifyEnvironment(Client.WorldExpectations(placed.WorldUid));
-                        new SessionControl(host).WaitForWorld(placed.WorldUid, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation);
-                    });
-                    round.Step("verify prepared character start at the measurement point", () =>
-                        round.Write("arrival", PlayerPlacement.ObserveArrival(host, Arrival!, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation)));
-                }
-                else round.Step(i == 0 ? "host the fixture world with the disposable character, protected" : "restart the hosted world, protected",
+                round.Step(i == 0 ? "host the fixture world with the disposable character, protected" : "restart the hosted world, protected",
                     () => HostWorlds.Start(host, Client, placed.Name, TimeSpan.FromSeconds(Client.JoinSeconds), Cancellation));
                 // The owned host's disposable character and fixture acknowledge cheats; an operator's client keeps devcommands only.
                 if (Client.Owned)
@@ -430,9 +411,6 @@ public sealed class HostRounds
                 try { Report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); released |= session.Owned; }
                 catch (Exception error) { teardown = error; } // Recorded as its own failed step.
                 finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
-            if (stage != null)
-                try { Report.Step("remove only the staged character and its game-made backups", stage.Dispose); }
-                catch (Exception error) { teardown ??= error; }
             if (world != null)
             {
                 if (!released) Report.Provenance["hostWorldLeftInPlace"] = world.WorldsDirectory + " (" + world.Name + ")";

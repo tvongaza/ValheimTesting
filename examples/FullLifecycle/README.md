@@ -26,68 +26,6 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 
 The scenario never calls `PlayerPlacement.Protect` itself: `SessionControl.WaitForWorld` protects the joined player (god, ghost and debug mode, read back) as soon as the world is ready, so the join step fails if the game does not confirm it, and the player is never moved unprotected. Fly stays off; the arrival and marker checks measure a player standing on the ground.
 
-### Optional character start at the first site (preview)
-
-For repeated native runs on the **same known world**, a disposable local character that has already visited that world can start at the dry arrival site. This is opt-in; the normal plan still teleports after joining.
-
-Only a **registered** disposable character can be prepared. Register it once, in a store directory outside the game's folders; registration copies the save into the store and records the game's player ID, and never changes the original. After the character visits a new fixture world, take its newer save with `refresh-character`, which refuses a different character. Then prepare a separate copy while the client is stopped:
-
-```sh
-store=/absolute/path/to/test-character-store
-evidence=/absolute/path/to/new-evidence-directory
-world_uid=123456789
-arrival_x=125
-arrival_y=45
-arrival_z=-380
-fresh_name=mymod-test-001
-# Once, for a character made only for tests:
-dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- \
-  register-character "$store" mymodtester /absolute/path/to/characters_local/mymodtester.fch
-mkdir -p "$evidence"
-dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- \
-  prepare-character "$store" mymodtester "$world_uid" "$arrival_x" "$arrival_y" "$arrival_z" \
-  "$evidence/$fresh_name.fch"
-```
-
-Replace those sample coordinates and UID with the pinned plan's values. The command validates the 1.0.16 save layout and hash, changes only the requested world's logout point, and refuses an unregistered name, a stored copy that is a different character from its registration, an existing output or an output inside a character folder or the store. It **does not install or launch** the copy. Use a fresh filename; `client.character` is that filename without `.fch`, never the display name. For an **owned** client, set `client.startAtCharacterSave` to `true` and include:
-
-```json
-"characterStart": {
-  "preparedFile": "/absolute/evidence/mymod-test-001.fch",
-  "sha256": "<PREPARED output's SHA256>",
-  "charactersLocalDirectory": "/absolute/client-save/characters_local",
-  "steamUserDataDirectory": "/absolute/Steam/userdata",
-  "characterStore": "/absolute/path/to/test-character-store"
-}
-```
-
-The runner checks the prepared bytes, world UID, exact arrival point, hash and that the store registers its player **before launch**, refuses a same-named local or Steam Cloud character, stages the copy, requires ValheimCLI to report `(<filename>, Local)` at selection, and removes only that copy and its game-made backups after stopping the owned client. This preview option requires a locally launched owned client; attached and remote-profile clients are refused until they have an equivalent owned staging boundary. A hosted fixture can use it with `directStart` and a declared dry `arrival` point. The first round checks the client's own support reading at `arrival`, without a teleport or fallback; a wrong start fails. Later rounds and zone-cycle movements still use teleports.
-
-### Directly start a prepared client in its fixture world
-
-For a clean registered test character that has **not** visited the fixture, use `prepare-character-new-world` with the fixture's verified UID and dry arrival coordinates in the command above. For a character that has already visited it, keep using `prepare-character`; the new-world command refuses an existing entry. Neither command creates a character or edits its original. In the owned client's plan, set `directStart: true` alongside `startAtCharacterSave: true` and the `characterStart` block. A dedicated-server run also sets `directStartWorldUid` to the server fixture UID. The runner waits for the server to accept joins *before* launching this client.
-
-For the [hosted sample plan](MyMod.SystemTests/sample-plan-hosted.json), add an `arrival` site and set `client.hostWorld.local: true` for a local-only run (or leave it false for a listen server):
-
-```json
-{
-  "arrival": { "x": 125, "z": -380, "ground": 45.2 },
-  "client": {
-    "directStart": true,
-    "startAtCharacterSave": true,
-    "character": "mymod-test-001",
-    "characterStart": { "preparedFile": "/absolute/evidence/mymod-test-001.fch", "sha256": "<prepared SHA256>", "charactersLocalDirectory": "/absolute/client-save/characters_local", "steamUserDataDirectory": "/absolute/Steam/userdata", "characterStore": "/absolute/test-character-store" },
-    "hostWorld": { "local": true }
-  }
-}
-```
-
-Those are additions to the full pinned plan, not a complete plan by themselves. Run `validate-host` first, then `host` with a fresh evidence directory. The owned client inherits a password variable if a dedicated join uses one; the startup request file holds only its *name*. The ValheimCLI Standard pack must advertise `valheim.session/direct-start`, and the runner verifies that this process consumed its one-use request. Native Valheim 1.0.16 runs passed for a local world, listen host and dedicated-server join, including exact world and character, grounded arrival, mod assertions, save, restart and cleanup. With the dedicated server ready before either launch, one paired run reached its first mod assertion in 31.61 seconds by direct start and 31.54 seconds through the menu. Direct start removes menu interaction; this run did not show a startup speedup. The vanilla `-joinserverwithcharacter` argument and whether a menu frame is ever visible have not been verified here.
-
-The hosted MyMod example marks its copied fixture and staged character as cheated before issuing its cheat-gated mod commands. The dedicated `lifecycle-world` example does the same on its first prepared-character round. Valheim 1.0.16 asks for cheat acknowledgement even when devcommands are on, including for the example's read-only prefab census. Vanilla `confirmcheats` goes to the server when a client has joined one, leaving that client's character unmarked; the ValheimCLI Standard pack's `cli_acknowledge_local_cheats` explicitly marks the local disposable character and reports the result. These acknowledgements are restricted to owned, prepared disposable characters; they are never sent to an attached client. A site or load test that does not need cheat commands should leave the character unmarked. If the disposable station client's BepInEx log contains the known `Unable to start Unity log writer` header, a plan can list that **exact** line under `logScan.unknown-error.expected` with a written reason; other errors still fail, and the Unity Player.log is scanned separately.
-
-This path passed a bounded [native Windows 1.0.16 joined-client check](https://github.com/tvongaza/ValheimTesting/pull/94#issuecomment-5912134571): prepared local copies started grounded at two dry points 1.9 km apart with no first-round teleport; copies whose saved point differed from the plan were refused before launch. The normal teleport flow also passed. The test does not establish other game versions or hosted, attached, or remote-profile clients. Use only a disposable local character, never a personal or Steam Cloud character, and rely on the client's support observation rather than the prepared file alone as arrival evidence.
-
 Observations use ValheimCLI's generic commands (`cli_zdos_at` on the server, `cli_prefabs_at` on the client). A mod that needs a test-only action or observation adds it to its adapter as another extension command.
 
 ## Run the layers

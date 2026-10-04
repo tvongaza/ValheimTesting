@@ -14,13 +14,12 @@ public sealed class DefaultSmokeCharacterTests : IDisposable
         var store = DefaultSmokeCharacter.Prepare(root);
         var character = store.Get(DefaultSmokeCharacter.Name);
         byte[] original = File.ReadAllBytes(Path.Combine(store.Root, DefaultSmokeCharacter.Name + ".fch"));
-        Assert.Equal("VTSeedClean", CharacterSavePosition.ReadIdentity(original).Name);
-        Assert.True(CharacterSavePosition.IsFreshSmokeSeed(original));
+        Assert.Equal("VTSeedClean", CharacterSaveReader.ReadIdentity(original).Name);
+        Assert.True(CharacterSaveReader.IsFreshSmokeSeed(original));
         Assert.Equal("16712a2a3166e9b93c3aa006ea8d3d85a2d56372f7363728808f30d18bc8d626",
             Convert.ToHexString(SHA256.HashData(original)).ToLowerInvariant());
         Assert.Equal(character.Sha256, store.Get(DefaultSmokeCharacter.Name).Sha256);
         Assert.DoesNotContain("MWL_KnownPorts", System.Text.Encoding.UTF8.GetString(original));
-        Assert.Throws<KeyNotFoundException>(() => CharacterSavePosition.AtWorld(original, long.Parse(DefaultSmokeWorld.Uid), 0, 35, 0));
         Assert.Throws<IOException>(() => DefaultSmokeCharacter.Prepare(root));
         Assert.Equal(character.Sha256, DefaultSmokeCharacter.Ensure(root).Get(DefaultSmokeCharacter.Name).Sha256);
 
@@ -65,7 +64,7 @@ public sealed class DefaultSmokeCharacterTests : IDisposable
         File.WriteAllText(personal, "personal character");
         try
         {
-            using var stage = CharacterStartStage.InstallRegistered(store.Root, DefaultSmokeCharacter.Name, local, steam, "vtseedclean");
+            using var stage = RegisteredCharacterStage.InstallRegistered(store.Root, DefaultSmokeCharacter.Name, local, steam, "vtseedclean");
             Assert.True(File.Exists(Path.Combine(local, "vtseedclean.fch")));
             throw new InvalidOperationException("simulated native failure");
         }

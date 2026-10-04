@@ -222,7 +222,7 @@ public sealed class TargetedRegressionTests : IDisposable
     {
         string local = Path.Combine(_rig.Save, "characters_local");
         string source = Path.Combine(local, "smoketest.fch");
-        File.WriteAllBytes(source, CharacterSavePositionTests.Profile(playerId: 917).File);
+        File.WriteAllBytes(source, CharacterSaveReaderTests.Profile(playerId: 917).File);
         string storePath = Path.Combine(_rig.Root, "registered-test-characters");
         DisposableCharacterStore.Create(storePath).Register("smoketest", source);
         File.Delete(source);

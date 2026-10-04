@@ -99,24 +99,6 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Contains("\"pid\":99", File.ReadAllText(Path.Combine(_output, "client-process.json")));
     }
 
-    [Fact] public void ADirectStartPinsTheWorldBeforeReturningInsteadOfRequiringTheMenu()
-    {
-        var plan = Plan(); plan.DirectStart = true; plan.DirectStartWorldUid = "77";
-        var transport = new ScriptedTransport().Extension("valheim.session", "direct-start", _ => new { source = "direct-start", complete = true, supported = true, claimed = true });
-        using var session = ClientSession.Launch(plan, _output, () => new Process(), () => transport, (_, _) => Task.CompletedTask);
-        Assert.Contains(transport.Commands, command => command.StartsWith("cli_expect ", StringComparison.Ordinal) &&
-            command.Contains("worlduid=77", StringComparison.Ordinal));
-        CliCapabilities.RequireDirectStartClaimed(session.Actor);
-    }
-
-    [Fact] public void AWorldWithoutAConsumedDirectStartRequestIsRefused()
-    {
-        var transport = new ScriptedTransport().Extension("valheim.session", "direct-start", _ =>
-            new { source = "direct-start", complete = true, supported = true, claimed = false });
-        using var actor = transport.Actor();
-        Assert.Contains("did not confirm consuming", Assert.Throws<InvalidOperationException>(() => CliCapabilities.RequireDirectStartClaimed(actor)).Message);
-    }
-
     // An unpinned owned plan for a synthetic install, so only the architecture decides what the launch does.
     private static ClientRunPlan Owned(string install, string? architecture = null) => new()
     {

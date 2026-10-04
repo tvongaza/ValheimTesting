@@ -33,7 +33,6 @@
     },
     "join": "127.0.0.1:2456",
     "character": "mymodtester",
-    "startAtCharacterSave": false,
     "passwordVariable": "MYMOD_TEST_PASSWORD"
   },
   "review": { "enabled": false, "seconds": 600 }
