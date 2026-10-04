@@ -214,7 +214,7 @@ public sealed class DisposableCharacterStore
             ?? throw new KeyNotFoundException($"{name} is not a registered disposable character.");
     }
 
-    private string StoredFile(string name) => Path.Combine(Root, name + ".fch");
+    internal string StoredFile(string name) => Path.Combine(Root, SaveFile(name));
 
     private Manifest ReadManifest()
     {
@@ -239,6 +239,66 @@ public sealed class DisposableCharacterStore
         string path = Path.Combine(Root, ManifestFile), temporary = path + ".new";
         File.WriteAllText(temporary, JsonSerializer.Serialize(manifest, Json));
         File.Move(temporary, path, overwrite: true);
+    }
+
+    // ---- The files one character owns: the one rule for staging and retiring, here and on another host ----
+
+    // What the game (1.0.16) keeps for a character file <character>.fch in a characters folder: the save, the previous save
+    // it moves aside on every save (.old), the new save it writes before the rename (.new, left behind when the process
+    // stops mid-save), and its automatic backups. The one table: IsCharacterFile and the host scripts both read it.
+    private static string[] OwnedNames(string character) => [SaveFile(character), character + ".fch.old", character + ".fch.new"];
+    private static string[] OwnedPrefixes(string character) => [character + "_backup_auto-"];
+    // Besides characters_local, where the game finds a character of the same name: the sibling Steam Cloud folder and each
+    // Steam account's Valheim cloud folder under userdata.
+    private const string CloudFolder = "characters";
+    private static readonly string[] SteamCloudFolder = ["892970", "remote", "characters"];
+
+    /// <summary>
+    /// Whether <paramref name="fileName"/>, in a characters folder, is one of the files the game keeps for the character file
+    /// <paramref name="character"/> (without <c>.fch</c>): <c>&lt;character&gt;.fch</c>, <c>.fch.old</c>, <c>.fch.new</c> and
+    /// the automatic backups <c>&lt;character&gt;_backup_auto-*</c>. Compared ignoring case, as Windows does. A stage refuses
+    /// a character for which any folder of <see cref="CharacterFolders"/> holds one, so after its run every such file in
+    /// <c>characters_local</c> is the run's own to remove. Host scripts get the same table from <see cref="HostScriptVariables"/>.
+    /// </summary>
+    internal static bool IsCharacterFile(string fileName, string character) =>
+        OwnedNames(character).Any(name => fileName.Equals(name, StringComparison.OrdinalIgnoreCase)) ||
+        OwnedPrefixes(character).Any(prefix => fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The character's save file name, <c>&lt;character&gt;.fch</c>.</summary>
+    internal static string SaveFile(string character) => character + ".fch";
+
+    /// <summary>
+    /// Every folder on this machine that can hold a character named like a staged one: <paramref name="charactersLocal"/>, its
+    /// sibling Steam Cloud <c>characters</c> folder and every <c>&lt;account&gt;/892970/remote/characters</c> under
+    /// <paramref name="steamUserData"/>. Folders that do not exist are included; a caller skips them.
+    /// </summary>
+    internal static IEnumerable<string> CharacterFolders(string charactersLocal, string steamUserData)
+    {
+        yield return charactersLocal;
+        yield return CloudFolderBeside(charactersLocal);
+        foreach (string account in Directory.EnumerateDirectories(steamUserData))
+            yield return Path.Combine([account, .. SteamCloudFolder]);
+    }
+
+    /// <summary>
+    /// The rule for a script on the client's host, which decides there: <c>names</c> and <c>prefixes</c> (the table, one per
+    /// line; the script matches ignoring case), <c>save</c> (the save file name), <c>cloud</c> (the sibling Steam Cloud folder
+    /// of <paramref name="charactersLocal"/>, a path on that host) and <c>remote</c> (each Steam account's cloud folder,
+    /// relative to the account directory).
+    /// </summary>
+    internal static Dictionary<string, string> HostScriptVariables(string character, string charactersLocal) => new()
+    {
+        ["names"] = string.Join('\n', OwnedNames(character)), ["prefixes"] = string.Join('\n', OwnedPrefixes(character)),
+        ["save"] = SaveFile(character), ["cloud"] = CloudFolderBeside(charactersLocal), ["remote"] = string.Join('/', SteamCloudFolder),
+    };
+
+    // The characters folder beside characters_local, as a path in the same style (Windows or POSIX), on this machine or another.
+    private static string CloudFolderBeside(string charactersLocal)
+    {
+        string local = charactersLocal.TrimEnd('/', '\\');
+        int cut = local.LastIndexOfAny(['/', '\\']);
+        if (cut < 0) throw new ArgumentException($"characters_local must be a full path; '{charactersLocal}' is not.", nameof(charactersLocal));
+        return HostInstall.Join(cut == 0 ? local[..1] : local[..cut], CloudFolder);
     }
 
     private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;

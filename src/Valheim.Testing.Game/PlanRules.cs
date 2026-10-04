@@ -1,8 +1,8 @@
 namespace Valheim.Testing.Game;
 
-// The plan-validation idioms mod runners repeat: a known scenario, an environment flag that must be exactly "1", an
-// optional environment choice, settings that belong to another scenario, and which scenarios a mode runs. Each refusal
-// is an ArgumentException whose message names the plan field and the fix.
+// The plan-validation idioms mod runners repeat: a known scenario, an environment flag that must be exactly "1" and
+// settings that belong to another scenario. Each refusal is an ArgumentException whose message names the plan field and
+// the fix. A runner refuses a mode and plan that do not belong together with PinnedServerRunOptions.CheckMode.
 public partial class ServerRunPlan
 {
     /// <summary>Refuses a <see cref="Scenario"/> that is not one of <paramref name="known"/>.</summary>
@@ -28,20 +28,6 @@ public partial class ServerRunPlan
     }
 
     /// <summary>
-    /// An optional choice made through <paramref name="variable"/> in <see cref="Environment"/>: null when the plan leaves
-    /// it out (the mod's default), otherwise exactly one of <paramref name="choices"/>, compared exactly. Refuses any other
-    /// value and a second key that differs only in case, so the plan can never name two choices at once.
-    /// </summary>
-    public string? EnvironmentChoice(string variable, params string[] choices)
-    {
-        if (choices.Length == 0) throw new ArgumentException("Name at least one choice.", nameof(choices));
-        var entry = SingleEnvironmentEntry(variable);
-        if (entry is { } found && !choices.Contains(found.Value, StringComparer.Ordinal))
-            throw new ArgumentException($"environment.{variable} is \"{found.Value}\": remove it for the default, or set it to {Or(choices)}.");
-        return entry?.Value;
-    }
-
-    /// <summary>
     /// Refuses <paramref name="settings"/> (the plan fields, as the plan spells them) when <paramref name="supplied"/> is
     /// true and the plan's <see cref="Scenario"/> is not one of <paramref name="scenarios"/>: a setting another scenario
     /// reads would otherwise be ignored silently, and the plan would not test what its author thinks.
@@ -51,16 +37,6 @@ public partial class ServerRunPlan
         if (scenarios.Length == 0) throw new ArgumentException("Name at least one scenario.", nameof(scenarios));
         if (supplied && !scenarios.Contains(Scenario, StringComparer.Ordinal))
             throw new ArgumentException($"{settings} are for the {Or(scenarios)} scenario, not {Scenario}: remove them from this plan, or set scenario to {Or(scenarios)}.");
-    }
-
-    /// <summary>
-    /// Refuses a mode that <paramref name="modeScenarios"/> limits to other scenarios, for example a fixture-preparation
-    /// mode that only prepares one scenario's world. Modes it does not list run any scenario.
-    /// </summary>
-    public void CheckModeScenario(string mode, IReadOnlyDictionary<string, string[]> modeScenarios)
-    {
-        if (modeScenarios.TryGetValue(mode, out var scenarios) && !scenarios.Contains(Scenario, StringComparer.Ordinal))
-            throw new ArgumentException($"Mode {mode} runs only a plan whose scenario is {Or(scenarios)}, and this plan's scenario is \"{Scenario}\": use such a plan, or another mode.");
     }
 
     // The one entry whose key matches ignoring case, or null; a key that differs only in case is refused by name.

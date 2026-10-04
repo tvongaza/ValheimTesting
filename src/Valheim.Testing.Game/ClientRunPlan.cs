@@ -60,7 +60,7 @@ public sealed class ClientRunPlan
     [JsonInclude, JsonPropertyName("characterStart"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     private JsonElement? RemovedCharacterStart { get => null; set => throw Removed("characterStart", 298, StartInstead); }
     private const string StartInstead = "an owned client launches to its menu and joins (or hosts), and the first arrival teleports";
-    private static ArgumentException Removed(string field, int issue, string instead) =>
+    internal static ArgumentException Removed(string field, int issue, string instead) =>
         new($"The client plan's {field} was removed (ValheimTesting #{issue}): {instead}. Delete {field} from the plan.");
     // Removed (#299): arrival has one procedure, the game-side signal waits that were opt-in here (PlayerPlacement.Arrive).
     [JsonInclude, JsonPropertyName("eventDrivenArrival"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

@@ -220,7 +220,6 @@ public sealed class ClientRounds
         public void Record()
         {
             Report.Provenance["role"] = "host";
-            Report.Provenance["hostMode"] = plan.Local ? "local" : "listen";
             Report.Provenance["hostCrossplay"] = plan.Crossplay ? "true" : "false";
             Report.Provenance["hostRounds"] = string.Join(",", rounds.Rounds);
         }

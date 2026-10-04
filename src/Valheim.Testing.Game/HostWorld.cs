@@ -1,13 +1,14 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
 /// <summary>
 /// The <c>hostWorld</c> section of a <see cref="ClientRunPlan"/>: the client hosts this fixture world from its menu (a
-/// listen server), or starts it locally when <see cref="Local"/> is true, instead of joining a dedicated server. The world
-/// is the client's own local world, so the runner copies the
+/// listen server) instead of joining a dedicated server. The world is the client's own local world, so the runner copies the
 /// pinned fixture into the client's local worlds for the run (<see cref="HostedWorld"/>) and never uses a world already
 /// there. Unknown fields are refused with the rest of the plan.
 /// </summary>
@@ -26,8 +27,13 @@ public sealed class HostWorldPlan
     public string WorldUid { get; set; } = "";
     /// <summary>Hosts a crossplay world (the game's PlayFab backend, <c>--crossplay true</c>).</summary>
     public bool Crossplay { get; set; }
-    /// <summary>Start the fixture as a local world instead of opening a listen server. Crossplay must be false.</summary>
-    public bool Local { get; set; }
+    // Removed (#301): local was added for direct start (#298), and no runner, example or sample set it after that went.
+    [JsonInclude, JsonPropertyName("local"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedLocal
+    {
+        get => null;
+        set => throw ClientRunPlan.Removed("hostWorld.local", 301, "a hosting client always opens its fixture world as a listen server from its menu (cli_start_host_world), which a local world start only skipped the network for");
+    }
     /// <summary>
     /// The client's data directory, which holds <c>worlds_local</c>. Default: this user's Valheim data directory for the
     /// client's platform (<see cref="HostedWorld.DefaultSaveDirectory"/>). Set it when a Windows or Linux client runs as
@@ -44,7 +50,6 @@ public sealed class HostWorldPlan
     /// </summary>
     public void Validate(bool pinned)
     {
-        if (Local && Crossplay) throw new ArgumentException("A local fixture world cannot also host crossplay.");
         World.Validate(pinned);
         if (World.Sha256.Count != 0) _ = HostedWorld.NameOf(World.Sha256.Keys);
         if (!long.TryParse(WorldUid, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
@@ -266,20 +271,11 @@ public static class HostWorlds
         string crossplay = world.Crossplay ? "true" : "false";
         try
         {
-            var reply = host.Execute(world.Local ? $"cli_start_local_world {worldName}" :
-                $"cli_start_host_world {worldName} --public false --crossplay {crossplay}"); // Exactly once.
-            string? line = reply.Line(world.Local ? "OK: Starting local world '" : "OK: Starting hosted world '");
-            if (world.Local)
-            {
-                if (line == null || !line.StartsWith($"OK: Starting local world '{worldName}' using ", StringComparison.Ordinal))
-                    throw new InvalidOperationException("The local world did not start as planned: " + (line ?? reply.Describe()));
-            }
-            else
-            {
-                string ending = $"; open=true, public=False, crossplay={(world.Crossplay ? "True" : "False")}, backend={(world.Crossplay ? "PlayFab" : "Steamworks")}, passwordSet=False";
-                if (line == null || !line.StartsWith($"OK: Starting hosted world '{worldName}' using ", StringComparison.Ordinal) || !line.EndsWith(ending, StringComparison.Ordinal))
-                    throw new InvalidOperationException("The hosted world did not start as planned: " + (line ?? reply.Describe()));
-            }
+            var reply = host.Execute($"cli_start_host_world {worldName} --public false --crossplay {crossplay}"); // Exactly once.
+            string? line = reply.Line("OK: Starting hosted world '");
+            string ending = $"; open=true, public=False, crossplay={(world.Crossplay ? "True" : "False")}, backend={(world.Crossplay ? "PlayFab" : "Steamworks")}, passwordSet=False";
+            if (line == null || !line.StartsWith($"OK: Starting hosted world '{worldName}' using ", StringComparison.Ordinal) || !line.EndsWith(ending, StringComparison.Ordinal))
+                throw new InvalidOperationException("The hosted world did not start as planned: " + (line ?? reply.Describe()));
         }
         finally { host.InvalidateEnvironment(); } // A start that may have begun changes the world.
         try

@@ -57,6 +57,12 @@ internal sealed class FakeServerHost : IGameHost
 
     public string Local(string hostPath) => Path.Combine([_mirror, .. hostPath.Replace(':', '/').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)]);
 
+    private static bool CharacterFile(string path, IReadOnlyDictionary<string, string> v)
+    {
+        string name = Path.GetFileName(path);
+        return v["names"].Split('\n').Any(entry => name.Equals(entry, StringComparison.OrdinalIgnoreCase)) ||
+            v["prefixes"].Split('\n').Any(entry => name.StartsWith(entry, StringComparison.OrdinalIgnoreCase));
+    }
     private static HostResult Ok(string stdout) => new(HostOutcome.Exited, 0, stdout, "", TimeSpan.FromMilliseconds(3), false);
     public static HostResult TransportFailure => new(HostOutcome.TransportFailed, null, "", "ssh: connect to host test port 22: Connection refused", TimeSpan.FromMilliseconds(3), false);
 
@@ -157,25 +163,23 @@ internal sealed class FakeServerHost : IGameHost
                 if (v.TryGetValue("parent", out string? parent) && Directory.Exists(Local(parent)) && !Directory.EnumerateFileSystemEntries(Local(parent)).Any())
                     Directory.Delete(Local(parent));
                 return Ok("VT-STAGE-CLEANED\n");
+            // As the real scripts do (HostedCharacterStageShellTests runs them): the rule arrives as variables.
             case "character-install":
             {
                 string characters = Local(v["characters"]), userdata = Local(v["userdata"]);
                 if (!Directory.Exists(characters) || !Directory.Exists(userdata)) return Ok("VT-CHAR missing-directory\n");
-                string file = v["name"] + ".fch";
-                string cloud = Path.Combine(Directory.GetParent(characters)!.FullName, "characters");
-                var folders = new[] { characters, cloud }.Concat(Directory.GetDirectories(userdata)
-                    .Select(account => Path.Combine(account, "892970", "remote", "characters")));
-                if (folders.Where(Directory.Exists).SelectMany(folder => Directory.GetFiles(folder))
-                    .Any(path => Path.GetFileName(path).Equals(file, StringComparison.OrdinalIgnoreCase))) return Ok("VT-CHAR collision\n");
-                File.Copy(Path.Combine(Local(v["stage"]), file), Path.Combine(characters, file));
+                var folders = new[] { characters, Local(v["cloud"]) }.Concat(Directory.GetDirectories(userdata)
+                    .Select(account => Path.Combine(account, v["remote"])));
+                if (folders.Where(Directory.Exists).SelectMany(folder => Directory.GetFiles(folder)).Any(path => CharacterFile(path, v)))
+                    return Ok("VT-CHAR collision\n");
+                File.Copy(Path.Combine(Local(v["stage"]), v["save"]), Path.Combine(characters, v["save"]));
                 return Ok("VT-CHAR staged\n");
             }
             case "character-retire":
             {
                 string characters = Local(v["characters"]);
                 if (Directory.Exists(characters))
-                    foreach (string file in Directory.GetFiles(characters).Where(path =>
-                        Path.GetFileName(path).Equals(v["name"] + ".fch", StringComparison.OrdinalIgnoreCase))) File.Delete(file);
+                    foreach (string file in Directory.GetFiles(characters).Where(path => CharacterFile(path, v))) File.Delete(file);
                 return Ok("VT-CHAR-RETIRED\n");
             }
             case "character-drop":
