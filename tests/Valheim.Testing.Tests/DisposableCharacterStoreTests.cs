@@ -69,6 +69,70 @@ public sealed class DisposableCharacterStoreTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_local, "smoke-only.fch")));
     }
 
+    // The one character-file rule (DisposableCharacterStore.IsCharacterFile) in each folder CharacterFolders names. The
+    // trailing separator case is the negative control for #301: before it the sibling cloud folder was taken as
+    // characters_local/characters, so a cloud save of the same name went unnoticed.
+    [Theory]
+    [InlineData("local", "Smoke-Only.fch", false)] [InlineData("local", "smoke-only.fch.old", false)] [InlineData("local", "smoke-only_backup_auto-20261004120000.fch", false)]
+    [InlineData("cloud", "smoke-only.fch", false)] [InlineData("cloud", "SMOKE-ONLY.FCH.OLD", true)] [InlineData("cloud", "smoke-only_backup_auto-1.fch", true)]
+    [InlineData("account", "smoke-only.fch", true)] [InlineData("account", "smoke-only.fch.old", false)] [InlineData("account", "smoke-only_backup_auto-1.fch", false)]
+    [InlineData("local", "smoke-only.fch.new", false)] [InlineData("cloud", "smoke-only.FCH.NEW", true)]
+    public void TheLocalStageRefusesAnyFileTheCharacterOwnsInEveryFolder(string folder, string existing, bool trailingSeparator)
+    {
+        var store = DisposableCharacterStore.Create(StoreDirectory);
+        store.Register("tester", Local("seed", 11));
+        string directory = folder switch
+        {
+            "local" => _local, "cloud" => Path.Combine(_root, "characters"),
+            _ => Path.Combine(_steam, "12345", "892970", "remote", "characters"),
+        };
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, existing), "someone else's");
+        Assert.True(DisposableCharacterStore.IsCharacterFile(existing, "smoke-only"));
+        string local = trailingSeparator ? _local + Path.DirectorySeparatorChar : _local;
+        var before = Directory.EnumerateFiles(_local).Order(StringComparer.Ordinal).ToList();
+        Assert.Throws<IOException>(() => RegisteredCharacterStage.InstallRegistered(StoreDirectory, "tester", local, _steam, "smoke-only"));
+        Assert.Equal(before, Directory.EnumerateFiles(_local).Order(StringComparer.Ordinal));
+        Assert.Equal("someone else's", File.ReadAllText(Path.Combine(directory, existing)));
+    }
+
+    [Fact]
+    public void TheLocalStageRetiresExactlyTheFilesTheGameKeptForItsCharacter()
+    {
+        var store = DisposableCharacterStore.Create(StoreDirectory);
+        store.Register("tester", Local("seed", 11));
+        string[] others = ["seed.fch", "smoke-only2.fch", "asmoke-only.fch", "smoke-only.fch.bak", "smoke-only_backup.fch"];
+        foreach (string other in others.Skip(1)) File.WriteAllText(Path.Combine(_local, other), "not the run's");
+        using (RegisteredCharacterStage.InstallRegistered(StoreDirectory, "tester", _local, _steam, "smoke-only"))
+        {
+            // What the game writes for the character while it plays: its previous save and an automatic backup.
+            File.WriteAllText(Path.Combine(_local, "smoke-only.fch.old"), "previous");
+            File.WriteAllText(Path.Combine(_local, "smoke-only_backup_auto-20261004120000.fch"), "backup");
+            File.WriteAllText(Path.Combine(_local, "smoke-only.fch.new"), "a save the stop interrupted");
+        }
+        Assert.Equal(others.Order(StringComparer.Ordinal), Directory.EnumerateFiles(_local).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.All(others, name => Assert.False(DisposableCharacterStore.IsCharacterFile(name, "smoke-only")));
+    }
+
+    [Theory]
+    [InlineData(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local", @"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters")]
+    [InlineData(@"C:\Valheim\characters_local\", @"C:\Valheim\characters")]
+    [InlineData("/home/steam/.config/unity3d/IronGate/Valheim/characters_local/", "/home/steam/.config/unity3d/IronGate/Valheim/characters")]
+    [InlineData("/characters_local", "/characters")]
+    public void HostScriptsGetTheRuleAndTheSiblingCloudFolderInTheHostsStyle(string charactersLocal, string cloud)
+    {
+        var variables = DisposableCharacterStore.HostScriptVariables("fresh", charactersLocal);
+        Assert.Equal(cloud, variables["cloud"]);
+        Assert.Equal("892970/remote/characters", variables["remote"]);
+        Assert.Equal("fresh.fch", variables["save"]);
+        Assert.Equal(new[] { "fresh.fch", "fresh.fch.old", "fresh.fch.new" }, variables["names"].Split('\n'));
+        Assert.Equal(new[] { "fresh_backup_auto-" }, variables["prefixes"].Split('\n'));
+    }
+
+    [Theory][InlineData("characters_local")][InlineData("")]
+    public void HostScriptsRefuseACharactersFolderThatIsNoFullPath(string charactersLocal) =>
+        Assert.Throws<ArgumentException>(() => DisposableCharacterStore.HostScriptVariables("fresh", charactersLocal));
+
     [Fact]
     public void AnUnregisteredPersonalCharacterCannotBeTakenOrStaged()
     {

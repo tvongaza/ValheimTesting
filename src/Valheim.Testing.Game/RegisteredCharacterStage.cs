@@ -34,12 +34,9 @@ internal sealed class RegisteredCharacterStage : IDisposable
             !Path.GetFileName(Path.TrimEndingDirectorySeparator(local)).Equals("characters_local", StringComparison.OrdinalIgnoreCase) ||
             !Path.GetFileName(Path.TrimEndingDirectorySeparator(steam)).Equals("userdata", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Stage only into the owned client's characters_local folder, with Steam's userdata directory supplied for collision checks.");
-        string installed = Path.Combine(local, character + ".fch");
-        RefuseCollisions(local, character);
-        string siblingCloud = Path.Combine(Path.GetDirectoryName(local)!, "characters");
-        RefuseCollisions(siblingCloud, character);
-        foreach (string account in Directory.EnumerateDirectories(steam))
-            RefuseCollisions(Path.Combine(account, "892970", "remote", "characters"), character);
+        string installed = Path.Combine(local, DisposableCharacterStore.SaveFile(character));
+        foreach (string folder in DisposableCharacterStore.CharacterFolders(local, steam))
+            RefuseCollisions(folder, character);
 
         bool created = false;
         try
@@ -62,14 +59,9 @@ internal sealed class RegisteredCharacterStage : IDisposable
     {
         if (!Directory.Exists(directory)) return;
         foreach (string file in Directory.EnumerateFiles(directory))
-            if (OwnedFile(Path.GetFileName(file), character))
+            if (DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file), character))
                 throw new IOException($"A character or backup named {character} already exists in {directory}; choose a fresh filename.");
     }
-
-    private static bool OwnedFile(string name, string character) =>
-        name.Equals(character + ".fch", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals(character + ".fch.old", StringComparison.OrdinalIgnoreCase) ||
-        name.StartsWith(character + "_backup_auto-", StringComparison.OrdinalIgnoreCase);
 
     public void Dispose()
     {
@@ -78,6 +70,6 @@ internal sealed class RegisteredCharacterStage : IDisposable
         // ClientRounds stops its owned client before this scope ends. RefuseCollisions ensured that every matching
         // filename was absent beforehand, so these files belong to this run (including game-made backup files).
         foreach (string file in Directory.EnumerateFiles(_localDirectory))
-            if (OwnedFile(Path.GetFileName(file), _character)) File.Delete(file);
+            if (DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file), _character)) File.Delete(file);
     }
 }

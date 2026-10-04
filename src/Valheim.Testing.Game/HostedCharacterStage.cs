@@ -27,8 +27,9 @@ internal static class HostedCharacterStage
             string.IsNullOrWhiteSpace(input.FileName) || !Name.IsMatch(input.FileName))
             throw new ArgumentException("A campaign character needs a store, registeredName and fresh fileName of letters, digits, _ or -.");
         input.Store = Path.GetFullPath(input.Store, localDirectory);
-        var handle = DisposableCharacterStore.Open(input.Store).Get(input.RegisteredName);
-        string file = Path.Combine(input.Store, input.RegisteredName + ".fch");
+        var store = DisposableCharacterStore.Open(input.Store);
+        var handle = store.Get(input.RegisteredName);
+        string file = store.StoredFile(handle.Name);
         if (!WorldFixture.Hash(file).Equals(handle.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The registered character changed before staging: " + input.RegisteredName);
         return new(input, handle, file);
@@ -44,14 +45,15 @@ internal static class HostedCharacterStage
         bool shipped = false;
         try
         {
-            string target = Path.Combine(payload, selected.Input.FileName + ".fch");
+            string saveFile = DisposableCharacterStore.SaveFile(selected.Input.FileName);
+            string target = Path.Combine(payload, saveFile);
             File.Copy(selected.File, target);
             if (!WorldFixture.Hash(target).Equals(selected.Handle.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The local copy of the registered character changed.");
             shipped = true;
             await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
             var listing = await HostInstall.ListAsync(host, staging, timeout, cancellation: cancellation).ConfigureAwait(false);
-            if (!listing.Files.TryGetValue(selected.Input.FileName + ".fch", out string? hash) ||
+            if (!listing.Files.TryGetValue(saveFile, out string? hash) ||
                 !hash.Equals(selected.Handle.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new IOException($"The staged character on {host.Name} differs from its registered source.");
             HostResult reply;
@@ -117,11 +119,12 @@ internal static class HostedCharacterStage
             throw new HostOperationException($"Character staging cleanup on {host.Name} was not proven", reply);
     }
 
-    private static Dictionary<string, string> Variables(HostedCampaignCharacter input, string staging) => new()
-    {
-        ["stage"] = staging, ["characters"] = input.CharactersLocalDirectory, ["userdata"] = input.SteamUserDataDirectory,
-        ["name"] = input.FileName,
-    };
+    // The character-file rule comes from its one owner (DisposableCharacterStore.HostScriptVariables); the scripts only apply it.
+    internal static Dictionary<string, string> Variables(HostedCampaignCharacter input, string staging) =>
+        new(DisposableCharacterStore.HostScriptVariables(input.FileName, input.CharactersLocalDirectory))
+        {
+            ["stage"] = staging, ["characters"] = input.CharactersLocalDirectory, ["userdata"] = input.SteamUserDataDirectory,
+        };
 
     private static void CheckHostPaths(IGameHost host, HostedCampaignCharacter input)
     {
@@ -135,82 +138,81 @@ internal static class HostedCharacterStage
             throw new ArgumentException("Stage only a fresh character filename into characters_local with the matching Steam userdata folder.");
     }
 
-    internal static readonly string WindowsInstall = """
+    // Whether a file is one of the character's own: DisposableCharacterStore.IsCharacterFile, its table given as variables.
+    private const string WindowsOwned = """
+        $characterNames = @($names -split "`n"); $characterPrefixes = @($prefixes -split "`n")
+        function Test-CharacterFile([string] $file) {
+            $base = [IO.Path]::GetFileName($file)
+            foreach ($entry in $characterNames) { if ($base.Equals($entry, [StringComparison]::OrdinalIgnoreCase)) { return $true } }
+            foreach ($entry in $characterPrefixes) { if ($entry.Length -ne 0 -and $base.StartsWith($entry, [StringComparison]::OrdinalIgnoreCase)) { return $true } }
+            return $false
+        }
+
+        """;
+
+    private const string BashOwned = """
+        set -eu
+        shopt -s nocasematch
+        is_character_file() {
+          local base=${1##*/} entry
+          while IFS= read -r entry; do [[ $base == "$entry" ]] && return 0; done <<< "$names"
+          while IFS= read -r entry; do [[ -n $entry && $base == "$entry"* ]] && return 0; done <<< "$prefixes"
+          return 1
+        }
+
+        """;
+
+    internal static readonly string WindowsInstall = (WindowsOwned + """
         if (-not [IO.Directory]::Exists($characters) -or -not [IO.Directory]::Exists($userdata)) { 'VT-CHAR missing-directory'; exit 0 }
-        $parent = [IO.Directory]::GetParent($characters).FullName
-        $cloud = Join-Path $parent 'characters'
         $folders = @($characters, $cloud)
-        foreach ($account in [IO.Directory]::GetDirectories($userdata)) { $folders += (Join-Path $account '892970\remote\characters') }
-        $prefix = $name + '.fch'
+        foreach ($account in [IO.Directory]::GetDirectories($userdata)) { $folders += [IO.Path]::Combine($account, $remote) }
         foreach ($folder in $folders) {
             if (-not [IO.Directory]::Exists($folder)) { continue }
-            foreach ($file in [IO.Directory]::GetFiles($folder)) {
-                $base = [IO.Path]::GetFileName($file)
-                if ($base.Equals($prefix, [StringComparison]::OrdinalIgnoreCase) -or
-                    $base.Equals($prefix + '.old', [StringComparison]::OrdinalIgnoreCase) -or
-                    $base.StartsWith($name + '_backup_auto-', [StringComparison]::OrdinalIgnoreCase)) {
-                    'VT-CHAR collision'; exit 0
-                }
-            }
+            foreach ($file in [IO.Directory]::GetFiles($folder)) { if (Test-CharacterFile $file) { 'VT-CHAR collision'; exit 0 } }
         }
-        $source = Join-Path $stage ($name + '.fch')
-        $target = Join-Path $characters ($name + '.fch')
-        $temporary = Join-Path $characters ('.vt-character-' + [Guid]::NewGuid().ToString('N'))
+        $source = [IO.Path]::Combine($stage, $save)
+        $target = [IO.Path]::Combine($characters, $save)
+        $temporary = [IO.Path]::Combine($characters, '.vt-character-' + [Guid]::NewGuid().ToString('N'))
         try {
             [IO.File]::Copy($source, $temporary, $false)
             [IO.File]::Move($temporary, $target)
         } finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
         'VT-CHAR staged'
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 
-    internal static readonly string BashInstall = """
-        set -eu
+    internal static readonly string BashInstall = (BashOwned + """
         if [ ! -d "$characters" ] || [ ! -d "$userdata" ]; then echo 'VT-CHAR missing-directory'; exit 0; fi
-        parent=$(dirname "$characters")
-        for folder in "$characters" "$parent/characters" "$userdata"/*/892970/remote/characters; do
+        for folder in "$characters" "$cloud" "$userdata"/*/"$remote"; do
           [ -d "$folder" ] || continue
           for file in "$folder"/*; do
             [ -f "$file" ] || continue
-            base=${file##*/}
-            lower=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
-            wanted=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
-            case "$lower" in "$wanted.fch"|"$wanted.fch.old"|"${wanted}_backup_auto-"*) echo 'VT-CHAR collision'; exit 0;; esac
+            if is_character_file "$file"; then echo 'VT-CHAR collision'; exit 0; fi
           done
         done
         temporary=$(mktemp "$characters/.vt-character.XXXXXXXX")
         trap 'rm -f "$temporary"' EXIT
-        cp "$stage/$name.fch" "$temporary"
-        ln "$temporary" "$characters/$name.fch"
+        cp "$stage/$save" "$temporary"
+        ln "$temporary" "$characters/$save"
         rm -f "$temporary"
         trap - EXIT
         echo 'VT-CHAR staged'
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 
-    internal static readonly string WindowsRetire = """
+    internal static readonly string WindowsRetire = (WindowsOwned + """
         if (-not [IO.Directory]::Exists($characters)) { 'VT-CHAR-RETIRED'; exit 0 }
-        foreach ($file in [IO.Directory]::GetFiles($characters)) {
-            $base = [IO.Path]::GetFileName($file)
-            $prefix = $name + '.fch'
-            if ($base.Equals($prefix, [StringComparison]::OrdinalIgnoreCase) -or
-                $base.Equals($prefix + '.old', [StringComparison]::OrdinalIgnoreCase) -or
-                $base.StartsWith($name + '_backup_auto-', [StringComparison]::OrdinalIgnoreCase)) { [IO.File]::Delete($file) }
-        }
+        foreach ($file in [IO.Directory]::GetFiles($characters)) { if (Test-CharacterFile $file) { [IO.File]::Delete($file) } }
         'VT-CHAR-RETIRED'
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 
-    internal static readonly string BashRetire = """
-        set -eu
+    internal static readonly string BashRetire = (BashOwned + """
         if [ -d "$characters" ]; then
           for file in "$characters"/*; do
             [ -f "$file" ] || continue
-            base=${file##*/}
-            lower=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
-            wanted=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
-            case "$lower" in "$wanted.fch"|"$wanted.fch.old"|"${wanted}_backup_auto-"*) rm -f "$file";; esac
+            if is_character_file "$file"; then rm -f "$file"; fi
           done
         fi
         echo 'VT-CHAR-RETIRED'
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 
     internal static readonly string WindowsDropStage = "if ([IO.Directory]::Exists($stage)) { [IO.Directory]::Delete($stage, $true) }; 'VT-CHAR-STAGE-DROPPED'";
     internal static readonly string BashDropStage = "if [ -d \"$stage\" ]; then rm -rf -- \"$stage\"; fi; echo VT-CHAR-STAGE-DROPPED";
