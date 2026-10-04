@@ -251,16 +251,16 @@ public sealed partial class HostedServerRunTests
         Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(PoolFile)).State);
     }
 
-    // Canary: a password in the account's variable and the account's SteamID reach no report, evidence file or host script; the
-    // account's name does. Negative control: the same scan finds the canary once the run is given it as its name.
-    [Fact] public async Task NeitherAPasswordNorASteamIdReachesAReportOrAHost()
+    // Canary: an unrelated environment secret and the account's SteamID reach no report, evidence file or host script;
+    // the account's name does. Negative control: the same scan finds the canary once the run is given it as its name.
+    [Fact] public async Task NeitherAnUnrelatedSecretNorASteamIdReachesAReportOrAHost()
     {
         string variable = "VT_TEST_CANARY_" + Guid.NewGuid().ToString("N");
         string canary = "canary" + Guid.NewGuid().ToString("N");
         Environment.SetEnvironmentVariable(variable, canary);
         try
         {
-            LeaseBox.WritePool(_root, Leases, [new { name = LeaseBox.Account, steamId = LeaseBox.SteamId, passwordVariable = variable }], SteamAccountPool.ApproveEachLogin);
+            LeaseBox.WritePool(_root, Leases, [new { name = LeaseBox.Account, steamId = LeaseBox.SteamId }]);
             var run = WithClient(Accounts(check: true));
             run.Client.SteamUserReply = "VT-STEAMUSER id " + LeaseBox.SteamId + "\n";
             Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", run.Profile, "run", run.Plan, Output], Options(run.Host, run.Server, context =>

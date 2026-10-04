@@ -25,23 +25,22 @@ public class SteamAccountPoolTests
     private static ScriptedGameHost Host(FakeLauncher fake) => new SshGameHost("lease-box", "tester@lease-box.example", HostShell.Bash, 0, null, null, "ssh", fake);
     private static string Reply(params string[] lines) => string.Join('\n', lines) + "\n";
 
-    [Fact] public void APoolFileNamesAccountsAndAnExplicitSteamGuardChoice()
+    [Fact] public void APoolFileNamesAccountsAndDefaultsToSignedIn()
     {
         var pool = SteamAccountPool.Parse(Sample);
         Assert.Equal("valheim-clients", pool.Pool); Assert.Equal(90, pool.LeaseMinutes); Assert.Equal(SteamAccountPool.SignedIn, pool.SteamGuard);
         Assert.Equal(new[] { "vt_client_one", "vt_client_two" }, pool.Accounts.Select(account => account.Name));
         Assert.Equal("gaming-pc", pool.Accounts[0].Host);
-        var approved = SteamAccountPool.Parse(Sample.Replace("\"signed-in\"", "\"approve-each-login\"").Replace("{ \"name\": \"vt_client_two\" }",
-            "{ \"name\": \"vt_client_two\", \"passwordVariable\": \"VT_STEAM_PASSWORD_TWO\" }"));
-        Assert.Equal("VT_STEAM_PASSWORD_TWO", approved.Accounts[1].PasswordVariable);
+        Assert.Equal(SteamAccountPool.SignedIn,
+            SteamAccountPool.Parse(Sample.Replace("\"steamGuard\": \"signed-in\",", "")).SteamGuard);
     }
 
     [Theory]
-    [InlineData("\"steamGuard\": \"signed-in\",", "", "Choose steamGuard explicitly")]
-    [InlineData("\"signed-in\"", "\"automatic\"", "Automated Steam Guard code entry is not supported")]
+    [InlineData("\"signed-in\"", "\"automatic\"", "runner never signs in")]
+    [InlineData("\"signed-in\"", "\"approve-each-login\"", "runner never signs in")]
     [InlineData("\"vt_client_two\"", "\"user:password\"", "must be a Steam account name")]
     [InlineData("\"vt_client_two\"", "\"VT_CLIENT_ONE\"", "listed twice")]
-    [InlineData("{ \"name\": \"vt_client_two\" }", "{ \"name\": \"vt_client_two\", \"passwordVariable\": \"VT_PW\" }", "leave out passwordVariable")]
+    [InlineData("{ \"name\": \"vt_client_two\" }", "{ \"name\": \"vt_client_two\", \"passwordVariable\": \"VT_PW\" }", "passwordVariable")]
     [InlineData("\"leaseMinutes\": 90", "\"leaseMinutes\": 0", "leaseMinutes must be")]
     [InlineData("\"/var/tmp/valheim-testing/leases\"", "\"leases\"", "leaseDirectory must be")]
     [InlineData("\"accounts\": [", "\"extra\": 1, \"accounts\": [", "extra")]
@@ -144,15 +143,14 @@ public class SteamAccountPoolTests
         Assert.Equal(8, fake.Calls.Count);
     }
 
-    [Fact] public async Task TheReportRecordsTheAccountsNameAndNeverACredential()
+    [Fact] public async Task TheReportRecordsTheAccountsNameAndNeverAnUnrelatedSecret()
     {
         string variable = "VT_TEST_CANARY_" + Guid.NewGuid().ToString("N");
         string canary = "canary-" + Guid.NewGuid().ToString("N");
         Environment.SetEnvironmentVariable(variable, canary);
         try
         {
-            var pool = SteamAccountPool.Parse(Sample.Replace("\"signed-in\"", "\"approve-each-login\"")
-                .Replace("{ \"name\": \"vt_client_two\" }", "{ \"name\": \"vt_client_two\", \"passwordVariable\": \"" + variable + "\" }"));
+            var pool = SteamAccountPool.Parse(Sample);
             var fake = new FakeLauncher()
                 .Exits(0, Reply("VT-LEASE claimed vt_client_two 1 1790000000"), FakeLauncher.Report(0))
                 .Exits(0, Reply("VT-LEASE renewed 1790000100"), FakeLauncher.Report(0))
@@ -162,7 +160,6 @@ public class SteamAccountPoolTests
             var seen = new List<string>();
             await using (var lease = await pool.AcquireAsync(Host(fake), "run-42", Timeout))
             {
-                Assert.Equal(variable, lease.PasswordVariable);
                 lease.Record(report, "player");
                 await lease.RenewAsync(Timeout);
                 seen.Add((await Assert.ThrowsAsync<SteamAccountLeaseException>(() => pool.AcquireAsync(Host(fake), "run-43", Timeout))).ToString());
