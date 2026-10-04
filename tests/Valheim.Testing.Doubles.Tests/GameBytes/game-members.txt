@@ -1250,15 +1250,12 @@ UnityEngine.GameObject	type	class : UnityEngine.Object	game
 UnityEngine.GameObject	ctor	.ctor()	game
 UnityEngine.GameObject	ctor	.ctor(string)	game
 UnityEngine.GameObject	ctor	.ctor(string, params Type[])	game
-UnityEngine.GameObject	field	Health : float?	absent
 UnityEngine.GameObject	field	IsAsset : bool	absent
-UnityEngine.GameObject	field	Networked : bool	absent
-UnityEngine.GameObject	field	View : ZNetView	absent
-UnityEngine.GameObject	field	Wear : WearNTear	absent
 UnityEngine.GameObject	field	layer : int	game
 UnityEngine.GameObject	field	m_activeSelf : bool	absent
 UnityEngine.GameObject	method	AddComponent(Type) : UnityEngine.Component	game
 UnityEngine.GameObject	method	AddComponent<T>() : T	game
+UnityEngine.GameObject	method	AddComponent<T>(Action<T>) : T	differs	AddComponent(Type) : UnityEngine.Component | AddComponent<T>() : T
 UnityEngine.GameObject	method	Attach(UnityEngine.Component) : void	absent
 UnityEngine.GameObject	method	Clone(UnityEngine.Vector3, UnityEngine.Quaternion) : UnityEngine.GameObject	absent
 UnityEngine.GameObject	method	CompareTag(string) : bool	game
@@ -1269,16 +1266,20 @@ UnityEngine.GameObject	method	GetComponentInChildren<T>(bool) : T	game
 UnityEngine.GameObject	method	GetComponentInParent<T>(bool) : T	game
 UnityEngine.GameObject	method	GetComponents<T>() : T[]	game
 UnityEngine.GameObject	method	GetComponentsInChildren<T>(bool) : T[]	game
-UnityEngine.GameObject	method	OnDestroyed() : void	absent
+UnityEngine.GameObject	method	Own<T>() : T	absent
 UnityEngine.GameObject	method	SetActive(bool) : void	game
 UnityEngine.GameObject	method	TryGetComponent<T>(out T) : bool	game
 UnityEngine.GameObject	method	UnityDestroying() : void	absent
 UnityEngine.GameObject	method	static CheckComponentType(Type) : void	absent
 UnityEngine.GameObject	method	static HierarchyActivityChanged(UnityEngine.GameObject, bool) : void	absent
+UnityEngine.GameObject	property	Health : float?	absent
 UnityEngine.GameObject	property	InScene : bool	absent
+UnityEngine.GameObject	property	Networked : bool	absent
 UnityEngine.GameObject	property	OwnTransform : UnityEngine.Transform	absent
 UnityEngine.GameObject	property	Position : UnityEngine.Vector3	absent
 UnityEngine.GameObject	property	Rotation : UnityEngine.Quaternion	absent
+UnityEngine.GameObject	property	View : ZNetView	absent
+UnityEngine.GameObject	property	Wear : WearNTear	absent
 UnityEngine.GameObject	property	activeInHierarchy : bool	game
 UnityEngine.GameObject	property	activeSelf : bool	game
 UnityEngine.GameObject	property	tag : string	game
@@ -1394,6 +1395,7 @@ UnityEngine.MonoBehaviour	property	UnityAlive : bool	absent
 UnityEngine.MonoBehaviour	property	UnityRunning : bool	absent
 UnityEngine.Object	type	class	game
 UnityEngine.Object	ctor	.ctor()	game
+UnityEngine.Object	field	static s_pendingDestroy : List<UnityEngine.Object>	absent
 UnityEngine.Object	field	static s_unityComponents : List<UnityEngine.Component>	absent
 UnityEngine.Object	field	static s_unityGameObjects : List<UnityEngine.GameObject>	absent
 UnityEngine.Object	field	static s_unityLastCloneMap : Dictionary<UnityEngine.Object, UnityEngine.Object>	absent
@@ -1447,6 +1449,7 @@ UnityEngine.Quaternion	method	static op_Multiply(UnityEngine.Quaternion, UnityEn
 UnityEngine.Quaternion	property	eulerAngles : UnityEngine.Vector3	game
 UnityEngine.Quaternion	property	static identity : UnityEngine.Quaternion	game
 UnityEngine.Random	type	static class	game
+UnityEngine.Random	field	static s_random : Random	absent
 UnityEngine.Random	method	static InitState(int) : void	game
 UnityEngine.Random	method	static Range(float, float) : float	game
 UnityEngine.Random	method	static Range(int, int) : int	game
@@ -1796,6 +1799,8 @@ ZDOVars	field	static s_location : int	game
 ZDOVars	field	static s_picked : int	game
 ZDOVars	field	static s_playerID : int	game
 ZDOVars	field	static s_playerName : int	game
+ZDOVars	field	static s_scaleHash : int	game
+ZDOVars	field	static s_scaleScalarHash : int	game
 ZDOVars	field	static s_terrainModifierTimeCreated : int	game
 ZInput	type	class	game
 ZInput	ctor	.ctor()	game
@@ -1919,6 +1924,9 @@ ZNetView	field	m_functions : Dictionary<int, ValueTuple<string, Delegate>>	diffe
 ZNetView	field	m_persistent : bool	game
 ZNetView	field	m_syncInitialScale : bool	game
 ZNetView	field	static Everybody : long	game
+ZNetView	field	static m_forceDisableInit : bool	game
+ZNetView	field	static m_initZDO : ZDO	game
+ZNetView	field	static m_useInitZDO : bool	game
 ZNetView	method	ClaimOwnership() : void	game
 ZNetView	method	GetZDO() : ZDO	game
 ZNetView	method	HandleRoutedRPC(ZRoutedRpc.RoutedRPCData) : void	game

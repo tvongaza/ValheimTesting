@@ -221,7 +221,7 @@ namespace UnityEngine
         // stays asleep (or disabled) until the object is next active, rather than waking on an inactive object.
         internal void UnityBecameActive()
         {
-            if (Destroyed || m_gameObject is not { activeInHierarchy: true }) return;
+            if (Destroyed || m_gameObject is not { activeInHierarchy: true, InScene: true }) return;
             if (!m_unityAwoken) { m_unityAwoken = true; UnitySendMessage("Awake"); if (Destroyed || m_gameObject is not { activeInHierarchy: true }) return; }
             if (m_behaviourEnabled && !m_unityEnableSent) { m_unityEnableSent = true; UnitySendMessage("OnEnable"); }
         }
@@ -427,7 +427,7 @@ namespace UnityEngine
     /// <summary>
     /// Components, children and activation. <see cref="AddComponent{T}"/> wakes a MonoBehaviour at once when the object
     /// is active in its hierarchy, and otherwise when it becomes so, as Unity does; a prefab kept under an inactive
-    /// parent therefore wakes only in its copies.
+    /// parent, or an asset (<see cref="IsAsset"/>), therefore wakes only in its copies.
     /// </summary>
     public partial class GameObject
     {
@@ -484,15 +484,19 @@ namespace UnityEngine
             }
         }
 
-        /// <summary>Adds a new component of the type, as Unity's; a MonoBehaviour wakes at once if the object is active in its hierarchy.</summary>
+        /// <summary>Adds a new component of the type, as Unity's; a MonoBehaviour wakes at once if the object is active in its hierarchy (and not an asset).</summary>
         public T AddComponent<T>() where T : Component => (T)AddComponent(typeof(T));
-        public Component AddComponent(Type componentType)
+        public Component AddComponent(Type componentType) => AddComponent(componentType, null);
+        /// <summary>As <see cref="AddComponent{T}"/>, with <paramref name="serialized"/> setting fields first, as a prefab's serialized values are in place before Awake.</summary>
+        internal T AddComponent<T>(Action<T> serialized) where T : Component => (T)AddComponent(typeof(T), c => serialized((T)c));
+        private Component AddComponent(Type componentType, Action<Component>? serialized)
         {
             ThrowIfDestroyed();
             if (!typeof(Component).IsAssignableFrom(componentType) || componentType.IsAbstract)
                 throw new ArgumentException($"{componentType.Name} is not a concrete component type.", nameof(componentType));
             var component = UnitySerialization.NewInstance(componentType) as Component
                 ?? throw new ArgumentException($"{componentType.Name} is not a component.", nameof(componentType));
+            serialized?.Invoke(component);
             Attach(component);
             if (component is MonoBehaviour behaviour && activeInHierarchy) behaviour.UnityBecameActive();
             return component;
@@ -504,13 +508,19 @@ namespace UnityEngine
             s_unityComponents.Add(component);
         }
 
-        /// <summary>The transform, then the ZNetView and WearNTear, then added components in order: Unity lists the transform first.</summary>
+        /// <summary>The transform, then the added components in order: Unity lists the transform first.</summary>
         private IEnumerable<Component> AllComponents()
         {
             yield return OwnTransform;
-            if (View is { } view) yield return view;
-            if (Wear is { } wear) yield return wear;
             foreach (var component in m_components) yield return component;
+        }
+        /// <summary>The first live component of the type, or on a destroyed object the first one it had; never throws.</summary>
+        internal T? Own<T>() where T : Component
+        {
+            T? first = null;
+            foreach (var component in m_components)
+                if (component is T match) { if (!match.Destroyed) return match; first ??= match; }
+            return Destroyed ? first : null;
         }
 
         /// <summary>The first live component of type <typeparamref name="T"/> (a base type or interface matches too), or null. Throws once the object is destroyed.</summary>
@@ -619,8 +629,6 @@ namespace UnityEngine
             var pairs = new List<(Component Source, Component Copy)>();
             MapHierarchy(this, copy, map, pairs);
             foreach (var (source, target) in pairs) UnitySerialization.CopySerializedFields(source, target, map);
-            if (copy.View is { } view) s_unityComponents.Add(view);
-            if (copy.Wear is { } wear) s_unityComponents.Add(wear);
             if (parent is not null)
             {
                 if (!worldStays)
@@ -636,8 +644,6 @@ namespace UnityEngine
         private static void MapHierarchy(GameObject source, GameObject copy, Dictionary<Object, Object> map, List<(Component, Component)> pairs)
         {
             map[source] = copy; map[source.OwnTransform] = copy.OwnTransform;
-            if (source.View is { } view && copy.View is { } copiedView) map[view] = copiedView;
-            if (source.Wear is { } wear && copy.Wear is { } copiedWear) map[wear] = copiedWear;
             copy.m_activeSelf = source.m_activeSelf; copy.m_tag = source.m_tag; copy.layer = source.layer;
             copy.OwnTransform.localScale = source.OwnTransform.localScale;
             foreach (var component in source.m_components)
@@ -652,7 +658,7 @@ namespace UnityEngine
             foreach (var child in source.OwnTransform.m_children)
             {
                 if (child.m_gameObject is not { Destroyed: false } childObject) continue;
-                var childCopy = new GameObject(childObject.name) { Networked = false };
+                var childCopy = new GameObject(childObject.name);
                 childCopy.OwnTransform.SetParent(copy.OwnTransform, false);
                 childCopy.OwnTransform.localPosition = child.localPosition;
                 childCopy.OwnTransform.localRotation = child.localRotation;
@@ -777,7 +783,7 @@ namespace UnityEngine
     /// </summary>
     public static partial class Random
     {
-        private static System.Random s_random = new(0);
+        internal static System.Random s_random = new(0);
         public static void InitState(int seed) => s_random = new System.Random(seed);
         /// <summary>A float from 0 to 1, both included.</summary>
         public static float value => (float)(s_random.Next(0, 16777217) / 16777216.0);

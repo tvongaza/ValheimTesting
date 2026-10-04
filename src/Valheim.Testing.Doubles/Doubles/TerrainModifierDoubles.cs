@@ -193,21 +193,12 @@ namespace Valheim.Testing.Doubles
 {
     public sealed partial class ValheimWorldScope
     {
-        private readonly List<global::TerrainModifier> _terrainModifiers = global::TerrainModifier.s_instances;
-        private readonly bool _terrainModifiersNeedSorting = global::TerrainModifier.s_needsSorting;
-
         /// <summary>No live terrain modifiers yet: the modifiers this test wakes join a fresh list.</summary>
         public ValheimWorldScope WithTerrainModifiers()
         {
             global::TerrainModifier.s_instances = new List<global::TerrainModifier>();
             global::TerrainModifier.s_needsSorting = false;
             return this;
-        }
-
-        private void RestoreTerrainModifiers()
-        {
-            global::TerrainModifier.s_instances = _terrainModifiers;
-            global::TerrainModifier.s_needsSorting = _terrainModifiersNeedSorting;
         }
     }
 }

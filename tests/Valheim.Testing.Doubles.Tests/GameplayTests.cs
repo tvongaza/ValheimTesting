@@ -25,6 +25,17 @@ public sealed class GameplayTests : IDisposable
         prefab.transform.SetParent(holder.transform);
         return prefab;
     }
+    // The object the game makes for a loaded ZDO, as ZNetScene.CreateObject does: the prefab is instantiated with
+    // ZNetView.m_initZDO set, so its view wakes with that ZDO instead of a new one.
+    private static GameObject Loaded(GameObject prefab, Action<ZDO> saved, long owner = 0)
+    {
+        var zdo = ZDOMan.instance!.CreateNewZDO(new Vector3(1, 30, 1), prefab.name.GetStableHashCode());
+        zdo.SetOwner(owner != 0 ? owner : ZDOMan.instance.m_sessionID); zdo.Persistent = true;
+        saved(zdo);
+        ZNetView.m_useInitZDO = true; ZNetView.m_initZDO = zdo;
+        try { return Object.Instantiate(prefab, zdo.GetPosition(), zdo.GetRotation()); }
+        finally { ZNetView.m_useInitZDO = false; }
+    }
 
     [Fact] public void UtilsKeepsTheGamesArithmeticAndNaming()
     {
@@ -173,14 +184,10 @@ public sealed class GameplayTests : IDisposable
         Assert.NotSame(container.m_defaultItems, chest.GetComponent<Container>().m_defaultItems); // the copy has its own table
 
         // A chest another peer owns, and one whose ZDO already had its items: both wake with an empty inventory.
-        var theirs = Object.Instantiate(prefab, prefab.transform.parent!); // still asleep under the inactive parent
-        theirs.GetComponent<ZNetView>().GetZDO().SetOwner(99);
-        theirs.transform.SetParent(null);
+        var theirs = Loaded(prefab, _ => { }, owner: 99);
         Assert.Equal(0, theirs.GetComponent<Container>().GetInventory().NrOfItems());
         Assert.Equal(0, theirs.GetComponent<ZNetView>().GetZDO().GetInt(ZDOVars.s_addedDefaultItems));
-        var loaded = Object.Instantiate(prefab, prefab.transform.parent!);
-        loaded.GetComponent<ZNetView>().GetZDO().Set(ZDOVars.s_addedDefaultItems, 1);
-        loaded.transform.SetParent(null);
+        var loaded = Loaded(prefab, zdo => zdo.Set(ZDOVars.s_addedDefaultItems, 1));
         Assert.Equal(0, loaded.GetComponent<Container>().GetInventory().NrOfItems());
     }
 
@@ -222,16 +229,12 @@ public sealed class GameplayTests : IDisposable
         var plain = Asleep(ZNetScene.instance.AddPrefab("Mushroom"));
         plain.AddComponent<Pickable>().m_itemPrefab = berries;
 
-        // Copies made asleep (under the inactive holder), their ZDOs marked picked as a load would, then woken.
-        var loadedBush = Object.Instantiate(withPart, withPart.transform.parent!);
-        loadedBush.GetComponent<ZNetView>().GetZDO().Set(ZDOVars.s_picked, true);
-        loadedBush.transform.SetParent(null);
+        // Objects made for loaded ZDOs that were saved picked.
+        var loadedBush = Loaded(withPart, zdo => zdo.Set(ZDOVars.s_picked, true));
         var picked = loadedBush.GetComponent<Pickable>();
         Assert.True(picked.GetPicked()); Assert.False(picked.m_hideWhenPicked!.activeSelf); Assert.False(picked.CanBePicked());
-        var loadedMushroom = Object.Instantiate(plain, plain.transform.parent!);
-        var mushroomZdo = loadedMushroom.GetComponent<ZNetView>().GetZDO();
-        mushroomZdo.Set(ZDOVars.s_picked, true);
-        loadedMushroom.transform.SetParent(null);
+        ZDO mushroomZdo = null!;
+        var loadedMushroom = Loaded(plain, zdo => { zdo.Set(ZDOVars.s_picked, true); mushroomZdo = zdo; });
         Assert.DoesNotContain(loadedMushroom, ZNetScene.instance.Live); Assert.Contains(mushroomZdo, ZDOMan.instance!.DestroyQueue);
         Object.EndOfFrame();
         Assert.True(loadedMushroom == null); Assert.False(loadedBush == null); // neither respawning nor hiding a part: removed

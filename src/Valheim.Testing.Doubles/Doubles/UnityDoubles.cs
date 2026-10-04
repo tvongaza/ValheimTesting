@@ -286,7 +286,8 @@ public partial struct Quaternion
 /// </summary>
 public partial class Object
 {
-    private static readonly System.Collections.Generic.List<Object> s_pendingDestroy = new();
+    /// <summary>What <see cref="Destroy"/> queued for the end of the frame. <c>ValheimWorldScope.WithScene</c> gives a test its own.</summary>
+    internal static System.Collections.Generic.List<Object> s_pendingDestroy = new();
     private string m_name = "";
 
     /// <summary>True once destroyed (after <see cref="EndOfFrame"/> or <see cref="DestroyImmediate"/>). Never throws.</summary>
@@ -412,41 +413,46 @@ public partial class Behaviour : Component { }
 public partial class MonoBehaviour : Behaviour { }
 
 /// <summary>
-/// Shim for a prefab or scene object: optionally networked (a ZNetView) and damageable (a WearNTear). Its other
-/// components, transform hierarchy and activation are in UnityComponentDoubles.cs.
+/// Shim for a prefab or scene object. Its components (a <see cref="ZNetView"/> and a <see cref="WearNTear"/> among them),
+/// transform hierarchy and activation are in UnityComponentDoubles.cs; the members here are fixture shorthands over them.
 /// </summary>
 public partial class GameObject : Object
 {
-    [TestOnly] public bool Networked;
-    [TestOnly] public float? Health;
-    [TestOnly] public ZNetView? View;
-    [TestOnly] public WearNTear? Wear;
+    /// <summary>
+    /// Fixture shorthand for a <see cref="ZNetView"/> on the object. Setting it adds a persistent one, as the game's
+    /// prefabs carry. On an active scene object the view wakes at once and takes its ZDO from the object's position then,
+    /// so set <see cref="IsAsset"/>, the position and the parent first (in an object initializer, before this). Clearing
+    /// it destroys the view component at once; as in the game, that leaves a ZDO the view had, and its place in
+    /// <c>ZNetScene.Live</c>, behind.
+    /// </summary>
+    [TestOnly] public bool Networked
+    {
+        get => View is { Destroyed: false };
+        set { if (value == Networked) return; if (value) AddComponent<ZNetView>(view => view.m_persistent = true); else DestroyImmediate(View); }
+    }
+    /// <summary>Fixture shorthand for a <see cref="WearNTear"/> with this full health; null removes it.</summary>
+    [TestOnly] public float? Health
+    {
+        get => Wear is { Destroyed: false } wear ? wear.m_health : null;
+        set
+        {
+            if (value is not float health) { if (Wear is { Destroyed: false } wear) DestroyImmediate(wear); }
+            else if (Wear is { Destroyed: false } wear) wear.m_health = health;
+            else AddComponent<WearNTear>(added => added.m_health = health);
+        }
+    }
+    /// <summary>The object's first <see cref="ZNetView"/>, or null. Never throws: on a destroyed object it is the destroyed view, which <c>ZNetScene.FindInstance</c> still finds, as in the game.</summary>
+    [TestOnly] public ZNetView? View => Own<ZNetView>();
+    /// <summary>The object's first <see cref="WearNTear"/>, or null, as <see cref="View"/>.</summary>
+    [TestOnly] public WearNTear? Wear => Own<WearNTear>();
     /// <summary>A new object in the scene, as Unity's: FindObjectsByType finds it, with or without components.</summary>
     public GameObject(string name) { this.name = name; s_unityGameObjects.Add(this); }
 
     internal GameObject Clone(Vector3 position, Quaternion rotation)
     {
-        var copy = new GameObject(name) { Position = position, Rotation = rotation, Networked = Networked, Health = Health };
-        if (Health is float health) copy.Wear = new WearNTear { m_health = health, gameObject = copy };
-        if (Networked)
-        {
-            // As ZNetView.Awake does: a new object gets a new ZDO of its prefab, owned by this session.
-            var zdo = global::ZDOMan.instance!.CreateNewZDO(position, name.GetStableHashCode());
-            zdo.SetOwner(global::ZDOMan.instance.m_sessionID);
-            zdo.Persistent = true;
-            copy.View = new ZNetView(zdo) { gameObject = copy };
-            if (!ZNetView.GhostInit) global::ZNetScene.instance?.Live.Add(copy);
-        }
+        var copy = new GameObject(name) { Position = position, Rotation = rotation };
         CopyHierarchyInto(copy);
         return copy;
-    }
-
-    // A destroyed object's components go with it. It stays in ZNetScene.Live, as in the game, where only ZNetScene
-    // removes an instance; a plain Destroy leaves a destroyed view there.
-    private protected override void OnDestroyed()
-    {
-        DestroyImmediate(View);
-        DestroyImmediate(Wear);
     }
 }
 

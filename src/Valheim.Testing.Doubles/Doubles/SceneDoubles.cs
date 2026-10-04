@@ -24,7 +24,8 @@ public partial class ZNetScene
     /// <summary>A networked prefab with a WearNTear, registered at once (in <c>m_prefabs</c> and by name hash); a second one with the same name replaces the first. It is an asset (<see cref="UnityEngine.GameObject.IsAsset"/>), as the game's prefabs are, so only its copies are in the scene.</summary>
     [TestOnly] public UnityEngine.GameObject AddPrefab(string name, float health = 1000f)
     {
-        var prefab = new UnityEngine.GameObject(name) { Networked = true, Health = health, IsAsset = true };
+        var prefab = new UnityEngine.GameObject(name) { IsAsset = true };
+        prefab.Networked = true; prefab.Health = health;
         if (Prefabs.TryGetValue(name, out var replaced)) m_prefabs.Remove(replaced);
         Prefabs[name] = prefab;
         m_prefabs.Add(prefab);

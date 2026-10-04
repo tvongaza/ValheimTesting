@@ -53,29 +53,11 @@ namespace Valheim.Testing.Doubles
     /// others are null) and a preview <see cref="Player"/> with no ZDO that is not the local player, as the character
     /// select screen has.</item>
     /// </list>
-    /// <see cref="AddRemotePlayer"/> adds another peer's player. The scope also saves and restores ObjectDB, the Unity
-    /// component and GameObject lists and their order (<see cref="WithUnityOrder"/>), the registries' postfix hooks, Localization, ZInput, PlatformPrefs, the config disk, the player
-    /// list, the heightmap builder and the clock.
+    /// <see cref="AddRemotePlayer"/> adds another peer's player. What the presets change, the scope puts back on dispose
+    /// with every other static (WorldDoubles.cs).
     /// </summary>
     public sealed partial class ValheimWorldScope
     {
-        private readonly List<UnityEngine.Component> _components = UnityEngine.Object.s_unityComponents;
-        private readonly List<UnityEngine.GameObject> _gameObjects = UnityEngine.Object.s_unityGameObjects;
-        private readonly bool _unityReversedOrder = UnityEngine.Object.s_unityReversedOrder;
-        private readonly ObjectDB? _objectDB = ObjectDB.m_instance;
-        private readonly Action<ObjectDB>? _objectDBAwake = ObjectDB.AwakePostfix, _objectDBCopy = ObjectDB.CopyOtherDBPostfix;
-        private readonly Action<ZNetScene>? _sceneAwake = ZNetScene.AwakePostfix;
-        private readonly Localization? _localization = Localization.Current;
-        private readonly Action? _languageChange = Localization.OnLanguageChange;
-        private readonly ZInput? _input = ZInput.Current;
-        private readonly Dictionary<string, object> _prefs = PlatformPrefs.s_values;
-        private readonly string? _prefsUnavailable = PlatformPrefs.Unavailable;
-        private readonly Dictionary<string, string> _configFiles = BepInEx.Configuration.ConfigFile.s_files;
-        private readonly bool _dedicated = ZNet.instance?.Dedicated ?? false;
-        private readonly List<Player> _players = Player.s_players;
-        private readonly HeightmapBuilder? _builder = HeightmapBuilder.m_instance;
-        private readonly float _gameTime = UnityEngine.Time.time, _deltaTime = UnityEngine.Time.deltaTime;
-        private readonly int _frameCount = UnityEngine.Time.frameCount;
         private UnityEngine.GameObject? _pluginManager;
         private ObjectDB? _objectDBPrefab;
         private UnityEngine.GameObject[] _vanillaItems = new UnityEngine.GameObject[0];
@@ -84,21 +66,6 @@ namespace Valheim.Testing.Doubles
 
         /// <summary>The preview character <see cref="AtMainMenu"/> made, or null.</summary>
         public Player? PreviewPlayer { get; private set; }
-
-        partial void RestorePresetState()
-        {
-            UnityEngine.Object.s_unityComponents = _components; UnityEngine.Object.s_unityGameObjects = _gameObjects;
-            UnityEngine.Object.s_unityReversedOrder = _unityReversedOrder;
-            ObjectDB.m_instance = _objectDB; ObjectDB.AwakePostfix = _objectDBAwake; ObjectDB.CopyOtherDBPostfix = _objectDBCopy;
-            ZNetScene.AwakePostfix = _sceneAwake;
-            Localization.Current = _localization; Localization.OnLanguageChange = _languageChange; ZInput.Current = _input;
-            PlatformPrefs.s_values = _prefs; PlatformPrefs.Unavailable = _prefsUnavailable;
-            BepInEx.Configuration.ConfigFile.s_files = _configFiles;
-            if (_net != null) _net.Dedicated = _dedicated;
-            Player.s_players = _players;
-            HeightmapBuilder.m_instance = _builder;
-            UnityEngine.Time.time = _gameTime; UnityEngine.Time.deltaTime = _deltaTime; UnityEngine.Time.frameCount = _frameCount;
-        }
 
         /// <summary>
         /// A dedicated server: server, dedicated, no local player, a world's singletons, and fresh preferences and
@@ -133,10 +100,10 @@ namespace Valheim.Testing.Doubles
         /// </summary>
         public ValheimWorldScope AtMainMenu()
         {
+            EmptyUnityScene();
             ZNet.instance = null!; ZRoutedRpc.instance = null!;
             ZDOMan.instance = null; ZoneSystem.instance = null; ZNetScene.instance = null; WorldGenerator.instance = null;
             global::Heightmap.s_heightmaps = new List<global::Heightmap>(); _ownsHeightmaps = true;
-            UnityEngine.Object.s_unityComponents = new List<UnityEngine.Component>(); UnityEngine.Object.s_unityGameObjects = new List<UnityEngine.GameObject>();
             Player.m_localPlayer = null;
             Player.s_players = new List<Player>();
             PreviewPlayer = new Player();
