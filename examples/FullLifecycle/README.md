@@ -215,15 +215,17 @@ Six more scenarios, and a hosted run, take the toolkit's lifecycle steps and wor
 | [content-census](MyMod.SystemTests/sample-plan-content-census.json) | `content-census` | MyMod, adapter | MyMod, adapter (the server's builds) | #91/#114 in each round (first, after restart and rejoin) each side observes MyMod's declared item, prefabs, recipe, Hammer-table piece and status effect ([content-expectations.json](MyMod.SystemTests/content-expectations.json)); dependencies resolve, no undeclared content appears in scope, and the observation comes from that side's pinned MyMod build. The #114 additions passed a native run. |
 | [ownership-handoff](MyMod.SystemTests/sample-plan-ownership-handoff.json) | `ownership-handoff` | MyMod, adapter | Two simultaneous owned clients, each with MyMod and adapter on a different host and Steam account | #211 A explicitly claims the marker; B sees A's owner; A leaves; B explicitly claims it; server and B agree on one owner. This tests orchestration, not automatic ownership of every Valheim object. Native Windows dedicated server + macOS/Windows clients passed 47/47 steps (Valheim 1.0.16) |
 
-For `ownership-handoff`, pass `--profile` to the runner. The private environment profile names `client-a` and `client-b` on different hosts, gives each a different `steamAccount` from the pool, and maps their `cliPort` values to the sample plan's `client.port` and `secondClient.port`. Each host has its own game install and disposable local character. The relevant part of the profile looks like this (see [account leases](../../docs/testing-toolkit.md#a-runs-client-accounts-from-an-environment-profile) for the full host and pool format):
+For `ownership-handoff`, use the [environment inventory](MyMod.SystemTests/sample-environment-inventory.json). It lists client hosts in preference order and maps their `cliPort` values to the sample plan's `client.port` and `secondClient.port`. Each host has its own game install and disposable local character. Sign into Steam on each client host first; preflight reads the account in use and rejects a conflict. No Steam ID or account-pool file is needed in the inventory:
 
 ```json
 {
-  "clients": {
-    "client-a": { "host": "gaming-pc", "install": "<client A install>", "runtime": "<client A run directory>", "cliPort": 5556, "steamAccount": "test_account_a" },
-    "client-b": { "host": "second-host", "install": "<client B install>", "runtime": "<client B run directory>", "cliPort": 5557, "steamAccount": "test_account_b" }
-  },
-  "steamAccounts": { "pool": "steam-accounts.json", "leaseHost": "lease-box", "checkSignedIn": true }
+  "hosts": { "gaming-pc": { "...": "host settings" }, "second-host": { "...": "host settings" } },
+  "environments": [
+    { "name": "client-a", "host": "gaming-pc", "roles": ["client"], "install": "<client A install>", "runtime": "<client A run directory>", "cliPort": 5556 },
+    { "name": "client-b", "host": "second-host", "roles": ["client"], "install": "<client B install>", "runtime": "<client B run directory>", "cliPort": 5557 }
+  ],
+  "leaseHost": "gaming-pc",
+  "leaseDirectory": "<shared lease directory on gaming-pc>"
 }
 ```
 
@@ -306,7 +308,7 @@ source installs remain untouched and all actor runtime copies are made after the
 Rented GPU VM client environments are experimental in this campaign flow; start with local or known SSH desktops.
 They still require an interactive desktop, a signed-in Steam client and the same preflight and lease checks.
 
-Fixed-profile campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool;
+Legacy fixed-profile campaign clients require `steamAccounts.checkSignedIn: true` and distinct Steam IDs in their private pool;
 inventory campaigns discover the IDs from the selected hosts instead. Preparation checks identity before copying;
 launch repeats that check under the account lease, then verifies the game's
 own identity. Unix's remembered Steam login alone is not proof of the running game's account. Identity values are redacted
