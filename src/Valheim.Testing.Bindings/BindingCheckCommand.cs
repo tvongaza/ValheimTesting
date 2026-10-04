@@ -9,13 +9,13 @@ namespace Valheim.Testing.Bindings;
 /// The <c>valheim-bindings</c> command (Valheim.Testing.Bindings.Tool), callable from a test too. Exit codes:
 /// <see cref="Binds"/> when every checked reference binds, <see cref="Fails"/> when any is missing (or, with
 /// <c>--fail-on-access</c>, when a non-accessible member is used without <c>IgnoresAccessChecksTo</c>), and
-/// <see cref="Incomplete"/> for bad arguments, an unreadable file or a required assembly that was not supplied.
+/// <see cref="Incomplete"/> for bad arguments, an unreadable or malformed file or a required assembly that was not supplied.
 /// </summary>
 public static class BindingCheckCommand
 {
     public const int Binds = 0, Fails = 1, Incomplete = 2;
 
-    public static readonly string Usage = string.Join(Environment.NewLine, new[]
+    private static readonly string Usage = string.Join(Environment.NewLine, new[]
     {
         "Usage: valheim-bindings <mod.dll>... (--game-dir <dir> | --game-file <file>)... [options]",
         "",
@@ -29,7 +29,7 @@ public static class BindingCheckCommand
         "  --max-users <n>      List at most n users per finding (default 10).",
         "",
         "Exit codes: 0 every checked reference binds; 1 missing references (or access findings with --fail-on-access);",
-        "2 bad arguments, unreadable input or a required assembly not supplied.",
+        "2 bad arguments, unreadable or malformed input or a required assembly not supplied.",
         "",
     });
 
@@ -70,11 +70,14 @@ public static class BindingCheckCommand
         foreach (string mod in mods)
         {
             BindingReport report;
+            // Anything Cecil or the file system throws (a malformed method body throws IndexOutOfRangeException, say) means
+            // this mod was not checked: Incomplete, never an unhandled crash with another exit code.
             try { report = BindingCheck.Check(mod, options); }
-            catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException or ArgumentException)
+            catch (Exception e)
             {
-                error.WriteLine($"valheim-bindings: cannot check {mod}: {e.Message}");
-                return Incomplete;
+                error.WriteLine($"valheim-bindings: cannot check {mod}: {e.GetType().Name}: {e.Message}");
+                result = Incomplete; // the other mods are still checked and reported
+                continue;
             }
             report.WriteText(output, maxUsers);
             output.WriteLine();

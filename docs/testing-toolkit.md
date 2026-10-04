@@ -1128,7 +1128,7 @@ Supply the game's managed directory with `--game-dir` (the client's `valheim_Dat
 |---|---|
 | 0 | Every checked reference binds (access findings may be listed) |
 | 1 | At least one missing reference; with `--fail-on-access`, also an access finding without `IgnoresAccessChecksTo` |
-| 2 | Bad arguments, an unreadable or missing file or directory, or a required assembly not supplied: the check is incomplete |
+| 2 | Bad arguments, an unreadable, malformed or missing file or directory, or a required assembly not supplied: the check is incomplete. Since preview 2 any failure to read a mod (a malformed method body, say) is exit 2 with the reason, never an unhandled crash with another code. |
 
 Run it in the job that builds the plugin, since both need the game's assemblies, and before anything launches the game:
 

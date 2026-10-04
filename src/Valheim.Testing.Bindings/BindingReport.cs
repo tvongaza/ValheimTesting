@@ -43,27 +43,24 @@ public sealed class BindingFinding
     public bool IsMissing => Kind is BindingFindingKind.MissingType or BindingFindingKind.MissingField or BindingFindingKind.MissingMethod;
 }
 
-/// <summary>A supplied assembly the mod references, with the number of distinct types and members checked in it.</summary>
-public sealed class CheckedAssembly
+/// <summary>
+/// An assembly the mod references and the number of distinct types and members it uses there: in
+/// <see cref="BindingReport.Checked"/> a supplied one (with its <see cref="Path"/>), in <see cref="BindingReport.NotChecked"/>
+/// one that was not supplied, so its references were not checked (no path).
+/// </summary>
+public sealed class ReferencedAssembly
 {
-    public CheckedAssembly(string name, string path, int references) { Name = name; Path = path; References = references; }
-    public string Name { get; }
-    public string Path { get; }
-    public int References { get; }
-}
-
-/// <summary>A referenced assembly that was not supplied, so its references were not checked.</summary>
-public sealed class UncheckedAssembly
-{
-    public UncheckedAssembly(string name, int references) { Name = name; References = references; }
+    public ReferencedAssembly(string name, int references, string? path = null) { Name = name; References = references; Path = path; }
     public string Name { get; }
     public int References { get; }
+    /// <summary>The supplied file that was checked; null for an assembly that was not supplied.</summary>
+    public string? Path { get; }
 }
 
 public sealed class BindingReport
 {
     public BindingReport(string modPath, string modAssembly, IReadOnlyList<BindingFinding> missing, IReadOnlyList<BindingFinding> access,
-        IReadOnlyList<CheckedAssembly> @checked, IReadOnlyList<UncheckedAssembly> notChecked, IReadOnlyList<string> missingRequired,
+        IReadOnlyList<ReferencedAssembly> @checked, IReadOnlyList<ReferencedAssembly> notChecked, IReadOnlyList<string> missingRequired,
         IReadOnlyList<string> ignoresAccessChecksTo, IReadOnlyList<string> notes)
     {
         ModPath = modPath; ModAssembly = modAssembly; Missing = missing; Access = access; Checked = @checked; NotChecked = notChecked;
@@ -76,8 +73,8 @@ public sealed class BindingReport
     public IReadOnlyList<BindingFinding> Missing { get; }
     /// <summary>References that bind but are not accessible from the mod. Expected for a mod built against publicized assemblies.</summary>
     public IReadOnlyList<BindingFinding> Access { get; }
-    public IReadOnlyList<CheckedAssembly> Checked { get; }
-    public IReadOnlyList<UncheckedAssembly> NotChecked { get; }
+    public IReadOnlyList<ReferencedAssembly> Checked { get; }
+    public IReadOnlyList<ReferencedAssembly> NotChecked { get; }
     /// <summary>Required assemblies (see <see cref="BindingCheckOptions.RequiredAssemblies"/>) the mod references that were not supplied: the check is incomplete.</summary>
     public IReadOnlyList<string> MissingRequired { get; }
     /// <summary>Assemblies the mod names in <c>IgnoresAccessChecksTo</c> attributes.</summary>
@@ -93,9 +90,9 @@ public sealed class BindingReport
     public void WriteText(TextWriter output, int maxUsers = 10)
     {
         output.WriteLine($"Mod: {ModAssembly} ({ModPath})");
-        foreach (CheckedAssembly assembly in Checked)
+        foreach (ReferencedAssembly assembly in Checked)
             output.WriteLine($"Checked: {assembly.Name}, {assembly.References} references ({assembly.Path})");
-        foreach (UncheckedAssembly assembly in NotChecked)
+        foreach (ReferencedAssembly assembly in NotChecked)
             output.WriteLine($"Not checked (not supplied): {assembly.Name}, {assembly.References} references");
         foreach (string required in MissingRequired)
             output.WriteLine($"INCOMPLETE: the mod references {required}, which was not supplied");
