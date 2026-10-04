@@ -38,8 +38,8 @@ public sealed class HostServerLaunch
     public bool Crossplay => Arguments.Any(argument => argument.Equals("-crossplay", StringComparison.OrdinalIgnoreCase));
     /// <summary>Files, relative to <see cref="Runtime"/>, the host must have before anything starts.</summary>
     public IReadOnlyList<string> RequiredFiles => Windows
-        ? [ServerLaunch.WindowsExecutable, "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "winhttp.dll", "doorstop_config.ini"]
-        : [ServerLaunch.LinuxExecutable, "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "doorstop_libs/libdoorstop_x64.so"];
+        ? [ServerLaunch.WindowsExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows)]
+        : [ServerLaunch.LinuxExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux)];
 
     /// <summary>A Windows dedicated-server launch on a PowerShell host. The server has its own console and is independent of the SSH session.</summary>
     public static HostServerLaunch CreateWindows(string runtime, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null)

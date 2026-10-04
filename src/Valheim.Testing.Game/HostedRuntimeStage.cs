@@ -96,14 +96,15 @@ public static class HostedRuntimeStage
             if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
                 throw new InvalidOperationException($"The client install on {host.Name} does not match its host platform.");
         }
-        if (loaderPackage == null) _ = HostInstall.Pins(sourceListing);
-        if (loaderPackage == null && host.Shell.Kind == HostShellKind.PowerShell)
+        if (loaderPackage == null)
         {
-            byte[] proxy = await HostClientPreflight.Read(host, HostInstall.Join(source, BepInExLoader.WindowsProxy), timeout, cancellation).ConfigureAwait(false)
-                ?? throw new FileNotFoundException($"The source install on {host.Name} has no {BepInExLoader.WindowsProxy}.");
-            byte[] config = await HostClientPreflight.Read(host, HostInstall.Join(source, BepInExLoader.WindowsConfig), timeout, cancellation).ConfigureAwait(false)
-                ?? throw new FileNotFoundException($"The source install on {host.Name} has no {BepInExLoader.WindowsConfig}.");
-            BepInExLoader.RequireWindowsLoader(proxy, Encoding.UTF8.GetString(config), source, $"source install on {host.Name}");
+            _ = HostInstall.Pins(sourceListing); // Also refuses a nested BepInEx/core/core.
+            // Every platform's loader files from the listing; a Windows proxy and configuration also as one Doorstop version.
+            var platform = host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
+                : sourceListing.Files.ContainsKey("Valheim.app/Contents/MacOS/Valheim") ? ClientPlatform.MacOS : ClientPlatform.Linux;
+            BepInExLoader.RequireLoaderFiles(platform, sourceListing.Files.ContainsKey, $"source install on {host.Name}");
+            if (platform == ClientPlatform.Windows)
+                await HostClientPreflight.RequireWindowsLoaderAsync(host, source, $"source install on {host.Name}", timeout, cancellation).ConfigureAwait(false);
         }
         return sourceListing;
     }

@@ -183,16 +183,8 @@ internal sealed class HostedServerRun
     /// <summary>Refuses an incoherent Windows Doorstop pair in the copied runtime before its server can start.</summary>
     public Task CheckWindowsLoaderAsync(ScenarioReport report, CancellationToken cancellation) => Host.Shell.Kind != HostShellKind.PowerShell
         ? Task.CompletedTask
-        : report.StepAsync(StepPhase.Setup, "copied Windows runtime has a coherent Doorstop loader", async () =>
-        {
-            string proxyPath = HostInstall.Join(RuntimeDirectory, BepInExLoader.WindowsProxy);
-            string configPath = HostInstall.Join(RuntimeDirectory, BepInExLoader.WindowsConfig);
-            byte[] proxy = await HostClientPreflight.Read(Host, proxyPath, Quick, cancellation).ConfigureAwait(false) ??
-                throw new FileNotFoundException("Windows Doorstop proxy is missing from the server runtime copy.", proxyPath);
-            byte[] config = await HostClientPreflight.Read(Host, configPath, Quick, cancellation).ConfigureAwait(false) ??
-                throw new FileNotFoundException("Windows Doorstop config is missing from the server runtime copy.", configPath);
-            BepInExLoader.RequireWindowsLoader(proxy, Encoding.UTF8.GetString(config), RuntimeDirectory, "server runtime");
-        });
+        : report.StepAsync(StepPhase.Setup, "copied Windows runtime has a coherent Doorstop loader", () =>
+            HostClientPreflight.RequireWindowsLoaderAsync(Host, RuntimeDirectory, "server runtime", Quick, cancellation));
 
     /// <summary>Refuses a busy CLI port on the host, then opens the loopback tunnel to it.</summary>
     public async Task OpenAsync(ScenarioReport report, CancellationToken cancellation)
