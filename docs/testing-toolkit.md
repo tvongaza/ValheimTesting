@@ -596,9 +596,7 @@ Mod runners repeat two kinds of glue, which the toolkit now owns. The [FullLifec
 Plan rules on `ServerRunPlan` refuse a plan before anything is copied, with an `ArgumentException` that names the field and the fix:
 - `RequireScenario(known...)`: the plan's `scenario` is one the runner knows.
 - `RequireEnvironmentFlag(variable, purpose)`: an explicit fixture opt-in, set to exactly `1`. A missing variable, any other value (`true`, `1 `) and a key that differs only in case are refused.
-- `EnvironmentChoice(variable, choices...)`: an optional choice, returned as null when absent (the mod's default) or as exactly one of the choices. Any other value, and a second key that differs only in case, are refused.
 - `OnlyForScenario(settings, supplied, scenarios...)`: settings another scenario reads are refused rather than silently ignored.
-- `CheckModeScenario(mode, map)`, used by the runner through `PinnedServerRunOptions.ModeScenarios` (for example `["prepare-bridge"] = ["bridge-respawn"]`): a listed mode runs only its scenarios, and unlisted modes run every scenario. A map key that is not one of the runner's modes is refused at once.
 
 The toolkit's own tests cover the rules every pinned plan follows: output path, launch host, executable, pins, save root, Doorstop and token variables, and unknown fields. A mod's plan tests need only cover its own rules.
 

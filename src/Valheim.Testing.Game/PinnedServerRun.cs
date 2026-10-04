@@ -20,12 +20,6 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public required string SessionTokenVariable { get; init; }
     /// <summary>Launching modes beyond <c>run</c>, for fixture preparation; they never pass an acceptance test.</summary>
     public IReadOnlyList<string> PrepareModes { get; init; } = [];
-    /// <summary>
-    /// Which scenarios a mode runs, for example <c>["prepare-bridge"] = ["bridge-respawn"]</c>: a listed mode with a plan
-    /// of any other scenario is refused before anything is copied (<see cref="ServerRunPlan.CheckModeScenario"/>). Modes
-    /// not listed run every scenario. Each key must be <c>validate</c>, <c>run</c> or one of <see cref="PrepareModes"/>.
-    /// </summary>
-    public IReadOnlyDictionary<string, string[]> ModeScenarios { get; init; } = new Dictionary<string, string[]>();
     /// <summary>Refuses a mode and plan that do not belong together (throw <see cref="ArgumentException"/>).</summary>
     public Action<string, TPlan>? CheckMode { get; init; }
     /// <summary>Checks a plan against its optional host profile before the runner copies fixtures or starts a process.</summary>
@@ -233,8 +227,6 @@ public static class PinnedServerRun
     public static async Task<int> MainAsync<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
     {
         string[] modes = ["validate", "run", .. options.PrepareModes];
-        if (options.ModeScenarios.Keys.FirstOrDefault(key => !modes.Contains(key)) is { } unknownMode)
-            throw new ArgumentException($"ModeScenarios lists {unknownMode}, which is not one of this runner's modes ({string.Join(", ", modes)}).", nameof(options));
         string? profilePath = null;
         if (args.Length >= 2 && args[0] == ProfileOption) { profilePath = args[1]; args = args[2..]; }
         if (args.Length != 3 || !modes.Contains(args[0]))
@@ -287,7 +279,6 @@ public static class PinnedServerRun
                 if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);
             }
             if (hosted != null && options.StagedRuntime != null) throw new ArgumentException("A --profile run copies its runtime on the server host; a staged local runtime copy cannot stand in for it.");
-            plan.CheckModeScenario(mode, options.ModeScenarios);
             options.CheckMode?.Invoke(mode, plan);
             report.Provenance["planSha256"] = WorldFixture.Hash(args[1]);
             report.Provenance["scenario"] = plan.Scenario;
