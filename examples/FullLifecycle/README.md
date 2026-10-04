@@ -261,7 +261,7 @@ placeholders, never defaults that the runner guesses.
 From the repository root, these are the preparation check and the complete run:
 
 ```sh
-dotnet run --project examples/NativeSmoke -c Release -- env preflight /private/test/campaign.json
+dotnet run --project src/Valheim.Testing.NativeSmoke -c Release -- env preflight /private/test/campaign.json
 dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign check /private/test/campaign.json /private/test/three-actor-plan.json
 dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign run /private/test/campaign.json /private/test/three-actor-plan.json /private/test/runs/first
 ```

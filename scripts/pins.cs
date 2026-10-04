@@ -9,9 +9,9 @@
 // valheimCLI commit the released Valheim.Testing.Cli was built from. Documentation and examples pin exactly these versions
 // and follow every release: once a release is published, edit the file and run write; nothing else is edited by hand.
 //
-// Pins are the copyable versions in the README, CONTRIBUTING, docs, examples and tools: a PackageReference, a `dotnet tool install`
-// or `dotnet add package` command, ToolkitPackageVersion (the Game package; a -p: argument or a project property), and a
-// backticked package ID followed by a backticked version, as in the package table. History in prose ("new in Game
+// Pins are the copyable versions in the README, CONTRIBUTING, docs, examples, tools and the packages' READMEs: a
+// PackageReference, a `dotnet tool install` or `dotnet add package` command, ToolkitPackageVersion (the Game package; a -p:
+// argument or a project property), and a backticked package ID followed by a backticked version, as in the package table. History in prose ("new in Game
 // preview 11") is not a pin. Dated native-validation records are not scanned. The NativeSmoke tool reads the released Game
 // version from the file itself (embedded at build).
 //
@@ -255,9 +255,10 @@ int FileLine(string file, string needle) =>
 List<Pin> FindPins()
 {
     var files = new List<string> { "README.md", "CONTRIBUTING.md" };
-    foreach (string dir in new[] { "docs", "examples", "tools" })
+    foreach (string dir in new[] { "docs", "examples", "tools", "src" })
         files.AddRange(Directory.GetFiles(Path.Combine(root, dir), "*", SearchOption.AllDirectories)
-            .Where(f => Path.GetExtension(f) is ".md" or ".csproj" or ".props" or ".targets" or ".yml" or ".yaml" or ".cs")
+            .Where(f => dir == "src" ? Path.GetExtension(f) == ".md" // a package's README, not its build
+                : Path.GetExtension(f) is ".md" or ".csproj" or ".props" or ".targets" or ".yml" or ".yaml" or ".cs")
             .Where(f => !f.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(p => p is "bin" or "obj"))
             .Where(f => !Path.GetFileName(f).StartsWith("native-validation-", StringComparison.Ordinal))
             .Select(f => Path.GetRelativePath(root, f).Replace('\\', '/')));
@@ -317,9 +318,7 @@ static string ReadText(string path, out Encoding encoding)
 
 static bool IsCandidate(string version) => version.Contains("-candidate", StringComparison.OrdinalIgnoreCase);
 
-static string ProjectFile(string name) => name == "Valheim.Testing.NativeSmoke"
-    ? "examples/NativeSmoke/NativeSmoke.csproj"
-    : $"src/{name}/{name}.csproj";
+static string ProjectFile(string name) => $"src/{name}/{name}.csproj";
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
 

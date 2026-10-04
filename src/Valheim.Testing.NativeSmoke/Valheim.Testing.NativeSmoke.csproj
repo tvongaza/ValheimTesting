@@ -17,15 +17,16 @@
     <RepositoryUrl>https://github.com/tvongaza/ValheimTesting.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
+  <ItemGroup><InternalsVisibleTo Include="Valheim.Testing.Tests" /></ItemGroup>
   <ItemGroup>
     <Compile Remove="SessionAdapter/**/*.cs" />
-    <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
+    <ProjectReference Include="../Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
     <None Include="../../LICENSE" Pack="true" PackagePath="" />
     <None Include="README.md" Pack="true" PackagePath="" />
     <EmbeddedResource Include="SessionAdapter/Plugin.cs" LogicalName="NativeSmoke.Adapter.Plugin.cs" />
     <EmbeddedResource Include="../../toolkit-versions.json" LogicalName="toolkit-versions.json" />
-    <EmbeddedResource Include="../../src/Valheim.Testing.Adapter/Adapter/TestExtension.cs" LogicalName="NativeSmoke.Adapter.TestExtension.cs" />
-    <EmbeddedResource Include="../../src/Valheim.Testing.Adapter/Adapter/Members.cs" LogicalName="NativeSmoke.Adapter.Members.cs" />
+    <EmbeddedResource Include="../Valheim.Testing.Adapter/Adapter/TestExtension.cs" LogicalName="NativeSmoke.Adapter.TestExtension.cs" />
+    <EmbeddedResource Include="../Valheim.Testing.Adapter/Adapter/Members.cs" LogicalName="NativeSmoke.Adapter.Members.cs" />
     <EmbeddedResource Include="../../tools/game-references/Valheim.GameReferences.props" LogicalName="NativeSmoke.Adapter.Valheim.GameReferences.props" />
     <EmbeddedResource Include="../../tools/game-references/Valheim.GameReferences.targets" LogicalName="NativeSmoke.Adapter.Valheim.GameReferences.targets" />
   </ItemGroup>

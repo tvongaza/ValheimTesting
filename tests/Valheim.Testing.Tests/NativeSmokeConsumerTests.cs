@@ -66,10 +66,24 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         Assert.Contains(server ? "PinnedServerRun.MainAsync" : "new TargetedRegression", source);
     }
 
+    // The tests exercise the tool's own build through InternalsVisibleTo, not a second compile of its sources into this
+    // assembly; nothing is public only for the tests.
+    [Fact]
+    public void TestsReachTheToolsOwnBuildAndItExposesNoPublicType()
+    {
+        System.Reflection.Assembly tool = typeof(SmokeProject).Assembly;
+        Assert.Equal("Valheim.Testing.NativeSmoke", tool.GetName().Name);
+        // Compiler-generated helpers ("<PrivateImplementationDetails>", inline arrays) exist in both and are not sources.
+        static IEnumerable<string> Declared(System.Reflection.Assembly assembly) =>
+            assembly.GetTypes().Select(type => type.FullName!).Where(name => !name.StartsWith('<'));
+        Assert.Empty(Declared(typeof(NativeSmokeConsumerTests).Assembly).Intersect(Declared(tool)));
+        Assert.Empty(tool.GetExportedTypes());
+    }
+
     [Fact]
     public void ToolCarriesTheServerAdapterSourceNeededOutsideThisCheckout()
     {
-        string[] names = System.Reflection.Assembly.Load("NativeSmoke").GetManifestResourceNames();
+        string[] names = typeof(SmokeProject).Assembly.GetManifestResourceNames();
         foreach (string file in new[] { "Plugin.cs", "TestExtension.cs", "Members.cs",
                      "Valheim.GameReferences.props", "Valheim.GameReferences.targets" })
             Assert.Contains("NativeSmoke.Adapter." + file, names);
@@ -83,7 +97,7 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         string file = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "toolkit-versions.json"));
         using var versions = System.Text.Json.JsonDocument.Parse(file);
         Assert.Equal(versions.RootElement.GetProperty("released").GetProperty("Valheim.Testing.Game").GetString(), SmokeProject.GameVersion);
-        using Stream? carried = System.Reflection.Assembly.Load("NativeSmoke").GetManifestResourceStream("toolkit-versions.json");
+        using Stream? carried = typeof(SmokeProject).Assembly.GetManifestResourceStream("toolkit-versions.json");
         Assert.NotNull(carried);
         Assert.Equal(file, new StreamReader(carried).ReadToEnd());
     }

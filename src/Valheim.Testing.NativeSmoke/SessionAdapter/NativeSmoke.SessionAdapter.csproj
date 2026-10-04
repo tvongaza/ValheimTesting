@@ -12,8 +12,8 @@
     <UseValheimCli>true</UseValheimCli>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../../src/Valheim.Testing.Adapter/Adapter/TestExtension.cs" Link="ValheimTestingAdapter/TestExtension.cs" />
-    <Compile Include="../../../src/Valheim.Testing.Adapter/Adapter/Members.cs" Link="ValheimTestingAdapter/Members.cs" />
+    <Compile Include="../../Valheim.Testing.Adapter/Adapter/TestExtension.cs" Link="ValheimTestingAdapter/TestExtension.cs" />
+    <Compile Include="../../Valheim.Testing.Adapter/Adapter/Members.cs" Link="ValheimTestingAdapter/Members.cs" />
   </ItemGroup>
   <Import Project="../../../tools/game-references/Valheim.GameReferences.targets" />
 </Project>

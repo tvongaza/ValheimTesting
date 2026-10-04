@@ -49,10 +49,9 @@ jobs:
       - name: Pack release packages
         run: |
           mkdir -p release
-          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.Doubles Valheim.Testing.Adapter Valheim.Testing.Bindings Valheim.Testing.Bindings.Tool; do
+          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.Doubles Valheim.Testing.Adapter Valheim.Testing.Bindings Valheim.Testing.Bindings.Tool Valheim.Testing.NativeSmoke; do
             dotnet pack "src/$p/$p.csproj" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true
           done
-          dotnet pack examples/NativeSmoke/NativeSmoke.csproj -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
           (cd release && sha256sum *.nupkg)
       # Before the push, so "new" means this run publishes it. A version already on NuGet.org is skipped by the
