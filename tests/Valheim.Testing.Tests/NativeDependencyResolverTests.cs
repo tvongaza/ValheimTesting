@@ -120,7 +120,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
             clients = new Dictionary<string, object> {
                 ["client-a"] = new { dependencyLock = clientLock, character = Character(stores[0], "one", "vt-one") },
                 ["client-b"] = new { dependencyLock = clientLock, character = Character(stores[1], "two", "vt-two") },
-                ["client-c"] = new { dependencyLock = clientLock, character = Character(stores[2], "three", "vt-three") },
+                // client-c leaves its folders out: they are its Windows host's standard ones, resolved there.
+                ["client-c"] = new { dependencyLock = clientLock, character = new { store = stores[2], registeredName = "three", fileName = "vt-three" } },
             },
         }));
         var duplicate = JsonNode.Parse(File.ReadAllText(manifestFile))!;
@@ -135,6 +136,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
         hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 303\n"; // client-c's identity: one account, two simultaneous clients.
         var hostReport = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
         Assert.Contains(hostReport.Problems, problem => problem.Actor == "client-a" && problem.Input == "Steam identity");
+        // client-c's standard folders do not exist yet: refused, naming each path tried on its host.
+        var folders = Assert.Single(hostReport.Problems, problem => problem.Actor == "client-c" && problem.Input == "character folders");
+        Assert.Contains(@"characters_local (tried C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local)", folders.Message);
+        Assert.Contains(@"Steam userdata (tried C:\Program Files (x86)\Steam\userdata)", folders.Message);
         Assert.Contains(hostReport.Problems, problem => problem.Actor == "clients" && problem.Input == "Steam identities" && problem.Message.Contains("client-b, client-c"));
         Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "ship" or "copy" or "start"));
         var identities = await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(manifestFile,
@@ -144,6 +149,14 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(hosts.Values, host => Assert.DoesNotContain("ship", host.Scripts));
         hosts["client-a"].SteamUserReply = "VT-STEAMUSER account 101\n";
         hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 202\n";
+        Directory.CreateDirectory(hosts["client-c"].Local(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local"));
+        Directory.CreateDirectory(hosts["client-c"].Local(@"C:\Program Files (x86)\Steam\userdata"));
+        var resolvedReport = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
+        Assert.True(resolvedReport.Ready, string.Join("; ", resolvedReport.Problems.Select(problem => problem.Message)));
+        var clientC = resolvedReport.Actors.Single(actor => actor.Name == "client-c");
+        Assert.Equal((@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local", @"C:\Program Files (x86)\Steam\userdata"),
+            (clientC.CharactersDirectory, clientC.SteamUserDataDirectory));
+        Assert.Equal(@"C:\save\characters_local", resolvedReport.Actors.Single(actor => actor.Name == "client-a").CharactersDirectory);
         var overlap = new Overlap();
         foreach (var host in hosts.Values) host.BeforeShip = overlap.EnterAsync;
         string output = Path.Combine(_rig.Root, "prepared");
@@ -180,7 +193,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.All(clients.Values, role => Assert.True(File.Exists(role.CliManifest)));
             Assert.True(File.Exists(hosts["client-a"].Local(@"C:\save\characters_local\vt-one.fch")));
             Assert.True(File.Exists(hosts["client-b"].Local(@"C:\save\characters_local\vt-two.fch")));
-            Assert.True(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
+            Assert.True(File.Exists(hosts["client-c"].Local(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local\vt-three.fch")));
             Assert.All(new[] { "server", "client-a", "client-b", "client-c" }, name => Assert.NotEmpty(hosts[name].Claims));
         }
         Assert.True(overlap.Seen, "Independent actors should stage concurrently, not wait for each prior actor's copy.");
@@ -195,7 +208,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(Directory.Exists(hosts["client-c"].Local(prepared[3])));
         Assert.False(File.Exists(hosts["client-a"].Local(@"C:\save\characters_local\vt-one.fch")));
         Assert.False(File.Exists(hosts["client-b"].Local(@"C:\save\characters_local\vt-two.fch")));
-        Assert.False(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
+        Assert.False(File.Exists(hosts["client-c"].Local(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local\vt-three.fch")));
         Assert.False(File.Exists(Path.Combine(output, "profile.json"))); // The prepared environment, with the observed Steam IDs, stays in memory.
 
         // A dedicated server and one client may share a machine. Their installs are separate, but setup should

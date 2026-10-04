@@ -899,11 +899,11 @@ A run with clients on other machines is a **campaign**: a manifest declares the 
   "inventory": "environments.json", "world": "fixture-world", "join": "linux-box.example:2466",
   "server": { "dependencyLock": "locks/server.json" },
   "clients": { "player": { "dependencyLock": "locks/client.json",
-    "character": { "store": "characters", "registeredName": "tester", "fileName": "vt-player",
-      "charactersLocalDirectory": "C:\\Users\\tester\\AppData\\LocalLow\\IronGate\\Valheim\\characters_local",
-      "steamUserDataDirectory": "C:\\Program Files (x86)\\Steam\\userdata" } } }
+    "character": { "store": "characters", "registeredName": "tester", "fileName": "vt-player" } } }
 }
 ```
+
+The character is staged into the client host user's own `characters_local` and checked against that host's Steam `userdata` for a same-named Steam Cloud character: both folders are resolved on the client host from its platform's standard paths (Windows `%USERPROFILE%\AppData\LocalLow\IronGate\Valheim\characters_local` and Steam's registered `SteamPath`, then `Program Files (x86)\Steam`; Linux `~/.config/unity3d/IronGate/Valheim/characters_local` and `~/.local/share/Steam`, `~/.steam/steam` or the Flatpak's; macOS under `~/Library/Application Support`). `env preflight --hosts` prints the resolved folders and refuses, naming every path it tried, when one is missing; set `charactersLocalDirectory` or `steamUserDataDirectory` on the character only for a non-standard place. Measured against what it replaces, for a server and one remote client: the old `profile.json` and `accounts.json`, plus the four plan fields that had to match them, were 32 hand-written fields; an inventory of two hosts (without `sshOptions`) and two environments plus this campaign are 33. The inventory is written once per set of machines; each further campaign is about 8 fields.
 
 `PinnedServerRun.RunCampaignAsync(manifest, plan, clients, output, options)` runs a plan on it (the [FullLifecycle example](../examples/FullLifecycle/README.md#prepare-the-campaign) wraps it as `campaign check|run`); `valheim-test env preflight MANIFEST [--hosts]` reports every independent problem first. The dependency locks and the character replace what used to be prepared by hand on each client install; binding fills the plan's installs, ports, runtime, world and pins from the prepared actors. Each named client, as their own steps:
 

@@ -89,6 +89,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostedCharacterStage.BashInstall) ? "character-install" :
         ReferenceEquals(script, HostedCharacterStage.WindowsRetire) ? "character-retire" :
         ReferenceEquals(script, HostedCharacterStage.BashRetire) ? "character-retire" :
+        ReferenceEquals(script, HostedCharacterStage.PowerShellDirectories) ? "character-folders" :
+        ReferenceEquals(script, HostedCharacterStage.BashDirectories) ? "character-folders" :
         ReferenceEquals(script, HostedCharacterStage.WindowsDropStage) ? "character-drop" :
         ReferenceEquals(script, HostedCharacterStage.BashDropStage) ? "character-drop" :
         ReferenceEquals(script, HostedRuntimeStage.WindowsProcessCheck) ? "game-process" :
@@ -164,6 +166,27 @@ internal sealed class FakeServerHost : IGameHost
                     Directory.Delete(Local(parent));
                 return Ok("VT-STAGE-CLEANED\n");
             // As the real scripts do (HostedCharacterStageShellTests runs them): the rule arrives as variables.
+            case "character-folders":
+            {
+                // The scripts' search, on this mirror (CharacterDirectoryTests runs the real scripts): a Windows host's user is
+                // C:\Users\tester with Steam in Program Files and no registered SteamPath, a Linux host's /home/tester (no Flatpak
+                // pairing here), a macOS host's /Users/tester.
+                string home = v["userhome"].Length != 0 ? v["userhome"] : Windows ? @"C:\Users\tester" : v["platform"] == "macos" ? "/Users/tester" : "/home/tester";
+                string Join(params string[] parts) => Windows ? string.Join('\\', parts) : string.Join('/', parts);
+                string characters = v["characters"].Length != 0 ? v["characters"] : Windows ? Join(home, "AppData", "LocalLow", "IronGate", "Valheim", "characters_local")
+                    : v["platform"] == "macos" ? home + "/Library/Application Support/IronGate/Valheim/characters_local" : home + "/.config/unity3d/IronGate/Valheim/characters_local";
+                string[] userdata = v["userdata"].Length != 0 ? [v["userdata"]] : Windows ? [@"C:\Program Files (x86)\Steam\userdata"]
+                    : v["platform"] == "macos" ? [home + "/Library/Application Support/Steam/userdata"] : [home + "/.local/share/Steam/userdata", home + "/.steam/steam/userdata", home + "/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata"];
+                var reply = new StringBuilder();
+                if (Directory.Exists(Local(characters))) reply.Append("VT-CHARDIR characters found " + characters + "\n");
+                reply.Append("VT-CHARDIR characters tried " + characters + "\n");
+                foreach (string folder in userdata)
+                {
+                    reply.Append("VT-CHARDIR userdata tried " + folder + "\n");
+                    if (Directory.Exists(Local(folder))) { reply.Append("VT-CHARDIR userdata found " + folder + "\n"); break; }
+                }
+                return Ok(reply.ToString());
+            }
             case "character-install":
             {
                 string characters = Local(v["characters"]), userdata = Local(v["userdata"]);

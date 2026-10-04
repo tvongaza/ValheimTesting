@@ -10,6 +10,10 @@ public sealed record CampaignPreflightActor(string Name, string Kind, string Hos
     public string? Environment { get; init; }
     /// <summary>Why this recipe was selected after considering earlier choices.</summary>
     public string? SelectionReason { get; init; }
+    /// <summary>A client's <c>characters_local</c> as the host check resolved it on its host; null before the host check.</summary>
+    public string? CharactersDirectory { get; init; }
+    /// <summary>A client's Steam <c>userdata</c> as the host check resolved it on its host; null before the host check.</summary>
+    public string? SteamUserDataDirectory { get; init; }
 }
 
 /// <summary>A deterministic, read-only review of the locally selected actors and fixture.</summary>

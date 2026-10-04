@@ -11,9 +11,7 @@
       "character": {
         "store": "./characters/a",
         "registeredName": "tester-a",
-        "fileName": "vt-campaign-a",
-        "charactersLocalDirectory": "C:\\Users\\TesterA\\AppData\\LocalLow\\IronGate\\Valheim\\characters_local",
-        "steamUserDataDirectory": "C:\\Program Files (x86)\\Steam\\userdata"
+        "fileName": "vt-campaign-a"
       }
     },
     "client-b": {
@@ -21,9 +19,7 @@
       "character": {
         "store": "./characters/b",
         "registeredName": "tester-b",
-        "fileName": "vt-campaign-b",
-        "charactersLocalDirectory": "C:\\Users\\TesterB\\AppData\\LocalLow\\IronGate\\Valheim\\characters_local",
-        "steamUserDataDirectory": "C:\\Program Files (x86)\\Steam\\userdata"
+        "fileName": "vt-campaign-b"
       }
     }
   }
