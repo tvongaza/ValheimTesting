@@ -21,7 +21,7 @@ public sealed class ClientRoundsTests : IDisposable
     private string Worlds => Path.Combine(Save, "worlds_local");
     private readonly List<ScriptedTransport> _servers = [];
     private ScriptedTransport _client;
-    private readonly RoundProcess _process = new();
+    private readonly FakeOwnedProcess _process = new(77);
     private readonly PreflightInstall _install = PreflightInstall.Create(); // An owned hosting client's install that passes the preflight.
     private bool _saves = true;
     private int _restarts, _opens;
@@ -471,7 +471,7 @@ public sealed class ClientRoundsTests : IDisposable
     [Theory] [MemberData(nameof(JoinedAndHosted))]
     public void AFailedCloseFailsAPassingRun(bool hosted)
     {
-        _process.RefuseStop = true;
+        _process.StopFailure = () => new TimeoutException("client did not stop");
         var report = new ScenarioReport("teardown");
         var close = Assert.Throws<TimeoutException>(() => RunEither(hosted, report, Measure()));
         Assert.Equal("client did not stop", close.Message);
@@ -484,7 +484,7 @@ public sealed class ClientRoundsTests : IDisposable
     [Theory] [MemberData(nameof(JoinedAndHosted))]
     public void AFailedCloseNeverHidesTheFailureBeforeIt(bool hosted)
     {
-        _process.RefuseStop = true;
+        _process.StopFailure = () => new TimeoutException("client did not stop");
         var report = new ScenarioReport("teardown");
         var first = Assert.Throws<InvalidOperationException>(() => RunEither(hosted, report, Measure(failIn: "first")));
         Assert.StartsWith("3 of 10 samples differ", first.Message);
@@ -780,22 +780,6 @@ public sealed class ClientRoundsTests : IDisposable
     [Theory] [MemberData(nameof(NotOneNamedWorld))]
     public void AFixtureThatIsNotOneNamedWorldIsRefused(string[] files) => Assert.Throws<ArgumentException>(() => HostedWorld.NameOf(files));
 
-    private sealed class RoundProcess : IServerProcess
-    {
-        private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public int Stops;
-        public bool RefuseStop;
-        public int Id => 77;
-        public bool HasExited => _exit.Task.IsCompleted;
-        public Task<int> WaitForExitAsync(CancellationToken cancellation) => _exit.Task.WaitAsync(cancellation);
-        public void Stop(TimeSpan timeout)
-        {
-            Stops++;
-            if (RefuseStop) throw new TimeoutException("client did not stop");
-            _exit.TrySetResult(-1);
-        }
-        public void Dispose() { }
-    }
 }
 
 /// <summary>An owned server for rounds tests: waits on the scripted server's session capability (or as told) and restarts with the given function.</summary>

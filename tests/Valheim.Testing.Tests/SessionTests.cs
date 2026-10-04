@@ -296,7 +296,7 @@ public class SessionTests
     [Fact] public async Task AnExitWhileTheWorldLoadsEndsStartupAtOnce()
     {
         using var log = new TempLog(); using var server = new FakeCliServer(StateWait.Loading);
-        FakeServerProcess? launched = null;
+        FakeOwnedProcess? launched = null;
         var fake = new FakeOwnedServer("roads.testing") { OnLaunch = process => { launched = process; log.Append(Listening); } };
         using var session = Session(fake, Generous, new StartupEvents { CliLog = log.Path, States = () => StateWait.Connect("127.0.0.1", server.Port) });
         var start = Task.Run(session.Start);

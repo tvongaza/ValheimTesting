@@ -4,23 +4,6 @@ using Xunit;
 
 public sealed partial class HostedServerRunTests
 {
-    private sealed class MacProcess : IServerProcess
-    {
-        private readonly TaskCompletionSource<int> _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public int Id => 91;
-        public int Stops { get; private set; }
-        public bool StopIsUnproven { get; set; }
-        public bool HasExited => _ended.Task.IsCompleted;
-        public Task<int> WaitForExitAsync(CancellationToken cancellation) => _ended.Task.WaitAsync(cancellation);
-        public void Stop(TimeSpan timeout)
-        {
-            Stops++;
-            if (StopIsUnproven) throw new IOException("stop could not be proven");
-            _ended.TrySetResult(-1);
-        }
-        public void Dispose() { }
-    }
-
     private (EnvironmentProfile Profile, ServerRunPlan Server, ClientRunPlan Client) LocalMacProfile(FakeServerHost serverHost, bool local = true)
     {
         var (planPath, profilePath) = Write(serverHost);
@@ -49,7 +32,7 @@ public sealed partial class HostedServerRunTests
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
         client.Architecture = "arm64";
-        var process = new MacProcess(); bool launched = false;
+        var process = new FakeOwnedProcess(91); bool launched = false;
         var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
         {
             RunId = RunId, Host = name => name == "mac" ? macHost : serverHost,
@@ -157,7 +140,7 @@ public sealed partial class HostedServerRunTests
         if (!OperatingSystem.IsMacOS()) return;
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
-        var process = new MacProcess { StopIsUnproven = true };
+        var process = new FakeOwnedProcess(91) { StopFailure = () => new IOException("stop could not be proven") };
         var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
         {
             RunId = RunId, Host = name => name == "mac" ? macHost : serverHost,
@@ -185,7 +168,7 @@ public sealed partial class HostedServerRunTests
         if (!OperatingSystem.IsMacOS()) return;
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
-        var process = new MacProcess();
+        var process = new FakeOwnedProcess(91);
         var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
         {
             RunId = RunId, Host = name => name == "mac" ? macHost : serverHost,

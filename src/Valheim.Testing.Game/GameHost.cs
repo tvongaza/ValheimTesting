@@ -167,9 +167,9 @@ public sealed record FetchedDirectory(string LocalDirectory, string Sha256, long
 /// </summary>
 public sealed class CliTunnel : IDisposable
 {
-    private readonly IOwnedProcess? _process;
+    private readonly IStartedProcess? _process;
     private int _disposed;
-    internal CliTunnel(IOwnedProcess? process, int localPort, int hostPort) { _process = process; LocalPort = localPort; HostPort = hostPort; }
+    internal CliTunnel(IStartedProcess? process, int localPort, int hostPort) { _process = process; LocalPort = localPort; HostPort = hostPort; }
     /// <summary>Always loopback: a tunnel never listens on another address.</summary>
     public string Address => "127.0.0.1";
     /// <summary>The port on 127.0.0.1 here.</summary>

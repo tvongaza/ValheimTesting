@@ -203,7 +203,7 @@ internal sealed class FakeServerHost : IGameHost
             case "start":
             {
                 string token = Spec(v["spec"]).Single(line => line.Kind == "env" && line.Text.StartsWith("TEST_SESSION_TOKEN=", StringComparison.Ordinal)).Text["TEST_SESSION_TOKEN=".Length..];
-                var process = (FakeServerProcess)_server!.Launch(token);
+                var process = (FakeOwnedProcess)_server!.Launch(token);
                 string boot = Local(v["dir"]);
                 Directory.CreateDirectory(boot);
                 File.WriteAllText(Path.Combine(boot, "stdout.log"), "server stdout\n");

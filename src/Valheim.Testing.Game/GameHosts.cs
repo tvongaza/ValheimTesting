@@ -349,7 +349,7 @@ internal static class GameHostPorts
         return port;
     }
 
-    public static async Task WaitUntilListeningAsync(IOwnedProcess process, int port, TimeSpan timeout, CancellationToken cancellation)
+    public static async Task WaitUntilListeningAsync(IStartedProcess process, int port, TimeSpan timeout, CancellationToken cancellation)
     {
         var exited = process.WaitForExitAsync(CancellationToken.None);
         string target = "the forward to listen on 127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture);

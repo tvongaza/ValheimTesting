@@ -33,7 +33,7 @@ public class ProcessStopTests
 
     [Fact] public void AProcessThatCannotBeAskedIsKilledAtOnce()
     {
-        IServerProcess process = new StopOnly();
+        IOwnedProcess process = new StopOnly();
         var stop = process.StopCleanly(TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(1));
         Assert.Equal(StopOutcome.Killed, stop.Outcome);
         Assert.True(((StopOnly)process).Stopped);
@@ -206,7 +206,8 @@ public class ProcessStopTests
         Assert.Null(new ServerRunPlan { Arguments = ["-batchmode"] }.GameLogFile("/rt", "/w"));
     }
 
-    private sealed class StopOnly : IServerProcess
+    // Not FakeOwnedProcess: that fake overrides StopCleanly, and this one must reach the interface's default (kill at once).
+    private sealed class StopOnly : IOwnedProcess
     {
         public bool Stopped;
         public int Id => 1;

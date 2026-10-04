@@ -24,18 +24,19 @@ internal interface IProcessLauncher
 {
     Task<ProcessExit> RunAsync(ProcessCall call, CancellationToken cancellation);
     /// <summary>Starts a long-running process (a port forward) with an empty stdin; stderr is kept for reports.</summary>
-    IOwnedProcess Start(string executable, IReadOnlyList<string> arguments);
+    IStartedProcess Start(string executable, IReadOnlyList<string> arguments);
 }
 
-internal interface IOwnedProcess : IDisposable
+/// <summary>
+/// A started long-running helper process (an ssh port forward): an <see cref="IOwnedProcess"/> that also keeps its stderr and
+/// exit code for reports. <see cref="IOwnedProcess.HasExited"/> is the liveness check: the exit task also waits for the
+/// process's pipes to close, which a child that inherited them can delay.
+/// </summary>
+internal interface IStartedProcess : IOwnedProcess
 {
-    int Id { get; }
-    bool HasExited { get; }
-    int ExitCode { get; }
     string Stderr { get; }
-    Task WaitForExitAsync(CancellationToken cancellation);
-    /// <summary>Kills the process and its children if still running, then waits for its exit.</summary>
-    void Stop(TimeSpan timeout);
+    /// <summary>The exit code; meaningful once <see cref="IOwnedProcess.HasExited"/> is true.</summary>
+    int ExitCode { get; }
 }
 
 internal sealed class SystemProcessLauncher : IProcessLauncher
@@ -47,7 +48,7 @@ internal sealed class SystemProcessLauncher : IProcessLauncher
         foreach (var (name, value) in call.Environment) start.Environment[name] = value;
         return ProcessRunner.RunAsync(start, call.Input, call.Upload, call.Output, call.Lines, call.Timeout, cancellation);
     }
-    public IOwnedProcess Start(string executable, IReadOnlyList<string> arguments) => new OwnedProcess(StartInfo(executable, arguments));
+    public IStartedProcess Start(string executable, IReadOnlyList<string> arguments) => new OwnedProcess(StartInfo(executable, arguments));
     private static ProcessStartInfo StartInfo(string executable, IReadOnlyList<string> arguments)
     {
         var start = new ProcessStartInfo(executable);
@@ -132,7 +133,7 @@ internal static class ProcessRunner
     }
 }
 
-internal sealed class OwnedProcess : IOwnedProcess
+internal sealed class OwnedProcess : IStartedProcess
 {
     private readonly Process _process;
     private readonly StringBuilder _stderr = new();
@@ -147,9 +148,15 @@ internal sealed class OwnedProcess : IOwnedProcess
     }
     public int Id => _process.Id;
     public bool HasExited => _process.HasExited;
-    public int ExitCode => _process.ExitCode;
     public string Stderr { get { lock (_stderr) return _stderr.ToString(); } }
-    public Task WaitForExitAsync(CancellationToken cancellation) => _process.WaitForExitAsync(cancellation);
+    public int ExitCode => _process.ExitCode;
+    public async Task<int> WaitForExitAsync(CancellationToken cancellation)
+    {
+        await _process.WaitForExitAsync(cancellation).ConfigureAwait(false);
+        // A wait abandoned until the tunnel is disposed completes after Dispose, when the code can no longer be read.
+        try { return _process.ExitCode; }
+        catch (InvalidOperationException) { return -1; }
+    }
     public void Stop(TimeSpan timeout)
     {
         if (!_process.HasExited)

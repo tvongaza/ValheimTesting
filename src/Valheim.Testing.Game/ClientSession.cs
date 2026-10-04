@@ -18,7 +18,7 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public sealed class ClientSession : IDisposable
 {
-    private readonly IServerProcess? _process;
+    private readonly IOwnedProcess? _process;
     private readonly object _stopping = new();
     private bool _disposed, _detachedForAccount, _stoppedForAccount;
     private CancellationTokenRegistration _accountLost;
@@ -30,7 +30,7 @@ public sealed class ClientSession : IDisposable
     public bool Owned => _process != null;
     /// <summary>The owned client's process ID, or null for an attached client.</summary>
     public int? ProcessId => _process?.Id;
-    internal IServerProcess? OwnedProcess => _process;
+    internal IOwnedProcess? OwnedProcess => _process;
     /// <summary>
     /// The slice the owned client was launched as (<see cref="ClientRunPlan.Architecture"/>; x64 unless the plan asked for arm64),
     /// or null for an attached client, whose operator chose it.
@@ -47,7 +47,7 @@ public sealed class ClientSession : IDisposable
     /// <summary>How the owned client ended once disposed; null before that, and for an attached client.</summary>
     public ProcessStop? Stopped { get; private set; }
 
-    private ClientSession(GameActor actor, IServerProcess? process, IReadOnlyList<RunLog>? logs = null, ClientArchitecture? architecture = null)
+    private ClientSession(GameActor actor, IOwnedProcess? process, IReadOnlyList<RunLog>? logs = null, ClientArchitecture? architecture = null)
     {
         Actor = actor; _process = process; Logs = logs ?? []; Architecture = architecture;
     }
@@ -138,7 +138,7 @@ public sealed class ClientSession : IDisposable
     // The profile owner records the exact process as soon as it exists. If startup then fails and its stop is unproven,
     // the Steam account lease remains held instead of being released while that client might still run.
     internal static ClientSession Launch(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation,
-        Action<IServerProcess>? processStarted)
+        Action<IOwnedProcess>? processStarted)
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
         account?.RequireReady(null);
@@ -200,12 +200,12 @@ public sealed class ClientSession : IDisposable
     /// cleanup without a game. <paramref name="ready"/> gets the time left and a token that is cancelled when the process
     /// exits first.
     /// </summary>
-    public static ClientSession Launch(ClientRunPlan plan, string output, Func<IServerProcess> start, Func<IGameTransport> connect,
+    public static ClientSession Launch(ClientRunPlan plan, string output, Func<IOwnedProcess> start, Func<IGameTransport> connect,
         Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation = default) =>
         Launch(plan, output, start, connect, ready, cancellation, null, null);
 
     // exitHint adds to an early exit's reason, for example that BepInEx never wrote its log.
-    internal static ClientSession Launch(ClientRunPlan plan, string output, Func<IServerProcess> start, Func<IGameTransport> connect,
+    internal static ClientSession Launch(ClientRunPlan plan, string output, Func<IOwnedProcess> start, Func<IGameTransport> connect,
         Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, SteamAccountHold? account = null)
     {
         if (plan.PasswordVariable is { } variable && Environment.GetEnvironmentVariable(variable) == null)

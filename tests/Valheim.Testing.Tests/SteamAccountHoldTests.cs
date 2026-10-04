@@ -341,17 +341,6 @@ public sealed class SteamAccountHoldTests : IDisposable
         Assert.Equal(SteamAccountLeaseState.Unknown, error.State); Assert.Contains("not proven", error.Message);
     }
 
-    private sealed class FakeClientProcess : IServerProcess
-    {
-        private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public int Stops, Disposals;
-        public int Id => 99;
-        public bool HasExited => _exit.Task.IsCompleted;
-        public Task<int> WaitForExitAsync(CancellationToken cancellation) => _exit.Task.WaitAsync(cancellation);
-        public void Stop(TimeSpan timeout) { Interlocked.Increment(ref Stops); _exit.TrySetResult(-1); }
-        public void Dispose() => Disposals++;
-    }
-
     private ClientRunPlan Plan(string mode = "owned") => new() { Mode = mode, Install = mode == "owned" ? _root.Path : "", Port = 5556, Pinning = "none" };
 
     [Fact] public async Task AClientStartsOnlyOnALiveCheckedLeaseAndALostLeaseStopsIt()
@@ -363,7 +352,7 @@ public sealed class SteamAccountHoldTests : IDisposable
         {
             bool started = false;
             Assert.Contains("run CheckSignedInAsync", Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(Plan(), output.Path,
-                () => { started = true; return new FakeClientProcess(); }, () => new ScriptedTransport(), (_, _) => Task.CompletedTask, default, null, null, pending)).Message);
+                () => { started = true; return new FakeOwnedProcess(99); }, () => new ScriptedTransport(), (_, _) => Task.CompletedTask, default, null, null, pending)).Message);
             Assert.False(started);
             var pc = new FakeServerHost("gaming-pc", _root.Path) { SteamUserReply = "VT-STEAMUSER account 1\n" };
             await pending.CheckSignedInAsync(pc);
@@ -373,7 +362,7 @@ public sealed class SteamAccountHoldTests : IDisposable
         var held = await SteamAccountHold.AcquireAsync(Profile("gaming-pc", "player"), "player", "run-2", LeaseBox.Host(), LeaseBox.Timeout, null, TimeSpan.FromMilliseconds(200), default);
         // Registered before the session: a token runs its callbacks newest first, so this completes after the session's stop.
         var lost = LeaseBox.CancelledAsync(held.Lost, LeaseBox.Timeout);
-        var process = new FakeClientProcess(); var transport = new ScriptedTransport();
+        var process = new FakeOwnedProcess(99); var transport = new ScriptedTransport();
         var session = ClientSession.Launch(Plan(), output.Path, () => process, () => transport, (_, _) => Task.CompletedTask, default, null, null, held);
         Assert.Same(held, session.Account);
         LeaseBox.ReleaseBehindTheHoldersBack(Leases);
@@ -385,7 +374,7 @@ public sealed class SteamAccountHoldTests : IDisposable
         Assert.Equal(1, process.Stops); Assert.Equal(1, process.Disposals); Assert.True(session.Closed);
         // Nothing starts or attaches on a lost lease.
         bool again = false;
-        Assert.Throws<SteamAccountLeaseException>(() => ClientSession.Launch(Plan(), output.Path, () => { again = true; return new FakeClientProcess(); },
+        Assert.Throws<SteamAccountLeaseException>(() => ClientSession.Launch(Plan(), output.Path, () => { again = true; return new FakeOwnedProcess(99); },
             () => new ScriptedTransport(), (_, _) => Task.CompletedTask, default, null, null, held));
         var unused = new ScriptedTransport();
         Assert.Throws<SteamAccountLeaseException>(() => ClientSession.Attach(Plan("attach"), output.Path, held, unused));

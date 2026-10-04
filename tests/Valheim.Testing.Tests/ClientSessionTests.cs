@@ -14,21 +14,6 @@ public sealed class ClientSessionTests : IDisposable
         InstallPins = mode == "owned" ? new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) } : null,
     };
 
-    private sealed class Process(int? exitCode = null) : IServerProcess
-    {
-        private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public int Stops, Disposals;
-        public int Id => 99;
-        public bool HasExited => _exit.Task.IsCompleted;
-        public Task<int> WaitForExitAsync(CancellationToken cancellation)
-        {
-            if (exitCode is int code) _exit.TrySetResult(code);
-            return _exit.Task.WaitAsync(cancellation);
-        }
-        public void Stop(TimeSpan timeout) { Stops++; _exit.TrySetResult(-1); }
-        public void Dispose() => Disposals++;
-    }
-
     // With an environment profile the client runs on another machine: a Windows install is validated from macOS or Linux too.
     [Theory]
     [InlineData(@"C:\Program Files (x86)\Steam\steamapps\common\Valheim", true)]
@@ -45,7 +30,7 @@ public sealed class ClientSessionTests : IDisposable
 
     [Fact] public void AnOwnedClientAtItsMenuIsPinnedAndDisposingStopsOnlyItsProcess()
     {
-        var process = new Process(); var transport = new ScriptedTransport();
+        var process = new FakeOwnedProcess(99); var transport = new ScriptedTransport();
         var session = ClientSession.Launch(Plan(), _output, () => process, () => transport, (_, _) => Task.CompletedTask);
         Assert.True(session.Owned); Assert.Equal(99, session.ProcessId);
         Assert.Contains(transport.Commands, c => c.StartsWith("cli_expect", StringComparison.Ordinal) && c.Contains("my.mod=absent", StringComparison.Ordinal));
@@ -53,6 +38,16 @@ public sealed class ClientSessionTests : IDisposable
         session.Dispose(); session.Dispose();
         Assert.Equal(1, process.Stops); Assert.Equal(1, process.Disposals); Assert.True(transport.Disposed);
         Assert.Contains("\"pid\":99", File.ReadAllText(Path.Combine(_output, "client-process.json")));
+    }
+
+    // The session reports how its client ended: a client that quits when asked is Clean, one that ignores the request is killed.
+    [Theory] [InlineData(false, StopOutcome.Clean)] [InlineData(true, StopOutcome.Killed)]
+    public void DisposingRecordsWhetherTheClientQuitOrWasKilled(bool ignoreQuit, StopOutcome outcome)
+    {
+        var process = new FakeOwnedProcess(99) { IgnoreQuit = ignoreQuit };
+        var session = ClientSession.Launch(Plan(), _output, () => process, () => new ScriptedTransport(), (_, _) => Task.CompletedTask);
+        session.Dispose();
+        Assert.Equal(outcome, session.Stopped!.Outcome); Assert.True(process.HasExited);
     }
 
     // An unpinned owned plan for a synthetic install, so only the architecture decides what the launch does.
@@ -124,10 +119,10 @@ public sealed class ClientSessionTests : IDisposable
     [Fact] public void AFailedStartupCarriesTheLogsItKept()
     {
         RunLog[] logs = [new("client BepInEx log", Path.Combine(_output, "client-boot.game-0.log"), Required: true), new("client Player.log", Path.Combine(_output, "client-boot.game-1.log"))];
-        var failed = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => new Process(exitCode: 3), () => new ScriptedTransport(),
+        var failed = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => FakeOwnedProcess.Exited(3, 99), () => new ScriptedTransport(),
             (_, _) => Task.CompletedTask, default, null, logs));
         Assert.Equal(logs, ClientSession.KeptLogs(failed));
-        var refused = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(Plan(), _output, () => new Process(), () => new ScriptedTransport { PinsHold = false },
+        var refused = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(Plan(), _output, () => new FakeOwnedProcess(99), () => new ScriptedTransport { PinsHold = false },
             (_, _) => Task.CompletedTask, default, null, logs));
         Assert.Equal(logs, ClientSession.KeptLogs(refused));
         var neverStarted = Assert.Throws<IOException>(() => ClientSession.Launch(Plan(), _output, () => throw new IOException("no such file"), () => new ScriptedTransport(),
@@ -162,10 +157,10 @@ public sealed class ClientSessionTests : IDisposable
     [Fact] public void TheLaunchedArchitectureIsRecordedAndAnAttachedClientHasNone()
     {
         var plan = Plan(); plan.Architecture = "arm64";
-        using (var session = ClientSession.Launch(plan, _output, () => new Process(), () => new ScriptedTransport(), (_, _) => Task.CompletedTask))
+        using (var session = ClientSession.Launch(plan, _output, () => new FakeOwnedProcess(99), () => new ScriptedTransport(), (_, _) => Task.CompletedTask))
             Assert.Equal(ClientArchitecture.Arm64, session.Architecture);
         Assert.Contains("\"architecture\":\"arm64\"", File.ReadAllText(Path.Combine(_output, "client-process.json")));
-        using (var session = ClientSession.Launch(Plan(), _output, () => new Process(), () => new ScriptedTransport(), (_, _) => Task.CompletedTask))
+        using (var session = ClientSession.Launch(Plan(), _output, () => new FakeOwnedProcess(99), () => new ScriptedTransport(), (_, _) => Task.CompletedTask))
             Assert.Equal(ClientArchitecture.X64, session.Architecture);
         Assert.Contains("\"architecture\":\"x64\"", File.ReadAllText(Path.Combine(_output, "client-process.json")));
         using (var session = ClientSession.Attach(Plan("attach"), _output, new ScriptedTransport())) Assert.Null(session.Architecture);
@@ -173,7 +168,7 @@ public sealed class ClientSessionTests : IDisposable
 
     [Fact] public void AnExitDuringStartupFailsWithItsCodeAndNeverConnects()
     {
-        var process = new Process(exitCode: 5); bool connected = false;
+        var process = FakeOwnedProcess.Exited(5, 99); bool connected = false;
         var error = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => process, () => { connected = true; return new ScriptedTransport(); }, (_, _) => Task.CompletedTask));
         Assert.Contains("exited with code 5", error.Message);
         Assert.False(connected); Assert.Equal(1, process.Stops);
@@ -182,7 +177,7 @@ public sealed class ClientSessionTests : IDisposable
     [Fact] public void AClientThatNeverReachesItsMenuTimesOutAndIsStopped()
     {
         var plan = Plan(); plan.StartSeconds = 1;
-        var process = new Process();
+        var process = new FakeOwnedProcess(99);
         var clock = System.Diagnostics.Stopwatch.StartNew();
         Assert.Throws<WaitTimeoutException>(() => ClientSession.Launch(plan, _output, () => process, () => new ScriptedTransport(), (_, token) => Task.Delay(Timeout.Infinite, token)));
         Assert.InRange(clock.Elapsed, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
@@ -191,7 +186,7 @@ public sealed class ClientSessionTests : IDisposable
 
     [Fact] public void AReadinessFailureEndsStartupAndStopsTheProcess()
     {
-        var process = new Process();
+        var process = new FakeOwnedProcess(99);
         Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => process, () => new ScriptedTransport(),
             (_, _) => Task.FromException(new WaitFailedException("CLI listening", "a plugin failed to load", TimeSpan.Zero, "[Error  : BepInEx] Could not load [x]"))));
         Assert.Equal(1, process.Stops);
@@ -199,7 +194,7 @@ public sealed class ClientSessionTests : IDisposable
 
     [Fact] public void PinsThatDoNotHoldAtTheMenuStopTheOwnedProcess()
     {
-        var process = new Process(); var transport = new ScriptedTransport { PinsHold = false };
+        var process = new FakeOwnedProcess(99); var transport = new ScriptedTransport { PinsHold = false };
         Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(Plan(), _output, () => process, () => transport, (_, _) => Task.CompletedTask));
         Assert.Equal(1, process.Stops); Assert.True(transport.Disposed);
     }
@@ -208,16 +203,16 @@ public sealed class ClientSessionTests : IDisposable
     {
         var plan = Plan(); plan.PasswordVariable = "VT_TEST_UNSET_" + Guid.NewGuid().ToString("N");
         bool started = false;
-        Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _output, () => { started = true; return new Process(); }, () => new ScriptedTransport(), (_, _) => Task.CompletedTask));
+        Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _output, () => { started = true; return new FakeOwnedProcess(99); }, () => new ScriptedTransport(), (_, _) => Task.CompletedTask));
         Assert.False(started);
     }
 
     [Fact] public void AnExitBeforeBepInExWroteItsLogSaysWhereToLook()
     {
-        var error = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => new Process(exitCode: 1), () => new ScriptedTransport(),
+        var error = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => FakeOwnedProcess.Exited(1, 99), () => new ScriptedTransport(),
             (_, _) => Task.CompletedTask, default, () => " before BepInEx wrote its log", null));
         Assert.Contains("exited with code 1 before BepInEx wrote its log", error.Reason);
-        var plain = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => new Process(exitCode: 1), () => new ScriptedTransport(),
+        var plain = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => FakeOwnedProcess.Exited(1, 99), () => new ScriptedTransport(),
             (_, _) => Task.CompletedTask, default, () => null, null));
         Assert.EndsWith("exited with code 1", plain.Reason);
     }
@@ -225,7 +220,7 @@ public sealed class ClientSessionTests : IDisposable
     [Fact] public void AnOwnedClientListsTheLogsItKeeps()
     {
         RunLog[] logs = [new("client BepInEx log", Path.Combine(_output, "client-boot.game-0.log"), Required: true), new("client Player.log", Path.Combine(_output, "client-boot.game-1.log"))];
-        using var session = ClientSession.Launch(Plan(), _output, () => new Process(), () => new ScriptedTransport(), (_, _) => Task.CompletedTask, default, null, logs);
+        using var session = ClientSession.Launch(Plan(), _output, () => new FakeOwnedProcess(99), () => new ScriptedTransport(), (_, _) => Task.CompletedTask, default, null, logs);
         Assert.Equal(logs, session.Logs);
     }
 

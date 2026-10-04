@@ -120,8 +120,8 @@ public sealed class CliCapabilityManifestTests : IDisposable
 
         // Then the live check, which stays authoritative: the declared capabilities are required once the client answers.
         var game = new ScriptedTransport().Extension("valheim.world", "terrain", _ => new { });
-        using (ClientSession.Launch(plan, _root, () => new Process(), () => game, (_, _) => Task.CompletedTask)) { }
-        var process = new Process();
+        using (ClientSession.Launch(plan, _root, () => new FakeOwnedProcess(99), () => game, (_, _) => Task.CompletedTask)) { }
+        var process = new FakeOwnedProcess(99);
         var error = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _root, () => process, () => new ScriptedTransport(), (_, _) => Task.CompletedTask));
         Assert.Contains("lacks valheim.world/terrain", error.Message);
         Assert.Equal(1, process.Stops); // A failed live check stops the client it started.
@@ -136,7 +136,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         var checkedSet = plan.CheckCliManifest()!;
         Assert.DoesNotContain("mymod.testing/markers", checkedSet.Capabilities);
         var error = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _root,
-            () => new Process(), () => new ScriptedTransport(), (_, _) => Task.CompletedTask));
+            () => new FakeOwnedProcess(99), () => new ScriptedTransport(), (_, _) => Task.CompletedTask));
         Assert.Contains("mymod.testing/markers", error.Message);
     }
 
@@ -371,17 +371,6 @@ public sealed class CliCapabilityManifestTests : IDisposable
         plan.Pins["valheimCLI.valheimCLI"] = PluginPins.Md5(Path.Combine(install.Root, "BepInEx", "plugins", Core));
         plan.CliManifest = manifest;
         return plan;
-    }
-
-    private sealed class Process : IServerProcess
-    {
-        private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public int Stops;
-        public int Id => 99;
-        public bool HasExited => _exit.Task.IsCompleted;
-        public Task<int> WaitForExitAsync(CancellationToken cancellation) => _exit.Task.WaitAsync(cancellation);
-        public void Stop(TimeSpan timeout) { Stops++; _exit.TrySetResult(-1); }
-        public void Dispose() { }
     }
 
     /// <summary>A pinned hosted fixture world and an empty local worlds folder for the hosted <see cref="ClientRounds"/>.</summary>

@@ -12,7 +12,7 @@ internal sealed class FakeLauncher : IProcessLauncher
     private readonly Queue<Func<ProcessCall, ProcessExit>> _replies = new();
     public List<ProcessCall> Calls { get; } = [];
     public List<(string Executable, IReadOnlyList<string> Arguments)> Started { get; } = [];
-    public Func<IReadOnlyList<string>, IOwnedProcess>? OnStart { get; set; }
+    public Func<IReadOnlyList<string>, IStartedProcess>? OnStart { get; set; }
 
     public FakeLauncher Reply(Func<ProcessCall, ProcessExit> reply) { _replies.Enqueue(reply); return this; }
     /// <summary>The transport exits with <paramref name="code"/>; add <see cref="Report"/> to stderr for the host's own exit report.</summary>
@@ -24,7 +24,7 @@ internal sealed class FakeLauncher : IProcessLauncher
         Calls.Add(call);
         return Task.FromResult(_replies.Dequeue()(call));
     }
-    public IOwnedProcess Start(string executable, IReadOnlyList<string> arguments)
+    public IStartedProcess Start(string executable, IReadOnlyList<string> arguments)
     {
         Started.Add((executable, arguments));
         return (OnStart ?? throw new InvalidOperationException("No process expected."))(arguments);
@@ -40,17 +40,17 @@ internal sealed class FakeLauncher : IProcessLauncher
 }
 
 /// <summary>An ssh port forward that listens on the requested loopback port until stopped.</summary>
-internal sealed class FakeForward : IOwnedProcess
+internal sealed class FakeForward : IStartedProcess
 {
     private readonly TcpListener? _listener;
-    private readonly TaskCompletionSource _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public FakeForward(IReadOnlyList<string> arguments, bool listen = true, int exitCode = 0, string stderr = "")
     {
         int at = arguments.ToList().IndexOf("-L");
         LocalPort = int.Parse(arguments[at + 1].Split(':')[1]);
         Stderr = stderr;
         if (listen) { _listener = new TcpListener(IPAddress.Loopback, LocalPort); _listener.Start(); }
-        else { ExitCode = exitCode; HasExited = true; _exit.SetResult(); }
+        else { ExitCode = exitCode; HasExited = true; _exit.SetResult(exitCode); }
     }
     public int LocalPort { get; }
     public int Id => 4242;
@@ -59,12 +59,12 @@ internal sealed class FakeForward : IOwnedProcess
     public string Stderr { get; }
     public bool Stopped { get; private set; }
     public bool Disposed { get; private set; }
-    public Task WaitForExitAsync(CancellationToken cancellation) => _exit.Task.WaitAsync(cancellation);
+    public Task<int> WaitForExitAsync(CancellationToken cancellation) => _exit.Task.WaitAsync(cancellation);
     public void Stop(TimeSpan timeout)
     {
         Stopped = true;
         _listener?.Stop();
-        HasExited = true; ExitCode = 255; _exit.TrySetResult();
+        HasExited = true; ExitCode = 255; _exit.TrySetResult(255);
     }
     public void Dispose() { Disposed = true; _listener?.Stop(); }
 }
