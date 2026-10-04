@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Valheim.Testing.Doubles;
 using Xunit;
 
 // The doubles against bytes the game itself wrote (issue #15): GameBytes/zpackage-capture.tsv comes from the capture plugin
@@ -25,6 +26,15 @@ public sealed class GameCapturedBytesTests
     }
 
     private static string Bytes(ZPackageCase c) { var pkg = new ZPackage(); c.Write(pkg); return ZPackageCases.Hex(pkg.GetArray()); }
+
+    // The bytes must come from the game the doubles copy: a game update that is not recaptured fails here (#308).
+    // MemberIndexTests.TheCaptureCoversExactlyTheIndex does the same for the member capture.
+    [Fact] public void TheCaptureComesFromTheGameTheDoublesCopy()
+    {
+        string header = File.ReadLines(Path.Combine(AppContext.BaseDirectory, "GameBytes", "zpackage-capture.tsv"))
+            .First(l => l.StartsWith("# game ", StringComparison.Ordinal));
+        Assert.StartsWith("# game " + DoubledGame.Version + ",", header);
+    }
 
     [Fact] public void TheCaptureHasExactlyTheCasesThisSourceDefines()
     {

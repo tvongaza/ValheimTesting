@@ -9,6 +9,19 @@ using Valheim.Testing;
 
 namespace Valheim.Testing.Doubles
 {
+    /// <summary>
+    /// The game build the doubles copy, which both game captures in the doubles' tests must come from: the ZPackage bytes
+    /// record <see cref="Version"/>, the member list <see cref="NetworkVersion"/>. Change them only with the game pin, and
+    /// recapture both.
+    /// </summary>
+    public static class DoubledGame
+    {
+        /// <summary>The game's version string; <c>ZNet.VersionString</c>'s default.</summary>
+        public const string Version = "1.0.16";
+        /// <summary>The game's network version (<c>Version.c_networkVersion</c>); <c>ZNet.NetworkVersion</c>'s default.</summary>
+        public const uint NetworkVersion = 40;
+    }
+
     /// <summary>A <see cref="WorldGenerator"/> over the toolkit's composable terrain (<see cref="ITerrain"/>).</summary>
     public partial class TerrainWorld : WorldGenerator
     {
