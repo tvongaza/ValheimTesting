@@ -6,25 +6,33 @@ using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
-/// <summary>A short, opt-in world-only motion sample. Output is an animated PNG for human inspection, never a verdict.</summary>
+/// <summary>A short, opt-in world-only motion sample. Output is a directory of hashed PNG frames for human inspection, never a verdict.</summary>
 public sealed record ReviewClipPlan(string Id, string ExtensionId, string HostDirectory, string EvidenceDirectory,
     string WorldUid, string GameBuild, IReadOnlyDictionary<string, string> PluginPins,
     int Width = 320, int Height = 180, int FramesPerSecond = 5, int Frames = 15);
 
-/// <summary>One local animated PNG with provenance. Visual correctness remains for a person to judge.</summary>
-public sealed record ReviewClipReceipt(string ClipPath, string MetadataPath, string Sha256, long Bytes, int Frames, int DurationMs);
+/// <summary>
+/// One local frame directory with provenance: <c>frame-NNN.png</c>, the game's <c>frames.csv</c> (index, elapsed
+/// milliseconds, bytes and SHA-256 of every frame) and the JSON sidecar. <see cref="ManifestSha256"/> is the SHA-256 of
+/// <c>frames.csv</c>, which in turn lists every frame's digest. Visual correctness remains for a person to judge.
+/// </summary>
+public sealed record ReviewClipReceipt(string FramesDirectory, string MetadataPath, string ManifestSha256, long Bytes, int Frames, int DurationMs);
 
 /// <summary>Capture only after an owned, pinned client has entered its intended world; remove partial local evidence on any failure.</summary>
 public static class ReviewClip
 {
-    public static Task<ReviewClipReceipt> CaptureAsync(GameActor client, IGameHost clientHost, ReviewClipPlan plan,
+    /// <summary>
+    /// Capture and fetch one clip. The frame command is an ordinary bounded command; <paramref name="cancellation"/> is
+    /// checked between steps and stops the transfer, and a canceled capture is restored and never published.
+    /// </summary>
+    public static ReviewClipReceipt Capture(GameActor client, IGameHost clientHost, ReviewClipPlan plan,
         TimeSpan fetchTimeout, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(clientHost);
-        return CaptureCoreAsync(client, plan, (host, local, token) => clientHost.FetchDirectoryAsync(host, local, fetchTimeout, token), cancellation);
+        return CaptureCore(client, plan, (host, local, token) => clientHost.FetchDirectoryAsync(host, local, fetchTimeout, token), cancellation);
     }
 
-    internal static async Task<ReviewClipReceipt> CaptureCoreAsync(GameActor client, ReviewClipPlan plan,
+    internal static ReviewClipReceipt CaptureCore(GameActor client, ReviewClipPlan plan,
         Func<string, string, CancellationToken, Task<FetchedDirectory>> fetch, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(client);
@@ -57,9 +65,9 @@ public static class ReviewClip
             try
             {
                 client.CommandTimeout = TimeSpan.FromSeconds(Math.Max(30, plan.Frames / (double)plan.FramesPerSecond + 20));
-                result = await client.InvokeCancelableAsync(clip, cancellation, plan.Id, hostFrames,
+                result = client.Invoke(clip, plan.Id, hostFrames,
                     plan.Width.ToString(CultureInfo.InvariantCulture), plan.Height.ToString(CultureInfo.InvariantCulture),
-                    plan.FramesPerSecond.ToString(CultureInfo.InvariantCulture), plan.Frames.ToString(CultureInfo.InvariantCulture)).ConfigureAwait(false);
+                    plan.FramesPerSecond.ToString(CultureInfo.InvariantCulture), plan.Frames.ToString(CultureInfo.InvariantCulture));
             }
             finally { client.CommandTimeout = previousTimeout; }
             if (result.GetProperty("source").GetString() != "scene-only-frames" ||
@@ -69,13 +77,13 @@ public static class ReviewClip
                 result.GetProperty("frames").GetInt32() != plan.Frames)
                 throw new InvalidDataException("The client did not confirm the requested bounded world-frame capture.");
             cancellation.ThrowIfCancellationRequested();
-            var copied = await fetch(hostFrames, staging, cancellation).ConfigureAwait(false);
+            // The fetch is the one asynchronous step; wait for it off any caller's synchronization context.
+            var copied = Task.Run(() => fetch(hostFrames, staging, cancellation), CancellationToken.None).GetAwaiter().GetResult();
+            cancellation.ThrowIfCancellationRequested();
             if (copied.Files != plan.Frames + 1) throw new InvalidDataException("The frame transfer is incomplete.");
             var frames = ReadFrames(staging, plan);
-            string output = Path.Combine(staging, plan.Id + ".apng");
-            var encoded = ApngClip.Write(output, frames);
-            if (encoded.Width != plan.Width || encoded.Height != plan.Height)
-                throw new InvalidDataException("The animated clip has the wrong dimensions.");
+            string manifestSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(staging, "frames.csv")))).ToLowerInvariant();
+            long bytes = frames.Sum(f => f.Bytes);
             int duration = frames[^1].ElapsedMs - frames[0].ElapsedMs;
             var metadata = new
             {
@@ -83,12 +91,12 @@ public static class ReviewClip
                 worldUid = plan.WorldUid, gameBuild = plan.GameBuild, pluginPins = plan.PluginPins,
                 plan.Width, plan.Height, requestedFps = plan.FramesPerSecond, frameCount = plan.Frames,
                 durationMs = duration, actualFps = Math.Round((plan.Frames - 1) * 1000d / duration, 2),
-                frameSha256 = frames.Select(f => f.Sha256).ToArray(), clipSha256 = encoded.Sha256, clipBytes = encoded.Bytes,
+                frameSha256 = frames.Select(f => f.Sha256).ToArray(), manifestSha256 = manifestSha, frameBytes = bytes,
                 recordedUtc = DateTimeOffset.UtcNow,
             };
-            await File.WriteAllTextAsync(Path.Combine(staging, plan.Id + ".json"), JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }), cancellation).ConfigureAwait(false);
-            receipt = new ReviewClipReceipt(Path.Combine(plan.EvidenceDirectory, plan.Id + ".apng"),
-                Path.Combine(plan.EvidenceDirectory, plan.Id + ".json"), encoded.Sha256, encoded.Bytes, plan.Frames, duration);
+            File.WriteAllText(Path.Combine(staging, plan.Id + ".json"), JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
+            receipt = new ReviewClipReceipt(plan.EvidenceDirectory, Path.Combine(plan.EvidenceDirectory, plan.Id + ".json"),
+                manifestSha, bytes, plan.Frames, duration);
         }
         catch (Exception error) { failure = error; }
         try
@@ -117,7 +125,14 @@ public static class ReviewClip
 
     private static char clientHostSeparator(string path) => Regex.IsMatch(path, "^[A-Za-z]:[\\\\/]", RegexOptions.CultureInvariant) ? '\\' : '/';
 
-    private static List<ApngClip.Frame> ReadFrames(string directory, ReviewClipPlan plan)
+    private sealed record Frame(string Path, int ElapsedMs, string Sha256, long Bytes);
+
+    /// <summary>
+    /// Checks the fetched directory against the game's manifest: exactly the declared frames and <c>frames.csv</c>, rising
+    /// timestamps, and each frame's length and SHA-256 as the game recorded them. Size and duration ceilings are the
+    /// plan's and the adapter's rules (<see cref="Validate"/>, <c>ReviewClipFrames</c>), not repeated here.
+    /// </summary>
+    private static List<Frame> ReadFrames(string directory, ReviewClipPlan plan)
     {
         string[] files = Directory.GetFiles(directory, "*", SearchOption.AllDirectories);
         if (files.Length != plan.Frames + 1 || !File.Exists(Path.Combine(directory, "frames.csv")))
@@ -125,25 +140,24 @@ public static class ReviewClip
         string[] rows = File.ReadAllLines(Path.Combine(directory, "frames.csv"));
         if (rows.Length != plan.Frames + 1 || rows[0] != "frame,elapsed_ms,bytes,sha256")
             throw new InvalidDataException("The clip timing manifest is incomplete.");
-        var frames = new List<ApngClip.Frame>();
+        var frames = new List<Frame>();
         int previous = -1;
-        long total = 0;
         for (int index = 0; index < plan.Frames; index++)
         {
             string[] cells = rows[index + 1].Split(',');
             if (cells.Length != 4 || !int.TryParse(cells[0], NumberStyles.None, CultureInfo.InvariantCulture, out int rowIndex) || rowIndex != index ||
-                !int.TryParse(cells[1], NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) || elapsed <= previous || elapsed > 10000 ||
-                !long.TryParse(cells[2], NumberStyles.None, CultureInfo.InvariantCulture, out long bytes) || bytes is < 1 or > 2 * 1024 * 1024 ||
+                !int.TryParse(cells[1], NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) || elapsed <= previous ||
+                !long.TryParse(cells[2], NumberStyles.None, CultureInfo.InvariantCulture, out long bytes) || bytes < 1 ||
                 !Regex.IsMatch(cells[3], "^[a-f0-9]{64}$", RegexOptions.CultureInvariant))
                 throw new InvalidDataException("A captured frame timing or digest is invalid.");
             string path = Path.Combine(directory, "frame-" + index.ToString("D3", CultureInfo.InvariantCulture) + ".png");
             if (!File.Exists(path)) throw new InvalidDataException("A captured frame is missing.");
-            frames.Add(new ApngClip.Frame(path, elapsed, cells[3], bytes));
-            total = checked(total + bytes);
+            using var stream = File.OpenRead(path);
+            if (stream.Length != bytes || Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant() != cells[3])
+                throw new InvalidDataException("A captured frame differs from its game-side digest.");
+            frames.Add(new Frame(path, elapsed, cells[3], bytes));
             previous = elapsed;
         }
-        if (total > 24 * 1024 * 1024 || files.Except(frames.Select(f => f.Path).Append(Path.Combine(directory, "frames.csv")), StringComparer.Ordinal).Any())
-            throw new InvalidDataException("The capture directory exceeds its bounds or contains an unexpected file.");
         return frames;
     }
 

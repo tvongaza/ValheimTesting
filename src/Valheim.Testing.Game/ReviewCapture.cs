@@ -27,8 +27,11 @@ public sealed record ReviewCaptureReceipt(string ImagePath, string MetadataPath,
 /// </summary>
 public static class ReviewCapture
 {
-    /// <summary>Capture from a joined client, fetching only this run's image directory from its owned host.</summary>
-    public static Task<ReviewCaptureReceipt> CaptureAsync(GameActor server, GameActor client, IGameHost clientHost,
+    /// <summary>
+    /// Capture from a joined client, fetching only this run's image directory from its owned host. Synchronous like the
+    /// arrival and commands it issues, so it runs directly inside a <c>ClientRound.Step</c>; it waits for the host fetch.
+    /// </summary>
+    public static ReviewCaptureReceipt Capture(GameActor server, GameActor client, IGameHost clientHost,
         ReviewCapturePlan plan, TimeSpan arrivalTimeout, TimeSpan fetchTimeout, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(server);
@@ -36,13 +39,13 @@ public static class ReviewCapture
         ArgumentNullException.ThrowIfNull(clientHost);
         // Refused before review-begin touches the client: PlayerPlacement.Arrive's deadline is at most 10 minutes.
         if (arrivalTimeout <= TimeSpan.Zero || arrivalTimeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(arrivalTimeout));
-        return CaptureCoreAsync(server, client, plan, clientHost.Shell.Kind,
+        return CaptureCore(server, client, plan, clientHost.Shell.Kind,
             (host, local, token) => clientHost.FetchDirectoryAsync(host, local, fetchTimeout, token),
             () => { PlayerPlacement.Protect(client); PlayerPlacement.Arrive(server, client, plan.Arrival, arrivalTimeout, cancellation); },
             cancellation);
     }
 
-    internal static async Task<ReviewCaptureReceipt> CaptureCoreAsync(GameActor server, GameActor client, ReviewCapturePlan plan,
+    internal static ReviewCaptureReceipt CaptureCore(GameActor server, GameActor client, ReviewCapturePlan plan,
         HostShellKind shell, Func<string, string, CancellationToken, Task<FetchedDirectory>> fetch, Action arrive,
         CancellationToken cancellation)
     {
@@ -95,12 +98,14 @@ public static class ReviewCapture
             finally { client.CommandTimeout = previousTimeout; }
             if (!capture.Contains("path=" + hostImage + " ", StringComparison.Ordinal))
                 throw new InvalidDataException("The game saved a different image path: " + capture);
-            var copied = await fetch(plan.HostDirectory, staging, cancellation).ConfigureAwait(false);
+            // The fetch is the one asynchronous step; wait for it off any caller's synchronization context.
+            var copied = Task.Run(() => fetch(plan.HostDirectory, staging, cancellation), CancellationToken.None).GetAwaiter().GetResult();
+            cancellation.ThrowIfCancellationRequested();
             if (copied.Files != 1) throw new InvalidDataException($"Expected one private image, fetched {copied.Files} files.");
             string[] files = Directory.GetFiles(staging, "*", SearchOption.AllDirectories);
             if (files.Length != 1 || Path.GetFileName(files[0]) != plan.Id + ".png")
                 throw new InvalidDataException("The fetched capture has an unexpected filename.");
-            byte[] png = await File.ReadAllBytesAsync(files[0], cancellation).ConfigureAwait(false);
+            byte[] png = File.ReadAllBytes(files[0]);
             if (!CompletePng(png)) throw new InvalidDataException("The fetched image is not a complete PNG.");
             string sha = Convert.ToHexString(SHA256.HashData(png)).ToLowerInvariant();
             var metadata = new
@@ -113,7 +118,7 @@ public static class ReviewCapture
                 recordedUtc = DateTimeOffset.UtcNow,
             };
             string metadataPath = Path.Combine(staging, plan.Id + ".json");
-            await File.WriteAllTextAsync(metadataPath, JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }), cancellation).ConfigureAwait(false);
+            File.WriteAllText(metadataPath, JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
             receipt = new ReviewCaptureReceipt(Path.Combine(plan.EvidenceDirectory, plan.Id + ".png"),
                 Path.Combine(plan.EvidenceDirectory, plan.Id + ".json"), sha, png.LongLength);
         }
@@ -131,6 +136,8 @@ public static class ReviewCapture
         {
             failure = failure == null ? cleanup : new AggregateException("Review capture and state restoration both failed.", failure, cleanup);
         }
+        if (failure == null && cancellation.IsCancellationRequested)
+            failure = new OperationCanceledException("Review capture was canceled before publication.", cancellation);
         if (failure != null)
         {
             if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
@@ -140,11 +147,16 @@ public static class ReviewCapture
         return receipt!;
     }
 
-    private static void Validate(ReviewCapturePlan plan, HostShellKind shell)
+    /// <summary>
+    /// The one rule for a capture plan: id, extension, weather, time, camera distance, height, azimuth, supersize, host and
+    /// evidence directories and provenance. <see cref="Capture"/> applies it first; call it to refuse a plan before launch.
+    /// </summary>
+    public static void Validate(ReviewCapturePlan plan, HostShellKind shell)
     {
+        ArgumentNullException.ThrowIfNull(plan);
         if (!Regex.IsMatch(plan.Id ?? "", "^[A-Za-z0-9-]{1,64}$", RegexOptions.CultureInvariant)) throw new ArgumentException("Capture id must be 1-64 letters, digits or hyphens.");
         if (!Regex.IsMatch(plan.ExtensionId ?? "", "^[A-Za-z0-9_.-]+$", RegexOptions.CultureInvariant)) throw new ArgumentException("Name the adapter extension id.");
-        if (!Regex.IsMatch(plan.Weather ?? "", "^[A-Za-z0-9_]+$", RegexOptions.CultureInvariant)) throw new ArgumentException("Weather must be one named environment.");
+        if (!Regex.IsMatch(plan.Weather ?? "", "^[A-Za-z0-9_]{1,64}$", RegexOptions.CultureInvariant)) throw new ArgumentException("Weather must be one named environment of at most 64 letters, digits or underscores.");
         if (!float.IsFinite(plan.TimeOfDay) || plan.TimeOfDay is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(plan.TimeOfDay));
         if (!float.IsFinite(plan.CameraDistance) || plan.CameraDistance is < 2 or > 100 || !float.IsFinite(plan.CameraHeight) || plan.CameraHeight is < 1 or > 100)
             throw new ArgumentOutOfRangeException(nameof(plan.CameraDistance), "Camera distance and height must be bounded and positive.");
@@ -152,7 +164,7 @@ public static class ReviewCapture
             throw new ArgumentOutOfRangeException(nameof(plan.CameraAzimuthDegrees), "Camera azimuth must be from 0 up to 360 degrees.");
         if (plan.Supersize is < 1 or > 4) throw new ArgumentOutOfRangeException(nameof(plan.Supersize));
         if (string.IsNullOrWhiteSpace(plan.HostDirectory) || plan.HostDirectory.Any(char.IsWhiteSpace) || !Path.IsPathFullyQualified(plan.EvidenceDirectory) ||
-            string.IsNullOrWhiteSpace(plan.WorldUid) || string.IsNullOrWhiteSpace(plan.GameBuild) || plan.PluginPins.Count == 0)
+            string.IsNullOrWhiteSpace(plan.WorldUid) || string.IsNullOrWhiteSpace(plan.GameBuild) || plan.GameBuild.Length > 64 || plan.PluginPins == null || plan.PluginPins.Count == 0)
             throw new ArgumentException("Use a private no-space host directory, an absolute new evidence directory and complete provenance.");
         string host = plan.HostDirectory.Replace('\\', '/');
         bool absolute = shell == HostShellKind.PowerShell ? Regex.IsMatch(host, "^[A-Za-z]:/[^/].*") : host.StartsWith("/", StringComparison.Ordinal);

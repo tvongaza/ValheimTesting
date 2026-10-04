@@ -111,7 +111,7 @@ public sealed partial class LifecyclePlan
                 if (!client.Owned) throw new ArgumentException("A review capture needs an owned client whose screenshot can be fetched.");
                 Arrival.Validate("review arrival", requireGround: true);
                 if (Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("Review arrival must be dry ground.");
-                (Capture ?? throw new ArgumentException("Add capture conditions to the review-capture plan.")).Validate();
+                ReviewCaptureScenario.Validate(this); // The library's capture rule, before anything is copied or launched.
                 break;
             case AreaObjectsScenarioName:
                 SameBuildsAs(client, "client");

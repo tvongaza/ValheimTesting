@@ -2,36 +2,11 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Valheim.Testing.Game;
-using Valheim.Testing.Game.Fakes;
 using valheim_cli.Testing;
 using Xunit;
 
 public sealed class CliTransportCancelTests
 {
-    [Fact]
-    public async Task RecordingWrapperForwardsCancellationAndRecordsTheFailure()
-    {
-        string log = Path.Combine(Path.GetTempPath(), "vt-cancel-" + Guid.NewGuid().ToString("N") + ".jsonl");
-        try
-        {
-            var inner = new ScriptedTransport().OnCancellable(async (_, token) =>
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, token);
-                throw new InvalidOperationException("Unreachable");
-            });
-            using (var wrapper = new RecordingTransport(inner, log))
-            using (var cancel = new CancellationTokenSource())
-            {
-                Task<CommandResult> pending = wrapper.ExecuteCancelableAsync("cli_expect worlduid=7", "cli_extension example/capture",
-                    TimeSpan.FromSeconds(30), cancel.Token);
-                cancel.Cancel();
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
-            }
-            Assert.Contains("cli_extension example/capture", File.ReadAllText(log));
-        }
-        finally { if (File.Exists(log)) File.Delete(log); }
-    }
-
     [Fact]
     public async Task CancellingTheCommandClosesOnlyItsSocketAfterRecheckingPins()
     {
