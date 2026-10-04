@@ -144,16 +144,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(hosts.Values, host => Assert.DoesNotContain("ship", host.Scripts));
         hosts["client-a"].SteamUserReply = "VT-STEAMUSER account 101\n";
         hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 202\n";
-        int active = 0, peak = 0;
-        foreach (var host in hosts.Values)
-            host.BeforeShip = async () =>
-            {
-                int now = Interlocked.Increment(ref active);
-                int old;
-                while ((old = Volatile.Read(ref peak)) < now && Interlocked.CompareExchange(ref peak, now, old) != old) { }
-                try { await Task.Delay(30); }
-                finally { Interlocked.Decrement(ref active); }
-            };
+        var overlap = new Overlap();
+        foreach (var host in hosts.Values) host.BeforeShip = overlap.EnterAsync;
         string output = Path.Combine(_rig.Root, "prepared");
         string[] prepared;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name]))
@@ -191,7 +183,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.True(File.Exists(hosts["client-c"].Local(@"C:\save\characters_local\vt-three.fch")));
             Assert.All(new[] { "server", "client-a", "client-b", "client-c" }, name => Assert.NotEmpty(hosts[name].Claims));
         }
-        Assert.True(peak >= 2, "Independent actors should stage concurrently, not wait for each prior actor's copy.");
+        Assert.True(overlap.Seen, "Independent actors should stage concurrently, not wait for each prior actor's copy.");
         foreach (string name in hosts.Keys)
         {
             Assert.True(File.Exists(Path.Combine(hosts[name].Local(@"C:\game\source"), "BepInEx", "core", "BepInEx.dll")));
@@ -224,21 +216,14 @@ public sealed class NativeDependencyResolverTests : IDisposable
         sameHostManifest["inventory"] = sameHostInventoryFile;
         string sameHostManifestFile = Path.Combine(_rig.Root, "shared-host-campaign.json");
         File.WriteAllText(sameHostManifestFile, sameHostManifest.ToJsonString());
-        int sharedActive = 0, sharedPeak = 0;
-        sharedHost.BeforeShip = async () =>
-        {
-            int now = Interlocked.Increment(ref sharedActive);
-            int old;
-            while ((old = Volatile.Read(ref sharedPeak)) < now && Interlocked.CompareExchange(ref sharedPeak, now, old) != old) { }
-            try { await Task.Delay(30); }
-            finally { Interlocked.Decrement(ref sharedActive); }
-        };
+        var sharedOverlap = new Overlap();
+        sharedHost.BeforeShip = sharedOverlap.EnterAsync;
         int claimsBefore = sharedHost.Claims.Count;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
             Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]))
         {
             Assert.Equal(claimsBefore + 1, sharedHost.Claims.Count);
-            Assert.True(sharedPeak >= 2, "Server and client setup on one host should overlap under its single claim.");
+            Assert.True(sharedOverlap.Seen, "Server and client setup on one host should overlap under its single claim.");
             Assert.Contains("BepInEx/plugins/Server.dll", campaign.Listings["server"].Files.Keys);
             Assert.DoesNotContain("BepInEx/plugins/Server.dll", campaign.Listings["client-a"].Files.Keys);
             Assert.True(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
@@ -368,6 +353,21 @@ public sealed class NativeDependencyResolverTests : IDisposable
     }
 
     private sealed class SitePlan : ServerRunPlan { public float Ground { get; set; } = float.NaN; }
+
+    // A barrier, not a delay: each ship waits until a second one is inside at the same time. Overlapping setups always meet
+    // (the first waits for the second); serialised setups never do, so each ship gives up after the bound and Seen stays false.
+    private sealed class Overlap
+    {
+        private readonly TaskCompletionSource _met = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _inside;
+        public bool Seen => _met.Task.IsCompleted;
+        public async Task EnterAsync()
+        {
+            if (Interlocked.Increment(ref _inside) >= 2) _met.TrySetResult();
+            try { await Task.WhenAny(_met.Task, Task.Delay(TimeSpan.FromSeconds(5))); }
+            finally { Interlocked.Decrement(ref _inside); }
+        }
+    }
 
     [Fact] public async Task PreparingOrRetiringACharacterRefusesAnActiveGameProcess()
     {
