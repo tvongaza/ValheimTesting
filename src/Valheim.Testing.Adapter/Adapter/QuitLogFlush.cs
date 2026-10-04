@@ -22,32 +22,66 @@ namespace Valheim.Testing.Adapter
     /// is logged after the last managed code runs. Arming logs one info line naming the signal that armed it.
     /// </para>
     /// <para>
-    /// Enable it in the test adapter's <c>Awake</c>; production mods never need it. It changes no BepInEx configuration,
-    /// removes no listener, changes no log level and never touches Harmony. Before the game quits, logging is buffered
-    /// exactly as without it.
+    /// Enable it in the test adapter's <c>Awake</c> and call <see cref="Disable"/> from its <c>OnDestroy</c>; production
+    /// mods never need it. It changes no BepInEx configuration, removes no listener but its own, changes no log level and
+    /// never touches Harmony. Before the game quits, logging is buffered exactly as without it.
+    /// </para>
+    /// <para>
+    /// The state is process-wide, not per load: a ScriptEngine reload loads the adapter again with fresh statics, and
+    /// two mods' adapters each compile this source, while BepInEx's listener list lives on. So the process keeps one
+    /// listener whichever load added it, a quit signal seen by any load arms the flush for all, and the listener is
+    /// removed only when the last enabled load calls <see cref="Disable"/> (a load reloaded without it counts as still
+    /// enabled, so the flush stays: the safe direction).
     /// </para>
     /// </summary>
     public static class QuitLogFlush
     {
-        private static FlushListener? _listener;
+        // AppDomain data is shared by every load of this class; its statics are not.
+        private const string ArmedKey = "Valheim.Testing.Adapter.QuitLogFlush.ArmedBy";
+        private const string UsersKey = "Valheim.Testing.Adapter.QuitLogFlush.Users";
+        private static bool _enabled;
         private static ManualLogSource? _log;
+        private static readonly Action OnQuitting = () => Quitting("Application.quitting");
+        private static readonly EventHandler OnProcessExit = (_, _) => Quitting("AppDomain.ProcessExit");
+        private static readonly EventHandler OnDomainUnload = (_, _) => Quitting("AppDomain.DomainUnload");
 
-        /// <summary>Whether <see cref="Enable"/> has run in this process.</summary>
-        public static bool Enabled => _listener != null;
+        /// <summary>Whether this load of the adapter has enabled the flush (and not disabled it).</summary>
+        public static bool Enabled => _enabled;
 
-        /// <summary>The quit signal that armed the flush, or null while the game is not quitting.</summary>
-        public static string? ArmedBy { get; private set; }
+        /// <summary>The quit signal that armed the flush (seen by any load in this process), or null while the game is not quitting.</summary>
+        public static string? ArmedBy => AppDomain.CurrentDomain.GetData(ArmedKey) as string;
 
-        /// <summary>Adds the listener and subscribes to the quit signals. Idempotent.</summary>
+        /// <summary>
+        /// Subscribes this load to the quit signals and makes sure the process has the one listener. Idempotent, also
+        /// across script reloads and several adapters.
+        /// </summary>
         public static void Enable()
         {
-            if (_listener != null) return;
-            _log = BepInEx.Logging.Logger.CreateLogSource("ValheimTesting");
-            _listener = new FlushListener();
-            BepInEx.Logging.Logger.Listeners.Add(_listener);
-            Application.quitting += () => Quitting("Application.quitting");
-            AppDomain.CurrentDomain.ProcessExit += (_, _) => Quitting("AppDomain.ProcessExit");
-            AppDomain.CurrentDomain.DomainUnload += (_, _) => Quitting("AppDomain.DomainUnload");
+            if (_enabled) return;
+            _enabled = true;
+            AppDomain.CurrentDomain.SetData(UsersKey, Users + 1);
+            _log ??= BepInEx.Logging.Logger.CreateLogSource("ValheimTesting");
+            if (!Listeners().Any()) BepInEx.Logging.Logger.Listeners.Add(new FlushListener());
+            Application.quitting += OnQuitting;
+            AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
+            AppDomain.CurrentDomain.DomainUnload += OnDomainUnload;
+        }
+
+        /// <summary>
+        /// Unsubscribes this load, for the adapter's <c>OnDestroy</c> before a script reload; the last enabled load also
+        /// removes the listener. Does nothing once the game is quitting (<see cref="ArmedBy"/> set): plugins are destroyed
+        /// at quit too, and the lines they log then are the ones this flush exists to save.
+        /// </summary>
+        public static void Disable()
+        {
+            if (!_enabled || ArmedBy != null) return;
+            _enabled = false;
+            Application.quitting -= OnQuitting;
+            AppDomain.CurrentDomain.ProcessExit -= OnProcessExit;
+            AppDomain.CurrentDomain.DomainUnload -= OnDomainUnload;
+            int users = Math.Max(0, Users - 1);
+            AppDomain.CurrentDomain.SetData(UsersKey, users);
+            if (users == 0) foreach (var listener in Listeners().ToArray()) BepInEx.Logging.Logger.Listeners.Remove(listener);
         }
 
         /// <summary>
@@ -56,14 +90,20 @@ namespace Valheim.Testing.Adapter
         /// </summary>
         public static void Quitting(string signal)
         {
-            if (_listener == null) return;
+            if (!_enabled) return;
             if (ArmedBy == null)
             {
-                ArmedBy = signal;
+                AppDomain.CurrentDomain.SetData(ArmedKey, signal);
                 try { _log?.LogInfo("Quit log flush armed by " + signal + "."); } catch (Exception) { }
             }
             Flush();
         }
+
+        private static int Users => AppDomain.CurrentDomain.GetData(UsersKey) is int n ? n : 0;
+
+        // Every load's listener has this full type name, whichever adapter assembly compiled it.
+        private static System.Collections.Generic.IEnumerable<ILogListener> Listeners() =>
+            BepInEx.Logging.Logger.Listeners.Where(l => l.GetType().FullName == typeof(FlushListener).FullName);
 
         /// <summary>Flushes every BepInEx disk log now.</summary>
         public static void Flush()
