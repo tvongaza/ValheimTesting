@@ -11,6 +11,7 @@
 // as "name" or "name value"; setting a name again replaces its value.
 using System.Collections.Generic;
 using System.Globalization;
+using Valheim.Testing.Doubles;
 
 /// <summary>
 /// The game's named global keys (1.0.16), in its order. Everything before <see cref="NonServerOption"/> is a world
@@ -89,10 +90,10 @@ public partial class ZoneSystem
     /// removes the world modifiers among its keys, and what <see cref="SetStartingGlobalKeys"/> reads back after a
     /// restart. Null when no world is loaded, as on a client; nothing is written then.
     /// </summary>
-    public List<string>? WorldStartingGlobalKeys;
+    [TestOnly] public List<string>? WorldStartingGlobalKeys;
 
     /// <summary>Whether <see cref="Start"/> has run.</summary>
-    public bool Started { get; private set; }
+    [TestOnly] public bool Started { get; private set; }
     private bool m_startedAsServer;
 
     /// <summary>
@@ -247,7 +248,7 @@ public partial class ZoneSystem
     }
 
     /// <summary>The lines the world's zone-system save keeps: every key except the world modifiers, which the world keeps in its starting keys.</summary>
-    public List<string> SaveGlobalKeys()
+    [TestOnly] public List<string> SaveGlobalKeys()
     {
         var kept = new HashSet<string>(m_globalKeys);
         kept.RemoveWhere(line => { GetKeyValue(line, out _, out var gk); return gk < GlobalKeys.NonServerOption; });
@@ -255,7 +256,7 @@ public partial class ZoneSystem
     }
 
     /// <summary>As the game's load of the zone-system save: the keys are cleared, then each saved line is added.</summary>
-    public void LoadGlobalKeys(IEnumerable<string> saved)
+    [TestOnly] public void LoadGlobalKeys(IEnumerable<string> saved)
     {
         ClearGlobalKeys();
         foreach (string key in saved) GlobalKeyAdd(key);

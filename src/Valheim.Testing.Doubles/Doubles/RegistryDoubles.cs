@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using Valheim.Testing.Doubles;
 
 /// <summary>
 /// Items, recipes and status effects, as the game's ObjectDB (1.0.16). <see cref="Awake"/> makes it the instance and
@@ -32,20 +33,20 @@ public partial class ObjectDB : MonoBehaviour
     private readonly Dictionary<ItemDrop.ItemData.SharedData, GameObject> m_itemByData = new();
 
     /// <summary>Runs at the end of <see cref="Awake"/>, as a Harmony postfix would. <c>ValheimWorldScope</c> restores it.</summary>
-    public static Action<ObjectDB>? AwakePostfix;
+    [TestOnly] public static Action<ObjectDB>? AwakePostfix;
     /// <summary>Runs at the end of <see cref="CopyOtherDB"/>, as a Harmony postfix would. <c>ValheimWorldScope</c> restores it.</summary>
-    public static Action<ObjectDB>? CopyOtherDBPostfix;
+    [TestOnly] public static Action<ObjectDB>? CopyOtherDBPostfix;
 
     /// <summary>
     /// Stable hashes of items a test holds back as not registered yet, standing for a registration another mod or a later
     /// pass has still to make: name and hash lookups return null for them and are recorded in <see cref="EarlyLookups"/>.
-    /// A test switch, not a game field; the game's registries hold every registered entry and look it up directly.
+    /// The game's registries hold every registered entry and look it up directly.
     /// </summary>
-    public readonly HashSet<int> NotYetRegistered = new();
+    [TestOnly] public readonly HashSet<int> NotYetRegistered = new();
     /// <summary>Every lookup that returned null only because its item was held back as not registered yet.</summary>
-    public readonly List<string> EarlyLookups = new();
-    public void MarkNotYetRegistered(params string[] names) { foreach (var name in names) NotYetRegistered.Add(name.GetStableHashCode()); }
-    public void FinishRegistering() => NotYetRegistered.Clear();
+    [TestOnly] public readonly List<string> EarlyLookups = new();
+    [TestOnly] public void MarkNotYetRegistered(params string[] names) { foreach (var name in names) NotYetRegistered.Add(name.GetStableHashCode()); }
+    [TestOnly] public void FinishRegistering() => NotYetRegistered.Clear();
 
     public void Awake()
     {
@@ -125,8 +126,8 @@ public partial class ObjectDB : MonoBehaviour
         return null;
     }
 
-    /// <summary>Items whose names share a stable hash (the same name twice, or a collision), which the next index would throw on. Not a game member.</summary>
-    public List<(int Hash, string[] Names)> FindDuplicateItems() => Registry.Duplicates(m_items);
+    /// <summary>Items whose names share a stable hash (the same name twice, or a collision), which the next index would throw on.</summary>
+    [TestOnly] public List<(int Hash, string[] Names)> FindDuplicateItems() => Registry.Duplicates(m_items);
 }
 
 /// <summary>
@@ -143,18 +144,18 @@ public partial class ZNetScene : MonoBehaviour
     /// <summary>The index by name hash (private in the game; mods reach it through publicized assemblies).</summary>
     public readonly Dictionary<int, GameObject> m_namedPrefabs = new();
     /// <summary>Runs at the end of <see cref="Awake"/>, as a Harmony postfix would. <c>ValheimWorldScope</c> restores it.</summary>
-    public static Action<ZNetScene>? AwakePostfix;
+    [TestOnly] public static Action<ZNetScene>? AwakePostfix;
 
     /// <summary>
     /// Stable hashes of prefabs a test holds back as not registered yet, standing for a registration another mod or a later
     /// pass has still to make: name and hash lookups return null for them and are recorded in <see cref="EarlyLookups"/>.
-    /// A test switch, not a game field; the game's registries hold every registered entry and look it up directly.
+    /// The game's registries hold every registered entry and look it up directly.
     /// </summary>
-    public readonly HashSet<int> NotYetRegistered = new();
+    [TestOnly] public readonly HashSet<int> NotYetRegistered = new();
     /// <summary>Every lookup that returned null only because its prefab was held back as not registered yet.</summary>
-    public readonly List<string> EarlyLookups = new();
-    public void MarkNotYetRegistered(params string[] names) { foreach (var name in names) NotYetRegistered.Add(name.GetStableHashCode()); }
-    public void FinishRegistering() => NotYetRegistered.Clear();
+    [TestOnly] public readonly List<string> EarlyLookups = new();
+    [TestOnly] public void MarkNotYetRegistered(params string[] names) { foreach (var name in names) NotYetRegistered.Add(name.GetStableHashCode()); }
+    [TestOnly] public void FinishRegistering() => NotYetRegistered.Clear();
 
     public void Awake()
     {
@@ -182,8 +183,8 @@ public partial class ZNetScene : MonoBehaviour
     public GameObject? GetPrefab(string name) => GetPrefab(name.GetStableHashCode());
     public int GetPrefabHash(GameObject go) => go.name.GetStableHashCode();
     public List<string> GetPrefabNames() => m_namedPrefabs.Values.Select(p => p.name).ToList();
-    /// <summary>Prefabs whose names share a stable hash (the same name twice, or a collision), which Awake would throw on. Not a game member.</summary>
-    public List<(int Hash, string[] Names)> FindDuplicateHashes() => Registry.Duplicates(m_prefabs.Concat(m_nonNetViewPrefabs));
+    /// <summary>Prefabs whose names share a stable hash (the same name twice, or a collision), which Awake would throw on.</summary>
+    [TestOnly] public List<(int Hash, string[] Names)> FindDuplicateHashes() => Registry.Duplicates(m_prefabs.Concat(m_nonNetViewPrefabs));
 }
 
 internal static class Registry

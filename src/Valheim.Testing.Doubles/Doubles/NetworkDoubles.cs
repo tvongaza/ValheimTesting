@@ -11,6 +11,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using Valheim.Testing.Doubles;
 
 /// <summary>A connected peer: its id and, once spawned, its character's ZDO.</summary>
 public sealed partial class ZNetPeer
@@ -20,9 +21,9 @@ public sealed partial class ZNetPeer
     public string m_playerName = "";
     /// <summary>
     /// False while the peer is still joining. Like the game's, such a peer's <c>m_uid</c> is 0 and it receives no routed
-    /// RPC. A test switch, not a game field.
+    /// RPC.
     /// </summary>
-    public bool Ready = true;
+    [TestOnly] public bool Ready = true;
     /// <summary>As the game's: a peer is ready once it has its id.</summary>
     public bool IsReady() => Ready && m_uid != 0;
 }
@@ -33,13 +34,13 @@ public sealed partial class ZNet : UnityEngine.MonoBehaviour
     /// <summary>Set when loading the world failed; the game then refuses to save over it.</summary>
     public static bool m_loadError;
     /// <summary>How many times <see cref="Save"/> ran: the game's world save is not modelled, its call is.</summary>
-    public int SaveCalls;
+    [TestOnly] public int SaveCalls;
     public void Save(bool sync, bool saveOtherPlayerProfiles = false, bool waitForNextFrame = false) => SaveCalls++;
-    public bool Server;
-    public readonly Dictionary<long, ZNetPeer> Peers = new();
+    [TestOnly] public bool Server;
+    [TestOnly] public readonly Dictionary<long, ZNetPeer> Peers = new();
     public bool IsServer() => Server;
     /// <summary>Console lines this client sent to the server as remote commands (the game's <c>ZNet.RemoteCommand</c>), in order.</summary>
-    public readonly List<string> RemoteCommands = new();
+    [TestOnly] public readonly List<string> RemoteCommands = new();
     public void RemoteCommand(string command) => RemoteCommands.Add(command);
     /// <summary>The ready peer with that id, or null, as the game finds a peer by its id.</summary>
     public ZNetPeer? GetPeer(long id) => Peers.TryGetValue(id, out var p) && Sync(id, p).Ready ? p : null;
@@ -56,8 +57,8 @@ public sealed partial class ZNet : UnityEngine.MonoBehaviour
 public sealed partial class Player
 {
     public static Player? m_localPlayer;
-    public Transform transform = new();
-    public void OnSpawned() { }
+    public UnityEngine.Transform transform = new();
+    [TestOnly] public void OnSpawned() { }
 }
 /// <summary>A value a mod writes into an RPC's package itself, as the game's interface.</summary>
 public partial interface ISerializableParameter
@@ -66,9 +67,9 @@ public partial interface ISerializableParameter
     void Deserialize(ref ZPackage pkg);
 }
 /// <summary>The handler types for four to six arguments, as the game declares them.</summary>
-public partial class RoutedMethod<T, U, V, B> { public delegate void Method(long sender, T p0, U p1, V p2, B p3); }
-public partial class RoutedMethod<T, U, V, B, K> { public delegate void Method(long sender, T p0, U p1, V p2, B p3, K p4); }
-public partial class RoutedMethod<T, U, V, B, K, M> { public delegate void Method(long sender, T p0, U p1, V p2, B p3, K p4, M p5); }
+public partial class RoutedMethod<T, U, V, B> { private RoutedMethod() { } public delegate void Method(long sender, T p0, U p1, V p2, B p3); }
+public partial class RoutedMethod<T, U, V, B, K> { private RoutedMethod() { } public delegate void Method(long sender, T p0, U p1, V p2, B p3, K p4); }
+public partial class RoutedMethod<T, U, V, B, K, M> { private RoutedMethod() { } public delegate void Method(long sender, T p0, U p1, V p2, B p3, K p4, M p5); }
 
 /// <summary>
 /// Routed RPCs, by the game's 1.0.16 rules. Arguments are written into a <see cref="ZPackage"/> with the game's type
@@ -81,6 +82,7 @@ public partial class RoutedMethod<T, U, V, B, K, M> { public delegate void Metho
 /// </summary>
 public sealed partial class ZRoutedRpc
 {
+    [TestOnly] public ZRoutedRpc() { }
     /// <summary>A routed call as the game puts it on the wire.</summary>
     public sealed partial class RoutedRPCData
     {
@@ -91,7 +93,7 @@ public sealed partial class ZRoutedRpc
         public int m_methodHash;
         public ZPackage m_parameters = new();
         /// <summary>The method's name, for messages; the game sends only its hash.</summary>
-        public string Method = "";
+        [TestOnly] public string Method = "";
         internal List<Type>? ArgumentTypes;
         public void Serialize(ZPackage pkg)
         {
@@ -113,14 +115,14 @@ public sealed partial class ZRoutedRpc
     private int m_rpcMsgID = 1;
     private readonly Dictionary<int, (string Name, Delegate Handler)> m_functions = new();
     /// <summary>Every call this peer made, as made: target, method and the caller's arguments.</summary>
-    public readonly List<(long Target, string Method, object[] Args)> Invoked = new();
+    [TestOnly] public readonly List<(long Target, string Method, object[] Args)> Invoked = new();
     /// <summary>What each ready peer receives, in order, decoded as that peer reads it.</summary>
-    public readonly List<(long Peer, RoutedRPCData Data)> Sent = new();
+    [TestOnly] public readonly List<(long Peer, RoutedRPCData Data)> Sent = new();
     /// <summary>
     /// Every call handled here that reached no handler: an unregistered name, an object that is not there, or a name the
     /// object did not register. The game drops the first two silently and logs the third.
     /// </summary>
-    public readonly List<(long Sender, ZDOID TargetZDO, string Method, string Reason)> Dropped = new();
+    [TestOnly] public readonly List<(long Sender, ZDOID TargetZDO, string Method, string Reason)> Dropped = new();
 
     /// <summary>Sets this peer's id, as the game does from the session id.</summary>
     public void SetUID(long uid) => m_id = uid;
@@ -128,7 +130,7 @@ public sealed partial class ZRoutedRpc
     /// This peer's id: the one <see cref="SetUID"/> gave, else <c>ZNet.GetUID()</c> (this session's id, or the current
     /// side's <c>ZNet.Uid</c> in a two-sided test), as the game sets it from the session id.
     /// </summary>
-    public long PeerId => m_id ?? ZNet.GetUID();
+    [TestOnly] public long PeerId => m_id ?? ZNet.GetUID();
     private static bool IsServer => ZNet.instance.IsServer();
 
     /// <summary>
@@ -167,12 +169,12 @@ public sealed partial class ZRoutedRpc
     }
 
     /// <summary>Handles <paramref name="method"/> as if <paramref name="sender"/>'s call to this peer arrived.</summary>
-    public void Deliver(long sender, string method, params object[] args) => Receive(sender, PeerId, ZDOID.None, method, args);
+    [TestOnly] public void Deliver(long sender, string method, params object[] args) => Receive(sender, PeerId, ZDOID.None, method, args);
     /// <summary>
     /// Handles a call from <paramref name="sender"/> as the game handles one arriving from the network: it runs here
     /// when aimed at this peer or <see cref="Everybody"/>, and the server passes on what is aimed at anyone else.
     /// </summary>
-    public void Receive(long sender, long target, ZDOID targetZDO, string method, params object[] args)
+    [TestOnly] public void Receive(long sender, long target, ZDOID targetZDO, string method, params object[] args)
     {
         var parameters = new ZPackage(); var types = new List<Type>();
         SerializeArguments(method, args, parameters, types);
@@ -231,8 +233,8 @@ public sealed partial class ZRoutedRpc
     public void Register<T, U, V, B>(string name, RoutedMethod<T, U, V, B>.Method handler) => Add(name, handler);
     public void Register<T, U, V, B, K>(string name, RoutedMethod<T, U, V, B, K>.Method handler) => Add(name, handler);
     public void Register<T, U, V, B, K, M>(string name, RoutedMethod<T, U, V, B, K, M>.Method handler) => Add(name, handler);
-    /// <summary>Whether a handler is registered under the name. Not a game method: for tests only.</summary>
-    public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
+    /// <summary>Whether a handler is registered under the name.</summary>
+    [TestOnly] public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
     private void Add(string name, Delegate handler) => AddHandler(m_functions, name, handler, "ZRoutedRpc");
 
     internal static void AddHandler(Dictionary<int, (string Name, Delegate Handler)> functions, string name, Delegate handler, string owner)
@@ -368,8 +370,8 @@ public partial class ZNetView
     public void Register<T, U, V, B, K>(string name, RoutedMethod<T, U, V, B, K>.Method f) => Add(name, f);
     public void Register<T, U, V, B, K, M>(string name, RoutedMethod<T, U, V, B, K, M>.Method f) => Add(name, f);
     public void Unregister(string name) => m_functions.Remove(name.GetStableHashCode());
-    /// <summary>Whether this object registered a handler under the name. Not a game method: for tests only.</summary>
-    public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
+    /// <summary>Whether this object registered a handler under the name.</summary>
+    [TestOnly] public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
     private void Add(string name, Delegate handler) => ZRoutedRpc.AddHandler(m_functions, name, handler, "ZNetView");
 
     /// <summary>Runs this object's handler for the call, or logs "Failed to find rpc method" with its hash, as the game does.</summary>

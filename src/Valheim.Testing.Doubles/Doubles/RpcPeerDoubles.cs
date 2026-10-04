@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using Valheim.Testing.Doubles;
 
 /// <summary>
 /// A peer's direct RPCs over its socket, as the game's (1.0.16). <see cref="Invoke"/> writes the method's hash and the
@@ -25,8 +26,8 @@ using System.Text;
 public partial class ZRpc : IDisposable
 {
     public enum ErrorCode { Success, Disconnected, IncompatibleVersion }
-    public partial class RpcMethod { public delegate void Method(ZRpc RPC); }
-    public partial class RpcMethod<T, U, V, B> { public delegate void Method(ZRpc RPC, T p0, U p1, V p2, B p3); }
+    public partial class RpcMethod { private RpcMethod() { } public delegate void Method(ZRpc RPC); }
+    public partial class RpcMethod<T, U, V, B> { private RpcMethod() { } public delegate void Method(ZRpc RPC, T p0, U p1, V p2, B p3); }
 
     private readonly ISocket m_socket;
     private readonly Dictionary<int, (string Name, Delegate Handler)> m_functions = new();
@@ -35,11 +36,11 @@ public partial class ZRpc : IDisposable
     private static readonly float m_pingInterval = 1f;
     private static float m_timeout = 30f;
     /// <summary>Every call sent through this channel, as made.</summary>
-    public readonly List<(string Method, object[] Args)> Invoked = new();
+    [TestOnly] public readonly List<(string Method, object[] Args)> Invoked = new();
     /// <summary>The method hash of every call that arrived with no handler; the game ignores them silently.</summary>
-    public readonly List<int> Dropped = new();
+    [TestOnly] public readonly List<int> Dropped = new();
     /// <summary>Every exception a handler threw while a package was handled; the game only logs them.</summary>
-    public readonly List<Exception> Exceptions = new();
+    [TestOnly] public readonly List<Exception> Exceptions = new();
 
     public ZRpc(ISocket socket) => m_socket = socket;
     public void Dispose() => m_socket.Dispose();
@@ -53,8 +54,8 @@ public partial class ZRpc : IDisposable
     public void Register<T, U, V>(string name, Action<ZRpc, T, U, V> f) => Add(name, f);
     public void Register<T, U, V, W>(string name, RpcMethod<T, U, V, W>.Method f) => Add(name, f);
     public void Unregister(string name) => m_functions.Remove(name.GetStableHashCode());
-    /// <summary>Whether a handler is registered under <paramref name="name"/>. Not a game method.</summary>
-    public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
+    /// <summary>Whether a handler is registered under <paramref name="name"/>.</summary>
+    [TestOnly] public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
     private void Add(string name, Delegate handler)
     {
         var parameters = handler.Method.GetParameters();
@@ -87,8 +88,8 @@ public partial class ZRpc : IDisposable
         return ErrorCode.Success;
     }
 
-    /// <summary>Handles a call as if it had just arrived, as <see cref="Update"/> would, and returns its result. Not a game method.</summary>
-    public ErrorCode Deliver(string method, params object[] args)
+    /// <summary>Handles a call as if it had just arrived, as <see cref="Update"/> would, and returns its result.</summary>
+    [TestOnly] public ErrorCode Deliver(string method, params object[] args)
     {
         var pkg = Package(method, args); pkg.SetPos(0);
         return Handle(pkg);
@@ -176,7 +177,7 @@ public sealed partial class ZNetPeer : IDisposable
     public string m_playfabId = "";
     public ZNetPeer(ISocket socket, bool server) { m_socket = socket; m_rpc = new ZRpc(socket); m_server = server; }
     /// <summary>A peer on an unlinked Steam socket (Steam id 0): what it sends stays in its socket's <c>Sent</c>.</summary>
-    public ZNetPeer() : this(new ZSteamSocket(0), server: false) { }
+    [TestOnly] public ZNetPeer() : this(new ZSteamSocket(0), server: false) { }
     public void Dispose() { m_socket.Dispose(); m_rpc.Dispose(); }
 }
 
@@ -201,28 +202,28 @@ public sealed partial class ZNet
     /// This side's connection status. Static in the game; one per ZNet here, like the server flag, so a test can hold a
     /// server and a client. <see cref="GetConnectionStatus"/> reads <see cref="instance"/>'s.
     /// </summary>
-    public ConnectionStatus Status;
+    [TestOnly] public ConnectionStatus Status;
     public static ConnectionStatus GetConnectionStatus() => instance.Status;
     /// <summary>The game version this side sends and reports (1.0.16's by default).</summary>
-    public string VersionString = "1.0.16";
+    [TestOnly] public string VersionString = "1.0.16";
     /// <summary>The network version this side sends and requires (1.0.16's is 40).</summary>
-    public uint NetworkVersion = 40;
+    [TestOnly] public uint NetworkVersion = 40;
     /// <summary>This side's id (the game's static <c>GetUID()</c>): the ZDOMan session id unless set. Give each side of a two-sided test its own.</summary>
-    public long? Uid;
+    [TestOnly] public long? Uid;
     public static long GetUID() => instance.OwnUid;
     private long OwnUid => Uid ?? ZDOMan.GetSessionID();
     /// <summary>The player name this side sends (the game sends its player profile's).</summary>
-    public string PlayerName = "";
+    [TestOnly] public string PlayerName = "";
     /// <summary>The PlayFab id this side sends.</summary>
-    public string PlayFabId = "";
+    [TestOnly] public string PlayFabId = "";
     /// <summary>The password a client joins with when the server asks for one (the game asks in a dialog; empty leaves it waiting).</summary>
-    public string JoinPassword = "";
+    [TestOnly] public string JoinPassword = "";
     private string m_serverPassword = "";
     private string m_serverPasswordSalt = "";
     private static long s_joiningKey = long.MinValue;
 
     /// <summary>Makes this server ask for <paramref name="password"/>, stored salted and hashed as the game does.</summary>
-    public void SetServerPassword(string password) => m_serverPassword = string.IsNullOrEmpty(password) ? "" : HashPassword(password, ServerPasswordSalt());
+    [TestOnly] public void SetServerPassword(string password) => m_serverPassword = string.IsNullOrEmpty(password) ? "" : HashPassword(password, ServerPasswordSalt());
 
     /// <summary>
     /// A new connection, as the game handles it: the peer joins <see cref="Peers"/> as joining (not ready, <c>m_uid</c> 0)

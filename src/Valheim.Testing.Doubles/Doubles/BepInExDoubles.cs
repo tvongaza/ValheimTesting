@@ -6,6 +6,7 @@
 // ReSharper disable InconsistentNaming
 // BepInEx logging (capturable). Harmony's attributes and helpers are in HarmonyDoubles.cs, configuration in ConfigDoubles.cs.
 using System;
+using Valheim.Testing.Doubles;
 
 namespace BepInEx.Logging
 {
@@ -13,15 +14,15 @@ namespace BepInEx.Logging
     {
         /// <summary>
         /// When non-null, every log line is also appended here — tests use
-        /// this to observe mod behavior (e.g. which roads were generated).
+        /// this to observe mod behavior (e.g. what a mod logged at startup).
         /// </summary>
-        public static System.Collections.Generic.List<string>? Captured;
+        [TestOnly] public static System.Collections.Generic.List<string>? Captured;
 
         /// <summary>
         /// Makes the next <see cref="LogInfo"/> throw, once: a test's way to prove that a failing report cannot decide
         /// what the mod does. Cleared when it fires.
         /// </summary>
-        public static bool ThrowOnNextInfo;
+        [TestOnly] public static bool ThrowOnNextInfo;
 
         public void LogDebug(object data) => Write("DEBUG", data);
         public void LogInfo(object data)

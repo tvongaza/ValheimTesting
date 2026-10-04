@@ -1,3 +1,4 @@
+using Valheim.Testing.Doubles;
 // Valheim.Testing.Doubles: compile-time stand-ins for the Unity, Valheim, BepInEx and Jotunn types a mod's
 // pure-logic sources use, so those sources compile and run in an ordinary test project without the game.
 // Source package: these files are compiled into the consuming test project. Every type is partial; add the
@@ -75,16 +76,16 @@ public partial class ZoneSystem
         public int Hash => m_prefab.Name.GetStableHashCode();
 
         /// <summary>The height the placement measures altitude from: 30 m, the default water level.</summary>
-        public const float AltitudeZero = 30f;
+        [TestOnly] public const float AltitudeZero = 30f;
 
         /// <summary>A ground height as the placement measures altitude: metres above the water level (y = 30), negative below it.</summary>
-        public static float AltitudeAboveWater(float groundHeight) => (float)((double)groundHeight - AltitudeZero);
+        [TestOnly] public static float AltitudeAboveWater(float groundHeight) => (float)((double)groundHeight - AltitudeZero);
 
         /// <summary>
         /// Whether the placement's altitude rule accepts ground at this height: <see cref="m_minAltitude"/> ≤ height − 30 ≤
         /// <see cref="m_maxAltitude"/>, both ends included.
         /// </summary>
-        public bool IsAltitudeAllowed(float groundHeight)
+        [TestOnly] public bool IsAltitudeAllowed(float groundHeight)
         {
             float altitude = AltitudeAboveWater(groundHeight);
             return !(altitude < m_minAltitude || altitude > m_maxAltitude);
@@ -95,7 +96,7 @@ public partial class ZoneSystem
         /// <paramref name="downhill"/> (from the highest ground sample towards the lowest; its height is ignored), rounded
         /// to the nearest 22.5 degrees with ties to even, as Unity's Mathf.Round. A level direction gives 0.
         /// </summary>
-        public static float SlopeRotationYaw(UnityEngine.Vector3 downhill)
+        [TestOnly] public static float SlopeRotationYaw(UnityEngine.Vector3 downhill)
         {
             if (downhill.x == 0f && downhill.z == 0f) return 0f;
             float yaw = (float)(System.Math.Atan2(downhill.x, downhill.z) * 180.0 / System.Math.PI);
@@ -105,7 +106,7 @@ public partial class ZoneSystem
         }
 
         /// <summary>The first placement rule a point fails, in the game's order, or Accepted.</summary>
-        public enum Placement { Accepted, Distance, Biome, Altitude, CenterDistance, TerrainDelta }
+        [TestOnly] public enum Placement { Accepted, Distance, Biome, Altitude, CenterDistance, TerrainDelta }
 
         /// <summary>
         /// Checks a candidate point against the rules the game applies to each point in turn: distance from the origin
@@ -113,9 +114,9 @@ public partial class ZoneSystem
         /// distance from the centre (<see cref="m_minDistanceFromCenter"/>/<see cref="m_maxDistanceFromCenter"/>) and the
         /// terrain delta, which the game samples at random within <c>m_exteriorRadius</c> and the caller passes in.
         /// Heights and biomes come from <paramref name="world"/>. Not checked: the biome area, forest, distance to similar
-        /// locations, vegetation, alternative biomes and whether the zone is free and ungenerated. Not a game method.
+        /// locations, vegetation, alternative biomes and whether the zone is free and ungenerated.
         /// </summary>
-        public Placement CheckPlacement(float x, float z, WorldGenerator world, float terrainDelta = 0f)
+        [TestOnly] public Placement CheckPlacement(float x, float z, WorldGenerator world, float terrainDelta = 0f)
         {
             // The candidate point has y = 0 when its distances are measured.
             float distance = (float)System.Math.Sqrt(x * x + z * z);

@@ -8,6 +8,7 @@
 // 100-entry cache; ZInput's key-binding strings; and PlatformPrefs in memory.
 using System;
 using System.Collections.Generic;
+using Valheim.Testing.Doubles;
 
 /// <summary>
 /// The game's translator. <see cref="Localize(string)"/> replaces each <c>$word</c> (up to a space or one of
@@ -127,11 +128,11 @@ public partial class ZInput
     public static ZInput instance => m_instance ??= new ZInput();
     internal static ZInput? Current { get => m_instance; set => m_instance = value; }
     private readonly Dictionary<string, string?> m_buttons = new();
-    /// <summary>Whether a gamepad is the active input. A test switch.</summary>
-    public bool GamepadActive;
+    /// <summary>Whether a gamepad is the active input.</summary>
+    [TestOnly] public bool GamepadActive;
 
     /// <summary>Declares a button and the key text shown for it; null or empty declares it unbound.</summary>
-    public void SetBinding(string name, string? key) => m_buttons[name] = key;
+    [TestOnly] public void SetBinding(string name, string? key) => m_buttons[name] = key;
     public string GetBoundKeyString(string name, bool emptyStringOnMissing = false)
     {
         if (!m_buttons.TryGetValue(name, out var key)) return emptyStringOnMissing ? "" : "MISSING BUTTON DEF \"" + name + "\"";
@@ -153,7 +154,7 @@ public static partial class PlatformPrefs
 {
     internal static Dictionary<string, object> s_values = new();
     /// <summary>Why the preferences cannot be used right now, or null when they can.</summary>
-    public static string? Unavailable;
+    [TestOnly] public static string? Unavailable;
 
     private static void Check(string name)
     {

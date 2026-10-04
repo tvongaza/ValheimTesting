@@ -13,6 +13,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using UnityEngine;
+using Valheim.Testing.Doubles;
 
 namespace UnityEngine
 {
@@ -202,11 +203,11 @@ public partial class HeightmapBuilder
     private readonly List<HMBuildData> m_toBuild = new();
     private readonly List<HMBuildData> m_ready = new();
     /// <summary>Builds waiting for the build thread.</summary>
-    public int QueuedCount => m_toBuild.Count;
+    [TestOnly] public int QueuedCount => m_toBuild.Count;
     /// <summary>Finished builds not yet handed out.</summary>
-    public int ReadyCount => m_ready.Count;
+    [TestOnly] public int ReadyCount => m_ready.Count;
     /// <summary>How many times <see cref="RequestTerrainSync"/> was called: a test can check that code asked only when the build was ready.</summary>
-    public int SyncRequests { get; private set; }
+    [TestOnly] public int SyncRequests { get; private set; }
 
     public bool IsTerrainReady(Vector3 center, int width, float scale, bool distantLod, WorldGenerator worldGen)
     {
@@ -230,7 +231,7 @@ public partial class HeightmapBuilder
     /// Builds one terrain now and makes it ready, as if it had been queued and the build thread had run: the next
     /// <see cref="IsTerrainReady"/> for it answers true. Returns the build.
     /// </summary>
-    public HMBuildData MakeReady(Vector3 center, int width, float scale, bool distantLod, WorldGenerator worldGen)
+    [TestOnly] public HMBuildData MakeReady(Vector3 center, int width, float scale, bool distantLod, WorldGenerator worldGen)
     {
         m_toBuild.RemoveAll(d => d.IsEqual(center, width, scale, distantLod, worldGen));
         var data = Built(new HMBuildData(center, width, scale, distantLod, worldGen));
@@ -238,7 +239,7 @@ public partial class HeightmapBuilder
         return data;
     }
     /// <summary>Builds everything queued and makes it ready, as the build thread does; returns how many were built.</summary>
-    public int BuildQueued()
+    [TestOnly] public int BuildQueued()
     {
         var queued = m_toBuild.ToList();
         m_toBuild.Clear();

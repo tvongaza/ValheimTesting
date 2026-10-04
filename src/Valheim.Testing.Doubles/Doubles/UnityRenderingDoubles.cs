@@ -11,6 +11,7 @@
 // so Instantiate still copies it.
 using System;
 using System.Collections.Generic;
+using Valheim.Testing.Doubles;
 
 namespace UnityEngine
 {
@@ -318,8 +319,8 @@ namespace UnityEngine
         public float shadowStrength { get => m_ShadowStrength; set => m_ShadowStrength = value; }
     }
 
-    /// <summary>Unity 6's animator update modes (AnimatePhysics is now Fixed; the old name remains, obsolete).</summary>
-    public enum AnimatorUpdateMode { Normal = 0, Fixed = 1, UnscaledTime = 2, [Obsolete("AnimatePhysics has been renamed to Fixed.")] AnimatePhysics = 1 }
+    /// <summary>Unity 6's animator update modes (the game's Unity no longer has AnimatePhysics, now Fixed).</summary>
+    public enum AnimatorUpdateMode { Normal = 0, Fixed = 1, UnscaledTime = 2 }
 
     /// <summary>
     /// An animator's parameters and settings. A parameter set by name and one set by <see cref="StringToHash"/> of that
@@ -378,7 +379,7 @@ namespace UnityEngine
         [SerializeField] private float m_ScaleFactor = 1f;
         public float scaleFactor { get => m_ScaleFactor; set => m_ScaleFactor = value; }
         /// <summary>How many times <see cref="ForceUpdateCanvases"/> ran; a test can check a layout pass was requested.</summary>
-        public static int ForceUpdateCount;
+        [TestOnly] public static int ForceUpdateCount;
         public static void ForceUpdateCanvases() => ForceUpdateCount++;
         public bool isRootCanvas => ParentCanvas() == null;
         public Canvas rootCanvas { get { var root = this; for (var up = ParentCanvas(); up != null; up = up.ParentCanvas()) root = up; return root; } }

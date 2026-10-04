@@ -1,3 +1,4 @@
+using Valheim.Testing.Doubles;
 // Valheim.Testing.Doubles: compile-time stand-ins for the Unity, Valheim, BepInEx and Jotunn types a mod's
 // pure-logic sources use, so those sources compile and run in an ordinary test project without the game.
 // Source package: these files are compiled into the consuming test project. Every type is partial; add the
@@ -154,7 +155,7 @@ public partial struct Vector2Int
     }
 }
 
-public static partial class Mathf
+public partial struct Mathf
 {
     public const float PI = (float)System.Math.PI;
 
@@ -214,7 +215,7 @@ public static partial class Mathf
 public partial struct Quaternion
 {
     public float x, y, z, w;
-    public float EulerX, EulerY, EulerZ;
+    [TestOnly] public float EulerX, EulerY, EulerZ;
     public Quaternion(float x, float y, float z, float w) { this.x = x; this.y = y; this.z = z; this.w = w; EulerX = EulerY = EulerZ = 0f; }
     public static Quaternion identity => new(0f, 0f, 0f, 1f);
     public static Quaternion Euler(float x, float y, float z)
@@ -289,7 +290,7 @@ public partial class Object
     private string m_name = "";
 
     /// <summary>True once destroyed (after <see cref="EndOfFrame"/> or <see cref="DestroyImmediate"/>). Never throws.</summary>
-    public bool Destroyed { get; private set; }
+    [TestOnly] public bool Destroyed { get; private set; }
 
     /// <summary>The object's name; a component's is its GameObject's. Throws once destroyed.</summary>
     public string name
@@ -299,7 +300,7 @@ public partial class Object
     }
     private Object NameHolder => this is Component { m_gameObject: { } owner } ? owner : this;
 
-    public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation) => original.Clone(position, rotation);
+    [TestOnly] public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation) => original.Clone(position, rotation);
 
     /// <summary>Queues the object; it is destroyed when the test calls <see cref="EndOfFrame"/>, as Unity destroys at the end of the frame.</summary>
     public static void Destroy(Object? obj)
@@ -322,7 +323,7 @@ public partial class Object
     /// order they were queued (reversed with <c>ValheimWorldScope.WithUnityOrder(UnityOrder.Reversed)</c>); Unity promises
     /// no order.
     /// </summary>
-    public static int EndOfFrame()
+    [TestOnly] public static int EndOfFrame()
     {
         var due = UnityOrdered(s_pendingDestroy);
         s_pendingDestroy.Clear();
@@ -416,10 +417,10 @@ public partial class MonoBehaviour : Behaviour { }
 /// </summary>
 public partial class GameObject : Object
 {
-    public bool Networked;
-    public float? Health;
-    public ZNetView? View;
-    public WearNTear? Wear;
+    [TestOnly] public bool Networked;
+    [TestOnly] public float? Health;
+    [TestOnly] public ZNetView? View;
+    [TestOnly] public WearNTear? Wear;
     /// <summary>A new object in the scene, as Unity's: FindObjectsByType finds it, with or without components.</summary>
     public GameObject(string name) { this.name = name; s_unityGameObjects.Add(this); }
 

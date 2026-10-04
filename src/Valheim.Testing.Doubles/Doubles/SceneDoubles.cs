@@ -9,6 +9,7 @@
 // object destruction until UnityEngine.Object.EndOfFrame, as Unity's is.
 using System.Collections.Generic;
 using System.Linq;
+using Valheim.Testing.Doubles;
 
 /// <summary>Shim for WearNTear: the prefab's full health.</summary>
 public partial class WearNTear : UnityEngine.MonoBehaviour { public float m_health; }
@@ -18,10 +19,10 @@ public partial class ZNetScene
 {
     public static ZNetScene? instance;
     /// <summary>The prefabs <see cref="AddPrefab"/> made, by name.</summary>
-    public readonly Dictionary<string, UnityEngine.GameObject> Prefabs = new();
-    public readonly List<UnityEngine.GameObject> Live = new();
+    [TestOnly] public readonly Dictionary<string, UnityEngine.GameObject> Prefabs = new();
+    [TestOnly] public readonly List<UnityEngine.GameObject> Live = new();
     /// <summary>A networked prefab with a WearNTear, registered at once (in <c>m_prefabs</c> and by name hash); a second one with the same name replaces the first. It is an asset (<see cref="UnityEngine.GameObject.IsAsset"/>), as the game's prefabs are, so only its copies are in the scene.</summary>
-    public UnityEngine.GameObject AddPrefab(string name, float health = 1000f)
+    [TestOnly] public UnityEngine.GameObject AddPrefab(string name, float health = 1000f)
     {
         var prefab = new UnityEngine.GameObject(name) { Networked = true, Health = health, IsAsset = true };
         if (Prefabs.TryGetValue(name, out var replaced)) m_prefabs.Remove(replaced);

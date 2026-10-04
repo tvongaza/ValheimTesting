@@ -12,6 +12,7 @@
 // its object's. Added to an active object it wakes (Awake) and joins the live list, as a spawned piece's does.
 using System.Collections.Generic;
 using System.Linq;
+using Valheim.Testing.Doubles;
 
 public partial class TerrainModifier : UnityEngine.MonoBehaviour
 {
@@ -49,7 +50,7 @@ public partial class TerrainModifier : UnityEngine.MonoBehaviour
     /// A modifier on a new object of its own at <paramref name="position"/>, not yet awake: call <see cref="Awake"/> to spawn
     /// it into the live list. A test convenience; <c>AddComponent&lt;TerrainModifier&gt;()</c> is the game's way.
     /// </summary>
-    public TerrainModifier(UnityEngine.Vector3 position, ZNetView? view = null)
+    [TestOnly] public TerrainModifier(UnityEngine.Vector3 position, ZNetView? view = null)
     {
         var owner = new UnityEngine.GameObject("TerrainModifier");
         owner.transform.position = position;
@@ -104,7 +105,7 @@ public partial class TerrainModifier : UnityEngine.MonoBehaviour
     /// long. Valheim 1.0.16 writes that value only when it converts a world saved before its ZDO rework; a modifier
     /// placed since reads 0, so it sorts before every converted one of the same kind and order.
     /// </summary>
-    public long CreationTime => m_creationTime;
+    [TestOnly] public long CreationTime => m_creationTime;
 
     private long GetCreationTime()
     {
@@ -177,9 +178,9 @@ public partial class Heightmap
     /// <summary>
     /// The modifiers this heightmap's rebuild applies, in the order it applies them: every enabled live modifier that
     /// overlaps it (<see cref="TerrainVSModifier"/>), in <see cref="TerrainModifier.GetAllInstances"/> order. The game
-    /// applies the zone's terrain compiler (<see cref="TerrainComp"/>) after all of them. Not a game method.
+    /// applies the zone's terrain compiler (<see cref="TerrainComp"/>) after all of them.
     /// </summary>
-    public List<TerrainModifier> ModifiersInApplyOrder()
+    [TestOnly] public List<TerrainModifier> ModifiersInApplyOrder()
     {
         var applied = new List<TerrainModifier>();
         foreach (var modifier in TerrainModifier.GetAllInstances())

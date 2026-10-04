@@ -350,7 +350,7 @@ public sealed class UnityComponentTests : IDisposable
         body.velocity = new Vector3(1, 2, 3); Assert.Equal(2f, body.linearVelocity.y);
         body.drag = 0.5f; Assert.Equal(0.5f, body.linearDamping);
         Assert.Same(body, Object.FindObjectOfType<Rigidbody>()); Assert.Equal(new[] { body }, Object.FindObjectsOfType<Rigidbody>());
-        Assert.Equal(LightType.Rectangle, LightType.Area); Assert.Equal(AnimatorUpdateMode.Fixed, AnimatorUpdateMode.AnimatePhysics);
+        Assert.Equal(LightType.Rectangle, LightType.Area);
     }
 #pragma warning restore CS0618
 

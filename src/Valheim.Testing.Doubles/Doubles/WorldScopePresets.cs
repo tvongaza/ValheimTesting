@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Valheim.Testing.Doubles;
 
 /// <summary>A player, as mod code finds one: its view (and so its ZDO), its name and id from the ZDO, and the list of every player object.</summary>
 public sealed partial class Player
@@ -28,7 +29,7 @@ public sealed partial class Player
 public sealed partial class ZNet
 {
     /// <summary>A dedicated server (no local player, no Steam client). A test switch; <c>ValheimWorldScope.AsDedicatedServer</c> sets it.</summary>
-    public bool Dedicated;
+    [TestOnly] public bool Dedicated;
     public bool IsDedicated() => Dedicated;
 }
 
