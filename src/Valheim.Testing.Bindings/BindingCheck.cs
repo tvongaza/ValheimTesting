@@ -225,8 +225,8 @@ internal sealed class Checker
             _mod.Name.Name,
             findings.Where(f => f.IsMissing).ToArray(),
             findings.Where(f => !f.IsMissing).ToArray(),
-            _checked.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => new CheckedAssembly(p.Key, _supplied.PathFor(p.Key) ?? "", p.Value.Count)).ToArray(),
-            _unchecked.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => new UncheckedAssembly(p.Key, p.Value.Count)).ToArray(),
+            _checked.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => new ReferencedAssembly(p.Key, p.Value.Count, _supplied.PathFor(p.Key))).ToArray(),
+            _unchecked.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => new ReferencedAssembly(p.Key, p.Value.Count)).ToArray(),
             _options.RequiredAssemblies.Where(r => referenced.Contains(r) && _supplied.PathFor(r) == null).OrderBy(r => r, StringComparer.OrdinalIgnoreCase).ToArray(),
             _ignoresAccessChecksTo.OrderBy(a => a, StringComparer.OrdinalIgnoreCase).ToArray(),
             _notes.ToArray());

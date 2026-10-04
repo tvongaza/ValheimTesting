@@ -27,7 +27,7 @@ public class BindingCheckTests : IClassFixture<GameAssemblies>
             Assert.Empty(report.Missing);
             Assert.Empty(report.Access);
             Assert.Empty(report.MissingRequired);
-            CheckedAssembly game = Assert.Single(report.Checked);
+            ReferencedAssembly game = Assert.Single(report.Checked);
             Assert.Equal("assembly_valheim", game.Name);
             Assert.True(game.References > 20, "only " + game.References + " references were checked");
         }

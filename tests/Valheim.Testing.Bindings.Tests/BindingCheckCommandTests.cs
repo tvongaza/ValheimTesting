@@ -15,6 +15,30 @@ public class BindingCheckCommandTests : IClassFixture<GameAssemblies>
         return (exit, output.ToString(), error.ToString());
     }
 
+    [Fact] public void AMalformedModIsIncompleteNotACrash()
+    {
+        // Overwrite the IL of the mod's largest method body with 0xFF: Cecil then throws while decoding it (not an
+        // IOException or BadImageFormatException), and the command must still answer with exit code 2.
+        string mod = Path.Combine(_game.Root, "malformed", "MyMod.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(mod)!);
+        byte[] bytes = File.ReadAllBytes(_game.Mod);
+        using (var module = Mono.Cecil.ModuleDefinition.ReadModule(new MemoryStream(bytes)))
+        using (var pe = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(bytes)))
+        {
+            var method = module.Types.SelectMany(t => t.Methods).Where(m => m.HasBody).OrderByDescending(m => m.Body.CodeSize).First();
+            int rva = method.RVA, size = method.Body.CodeSize;
+            var section = pe.PEHeaders.SectionHeaders.Single(h => rva >= h.VirtualAddress && rva < h.VirtualAddress + h.VirtualSize);
+            int offset = rva - section.VirtualAddress + section.PointerToRawData;
+            int header = (bytes[offset] & 3) == 2 ? 1 : (bytes[offset + 1] >> 4) * 4; // tiny, or a fat header's own size
+            Array.Fill(bytes, (byte)0xFF, offset + header, size);
+        }
+        File.WriteAllBytes(mod, bytes);
+        var (exit, output, error) = Run(mod, _game.Mod, "--game-dir", _game.V1);
+        Assert.Equal(BindingCheckCommand.Incomplete, exit);
+        Assert.Contains("valheim-bindings: cannot check " + mod + ": ", error);
+        Assert.Contains("PASS: every checked reference binds", output); // the next mod is still checked
+    }
+
     [Fact] public void TheBuildItWasCompiledAgainstPasses()
     {
         var (exit, output, _) = Run(_game.Mod, "--game-dir", _game.V1);
