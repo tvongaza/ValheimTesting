@@ -505,7 +505,7 @@ public static class RegressionBundle
             foreach (var result in results)
             {
                 var arm = template.Mod.Arms[result.Arm];
-                if (arm.Commit.Length != 0 && !IsPlaceholder(arm.Commit) && arm.Commit != result.Commit)
+                if (arm.Commit is { Length: > 0 } && !IsPlaceholder(arm.Commit) && arm.Commit != result.Commit)
                     throw new InvalidOperationException($"{TemplateFile}: arm {result.Arm} names commit {arm.Commit}, and the evidence ran {result.Commit}.");
                 if (arm.Sha256.Length != 0 && !IsPlaceholder(arm.Sha256) && result.Sha256 != null && !arm.Sha256.Equals(result.Sha256, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException($"{TemplateFile}: arm {result.Arm} pins sha256 {arm.Sha256}, and the evidence ran {result.Sha256}.");
@@ -561,7 +561,7 @@ public static class RegressionBundle
             return given.Count == 0 ? (null, null) : (given[0].Value, given[0].Source);
         }
         string commit = Agree("commit", ("run-manifest.json", run?.ModCommit), ("the environment manifest", declared?.Commit), ("the spec", arm.Commit)).Value
-            ?? throw new InvalidOperationException($"{where}: no run-manifest.json records the build's source commit; set the arm's commit in the spec.");
+            ?? throw new InvalidOperationException($"{where}: neither run-manifest.json nor the environment records the build's source commit; set the arm's commit in the spec.");
         string md5 = Agree("md5", ("run-manifest.json", run?.Arms.FirstOrDefault(entry => entry.Arm == name)?.Md5), ("the spec", arm.Md5)).Value?.ToLowerInvariant()
             ?? throw new InvalidOperationException($"{where}: no run-manifest.json records the build's MD5; set the arm's md5 in the spec (the value its strict pins name).");
         var (sha256, sha256Source) = Agree("sha256", ("run-manifest.json", run?.ModSha256), ("the environment manifest", declared?.Sha256),

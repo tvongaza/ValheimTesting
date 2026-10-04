@@ -185,6 +185,36 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("overlap", Assert.Throws<ArgumentException>(overlap.Validate).Message);
     }
 
+    [Fact] public void RemovingTheInstallIsTheLastArmsCleanupStep()
+    {
+        new TargetedRegression(_rig.Manifest()).Stage("parent");
+        string evidence = Path.Combine(_rig.Root, "evidence-last");
+        var report = new ScenarioReport("last arm");
+        report.Step("the scenario", () => { });
+        TargetedRegression.Remove(_rig.Manifest(), report, evidence);
+        Assert.False(Directory.Exists(_rig.Install));
+        var result = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(evidence, "result.json"))).RootElement;
+        Assert.Equal("removed", result.GetProperty("Provenance").GetProperty("disposableInstall").GetString());
+        Assert.True(result.GetProperty("CleanupVerified").GetBoolean());
+        // An install this tool did not create is refused, recorded as the failed cleanup, and kept.
+        Directory.CreateDirectory(_rig.Install);
+        var refused = new ScenarioReport("last arm");
+        refused.Step("the scenario", () => { });
+        Assert.Throws<InvalidOperationException>(() => TargetedRegression.Remove(_rig.Manifest(), refused, evidence));
+        Assert.True(Directory.Exists(_rig.Install));
+        Assert.Equal((true, false), (refused.ScenarioPassed, refused.CleanupVerified));
+        Assert.StartsWith("kept, removal refused", refused.Provenance["disposableInstall"]);
+        Directory.Delete(_rig.Install);
+    }
+
+    [Fact] public void AnArmsCommitIsOptionalButNeverBlank()
+    {
+        var arm = new RegressionArm { File = Path.GetFullPath("/mods/My.dll"), Sha256 = new string('a', 64) };
+        arm.Validate("mod.arms.parent"); // Not known: left out, never replaced by a stand-in.
+        arm.Commit = " ";
+        Assert.Contains("leave it out when it is not known", Assert.Throws<ArgumentException>(() => arm.Validate("mod.arms.parent")).Message);
+    }
+
     [Fact] public void AReusedInstallIsCopiedAgainWhenTheGamesLoaderChanged()
     {
         // Found on a Windows station: the prepared game held a mod manager's Doorstop proxy, which the preflight refused.

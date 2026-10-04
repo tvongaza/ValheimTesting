@@ -120,7 +120,7 @@ public sealed class ClientRounds
         try
         {
             world.Prepare();
-            Report.Step(OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
+            Report.Step(StepPhase.Setup, OpenStep ?? (Client.Owned ? "launch the owned client to its menu, plugins pinned" : "attach to the operator's client at its menu, plugins pinned"),
                 () =>
                 {
                     session = openClient();
@@ -135,8 +135,8 @@ public sealed class ClientRounds
                 if (i > 0) afterRestart?.Invoke(round);
                 world.Enter(round);
                 measure(round);
-                if (!round.Last) Report.Step(Between("confirmed world save", i), () => world.Save(round));
-                round.Step(world.LeaveStep, () =>
+                if (!round.Last) Report.Step(StepPhase.Setup, Between("confirmed world save", i), () => world.Save(round));
+                round.Step(StepPhase.Setup, world.LeaveStep, () =>
                 {
                     new SessionControl(client).Leave();
                     client.VerifyEnvironment(Client.MenuExpectations); // A transition always needs fresh pins.
@@ -160,7 +160,7 @@ public sealed class ClientRounds
         bool released = session == null || passed;
         Exception? teardown = null;
         if (session != null)
-            try { Report.Step(session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); released |= session.Owned; }
+            try { Report.Step(StepPhase.Cleanup, session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); released |= session.Owned; }
             catch (Exception error) { teardown = error; }
             finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
         try { world.Release(released); }
@@ -201,14 +201,14 @@ public sealed class ClientRounds
         {
             // An owned client's staged ValheimCLI set, read from its manifest before the launch, when the plan names one.
             if (rounds.Arrival != null && rounds.Client.Owned && rounds.Client.CliManifest != null)
-                rounds.Report.Step("the owned client's ValheimCLI manifest offers the arrival waits, before launch",
+                rounds.Report.Step(StepPhase.Preflight, "the owned client's ValheimCLI manifest offers the arrival waits, before launch",
                     () => rounds.Client.CheckCliManifest(PlayerPlacement.ArrivalCapabilities));
         }
         public void Opened(GameActor client) { }
         public GameActor ServerFor(GameActor client) => _server;
         public void Enter(ClientRound round) => rounds.Join(round);
         public void Save(ClientRound round) => round.Server.SaveConfirmed();
-        public void Restart(int round) => rounds.Report.Step(rounds.Between("restart only the owned server", round), () => _server = rounds.OwnedServer!.Restart());
+        public void Restart(int round) => rounds.Report.Step(StepPhase.Setup, rounds.Between("restart only the owned server", round), () => _server = rounds.OwnedServer!.Restart());
         public void Release(bool released) { }
     }
 
@@ -229,30 +229,30 @@ public sealed class ClientRounds
         }
         public void Prepare()
         {
-            Report.Step(Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
+            Report.Step(StepPhase.Preflight, Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
                 () => Client.Preflight(CliCapabilities.HostedRounds));
             string? saveDirectory = null;
-            Report.Step("preflight the native client's hosted-world save directory", () =>
+            Report.Step(StepPhase.Preflight, "preflight the native client's hosted-world save directory", () =>
             {
                 var platform = Client.Owned ? ClientLaunch.Detect(Client.Install) : HostedWorld.CurrentPlatform;
                 string defaultSaveDirectory = HostedWorld.DefaultSaveDirectory(platform);
                 HostedWorld.RequireNativeSaveDirectory(platform, plan.SaveDirectory, Client.LaunchArguments, defaultSaveDirectory);
                 saveDirectory = plan.SaveDirectory ?? defaultSaveDirectory;
             });
-            Report.Step("place the disposable fixture world in the client's local worlds", () => _world = HostedWorld.Place(plan, saveDirectory!, rounds.Output, Client.Pinned));
+            Report.Step(StepPhase.Setup, "place the disposable fixture world in the client's local worlds", () => _world = HostedWorld.Place(plan, saveDirectory!, rounds.Output, Client.Pinned));
             Report.Provenance["hostWorld"] = _world!.Name;
         }
         public void Opened(GameActor client) =>
-            Report.Step("the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(client, CliCapabilities.HostedRounds));
+            Report.Step(StepPhase.Setup, "the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(client, CliCapabilities.HostedRounds));
         public GameActor ServerFor(GameActor client) => client; // The host is both.
         public void Enter(ClientRound round)
         {
             string protect = rounds.ProtectPlayer ? ", protected" : "";
-            round.Step(round.Index == 0 ? "host the fixture world with the disposable character" + protect : "restart the hosted world" + protect,
+            round.Step(StepPhase.Setup, round.Index == 0 ? "host the fixture world with the disposable character" + protect : "restart the hosted world" + protect,
                 () => HostWorlds.Start(round.Client, Client, _world!.Name, TimeSpan.FromSeconds(Client.JoinSeconds), rounds.Cancellation, rounds.ProtectPlayer));
             // The owned host's disposable character and fixture acknowledge cheats; an operator's client keeps devcommands only.
             if (Client.Owned)
-                round.Step("establish test access on the owned host", () => TestAccess.Ensure(round.Client, TestActorRole.ClientInWorld));
+                round.Step(StepPhase.Setup, "establish test access on the owned host", () => TestAccess.Ensure(round.Client, TestActorRole.ClientInWorld));
         }
         public void Save(ClientRound round) => new SessionControl(round.Client).Save(plan.WorldUid, TimeSpan.FromSeconds(plan.SaveSeconds));
         public void Restart(int round) { } // The next round's start restarts the hosted world.
@@ -262,7 +262,7 @@ public sealed class ClientRounds
             if (!released) Report.Provenance["hostWorldLeftInPlace"] = _world.WorldsDirectory + " (" + _world.Name + ")";
             else
             {
-                Report.Step("move the hosted world from the client's local worlds into the evidence", _world.Collect);
+                Report.Step(StepPhase.Cleanup, "move the hosted world from the client's local worlds into the evidence", _world.Collect);
                 Report.Provenance["hostWorldEvidence"] = _world.CollectedTo!;
             }
         }
@@ -270,18 +270,18 @@ public sealed class ClientRounds
 
     private void Join(ClientRound round)
     {
-        round.Step("the server accepts game connections", () => OwnedServer!.WaitUntilJoinable(round.Server));
+        round.Step(StepPhase.Setup, "the server accepts game connections", () => OwnedServer!.WaitUntilJoinable(round.Server));
         CrossplayLobby? lobby = null;
-        if (Client.Crossplay) round.Step("the server's crossplay lobby is open", () => lobby = Lobby!(round.Server));
+        if (Client.Crossplay) round.Step(StepPhase.Setup, "the server's crossplay lobby is open", () => lobby = Lobby!(round.Server));
         // The one join (SessionControl.JoinWorld): devcommands first, the join exactly once, world pins, the world awaited and,
         // when requested, the player protected; an owned client's disposable character then gets test access. An operator's
         // client keeps devcommands only.
-        round.Step((Client.Crossplay ? "join the owned server's crossplay lobby with the disposable character" : "join the owned server with the disposable character") +
+        round.Step(StepPhase.Setup, (Client.Crossplay ? "join the owned server's crossplay lobby with the disposable character" : "join the owned server with the disposable character") +
             (ProtectPlayer ? ", protected" : ""),
             () => new SessionControl(round.Client).JoinWorld(Client, WorldUid!, lobby, ProtectPlayer, Cancellation)); // CheckJoined requires WorldUid.
         if (Arrival is { } point)
         {
-            round.Step(ArriveStep, () =>
+            round.Step(StepPhase.Setup, ArriveStep, () =>
             {
                 var arrival = PlayerPlacement.Arrive(round.Server, round.Client, point, TimeSpan.FromSeconds(Client.ArrivalSeconds), Cancellation);
                 round.Write("arrival", arrival.Support);
@@ -348,8 +348,10 @@ public sealed class ClientRound
     public ScenarioReport Report { get; }
     public string Output { get; }
 
-    /// <summary>Records a step named <c>{round}: {name}</c> and rethrows its failure.</summary>
+    /// <summary>Records a <see cref="StepPhase.Scenario"/> step named <c>{round}: {name}</c> and rethrows its failure.</summary>
     public void Step(string name, Action action) => Report.Step(Name + ": " + name, action);
+    /// <summary>Records a step in <paramref name="phase"/> named <c>{round}: {name}</c> and rethrows its failure.</summary>
+    public void Step(StepPhase phase, string name, Action action) => Report.Step(phase, Name + ": " + name, action);
 
     /// <summary>The world UID the rounds run in, which every evidence file of this round names.</summary>
     public string WorldUid { get; }

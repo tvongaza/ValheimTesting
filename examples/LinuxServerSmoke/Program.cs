@@ -39,7 +39,7 @@ string password = Guid.NewGuid().ToString("N");
 DirectServerProcess? server = null;
 try
 {
-    report.Step("prepare launch from the runtime's own platform", () =>
+    report.Step(StepPhase.Setup, "prepare launch from the runtime's own platform", () =>
     {
         // A previous run's log would satisfy the chainloader check without this boot.
         if (File.Exists(bepinexLog)) throw new InvalidOperationException("BepInEx/LogOutput.log already exists; use a fresh runtime copy.");
@@ -75,7 +75,7 @@ ProcessStartInfo Start(int boot) => ServerLaunch.CreateStartInfo(runtime, ["-bat
 void Boot(int boot, string worldStep, params string[] markers)
 {
     string suffix = boot == 1 ? "" : $" (boot {boot})";
-    report.Step("start owned server process" + suffix, () =>
+    report.Step(StepPhase.Setup, "start owned server process" + suffix, () =>
     {
         // The previous boot's log, already kept as boot-N.game-0.log, would pass the chainloader check before this boot
         // truncates it.
@@ -85,7 +85,7 @@ void Boot(int boot, string worldStep, params string[] markers)
     });
     report.Step("BepInEx chainloader finished" + suffix, () => WaitFor(bepinexLog, "Chainloader startup complete"));
     report.Step(worldStep, () => WaitFor(Log(boot), markers));
-    report.Step("stop owned server process cleanly" + suffix, () =>
+    report.Step(StepPhase.Cleanup, "stop owned server process cleanly" + suffix, () =>
     {
         var stop = Stop()!;
         report.Provenance[$"stop{boot}"] = stop.ToString();

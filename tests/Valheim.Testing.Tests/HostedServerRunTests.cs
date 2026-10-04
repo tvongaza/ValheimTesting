@@ -730,11 +730,16 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime")));
         Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime-changes"))); // fetched, so not kept twice
 
-        // A cleanup the host could not finish is reported; the run's result stands and the host's lock is released.
+        // A cleanup the host could not finish fails the Cleanup step: the run fails (exit 1), its scenario still passed, and
+        // the host's lock is released.
         Directory.Delete(Output, true); Directory.Delete(host.Local(RunDirectory), true);
         host.Failures["retire"] = new HostResult(HostOutcome.Exited, 3, "", "rm: cannot remove", TimeSpan.Zero, false);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--profile", profile, "run", plan, Output], Options(host, server)));
         Assert.StartsWith("cleanup failed", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
+        // This scenario records no step of its own, so the runtime-ready state is the one that says the run got that far.
+        Assert.Equal((false, true, false), (Result().GetProperty("Passed").GetBoolean(), Result().GetProperty("RuntimeReady").GetBoolean(), Result().GetProperty("CleanupVerified").GetBoolean()));
+        var failed = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), s => !s.GetProperty("Passed").GetBoolean());
+        Assert.Equal(("remove the server host's runtime copy, keeping what the run changed", "Cleanup"), (failed.GetProperty("Name").GetString(), failed.GetProperty("Phase").GetString()));
         Assert.Equal(host.Claims.Count, host.Releases.Count);
         host.Failures.Remove("retire");
 
@@ -778,7 +783,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
                 "copied runtime has the plan's server executable", "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
-                "fetch the server host's world copy", "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
+                "fetch the server host's world copy", "remove the server host's runtime copy, keeping what the run changed", "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
 
         // The copy is the host's install, into this run's own directory; the world copy is shipped there.
         var copy = Assert.Single(host.Runs, run => run.Script == "copy");
