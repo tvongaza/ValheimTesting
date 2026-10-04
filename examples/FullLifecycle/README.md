@@ -254,7 +254,7 @@ own identity. Unix's remembered Steam login alone is not proof of the running ga
 from the recorded identity reply. The FullLifecycle runner opts into `TestAccess.Ensure`: dedicated servers acknowledge
 cheats locally, and clients acknowledge their disposable character after joining. `AllowOnServerClients` must already be
 set in the staged configuration for client mutations; the helper never grants it at runtime. Register two clean, distinct
-test characters with `DisposableCharacterStore`; one seed copied twice is still one player. Set the server password and
+test characters with `DisposableCharacterStore`; one seed copied twice is still one player. Each is staged into its client host's own `characters_local`, resolved on that host with its Steam `userdata` (see [the campaign docs](../../docs/testing-toolkit.md#a-campaign-remote-clients-and-steam-identities)); `env preflight --hosts` prints both folders. Set the server password and
 client password variable in the private plan/environment as for any owned-server run. The sample paths and password are
 placeholders, never defaults that the runner guesses.
 

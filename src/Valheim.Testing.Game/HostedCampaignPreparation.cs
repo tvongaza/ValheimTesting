@@ -236,17 +236,19 @@ public static class HostedCampaignPreparation
     }
 
     private sealed record HostInspection(CampaignPreflightReport Report,
-        IReadOnlyDictionary<string, string> ObservedSteamIds, IReadOnlyDictionary<string, HostListing> SourceListings);
+        IReadOnlyDictionary<string, string> ObservedSteamIds, IReadOnlyDictionary<string, HostListing> SourceListings,
+        IReadOnlyDictionary<string, CharacterDirectories> CharacterDirectories);
 
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
     {
         if (inspection.Inputs == null) return new HostInspection(inspection.Report,
-            new Dictionary<string, string>(), new Dictionary<string, HostListing>());
+            new Dictionary<string, string>(), new Dictionary<string, HostListing>(), new Dictionary<string, CharacterDirectories>());
         var inputs = inspection.Inputs!;
         var failures = new ConcurrentBag<CampaignPreflightProblem>(inspection.Report.Problems);
         var observedSteamIds = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var sourceListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
+        var characterDirectories = new ConcurrentDictionary<string, CharacterDirectories>(StringComparer.Ordinal);
         var hostChecks = inputs.Roles.GroupBy(role => role.Role.Host, StringComparer.Ordinal).Select(async group =>
         {
             IGameHost host;
@@ -299,6 +301,20 @@ public static class HostedCampaignPreparation
                     { failures.Add(new(item.Name, "game and loader", error.Message)); }
                 }
                 if (item.Name == "server") return;
+                var folders = inputs.Characters.TryGetValue(item.Name, out var character) ? ResolveFoldersAsync(character) : Task.CompletedTask;
+                async Task ResolveFoldersAsync(HostedCharacterSelection selection)
+                {
+                    try
+                    {
+                        // Given folders are checked, left-out ones resolved, on the client's own host.
+                        var directories = await HostedCharacterStage.ResolveDirectoriesAsync(host, inputs.Profile.Hosts[group.Key].Platform,
+                            selection.Input, timeout, cancellation).ConfigureAwait(false);
+                        if (directories.Missing != null) failures.Add(new(item.Name, "character folders", directories.Missing));
+                        else characterDirectories[item.Name] = directories;
+                    }
+                    catch (Exception error) when (error is ArgumentException or InvalidOperationException or HostOperationException or IOException)
+                    { failures.Add(new(item.Name, "character folders", error.Message)); }
+                }
                 try
                 {
                     // The client's Steam identity is the one signed in on its host, never one written in a file.
@@ -309,6 +325,7 @@ public static class HostedCampaignPreparation
                 }
                 catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
                 { failures.Add(new(item.Name, "Steam identity", error.Message)); }
+                await folders.ConfigureAwait(false);
             })).ConfigureAwait(false);
             try { HostCopyCapacityProbe.RequireCombined(group.Key, capacities); }
             catch (IOException error) { failures.Add(new(group.Key, "copy space", error.Message)); }
@@ -318,9 +335,11 @@ public static class HostedCampaignPreparation
         foreach (var shared in observedSteamIds.GroupBy(account => account.Value, StringComparer.Ordinal).Where(group => group.Count() > 1))
             failures.Add(new("clients", "Steam identities", "Clients " + string.Join(", ", shared.Select(account => account.Key).Order(StringComparer.Ordinal)) +
                 " use the same signed-in Steam account; choose different client environments before launch."));
+        var actors = inspection.Report.Actors.Select(actor => characterDirectories.TryGetValue(actor.Name, out var directories)
+            ? actor with { CharactersDirectory = directories.Characters, SteamUserDataDirectory = directories.UserData } : actor).ToArray();
         return new HostInspection(new CampaignPreflightReport(failures.OrderBy(problem => problem.Actor, StringComparer.Ordinal)
-            .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = inspection.Report.Actors },
-            observedSteamIds, sourceListings);
+            .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = actors },
+            observedSteamIds, sourceListings, characterDirectories);
     }
 
     /// <summary>The BepInEx plugins among a role's selected files, by GUID, with each DLL's MD5.</summary>
@@ -576,8 +595,11 @@ public static class HostedCampaignPreparation
                         item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage),
                         readiness.SourceListings[name]).ConfigureAwait(false);
                     copies.Add((hostName, runtime, stage));
-                    if (characters.TryGetValue(name, out var character))
+                    if (characters.TryGetValue(name, out var selected))
                     {
+                        // The folders the host check resolved, never the manifest's object.
+                        var folders = readiness.CharacterDirectories[name];
+                        var character = selected with { Input = selected.Input.WithDirectories(folders.Characters!, folders.UserData!) };
                         await HostedCharacterStage.StageAsync(host, character, HostInstall.Join(parent, "character-stage"), timeout, cancellation).ConfigureAwait(false);
                         stagedCharacters.Add((hostName, character.Input));
                     }

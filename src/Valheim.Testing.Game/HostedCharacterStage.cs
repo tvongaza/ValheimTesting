@@ -10,9 +10,29 @@ public sealed class HostedCampaignCharacter
     public string RegisteredName { get; set; } = "";
     /// <summary>Fresh filename without .fch on this host. Two simultaneous clients need different player IDs too.</summary>
     public string FileName { get; set; } = "";
+    /// <summary>
+    /// Optional: the client host user's <c>characters_local</c>. Left out, the client host's standard folder for its platform,
+    /// resolved on that host (Windows <c>%USERPROFILE%\AppData\LocalLow\IronGate\Valheim\characters_local</c>, Linux
+    /// <c>~/.config/unity3d/IronGate/Valheim/characters_local</c>, macOS <c>~/Library/Application Support/IronGate/Valheim/characters_local</c>).
+    /// </summary>
     public string CharactersLocalDirectory { get; set; } = "";
+    /// <summary>
+    /// Optional: the client host's Steam <c>userdata</c>, searched for a same-named Steam Cloud character. Left out, the first that
+    /// exists on that host: Windows Steam's registered <c>SteamPath</c>, then <c>Program Files (x86)\Steam</c>; Linux
+    /// <c>~/.local/share/Steam</c>, <c>~/.steam/steam</c>, then the Flatpak's; macOS <c>~/Library/Application Support/Steam</c>.
+    /// </summary>
     public string SteamUserDataDirectory { get; set; } = "";
+
+    internal HostedCampaignCharacter WithDirectories(string characters, string userdata)
+    {
+        var copy = (HostedCampaignCharacter)MemberwiseClone();
+        copy.CharactersLocalDirectory = characters; copy.SteamUserDataDirectory = userdata;
+        return copy;
+    }
 }
+
+/// <summary>A client host's character and Steam userdata folders as resolved there (null when missing), and what is missing.</summary>
+internal sealed record CharacterDirectories(string? Characters, string? UserData, string? Missing);
 
 internal sealed record HostedCharacterSelection(HostedCampaignCharacter Input, DisposableCharacter Handle, string File);
 
@@ -33,6 +53,43 @@ internal static class HostedCharacterStage
         if (!WorldFixture.Hash(file).Equals(handle.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The registered character changed before staging: " + input.RegisteredName);
         return new(input, handle, file);
+    }
+
+    /// <summary>
+    /// Resolves the character's folders on its client host: each given one as given, each left out from the host's standard
+    /// paths for <paramref name="platform"/> (<c>windows</c>, <c>linux</c> or <c>macos</c>). <see cref="CharacterDirectories.Missing"/>
+    /// names the folder and every path tried when one does not exist. <paramref name="userHome"/> replaces the host user's home
+    /// in controlled tests.
+    /// </summary>
+    internal static async Task<CharacterDirectories> ResolveDirectoriesAsync(IGameHost host, string platform, HostedCampaignCharacter input,
+        TimeSpan timeout, CancellationToken cancellation, string userHome = "", string steamRoot = "")
+    {
+        var reply = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? PowerShellDirectories : BashDirectories,
+            new Dictionary<string, string>
+            {
+                ["platform"] = platform, ["characters"] = input.CharactersLocalDirectory, ["userdata"] = input.SteamUserDataDirectory,
+                ["userhome"] = userHome, ["steamroot"] = steamRoot,
+            }, timeout, cancellation).ConfigureAwait(false);
+        reply.EnsureSuccess($"Resolving the character folders on {host.Name}");
+        string? characters = null, userdata = null;
+        var tried = new Dictionary<string, List<string>> { ["characters"] = [], ["userdata"] = [] };
+        foreach (string line in reply.Stdout.Split('\n').Select(line => line.TrimEnd('\r')))
+        {
+            var match = Regex.Match(line, "^VT-CHARDIR (characters|userdata) (found|tried) (.+)$", RegexOptions.CultureInvariant);
+            if (!match.Success) continue;
+            if (match.Groups[2].Value == "tried") tried[match.Groups[1].Value].Add(match.Groups[3].Value);
+            else if (match.Groups[1].Value == "characters") characters = match.Groups[3].Value;
+            else userdata = match.Groups[3].Value;
+        }
+        if (tried["characters"].Count == 0 || tried["userdata"].Count == 0)
+            throw new HostOperationException($"Unexpected reply while resolving the character folders on {host.Name}", reply);
+        var missing = new List<string>();
+        if (characters == null) missing.Add("characters_local (tried " + string.Join(", ", tried["characters"]) + ")");
+        if (userdata == null) missing.Add("Steam userdata (tried " + string.Join(", ", tried["userdata"]) + ")");
+        if (missing.Count != 0) return new CharacterDirectories(characters, userdata, $"No {string.Join(" and no ", missing)} on {host.Name}.");
+        // A resolved folder is staged into: the same shape rules as a given one, before anything is copied.
+        CheckHostPaths(host, input.WithDirectories(characters!, userdata!));
+        return new CharacterDirectories(characters, userdata, null);
     }
 
     internal static async Task StageAsync(IGameHost host, HostedCharacterSelection selected, string staging, TimeSpan timeout,
@@ -126,7 +183,7 @@ internal static class HostedCharacterStage
             ["stage"] = staging, ["characters"] = input.CharactersLocalDirectory, ["userdata"] = input.SteamUserDataDirectory,
         };
 
-    private static void CheckHostPaths(IGameHost host, HostedCampaignCharacter input)
+    internal static void CheckHostPaths(IGameHost host, HostedCampaignCharacter input)
     {
         HostInstall.RequireHostPath(host, input.CharactersLocalDirectory, nameof(input.CharactersLocalDirectory));
         HostInstall.RequireHostPath(host, input.SteamUserDataDirectory, nameof(input.SteamUserDataDirectory));
@@ -161,6 +218,71 @@ internal static class HostedCharacterStage
         }
 
         """;
+
+    // Variables: platform, characters, userdata, userhome and steamroot (each may be empty; userhome and steamroot only for
+    // controlled tests). One "found" or "tried" line per path considered. Steam's userdata is searched in the order the signed-in
+    // identity is read (SteamSignedInUsers); Valheim's characters_local is the one beside it: a Flatpak Steam's game keeps its
+    // saves inside the Flatpak's own home.
+    internal static readonly string BashDirectories = """
+        set -u
+        home=${userhome:-$HOME}
+        if [ "$platform" = macos ]; then
+          set -- "$home/Library/Application Support/Steam/userdata"
+        else
+          set -- "$home/.local/share/Steam/userdata" "$home/.steam/steam/userdata" "$home/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata"
+        fi
+        if [ -n "$userdata" ]; then set -- "$userdata"; fi
+        steamfound=""
+        for folder in "$@"; do
+          echo "VT-CHARDIR userdata tried $folder"
+          if [ -d "$folder" ]; then echo "VT-CHARDIR userdata found $folder"; steamfound=$folder; break; fi
+        done
+        if [ "$platform" = macos ]; then
+          standard="$home/Library/Application Support/IronGate/Valheim/characters_local"
+        else
+          case "$steamfound" in
+            "$home/.var/app/com.valvesoftware.Steam/"*) config="$home/.var/app/com.valvesoftware.Steam/.config" ;;
+            *) if [ -n "$userhome" ]; then config="$home/.config"; else config="${XDG_CONFIG_HOME:-$home/.config}"; fi ;;
+          esac
+          standard="$config/unity3d/IronGate/Valheim/characters_local"
+        fi
+        folder=${characters:-$standard}
+        echo "VT-CHARDIR characters tried $folder"
+        if [ -d "$folder" ]; then echo "VT-CHARDIR characters found $folder"; fi
+        """.ReplaceLineEndings("\n");
+
+    internal static readonly string PowerShellDirectories = """
+        $userHomeDir = if ($userhome) { $userhome } elseif ($platform -eq 'windows' -and $env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
+        $candidates = @()
+        if ($platform -eq 'windows') {
+            $steam = $steamroot
+            if (-not $steam) { try { $steam = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction Stop).SteamPath } catch { } }
+            # Steam writes its registered path with forward slashes.
+            if ($steam) { $candidates += [IO.Path]::Combine(($steam -replace '/', '\'), 'userdata') }
+            $x86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+            if ($x86 -and -not $steamroot) { $candidates += [IO.Path]::Combine($x86, 'Steam', 'userdata') }
+        } elseif ($platform -eq 'macos') {
+            $candidates += "$userHomeDir/Library/Application Support/Steam/userdata"
+        } else {
+            $candidates += "$userHomeDir/.local/share/Steam/userdata", "$userHomeDir/.steam/steam/userdata", "$userHomeDir/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata"
+        }
+        if ($userdata) { $candidates = @($userdata) }
+        $steamFound = $null
+        foreach ($candidate in $candidates) {
+            "VT-CHARDIR userdata tried $candidate"
+            if ([IO.Directory]::Exists($candidate)) { "VT-CHARDIR userdata found $candidate"; $steamFound = $candidate; break }
+        }
+        if ($platform -eq 'windows') { $standard = [IO.Path]::Combine($userHomeDir, 'AppData', 'LocalLow', 'IronGate', 'Valheim', 'characters_local') }
+        elseif ($platform -eq 'macos') { $standard = "$userHomeDir/Library/Application Support/IronGate/Valheim/characters_local" }
+        else {
+            $flatpak = "$userHomeDir/.var/app/com.valvesoftware.Steam/"
+            $config = if ($steamFound -and $steamFound.StartsWith($flatpak)) { $flatpak + '.config' } elseif (-not $userhome -and $env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { "$userHomeDir/.config" }
+            $standard = "$config/unity3d/IronGate/Valheim/characters_local"
+        }
+        $folder = if ($characters) { $characters } else { $standard }
+        "VT-CHARDIR characters tried $folder"
+        if ([IO.Directory]::Exists($folder)) { "VT-CHARDIR characters found $folder" }
+        """.ReplaceLineEndings("\n");
 
     internal static readonly string WindowsInstall = (WindowsOwned + """
         if (-not [IO.Directory]::Exists($characters) -or -not [IO.Directory]::Exists($userdata)) { 'VT-CHAR missing-directory'; exit 0 }

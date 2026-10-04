@@ -37,8 +37,12 @@ internal static class EnvCommand
         else
         {
             foreach (var actor in report.Actors)
+            {
                 output.WriteLine($"{actor.Name}: {actor.Kind} on {actor.Host} ({actor.Platform})" +
                     (actor.Environment == null ? "" : $" via {actor.Environment}: {actor.SelectionReason}"));
+                if (actor.CharactersDirectory != null)
+                    output.WriteLine($"  characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
+            }
             if (report.Ready) output.WriteLine(hosts
                 ? "READY: read-only host checks passed. Mutable state is rechecked under lease before launch."
                 : "ELIGIBLE: local files, fixture and actor assignments passed. Host readiness is checked under lease before launch.");
