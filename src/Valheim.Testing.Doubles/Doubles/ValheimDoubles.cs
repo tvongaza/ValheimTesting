@@ -161,7 +161,7 @@ public partial class Heightmap
     public static Heightmap? FindHeightmap(UnityEngine.Vector3 point) => s_heightmaps.Find(h => h.IsPointInside(point));
     public static System.Collections.Generic.List<Heightmap> GetAllHeightmaps() => new(s_heightmaps);
     /// <summary>Like the game: the zone's live compiler, or a new one (with a new ZDO) if it has none.</summary>
-    public TerrainComp GetAndCreateTerrainCompiler() => m_terrainComp ??= new TerrainComp(this, 64);
+    public TerrainComp GetAndCreateTerrainCompiler() => m_terrainComp ??= new TerrainComp(this, m_width);
     /// <summary>Valheim 1.0: the argument selects which late pass rebuilds
     /// (1 = LateUpdate, 2 = CustomLateUpdate), it is not a frame count.</summary>
     // Most existing writer tests advance straight to the requested late pass.
@@ -177,8 +177,10 @@ public partial class Heightmap
     public void Regenerate() => RebuildTerrain();
     [TestOnly] public void RebuildTerrain()
     {
-        if (m_terrainComp == null) return;
-        int width = m_terrainComp.m_width;
+        int width = m_width;
+        var compiler = m_terrainComp;
+        if (compiler != null && compiler.m_width != width)
+            throw new System.InvalidOperationException($"The zone's compiler is {compiler.m_width} wide and its heightmap {width}; the game sizes the compiler from the heightmap.");
         var heights = new System.Collections.Generic.List<float>();
         for (int z = 0; z <= width; z++)
             for (int x = 0; x <= width; x++)
@@ -188,12 +190,23 @@ public partial class Heightmap
                 float h = AuthoredHeight != null ? AuthoredHeight(wx, wz) : BaseHeight(wx, wz);
                 heights.Add(h - transform.position.y);
             }
-        var baseline = heights.ToArray();
-        // The seam a mod's Harmony prefix on the game's rebuild uses: no compiler deltas are in these heights yet.
-        ModTerrainPass(heights);
-        for (int i = 0; i < heights.Count; i++)
-            heights[i] = UnityEngine.Mathf.Clamp(heights[i] + m_terrainComp.m_levelDelta[i] +
-                m_terrainComp.m_smoothDelta[i], baseline[i] - 8f, baseline[i] + 8f);
+        // As the game's Heightmap.ApplyModifiers (1.0.16): without a compiler in the zone, ApplyToHeightmap is not called.
+        if (compiler != null)
+        {
+            var baseline = heights.ToArray();
+            // The seam a mod's Harmony prefix on ApplyToHeightmap uses: no compiler deltas are in these heights yet.
+            ModTerrainPass(heights);
+            // As ApplyToHeightmap: nothing from a compiler that is not initialized; otherwise every vertex with a non-zero
+            // level or smooth delta, flagged as modified or not, gets both and only those vertices are clamped to 8 m
+            // around the base height. The flag decides only what Save keeps.
+            if (compiler.m_initialized)
+            {
+                float[] levels = compiler.m_levelDelta, smooths = compiler.m_smoothDelta;
+                for (int i = 0; i < heights.Count; i++)
+                    if (levels[i] != 0f || smooths[i] != 0f)
+                        heights[i] = UnityEngine.Mathf.Clamp(heights[i] + levels[i] + smooths[i], baseline[i] - 8f, baseline[i] + 8f);
+            }
+        }
         LastRenderedHeights = heights;
     }
 
@@ -396,7 +409,7 @@ public partial class TerrainComp
     /// <summary>The last operation's point and radius, saved with the terrain.</summary>
     public UnityEngine.Vector3 m_lastOpPoint;
     public float m_lastOpRadius;
-    /// <summary>The game's (private) flag, set once the compiler has its heightmap; until then Save writes nothing. True here from construction; a test sets it false to make a save silently not happen.</summary>
+    /// <summary>The game's (private) flag, set once the compiler has its heightmap; until then Save writes nothing and a rebuild adds none of its deltas. True here from construction; a test sets it false to make a save silently not happen.</summary>
     public bool m_initialized = true;
     [TestOnly] public int SaveCount;
 
