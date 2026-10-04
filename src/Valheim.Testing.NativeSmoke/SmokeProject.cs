@@ -1,18 +1,33 @@
 using System.Diagnostics;
-using System.Net;
-using System.Text.Json;
+using Valheim.Testing.Game;
 
 /// <summary>
-/// Leave an editable native scenario beside the evidence. Prove it builds from the published package before copying
-/// it into the output: a source checkout or a stale global NuGet cache cannot stand in for a release.
+/// <c>valheim-test init</c>: an editable native scenario, the only thing this tool builds. Prove it builds from NuGet.org
+/// alone before copying it into the output: a source checkout or a stale global NuGet cache cannot stand in for a release.
+/// <c>start</c> and <c>server-load</c> never build it; they run from this tool's own assemblies, offline.
 /// </summary>
 internal static class SmokeProject
 {
-    // The generated consumer only uses the already published runner API: it pins the newest Game package released when this
-    // tool was built, read from the repository's toolkit-versions.json (embedded at build). A tool released together with
-    // a new Game therefore pins the Game before it; its next release moves with the file.
-    internal static readonly string GameVersion = ReleasedGameVersion();
+    // The consumer pins the Valheim.Testing.Game this tool was built with and runs in process, so the environment.json or
+    // plan.json the tool writes and the consumer's reader are one version by construction (one source: the Game assembly).
+    internal static readonly string GameVersion = typeof(TargetedRegression).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "unknown";
     private const string Feed = "https://api.nuget.org/v3/index.json";
+
+    /// <summary>Why a consumer cannot pin <paramref name="version"/>: a local candidate build or an unknown version is never on NuGet.org.</summary>
+    internal static string? Unpublishable(string version) =>
+        version == "unknown" ? "This tool's Valheim.Testing.Game version is unknown, so a consumer cannot pin it."
+        : version.Contains("-candidate", StringComparison.OrdinalIgnoreCase)
+            ? $"This tool was built with the local candidate Valheim.Testing.Game {version}, which NuGet.org never serves. Use a released valheim-test to create a consumer."
+            : null;
+
+    /// <summary>The one line a run prints after its result: how to get a consumer for the file it wrote (none when init would refuse).</summary>
+    internal static void PrintHint(bool server)
+    {
+        if (Unpublishable(GameVersion) == null)
+            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "plan" : "environment")}.json; needs NuGet.org).");
+    }
 
     internal static async Task<int> InitAsync(string[] args)
     {
@@ -24,6 +39,11 @@ internal static class SmokeProject
             return 2;
         }
         string output = Path.GetFullPath(path);
+        if (Unpublishable(GameVersion) is { } refusal)
+        {
+            Console.Error.WriteLine("REFUSED: " + refusal);
+            return 3;
+        }
         if (Path.Exists(output))
         {
             Console.Error.WriteLine("REFUSED: The consumer output must be new: " + output);
@@ -40,7 +60,7 @@ internal static class SmokeProject
                 "; Valheim.Testing.Game " + GameVersion + " restored and built from NuGet.org only.");
             return 0;
         }
-        catch (Exception failure) when (failure is IOException or InvalidOperationException or HttpRequestException or UnauthorizedAccessException or OperationCanceledException)
+        catch (Exception failure) when (failure is IOException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             if (Directory.Exists(output) && !Directory.EnumerateFileSystemEntries(output).Any()) Directory.Delete(output);
@@ -49,12 +69,11 @@ internal static class SmokeProject
         finally { Console.CancelKeyPress -= onCancel; }
     }
 
-    internal static async Task CreateAsync(string output, bool server, CancellationToken cancellation)
+    private static async Task CreateAsync(string output, bool server, CancellationToken cancellation)
     {
         string stage = Path.Combine(Path.GetTempPath(), "valheimtesting-smoke-project-" + Guid.NewGuid().ToString("N"));
         try
         {
-            await RequirePublishedAsync(cancellation);
             Directory.CreateDirectory(stage);
             Write(stage, server);
             string packages = Path.Combine(stage, "packages"), httpCache = Path.Combine(stage, "http-cache");
@@ -120,7 +139,7 @@ internal static class SmokeProject
             """ : """
             using Valheim.Testing.Game;
 
-            // Run this from consumer/ after the native smoke has written ../environment.json.
+            // Run this with the environment.json a `valheim-test start` run wrote beside its evidence.
             // Supply a fresh result directory for each run; the game install and selected DLLs remain pinned.
             if (args is not [var environmentFile, var resultDirectory])
             {
@@ -142,28 +161,19 @@ internal static class SmokeProject
         File.WriteAllText(Path.Combine(directory, "README.md"), $$"""
             # Extend this native smoke
 
-            This project restores `Valheim.Testing.Game` from NuGet.org only. The pinned plan and private evidence
-            live one directory above. Add your mod-specific observations in `Program.cs`, then run from this
-            directory with a fresh result directory:
+            This project restores `Valheim.Testing.Game` {{GameVersion}} from NuGet.org only: the version the
+            `valheim-test` that created it runs, so it reads that tool's files. Add your mod-specific observations in
+            `Program.cs`, then run from this directory with the {{(server ? "plan" : "environment")}}.json a
+            `valheim-test {{(server ? "server-load" : "start")}}` run wrote and a fresh result directory:
 
             ```sh
-            dotnet run -c Release -- ../{{(server ? "plan" : "environment")}}.json ../my-assertions-1
+            dotnet run -c Release -- RUN_OUTPUT/{{(server ? "plan" : "environment")}}.json RUN_OUTPUT/my-assertions-1
             ```
 
             Keep the fixture, installed DLL hashes and ValheimCLI pins fixed while investigating a regression.
             A passing load check means the selected plugins started, not that their gameplay is correct.
             Do not publish the environment or evidence unchanged; they can contain private machine paths.
             """);
-    }
-
-    private static async Task RequirePublishedAsync(CancellationToken cancellation)
-    {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-        string version = GameVersion.ToLowerInvariant();
-        string url = $"https://api.nuget.org/v3-flatcontainer/valheim.testing.game/{version}/valheim.testing.game.{version}.nupkg";
-        using var reply = await http.SendAsync(new HttpRequestMessage(HttpMethod.Head, url), cancellation);
-        if (reply.StatusCode != HttpStatusCode.OK)
-            throw new InvalidOperationException($"Valheim.Testing.Game {GameVersion} is not served by NuGet.org (HTTP {(int)reply.StatusCode}). Publish that Game API before creating a native smoke consumer; no source checkout will substitute for it.");
     }
 
     private static async Task RunDotnetAsync(string directory, string packages, string httpCache, CancellationToken cancellation,
@@ -186,6 +196,9 @@ internal static class SmokeProject
             throw;
         }
         string output = (await stdout) + "\n" + (await stderr);
+        // NU1101-NU1103: the version is not on NuGet.org, as for a tool built from a checkout ahead of the last release.
+        if (process.ExitCode != 0 && args[0] == "restore" && System.Text.RegularExpressions.Regex.IsMatch(output, @"\bNU110[123]\b"))
+            throw new InvalidOperationException($"NuGet.org does not serve Valheim.Testing.Game {GameVersion}, the version this tool runs; a tool built from a source checkout ahead of the last release cannot create a consumer. Use a released valheim-test. ({output.Trim()})");
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"The generated consumer did not {args[0]} from NuGet.org (exit {process.ExitCode}): {output.Trim()}");
         if (args[0] == "restore")
@@ -194,14 +207,5 @@ internal static class SmokeProject
             if (!File.Exists(metadata) || !File.ReadAllText(metadata).Contains(Feed, StringComparison.Ordinal))
                 throw new InvalidOperationException("The generated consumer did not restore Valheim.Testing.Game from NuGet.org; its source metadata is absent or different.");
         }
-    }
-
-    private static string ReleasedGameVersion()
-    {
-        using Stream stream = typeof(SmokeProject).Assembly.GetManifestResourceStream("toolkit-versions.json")
-            ?? throw new InvalidOperationException("toolkit-versions.json is not embedded in this build.");
-        using JsonDocument versions = JsonDocument.Parse(stream);
-        return versions.RootElement.GetProperty("released").GetProperty("Valheim.Testing.Game").GetString()
-            ?? throw new InvalidOperationException("toolkit-versions.json names no released Valheim.Testing.Game.");
     }
 }

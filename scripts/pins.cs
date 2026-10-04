@@ -11,9 +11,9 @@
 //
 // Pins are the copyable versions in the README, CONTRIBUTING, docs, examples, tools and the packages' READMEs: a
 // PackageReference, a `dotnet tool install` or `dotnet add package` command, ToolkitPackageVersion (the Game package; a -p:
-// argument or a project property), and a backticked package ID followed by a backticked version, as in the package table. History in prose ("new in Game
-// preview 11") is not a pin. Dated native-validation records are not scanned. The NativeSmoke tool reads the released Game
-// version from the file itself (embedded at build).
+// argument or a project property), and a backticked package ID followed by a backticked version, as in the package table.
+// History in prose ("new in Game preview 11") is not a pin. Dated native-validation records are not scanned. The
+// NativeSmoke tool does not read this file: its generated consumer pins the Game the tool was built with.
 //
 // check reads NuGet.org and fails, naming the file and line, when: a pin differs from the file; a released version is not
 // served, is a candidate, or is superseded by a newer version NuGet.org lists (the docs lag a release; an unlisted

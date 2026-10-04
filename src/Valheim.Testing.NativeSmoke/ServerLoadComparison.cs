@@ -5,7 +5,7 @@ internal static class ServerLoadComparison
 {
     public static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runArm = null)
     {
-        runArm ??= ServerLoad.RunAsync;
+        runArm ??= arm => ServerLoad.RunAsync(arm);
         using var cancel = new CancellationTokenSource();
         ConsoleCancelEventHandler onCancel = (_, press) => { press.Cancel = true; cancel.Cancel(); };
         Console.CancelKeyPress += onCancel;
@@ -108,7 +108,7 @@ internal static class ServerLoadComparison
                 : $"SERVER_MODSET_AB_FAIL: full set exit {beforeResult}, removed-mod set exit {afterResult}; inspect both private arm results before attributing the difference.");
             return beforeResult != 0 ? beforeResult : afterResult;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or HttpRequestException or OperationCanceledException)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             return 3;

@@ -1,3 +1,4 @@
+using Valheim.Testing.Game;
 using Xunit;
 
 public sealed class NativeSmokeConsumerTests : IDisposable
@@ -89,17 +90,41 @@ public sealed class NativeSmokeConsumerTests : IDisposable
             Assert.Contains("NativeSmoke.Adapter." + file, names);
     }
 
-    // The editable consumer pins the newest released Game package from toolkit-versions.json, the one record of releases.
-    // The tool carries the file under the name SmokeProject reads, so an installed tool reads the version it was built with.
+    // One source (#297): the consumer pins the Valheim.Testing.Game this tool was built with and runs, the version of
+    // the Game project it references, so the files the tool writes and the consumer's reader are one version. The tool no
+    // longer carries toolkit-versions.json, the released version that differed from what it ran.
     [Fact]
-    public void EditableConsumerPinsTheReleasedGameFromToolkitVersions()
+    public void EditableConsumerPinsTheGameThisToolRuns()
     {
-        string file = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "toolkit-versions.json"));
-        using var versions = System.Text.Json.JsonDocument.Parse(file);
-        Assert.Equal(versions.RootElement.GetProperty("released").GetProperty("Valheim.Testing.Game").GetString(), SmokeProject.GameVersion);
-        using Stream? carried = typeof(SmokeProject).Assembly.GetManifestResourceStream("toolkit-versions.json");
-        Assert.NotNull(carried);
-        Assert.Equal(file, new StreamReader(carried).ReadToEnd());
+        string project = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "src", "Valheim.Testing.Game", "Valheim.Testing.Game.csproj"));
+        string built = System.Text.RegularExpressions.Regex.Match(project, "<Version>([^<]+)</Version>").Groups[1].Value;
+        Assert.NotEmpty(built);
+        Assert.Equal(built, SmokeProject.GameVersion);
+        Assert.Equal("Valheim.Testing.Game " + built, TargetedRegression.ToolkitVersion); // the run's provenance names the same version
+        Assert.Null(typeof(SmokeProject).Assembly.GetManifestResourceStream("toolkit-versions.json"));
+    }
+
+    [Theory]
+    [InlineData("0.1.0-preview.41", false)]
+    [InlineData("0.1.0-preview.42-candidate.1a2b3c4", true)]
+    [InlineData("unknown", true)]
+    public void InitRefusesOnlyAGameVersionNuGetOrgNeverServes(string version, bool refused)
+    {
+        Assert.Equal(refused, SmokeProject.Unpublishable(version) != null);
+    }
+
+    // start and server-load make no network call: neither the tool nor the toolkit assemblies it runs in process has an
+    // HTTP client (the NuGet.org check before every run is gone), and the tool's only dotnet processes are init's consumer
+    // build and the server adapter build that --adapter skips.
+    [Fact]
+    public void NeitherTheToolNorTheToolkitItRunsHasAnHttpClient()
+    {
+        var tool = typeof(SmokeProject).Assembly;
+        var toolkit = tool.GetReferencedAssemblies().Where(name => name.Name!.StartsWith("Valheim.", StringComparison.Ordinal))
+            .Select(System.Reflection.Assembly.Load).Prepend(tool).ToList();
+        Assert.Contains(toolkit, assembly => assembly.GetName().Name == "Valheim.Testing.Game");
+        foreach (var assembly in toolkit)
+            Assert.DoesNotContain(assembly.GetReferencedAssemblies(), name => name.Name == "System.Net.Http");
     }
 
     private static string Manifest() =>
