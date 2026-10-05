@@ -22,6 +22,8 @@ internal sealed class HostedSeams
     public Action? RequireMacGui { get; init; }
     /// <summary>Starts a local macOS client without opening the real game in controlled tests.</summary>
     public Func<ClientRunPlan, string, SteamAccountHold?, CancellationToken, Action<IOwnedProcess>?, ClientSession>? LocalMacLaunch { get; init; }
+    /// <summary>The run's Ctrl+C owner instead of one the runner makes, so a test can signal it.</summary>
+    public RunCancellation? Cancellation { get; init; }
 }
 
 /// <summary>
@@ -89,8 +91,10 @@ internal sealed class HostedServerRun
     /// The run's end in its server host's journal, when the run wrote there at all (a standalone run; a campaign's preparation
     /// journals its own hosts). A run refused before it touched the host leaves it untouched.
     /// </summary>
-    public Task JournalEndAsync(string state, bool cleanupVerified) => !_serverJournalled ? Task.CompletedTask :
-        NoteAsync(Host, Role.Host, "run", JournalEntry.Of(JournalEntry.RunEnded, ("state", state), ("cleanupVerified", cleanupVerified ? "true" : "false")));
+    public Task JournalEndAsync(string state, bool cleanupVerified) =>
+        JournalEndAsync(JournalEntry.Of(JournalEntry.RunEnded, ("state", state), ("cleanupVerified", cleanupVerified ? "true" : "false")));
+    /// <summary>The run's last journal entry on its server host: its end, or that its cleanup was abandoned.</summary>
+    internal Task JournalEndAsync(JournalEntry last) => !_serverJournalled ? Task.CompletedTask : NoteAsync(Host, Role.Host, "run", last);
 
     /// <summary>Whether the runtime is a campaign's prepared install (verified in place) rather than a copy this run makes.</summary>
     public bool Prepared { get; }
@@ -449,8 +453,16 @@ internal sealed class HostedServerRun
                     }
                     catch (WaitTimeoutException error)
                     {
-                        throw new InvalidOperationException($"BepInEx wrote no fresh log line on {host.Name} within {plan.BepInExSeconds}s. " +
-                            $"The game may have reached its menu without BepInEx; check winhttp.dll, doorstop_config.ini and BepInEx/core as one pack. " +
+                        // A preloader crash log this launch wrote says why (#254); an older one is not this launch's and says nothing.
+                        var preloader = await HostedClientScripts.ReadPreloaderAsync(host, role.Install, launchDirectory).ConfigureAwait(false);
+                        // A nullable projection: FirstOrDefault of a tuple list is a default tuple, never null.
+                        var failed = preloader?.Fresh.Where(log => log.FirstError != null).Select(log => ((string Name, string Error)?)(log.Name, log.FirstError!)).FirstOrDefault();
+                        string why = failed is { } hit
+                            ? $"BepInEx's preloader failed: {hit.Error} (from {hit.Name}, which the client's evidence keeps as game-2.preloader-*.log). "
+                            : preloader?.Fresh.Count > 0 ? $"BepInEx's preloader wrote {string.Join(", ", preloader.Value.Fresh.Select(log => log.Name))} with no error line (the client's evidence keeps it as game-2.preloader-*.log). "
+                            : "The game may have reached its menu without BepInEx; check winhttp.dll, doorstop_config.ini and BepInEx/core as one pack. ";
+                        string stale = preloader?.Stale.Count > 0 ? $"Older preloader logs beside the game ({string.Join(", ", preloader.Value.Stale)}) predate this launch and are not its. " : "";
+                        throw new InvalidOperationException($"BepInEx wrote no fresh log line on {host.Name} within {plan.BepInExSeconds}s. {why}{stale}" +
                             $"The client's Player.log and boot output are kept in {local}.", error);
                     }
                     (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
@@ -518,20 +530,22 @@ internal sealed class HostedServerRun
     /// the server host's lock and runtime are kept, because the server may still run there. Returns the failures; it never throws.
     /// </summary>
     public async Task<IReadOnlyList<Exception>> TeardownAsync(ScenarioReport report, string output, bool launched, bool serverStopped,
-        PreparedHostedCampaign? prepared = null, RunRetirement? retirement = null)
+        PreparedHostedCampaign? prepared = null, RunRetirement? retirement = null, CancellationToken cleanup = default)
     {
         retirement ??= new RunRetirement(report, output);
         serverStopped &= !_serverMayRun;
         var failures = new List<Exception>();
         async Task Try(string step, Func<Task> action)
         {
+            // An abandoned cleanup (RunCancellation.BeginCleanup) attempts nothing more; the journal names what is left.
+            if (cleanup.IsCancellationRequested) action = () => throw new OperationCanceledException("Not attempted: the cleanup was abandoned.", cleanup);
             try { await report.StepAsync(StepPhase.Cleanup, step, action).ConfigureAwait(false); }
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         }
         if (launched && _worldShipped && serverStopped)
-            await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long)).ConfigureAwait(false);
+            await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long, cleanup)).ConfigureAwait(false);
         if (_runtime != null)
-            try { await retirement.HostAsync(Role.Host, Host, _runtime, RuntimeDirectory, launched, serverStopped).ConfigureAwait(false); }
+            try { await retirement.HostAsync(Role.Host, Host, _runtime, RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false); }
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         foreach (var account in _accounts)
@@ -561,7 +575,7 @@ internal sealed class HostedServerRun
             var locked = _clientLocks.Select(held => held.Host).ToList();
             if (_lock != null) locked.Add(Host.Name);
             // A server that may still run kept its own copy above; the process check below only looks at the copies retired.
-            foreach (var failure in await retirement.CampaignAsync(prepared, locked).ConfigureAwait(false))
+            foreach (var failure in await retirement.CampaignAsync(prepared, locked, cleanup).ConfigureAwait(false))
             { failures.Add(failure); Console.Error.WriteLine("Teardown: " + failure.Message); }
         }
         foreach (var (name, held) in _clientLocks) await Try($"release client host {name}'s lock", () =>
@@ -666,6 +680,63 @@ internal static class HostedClientScripts
 {
     public static string MoveAside(HostShellKind kind) => kind == HostShellKind.Bash ? BashMoveAside : PowerShellMoveAside;
     public static string Keep(HostShellKind kind) => kind == HostShellKind.Bash ? BashKeep : PowerShellKeep;
+    public static string Preloader(HostShellKind kind) => kind == HostShellKind.Bash ? BashPreloader : PowerShellPreloader;
+
+    // Variables: install, dir. Reads only: each preloader_*.log beside the game, whether this launch wrote it (not older than
+    // the launch's pid file) and the first [Error or [Fatal line of each fresh one, base64-encoded:
+    // VT-PRELOADER fresh|stale <name> <line or ->, then VT-PRELOADER-END.
+    public static readonly string BashPreloader = """
+        set -u
+        ref="$dir/pid"; [ -e "$ref" ] || ref="$dir"
+        for f in "$install"/preloader_*.log; do
+          [ -f "$f" ] || continue
+          name=$(basename -- "$f" | base64 | tr -d '\n')
+          if [ "$ref" -nt "$f" ]; then echo "VT-PRELOADER stale $name -"; continue; fi
+          line=$(grep -m1 -E '\[(Error|Fatal)' -- "$f" 2> /dev/null | base64 | tr -d '\n')
+          echo "VT-PRELOADER fresh $name ${line:--}"
+        done
+        echo "VT-PRELOADER-END"
+        """.ReplaceLineEndings("\n");
+    public static readonly string PowerShellPreloader = """
+        $ref = Join-Path $dir 'pid'
+        $since = if ([IO.File]::Exists($ref)) { [IO.File]::GetLastWriteTimeUtc($ref) } else { [IO.Directory]::GetLastWriteTimeUtc($dir) }
+        $utf8 = New-Object Text.UTF8Encoding $false
+        if ([IO.Directory]::Exists($install)) {
+            foreach ($f in @([IO.Directory]::GetFiles($install, 'preloader_*.log'))) {
+                $name = [Convert]::ToBase64String($utf8.GetBytes([IO.Path]::GetFileName($f)))
+                if ([IO.File]::GetLastWriteTimeUtc($f) -lt $since) { 'VT-PRELOADER stale ' + $name + ' -'; continue }
+                $first = @([IO.File]::ReadAllLines($f) | Where-Object { $_ -match '\[(Error|Fatal)' } | Select-Object -First 1)
+                $line = if ($first.Count -ne 0) { [Convert]::ToBase64String($utf8.GetBytes($first[0])) } else { '-' }
+                'VT-PRELOADER fresh ' + $name + ' ' + $line
+            }
+        }
+        'VT-PRELOADER-END'
+        """.ReplaceLineEndings("\n");
+
+    /// <summary>
+    /// Why a client never wrote a BepInEx log line, from BepInEx's preloader logs beside the game: the first error of each one
+    /// this launch wrote (#254), and the names of older ones, which are not this launch's and explain nothing. Null when it
+    /// cannot be read.
+    /// </summary>
+    public static async Task<(IReadOnlyList<(string Name, string? FirstError)> Fresh, IReadOnlyList<string> Stale)?> ReadPreloaderAsync(IGameHost host, string install, string launchDirectory)
+    {
+        try
+        {
+            var result = await host.RunAsync(Preloader(host.Shell.Kind), new Dictionary<string, string> { ["install"] = install, ["dir"] = launchDirectory },
+                TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+            if (!result.Succeeded || InteractiveClient.Line(result.Stdout, "VT-PRELOADER-END") == null) return null;
+            var fresh = new List<(string, string?)>(); var stale = new List<string>();
+            foreach (string line in result.Stdout.Split('\n'))
+                if (line.Trim().Split(' ') is ["VT-PRELOADER", var kind, var name, var error])
+                {
+                    string Decode(string value) => System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(value)).Trim();
+                    if (kind == "stale") stale.Add(Decode(name));
+                    else fresh.Add((Decode(name), error == "-" ? null : Decode(error)));
+                }
+            return (fresh, stale);
+        }
+        catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or FormatException or InvalidOperationException) { return null; }
+    }
 
     // Variables: log, to.
     public static readonly string BashMoveAside = """
@@ -690,6 +761,16 @@ internal static class HostedClientScripts
         keep() { if [ -f "$1" ]; then cp -- "$1" "$dir/$2" || exit 3; else printf 'The game did not write %s\n' "$1" > "$dir/$2.absent" || exit 3; fi; }
         keep "$install/BepInEx/LogOutput.log" game-0.log
         keep "${HOME:-/nonexistent}/.config/unity3d/IronGate/Valheim/Player.log" game-1.log
+        # BepInEx's preloader crash logs beside the game (#254): this launch's (not older than its pid file) are kept; older
+        # ones, left by an earlier start, are only named.
+        ref="$dir/pid"; [ -e "$ref" ] || ref="$dir"
+        n=0; stale=""
+        for f in "$install"/preloader_*.log; do
+          [ -f "$f" ] || continue
+          if [ "$ref" -nt "$f" ]; then stale="$stale$(basename -- "$f")
+        "; else n=$((n + 1)); cp -- "$f" "$dir/game-2.preloader-$n.log" || exit 3; fi
+        done
+        if [ -n "$stale" ]; then printf 'Older preloader logs beside the game, from before this launch (not kept):\n%s' "$stale" > "$dir/preloader.stale" || exit 3; fi
         echo "VT-KEPT"
         """.ReplaceLineEndings("\n");
 
@@ -701,6 +782,16 @@ internal static class HostedClientScripts
         }
         Save-VtLog (Join-Path $install 'BepInEx\LogOutput.log') 'game-0.log'
         Save-VtLog (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'AppData\LocalLow\IronGate\Valheim\Player.log') 'game-1.log'
+        # BepInEx's preloader crash logs beside the game (#254): this launch's (not older than its pid file) are kept; older ones are only named.
+        $ref = Join-Path $dir 'pid'; if (-not [IO.File]::Exists($ref)) { $ref = $dir }
+        $since = [IO.File]::GetLastWriteTimeUtc($ref); if ($ref -eq $dir) { $since = [IO.Directory]::GetLastWriteTimeUtc($dir) }
+        $n = 0; $stale = @()
+        $logs = if ([IO.Directory]::Exists($install)) { @([IO.Directory]::GetFiles($install, 'preloader_*.log')) } else { @() }
+        foreach ($f in $logs) {
+            if ([IO.File]::GetLastWriteTimeUtc($f) -lt $since) { $stale += [IO.Path]::GetFileName($f) }
+            else { $n++; [IO.File]::Copy($f, (Join-Path $dir ('game-2.preloader-' + $n + '.log')), $true) }
+        }
+        if ($stale.Count -ne 0) { [IO.File]::WriteAllText((Join-Path $dir 'preloader.stale'), "Older preloader logs beside the game, from before this launch (not kept):`n" + ($stale -join "`n")) }
         'VT-KEPT'
         """.ReplaceLineEndings("\n");
 }

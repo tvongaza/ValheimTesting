@@ -206,7 +206,8 @@ public static class PinnedServerRun
             return 2;
         }
         string planFile = args[1];
-        using var cancellation = new RunCancellation();
+        using var own = options.HostSeams?.Cancellation == null ? new RunCancellation() : null;
+        var cancellation = options.HostSeams?.Cancellation ?? own!;
         return await RunAsync(args[0], () => options.ReadPlan(planFile), () => FileHash.Sha256(planFile), Path.GetFileName(planFile),
             args[2], options, cancellation, inventoryPath, campaign: null).ConfigureAwait(false);
     }
@@ -216,7 +217,8 @@ public static class PinnedServerRun
     {
         if (args.Length != 3) throw new ArgumentException("mode, plan and output.", nameof(args));
         string planFile = args[1];
-        using var cancellation = new RunCancellation();
+        using var own = options.HostSeams?.Cancellation == null ? new RunCancellation() : null;
+        var cancellation = options.HostSeams?.Cancellation ?? own!;
         return await RunAsync(args[0], () => options.ReadPlan(planFile), () => FileHash.Sha256(planFile), Path.GetFileName(planFile),
             args[2], options, cancellation, inventoryPath: null, campaign: null, environment).ConfigureAwait(false);
     }
@@ -255,7 +257,7 @@ public static class PinnedServerRun
         PreparedHostedCampaign? prepared = null;
         string output = Path.GetFullPath(outputArgument);
         bool ownOutput = false, pinned = true, definite = false, unknownOutcome = false;
-        string? unknown = null;
+        string? unknown = null, abandoned = null;
         var phase = StepPhase.Preflight; // Where a failure outside any step happened: before copying, until the scenario, or in it.
         // A host operation with an unknown outcome is not a failure of the test; anything else is.
         void Classify(Exception error) { if (HostedServerRun.UnknownOutcome(error) is { } why) unknown ??= why; else definite = true; }
@@ -411,6 +413,9 @@ public static class PinnedServerRun
         }
         finally
         {
+            // Cleanup runs on its own bounded token, never the run's (which a Ctrl+C cancelled), from the first stop on; a second
+            // Ctrl+C from here abandons what it can still give up (the stop itself is bounded by the plan's own quit and kill).
+            var cleanup = cancellation.BeginCleanup();
             bool stopped = true;
             if (session != null)
             {
@@ -439,9 +444,9 @@ public static class PinnedServerRun
             // and installs under the locks it holds; a campaign whose server run was never created is retired here.
             var retirement = new RunRetirement(report, output);
             if (hosted != null)
-                foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped, prepared, retirement).ConfigureAwait(false)) Classify(failure);
+                foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped, prepared, retirement, cleanup).ConfigureAwait(false)) Classify(failure);
             else if (prepared != null)
-                foreach (var failure in await retirement.CampaignAsync(prepared, []).ConfigureAwait(false))
+                foreach (var failure in await retirement.CampaignAsync(prepared, [], cleanup).ConfigureAwait(false))
                 { Console.Error.WriteLine("Teardown: " + failure.Message); Classify(failure); }
             // After the stop, which keeps each boot's logs; a client's were kept when the scenario closed it. Logs missing after
             // an unknown outcome are explained by it, so the scan then decides nothing on its own.
@@ -452,18 +457,19 @@ public static class PinnedServerRun
                 catch (Exception error) { Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message); definite = true; } // Recorded as its failed step.
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
-            // The journal's last word on each host the campaign prepared: how the run ended and whether its cleanup was proven.
+            // The journal's last word on each host the campaign prepared: how the run ended and whether its cleanup was proven, or
+            // that its cleanup was abandoned, which leaves the run for env recover (it never journals an end it did not reach).
+            abandoned = cancellation.Abandoned;
+            var last = abandoned != null ? JournalEntry.Of(JournalEntry.CleanupAbandoned, ("reason", abandoned))
+                : JournalEntry.Of(JournalEntry.RunEnded, ("state", report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed"),
+                    ("cleanupVerified", report.CleanupVerified ? "true" : "false"));
             if (prepared != null)
                 foreach (string hostName in prepared.Copies.Select(copy => copy.Host).Distinct(StringComparer.OrdinalIgnoreCase))
-                    try
-                    {
-                        await prepared.Journal.AppendAsync(prepared.HostFor(hostName), prepared.JournalOf(hostName), "run", JournalEntry.Of(JournalEntry.RunEnded,
-                            ("state", report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed"),
-                            ("cleanupVerified", report.CleanupVerified ? "true" : "false")), prepared.Timeout).ConfigureAwait(false);
-                    }
+                    try { await prepared.Journal.AppendAsync(prepared.HostFor(hostName), prepared.JournalOf(hostName), "run", last,
+                        abandoned != null ? TimeSpan.FromSeconds(15) : prepared.Timeout).ConfigureAwait(false); } // the user asked to get out
                     catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the run's end on {hostName}: {error.Message}"); }
             else if (hosted != null)
-                await hosted.JournalEndAsync(report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed", report.CleanupVerified).ConfigureAwait(false);
+                await hosted.JournalEndAsync(last).ConfigureAwait(false);
             // The run ends here: it no longer holds the copies it keeps (their owner records go; see OwnedCopies).
             runtime?.Dispose(); world?.Dispose();
             if (ownOutput)
@@ -473,6 +479,12 @@ public static class PinnedServerRun
                 report.Write(output);
                 Console.WriteLine($"Output: {DiskSpace.Format(bytes)} in {output}");
             }
+        }
+        if (abandoned != null)
+        {
+            string run = report.Provenance.GetValueOrDefault("runId") ?? hosted?.RunId ?? "<run id>";
+            Console.WriteLine($"ABANDONED cleanup ({abandoned}): what the run left is in its journal; see valheim-test env status, then valheim-test env recover --run {run}.");
+            return 3;
         }
         // Only `run` is an acceptance result: validate launches nothing, and preparing a fixture never passes a test.
         Console.WriteLine((unknownOutcome ? "UNKNOWN (a host operation's outcome could not be established; neither a pass nor a failure: " + unknown + ")"

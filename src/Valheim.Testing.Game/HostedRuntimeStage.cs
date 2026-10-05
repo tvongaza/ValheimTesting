@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -23,42 +24,62 @@ public static class HostedRuntimeStage
     /// Refuse conflicting client use or a process executing from any of the owned <paramref name="runtimes"/>; unrelated
     /// servers may stay up. One check covers every runtime on the host.
     /// </summary>
+    /// <summary>
+    /// The conflicting-use check (#257): refuses when a Valheim client runs where this run needs the desktop session
+    /// (<paramref name="clientSession"/>: one client per session), or any game runs from one of <paramref name="runtimes"/>.
+    /// Other games on the host (a server elsewhere, a client when only a server is needed) are not a conflict. The refusal names
+    /// each conflicting process, and the run that journalled it when <paramref name="owners"/> (process ID to run) knows it; a
+    /// client no run owns is the user's own, to stop or to describe in the inventory.
+    /// </summary>
     internal static async Task RequireStoppedAsync(IGameHost host, TimeSpan timeout, CancellationToken cancellation = default,
-        IReadOnlyCollection<string>? runtimes = null, bool clientSession = true)
+        IReadOnlyCollection<string>? runtimes = null, bool clientSession = true, IReadOnlyDictionary<int, string>? owners = null)
     {
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsProcessCheck : BashProcessCheck,
             new Dictionary<string, string> { ["runtime"] = string.Join('\n', runtimes ?? []), ["clientSession"] = clientSession ? "true" : "false" },
             timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Checking conflicting game processes on {host.Name}");
-        string state = InteractiveClient.Line(result.Stdout, "VT-GAME ") ??
+        string verdict = InteractiveClient.Line(result.Stdout, "VT-GAME ") ??
             throw new HostOperationException($"No game-process verdict from {host.Name}", result);
-        if (state == "busy") throw new InvalidOperationException($"A conflicting Valheim client or owned-runtime process is running on {host.Name}; no files were changed.");
-        if (state != "idle") throw new HostOperationException($"Unexpected game-process verdict from {host.Name}", result);
+        string[] parts = verdict.Split(' ', 2);
+        if (parts[0] == "busy")
+        {
+            var pids = parts.Length == 2 ? parts[1].Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(pid => int.TryParse(pid, NumberStyles.None, CultureInfo.InvariantCulture, out int id) ? id : 0).Where(id => id > 0).ToList() : [];
+            string Name(int pid) => owners != null && owners.TryGetValue(pid, out string? run)
+                ? $"process {pid} of run {run} (wait for it to end, or see valheim-test env status)"
+                : owners != null ? $"process {pid}, which no run journalled: a game of your own, so stop it, or describe its machine in the inventory"
+                : $"process {pid}";
+            throw new InvalidOperationException((pids.Count == 0 ? "A conflicting Valheim client or owned-runtime process" : "Conflicting Valheim " + string.Join("; ", pids.Select(Name))) +
+                $" is running on {host.Name}" + (clientSession ? ", where this run needs the desktop session's one client" : "") + "; no files were changed.");
+        }
+        if (parts[0] != "idle") throw new HostOperationException($"Unexpected game-process verdict from {host.Name}", result);
     }
 
     internal static readonly string WindowsProcessCheck = """
-        $busy = $false
+        $busy = @()
         $roots = @($runtime -split "`n" | Where-Object { $_ })
         foreach ($p in @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.Name -in @('Valheim.exe', 'valheim_server.exe') })) {
-            if ($clientSession -eq 'true' -and $p.Name -eq 'Valheim.exe') { $busy = $true }
+            if ($clientSession -eq 'true' -and $p.Name -eq 'Valheim.exe') { $busy += [string]$p.ProcessId }
             if ($roots.Count -ne 0 -and -not $p.ExecutablePath) { throw 'Cannot establish the running game executable path' }
             foreach ($root in $roots) {
-                if ($p.ExecutablePath.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { $busy = $true }
+                if ($p.ExecutablePath.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { $busy += [string]$p.ProcessId }
             }
         }
-        if ($busy) { 'VT-GAME busy' } else { 'VT-GAME idle' }
+        if ($busy.Count -ne 0) { 'VT-GAME busy ' + ((@($busy) | Select-Object -Unique) -join ',') } else { 'VT-GAME idle' }
         """;
     // ps errors remain errors. A dedicated server elsewhere does not use the client's character files. The runtimes are one
     // per line; awk takes them as one value, so the lines are joined with a byte no path holds (\034) and split again.
     internal static readonly string BashProcessCheck = """
-        processes=$(ps -axo comm=) || exit 4
+        processes=$(ps -axo pid=,comm=) || exit 4
         roots=$(printf '%s' "$runtime" | tr '\n' '\034')
         if printf '%s\n' "$processes" | awk -v roots="$roots" -v client="$clientSession" '
           BEGIN { n=split(roots, root, "\034") }
-          { path=$0; sub(/^[[:space:]]+/, "", path); name=path; sub(/^.*\//, "", name);
+          { line=$0; sub(/^[[:space:]]+/, "", line); pid=line; sub(/[[:space:]].*$/, "", pid); path=line; sub(/^[0-9]+[[:space:]]+/, "", path);
+            name=path; sub(/^.*\//, "", name); hit=0;
             game=(name=="Valheim" || name=="valheim.x86_64" || index(name,"valheim_server")==1);
-            if (client=="true" && (name=="Valheim" || name=="valheim.x86_64")) busy=1;
-            for (i=1; i<=n; i++) if (game && root[i]!="") { if (index(path,root[i] "/")==1) busy=1; if (index(path,"/")!=1) unknown=1 } }
-          END { if (unknown) print "VT-GAME unknown"; else if (busy) print "VT-GAME busy"; else print "VT-GAME idle" }'; then :; else exit 4; fi
+            if (client=="true" && (name=="Valheim" || name=="valheim.x86_64")) hit=1;
+            for (i=1; i<=n; i++) if (game && root[i]!="") { if (index(path,root[i] "/")==1) hit=1; if (index(path,"/")!=1) unknown=1 }
+            if (hit) busy=busy (busy=="" ? "" : ",") pid }
+          END { if (unknown) print "VT-GAME unknown"; else if (busy!="") print "VT-GAME busy " busy; else print "VT-GAME idle" }'; then :; else exit 4; fi
         """;
 
     /// <summary>
@@ -262,14 +283,14 @@ public static class HostedRuntimeStage
 
     // Only HostedCampaignPreparation calls this for a unique directory it created and retained in memory. Its caller
     // must hold the host lock and must have stopped all game processes before retiring the prepared install.
-    internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout)
+    internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default)
     {
         string parent = destination[..destination.LastIndexOfAny(['/', '\\'])];
         if (!destination.EndsWith(host.Shell.Kind == HostShellKind.PowerShell ? @"\runtime" : "/runtime", StringComparison.OrdinalIgnoreCase) ||
             !parent.Replace('\\', '/').Split('/').Last().StartsWith("vt-prep-", StringComparison.Ordinal))
             throw new ArgumentException("Only a toolkit-created vt-prep runtime can be retired.", nameof(destination));
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
-            new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout).ConfigureAwait(false);
+            new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false);
         result.EnsureSuccess($"Retiring prepared runtime on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-STAGE-CLEANED") == null)
             throw new HostOperationException($"Unexpected cleanup reply from {host.Name}", result);

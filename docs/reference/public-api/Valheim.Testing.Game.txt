@@ -2002,9 +2002,12 @@ sealed class Valheim.Testing.Game.RoomSize : System.IEquatable`1<Valheim.Testing
   property System.Single Y { get; init; }
   property System.Single Z { get; init; }
 sealed class Valheim.Testing.Game.RunCancellation : System.IDisposable
+  field static readonly System.TimeSpan CleanupBudget
+  method System.Threading.CancellationToken BeginCleanup(System.Nullable`1<System.TimeSpan> budget = null)
   method System.Void .ctor()
   method System.Void Cancel()
   method System.Void Dispose()
+  property System.String Abandoned { get; }
   property System.Threading.CancellationToken Token { get; }
 sealed class Valheim.Testing.Game.RunLog : System.IEquatable`1<Valheim.Testing.Game.RunLog>
   method System.Boolean Equals(Valheim.Testing.Game.RunLog other)

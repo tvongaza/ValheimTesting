@@ -37,11 +37,19 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>Another run's claimant holding the lock.</summary>
     public string? HeldBy { get; set; }
     public Dictionary<string, HostResult> Failures { get; } = [];
+    /// <summary>What the preloader-log check replies (HostedClientScripts.Preloader): none by default.</summary>
+    public string PreloaderReply { get; set; } = "VT-PRELOADER-END\n";
+    /// <summary>Scripts that hang until cancelled.</summary>
+    public HashSet<string> Hang { get; } = [];
+    /// <summary>Runs when a script starts, by its name.</summary>
+    public Action<string>? BeforeScript { get; set; }
     public Exception? TunnelFailure { get; set; }
     public bool PortBusy { get; set; }
     /// <summary>The port check's whole reply when set; else free or busy by <see cref="PortBusy"/>.</summary>
     public string? PortReply { get; set; }
     public bool GameActive { get; set; }
+    /// <summary>The conflicting processes' IDs the game-process check names when <see cref="GameActive"/> (comma separated), or none.</summary>
+    public string GameProcessIds { get; set; } = "";
     public long AvailableCopyBytes { get; set; } = 100L << 30;
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
     public bool IgnoreQuit { get; set; }
@@ -126,6 +134,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostServerScripts.WindowsStop) ? "stop" :
         ReferenceEquals(script, InteractiveScripts.LinuxStart) ? "client-start" :
         ReferenceEquals(script, HostedClientScripts.BashKeep) ? "client-keep" :
+        ReferenceEquals(script, HostedClientScripts.BashPreloader) ? "preloader" :
+        ReferenceEquals(script, HostedClientScripts.PowerShellPreloader) ? "preloader" :
         ReferenceEquals(script, HostedClientScripts.BashMoveAside) ? "move-aside" :
         ReferenceEquals(script, HostClientPreflight.BashRead) ? "preflight-read" :
         ReferenceEquals(script, HostClientPreflight.PowerShellRead) ? "preflight-read" :
@@ -148,11 +158,16 @@ internal sealed class FakeServerHost : IGameHost
     {
         var v = variables ?? new Dictionary<string, string>();
         string name = ScriptName(script);
+        // As a real host does: a script is not started on a cancelled token.
+        cancellation.ThrowIfCancellationRequested();
         lock (_sync) Runs.Add((name, v));
+        BeforeScript?.Invoke(name);
+        // A script that never answers until the caller gives up: a hung SSH session, a stuck removal.
+        if (Hang.Contains(name)) await Task.Delay(Timeout.Infinite, cancellation);
         if (Failures.TryGetValue(name, out var failure)) return failure;
         switch (name)
         {
-            case "game-process": return Ok(GameActive ? "VT-GAME busy\n" : "VT-GAME idle\n");
+            case "game-process": return Ok(GameActive ? $"VT-GAME busy {GameProcessIds}\n".Replace(" \n", "\n") : "VT-GAME idle\n");
             case "server-logon": return Ok("VT-LOGON " + ServerTaskLogon + "\n");
             case "copy-space":
                 return Ok($"VT-STORAGE {DiskSpace.DirectoryBytes(Local(v["source"]))} {AvailableCopyBytes} " +
@@ -424,6 +439,7 @@ internal sealed class FakeServerHost : IGameHost
                 if (!v["keep"].Replace('\\', '/').EndsWith("/" + v["run"] + "/runtime-changes", StringComparison.Ordinal)) return new HostResult(HostOutcome.Exited, 3, "", "", TimeSpan.Zero, false);
                 if (Directory.Exists(Local(v["keep"]))) Directory.Delete(Local(v["keep"]), recursive: true);
                 return Ok("VT-DROPPED\n");
+            case "preloader": return Ok(PreloaderReply);
             case "client-keep":
             {
                 string dir = Local(v["dir"]);
@@ -942,7 +958,8 @@ public sealed partial class HostedServerRunTests : IDisposable
     }
 
     private static PinnedServerRunOptions<ServerRunPlan> Options(FakeServerHost host, FakeOwnedServer? server, Func<PinnedServerRunContext<ServerRunPlan>, Task>? scenario = null,
-        FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, TimeSpan? renewEvery = null, string name = "toolkit-smoke") => new()
+        FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, TimeSpan? renewEvery = null, string name = "toolkit-smoke",
+        RunCancellation? cancellation = null) => new()
     {
         Name = name,
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
@@ -952,7 +969,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         {
             Host = hostName => hostName == "linux-box" ? host : hostName == LeaseBox.Name && leaseHost != null ? leaseHost : clientHost ?? throw new InvalidOperationException("No fake host " + hostName),
             Connect = port => port == 15578 ? clientTransport! : server!.Connect(),
-            StateWaits = false, RunId = RunId, SteamRenewEvery = renewEvery,
+            StateWaits = false, RunId = RunId, SteamRenewEvery = renewEvery, Cancellation = cancellation,
         },
     };
     // Where in a fake host's script log the first journal append of that kind ran.
@@ -1215,6 +1232,40 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Runs);
         Assert.Empty(host.Releases);
         Assert.DoesNotContain("release the server host's lock", StepNames());
+    }
+
+    // #257 step 5: cleanup never runs on the cancelled token. A Ctrl+C during the scenario still lets the copy be retired and
+    // the run's end be journalled; a second Ctrl+C while a retire hangs abandons the cleanup: exit 3, journalled, recoverable.
+    [Fact] public async Task CleanupRunsOnItsOwnTokenAndASecondInterruptAbandonsIt()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host);
+        using (var once = new RunCancellation())
+        {
+            await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server,
+                _ => { once.SignalCancel(); return Task.CompletedTask; }, cancellation: once));
+            Assert.True(once.Token.IsCancellationRequested);
+            Assert.Null(once.Abandoned);
+            Assert.Contains("retire", host.Scripts);
+            Assert.Contains(await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5)), record => record.Entry.Kind == JournalEntry.RunEnded);
+        }
+
+        var server2 = NewServer(); var host2 = new FakeServerHost("linux-box", Path.Combine(_root, "mirror-2"), server2);
+        var (plan2, profile2) = Write(host2);
+        using var twice = new RunCancellation();
+        host2.Hang.Add("retire");
+        host2.BeforeScript = name => { if (name == "retire") { twice.SignalCancel(); twice.SignalCancel(); } };
+        string output2 = Path.Combine(_root, "output-2");
+        Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile2), ["run", plan2, output2], Options(host2, server2, cancellation: twice)));
+        Assert.Contains("second interrupt", twice.Abandoned);
+        var journal = await RunJournal.ReadAsync(host2, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.Contains("second interrupt", Assert.Single(journal, record => record.Entry.Kind == JournalEntry.CleanupAbandoned).Entry.Fields["reason"]);
+        Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.RunEnded);
+        // env status names it (this test is the runner, so the run reads as going until the process ends, then recoverable).
+        var status = Assert.Single((await RunJournalStatus.InspectAsync(new Dictionary<string, HostProfile> { ["linux-box"] = new() { Kind = "ssh", Lock = "/var/tmp/vt/lock" } },
+            _ => host2, TimeSpan.FromSeconds(5))).Runs, run => run.Run == RunId);
+        Assert.Contains("its cleanup was abandoned (a second interrupt during cleanup)", status.Reason);
+        Assert.NotEqual(JournalRunState.Ended, status.State);
     }
 
     // A boot whose journal entry cannot be written is never started: no process runs that the journal does not name.
@@ -1542,8 +1593,43 @@ public sealed partial class HostedServerRunTests : IDisposable
         }, clientHost, new ScriptedTransport())));
         Assert.Contains("BepInEx wrote no fresh log line", failure?.ToString());
         Assert.Contains("within 30s", failure?.ToString());
+        Assert.Contains("check winhttp.dll, doorstop_config.ini and BepInEx/core", failure?.ToString()); // no preloader log: the guess stays
         Assert.Single(clientHost.Stops);
         Assert.DoesNotContain(clientHost.Runs, run => run.Script == "follow" && run.Variables["offset"] != "0");
+    }
+
+    // #254: a preloader crash log the launch wrote explains the missing BepInEx log; an older one is named as not this launch's.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task APreloaderCrashLogExplainsAClientThatNeverLoggedAndAnOlderOneIsNamedAsStale(bool fresh)
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { ClientWritesBepInExLog = false };
+        string clientInstall = clientHost.Local("/home/tester/valheim");
+        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
+        FakeInstalls.Client(clientInstall);
+        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        FakeInstalls.LinuxLoader(clientInstall);
+        static string B(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+        clientHost.PreloaderReply = (fresh ? $"VT-PRELOADER fresh {B("preloader_20261005_190000.log")} {B("[Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core")}\n" : "") +
+            $"VT-PRELOADER stale {B("preloader_20260101_000000.log")} -\nVT-PRELOADER-END\n";
+        var (plan, profile) = Write(host, withClient: true);
+        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
+        Exception? failure = null;
+        await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
+        {
+            failure = Record.Exception(() => run.OpenClient(client));
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport()));
+        string message = failure?.ToString() ?? "";
+        Assert.Contains("Older preloader logs beside the game (preloader_20260101_000000.log) predate this launch and are not its.", message);
+        if (fresh)
+        {
+            Assert.Contains("BepInEx's preloader failed: [Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core (from preloader_20261005_190000.log", message);
+            Assert.DoesNotContain("check winhttp.dll", message);
+        }
+        else Assert.Contains("check winhttp.dll, doorstop_config.ini and BepInEx/core", message);
     }
 
     [Fact] public async Task AnArm64ProfileClientIsRefusedBeforeItsHostIsLockedOrAnythingStarts()
