@@ -136,6 +136,23 @@ public sealed class HostServerLaunch
 public static class HostServer
 {
     /// <summary>
+    /// On a Windows host: how a server task would log on there (<c>s4u</c>, an elevated token's session-0 task, or
+    /// <c>interactive</c>, the user's one desktop session), or a refusal naming why neither can be registered, before anything
+    /// is copied. Other hosts need no task and return null.
+    /// </summary>
+    internal static async Task<string?> RequireTaskLogonAsync(IGameHost host, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        if (host.Shell.Kind != HostShellKind.PowerShell) return null;
+        var result = (await host.RunAsync(HostServerScripts.WindowsServerLogonCheck, new Dictionary<string, string>(), timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Checking how a server task logs on at {host.Name}");
+        string verdict = InteractiveClient.Line(result.Stdout, "VT-LOGON ") ?? throw new HostOperationException($"Unexpected reply while checking the server task's logon on {host.Name}", result);
+        if (verdict.StartsWith("unsupported ", StringComparison.Ordinal))
+            throw new InvalidOperationException($"A dedicated server cannot be started on {host.Name}: {verdict["unsupported ".Length..]}.");
+        if (verdict is not ("s4u" or "interactive")) throw new HostOperationException($"Unexpected reply while checking the server task's logon on {host.Name}", result);
+        return verdict;
+    }
+
+    /// <summary>
     /// Starts <paramref name="launch"/> on <paramref name="host"/>. <paramref name="bootDirectory"/> is a new absolute directory on
     /// the host for this boot's evidence. <paramref name="logs"/> are the game's logs inside the runtime (for example
     /// <c>BepInEx/LogOutput.log</c>): a copy of any of them left by an earlier boot or by the install moves into the boot directory
@@ -180,11 +197,12 @@ public static class HostServer
             var parts = detail.Split(' ');
             if (parts.Length != 2 || !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out int id) || parts[1].Length == 0 || !parts[1].All(char.IsAsciiDigit))
                 throw new HostOperationException($"Unexpected process identity from {host.Name}; see {directory}/pid", result);
-            return new HostServerProcess(host, id, parts[1], directory, launch.Runtime, kept, evidence);
+            return new HostServerProcess(host, id, parts[1], directory, launch.Runtime, kept, evidence)
+                { TaskLogon = InteractiveClient.Line(result.Stdout, "VT-LOGON ") };
         }
         throw word switch
         {
-            "unsupported" => (Exception)new PlatformNotSupportedException($"Cannot start the Linux dedicated server on {host.Name}: {detail}"),
+            "unsupported" => (Exception)new PlatformNotSupportedException($"Cannot start the dedicated server on {host.Name}: {detail}. Nothing was started."),
             "missing" => new FileNotFoundException($"The runtime on {host.Name} is incomplete: {detail}. Nothing was started."),
             // Verdict throws the check's own refusal (a missing library, no libparty.so, no ldd).
             "libraries" => CrossplayLibraries.Verdict(host.Name, result.Stdout) == null
@@ -215,6 +233,9 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
     private readonly SemaphoreSlim _stopping = new(1, 1);
     private bool _killed, _kept;
     private volatile bool _exited;
+
+    /// <summary>On Windows, how the task that started this server logged on: <c>s4u</c> (session 0) or <c>interactive</c> (the user's desktop session).</summary>
+    public string? TaskLogon { get; internal init; }
 
     internal HostServerProcess(IGameHost host, int id, string start, string bootDirectory, string runtime, IReadOnlyList<string> logs, string? evidence)
     {
@@ -367,15 +388,44 @@ internal static class HostServerScripts
         if ($process.WaitForExit([int]$seconds * 1000)) { 'VT-STOP stopped' } else { 'VT-STOP running' }
         """.ReplaceLineEndings("\n");
 
-    // A task with an S4U token starts the headless server in session 0, independent of the SSH session. The task and
-    // launch specification are removed after the child reports its PID. No desktop or Steam client is required.
+    // How the server's task logs on, decided on the host (Get-VtServerLogon). An elevated token registers an S4U task, which
+    // starts the server in session 0 with no desktop (an SSH session as an administrator); Windows refuses S4U to any other
+    // token (E_ACCESSDENIED). A user's ordinary, UAC-filtered token registers an interactive-token task at the limited run
+    // level, as the client's task does, which starts the server in the user's desktop session: only when the asking process
+    // is itself in that one desktop session, so the stop, run from the same session, reaches the server's console. Otherwise
+    // the reply names why. Test seams replace the facts: elevated ('true'/'false'), session (this process's session id) and
+    // desktops (how many desktop sessions the user has, this one among them).
+    internal const string WindowsServerLogon = InteractiveScripts.WindowsSessions + """
+        function Get-VtServerLogon {
+            $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $system = [Environment]::SystemDirectory
+            $admin = if ($elevated) { $elevated -eq 'true' } else {
+                (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
+            if ($admin) { return 's4u' }
+            $here = if ($session) { [int]$session } else { (Get-Process -Id $PID).SessionId }
+            if ($here -eq 0) { return 'unsupported ' + $me + ' is not elevated, which a session-0 server task needs, and this is not a desktop session (an SSH session, for example); run from your own desktop session, or over SSH as an administrator' }
+            $count = if ($desktops) { [int]$desktops } else { (Get-VtSessions '').Count }
+            if ($count -gt 1) { return 'unsupported ' + $me + ' is not elevated and has ' + $count + ' desktop sessions, so a server task could start in another one; sign out of all but this one, or run as an administrator' }
+            return 'interactive'
+        }
+        """;
+
+    // The check preflight runs before anything is copied: which logon the server's task would use on this host, or why none.
+    public static readonly string WindowsServerLogonCheck = (WindowsServerLogon + "\n'VT-LOGON ' + (Get-VtServerLogon)\n").ReplaceLineEndings("\n");
+
+    // A task starts the server independent of the session that asked (Get-VtServerLogon decides its logon). The task and
+    // launch specification are removed after the child reports its PID. No Steam client is required.
     // Variables: runtime, files, dir, spec, logs, seconds, task, launcher.
-    public static readonly string WindowsStart = """
+    public static readonly string WindowsStart = (WindowsServerLogon + "\n" + """
         $utf8 = New-Object Text.UTF8Encoding $false
         foreach ($file in ($files -split "`n")) {
             if ($file -and -not [IO.File]::Exists((Join-Path $runtime $file))) { 'VT-SERVER missing ' + $file; exit 0 }
         }
         if ([IO.Directory]::Exists($dir) -or [IO.File]::Exists($dir)) { 'VT-SERVER exists'; exit 0 }
+        $logon = Get-VtServerLogon
+        if ($logon -like 'unsupported *') { 'VT-SERVER ' + $logon; exit 0 }
+        $logonType = if ($logon -eq 's4u') { 2 } else { 3 } # 2: S4U, no desktop or password; 3: this desktop session's token
+        'VT-LOGON ' + $logon
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dir))
         [void][IO.Directory]::CreateDirectory($dir)
         $index = 0
@@ -400,8 +450,9 @@ internal static class HostServerScripts
             $definition = $service.NewTask(0)
             $definition.RegistrationInfo.Description = 'ValheimTesting: starts one owned headless dedicated server; removed after launch.'
             $definition.Principal.UserId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-            $definition.Principal.LogonType = 2 # S4U: no desktop or password
-            $definition.Principal.RunLevel = 0
+            $definition.Principal.LogonType = $logonType
+            $definition.Principal.RunLevel = 0 # limited: an interactive token is the user's filtered one
+            $definition.Settings.Hidden = $true
             $definition.Settings.Enabled = $true
             $definition.Settings.AllowDemandStart = $true
             $definition.Settings.DisallowStartIfOnBatteries = $false
@@ -411,7 +462,7 @@ internal static class HostServerScripts
             $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
             $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $launcherFile + '" "' + $dir + '"'
             $action.WorkingDirectory = $dir
-            $registered = $folder.RegisterTaskDefinition($task, $definition, 2, $definition.Principal.UserId, $null, 2)
+            $registered = $folder.RegisterTaskDefinition($task, $definition, 2, $definition.Principal.UserId, $null, $logonType)
             try {
                 [void]$registered.Run($null)
                 $deadline = [DateTime]::UtcNow.AddSeconds([double]$seconds)
@@ -431,7 +482,7 @@ internal static class HostServerScripts
             if ([IO.File]::Exists($specFile)) { [IO.File]::Delete($specFile) }
         }
         $verdict
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 
     public static readonly string WindowsLauncher = """
         param([string]$dir)

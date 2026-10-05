@@ -120,6 +120,9 @@ internal sealed class HostedServerRun
     /// <summary>Takes the server host's lock, then copies the host's install into this run's runtime and verifies every file there.</summary>
     public async Task LockAndCopyRuntimeAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, CancellationToken cancellation)
     {
+        // A Windows host that can register no server task is refused before the copy (a campaign's preflight asked already).
+        if (Host.Shell.Kind == HostShellKind.PowerShell)
+            await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, Quick, cancellation)).ConfigureAwait(false);
         await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         // Only an unpinned plan may leave out the manifest; the copy is then recorded as found.
         bool verified = pinned || plan.Runtime.Sha256.Count != 0;
@@ -231,7 +234,7 @@ internal sealed class HostedServerRun
                 File.WriteAllText(Path.Combine(run.Output, "boot-" + n + ".process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new()
                 {
                     ["pid"] = process.Id, ["startIdentity"] = process.StartIdentity, ["host"] = Host.Name, ["bootDirectory"] = bootDirectory,
-                    ["startedUtc"] = DateTime.UtcNow, ["world"] = WorldDirectory,
+                    ["startedUtc"] = DateTime.UtcNow, ["world"] = WorldDirectory, ["taskLogon"] = process.TaskLogon,
                 }, plan.Pinned)));
             }
             catch { process.Stop(TimeSpan.FromSeconds(15)); throw; }

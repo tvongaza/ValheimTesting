@@ -23,6 +23,8 @@ internal sealed class FakeServerHost : IGameHost
         Name = name; _mirror = mirror; _server = server; TunnelPort = tunnelPort; _kind = kind; Windows = windows;
     }
     public string Name { get; }
+    /// <summary>What a Windows host's server-task logon check replies: s4u, interactive, or "unsupported &lt;why&gt;".</summary>
+    public string ServerTaskLogon { get; set; } = "s4u";
     public GameHostKind Kind => _kind;
     public bool Windows { get; }
     public HostShell Shell => Windows ? HostShell.WindowsPowerShell : HostShell.Bash;
@@ -100,6 +102,7 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostCopyCapacityProbe.Windows) ? "copy-space" :
         ReferenceEquals(script, HostCopyCapacityProbe.Bash) ? "copy-space" :
         ReferenceEquals(script, CrossplayLibraryScripts.Check) ? "party" :
+        ReferenceEquals(script, HostServerScripts.WindowsServerLogonCheck) ? "server-logon" :
         ReferenceEquals(script, InteractiveScripts.LinuxWait) ? "wait" :
         ReferenceEquals(script, InteractiveScripts.WindowsWait) ? "wait" :
         ReferenceEquals(script, InteractiveScripts.LinuxStop) ? "stop" :
@@ -123,6 +126,7 @@ internal sealed class FakeServerHost : IGameHost
         switch (name)
         {
             case "game-process": return Ok(GameActive ? "VT-GAME busy\n" : "VT-GAME idle\n");
+            case "server-logon": return Ok("VT-LOGON " + ServerTaskLogon + "\n");
             case "copy-space":
                 return Ok($"VT-STORAGE {DiskSpace.DirectoryBytes(Local(v["source"]))} {AvailableCopyBytes} " +
                     Convert.ToBase64String(Encoding.UTF8.GetBytes(Windows ? "C:\\" : "/")) + "\n");
