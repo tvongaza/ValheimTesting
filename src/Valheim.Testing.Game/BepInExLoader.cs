@@ -4,6 +4,11 @@ using System.Text;
 
 namespace Valheim.Testing.Game;
 
+// A Windows Doorstop proxy and configuration that cannot start BepInEx together: from different Doorstop versions (a mod
+// manager's proxy beside BepInExPack's file), or a proxy no check recognises. The one loader fault a reviewed package can
+// stand in for without hiding another (BepInExLoaderPackage.DoorstopMismatch).
+internal sealed class DoorstopPairingException(string message) : InvalidOperationException(message);
+
 // The BepInEx loader policy ServerLaunch and ClientLaunch share: the files a BepInEx launch needs, the Windows Doorstop
 // configuration, and the caller settings that would disable or redirect the loader. It checks an install before launch;
 // it cannot prove the loader ran, which the session's plugin pins do.
@@ -166,7 +171,7 @@ internal static class BepInExLoader
         // Every Doorstop 3 and 4 proxy holds exactly one of the two keys; one holding neither or both cannot be paired with
         // its configuration, so it is refused rather than passed unchecked.
         if (major == null)
-            throw new InvalidOperationException($"The {kind}'s {WindowsProxy} is not a Doorstop proxy this check recognises: it holds " +
+            throw new DoorstopPairingException($"The {kind}'s {WindowsProxy} is not a Doorstop proxy this check recognises: it holds " +
                 "neither or both of the keys Doorstop reads (targetAssembly for Doorstop 3, target_assembly for Doorstop 4), so its configuration cannot be matched to it. " +
                 $"Install {WindowsProxy} and {WindowsConfig} from one BepInExPack.");
         string own = major == 4 ? "General" : "UnityDoorstop", other = major == 4 ? "UnityDoorstop" : "General";
@@ -174,7 +179,7 @@ internal static class BepInExLoader
         if (configured && (major == 3 || !sections.Contains(other))) return;
         string version = ProxyFileVersion(proxy) is { } found ? " (file version " + found + ")" : "";
         string written = sections.Contains(other) ? $"written for Doorstop {7 - major} ([{other}])" : $"without the [{own}] enabled and {(major == 4 ? "target_assembly" : "targetAssembly")} it reads";
-        throw new InvalidOperationException($"The {kind}'s {WindowsProxy} is Doorstop {major}{version}, which reads only [{own}] in {WindowsConfig}, but that file is {written}. " +
+        throw new DoorstopPairingException($"The {kind}'s {WindowsProxy} is Doorstop {major}{version}, which reads only [{own}] in {WindowsConfig}, but that file is {written}. " +
             "A proxy and configuration from different Doorstop versions start the game without BepInEx (a Doorstop 4 proxy beside a Doorstop 3 file did, even with a [General] section added). " +
             $"Install {WindowsProxy} and {WindowsConfig} from one BepInExPack, for example by restoring the pack's {WindowsProxy} after a mod manager replaced it.");
     }

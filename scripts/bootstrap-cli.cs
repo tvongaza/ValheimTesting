@@ -82,35 +82,42 @@ Console.WriteLine($"Pinned CLI dependency ready as {packageId} {packageVersion} 
 
 // The game-side ValheimCLI bundle (core, packs, manifest) built from the same commit and published once, by its SHA-256:
 // valheim-test embeds .packages/valheimcli-bundle.zip, so a run needs no plugins in the game and no network.
-string bundleFile = Path.Combine(feed, "valheimcli-bundle.zip");
-if (!pinDoc.RootElement.TryGetProperty("bundle", out JsonElement bundlePin))
-{
+if (pinDoc.RootElement.TryGetProperty("bundle", out JsonElement bundlePin))
+    await FetchPinned("ValheimCLI bundle", Path.Combine(feed, "valheimcli-bundle.zip"), bundlePin.GetProperty("url").GetString()!, bundlePin.GetProperty("sha256").GetString()!);
+else
     Console.WriteLine("No ValheimCLI plugin bundle is pinned in cli-dependency.json yet: valheim-test builds without one and asks for --cli-files or VALHEIMCLI_BUNDLE.");
-    return 0;
-}
-string bundleUrl = bundlePin.GetProperty("url").GetString()!, bundleSha256 = bundlePin.GetProperty("sha256").GetString()!.ToLowerInvariant();
-if (File.Exists(bundleFile) && Sha256(bundleFile) == bundleSha256)
-{
-    Console.WriteLine($"Pinned ValheimCLI bundle present: {bundleFile} (sha256 {bundleSha256})");
-    return 0;
-}
-string download = bundleFile + ".download-" + Guid.NewGuid().ToString("N");
-try
-{
-    using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
-    using (var response = await http.GetAsync(bundleUrl, HttpCompletionOption.ResponseHeadersRead))
-    {
-        response.EnsureSuccessStatusCode();
-        await using var file = File.Create(download);
-        await response.Content.CopyToAsync(file);
-    }
-    string got = Sha256(download);
-    if (got != bundleSha256) throw new InvalidOperationException($"The ValheimCLI bundle at {bundleUrl} is sha256 {got}, not the pinned {bundleSha256}.");
-    File.Move(download, bundleFile, overwrite: true);
-}
-finally { if (File.Exists(download)) File.Delete(download); }
-Console.WriteLine($"Pinned ValheimCLI bundle fetched and checked: {bundleFile} (sha256 {bundleSha256})");
+// The BepInExPack valheim-test applies to a disposable copy whose own Doorstop pair does not match (loader-dependency.json).
+using (JsonDocument loaderPin = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "loader-dependency.json"))))
+    await FetchPinned(loaderPin.RootElement.GetProperty("name").GetString()! + " " + loaderPin.RootElement.GetProperty("version").GetString()!,
+        Path.Combine(feed, "bepinexpack-valheim.zip"), loaderPin.RootElement.GetProperty("url").GetString()!, loaderPin.RootElement.GetProperty("sha256").GetString()!);
 return 0;
+
+// A pinned download into the feed, kept only when it has the pinned SHA-256; one already there with that hash is reused.
+static async Task FetchPinned(string what, string file, string url, string sha256)
+{
+    sha256 = sha256.ToLowerInvariant();
+    if (File.Exists(file) && Sha256(file) == sha256)
+    {
+        Console.WriteLine($"Pinned {what} present: {file} (sha256 {sha256})");
+        return;
+    }
+    string download = file + ".download-" + Guid.NewGuid().ToString("N");
+    try
+    {
+        using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+        using (var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+        {
+            response.EnsureSuccessStatusCode();
+            await using var stream = File.Create(download);
+            await response.Content.CopyToAsync(stream);
+        }
+        string got = Sha256(download);
+        if (got != sha256) throw new InvalidOperationException($"The {what} at {url} is sha256 {got}, not the pinned {sha256}.");
+        File.Move(download, file, overwrite: true);
+    }
+    finally { if (File.Exists(download)) File.Delete(download); }
+    Console.WriteLine($"Pinned {what} fetched and checked: {file} (sha256 {sha256})");
+}
 
 static string Sha256(string path)
 {

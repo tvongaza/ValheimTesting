@@ -42,7 +42,7 @@ try
     string output = Path.GetFullPath(options!["--output"]);
     if (Path.Exists(output)) throw new IOException("--output must be a new directory; an earlier run or personal files will not be changed: " + output);
     // The client: the inventory's (this machine's Valheim with no --inventory); --game and --loader-package override it.
-    var (inventory, client) = SmokeInputs.Client(options, output);
+    var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead);
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
     Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}");
     string game = client.Install;
@@ -123,8 +123,11 @@ try
         string armOutput = Path.Combine(output, "evidence", arm);
         var report = runner.Run(arm, armOutput, "selected plugin loads in a hosted fixture",
             ["first"], _ => { }, cancel.Token, afterPinnedClientOpened: ready =>
+            {
                 ready.Provenance["firstModLoadedSecondsFromCommand"] =
-                    elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
+                    elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
+                if (shippedLoader != null) ready.Provenance["bepInExPackageShipped"] = shippedLoader.Reason;
+            });
         lastArm = report; lastArmOutput = armOutput; // Only an arm whose report was written records the removal.
         passed &= report.Passed;
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.

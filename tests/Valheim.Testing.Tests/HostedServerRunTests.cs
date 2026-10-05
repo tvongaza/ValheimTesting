@@ -592,7 +592,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(Path.Combine(winSource, ClientLaunch.WindowsExecutable), "game");
         File.WriteAllText(Path.Combine(winSource, "winhttp.dll"), "MZ fake");
         File.WriteAllText(Path.Combine(winSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
-        var unrecognised = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var unrecognised = await Assert.ThrowsAsync<DoorstopPairingException>(() =>
             HostedRuntimeStage.InspectSourceAsync(windows, HostedRuntimeKind.Client, @"C:\game\source", null, TimeSpan.FromSeconds(30)));
         Assert.Contains("not a Doorstop proxy this check recognises", unrecognised.Message);
         // A reviewed package complete for another platform is refused as the package's fault, before the source is listed.
@@ -1278,13 +1278,13 @@ public sealed partial class HostedServerRunTests : IDisposable
         FakeInstalls.Client(local);
         File.WriteAllText(Path.Combine(local, "winhttp.dll"), "MZ fake"); // a proxy that shows no Doorstop version
         File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
-        var unrecognised = await Assert.ThrowsAsync<InvalidOperationException>(() => HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows,
+        var unrecognised = await Assert.ThrowsAsync<DoorstopPairingException>(() => HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows,
             new ClientRunPlan { Mode = "owned", Pinning = "none" }, TimeSpan.FromSeconds(5), default));
         Assert.Contains("not a Doorstop proxy this check recognises", unrecognised.Message);
         File.WriteAllText(Path.Combine(local, "winhttp.dll"), "MZ target_assembly"); // Doorstop 4 signature
         File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         var plan = new ClientRunPlan { Mode = "owned", Pinning = "none", Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) } };
-        var mismatch = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var mismatch = await Assert.ThrowsAsync<DoorstopPairingException>(() =>
             HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default));
         DoorstopMixPathsTests.AssertRefusal(mismatch, "client install on windows-client",
             "is Doorstop 4, which reads only [General] in doorstop_config.ini, but that file is written for Doorstop 3 ([UnityDoorstop])");
@@ -1320,7 +1320,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var plan = new ClientRunPlan { Mode = "owned", Pinning = "none" };
         await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(30), default);
         File.WriteAllText(config, "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var error = await Assert.ThrowsAsync<DoorstopPairingException>(() =>
             HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(30), default));
         Assert.Contains("Doorstop 4", error.Message);
     }

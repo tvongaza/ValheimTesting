@@ -154,6 +154,32 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(1, EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments.Count);
     }
 
+    // An install whose own Doorstop pair does not match takes the shipped BepInExPack (ShippedLoader): the campaign's role
+    // names that package, and an install that needs none is left to its own loader.
+    [Fact] public async Task AShippedLoaderChosenForAnInstallBecomesItsRolesLoaderPackage()
+    {
+        if (!CampaignRoute) return;
+        string package = Path.Combine(_rig.Root, "shipped-loader.json");
+        BepInExLoaderPackage.Capture(_rig.Game, "BepInExPack_Valheim", "5.4.2351").Write(package);
+        var asked = new List<string>();
+        string output = Path.Combine(_rig.Root, "shipped-server");
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only", "--preflight-only"), new ServerLoad.Seams(
+            Inspect: _ => Task.FromResult(Ready), Campaign: (_, _, _, _, _) => Task.FromResult(0),
+            Loader: (actor, install) => { asked.Add(actor); return new ShippedLoader.Choice(package, install + " mismatched"); }));
+        Assert.Equal(0, result);
+        Assert.Equal(new[] { "server" }, asked); // --server-only: no client to ask about
+        var campaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "campaign.json"))).RootElement;
+        Assert.Equal(package, campaign.GetProperty("server").GetProperty("loaderPackage").GetString());
+
+        // An explicit package is the actor's own choice: the shipped one is not considered.
+        asked.Clear();
+        result = await ServerLoad.RunAsync(Arguments(Path.Combine(_rig.Root, "explicit"), "--server-only", "--preflight-only", "--loader-package", package),
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready), Campaign: (_, _, _, _, _) => Task.FromResult(0),
+                Loader: (actor, _) => { asked.Add(actor); return null; }));
+        Assert.Equal(0, result);
+        Assert.Empty(asked);
+    }
+
     // The server must be on this machine; a client elsewhere needs --join unless it can be inferred.
     [Fact] public void ARemoteServerIsRefusedAndARemoteClientNeedsAJoinAddress()
     {
@@ -253,12 +279,12 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string game;
         using (EnvironmentInventory.UseMachine(WithValheim(out game)))
         {
-            var (_, client) = SmokeInputs.Client(new Dictionary<string, string>(), output);
+            var (_, client, _) = SmokeInputs.Client(new Dictionary<string, string>(), output);
             Assert.Equal(("local-client", game), (client.Name, client.Install));
             Assert.EndsWith("userdata", SmokeInputs.SteamUserdata(new Dictionary<string, string>()));
         }
         Assert.Equal(game, EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments.Single().Install);
-        var (_, overridden) = SmokeInputs.Client(new Dictionary<string, string> { ["--game"] = _rig.Game }, Path.Combine(_rig.Root, "start-game"));
+        var (_, overridden, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--game"] = _rig.Game }, Path.Combine(_rig.Root, "start-game"));
         Assert.Equal(_rig.Game, overridden.Install);
 
         // A file with two clients here and one elsewhere: --client-env picks, and only that one is recorded.
@@ -277,7 +303,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("not this machine", Assert.Throws<ArgumentException>(() =>
             SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file }, Path.Combine(_rig.Root, "start-remote"))).Message);
         string chosen = Path.Combine(_rig.Root, "start-alt");
-        var (_, alt) = SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen);
+        var (_, alt, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen);
         Assert.Equal(5702, alt.CliPort);
         var recorded = EnvironmentInventory.Read(Path.Combine(chosen, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform));
         Assert.Equal(("alt", 5702), (recorded.Environments.Single().Name, recorded.Environments.Single().CliPort));

@@ -101,3 +101,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## BepInExPack_Valheim (shipped inside the valheim-test tool)
+
+The `Valheim.Testing.NativeSmoke` tool (`valheim-test`) embeds one unmodified BepInExPack_Valheim zip, pinned by SHA-256 in [loader-dependency.json](loader-dependency.json) (version 5.4.2351, published on Thunderstore by denikson; built from [AzumattDev/BepInEx](https://github.com/AzumattDev/BepInEx)). It is extracted only into ValheimTesting's own folder and copied only into a disposable copy of a game install whose own Doorstop proxy and configuration do not match. It is not part of any ValheimTesting library. Its components keep their own licenses:
+
+- [BepInEx](https://github.com/BepInEx/BepInEx) (`BepInEx/core/BepInEx*.dll`, `BepInEx.Preloader.dll`): GNU Lesser General Public License 2.1, text in [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt).
+- [UnityDoorstop](https://github.com/NeighTools/UnityDoorstop) (`winhttp.dll`, `doorstop_libs/`): GNU Lesser General Public License 2.1, as above.
+- [HarmonyX](https://github.com/BepInEx/HarmonyX) (`0Harmony*.dll`, `HarmonyXInterop.dll`), [MonoMod](https://github.com/MonoMod/MonoMod) (`MonoMod.*.dll`) and [Mono.Cecil](https://github.com/jbevain/cecil) (`Mono.Cecil*.dll`): MIT licenses, as published by those projects.
+
+The source for each component is at the linked repository; the exact files are those of the pinned zip, whose SHA-256 the build and every run check.

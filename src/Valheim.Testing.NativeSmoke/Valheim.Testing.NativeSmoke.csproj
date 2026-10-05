@@ -22,6 +22,9 @@
     <Compile Remove="SessionAdapter/**/*.cs" />
     <ProjectReference Include="../Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
     <None Include="../../LICENSE" Pack="true" PackagePath="" />
+    <!-- The tool embeds an unmodified BepInExPack (LGPL-2.1 and MIT components): its notices and the LGPL text ship with it. -->
+    <None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" />
+    <None Include="../../licenses/LGPL-2.1.txt" Pack="true" PackagePath="licenses" />
     <None Include="README.md" Pack="true" PackagePath="" />
     <EmbeddedResource Include="SessionAdapter/Plugin.cs" LogicalName="NativeSmoke.Adapter.Plugin.cs" />
     <EmbeddedResource Include="../Valheim.Testing.Adapter/Adapter/TestExtension.cs" LogicalName="NativeSmoke.Adapter.TestExtension.cs" />
@@ -32,6 +35,10 @@
          checks. A build without it (bundle not yet published or not fetched) carries none and says so at run time. -->
     <EmbeddedResource Include="../../cli-dependency.json" LogicalName="cli-dependency.json" />
     <EmbeddedResource Include="../../.packages/valheimcli-bundle.zip" LogicalName="valheimcli-bundle.zip" Condition="Exists('../../.packages/valheimcli-bundle.zip')" />
+    <!-- The pinned BepInExPack (loader-dependency.json) a disposable copy takes when its install's own Doorstop pair does not
+         match; bootstrap-cli.cs fetches it into .packages and checks it. A build without it carries none and refuses as before. -->
+    <EmbeddedResource Include="../../loader-dependency.json" LogicalName="loader-dependency.json" />
+    <EmbeddedResource Include="../../.packages/bepinexpack-valheim.zip" LogicalName="bepinexpack-valheim.zip" Condition="Exists('../../.packages/bepinexpack-valheim.zip')" />
   </ItemGroup>
   <!-- A stale zip beside a moved pin would make every run refuse on the user's machine: the build refuses instead. A CI
        or release build with a pinned bundle must embed it (bootstrap-cli.cs fetches it). -->
@@ -47,5 +54,16 @@
     <Error Condition="Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' == ''" Text=".packages/valheimcli-bundle.zip is present but cli-dependency.json pins no bundle; delete the zip or pin it." />
     <Error Condition="Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' != '' And '$(_CliBundleFound.ToLowerInvariant())' != '$(_CliBundleSha256)'" Text=".packages/valheimcli-bundle.zip is sha256 $(_CliBundleFound.ToLowerInvariant()), not the pinned $(_CliBundleSha256): run dotnet run scripts/bootstrap-cli.cs." />
     <Error Condition="!Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' != '' And '$(ContinuousIntegrationBuild)' == 'true'" Text="cli-dependency.json pins a ValheimCLI bundle, and this build has none to embed: run dotnet run scripts/bootstrap-cli.cs first." />
+    <PropertyGroup>
+      <_LoaderPin>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../loader-dependency.json'))</_LoaderPin>
+      <_LoaderSha256>$([System.Text.RegularExpressions.Regex]::Match($(_LoaderPin), '"sha256"\s*:\s*"([0-9a-fA-F]{64})"').Groups[1].Value.ToLowerInvariant())</_LoaderSha256>
+      <_LoaderZip>$(MSBuildThisFileDirectory)../../.packages/bepinexpack-valheim.zip</_LoaderZip>
+    </PropertyGroup>
+    <GetFileHash Files="$(_LoaderZip)" Algorithm="SHA256" Condition="Exists('$(_LoaderZip)')">
+      <Output TaskParameter="Hash" PropertyName="_LoaderFound" />
+    </GetFileHash>
+    <Error Condition="'$(_LoaderSha256)' == ''" Text="loader-dependency.json pins no sha256." />
+    <Error Condition="Exists('$(_LoaderZip)') And '$(_LoaderFound.ToLowerInvariant())' != '$(_LoaderSha256)'" Text=".packages/bepinexpack-valheim.zip is sha256 $(_LoaderFound.ToLowerInvariant()), not the pinned $(_LoaderSha256): run dotnet run scripts/bootstrap-cli.cs." />
+    <Error Condition="!Exists('$(_LoaderZip)') And '$(ContinuousIntegrationBuild)' == 'true'" Text="loader-dependency.json pins a BepInExPack, and this build has none to embed: run dotnet run scripts/bootstrap-cli.cs first." />
   </Target>
 </Project>
