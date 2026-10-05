@@ -5,8 +5,9 @@ using Valheim.Testing.Game;
 
 /// <summary>
 /// The BepInExPack this tool ships (loader-dependency.json and its zip, both embedded): a disposable copy takes it when its
-/// install's own Doorstop proxy and configuration do not match (a mod manager that swaps the proxy leaves them so), and
-/// for no other loader fault. The install is never changed; the run prints one line and records which package it used.
+/// install's own Doorstop proxy and configuration do not match (a mod manager that swaps the proxy leaves them so), or when
+/// its BepInEx is older than <see cref="MinimumBepInEx"/>, and for no other loader fault. The install is never changed; the
+/// run prints one line and records which package it used.
 /// </summary>
 internal static class ShippedLoader
 {
@@ -20,17 +21,42 @@ internal static class ShippedLoader
     /// </summary>
     internal static Choice? Instead(string actor, string install) => Instead(actor, install, Shipped, CliBundle.DataRoot);
 
+    /// <summary>
+    /// The oldest BepInEx a disposable copy keeps. Every v5 build before it finds none of Unity's log-writer methods on Unity
+    /// 2023.2 and later (Valheim's Unity 6), so its plugins' lines never reach Unity's log and it logs "Unable to start Unity log
+    /// writer" at startup (BepInEx/BepInEx#755); BepInEx/BepInEx#1264 fixed that in 5.4.23.5, which the shipped pack carries.
+    /// </summary>
+    internal static readonly Version MinimumBepInEx = new(5, 4, 23, 5);
+
+    /// <summary>
+    /// Why the install's BepInEx core is too old to keep (<see cref="MinimumBepInEx"/>), or null: new enough, not v5, unreadable,
+    /// or a macOS install, whose native arm64 loader the pack's x64 Doorstop library cannot replace.
+    /// </summary>
+    internal static string? OutdatedCore(string install)
+    {
+        if (Directory.Exists(Path.Combine(install, ClientLaunch.MacBundle)) || File.Exists(Path.Combine(install, ServerLaunch.MacExecutable))) return null;
+        string library = Path.Combine(install, InstallPins.CoreDirectory, "BepInEx.dll");
+        if (!File.Exists(library)) return null;
+        Version? version;
+        try { version = System.Reflection.AssemblyName.GetAssemblyName(library).Version; }
+        catch (Exception error) when (error is BadImageFormatException or FileLoadException or IOException) { return null; }
+        if (version is not { Major: 5 } || version >= MinimumBepInEx) return null;
+        return $"BepInEx {version} is older than {MinimumBepInEx}, which on Unity 6 cannot reach Unity's log writer " +
+            "(BepInEx/BepInEx#755, fixed by #1264 in 5.4.23.5)";
+    }
+
     internal static Choice? Instead(string actor, string install, Func<(Stream Zip, LoaderPin Pin)?> shipped, string dataRoot)
     {
-        string? mismatch = BepInExLoaderPackage.DoorstopMismatch(install);
-        if (mismatch == null) return null;
+        string? mismatch = BepInExLoaderPackage.DoorstopMismatch(install), outdated = OutdatedCore(install);
+        if (mismatch == null && outdated == null) return null;
         var found = shipped();
         if (found is not { } pack) return null;
         using (pack.Zip)
         {
             string manifest = Extract(pack.Zip, pack.Pin, dataRoot);
             string identity = BepInExLoaderPackage.Read(manifest).Identity;
-            string reason = $"{install}'s Doorstop proxy and configuration do not match ({mismatch}); its disposable copy takes valheim-test's {identity}, and the install is not changed";
+            string why = string.Join("; and ", new[] { mismatch == null ? null : $"Doorstop proxy and configuration do not match ({mismatch})", outdated }.OfType<string>());
+            string reason = $"{install}'s {why}; its disposable copy takes valheim-test's {identity}, and the install is not changed";
             Console.WriteLine($"{actor} loader: {reason}");
             return new Choice(manifest, reason);
         }

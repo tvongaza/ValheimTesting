@@ -101,6 +101,54 @@ public sealed class ShippedLoaderTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_root, "d2", "loader", "escaped.txt")));
     }
 
+    // A real BepInEx.dll of that assembly version in the install's core (the fakes above are text, which reads as unknown).
+    private static string WithCore(string install, Version version)
+    {
+        var builder = new System.Reflection.Emit.PersistedAssemblyBuilder(new System.Reflection.AssemblyName("BepInEx") { Version = version }, typeof(object).Assembly);
+        builder.DefineDynamicModule("BepInEx.dll");
+        builder.Save(Path.Combine(install, "BepInEx", "core", "BepInEx.dll"));
+        return install;
+    }
+
+    // BepInEx before 5.4.23.5 cannot reach Unity 6's log writer (BepInEx/BepInEx#755, fixed by #1264): its install takes the
+    // shipped pack even with a coherent Doorstop pair; 5.4.23.5 and later, another major and an unreadable core keep their own.
+    [Theory]
+    [InlineData("5.4.22.0", true)]
+    [InlineData("5.4.23.4", true)]
+    [InlineData("5.4.23.5", false)]
+    [InlineData("5.4.24.0", false)]
+    [InlineData("6.0.0.0", false)]
+    public void AnInstallWithBepInExBefore54235TakesTheShippedPack(string version, bool takes)
+    {
+        byte[] zip = Pack();
+        string install = WithCore(Install("core-" + version, "MZ target_assembly", Doorstop4), Version.Parse(version));
+        var choice = ShippedLoader.Instead("server", install, () => (new MemoryStream(zip), Pin(zip)), Path.Combine(_root, "data"));
+        Assert.Equal(takes, choice != null);
+        if (choice == null) return;
+        Assert.Contains($"BepInEx {version} is older than 5.4.23.5", choice.Reason);
+        Assert.Contains("BepInEx/BepInEx#755", choice.Reason);
+        Assert.DoesNotContain("Doorstop proxy", choice.Reason);
+        Assert.Contains("the install is not changed", choice.Reason);
+    }
+
+    // A macOS install keeps its own (native arm64) loader whatever its BepInEx: the pack's Doorstop library is x64.
+    [Fact] public void AMacInstallWithAnOldBepInExKeepsItsOwnLoader()
+    {
+        byte[] zip = Pack();
+        string install = WithCore(Install("mac-old", "MZ target_assembly", Doorstop4), new Version(5, 4, 22, 0));
+        Directory.CreateDirectory(Path.Combine(install, ClientLaunch.MacBundle));
+        Assert.Null(ShippedLoader.Instead("client", install, () => (new MemoryStream(zip), Pin(zip)), Path.Combine(_root, "data")));
+    }
+
+    [Fact] public void AnOldBepInExBehindAMismatchedPairNamesBothReasons()
+    {
+        byte[] zip = Pack();
+        string install = WithCore(Install("gale-old", "MZ target_assembly", Doorstop3), new Version(5, 4, 22, 0));
+        var choice = ShippedLoader.Instead("client", install, () => (new MemoryStream(zip), Pin(zip)), Path.Combine(_root, "data"));
+        Assert.Contains("Doorstop proxy and configuration do not match", choice!.Reason);
+        Assert.Contains("BepInEx 5.4.22.0 is older than 5.4.23.5", choice.Reason);
+    }
+
     [Fact] public void AMismatchedInstallTakesTheShippedPackAndACoherentOneKeepsItsOwn()
     {
         byte[] zip = Pack();
