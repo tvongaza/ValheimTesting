@@ -121,6 +121,21 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("--client-loader-package FILE", refusal);
         Assert.Contains("No Steam account is signed in", refusal);
         Assert.False(File.Exists(Path.Combine(checkedOutput, "plan.json"))); // the password is written only once the preflight passed
+
+        // With a reviewed package already given, a loader refusal is the package's own (here: another platform's loader);
+        // the hint would name the option that caused it, so there is none.
+        string package = Path.Combine(_rig.Root, "client-loader.json");
+        BepInExLoaderPackage.Capture(_rig.Game, "reviewed", "1").Write(package);
+        string packagedOutput = Path.Combine(_rig.Root, "client-package-refused");
+        using (EnvironmentInventory.UseMachine(WithValheim(out _)))
+            result = await ServerLoad.RunAsync(Arguments(packagedOutput, "--client-loader-package", package), new ServerLoad.Seams(
+                Inspect: _ => Task.FromResult(new CampaignPreflightReport([new("client", "game and loader", "The reviewed loader package does not match the host platform.")])),
+                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); }));
+        Assert.Equal(3, result);
+        Assert.False(ran);
+        refusal = File.ReadAllText(Path.Combine(packagedOutput, "REFUSED.txt"));
+        Assert.Contains("does not match the host platform", refusal);
+        Assert.DoesNotContain("--client-loader-package FILE", refusal);
     }
 
     [Fact] public async Task ServerOnlySkipsTheClientAndPreflightOnlyStopsBeforeTheRun()
