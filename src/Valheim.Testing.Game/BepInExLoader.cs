@@ -66,13 +66,19 @@ internal static class BepInExLoader
     /// </summary>
     internal static void RequireLoaderFiles(ClientPlatform platform, Func<string, bool> present, string kind)
     {
-        var missing = platform == ClientPlatform.MacOS
-            ? new[] { CorePreloader, CoreLibrary }.Where(file => !present(file))
-                .Concat(ClientLaunch.MacDoorstopFiles.Any(present) ? [] : [string.Join(" or ", ClientLaunch.MacDoorstopFiles)]).ToList()
-            : LoaderFiles(platform).Where(file => !present(file)).ToList();
+        var missing = MissingLoaderFiles(platform, present);
         if (missing.Count != 0)
             throw new FileNotFoundException($"BepInEx's loader is incomplete in the {kind}: it lacks {string.Join(", ", missing)}. Install a coherent BepInExPack, or name a reviewed loaderPackage.");
     }
+
+    /// <summary>
+    /// Which of the files a <paramref name="platform"/> launch needs <paramref name="present"/> lacks (<see cref="RequireLoaderFiles"/>),
+    /// relative with <c>/</c>, for a message: macOS's alternative Doorstop libraries are one entry, "<c>a or b</c>".
+    /// </summary>
+    internal static List<string> MissingLoaderFiles(ClientPlatform platform, Func<string, bool> present) => platform == ClientPlatform.MacOS
+        ? new[] { CorePreloader, CoreLibrary }.Where(file => !present(file))
+            .Concat(ClientLaunch.MacDoorstopFiles.Any(present) ? [] : [string.Join(" or ", ClientLaunch.MacDoorstopFiles)]).ToList()
+        : LoaderFiles(platform).Where(file => !present(file)).ToList();
 
     internal static void RequireFile(string root, string relative, string message)
     {
