@@ -44,7 +44,7 @@
   },
   "runtimePins": {
     "game": "<InstallPins.Of(runtime).Game>",
-    "loader": "<InstallPins.Of(runtime).Loader>",
+    "bepinexCore": "<InstallPins.Of(runtime).BepInExCore>",
     "patchers": "<InstallPins.Of(runtime).Patchers>"
   },
   "port": 5577,
@@ -68,7 +68,7 @@
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
-      "loader": "<InstallPins.Of(install).Loader>",
+      "bepinexCore": "<InstallPins.Of(install).BepInExCore>",
       "patchers": "<InstallPins.Of(install).Patchers>"
     },
     "join": "192.0.2.1:2456",
@@ -98,7 +98,7 @@
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
-      "loader": "<InstallPins.Of(install).Loader>",
+      "bepinexCore": "<InstallPins.Of(install).BepInExCore>",
       "patchers": "<InstallPins.Of(install).Patchers>"
     },
     "join": "192.0.2.1:2456",

@@ -72,7 +72,7 @@ public sealed class ServerOnlyTests : IDisposable
             ["world"] = new { source = Path.Combine(_directory, "world"), sha256 = new Dictionary<string, string> { ["adminlist.txt"] = hash } },
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
             ["pins"] = new Dictionary<string, string> { ["worlduid"] = "4242", ["valheimCLI.valheimCLI"] = md5, [LifecyclePlan.ModPlugin] = md5, [LifecyclePlan.AdapterPlugin] = md5 },
-            ["runtimePins"] = new { game = new string('c', 64), loader = new string('d', 64), patchers = new string('e', 64) },
+            ["runtimePins"] = new { game = new string('c', 64), bepinexCore = new string('d', 64), patchers = new string('e', 64) },
             ["drySite"] = new { x = 100, z = -40, ground = 42.5 },
             ["wetSite"] = new { x = 400, z = 300, ground = 22 },
         };

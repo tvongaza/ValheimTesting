@@ -389,23 +389,6 @@ public sealed class HostServerTests : IDisposable
             (Directory.Exists(Path.Combine(directory, "BepInEx", "patchers")) ? string.Concat(Directory.EnumerateFileSystemEntries(Path.Combine(directory, "BepInEx", "patchers"))
                 .Select(entry => "VT-PATCHER " + Convert.ToBase64String(Encoding.UTF8.GetBytes(Path.GetFileName(entry))) + "\n")) : "") + "VT-LIST done\n"));
 
-    // A Windows host lists a loader file in the spelling on its disk when listed whole, in the pin paths' spelling when listed
-    // by PinPaths; the loader pin is the same either way. A case-sensitive host's other spelling is another file, not loader.
-    [Fact] public void TheLoaderPinIgnoresAWindowsHostsSpellingOfItsLoaderFiles()
-    {
-        string install = Path.Combine(_root, "install");
-        FakeInstalls.Server(install);
-        File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
-        var local = InstallPins.Of(install);
-        string Respelled(string relative) => relative.Replace("BepInEx/core/", "BepInEx/Core/").Replace("winhttp.dll", "WinHttp.dll");
-        HostListing Listing(HostShellKind shell) => HostInstall.ReadListing("box", shell, "/srv/rt", Reply(
-            string.Concat(WorldFixture.Manifest(install).Select(pair => $"{pair.Value}  ./{Respelled(pair.Key.Replace('\\', '/'))}\n")) + "VT-LIST done\n"));
-        Assert.Equal(local.Loader, HostInstall.Pins(Listing(HostShellKind.PowerShell)).Loader);
-        Assert.Equal(local.Loader, HostInstall.Pins(ListingOf(install, HostShellKind.PowerShell)).Loader);
-        // Negative control: on a case-sensitive host BepInEx/Core and WinHttp.dll are not the loader.
-        Assert.NotEqual(local.Loader, HostInstall.Pins(Listing(HostShellKind.Bash)).Loader);
-    }
-
     [Fact] public void PinsFromAHostListingAreTheLocalInstallPins()
     {
         string install = Path.Combine(_root, "install");
@@ -417,7 +400,7 @@ public sealed class HostServerTests : IDisposable
         var local = InstallPins.Of(install);
         var listing = ListingOf(install);
         var found = HostInstall.Pins(listing);
-        Assert.Equal(local.Game, found.Game); Assert.Equal(local.Loader, found.Loader); Assert.Equal(local.Patchers, found.Patchers);
+        Assert.Equal(local.Game, found.Game); Assert.Equal(local.BepInExCore, found.BepInExCore); Assert.Equal(local.Patchers, found.Patchers);
         Assert.Equal(local.Game, HostInstall.CheckPins(local, listing, "runtime").Game);
         HostInstall.RequirePatchers(listing, ["Hooks"], "runtime");
         Assert.Contains("Hooks", Assert.Throws<InvalidOperationException>(() => HostInstall.RequirePatchers(listing, [], "runtime")).Message);

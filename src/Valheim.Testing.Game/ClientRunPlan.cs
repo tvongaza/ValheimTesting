@@ -84,7 +84,7 @@ public sealed class ClientRunPlan
     /// <summary>Owned only: every entry the install's <c>BepInEx/patchers</c> holds, by name; the launch refuses any other.</summary>
     public string[] Patchers { get; set; } = [];
     /// <summary>
-    /// Owned only: the install's game build, loader and patchers by SHA256 (<see cref="Valheim.Testing.Game.InstallPins.Of"/>),
+    /// Owned only: the install's game build, BepInEx core and patchers by SHA256 (<see cref="Valheim.Testing.Game.InstallPins.Of"/>),
     /// checked before launch. Required for an owned client unless <see cref="Pinning"/> is <c>none</c>. An attached
     /// client's install is its operator's and is not read, so its build is not pinned (the game refuses a join only across
     /// network versions).
@@ -193,7 +193,7 @@ public sealed class ClientRunPlan
             if (pin.Value != "absent" && (pin.Value.Length != 32 || !pin.Value.All(Uri.IsHexDigit))) throw new ArgumentException($"Client plugin {pin.Key} needs an exact MD5 or absent.");
         _ = MenuExpectations; // Parses the pins before anything launches.
         if (Owned)
-            (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\"."))
+            (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, BepInEx core and patchers in installPins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\"."))
                 .Validate("client install");
     }
 
@@ -269,11 +269,11 @@ public sealed class ClientRunPlan
         return manifest.Check(Install, Capabilities.Concat(capabilities ?? []).Where(CliCapabilities.IsPackCapability));
     }
 
-    /// <summary>Owned and pinned: refuses an install whose game build, loader or patchers are not <see cref="InstallPins"/>.</summary>
+    /// <summary>Owned and pinned: refuses an install whose game build, BepInEx core or patchers are not <see cref="InstallPins"/>.</summary>
     public void CheckInstallPins()
     {
         if (!Owned || !Pinned) return;
-        (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."))
+        (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, BepInEx core and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."))
             .Check(Install, "client install");
     }
     private static string Expect(IEnumerable<string> lines)

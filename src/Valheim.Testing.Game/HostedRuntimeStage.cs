@@ -204,7 +204,7 @@ public static class HostedRuntimeStage
             string names = string.Join('\n', selected.Keys.Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name))));
             var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsApply : BashApply,
                 new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["files"] = names,
-                    ["loader"] = loaderPackage == null ? "" : string.Join('\n', InstallPins.LoaderEntries) }, timeout, cancellation).ConfigureAwait(false);
+                    ["replaceLoader"] = loaderPackage == null ? "false" : "true" }, timeout, cancellation).ConfigureAwait(false);
             result.EnsureSuccess($"Staging selected plugins on {host.Name}");
             if (InteractiveClient.Line(result.Stdout, "VT-STAGED") == null)
                 throw new HostOperationException($"Unexpected reply while staging plugins on {host.Name}", result);
@@ -219,11 +219,13 @@ public static class HostedRuntimeStage
                 if (runtime.Files.Keys.Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Any(name => !expected.Contains(name)))
                     throw new IOException($"The prepared runtime on {host.Name} retained an unselected {directory} file.");
             }
-            var pins = HostInstall.Pins(runtime);
-            // The one loader identity: the prepared runtime's loader is the package's, every loader file and no other.
-            if (loaderPackage != null && !pins.Loader.Equals(loaderPackage.Loader, StringComparison.OrdinalIgnoreCase))
-                throw new IOException($"The prepared runtime's loader on {host.Name} ({pins.Loader}) is not the reviewed package's ({loaderPackage.Loader}): " +
-                    "a loader file outside the package survived preparation, or a package file is missing.");
+            _ = HostInstall.Pins(runtime);
+            if (loaderPackage != null)
+            {
+                foreach (string prefix in new[] { "BepInEx/core/", "doorstop_libs/" })
+                    if (runtime.Files.Keys.Any(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !selected.ContainsKey(name)))
+                        throw new IOException("An unselected loader file survived preparation: " + prefix);
+            }
             return runtime;
         }
         catch (Exception original)
@@ -274,12 +276,15 @@ public static class HostedRuntimeStage
             if ([IO.Directory]::Exists($dir)) { [IO.Directory]::Delete($dir, $true) }
             [void][IO.Directory]::CreateDirectory($dir)
         }
-        # loader: the loader's files and folders (InstallPins), one per line, when a reviewed package replaces them; else empty.
-        foreach ($entry in ($loader -split "`n")) {
-            if (-not $entry) { continue }
-            $path = Join-Path $runtime $entry
-            if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
-            elseif ([IO.Directory]::Exists($path)) { [IO.Directory]::Delete($path, $true) }
+        if ($replaceLoader -eq 'true') {
+            foreach ($file in @('winhttp.dll', 'doorstop_config.ini', 'libdoorstop.dylib')) {
+                $path = Join-Path $runtime $file
+                if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
+            }
+            foreach ($folder in @('BepInEx/core', 'doorstop_libs')) {
+                $path = Join-Path $runtime $folder
+                if ([IO.Directory]::Exists($path)) { [IO.Directory]::Delete($path, $true) }
+            }
         }
         foreach ($line in ($files -split "`n")) {
             if (-not $line) { continue }
@@ -299,11 +304,10 @@ public static class HostedRuntimeStage
           rm -rf -- "$runtime/BepInEx/$name"
           mkdir -p -- "$runtime/BepInEx/$name"
         done
-        # loader: the loader's files and folders (InstallPins), one per line, when a reviewed package replaces them; else empty.
-        while IFS= read -r entry; do
-          [ -n "$entry" ] || continue
-          rm -rf -- "$runtime/$entry"
-        done <<< "$loader"
+        if [ "$replaceLoader" = true ]; then
+          rm -f -- "$runtime/winhttp.dll" "$runtime/doorstop_config.ini" "$runtime/libdoorstop.dylib"
+          rm -rf -- "$runtime/BepInEx/core" "$runtime/doorstop_libs"
+        fi
         while IFS= read -r line; do
           [ -n "$line" ] || continue
           relative=$(printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d)

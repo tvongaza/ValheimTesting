@@ -1,7 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Valheim.Testing.Game;
 
@@ -55,18 +53,12 @@ public static class EnvironmentPinning
 /// <c>assembly_guiutils</c>, <c>assembly_postprocessing</c> and the rest. A game update or another branch
 /// (<c>default_old</c>, <c>default_pre1_0</c>) that changes any of them changes this pin; one that changes only assets
 /// or Unity's own assemblies does not.</item>
-/// <item><see cref="Loader"/>: BepInEx's loader as one set (<see cref="IsLoaderFile"/>): the Windows Doorstop proxy
-/// <c>winhttp.dll</c> and its <c>doorstop_config.ini</c>, a root <c>libdoorstop.dylib</c>, <c>doorstop_libs</c> and
-/// <c>BepInEx/core</c>. Another BepInEx, BepInExPack or Doorstop build changes it, and so does a proxy a mod manager
-/// replaced beside the pack's configuration. <see cref="BepInExLoaderPackage.Loader"/> is the same value for a reviewed
-/// loader package, so a plan, a package and every check of an install share one loader identity.
-/// <c>BepInEx/config/BepInEx.cfg</c> is configuration, not loader: BepInEx rewrites it when it binds its settings.</item>
+/// <item><see cref="BepInExCore"/>: <c>BepInEx/core</c>, the loader itself (another BepInEx or BepInExPack version).</item>
 /// <item><see cref="Patchers"/>: the contents of <c>BepInEx/patchers</c>, which rewrite game assemblies before any plugin
 /// loads (the plan's patcher names say which entries it holds; this says which builds).</item>
 /// </list>
 /// Each value is the SHA256 of a listing: one line per file, <c>&lt;sha256&gt;  &lt;relative path&gt;\n</c> with
-/// <c>/</c> separators, ordered by path (ordinal), as <c>sha256sum</c> prints it; <see cref="Loader"/>'s paths are relative
-/// to the install's root, the others' to their folder. Finder's <c>.DS_Store</c> and
+/// <c>/</c> separators, ordered by path (ordinal), as <c>sha256sum</c> prints it. Finder's <c>.DS_Store</c> and
 /// AppleDouble <c>._*</c> files are left out. An empty or absent folder hashes the empty listing.
 /// </summary>
 public sealed class InstallPins
@@ -77,19 +69,8 @@ public sealed class InstallPins
     public static readonly string CoreDirectory = Path.Combine("BepInEx", "core");
 
     public string Game { get; set; } = "";
-    public string Loader { get; set; } = "";
+    public string BepInExCore { get; set; } = "";
     public string Patchers { get; set; } = "";
-
-    // Removed (#295): the core-only hash missed the Doorstop proxy and its configuration, whose mismatch started games without
-    // BepInEx; loader covers them with the core. A plan that still names it is refused with what to do.
-    [JsonInclude, JsonPropertyName("bepinexCore"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedBepInExCore
-    {
-        get => null;
-        set => throw new ArgumentException("The pins' bepinexCore was removed (ValheimTesting #295): loader pins BepInEx/core together with the Doorstop " +
-            "proxy, its configuration and libraries as one hash. Replace bepinexCore with loader, computed by InstallPins.Of(<install>) " +
-            "(or BepInExLoaderPackage.Loader for a reviewed loader package).");
-    }
 
     /// <summary>Every value is a full SHA256. <paramref name="what"/> names the install in the message ("runtime", "client install").</summary>
     public void Validate(string what)
@@ -98,9 +79,9 @@ public sealed class InstallPins
             if (value is not { Length: 64 } || !value.All(Uri.IsHexDigit))
                 throw new ArgumentException($"Pin the {what}'s {name} by full SHA256 (InstallPins.Of computes them from the install).");
     }
-    private IEnumerable<(string Name, string Value)> Values => [("game", Game), ("loader", Loader), ("patchers", Patchers)];
+    private IEnumerable<(string Name, string Value)> Values => [("game", Game), ("bepinexCore", BepInExCore), ("patchers", Patchers)];
 
-    /// <summary>The pins of the install at <paramref name="root"/>: its game assemblies, loader and patchers, as found.</summary>
+    /// <summary>The pins of the install at <paramref name="root"/>: its game assemblies, BepInEx core and patchers, as found.</summary>
     public static InstallPins Of(string root)
     {
         root = Path.GetFullPath(root);
@@ -109,13 +90,13 @@ public sealed class InstallPins
         return new()
         {
             Game = GameHash(root),
-            Loader = LoaderHash(root),
+            BepInExCore = DirectoryHash(core),
             Patchers = DirectoryHash(Path.Combine(root, BepInExLoader.Patchers)),
         };
     }
 
     /// <summary>
-    /// Refuses the install at <paramref name="root"/> unless its game assembly, loader and patchers are these pins,
+    /// Refuses the install at <paramref name="root"/> unless its game assembly, BepInEx core and patchers are these pins,
     /// naming each that differs with the value found. <paramref name="kind"/> names the install ("runtime", "client install").
     /// Returns what it found.
     /// </summary>
@@ -135,8 +116,8 @@ public sealed class InstallPins
         var differences = new List<string>();
         if (!Same(found.Game, Game))
             differences.Add($"the game build differs ({gameFolder}/{GameAssemblies} is {found.Game}, pinned game {Game}): a game update or another branch");
-        if (!Same(found.Loader, Loader))
-            differences.Add($"the loader differs ({LoaderFilesText} is {found.Loader}, pinned loader {Loader}): another BepInEx, BepInExPack or Doorstop build, or a proxy or configuration replaced on its own");
+        if (!Same(found.BepInExCore, BepInExCore))
+            differences.Add($"BepInEx core differs ({CoreDirectory} is {found.BepInExCore}, pinned bepinexCore {BepInExCore}): another BepInEx or BepInExPack build");
         if (!Same(found.Patchers, Patchers))
             differences.Add($"the patchers differ ({BepInExLoader.Patchers} is {found.Patchers}, pinned patchers {Patchers})");
         if (differences.Count != 0)
@@ -174,43 +155,6 @@ public sealed class InstallPins
             Path.GetFileName(path) is var name && name.StartsWith("assembly_", StringComparison.Ordinal) && name.EndsWith(".dll", StringComparison.Ordinal)));
     }
 
-    /// <summary>
-    /// Whether <paramref name="relative"/> (a path under an install's root with <c>/</c> separators) is one of BepInEx's loader
-    /// files that <see cref="Loader"/> covers: <c>winhttp.dll</c>, <c>doorstop_config.ini</c>, <c>libdoorstop.dylib</c>, or a
-    /// file under <c>BepInEx/core</c> or <c>doorstop_libs</c>. <paramref name="comparison"/> is the host's path comparison.
-    /// </summary>
-    internal static bool IsLoaderFile(string relative, StringComparison comparison = StringComparison.Ordinal) => LoaderPath(relative, comparison) != null;
-    /// <summary>
-    /// <paramref name="relative"/> with its loader file or folder in this spelling (<c>BepInEx/Core/x.dll</c> as
-    /// <c>BepInEx/core/x.dll</c> under <see cref="StringComparison.OrdinalIgnoreCase"/>), so a case-insensitive host's
-    /// listings hash alike whichever spelling they carry; null when it is not a loader file.
-    /// </summary>
-    internal static string? LoaderPath(string relative, StringComparison comparison)
-    {
-        if (LoaderRootFiles.FirstOrDefault(file => relative.Equals(file, comparison)) is { } root) return root;
-        return LoaderFolders.FirstOrDefault(folder => relative.StartsWith(folder + "/", comparison)) is { } folder ? folder + relative[folder.Length..] : null;
-    }
-    // Derived from the files a launch needs (BepInExLoader.LoaderFiles, ClientLaunch.MacDoorstopFiles): each one at the root,
-    // and the whole folder of each one in a folder, so the identity covers every required file and what loads beside it.
-    private static readonly string[] Required =
-        [.. BepInExLoader.LoaderFiles(ClientPlatform.Windows), .. BepInExLoader.LoaderFiles(ClientPlatform.Linux), .. ClientLaunch.MacDoorstopFiles];
-    internal static readonly string[] LoaderRootFiles = Required.Where(file => !file.Contains('/')).Distinct(StringComparer.Ordinal).ToArray();
-    internal static readonly string[] LoaderFolders = Required.Where(file => file.Contains('/')).Select(file => file[..file.LastIndexOf('/')])
-        .Distinct(StringComparer.Ordinal).ToArray();
-    /// <summary>The loader's files and folders, relative with <c>/</c>: what replacing the loader removes.</summary>
-    internal static IEnumerable<string> LoaderEntries => LoaderRootFiles.Concat(LoaderFolders);
-    private static readonly string LoaderFilesText = string.Join(", ", LoaderEntries.SkipLast(1)) + " and " + LoaderEntries.Last();
-
-    /// <summary>The loader files (<see cref="IsLoaderFile"/>) under the install at <paramref name="root"/>, as full paths, Mac metadata left out.</summary>
-    internal static IEnumerable<string> LoaderFiles(string root) =>
-        LoaderRootFiles.Select(file => Path.Combine(root, file)).Where(File.Exists)
-            .Concat(LoaderFolders.Select(folder => Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar))).Where(Directory.Exists)
-                .SelectMany(folder => Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)))
-            .Where(path => !IsMacMetadata(path));
-
-    /// <summary>The <see cref="Loader"/> value of the install at <paramref name="root"/>: the listing hash of its loader files, relative to the root.</summary>
-    public static string LoaderHash(string root) => ListingHash(Path.GetFullPath(root), LoaderFiles(Path.GetFullPath(root)));
-
     /// <summary>The SHA256 of a folder's listing (see <see cref="InstallPins"/>); an empty or absent folder hashes the empty listing.</summary>
     public static string DirectoryHash(string directory) =>
         ListingHash(directory, Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories) : []);
@@ -242,7 +186,7 @@ public sealed class InstallPins
     public void Record(IDictionary<string, string> provenance, string prefix)
     {
         provenance[prefix + "GameSha256"] = Game;
-        provenance[prefix + "LoaderSha256"] = Loader;
+        provenance[prefix + "BepInExCoreSha256"] = BepInExCore;
         provenance[prefix + "PatchersSha256"] = Patchers;
     }
 }

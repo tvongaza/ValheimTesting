@@ -23,7 +23,7 @@
 // releasedCliCommit; a released package's Valheim.Testing* dependency is not met by the released set (so a page pinning
 // both Doubles and Valheim.Testing names a pair that restores together); or a project's source version is older than its
 // release; or a fork link pinned to releasedCliCommit names a file or heading the fork does not have at that commit (read
-// from GitHub). write, versions and docs read only this checkout.
+// from GitHub). write and docs read only this checkout.
 //
 // docs fails, naming the file and line, on a Markdown heading that names a version or a date (a page describes what is,
 // and history belongs in release notes; native-validation records are exempt), a link to a review/ branch (which moves),
@@ -35,6 +35,12 @@
 // local build identity, and NuGet.org never lets a published id/version be replaced. Checked are each packed project's
 // <Version> and Valheim.Testing* PackageReferences, and the Cli packageVersion in cli-dependency.json. It also refuses a
 // source version older than the release recorded in toolkit-versions.json. A candidate may sit on main between releases.
+// And it refuses a change under a published version in a package the valheim-test tool embeds (#363): the tool ships the
+// DLLs of the projects it references (Game, and Valheim.Testing through it), and the consumer its `init` creates restores
+// that Game version from NuGet.org. So when NuGet.org already serves such a package's source <Version>, its directory and
+// those of the projects it references must equal the commit that package was built from (its nuspec's repository commit);
+// otherwise the release skips it as published while the tool carries other bytes under the same version. This part reads
+// NuGet.org and needs the checkout's full history (release.yml fetches it).
 #:package NuGet.Versioning@7.9.0
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -49,6 +55,8 @@ const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
 const string Registration = "https://api.nuget.org/v3/registration5-gz-semver2";
 const string VersionsFile = "toolkit-versions.json";
 const string Cli = "Valheim.Testing.Cli";
+// The valheim-test tool: it ships the DLLs of the projects it references, and its generated consumer restores their packages.
+const string Tool = "Valheim.Testing.NativeSmoke";
 // The pin a valheimCLI fork link at a full commit names: releasedCliCommit, the commit the released Cli was built from.
 const string CliCommit = "releasedCliCommit";
 Regex ForkLink = new(@"https://github\.com/tvongaza/valheimCLI/blob/(?<version>[0-9a-f]{40})/(?<path>[^#?)\s]+)(?:#(?<anchor>[^)\s]*))?", RegexOptions.IgnoreCase);
@@ -63,7 +71,7 @@ return mode switch
 {
     "write" => Write(),
     "check" => await Check(),
-    "versions" => Versions(),
+    "versions" => await Versions(),
     "docs" => Report(DocsProblems(), "Every heading names no version or date, and every link resolves."),
     _ => Usage(mode == "" ? "no mode" : $"unknown mode '{mode}'"),
 };
@@ -152,7 +160,7 @@ async Task<List<Problem>> CheckReleased(HttpClient http, Dictionary<string, stri
     XDocument nuspec = XDocument.Parse(nuspecText);
     if (id == Cli)
     {
-        string? commit = nuspec.Descendants().FirstOrDefault(e => e.Name.LocalName == "repository")?.Attribute("commit")?.Value;
+        string? commit = NuspecCommit(nuspec);
         string expected = ReleasedCliCommit();
         if (!string.Equals(commit, expected, StringComparison.OrdinalIgnoreCase))
             problems.Add(new(VersionsFile, FileLine(VersionsFile, "\"releasedCliCommit\""), $"{id} {version} was built from valheimCLI {commit ?? "(no commit recorded)"}, not releasedCliCommit {expected}."));
@@ -193,7 +201,7 @@ async Task<List<NuGetVersion>> Listed(HttpClient http, string lower)
     return listed;
 }
 
-int Versions()
+async Task<int> Versions()
 {
     // Every version a release would publish or depend on: each packed project's <Version> and Valheim.Testing*
     // references (attributes in any order), and the Cli pin. A version set through an MSBuild property cannot be read
@@ -206,7 +214,68 @@ int Versions()
             : $"names the candidate version {pin.Version}. A candidate is a local build identity and is never released; " +
               "move it to a version NuGet.org has never served before tagging."));
     problems.AddRange(SourceOlderThanReleased(stated, ReadReleased()));
-    return Report(problems, $"No candidate version in the {stated.Count} release versions and dependencies, and none older than {VersionsFile}.");
+    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    var embedded = ProjectClosure(Tool);
+    foreach (var found in await Task.WhenAll(embedded.Select(id => ChangedUnderPublishedVersion(http, stated, id))))
+        problems.AddRange(found);
+    return Report(problems, $"No candidate version in the {stated.Count} release versions and dependencies, none older than {VersionsFile}, " +
+        $"and each package the {Tool} tool embeds ({string.Join(", ", embedded)}) is a new version or the source NuGet.org's copy was built from.");
+}
+
+// Same id, different bytes, for a package the tool embeds: when NuGet.org already serves the source version, the package's
+// directory and those of the projects it references must equal the commit that package was built from (its nuspec's
+// repository commit). The working tree is compared, untracked files included, so an edit not yet committed counts too.
+async Task<List<Problem>> ChangedUnderPublishedVersion(HttpClient http, List<Pin> stated, string id)
+{
+    if (stated.FirstOrDefault(p => p.Declares && p.Id == id) is not { } source || IsCandidate(source.Version)
+        || !NuGetVersion.TryParse(source.Version, out NuGetVersion? version)) return []; // refused above
+    string lower = id.ToLowerInvariant(), v = version.ToNormalizedString().ToLowerInvariant();
+    if (await Get(http, $"{FlatContainer}/{lower}/{v}/{lower}.nuspec") is not { } nuspecText) return []; // a new version
+    Problem Refuse(string message) => new(source.File, source.Line, $"{id} {source.Version} is on NuGet.org, and {message}");
+    if (NuspecCommit(XDocument.Parse(nuspecText)) is not { } commit || !Regex.IsMatch(commit, "^[0-9a-f]{40}$", RegexOptions.IgnoreCase))
+        return [Refuse("records no commit it was built from, so its source cannot be compared. Bump <Version>.")];
+    if (Git("cat-file", "-e", commit + "^{commit}").Exit != 0)
+        return [Refuse($"was built from {commit}, which this checkout does not have. Fetch the full history (actions/checkout fetch-depth: 0); if that commit is gone, bump <Version>.")];
+    string[] directories = [.. ProjectClosure(id).Prepend(id).Select(p => Path.GetDirectoryName(ProjectFile(p))!.Replace('\\', '/'))];
+    var diff = Git(["diff", "--name-only", commit, "--", .. directories]);
+    var untracked = Git(["ls-files", "--others", "--exclude-standard", "--", .. directories]);
+    if (diff.Exit != 0 || untracked.Exit != 0) return [Refuse($"comparing its source with {commit} failed: {diff.Error.Trim()} {untracked.Error.Trim()}")];
+    string[] changed = [.. (diff.Output + untracked.Output).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct().Order(StringComparer.Ordinal)];
+    if (changed.Length == 0) return [];
+    return [Refuse($"its source changed since it was built ({commit[..9]}): {string.Join(", ", changed.Take(5))}{(changed.Length > 5 ? $" and {changed.Length - 5} more" : "")}. " +
+        $"The release would skip {id} while the {Tool} tool ships the changed DLL, and a consumer its `init` creates restores the published bytes " +
+        "under the same version. Bump <Version>.")];
+}
+
+// The packages a project references, directly or through another, by their ProjectReference items.
+List<string> ProjectClosure(string id)
+{
+    var found = new List<string>();
+    var pending = new Stack<string>([id]);
+    while (pending.Count > 0)
+    {
+        string project = ProjectFile(pending.Pop());
+        foreach (string include in XDocument.Load(Path.Combine(root, project)).Descendants("ProjectReference").Select(e => (string?)e.Attribute("Include")).OfType<string>())
+        {
+            string referenced = Path.GetFileNameWithoutExtension(include.Replace('\\', '/'));
+            if (!found.Contains(referenced)) { found.Add(referenced); pending.Push(referenced); }
+        }
+    }
+    return found;
+}
+
+static string? NuspecCommit(XDocument nuspec) =>
+    nuspec.Descendants().FirstOrDefault(e => e.Name.LocalName == "repository")?.Attribute("commit")?.Value;
+
+(int Exit, string Output, string Error) Git(params string[] arguments)
+{
+    var info = new System.Diagnostics.ProcessStartInfo("git") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = root };
+    foreach (string argument in arguments) info.ArgumentList.Add(argument);
+    using var process = System.Diagnostics.Process.Start(info) ?? throw new InvalidOperationException("Could not start git.");
+    Task<string> error = process.StandardError.ReadToEndAsync();
+    string output = process.StandardOutput.ReadToEnd();
+    process.WaitForExit();
+    return (process.ExitCode, output, error.Result);
 }
 
 // Each packed project's <Version> and its Valheim.Testing* references, and the Cli packageVersion. Declares marks the

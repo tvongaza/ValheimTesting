@@ -28,10 +28,7 @@ public sealed class HostedCampaignRole
 /// </summary>
 public sealed class HostedCampaignManifest
 {
-    /// <summary>
-    /// The private ordered host/environment inventory (<see cref="EnvironmentInventory"/>) the actors are assigned from. Left
-    /// out, this machine alone (<see cref="EnvironmentInventory.Read(string?)"/> with no file).
-    /// </summary>
+    /// <summary>The private ordered host/environment inventory (<see cref="EnvironmentInventory"/>) the actors are assigned from.</summary>
     public string Inventory { get; set; } = "";
     /// <summary>Optional pinned world fixture for a scenario runner built on this preparation.</summary>
     public string World { get; set; } = "";
@@ -58,8 +55,9 @@ public sealed class HostedCampaignManifest
                     "a private environment inventory listing the hosts and environments its actors are assigned from.");
         var manifest = JsonSerializer.Deserialize<HostedCampaignManifest>(json, Json)
             ?? throw new InvalidDataException("Empty hosted campaign manifest.");
-        if (manifest.Inventory == null) throw new InvalidDataException("A campaign's inventory is a path, not null; leave it out for this machine.");
-        if (manifest.Inventory.Length != 0) manifest.Inventory = Path.GetFullPath(manifest.Inventory, directory);
+        if (string.IsNullOrWhiteSpace(manifest.Inventory))
+            throw new InvalidDataException("Name the private environment inventory (inventory) the campaign's actors are assigned from.");
+        manifest.Inventory = Path.GetFullPath(manifest.Inventory, directory);
         if (manifest.World.Length != 0) manifest.World = Path.GetFullPath(manifest.World, directory);
         if (manifest.Server == null || manifest.Clients == null) throw new InvalidDataException("A hosted campaign needs a server and named clients.");
         void Resolve(HostedCampaignRole role)
@@ -340,7 +338,7 @@ public static class HostedCampaignPreparation
         var actors = inspection.Report.Actors.Select(actor => characterDirectories.TryGetValue(actor.Name, out var directories)
             ? actor with { CharactersDirectory = directories.Characters, SteamUserDataDirectory = directories.UserData } : actor).ToArray();
         return new HostInspection(new CampaignPreflightReport(failures.OrderBy(problem => problem.Actor, StringComparer.Ordinal)
-            .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = actors, Detected = inspection.Report.Detected },
+            .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = actors },
             observedSteamIds, sourceListings, characterDirectories);
     }
 
@@ -433,14 +431,11 @@ public static class HostedCampaignPreparation
 
         ResolvedEnvironment? profile = null;
         ResolvedEnvironmentInventory? resolved = null;
-        IReadOnlyList<string> detected = [];
         if (manifest.Clients.ContainsKey("server"))
             problems.Add(new("server", "role", "The actor name server is reserved for the dedicated server."));
         else Try("campaign", "inventory", () =>
         {
-            var inventory = EnvironmentInventory.Read(manifest.Inventory.Length == 0 ? null : manifest.Inventory);
-            detected = inventory.Detected;
-            resolved = inventory.Resolve(manifest);
+            resolved = EnvironmentInventory.Read(manifest.Inventory).Resolve(manifest);
             profile = resolved.Environment;
         });
         if (manifest.Server.Character != null)
@@ -498,7 +493,7 @@ public static class HostedCampaignPreparation
                     selectedRole.Host, profile.Hosts.TryGetValue(selectedRole.Host, out var host) ? host.Platform : "unknown")
                 { Environment = assignment?.Environment, SelectionReason = assignment?.Reason };
             }).ToArray();
-        var report = new CampaignPreflightReport(problems) { Actors = actors, Detected = detected };
+        var report = new CampaignPreflightReport(problems) { Actors = actors };
         if (profile?.Server == null || !manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))
             return new Inspection(null, report);
         HostedCampaignRole RoleInput(string name, HostedCampaignRole input)

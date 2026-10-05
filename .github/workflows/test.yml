@@ -101,6 +101,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0 # versions compares src/Valheim.Testing.Game with the commit its published version was built from
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: dotnet run scripts/pins.cs -- check
@@ -140,6 +141,24 @@ jobs:
           # A source version older than its release.
           sed -i -E 's#<Version>[^<]+</Version>#<Version>0.1.0-preview.1</Version>#' src/Valheim.Testing.Doubles/Valheim.Testing.Doubles.csproj
           refused versions "Valheim.Testing.Doubles 0.1.0-preview.1 in source is older than the release"
+          # A change under a version NuGet.org already serves, in a package the valheim-test tool embeds (#363): with Game and
+          # the project it references exactly as the released Game was built (its nuspec's commit), versions reports nothing
+          # about Game; one changed line in either is refused, naming the file.
+          game=src/Valheim.Testing.Game
+          embedded=("$game" src/Valheim.Testing)
+          released=$(sed -nE 's/.*"Valheim\.Testing\.Game": "([^"]+)".*/\1/p' toolkit-versions.json)
+          commit=$(curl -fsS "https://api.nuget.org/v3-flatcontainer/valheim.testing.game/$released/valheim.testing.game.nuspec" | sed -nE 's/.*<repository [^>]*commit="([0-9a-f]{40})".*/\1/p')
+          git checkout --no-overlay "$commit" -- "${embedded[@]}"
+          out=$(env -u GITHUB_ACTIONS dotnet run scripts/pins.cs -- versions 2>&1) || true
+          echo "$out"
+          case "$out" in *"problem(s)."*|*"No candidate version"*) ;; *) echo "::error::pins versions did not finish"; exit 1 ;; esac
+          case "$out" in *"$game/Valheim.Testing.Game.csproj"*) echo "::error::versions refused the released Game source"; exit 1 ;; esac
+          echo '// changed' >> "$game/ZonePreparation.cs"
+          refused versions "Valheim.Testing.Game $released is on NuGet.org, and its source changed since it was built (*): $game/ZonePreparation.cs."
+          echo '// changed' >> src/Valheim.Testing/Terrain.cs
+          refused versions "Valheim.Testing.Game $released is on NuGet.org, and its source changed since it was built (*): src/Valheim.Testing/Terrain.cs."
+          git checkout --no-overlay HEAD -- "${embedded[@]}"
+          git diff --exit-code HEAD
           # A valheimCLI fork link at another commit than the released Cli's fails; write puts it back. A fork page's
           # anchor must be one of its headings at that commit.
           loop=tools/dev-loop/README.md

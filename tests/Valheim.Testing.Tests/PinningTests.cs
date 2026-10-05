@@ -30,7 +30,7 @@ internal static class FakeInstalls
     }
 }
 
-// Install pins (game build, loader, patchers) and the explicit, reported opt-out. Tests that read the warning
+// Install pins (game build, BepInEx core, patchers) and the explicit, reported opt-out. Tests that read the warning
 // capture only their own stderr writes (StderrCapture): other classes run at the same time and warn about their own actors.
 public sealed class PinningTests : IDisposable
 {
@@ -124,7 +124,7 @@ public sealed class PinningTests : IDisposable
         pins.Validate("client install");
         Assert.Equal(pins.Game, pins.Check(Install, "client install").Game);
         // A copy through macOS adds Finder and AppleDouble files everywhere; none of them changes a pin.
-        foreach (string folder in new[] { "", Path.Combine("valheim_Data", "Managed"), Path.Combine("BepInEx", "core"), Path.Combine("BepInEx", "patchers") })
+        foreach (string folder in new[] { Path.Combine("valheim_Data", "Managed"), Path.Combine("BepInEx", "core"), Path.Combine("BepInEx", "patchers") })
         {
             File.WriteAllText(Path.Combine(Install, folder, ".DS_Store"), "finder");
             File.WriteAllText(Path.Combine(Install, folder, "._BepInEx.dll"), "appledouble");
@@ -137,20 +137,14 @@ public sealed class PinningTests : IDisposable
     [Theory]
     [InlineData("game", "the game build differs")]
     [InlineData("game-utils", "the game build differs")]
-    [InlineData("core", "the loader differs")]
-    [InlineData("core-added", "the loader differs")]
-    [InlineData("proxy", "the loader differs")]
-    [InlineData("proxy-removed", "the loader differs")]
-    [InlineData("doorstop-config", "the loader differs")]
-    [InlineData("doorstop-library", "the loader differs")]
-    [InlineData("mac-doorstop-added", "the loader differs")]
+    [InlineData("core", "BepInEx core differs")]
+    [InlineData("core-added", "BepInEx core differs")]
     [InlineData("patcher", "the patchers differ")]
-    public void AChangedGameBuildLoaderOrPatcherIsRefused(string change, string message)
+    public void AChangedGameBuildCoreOrPatcherIsRefused(string change, string message)
     {
         FakeInstalls.Client(Install);
         Directory.CreateDirectory(Path.Combine(Install, "BepInEx", "patchers"));
         File.WriteAllText(Path.Combine(Install, "BepInEx", "patchers", "Hooks.dll"), "patcher 1");
-        WindowsLoader(Install);
         var pins = InstallPins.Of(Install);
         switch (change)
         {
@@ -158,76 +152,11 @@ public sealed class PinningTests : IDisposable
             case "game-utils": File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", "assembly_utils.dll"), "utils build 2"); break;
             case "core": File.WriteAllText(Path.Combine(Install, "BepInEx", "core", "BepInEx.dll"), "bepinex 5.4.24"); break;
             case "core-added": File.WriteAllText(Path.Combine(Install, "BepInEx", "core", "Extra.dll"), "x"); break;
-            // A mod manager's launch replaced the pack's Doorstop 3 proxy with its Doorstop 4 one: core unchanged, loader not.
-            case "proxy": File.WriteAllText(Path.Combine(Install, "winhttp.dll"), "MZ target_assembly"); break;
-            case "proxy-removed": File.Delete(Path.Combine(Install, "winhttp.dll")); break;
-            case "doorstop-config": File.WriteAllText(Path.Combine(Install, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n"); break;
-            case "doorstop-library": File.WriteAllText(Path.Combine(Install, "doorstop_libs", "libdoorstop_x64.so"), "doorstop 4"); break;
-            case "mac-doorstop-added": File.WriteAllText(Path.Combine(Install, "libdoorstop.dylib"), "universal"); break;
             case "patcher": File.WriteAllText(Path.Combine(Install, "BepInEx", "patchers", "Hooks.dll"), "patcher 2"); break;
         }
         var error = Assert.Throws<InvalidOperationException>(() => pins.Check(Install, "client install"));
         Assert.Contains(message, error.Message);
-        Assert.Equal(1, new[] { "the game build differs", "the loader differs", "the patchers differ" }.Count(error.Message.Contains));
-    }
-
-    // BepInExPack's Doorstop 3 loader beside the core: the proxy, its configuration and its libraries.
-    private static void WindowsLoader(string root)
-    {
-        File.WriteAllText(Path.Combine(root, "winhttp.dll"), "MZ targetAssembly");
-        File.WriteAllText(Path.Combine(root, "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
-        Directory.CreateDirectory(Path.Combine(root, "doorstop_libs"));
-        File.WriteAllText(Path.Combine(root, "doorstop_libs", "libdoorstop_x64.so"), "doorstop 3");
-    }
-
-    [Fact] public void TheLoaderPinIsTheListingOfTheLoaderFilesFromTheRoot()
-    {
-        FakeInstalls.Client(Install);
-        WindowsLoader(Install);
-        // What InstallPins documents and the shell recipe computes: sha256sum's lines for the loader files, relative to the root.
-        string Line(string relative) => WorldFixture.Hash(Path.Combine(Install, relative.Replace('/', Path.DirectorySeparatorChar))) + "  " + relative + "\n";
-        string listing = string.Concat(new[] { "BepInEx/core/BepInEx.dll", "BepInEx/core/BepInEx.Preloader.dll", "doorstop_config.ini", "doorstop_libs/libdoorstop_x64.so", "winhttp.dll" }
-            .Order(StringComparer.Ordinal).Select(Line));
-        string expected = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(listing))).ToLowerInvariant();
-        Assert.Equal(expected, InstallPins.Of(Install).Loader);
-        Assert.Equal(expected, InstallPins.LoaderHash(Install));
-        // Negative control: what is not loader leaves it alone (BepInEx rewrites BepInEx.cfg; the rest is the game's or a mod's).
-        Directory.CreateDirectory(Path.Combine(Install, "BepInEx", "config"));
-        File.WriteAllText(Path.Combine(Install, "BepInEx", "config", "BepInEx.cfg"), "[Logging.Console]\nEnabled = true\n");
-        File.WriteAllText(Path.Combine(Install, ".doorstop_version"), "4.0.0");
-        File.WriteAllText(Path.Combine(Install, "start_game_bepinex.sh"), "#!/bin/sh");
-        Directory.CreateDirectory(Path.Combine(Install, "BepInEx", "plugins"));
-        File.WriteAllText(Path.Combine(Install, "BepInEx", "plugins", "Mod.dll"), "mod");
-        Assert.Equal(expected, InstallPins.Of(Install).Loader);
-    }
-
-    // The loader identity covers every file a launch requires (#364's one list), so no required file can change unpinned.
-    [Fact] public void TheLoaderPinCoversEveryFileALaunchRequires()
-    {
-        foreach (string file in BepInExLoader.LoaderFiles(ClientPlatform.Windows).Concat(BepInExLoader.LoaderFiles(ClientPlatform.Linux)).Concat(ClientLaunch.MacDoorstopFiles))
-            Assert.True(InstallPins.IsLoaderFile(file), file);
-        Assert.Equal(["winhttp.dll", "doorstop_config.ini", "libdoorstop.dylib", "BepInEx/core", "doorstop_libs"], InstallPins.LoaderEntries);
-    }
-
-    // A plan written before #295 names bepinexCore; it is refused with what to do, wherever the pins sit.
-    [Theory]
-    [InlineData("runtimePins")]
-    [InlineData("client")]
-    public void APlanThatStillNamesBepInExCoreIsRefusedNamingTheLoaderPin(string where)
-    {
-        string pins = $$"""{ "game": "{{new string('a', 64)}}", "bepinexCore": "{{new string('b', 64)}}", "patchers": "{{new string('c', 64)}}" }""";
-        string path = Path.Combine(_root, "old-plan.json");
-        File.WriteAllText(path, where == "client" ? $$"""{ "client": { "mode": "owned", "installPins": {{pins}} } }""" : $$"""{ "runtimePins": {{pins}} }""");
-        var error = Assert.ThrowsAny<Exception>(() => ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path));
-        string message = error.Message + " " + error.InnerException?.Message;
-        Assert.Contains("The pins' bepinexCore was removed (ValheimTesting #295)", message);
-        Assert.Contains("Replace bepinexCore with loader, computed by InstallPins.Of(<install>)", message);
-        // The control: the same pins naming loader are read.
-        File.WriteAllText(path, where == "client" ? $$"""{ "client": { "mode": "owned", "installPins": {{pins.Replace("bepinexCore", "loader")}} } }"""
-            : $$"""{ "runtimePins": {{pins.Replace("bepinexCore", "loader")}} }""");
-        var read = ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path);
-        Assert.Equal(new string('b', 64), (where == "client" ? read.Client!.InstallPins : read.RuntimePins)!.Loader);
-        Assert.DoesNotContain("bepinexCore", System.Text.Json.JsonSerializer.Serialize(read.RuntimePins ?? read.Client!.InstallPins), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, new[] { "the game build differs", "BepInEx core differs", "the patchers differ" }.Count(error.Message.Contains));
     }
 
     [Fact] public void TheGameAssemblyIsFoundInEachLayoutAndNeverGuessed()
@@ -244,7 +173,7 @@ public sealed class PinningTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => InstallPins.GameAssembly(Install));
         Directory.CreateDirectory(Path.Combine(_root, "none"));
         Assert.Throws<FileNotFoundException>(() => InstallPins.GameAssembly(Path.Combine(_root, "none")));
-        Assert.Throws<ArgumentException>(() => new InstallPins { Game = new string('a', 64), Loader = "abc", Patchers = new string('a', 64) }.Validate("runtime"));
+        Assert.Throws<ArgumentException>(() => new InstallPins { Game = new string('a', 64), BepInExCore = "abc", Patchers = new string('a', 64) }.Validate("runtime"));
     }
 
     // ---- server plans ----
@@ -263,7 +192,7 @@ public sealed class PinningTests : IDisposable
     {
         plan.Runtime.Sha256["a"] = new string('a', 64); plan.World.Sha256["b"] = new string('b', 64);
         plan.Pins["worlduid"] = "1"; plan.Pins["my.mod"] = new string('1', 32);
-        plan.RuntimePins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) };
+        plan.RuntimePins = new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) };
     }
 
     [Fact] public void AStrictPlanNeedsRuntimePins()
@@ -283,7 +212,7 @@ public sealed class PinningTests : IDisposable
         Assert.False(plan.Pinned); Assert.Equal(EnvironmentPinning.None, plan.ExpectCommand);
         // Pins beside the opt-out would look enforced while nothing checks them.
         plan.Pins["worlduid"] = "1"; Assert.Contains("lists no pins", Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan([], "TOKEN")).Message); plan.Pins.Clear();
-        plan.RuntimePins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) };
+        plan.RuntimePins = new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) };
         Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan([], "TOKEN")); plan.RuntimePins = null;
         // The other plan rules still apply.
         plan.Arguments = ["-batchmode"]; Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan([], "TOKEN"));
@@ -362,7 +291,7 @@ public sealed class PinningTests : IDisposable
     // runtime pins still refuse it, naming what changed.
     [Theory]
     [InlineData("game", "the game build differs")]
-    [InlineData("core", "the loader differs")]
+    [InlineData("core", "BepInEx core differs")]
     [InlineData("patcher", "the patchers differ")]
     public async Task ARemanifestedRuntimeWithAnotherBuildIsRefused(string change, string message)
     {
@@ -378,7 +307,7 @@ public sealed class PinningTests : IDisposable
         string plan = WritePlan(runtimePins: pinned, patchers: named);
         string output = Path.Combine(_root, "out");
         Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, output], Options()));
-        var step = Step(Result(output), "copied runtime is the pinned game build, loader and patchers");
+        var step = Step(Result(output), "copied runtime is the pinned game build, BepInEx core and patchers");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains(message, step.GetProperty("Error").GetString());
         // The control: the same runtime pinned as it now is passes.
         Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", WritePlan(patchers: named), output + "-repinned"], Options()));
@@ -399,10 +328,10 @@ public sealed class PinningTests : IDisposable
         Assert.True(result.GetProperty("Passed").GetBoolean());
         Assert.Equal("none", result.GetProperty("Pinning").GetString());
         Assert.StartsWith("environment not pinned", result.GetProperty("Provenance").GetProperty("environment").GetString());
-        Assert.Equal(InstallPins.Of(Runtime).Loader, result.GetProperty("Provenance").GetProperty("runtimeLoaderSha256").GetString());
+        Assert.Equal(InstallPins.Of(Runtime).BepInExCore, result.GetProperty("Provenance").GetProperty("runtimeBepInExCoreSha256").GetString());
         var names = result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()).ToList();
         Assert.Contains("copy unpinned runtime as found", names); Assert.Contains("copy unpinned world as found", names);
-        Assert.Contains("record the unpinned runtime's game build, loader and patchers", names);
+        Assert.Contains("record the unpinned runtime's game build, BepInEx core and patchers", names);
         if (mode == "run") Assert.DoesNotContain(server.Events, e => e.StartsWith("pins", StringComparison.Ordinal)); // No cli_expect was sent.
         // The marker sits in the Preflight suite: the pinning decision is made before anything is copied.
         var junit = XDocument.Load(Path.Combine(output, "junit.xml")).Root!.Elements("testsuite").Single(s => s.Attribute("name")!.Value.EndsWith(" / preflight", StringComparison.Ordinal));
@@ -461,7 +390,7 @@ public sealed class PinningTests : IDisposable
     {
         var owned = Client("owned");
         Assert.Contains("installPins", Assert.Throws<ArgumentException>(() => owned.Validate("my.mod")).Message);
-        owned.InstallPins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) };
+        owned.InstallPins = new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) };
         owned.Validate("my.mod");
         var attached = Client("attach"); attached.Validate("my.mod");
         attached.InstallPins = owned.InstallPins;
