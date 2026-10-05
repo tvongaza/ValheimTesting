@@ -1,9 +1,0 @@
-#!/bin/bash
-# Start the Steam client as the steam user on :0 unless it is already running (root). Its UI renders on the CPU
-# (-cef-disable-gpu): a game starting while Steam's browser engine initialises the GPU crashed in GLX setup. The first login shows a QR
-# code: vt-screenshot + zbarimg give its https://s.team/ link, which an authenticator approves from outside.
-set -euo pipefail
-if vt-pids steam >/dev/null; then echo "vt-steam: already running"; exit 0; fi
-runuser -u steam -- env HOME=/home/steam DISPLAY=:0 bash -c \
-  'cd /home/steam && setsid dbus-launch --exit-with-session steam -no-cef-sandbox -cef-disable-gpu > /home/steam/steam.log 2>&1 < /dev/null &'
-echo "vt-steam: started; log /home/steam/steam.log"
