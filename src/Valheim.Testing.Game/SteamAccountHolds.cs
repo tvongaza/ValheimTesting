@@ -238,11 +238,13 @@ internal static class SteamSignedInUsers
     /// <param name="steamDirectory">A Steam directory to read first (tests); the host user's usual ones otherwise.</param>
     public static async Task<(SteamSignedInState State, uint? AccountId, string Detail)> ReadAsync(IGameHost host, TimeSpan timeout, CancellationToken cancellation, string steamDirectory = "")
     {
-        var result = await host.RunAsync(host.Shell.Kind == HostShellKind.Bash ? Bash : PowerShell, new Dictionary<string, string> { ["steam"] = steamDirectory }, timeout, cancellation)
-            .ConfigureAwait(false);
-        // Only the outcome is repeated, never the reply: it is about an account.
+        var invoked = DateTimeOffset.UtcNow;
+        var result = ShellPhases.Read(await host.RunAsync(host.Shell.Kind == HostShellKind.Bash ? Bash : PowerShell, new Dictionary<string, string> { ["steam"] = steamDirectory }, timeout, cancellation)
+            .ConfigureAwait(false), invoked, host.Kind == GameHostKind.Local);
+        // Only the outcome and where its time went are repeated, never the reply: it is about an account.
         if (!result.Succeeded)
-            return (SteamSignedInState.Unknown, null, $"reading it on {host.Name} did not complete: " + (result.Outcome == HostOutcome.Exited ? "exit " + result.ExitCode : result.TimedOut ? "timed out" : result.Outcome.ToString()));
+            return (SteamSignedInState.Unknown, null, $"reading it on {host.Name} did not complete: " + (result.Outcome == HostOutcome.Exited ? "exit " + result.ExitCode : result.TimedOut ? "timed out" : result.Outcome.ToString()) +
+                $" after {WaitText.Seconds(result.Elapsed)} ({result.Phases})");
         string? verdict = InteractiveClient.Line(result.Stdout, "VT-STEAMUSER ");
         string[] parts = (verdict ?? "").Split(' ', 2);
         return parts[0] switch
@@ -261,7 +263,7 @@ internal static class SteamSignedInUsers
     // Older clients mark it MostRecent "1"; the current macOS client (September 2026) writes no MostRecent key at all and records
     // each user's last sign-in as Timestamp, so without any MostRecent key the single newest Timestamp is that account, and a tie or
     // no Timestamp is unreadable. A user is a bare "<SteamID64>" line; only its id is printed. Variable: steam (optional Steam directory).
-    public static readonly string Bash = """
+    public static readonly string Bash = ShellPhases.Bash + """
         set -u
         found=
         for f in ${steam:+"$steam/config/loginusers.vdf"} "${HOME:-/nonexistent}/Library/Application Support/Steam/config/loginusers.vdf" \
@@ -290,7 +292,7 @@ internal static class SteamSignedInUsers
 
     // Windows: Steam's ActiveUser (the signed-in account id, 0 when none) in the host user's registry. pwsh on Linux or macOS reads
     // loginusers.vdf as the bash script does. [Environment]::OSVersion, because Windows PowerShell 5.1 has no $IsWindows.
-    public static readonly string PowerShell = """
+    public static readonly string PowerShell = ShellPhases.PowerShell + """
         if ([Environment]::OSVersion.Platform -ne [PlatformID]::Unix) {
             $active = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess', 'ActiveUser', $null)
             if ($null -eq $active) { 'VT-STEAMUSER unreadable the host user has no ActiveUser under HKCU\Software\Valve\Steam\ActiveProcess (Steam has not run for it)'; exit 0 }

@@ -73,7 +73,49 @@ public sealed record HostResult(HostOutcome Outcome, int? ExitCode, string Stdou
             _ => "ended without the host's exit report; the outcome is unknown",
         };
         string error = Stderr.Trim();
-        return state + " after " + WaitText.Seconds(Elapsed) + (error.Length == 0 ? "" : "; stderr: " + (error.Length > 600 ? "..." + error[^600..] : error));
+        return state + " after " + WaitText.Seconds(Elapsed) + (Phases == null ? "" : " (" + Phases + ")") +
+            (error.Length == 0 ? "" : "; stderr: " + (error.Length > 600 ? "..." + error[^600..] : error));
+    }
+
+    /// <summary>Where the time went, for a script that reports when it began (<see cref="ShellPhases"/>); null otherwise.</summary>
+    internal string? Phases { get; init; }
+}
+
+/// <summary>
+/// When a script began on its host (#255): a script that starts with <see cref="Bash"/> or <see cref="PowerShell"/> prints
+/// <c>VT-PHASE began &lt;Unix ms&gt;</c> as its first line. <see cref="Read"/> takes that line out of the output and says how
+/// long the shell (process start, transport) took before the script began, or that it never began before the deadline, so a
+/// timeout under load reads "the shell had not begun the script after 90 s" rather than an unknown outcome alone.
+/// </summary>
+internal static class ShellPhases
+{
+    // Seconds resolution in bash (macOS date has no %N); milliseconds in PowerShell.
+    public const string Bash = "echo \"VT-PHASE began $(($(date +%s) * 1000))\"\n";
+    // Straight to the console and flushed: pipeline output can wait in a buffer that a process killed at the deadline loses.
+    public const string PowerShell = "[Console]::Out.WriteLine('VT-PHASE began ' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); [Console]::Out.Flush()\n";
+
+    /// <summary>
+    /// <paramref name="result"/> without its phase line, with <see cref="HostResult.Phases"/> set. <paramref name="invokedUtc"/> is
+    /// when the script was asked for; <paramref name="sameClock"/> says whether the host's clock is this machine's (a local host).
+    /// </summary>
+    public static HostResult Read(HostResult result, DateTimeOffset invokedUtc, bool sameClock)
+    {
+        long? began = null;
+        var kept = new List<string>();
+        foreach (string line in result.Stdout.Split('\n'))
+            if (line.StartsWith("VT-PHASE began ", StringComparison.Ordinal) && long.TryParse(line["VT-PHASE began ".Length..].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out long ms))
+                began ??= ms;
+            else kept.Add(line);
+        string phases;
+        if (began is { } at)
+        {
+            var start = DateTimeOffset.FromUnixTimeMilliseconds(at) - invokedUtc;
+            if (start < TimeSpan.Zero) start = TimeSpan.Zero; // bash's whole seconds can land before the call
+            string startText = sameClock ? $"the shell began the script after about {WaitText.Seconds(start)}" : "the script began on the host";
+            phases = startText + (result.TimedOut ? ", and it was still running at the deadline" : "");
+        }
+        else phases = result.Succeeded ? "the script did not report when it began" : $"the shell had not begun the script after {WaitText.Seconds(result.Elapsed)}";
+        return result with { Stdout = string.Join('\n', kept), Phases = phases };
     }
 }
 

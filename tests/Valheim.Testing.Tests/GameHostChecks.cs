@@ -13,6 +13,17 @@ internal static class GameHostChecks
 {
     public static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
 
+    // #255: one deadline for the real-shell checks, from this machine as it is now: a trivial script's round trip, measured at
+    // each call, times a fixed factor (never under Generous, never over 5 min). A machine starved by a game run gets a deadline
+    // to match, and a failure past it still says where the time went (HostResult's phases).
+    public static async Task<TimeSpan> ShellDeadlineAsync(IGameHost host)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        (await host.RunAsync(host.Shell.Kind == HostShellKind.Bash ? "echo ok" : "'ok'", null, TimeSpan.FromMinutes(5))).EnsureSuccess("Measuring the shell's round trip");
+        var deadline = TimeSpan.FromTicks(clock.Elapsed.Ticks * 30);
+        return deadline < Generous ? Generous : deadline > TimeSpan.FromMinutes(5) ? TimeSpan.FromMinutes(5) : deadline;
+    }
+
     /// <summary>A new, absolute directory path on the host for one test, and its removal.</summary>
     public static async Task WithRootAsync(IGameHost host, string parent, Func<string, Task> test)
     {

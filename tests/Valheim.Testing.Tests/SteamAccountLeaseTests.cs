@@ -21,6 +21,36 @@ public class SteamAccountPoolTests
         }
         """;
 
+    // #255: a timeout says whether the shell ever began the script. Never began: process start or transport starved (a game
+    // run loading the machine). Began but still running at the deadline: the script itself was slow. Either way the outcome
+    // stays unknown, never a lost lease.
+    [Fact] public async Task AClaimThatTimesOutSaysWhetherTheShellEverBeganTheScript()
+    {
+        var never = new FakeLauncher().TimesOut();
+        var error = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => TestEnvironment.Pool(Sample).AcquireAsync(Host(never), "run-42", Timeout));
+        Assert.Equal(SteamAccountLeaseState.Unknown, error.State);
+        Assert.Contains("the shell had not begun the script after 2.0 s", error.Message);
+
+        long began = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var slow = new FakeLauncher().TimesOut($"VT-PHASE began {began}\n");
+        error = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => TestEnvironment.Pool(Sample).AcquireAsync(Host(slow), "run-43", Timeout));
+        Assert.Equal(SteamAccountLeaseState.Unknown, error.State);
+        Assert.Contains("the script began on the host, and it was still running at the deadline", error.Message);
+    }
+
+    // The phase line is taken out of the reply before anything reads it, and a local host's start is timed by this machine's clock.
+    [Fact] public void ThePhaseLineLeavesTheReplyAndTimesTheShellStart()
+    {
+        var invoked = DateTimeOffset.UtcNow;
+        var read = ShellPhases.Read(new HostResult(HostOutcome.Exited, 0, $"VT-PHASE began {(invoked + TimeSpan.FromSeconds(71)).ToUnixTimeMilliseconds()}\nVT-LEASE released\n", "",
+            TimeSpan.FromSeconds(72), false), invoked, sameClock: true);
+        Assert.Equal("VT-LEASE released", read.Stdout.Split('\n')[0]);
+        Assert.Equal("the shell began the script after about 71.0 s", read.Phases);
+        var never = ShellPhases.Read(new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(90), true), invoked, sameClock: true);
+        Assert.Equal("the shell had not begun the script after 90.0 s", never.Phases);
+        Assert.Contains("(the shell had not begun the script after 90.0 s)", never.Describe());
+    }
+
     private static ScriptedGameHost Host(FakeLauncher fake) => new SshGameHost("lease-box", "tester@lease-box.example", HostShell.Bash, 0, null, null, "ssh", fake);
     private static string Reply(params string[] lines) => string.Join('\n', lines) + "\n";
 
@@ -174,7 +204,7 @@ internal static class LeaseChecks
 
     private static async Task<(SteamAccountLease? Lease, SteamAccountLeaseException? Error)> TryAcquireAsync(SteamAccountPool pool, IGameHost host, string owner, TimeSpan? life = null)
     {
-        try { return (await pool.AcquireAsync(host, owner, GameHostChecks.Generous, leaseTime: life), null); }
+        try { return (await pool.AcquireAsync(host, owner, await GameHostChecks.ShellDeadlineAsync(host), leaseTime: life), null); }
         catch (SteamAccountLeaseException error) { return (null, error); }
     }
 

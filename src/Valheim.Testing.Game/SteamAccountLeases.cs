@@ -105,13 +105,18 @@ public sealed class SteamAccountPool
             .Select(line => ReadStatus(line["VT-LEASE-ACCOUNT ".Length..])).OfType<SteamAccountStatus>().ToList();
     }
 
-    internal Task<HostResult> RunAsync(IGameHost host, string action, TimeSpan timeout, CancellationToken cancellation, string accounts = "", string owner = "",
-        string lease = "", string seconds = "0", string account = "", string number = "0") =>
-        host.RunAsync(host.Shell.Kind == HostShellKind.Bash ? LeaseScripts.Bash : LeaseScripts.PowerShell, new Dictionary<string, string>
+    // The script's phase line is taken out of the reply (every caller reads its first line), and where its time went is kept
+    // for the failure (#255): a timeout under load then says whether the shell ever began the script.
+    internal async Task<HostResult> RunAsync(IGameHost host, string action, TimeSpan timeout, CancellationToken cancellation, string accounts = "", string owner = "",
+        string lease = "", string seconds = "0", string account = "", string number = "0")
+    {
+        var invoked = DateTimeOffset.UtcNow;
+        return ShellPhases.Read(await host.RunAsync(host.Shell.Kind == HostShellKind.Bash ? LeaseScripts.Bash : LeaseScripts.PowerShell, new Dictionary<string, string>
         {
             ["action"] = action, ["directory"] = LeaseDirectory, ["pool"] = Pool, ["accounts"] = accounts, ["owner"] = owner, ["lease"] = lease,
             ["seconds"] = seconds, ["account"] = account, ["number"] = number,
-        }, timeout, cancellation);
+        }, timeout, cancellation).ConfigureAwait(false), invoked, host.Kind == GameHostKind.Local);
+    }
 
     /// <summary>This pool with only <paramref name="account"/>: the same pool name, lease directory and lease time, so its lease is the one every run of the pool sees.</summary>
     internal SteamAccountPool Only(SteamPoolAccount account) => new() { Pool = Pool, LeaseDirectory = LeaseDirectory, LeaseMinutes = LeaseMinutes, Accounts = [account] };
@@ -313,7 +318,7 @@ public sealed class SteamAccountLease : IAsyncDisposable
 // line), owner, lease, seconds, account, number.
 internal static class LeaseScripts
 {
-    public static readonly string Bash = """
+    public static readonly string Bash = ShellPhases.Bash + """
         set -u
         root="$directory/$pool"
         now=$(date +%s) || exit 3
@@ -414,7 +419,7 @@ internal static class LeaseScripts
     // checks that the destination is absent and then renames, which replaces a claim another run created in between: both runs
     // then held one account (four leases from three accounts in CI). There the claim is a hard link, as in bash, which link(2)
     // refuses to make over an existing file. [Environment]::OSVersion, because Windows PowerShell 5.1 has no $IsWindows.
-    public static readonly string PowerShell = """
+    public static readonly string PowerShell = ShellPhases.PowerShell + """
         $utf8 = New-Object Text.UTF8Encoding $false
         $vtUnix = [Environment]::OSVersion.Platform -eq [PlatformID]::Unix
         $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
