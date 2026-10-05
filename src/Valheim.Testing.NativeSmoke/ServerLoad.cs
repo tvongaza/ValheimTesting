@@ -8,8 +8,10 @@ using Valheim.Testing.Game;
 /// <summary>The server half of #156: pinned selected mods on an owned dedicated server. A clean-client join follows.</summary>
 internal static class ServerLoad
 {
-    public static async Task<int> RunAsync(string[] args)
+    /// <param name="launch">Test seam: runs the pinned plan in place of <see cref="PinnedServerRun.MainAsync{TPlan}"/>.</param>
+    public static async Task<int> RunAsync(string[] args, Func<string[], PinnedServerRunOptions<ServerRunPlan>, Task<int>>? launch = null)
     {
+        launch ??= PinnedServerRun.MainAsync;
         if (!TryRead(args, out var options, out var mods, out var roots, out var configs,
                 out var pluginFiles, out var pluginDirectories, out var optional, out string error))
         {
@@ -67,7 +69,6 @@ internal static class ServerLoad
             dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
             if (!dependencies.Ready)
                 throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
-            await SmokeProject.CreateAsync(output, server: true, cancel.Token);
             adapter ??= await SmokeAdapter.BuildAsync(server, dependencies, output, cancel.Token, request.BepInExCore);
             string world = Path.Combine(output, "world-source");
             DefaultSmokeWorld.PrepareServerSaveRoot(world);
@@ -94,7 +95,7 @@ internal static class ServerLoad
             int result;
             try
             {
-                result = await PinnedServerRun.MainAsync(["run", planFile, Path.Combine(output, "evidence")],
+                result = await launch(["run", planFile, Path.Combine(output, "evidence")],
                     new PinnedServerRunOptions<ServerRunPlan>
                     {
                         Name = "native-smoke-server-load",
@@ -160,7 +161,7 @@ internal static class ServerLoad
                 $" Private evidence ({DiskSpace.Format(DiskSpace.DirectoryBytes(output))}) in {output}");
             return result;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or HttpRequestException or OperationCanceledException)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             return 3;

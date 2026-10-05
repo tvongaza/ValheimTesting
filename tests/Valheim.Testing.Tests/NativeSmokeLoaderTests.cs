@@ -106,6 +106,58 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         Assert.DoesNotContain(partner, arms[1]);
     }
 
+    // #297: server-load reaches the pinned launch from the tool's own assemblies. No consumer project is generated or
+    // built and nothing is restored before the game starts; with --adapter, the run needs no NuGet.org at all.
+    [Fact]
+    public async Task ServerLoadReachesTheLaunchWithoutBuildingAConsumer()
+    {
+        _rig.Write("game/valheim_server.exe", Encoding.UTF8.GetBytes("fake dedicated executable"));
+        var loader = Package("offline-server-loader");
+        string manifest = Path.Combine(_rig.Root, "offline-loader.json");
+        loader.Write(manifest);
+        Directory.Delete(Path.Combine(_rig.Game, "BepInEx"), recursive: true);
+        string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
+            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
+        string output = Path.Combine(_rig.Root, "offline-run");
+        var launched = new List<string[]>();
+        int result = await ServerLoad.RunAsync(
+            ["--server", _rig.Game, "--mod", _rig.Parent, "--loader-package", manifest,
+                "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
+                "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", adapter, "--output", output],
+            (arguments, options) =>
+            {
+                launched.Add(arguments);
+                Assert.True(File.Exists(arguments[1]), "The plan is written before the launch.");
+                return Task.FromResult(0);
+            });
+        Assert.Equal(0, result);
+        Assert.Single(launched);
+        Assert.Equal(Path.Combine(output, "plan.json"), launched[0][1]);
+        Assert.False(Directory.Exists(Path.Combine(output, "consumer")));
+    }
+
+    // #297: start goes straight to the hosted run from the tool's own assemblies; no consumer project comes first. The
+    // run stops at its first Setup step here (a Steam root not named userdata), before anything outside the output changes.
+    [Fact]
+    public void StartRunsTheHostedRunWithoutBuildingAConsumer()
+    {
+        string notUserdata = Path.Combine(_rig.Root, "steam-root");
+        Directory.CreateDirectory(notUserdata);
+        string output = Path.Combine(_rig.Root, "offline-start");
+        object? exit = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
+        {
+            "start", "--game", _rig.Game, "--mod", _rig.Parent, "--cli-manifest", _rig.CliManifest(save: true),
+            "--cli-files", Path.Combine(_rig.Root, "cli"), "--search-root", Path.Combine(_rig.Root, "deps"),
+            "--steam-userdata", notUserdata, "--output", output,
+        }]);
+        Assert.Equal(1, exit);
+        var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "evidence", "smoke", "result.json")));
+        var steps = report.RootElement.GetProperty("Steps").EnumerateArray().ToList();
+        Assert.Equal("stage only the registered disposable character", steps[0].GetProperty("Name").GetString());
+        Assert.Contains("userdata", steps[0].GetProperty("Error").GetString());
+        Assert.False(Directory.Exists(Path.Combine(output, "consumer")));
+    }
+
     private NativeDependencyLock Dependencies(BepInExLoaderPackage loader)
     {
         var lockFile = NativeDependencyResolver.Resolve(new NativeDependencyRequest
