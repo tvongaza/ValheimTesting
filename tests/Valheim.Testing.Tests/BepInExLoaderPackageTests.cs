@@ -16,8 +16,8 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         string changed = FileHash.Sha256(sourceCore);
 
         var environment = _rig.Manifest();
-        environment.LoaderPackage = manifest;
-        var staged = new TargetedRegression(environment).Stage("parent");
+        _rig.LoaderPackage = manifest;
+        var staged = _rig.Regression(environment).Stage("parent");
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Equal(changed, FileHash.Sha256(sourceCore));
         Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
@@ -25,7 +25,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         Assert.Equal(package.Loader, InstallPins.Of(_rig.Install).Loader);
         Assert.EndsWith("(" + package.Loader + ")", package.Identity);
         staged.Verify();
-        new TargetedRegression(environment).Stage("candidate").Verify(); // The package remains selected across arms.
+        _rig.Regression(environment).Stage("candidate").Verify(); // The package remains selected across arms.
     }
 
     [Fact] public void ChangedPackageBytesAreRejectedBeforeTheDisposableInstallIsCreated()
@@ -36,8 +36,8 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         string source = Path.Combine(package.Root, "BepInEx", "core", "BepInEx.dll");
         File.AppendAllText(source, "changed");
         var environment = _rig.Manifest();
-        environment.LoaderPackage = manifest;
-        Assert.Contains("missing or changed", Assert.Throws<InvalidDataException>(() => new TargetedRegression(environment).Stage("parent")).Message);
+        _rig.LoaderPackage = manifest;
+        Assert.Contains("missing or changed", Assert.Throws<InvalidDataException>(() => _rig.Regression(environment).Stage("parent")).Message);
         Assert.False(Directory.Exists(_rig.Install));
     }
 
@@ -48,8 +48,8 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         package.Write(manifest);
         Directory.Delete(Path.Combine(_rig.Game, "BepInEx", "core"), recursive: true);
         var environment = _rig.Manifest();
-        environment.LoaderPackage = manifest;
-        new TargetedRegression(environment).Stage("parent").Verify();
+        _rig.LoaderPackage = manifest;
+        _rig.Regression(environment).Stage("parent").Verify();
         Assert.False(Directory.Exists(Path.Combine(_rig.Game, "BepInEx", "core")));
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
     }
@@ -60,9 +60,9 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         string manifest = Path.Combine(_rig.Root, "loader.json");
         package.Write(manifest);
         var environment = _rig.Manifest();
-        environment.LoaderPackage = manifest;
+        _rig.LoaderPackage = manifest;
         environment.Configs["BepInEx.cfg"] = Path.Combine(package.Root, "BepInEx", "config", "BepInEx.cfg");
-        Assert.Contains("edit and recapture", Assert.Throws<ArgumentException>(() => new TargetedRegression(environment)).Message);
+        Assert.Contains("edit and recapture", Assert.Throws<ArgumentException>(() => _rig.Regression(environment)).Message);
         Assert.False(Directory.Exists(_rig.Install));
     }
 
@@ -71,8 +71,8 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         string manifest = Path.Combine(_rig.Root, "loader.json");
         BepInExLoaderPackage.Capture(_rig.Game, "live-game", "unreviewed").Write(manifest);
         var environment = _rig.Manifest();
-        environment.LoaderPackage = manifest;
-        Assert.Contains("extract one reviewed loader set", Assert.Throws<InvalidOperationException>(() => new TargetedRegression(environment).Stage("parent")).Message);
+        _rig.LoaderPackage = manifest;
+        Assert.Contains("extract one reviewed loader set", Assert.Throws<InvalidOperationException>(() => _rig.Regression(environment).Stage("parent")).Message);
         Assert.False(Directory.Exists(_rig.Install));
     }
 
@@ -82,14 +82,14 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         string manifest = Path.Combine(_rig.Root, "loader.json");
         package.Write(manifest);
         var environment = _rig.Manifest();
-        environment.LoaderPackage = manifest;
-        new TargetedRegression(environment).Stage("parent").Verify();
+        _rig.LoaderPackage = manifest;
+        _rig.Regression(environment).Stage("parent").Verify();
 
         string core = Path.Combine(package.Root, "BepInEx", "core", "BepInEx.dll");
         File.AppendAllText(core, "new reviewed loader version");
         package = BepInExLoaderPackage.Capture(package.Root, package.Name, "5.4.2203");
         package.Write(manifest);
-        new TargetedRegression(environment).Stage("parent").Verify();
+        _rig.Regression(environment).Stage("parent").Verify();
 
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
@@ -102,14 +102,14 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         package.Write(manifest);
         File.WriteAllText(Path.Combine(_rig.Game, "BepInEx", "core", "BepInEx.dll"), "another live core");
         var environment = _rig.Manifest();
-        environment.LoaderPackage = manifest;
+        _rig.LoaderPackage = manifest;
         // The live game's own loader is not what the disposable install will run.
         environment.GamePins = new InstallPins { Game = InstallPins.GameHash(_rig.Game), Loader = InstallPins.Of(_rig.Game).Loader, Patchers = new string('0', 64) };
-        Assert.Contains("the loader differs", Assert.Throws<InvalidOperationException>(() => new TargetedRegression(environment).Stage("parent")).Message);
+        Assert.Contains("the loader differs", Assert.Throws<InvalidOperationException>(() => _rig.Regression(environment).Stage("parent")).Message);
         Assert.False(Directory.Exists(_rig.Install));
         // The control: the package's loader is.
         environment.GamePins.Loader = package.Loader;
-        new TargetedRegression(environment).Stage("parent").Verify();
+        _rig.Regression(environment).Stage("parent").Verify();
     }
 
     [Fact] public void ThePackagesLoaderLeavesOutItsBepInExSettings()
