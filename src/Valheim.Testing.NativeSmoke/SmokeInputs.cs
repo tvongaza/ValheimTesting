@@ -79,9 +79,12 @@ internal static class SmokeInputs
     /// start's client environment: --client-env, or the first, of the --inventory file's or this machine's (Valheim from
     /// Steam), with --game and --loader-package as this machine's override. It must be on this machine. The chosen
     /// environment and its host are written to <c>environments.json</c> in <paramref name="output"/>, beside the run's
-    /// <c>regression.json</c>, so the run's consumer and its bundle read the machine it used.
+    /// <c>regression.json</c>, so the run's consumer and its bundle read the machine it used. <paramref name="shippedLoader"/> is the
+    /// shipped-loader decision (<see cref="ShippedLoader.Instead(string, string)"/> in a real run; it reads the real install,
+    /// so a test leaves it out).
     /// </summary>
-    internal static (EnvironmentInventory Inventory, EnvironmentRecipe Client) Client(IReadOnlyDictionary<string, string> options, string output)
+    internal static (EnvironmentInventory Inventory, EnvironmentRecipe Client, ShippedLoader.Choice? ShippedLoader) Client(IReadOnlyDictionary<string, string> options, string output,
+        Func<string, string, ShippedLoader.Choice?>? shippedLoader = null)
     {
         string? file = options.TryGetValue("--inventory", out string? named) ? Path.GetFullPath(named) : null;
         bool overrides = options.ContainsKey("--game") || options.ContainsKey("--loader-package");
@@ -112,6 +115,9 @@ internal static class SmokeInputs
                 : "The inventory has no client environment. " + string.Join(" ", inventory.Missing) + " Give --game DIR.");
         if (inventory.Hosts[client.Host].Kind != "local")
             throw new ArgumentException($"Client environment {client.Name} is on {client.Host}, not this machine. start runs its client here; name a client environment on this machine with --client-env.");
+        // An install whose own Doorstop pair does not match takes the shipped BepInExPack in its disposable copy (one printed line).
+        var shipped = client.LoaderPackage == null ? shippedLoader?.Invoke("client", client.Install) : null;
+        if (shipped != null) client.LoaderPackage = shipped.Manifest;
         // The machine the run uses, as a one-environment inventory beside its inputs.
         var recorded = new EnvironmentInventory
         {
@@ -122,6 +128,6 @@ internal static class SmokeInputs
         Directory.CreateDirectory(output);
         File.WriteAllText(Path.Combine(output, "environments.json"), JsonSerializer.Serialize(recorded,
             new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull }) + "\n");
-        return (inventory, client);
+        return (inventory, client, shipped);
     }
 }

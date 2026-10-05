@@ -31,7 +31,7 @@ public sealed class DoorstopMixPathsTests : IDisposable
     internal static void AssertRefusal(Exception? error, string kind, string? expected)
     {
         if (expected == null) { Assert.Null(error); return; }
-        Assert.IsType<InvalidOperationException>(error);
+        Assert.IsAssignableFrom<InvalidOperationException>(error); // a remote check rethrows the reply as its base type
         Assert.Contains($"The {kind}'s winhttp.dll {expected}", error!.Message);
         Assert.Contains("Install winhttp.dll and doorstop_config.ini from one BepInExPack", error.Message);
     }

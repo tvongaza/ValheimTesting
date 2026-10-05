@@ -57,6 +57,21 @@ public sealed class BepInExLoaderPackage
         return package;
     }
 
+    /// <summary>
+    /// Why the Windows install at <paramref name="install"/> cannot start BepInEx with its own Doorstop proxy and configuration
+    /// (they are from different Doorstop versions, as a mod manager that swaps the proxy leaves them, or the proxy is one no
+    /// check recognises), or null: they are one coherent pair, the install has no Windows Doorstop pair, or it fails another
+    /// way, which its own check reports. A reviewed package applied to a disposable copy replaces that pair and nothing else
+    /// of the install's. The install is only read.
+    /// </summary>
+    public static string? DoorstopMismatch(string install)
+    {
+        if (!File.Exists(Path.Combine(install, BepInExLoader.WindowsProxy)) || !File.Exists(Path.Combine(install, BepInExLoader.WindowsConfig))) return null;
+        try { BepInExLoader.RequireWindowsLoader(install, "install"); return null; }
+        catch (DoorstopPairingException mismatch) { return mismatch.Message; }
+        catch (Exception error) when (error is InvalidOperationException or IOException or UnauthorizedAccessException) { return null; }
+    }
+
     /// <summary>Checks package identity, allowed paths, pinned contents and static BepInEx loader shape.</summary>
     public void Validate()
     {

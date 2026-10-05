@@ -40,11 +40,14 @@ internal static class ServerLoad
         Func<string, Task<CampaignPreflightReport>>? Inspect = null,
         Func<string, ServerRunPlan, Func<ServerRunPlan, IReadOnlyDictionary<string, ClientRunPlan>>, string, PinnedServerRunOptions<ServerRunPlan>, Task<int>>? Campaign = null,
         Func<string[], PinnedServerRunOptions<ServerRunPlan>, Task<int>>? Staged = null,
-        bool? MacOS = null);
+        bool? MacOS = null,
+        // The shipped-loader decision reads the real install on this machine, so it is on only for a real run (no seams)
+        // and for a test that passes one.
+        Func<string, string, ShippedLoader.Choice?>? Loader = null);
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
-        seams ??= new Seams();
+        seams ??= new Seams(Loader: ShippedLoader.Instead);
         if (!TryRead(args, out var parsed, out string error))
         {
             Console.Error.WriteLine(error);
@@ -208,6 +211,14 @@ internal static class ServerLoad
         // A loader package given, or the chosen environment's own (which the campaign applies too); else the install's BepInEx.
         var serverLoader = parsed.Options.TryGetValue("--loader-package", out string? serverLoaderFile) ? Path.GetFullPath(serverLoaderFile) : server.LoaderPackage;
         var clientLoader = parsed.Options.TryGetValue("--client-loader-package", out string? clientLoaderFile) ? Path.GetFullPath(clientLoaderFile) : choice.Client?.LoaderPackage;
+        // An install on this machine whose own Doorstop proxy and configuration do not match (a mod manager swapped the proxy)
+        // gets the BepInExPack this tool ships in its disposable copy, with one printed line; every other loader fault still refuses.
+        var shipped = seams.Loader ?? ((_, _) => null);
+        var serverAuto = serverLoader == null ? shipped("server", serverInstall) : null;
+        var clientAuto = clientLoader == null && choice.Client is { } localClient && choice.Inventory.Hosts[localClient.Host].Kind == "local"
+            ? shipped("client", localClient.Install) : null;
+        serverLoader ??= serverAuto?.Manifest;
+        clientLoader ??= clientAuto?.Manifest;
         string core = Path.Combine(serverLoader == null ? serverInstall : BepInExLoaderPackage.Read(serverLoader).Root, InstallPins.CoreDirectory);
         if (!Directory.Exists(core))
             throw new DirectoryNotFoundException($"The server install {serverInstall} has no BepInEx ({InstallPins.CoreDirectory}). Install BepInExPack_Valheim into it, " +
@@ -357,6 +368,8 @@ internal static class ServerLoad
                     {
                         if (serverLoader != null) record["serverLoaderPackage"] = BepInExLoaderPackage.Read(serverLoader).Identity;
                         if (clientLoader != null) record["clientLoaderPackage"] = BepInExLoaderPackage.Read(clientLoader).Identity;
+                        if (serverAuto != null) record["serverLoaderShipped"] = serverAuto.Reason;
+                        if (clientAuto != null) record["clientLoaderShipped"] = clientAuto.Reason;
                     },
                     Scenario = run => Scenario(run, clientPlan, clock),
                 }).ConfigureAwait(false);

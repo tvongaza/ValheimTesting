@@ -194,7 +194,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
     public void AProxyAndConfigurationFromDifferentDoorstopVersionsAreRefused(int proxy, string config, string expected)
     {
         string install = Loader(Proxy(proxy), config);
-        var error = Assert.Throws<InvalidOperationException>(() => BepInExLoader.RequireWindowsLoader(install, "client install"));
+        var error = Assert.Throws<DoorstopPairingException>(() => BepInExLoader.RequireWindowsLoader(install, "client install"));
         Assert.Contains($"winhttp.dll is Doorstop {proxy}", error.Message);
         Assert.Contains(expected, error.Message);
         Assert.Contains("from one BepInExPack", error.Message);
@@ -213,7 +213,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
     public void AProxyThatShowsNoDoorstopVersionIsRefused(string holds, string config)
     {
         byte[] proxy = Encoding.ASCII.GetBytes(holds == "both" ? "MZ target_assembly targetAssembly" : "MZ fake");
-        var error = Assert.Throws<InvalidOperationException>(() => BepInExLoader.RequireWindowsLoader(Loader(proxy, config), "client install"));
+        var error = Assert.Throws<DoorstopPairingException>(() => BepInExLoader.RequireWindowsLoader(Loader(proxy, config), "client install"));
         Assert.Contains("winhttp.dll is not a Doorstop proxy this check recognises", error.Message);
     }
 
