@@ -45,6 +45,7 @@ sealed class Valheim.Testing.Game.BepInExLoaderPackage
   method System.Void .ctor()
   method System.Void Validate()
   method System.Void Write(System.String path)
+  method static System.String DoorstopMismatch(System.String install)
   method static Valheim.Testing.Game.BepInExLoaderPackage Capture(System.String root, System.String name, System.String version)
   method static Valheim.Testing.Game.BepInExLoaderPackage Read(System.String path)
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Files { get; set; }
