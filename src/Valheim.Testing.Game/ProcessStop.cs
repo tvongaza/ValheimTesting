@@ -22,7 +22,7 @@ public enum QuitRequest
 {
     /// <summary>
     /// SIGINT on Linux and macOS; on Windows Ctrl+Break from an SSH-launched runner, otherwise Ctrl+C, sent to the
-    /// process's own windowless console. A dedicated server started by <see cref="ServerLaunch.CreateStartInfo"/> has one.
+    /// process's own windowless console. A dedicated server started from <see cref="GameLaunch.ToStartInfo"/> has one.
     /// </summary>
     Interrupt,
     /// <summary>Windows: close the main window, as the window's close button does. Linux and macOS: SIGTERM.</summary>

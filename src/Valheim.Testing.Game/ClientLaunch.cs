@@ -14,7 +14,7 @@ public enum ClientPlatform { Windows, Linux, MacOS }
 // BepInEx core whose MonoMod can hook on arm64. Both are modded paths; neither is chosen for the caller.
 public enum ClientArchitecture { X64, Arm64 }
 
-// Builds the direct launch of one BepInEx game client from its install directory: the client twin of ServerLaunch.
+// Builds the direct launch of one BepInEx game client from its install directory: the client twin of GameLaunch.ForServer.
 // It reproduces what BepInExPack_Valheim's start_game_bepinex.sh exports on Linux and macOS, without the script,
 // so the started PID is the game's own. On Windows the pack's winhttp.dll proxy loads BepInEx and no variable is needed.
 // This only builds the ProcessStartInfo. A client needs an interactive desktop session with a display, a GPU and a
@@ -47,7 +47,7 @@ public static class ClientLaunch
     /// <summary>
     /// Decides the platform from the install's contents, never from the host: <c>valheim.exe</c>, <c>valheim.x86_64</c>
     /// or a <c>Valheim.app</c> bundle. Refuses an install holding more than one, an empty one, the bundle itself instead
-    /// of the directory holding it, and a dedicated-server runtime (which <see cref="ServerLaunch"/> launches).
+    /// of the directory holding it, and a dedicated-server runtime (which <see cref="GameLaunch.ForServer"/> launches).
     /// </summary>
     public static ClientPlatform Detect(string installDirectory)
     {
@@ -63,7 +63,7 @@ public static class ClientLaunch
             throw new ArgumentException($"{install} is the {MacBundle} bundle itself; pass the directory that holds it and BepInEx.", nameof(installDirectory));
         string? server = new[] { ServerLaunch.WindowsExecutable, ServerLaunch.LinuxExecutable, ServerLaunch.MacExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(install, name)));
         if (server != null)
-            throw new InvalidOperationException($"{install} is a dedicated-server runtime ({server}), not a game client; launch it with ServerLaunch.");
+            throw new InvalidOperationException($"{install} is a dedicated-server runtime ({server}), not a game client; launch it with GameLaunch.ForServer.");
         throw new FileNotFoundException($"Install contains none of {WindowsExecutable}, {LinuxExecutable} or {MacBundle}.", install);
     }
 
@@ -188,7 +188,7 @@ public static class ClientLaunch
     }
 
     // The first Doorstop library with the requested slice. dyld cannot insert a library into a process of another architecture.
-    // Shared with ServerLaunch for the macOS dedicated server, whose Doorstop library sits at the runtime's root the same way;
+    // Shared with GameLaunch.ForServer for the macOS dedicated server, whose Doorstop library sits at the runtime's root the same way;
     // a server runs as the machine's own slice, so only a client (client true) is offered the x64 alternative.
     internal static string MacDoorstop(string install, string executable, ClientArchitecture architecture, bool client = true)
     {

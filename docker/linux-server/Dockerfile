@@ -59,7 +59,7 @@ RUN set -eu; \
     echo "Valheim dedicated server build $(cat /opt/valheim/server-buildid.txt)"
 
 # BepInExPack_Valheim, verified by SHA-256 before anything is extracted. Its launch script is checked for
-# the variables ServerLaunch reproduces, so a pack with a different loader contract fails here.
+# the variables GameLaunch.ForServer reproduces, so a pack with a different loader contract fails here.
 RUN set -eu; \
     curl -fsSL -o /tmp/bepinex.zip \
       "https://thunderstore.io/package/download/denikson/BepInExPack_Valheim/${BEPINEX_PACK_VERSION}/"; \

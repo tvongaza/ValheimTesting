@@ -3,7 +3,7 @@ using System.Text;
 using Valheim.Testing.Game;
 using Xunit;
 
-// HostServerLaunch, HostServer, HostServerProcess and HostInstall against fake hosts: what the scripts are sent and how their
+// GameLaunch.ForServer for a host, HostServer, HostServerProcess and HostInstall against fake hosts: what the scripts are sent and how their
 // replies are read. The scripts themselves run for real in HostServerChecks.
 public sealed class HostServerTests : IDisposable
 {
@@ -45,8 +45,8 @@ public sealed class HostServerTests : IDisposable
 
     [Fact] public void ALaunchCarriesBepInExsLoaderForTheServerOnly()
     {
-        var launch = HostServerLaunch.Create("/srv/runs/run-1/runtime/", ["-batchmode", "-name", "it's a test"], new Dictionary<string, string> { ["MY_MOD_TOKEN"] = "abc" });
-        Assert.Equal("/srv/runs/run-1/runtime", launch.Runtime);
+        var launch = GameLaunch.ForServer("/srv/runs/run-1/runtime/", ["-batchmode", "-name", "it's a test"], new Dictionary<string, string> { ["MY_MOD_TOKEN"] = "abc" }, hostPlatform: ServerPlatform.Linux);
+        Assert.Equal("/srv/runs/run-1/runtime", launch.WorkingDirectory);
         Assert.Equal("/srv/runs/run-1/runtime/valheim_server.x86_64", launch.Executable);
         Assert.Equal("abc", launch.Environment["MY_MOD_TOKEN"]);
         Assert.Equal(ServerLaunch.DedicatedServerSteamAppId, launch.Environment["SteamAppId"]);
@@ -59,18 +59,36 @@ public sealed class HostServerTests : IDisposable
         var spec = launch.Spec().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Split(' ')).Select(parts => (parts[0], Encoding.UTF8.GetString(Convert.FromBase64String(parts[1])))).ToList();
         Assert.Equal(new[] { "-batchmode", "-name", "it's a test" }, spec.Where(item => item.Item1 == "arg").Select(item => item.Item2));
         Assert.Contains(("unset", "DOORSTOP_DISABLE"), spec);
-        Assert.Equal("7", HostServerLaunch.Create("/srv/rt", [], new Dictionary<string, string> { ["SteamAppId"] = "7" }).Environment["SteamAppId"]);
+        Assert.Equal("7", GameLaunch.ForServer("/srv/rt", [], new Dictionary<string, string> { ["SteamAppId"] = "7" }, hostPlatform: ServerPlatform.Linux).Environment["SteamAppId"]);
+    }
+
+    [Fact] public async Task AHostStartsOnlyAServerLaunchBuiltForAHost()
+    {
+        // A launch built for this machine (its files read here) is never sent to a host: refused before any script runs.
+        string runtime = Path.Combine(_root, "local-runtime");
+        foreach (string file in new[] { "valheim_server.x86_64", "doorstop_libs/libdoorstop_x64.so", "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll" })
+        {
+            string path = Path.Combine(runtime, file.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "fake");
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, File.GetUnixFileMode(path) | UnixFileMode.UserExecute);
+        }
+        var local = GameLaunch.LocalServer(runtime, ["-batchmode"], null, OperatingSystem.IsWindows() ? ServerHost.Windows : ServerHost.Linux, ServerLaunch.MacArchitecture);
+        var host = new QueueHost(HostShell.Bash);
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => HostServer.StartAsync(host, local, "/srv/runs/boot-1", TimeSpan.FromSeconds(60)));
+        Assert.Contains("GameLaunch.ForServer", error.Message);
+        Assert.Empty(host.Runs);
     }
 
     [Fact] public async Task WindowsServerLaunchUsesHeadlessTaskAndStopsOnlyTheOwnedIdentity()
     {
         var host = new QueueHost(HostShell.Pwsh);
-        var launch = HostServerLaunch.CreateWindows(@"C:\runs\r\runtime", ["-batchmode", "-name", "with spaces"]);
-        Assert.True(launch.Windows);
+        var launch = GameLaunch.ForServer(@"C:\runs\r\runtime", ["-batchmode", "-name", "with spaces"], hostPlatform: ServerPlatform.Windows);
+        Assert.Equal(ClientPlatform.Windows, launch.Platform);
         Assert.Equal(@"C:\runs\r\runtime\valheim_server.exe", launch.Executable);
         Assert.Contains("winhttp.dll", launch.RequiredFiles);
         Assert.Contains("-name \"with spaces\"", WindowsCommandLine.Join(launch.Arguments));
-        Assert.Throws<ArgumentException>(() => HostServerLaunch.CreateWindows(@"C:\r", [], new Dictionary<string, string> { ["doorstop_enabled"] = "0" }));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer(@"C:\r", [], new Dictionary<string, string> { ["doorstop_enabled"] = "0" }, hostPlatform: ServerPlatform.Windows));
         host.Replies.Enqueue(Reply("VT-LOGON interactive\nVT-SERVER started 701 123456789\n"));
         var process = await HostServer.StartAsync(host, launch, @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60));
         Assert.Equal("interactive", process.TaskLogon);
@@ -114,7 +132,7 @@ public sealed class HostServerTests : IDisposable
         host.Replies.Enqueue(Reply("VT-SERVER unsupported pc\\tester is not elevated and has no desktop session\n"));
         // (a started server's reply also says how its task logged on; see WindowsServerLaunchUsesHeadlessTaskAndStopsOnlyTheOwnedIdentity)
         var error = await Assert.ThrowsAsync<PlatformNotSupportedException>(() => HostServer.StartAsync(host,
-            HostServerLaunch.CreateWindows(@"C:\runs\r\runtime", []), @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60)));
+            GameLaunch.ForServer(@"C:\runs\r\runtime", [], hostPlatform: ServerPlatform.Windows), @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60)));
         Assert.Contains("is not elevated", error.Message);
         Assert.Contains("Nothing was started", error.Message);
         // The preflight's question: the logon a Windows host would use, or its reason; a bash host needs no task.
@@ -157,7 +175,7 @@ public sealed class HostServerTests : IDisposable
         var host = new QueueHost(HostShell.Pwsh);
         host.Replies.Enqueue(new HostResult(HostOutcome.TransportFailed, null, "", "ssh disconnected", TimeSpan.FromSeconds(1), false));
         var error = await Assert.ThrowsAsync<HostOperationException>(() => HostServer.StartAsync(host,
-            HostServerLaunch.CreateWindows(@"C:\runs\r\runtime", []), @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60)));
+            GameLaunch.ForServer(@"C:\runs\r\runtime", [], hostPlatform: ServerPlatform.Windows), @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60)));
         Assert.Contains("may have started", error.Message);
     }
 
@@ -177,13 +195,13 @@ public sealed class HostServerTests : IDisposable
         string root = Path.Combine(_root, "Valheim Testing Server"), runtime = Path.Combine(root, "runtime copy");
         Directory.CreateDirectory(runtime);
         File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), Path.Combine(runtime, ServerLaunch.WindowsExecutable));
-        foreach (string file in HostServerLaunch.CreateWindows(runtime, []).RequiredFiles.Skip(1))
+        foreach (string file in GameLaunch.ForServer(runtime, [], hostPlatform: ServerPlatform.Windows).RequiredFiles.Skip(1))
         {
             string path = Path.Combine(runtime, file.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, "test-only placeholder");
         }
-        var launch = HostServerLaunch.CreateWindows(runtime, ["-n", "60", "127.0.0.1"]);
+        var launch = GameLaunch.ForServer(runtime, ["-n", "60", "127.0.0.1"], hostPlatform: ServerPlatform.Windows);
 
         // 1. This process's own logon (S4U when elevated, else interactive), through StartAsync.
         string boot = Path.Combine(root, "boot 1");
@@ -261,13 +279,13 @@ public sealed class HostServerTests : IDisposable
 
     [Fact] public void ALaunchRefusesWhatWouldRedirectTheLoaderOrCannotRun()
     {
-        Assert.Throws<ArgumentException>(() => HostServerLaunch.Create("/srv/rt", [], new Dictionary<string, string> { ["DOORSTOP_ENABLED"] = "0" }));
-        Assert.Throws<ArgumentException>(() => HostServerLaunch.Create("/srv/rt", ["--doorstop-enabled", "false"]));
-        Assert.Throws<ArgumentException>(() => HostServerLaunch.Create("/srv/rt", [], new Dictionary<string, string> { ["LD_PRELOAD"] = "other.so" }));
-        Assert.Throws<ArgumentException>(() => HostServerLaunch.Create("/srv/a:b", []));
-        Assert.Throws<ArgumentException>(() => HostServerLaunch.Create("relative/runtime", []));
-        Assert.Throws<ArgumentException>(() => HostServerLaunch.Create("/srv/rt", ["two\nlines"]));
-        Assert.Throws<PlatformNotSupportedException>(() => HostServerLaunch.Create(@"C:\valheim\server", []));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer("/srv/rt", [], new Dictionary<string, string> { ["DOORSTOP_ENABLED"] = "0" }, hostPlatform: ServerPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer("/srv/rt", ["--doorstop-enabled", "false"], hostPlatform: ServerPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer("/srv/rt", [], new Dictionary<string, string> { ["LD_PRELOAD"] = "other.so" }, hostPlatform: ServerPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer("/srv/a:b", [], hostPlatform: ServerPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer("relative/runtime", [], hostPlatform: ServerPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer("/srv/rt", ["two\nlines"], hostPlatform: ServerPlatform.Linux));
+        Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForServer(@"C:\valheim\server", [], hostPlatform: ServerPlatform.Linux));
     }
 
     // ---- starting ----
@@ -276,7 +294,7 @@ public sealed class HostServerTests : IDisposable
     {
         var host = new QueueHost();
         host.Replies.Enqueue(Reply("VT-SERVER started 4321 998877\n"));
-        var launch = HostServerLaunch.Create("/srv/rt", ["-batchmode"]);
+        var launch = GameLaunch.ForServer("/srv/rt", ["-batchmode"], hostPlatform: ServerPlatform.Linux);
         var process = await HostServer.StartAsync(host, launch, "/srv/runs/boot-1/", TimeSpan.FromSeconds(60), ["BepInEx/LogOutput.log"], Path.Combine(_root, "boot-1"));
         Assert.Equal(4321, process.Id); Assert.Equal("998877", process.StartIdentity); Assert.Equal("/srv/runs/boot-1", process.BootDirectory);
         var run = Assert.Single(host.Runs);
@@ -289,7 +307,7 @@ public sealed class HostServerTests : IDisposable
 
     [Fact] public async Task EachRefusalIsItsOwnErrorAndALostReplyIsUnknown()
     {
-        var launch = HostServerLaunch.Create("/srv/rt", []);
+        var launch = GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux);
         async Task<Exception> Start(HostResult reply)
         {
             var host = new QueueHost(); host.Replies.Enqueue(reply);
@@ -379,8 +397,8 @@ public sealed class HostServerTests : IDisposable
     [Fact] public async Task ACrossplayStartChecksTheLibrariesFirstAndRefusesWithTheirNames()
     {
         // Only a launch with -crossplay (in any case, as the game reads it) asks the start script to check.
-        Assert.False(HostServerLaunch.Create("/srv/rt", ["-batchmode"]).Crossplay);
-        var launch = HostServerLaunch.Create("/srv/rt", ["-batchmode", "-CrossPlay"]);
+        Assert.False(GameLaunch.ForServer("/srv/rt", ["-batchmode"], hostPlatform: ServerPlatform.Linux).Crossplay);
+        var launch = GameLaunch.ForServer("/srv/rt", ["-batchmode", "-CrossPlay"], hostPlatform: ServerPlatform.Linux);
         Assert.True(launch.Crossplay);
         var host = new QueueHost();
         host.Replies.Enqueue(Reply(CheckReply(LddMissingPulse, 1) + "VT-SERVER libraries\n"));
@@ -390,7 +408,7 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal("1", run.Variables["crossplay"]);
         Assert.Equal(string.Join('\n', CrossplayLibraries.PartyLibraries), run.Variables["libraries"]);
         var plain = new QueueHost(); plain.Replies.Enqueue(Reply("VT-SERVER started 12 34\n"));
-        await HostServer.StartAsync(plain, HostServerLaunch.Create("/srv/rt", ["-batchmode"]), "/srv/boot", TimeSpan.FromSeconds(30));
+        await HostServer.StartAsync(plain, GameLaunch.ForServer("/srv/rt", ["-batchmode"], hostPlatform: ServerPlatform.Linux), "/srv/boot", TimeSpan.FromSeconds(30));
         Assert.Equal("", Assert.Single(plain.Runs).Variables["crossplay"]);
         var absent = new QueueHost(); absent.Replies.Enqueue(Reply("VT-PARTY absent\nVT-SERVER libraries\n"));
         await Assert.ThrowsAsync<FileNotFoundException>(() => HostServer.StartAsync(absent, launch, "/srv/boot", TimeSpan.FromSeconds(30)));
@@ -402,7 +420,7 @@ public sealed class HostServerTests : IDisposable
     {
         var host = new QueueHost();
         host.Replies.Enqueue(Reply("VT-SERVER started 4321 998877\n"));
-        var process = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-1", TimeSpan.FromSeconds(60), ["BepInEx/LogOutput.log", "toolkit-unity.log"], Path.Combine(_root, "boot-1"));
+        var process = await HostServer.StartAsync(host, GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux), "/srv/runs/boot-1", TimeSpan.FromSeconds(60), ["BepInEx/LogOutput.log", "toolkit-unity.log"], Path.Combine(_root, "boot-1"));
         host.Replies.Enqueue(Reply("VT-STOP stopped\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
         Assert.Equal(HostServerStop.Stopped, await process.StopAsync(TimeSpan.FromSeconds(15)));
         Assert.True(process.HasExited);
@@ -422,7 +440,7 @@ public sealed class HostServerTests : IDisposable
     {
         var host = new QueueHost();
         host.Replies.Enqueue(Reply("VT-SERVER started 4321 998877\n"));
-        var process = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-1", TimeSpan.FromSeconds(60));
+        var process = await HostServer.StartAsync(host, GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux), "/srv/runs/boot-1", TimeSpan.FromSeconds(60));
         host.Replies.Enqueue(Reply("VT-STOP quit\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
         var stop = process.StopCleanly(TimeSpan.FromSeconds(120), TimeSpan.FromSeconds(15));
         Assert.Equal((StopOutcome.Clean, "SIGINT"), (stop.Outcome, stop.Request));
@@ -431,12 +449,12 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal(("120", "INT", "15"), (sent.Variables["quit"], sent.Variables["signal"], sent.Variables["seconds"]));
         // One that did not quit in time was killed; a kill-only stop sends no quit request.
         host.Replies.Enqueue(Reply("VT-SERVER started 5 6\n"));
-        var stubborn = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-2", TimeSpan.FromSeconds(60));
+        var stubborn = await HostServer.StartAsync(host, GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux), "/srv/runs/boot-2", TimeSpan.FromSeconds(60));
         host.Replies.Enqueue(Reply("VT-STOP stopped\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
         var killed = stubborn.StopCleanly(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(15));
         Assert.Equal((StopOutcome.Killed, "SIGINT; no exit within 2.0 s"), (killed.Outcome, killed.Request));
         host.Replies.Enqueue(Reply("VT-SERVER started 7 8\n"));
-        var plain = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-3", TimeSpan.FromSeconds(60));
+        var plain = await HostServer.StartAsync(host, GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux), "/srv/runs/boot-3", TimeSpan.FromSeconds(60));
         host.Replies.Enqueue(Reply("VT-STOP stopped\n")); host.Replies.Enqueue(Reply("VT-KEPT\n"));
         Assert.Equal(HostServerStop.Stopped, await plain.StopAsync(TimeSpan.FromSeconds(15)));
         Assert.Equal("0", host.Runs[^2].Variables["quit"]);
@@ -446,7 +464,7 @@ public sealed class HostServerTests : IDisposable
     {
         var host = new QueueHost();
         host.Replies.Enqueue(Reply("VT-SERVER started 4321 998877\n"));
-        var process = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-1", TimeSpan.FromSeconds(60));
+        var process = await HostServer.StartAsync(host, GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux), "/srv/runs/boot-1", TimeSpan.FromSeconds(60));
         host.Replies.Enqueue(Reply("VT-STOP gone\n")); host.Replies.Enqueue(new HostResult(HostOutcome.TransportFailed, null, "", "ssh: lost", TimeSpan.Zero, false));
         var failed = await Assert.ThrowsAsync<HostOperationException>(() => process.StopAsync(TimeSpan.FromSeconds(15)));
         Assert.Equal(HostOutcome.TransportFailed, failed.Outcome);
@@ -456,7 +474,7 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal(1, host.Runs.Count(run => ReferenceEquals(run.Script, InteractiveScripts.LinuxStop)));
         // A process still there after the kill is a failure, not a stop.
         host.Replies.Enqueue(Reply("VT-SERVER started 5 6\n"));
-        var stubborn = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-2", TimeSpan.FromSeconds(60));
+        var stubborn = await HostServer.StartAsync(host, GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux), "/srv/runs/boot-2", TimeSpan.FromSeconds(60));
         host.Replies.Enqueue(Reply("VT-STOP running\n"));
         await Assert.ThrowsAsync<InvalidOperationException>(() => stubborn.StopAsync(TimeSpan.FromSeconds(5)));
         Assert.False(stubborn.HasExited);
@@ -466,7 +484,7 @@ public sealed class HostServerTests : IDisposable
     {
         var host = new QueueHost();
         host.Replies.Enqueue(Reply("VT-SERVER started 4321 998877\n"));
-        var process = await HostServer.StartAsync(host, HostServerLaunch.Create("/srv/rt", []), "/srv/runs/boot-1", TimeSpan.FromSeconds(60));
+        var process = await HostServer.StartAsync(host, GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux), "/srv/runs/boot-1", TimeSpan.FromSeconds(60));
         host.Replies.Enqueue(Reply("VT-WAIT running\n")); host.Replies.Enqueue(Reply("VT-WAIT exited 137\n"));
         Assert.Equal(137, await process.WaitForExitAsync(CancellationToken.None));
         Assert.True(process.HasExited);

@@ -198,8 +198,8 @@ public static class ServerFixture
         int boot = 0, connection = 0;
         return new OwnedServerSession(token =>
         {
-            var start = ServerLaunch.CreateStartInfo(runtime, plan.Arguments.Select(argument => plan.Expand(argument, runtime, world)),
-                new Dictionary<string, string> { [LifecyclePlan.SessionTokenVariable] = token });
+            var start = GameLaunch.ForServer(runtime, plan.Arguments.Select(argument => plan.Expand(argument, runtime, world)),
+                new Dictionary<string, string> { [LifecyclePlan.SessionTokenVariable] = token }).ToStartInfo();
             return new DirectServerProcess(start, Path.Combine(output, "boot-" + ++boot),
                 Path.Combine(runtime, "BepInEx", "LogOutput.log"), Path.Combine(runtime, "toolkit-unity.log"));
         }, () => new RecordingTransport(new CliTransport("127.0.0.1", plan.Port), Path.Combine(output, "connection-" + ++connection + ".jsonl")),

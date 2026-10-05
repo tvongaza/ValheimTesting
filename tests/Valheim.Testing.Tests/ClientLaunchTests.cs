@@ -50,7 +50,7 @@ public class ClientLaunchTests
         using var install = new Install(); install.Add(server); install.Add("BepInEx/core/BepInEx.Preloader.dll");
         var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.Detect(install.Root));
         Assert.Contains("dedicated-server runtime", error.Message);
-        Assert.Contains("ServerLaunch", error.Message);
+        Assert.Contains("GameLaunch.ForServer", error.Message);
         foreach (var host in Enum.GetValues<ClientPlatform>())
             Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, host));
     }

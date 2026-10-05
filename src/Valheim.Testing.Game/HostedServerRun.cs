@@ -268,9 +268,8 @@ internal sealed class HostedServerRun
         {
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, RuntimeDirectory, WorldDirectory));
             environment[options.SessionTokenVariable] = token;
-            var launch = Host.Shell.Kind == HostShellKind.PowerShell
-                ? HostServerLaunch.CreateWindows(RuntimeDirectory, plan.LaunchArguments(RuntimeDirectory, WorldDirectory), environment)
-                : HostServerLaunch.Create(RuntimeDirectory, plan.LaunchArguments(RuntimeDirectory, WorldDirectory), environment);
+            var launch = GameLaunch.ForServer(RuntimeDirectory, plan.LaunchArguments(RuntimeDirectory, WorldDirectory), environment,
+                Host.Shell.Kind == HostShellKind.PowerShell ? ServerPlatform.Windows : ServerPlatform.Linux);
             int n = ++boot;
             string local = Path.Combine(run.Output, "boot-" + n), bootDirectory = HostInstall.Join(RunDirectory, "boot-" + n);
             HostServerProcess process;

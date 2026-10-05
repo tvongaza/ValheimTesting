@@ -26,7 +26,7 @@ docker build -t valheimtesting-linux-server:local docker/linux-server
 
 The image is x86-64 only: the Dockerfile pins `FROM --platform=linux/amd64`, because the server, SteamCMD and Doorstop have no arm64 builds.
 
-The build context is this directory only; no repository source enters the image. Each build downloads the current public dedicated-server build, so record `server-buildid.txt` with any result. The base image is pinned by tag, SteamCMD and the .NET SDK are not pinned to exact builds; the BepInEx pack is pinned by version and hash, and its launch script is checked for the loader variables `ServerLaunch` reproduces.
+The build context is this directory only; no repository source enters the image. Each build downloads the current public dedicated-server build, so record `server-buildid.txt` with any result. The base image is pinned by tag, SteamCMD and the .NET SDK are not pinned to exact builds; the BepInEx pack is pinned by version and hash, and its launch script is checked for the loader variables `GameLaunch.ForServer` reproduces.
 
 ## Run a check inside the container
 
@@ -45,17 +45,17 @@ Your own runner builds the launch the same way, then owns the process through `O
 
 ```csharp
 // runtime: a disposable copy of /opt/valheim/server with your plugins added; world: its -savedir.
-var start = ServerLaunch.CreateStartInfo(runtime,
+var start = GameLaunch.ForServer(runtime,
     ["-batchmode", "-nographics", "-name", name, "-world", world, "-password", password, "-public", "0", "-savedir", saveDir, "-logFile", unityLog],
-    new Dictionary<string, string> { ["MY_TEST_SESSION_TOKEN"] = token });
+    new Dictionary<string, string> { ["MY_TEST_SESSION_TOKEN"] = token }).ToStartInfo();
 var process = new DirectServerProcess(start, logPrefix, Path.Combine(runtime, "BepInEx", "LogOutput.log"), unityLog);
 ```
 
-`ServerLaunch` detects Linux from `valheim_server.x86_64`, requires its execute bit and BepInEx's preloader, core and Doorstop library, refuses caller Doorstop variables and `--doorstop-*` arguments, and sets `DOORSTOP_ENABLED`, `DOORSTOP_TARGET_ASSEMBLY`, `LD_LIBRARY_PATH` (prepended), `LD_PRELOAD` (prepended) and `SteamAppId`. It starts the server executable directly, not the pack's shell script, so the session's PID check still holds.
+`GameLaunch.ForServer` detects Linux from `valheim_server.x86_64`, requires its execute bit and BepInEx's preloader, core and Doorstop library, refuses caller Doorstop variables and `--doorstop-*` arguments, and sets `DOORSTOP_ENABLED`, `DOORSTOP_TARGET_ASSEMBLY`, `LD_LIBRARY_PATH` (prepended), `LD_PRELOAD` (prepended) and `SteamAppId`. It starts the server executable directly, not the pack's shell script, so the session's PID check still holds.
 
 ## Apple Silicon (experimental)
 
-A Mac can run the macOS dedicated server natively (see [getting started](../../docs/getting-started.md)); this image is for the Linux one, which `ServerLaunch` refuses to launch on a macOS host. On an Apple Silicon Mac, Docker runs arm64 Linux, so this image only runs under x86-64 emulation. This path is **experimental and unverified**: no pass has been recorded on a Mac. Inside the container `ServerLaunch` sees a Linux host, so runners work unchanged.
+A Mac can run the macOS dedicated server natively (see [getting started](../../docs/getting-started.md)); this image is for the Linux one, which `GameLaunch.ForServer` refuses to launch on a macOS host. On an Apple Silicon Mac, Docker runs arm64 Linux, so this image only runs under x86-64 emulation. This path is **experimental and unverified**: no pass has been recorded on a Mac. Inside the container `GameLaunch.ForServer` sees a Linux host, so runners work unchanged.
 
 ```sh
 docker build --platform linux/amd64 -t valheimtesting-linux-server:local docker/linux-server
