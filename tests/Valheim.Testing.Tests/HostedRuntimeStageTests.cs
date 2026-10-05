@@ -11,12 +11,12 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [InlineData("valheim_server", "", true, "VT-GAME idle")]
     [InlineData("valheim_server", "/owned", false, "VT-GAME unknown")]
     [InlineData("/other/valheim_server.x86_64", "/owned", true, "VT-GAME idle")]
-    [InlineData("/owned/valheim_server.x86_64", "/owned", false, "VT-GAME busy")]
-    [InlineData("/tmp/Valheim.app/Contents/MacOS/Valheim", "", true, "VT-GAME busy")]
+    [InlineData("/owned/valheim_server.x86_64", "/owned", false, "VT-GAME busy 4242")]
+    [InlineData("/tmp/Valheim.app/Contents/MacOS/Valheim", "", true, "VT-GAME busy 4242")]
     [InlineData("ordinary-helper", "/owned", true, "VT-GAME idle")]
     // One check for every copy on a host (#257): a game running from any of them is busy, from none of them idle.
-    [InlineData("/second/valheim_server.x86_64", "/first\n/second", false, "VT-GAME busy")]
-    [InlineData("/first/valheim.x86_64", "/first\n/second", false, "VT-GAME busy")]
+    [InlineData("/second/valheim_server.x86_64", "/first\n/second", false, "VT-GAME busy 4242")]
+    [InlineData("/first/valheim.x86_64", "/first\n/second", false, "VT-GAME busy 4242")]
     [InlineData("/second2/valheim_server.x86_64", "/first\n/second", false, "VT-GAME idle")]
     [InlineData("valheim_server", "/first\n/second", false, "VT-GAME unknown")]
     public async Task BashProcessCheckRefusesConflictingUse(string process, string runtime, bool clientSession, string expected)
@@ -25,7 +25,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
         string bin = Path.Combine(_root, "bin");
         Directory.CreateDirectory(bin);
         string ps = Path.Combine(bin, "ps");
-        File.WriteAllText(ps, "#!/bin/sh\nprintf '%s\\n' '" + process + "'\n");
+        // As ps -axo pid=,comm= prints it: the ID, then the command.
+        File.WriteAllText(ps, "#!/bin/sh\nprintf '%s\\n' '  4242 " + process + "'\n");
         File.SetUnixFileMode(ps, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         var start = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true };
         start.ArgumentList.Add("-c");
@@ -99,7 +100,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
         using var running = Process.Start(new ProcessStartInfo(standIn, "-n 120 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true })!;
         try
         {
-            Assert.Contains("owned-runtime process", (await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            // The refusal names the process (#257): with no journal to ask, by its ID alone.
+            Assert.Contains($"Conflicting Valheim process {running.Id} is running on", (await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [first, second], clientSession: false))).Message);
             await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [first], clientSession: false);
         }

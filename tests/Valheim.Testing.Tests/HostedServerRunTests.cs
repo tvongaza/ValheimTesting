@@ -42,6 +42,8 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>The port check's whole reply when set; else free or busy by <see cref="PortBusy"/>.</summary>
     public string? PortReply { get; set; }
     public bool GameActive { get; set; }
+    /// <summary>The conflicting processes' IDs the game-process check names when <see cref="GameActive"/> (comma separated), or none.</summary>
+    public string GameProcessIds { get; set; } = "";
     public long AvailableCopyBytes { get; set; } = 100L << 30;
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
     public bool IgnoreQuit { get; set; }
@@ -152,7 +154,7 @@ internal sealed class FakeServerHost : IGameHost
         if (Failures.TryGetValue(name, out var failure)) return failure;
         switch (name)
         {
-            case "game-process": return Ok(GameActive ? "VT-GAME busy\n" : "VT-GAME idle\n");
+            case "game-process": return Ok(GameActive ? $"VT-GAME busy {GameProcessIds}\n".Replace(" \n", "\n") : "VT-GAME idle\n");
             case "server-logon": return Ok("VT-LOGON " + ServerTaskLogon + "\n");
             case "copy-space":
                 return Ok($"VT-STORAGE {DiskSpace.DirectoryBytes(Local(v["source"]))} {AvailableCopyBytes} " +
