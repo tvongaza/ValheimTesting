@@ -104,14 +104,23 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("--server-only", refused.Message);
         Assert.Contains("892970", refused.Message); // what was looked for
 
-        // A host check that refuses the client (here: no signed-in Steam) stops before anything is copied or launched.
+        // A host check that refuses the client (here: no signed-in Steam, and a mod manager's Doorstop proxy) stops before
+        // anything is copied or launched, names the reviewed-loader fix, and marks the folder as a refused run.
         string checkedOutput = Path.Combine(_rig.Root, "client-refused");
         using (EnvironmentInventory.UseMachine(WithValheim(out _)))
             result = await ServerLoad.RunAsync(Arguments(checkedOutput), new ServerLoad.Seams(
-                Inspect: _ => Task.FromResult(new CampaignPreflightReport([new("client", "Steam identity", "No Steam account is signed in on local.")])),
+                Inspect: _ => Task.FromResult(new CampaignPreflightReport([
+                    new("client", "Steam identity", "No Steam account is signed in on local."),
+                    new("client", "game and loader", "The source install on local's winhttp.dll is Doorstop 4 (file version 4.4.0), which reads only [General] in doorstop_config.ini, but that file is written for Doorstop 3 ([UnityDoorstop])."),
+                ])),
                 Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); }));
         Assert.Equal(3, result);
         Assert.False(ran);
+        string refusal = File.ReadAllText(Path.Combine(checkedOutput, "REFUSED.txt"));
+        Assert.Contains("not a prepared run", refusal);
+        Assert.Contains("--client-loader-package FILE", refusal);
+        Assert.Contains("No Steam account is signed in", refusal);
+        Assert.False(File.Exists(Path.Combine(checkedOutput, "plan.json"))); // the password is written only once the preflight passed
     }
 
     [Fact] public async Task ServerOnlySkipsTheClientAndPreflightOnlyStopsBeforeTheRun()
@@ -125,6 +134,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(ran);
         var campaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "campaign.json"))).RootElement;
         Assert.Empty(campaign.GetProperty("clients").EnumerateObject());
+        Assert.True(File.Exists(Path.Combine(output, "plan.json"))); // the consumer's input, written with the campaign
+        Assert.False(File.Exists(Path.Combine(output, "REFUSED.txt")));
         Assert.Equal(1, EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments.Count);
     }
 
