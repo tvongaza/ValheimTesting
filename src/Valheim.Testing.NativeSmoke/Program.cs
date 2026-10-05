@@ -3,7 +3,7 @@ using Valheim.Testing.Game;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--game DIR] [setup options] (--game: this machine's Valheim when left out)");
+    Console.WriteLine("valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [setup options] (the inventory's client; this machine's Valheim with no --inventory)");
     Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
@@ -26,14 +26,14 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start [--game DIR] --mod DLL [--mod DLL ...] --output NEW_DIR [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--steam-userdata DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--port 9500] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
 using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); };
 var elapsed = Stopwatch.StartNew();
-RegressionEnvironment? environment = null;
+TargetedRegression? runner = null;
 ScenarioReport? lastArm = null; string? lastArmOutput = null;
 int exitCode = 3;
 string? outcome = null;
@@ -41,15 +41,18 @@ try
 {
     string output = Path.GetFullPath(options!["--output"]);
     if (Path.Exists(output)) throw new IOException("--output must be a new directory; an earlier run or personal files will not be changed: " + output);
-    string game = options.TryGetValue("--game", out string? givenGame) ? Path.GetFullPath(givenGame) : SmokeInputs.Game();
+    // The client: the inventory's (this machine's Valheim with no --inventory); --game and --loader-package override it.
+    var (inventory, client) = SmokeInputs.Client(options, output);
+    foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
+    Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}");
+    string game = client.Install;
     var selectedMods = mods!.Select(Path.GetFullPath).ToList();
     string mod = selectedMods[0];
     var (cliManifest, cliFiles) = SmokeInputs.Cli(options, game);
-    string steamUserdata = SmokeInputs.SteamUserdata(options);
-    string? loader = options.TryGetValue("--loader-package", out string? loaderFile) ? Path.GetFullPath(loaderFile) : null;
-    foreach (var (name, path) in new[] { ("--game", game), ("--cli-files", cliFiles), ("--steam-userdata", steamUserdata) })
+    string? loader = client.LoaderPackage;
+    foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
-    SmokeOutput.RefuseInside(output, game, cliFiles, steamUserdata);
+    SmokeOutput.RefuseInside(output, new[] { game, cliFiles, inventory.SteamUserData }.OfType<string>().ToArray());
     foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
         if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
     if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--loader-package file does not exist: " + loader, loader);
@@ -90,33 +93,32 @@ try
 
     var world = DefaultSmokeWorld.Prepare(Path.Combine(output, "world-source"));
     var character = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
-    int port = options.TryGetValue("--port", out string? specifiedPort) ? int.Parse(specifiedPort) : 9500;
-    environment = new RegressionEnvironment
+    var inputs = new RegressionInputs
     {
-        Name = "native-smoke", Game = game, Install = Path.Combine(output, "install"),
+        // A name per run: its disposable install is <runtime>/regression-<name>, never shared with another start.
+        Name = "native-smoke-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture),
         Fixture = new RegressionFixture { Root = Path.Combine(output, "world-source"), WorldUid = world.UidText },
-        Client = new RegressionClient { Port = port, Character = DefaultSmokeCharacter.Name,
-            CharacterStore = character.Root, SteamUserDataDirectory = steamUserdata },
+        Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root },
         Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
             { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = FileHash.Sha256(mod),
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
                 Commit = options.GetValueOrDefault("--source") } } },
-        LoaderPackage = loader,
     };
     if (options.TryGetValue("--expected-log-error", out string? expectedError))
-        environment.LogScan[LogScanner.UnknownError] = new LogClassification
+        inputs.LogScan[LogScanner.UnknownError] = new LogClassification
         { Expected = [expectedError], Reason = options["--expected-log-reason"] };
-    dependencies.ApplyTo(environment, Path.Combine(output, "cli-capabilities.json"));
+    dependencies.ApplyTo(inputs, Path.Combine(output, "cli-capabilities.json"));
     // TargetedRegression calls one build its arm; other deliberately selected mods are fixed plugins in that same arm.
     // The resolver checks their combined dependency closure, duplicate GUIDs and declared incompatibilities first.
-    environment.Plugins.AddRange(dependencies.Mods.Skip(1).Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }));
+    inputs.Plugins.AddRange(dependencies.Mods.Skip(1).Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }));
     if (comparison != null)
-        environment.Mod.Arms.Add("after", new RegressionArm
+        inputs.Mod.Arms.Add("after", new RegressionArm
         { File = compareMod!, Sha256 = FileHash.Sha256(compareMod!), Commit = options["--compare-source"] });
-    environment.Write(Path.Combine(output, "environment.json"));
-    var runner = new TargetedRegression(environment);
+    inputs.Write(Path.Combine(output, "regression.json"));
+    runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
+    Console.WriteLine($"disposable install: {runner.Install}");
     bool passed = true;
-    foreach (string arm in environment.Mod.Arms.Keys)
+    foreach (string arm in inputs.Mod.Arms.Keys)
     {
         string armOutput = Path.Combine(output, "evidence", arm);
         var report = runner.Run(arm, armOutput, "selected plugin loads in a hosted fixture",
@@ -129,7 +131,7 @@ try
         if (!report.Passed) break;
     }
     exitCode = passed ? 0 : 1;
-    outcome = $": hosted fixture, {selectedMods.Count} selected mod(s), {environment.Mod.Arms.Count} arm(s); private evidence in {output}";
+    outcome = $": hosted fixture, {selectedMods.Count} selected mod(s), {inputs.Mod.Arms.Count} arm(s); private evidence in {output}";
 }
 catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException)
 {
@@ -137,13 +139,13 @@ catch (Exception failure) when (failure is ArgumentException or IOException or I
 }
 finally
 {
-    if (environment != null)
+    if (runner != null)
         // With a run, its last arm's result.json records the removal as its Cleanup step; before any run there is no report.
-        try { if (lastArm != null) TargetedRegression.Remove(environment, lastArm, lastArmOutput!); else TargetedRegression.Remove(environment); }
+        try { if (lastArm != null) runner.Remove(lastArm, lastArmOutput!); else runner.Remove(); }
         catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             // A partially copied install may not yet have its ownership marker. Never delete it by path alone.
-            Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + environment.Install);
+            Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + runner.Install);
             if (exitCode == 0) exitCode = 1;
         }
 }
@@ -157,7 +159,7 @@ return exitCode;
 file static class Arguments
 {
     private static readonly HashSet<string> Required = ["--mod", "--output"];
-    private static readonly HashSet<string> Allowed = [.. Required, "--game", "--source", "--cli-manifest", "--cli-files", "--steam-userdata", "--loader-package", "--port", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
+    private static readonly HashSet<string> Allowed = [.. Required, "--game", "--inventory", "--client-env", "--source", "--cli-manifest", "--cli-files", "--loader-package", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
 
     public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
         out List<string>? roots, out List<string>? optionalReferences, out string error)

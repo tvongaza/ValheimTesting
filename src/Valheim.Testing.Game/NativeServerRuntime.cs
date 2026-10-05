@@ -41,7 +41,7 @@ public sealed class NativeServerRuntime : IDisposable
         if (cliPort is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(cliPort));
         source = Path.GetFullPath(source); adapter = Path.GetFullPath(adapter);
         loaderPackage?.Validate();
-        if (loaderPackage != null && RegressionEnvironment.Inside(loaderPackage.Root, source))
+        if (loaderPackage != null && RegressionInputs.Inside(loaderPackage.Root, source))
             throw new InvalidOperationException("The loader package must be an extracted, reviewed set outside the source server install.");
         var configs = (configFiles ?? []).Select(Path.GetFullPath).ToList();
         var sidecarFiles = (pluginFiles ?? []).Select(Path.GetFullPath).ToList();
