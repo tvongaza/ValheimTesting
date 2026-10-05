@@ -1,7 +1,7 @@
 using Valheim.Testing.Game;
 
 /// <summary>Runs the same disposable server smoke twice, removing exactly one selected mod in the second arm.</summary>
-public static class ServerLoadComparison
+internal static class ServerLoadComparison
 {
     public static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runArm = null)
     {

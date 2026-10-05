@@ -20,7 +20,7 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Capture saved objects, containers and loaded structures near a site | [Area object snapshots](area-object-snapshots.md) | Terrain/paint or a mod-specific correctness verdict |
 | Find a run's evidence: snapshots, review stills and clips, round JSON | [Evidence linked from result.json](evidence.md) | That any picture looks right; a human verdict is recorded separately |
 | A/B regression of one mod in the real game | [TargetedRegression](../examples/TargetedRegression/README.md): preflight without the game, then one hosted run per arm | Other mods, dedicated servers or restarts |
-| Load a mod or isolate a mod-set conflict | [NativeSmoke](../examples/NativeSmoke/README.md) through [Debugging mods](debugging-mods.md): `valheim-test server-load`, `server-load-ab` or `start` | The mod's gameplay behavior or which mod owns a conflict |
+| Load a mod or isolate a mod-set conflict | [NativeSmoke](../src/Valheim.Testing.NativeSmoke/README.md) through [Debugging mods](debugging-mods.md): `valheim-test server-load`, `server-load-ab` or `start` | The mod's gameplay behavior or which mod owns a conflict |
 | Prepare a dedicated server and multiple owned clients | [FullLifecycle three-actor campaign](../examples/FullLifecycle/README.md#prepare-the-campaign): reviewed per-role locks, separate character/account hosts, strict pins, one run command | An arbitrary mod's gameplay correctness; the small sample is a setup smoke |
 | Share a native regression's source and result | [tools/regression-bundle](../tools/regression-bundle/README.md), a maintainer tool: a scrubbed directory for review, never published | That a ported runner's harness ran natively, or that no private detail outside its rules remains |
 | Exercise extension replacement | [tools/reload-check](../tools/reload-check/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
@@ -35,7 +35,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 
 1. Read the local repository's instructions and check branch/worktree status. Keep other agents' edits and active sessions intact.
 2. Check [package ownership and setup](getting-started.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`. ValheimCLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
-   For a load check from otherwise unmodded game installs, [NativeSmoke](../examples/NativeSmoke/README.md#disposable-native-mod-load-smoke) accepts a reviewed loader package and a coherent ValheimCLI bundle. A server and clean client use separately pinned loader packages. These options are in this checkout's candidate tool until its next release; the currently published tool may not have them.
+   For a load check from otherwise unmodded game installs, [NativeSmoke](../src/Valheim.Testing.NativeSmoke/README.md#disposable-native-mod-load-smoke) accepts a reviewed loader package and a coherent ValheimCLI bundle. A server and clean client use separately pinned loader packages. These options are in this checkout's candidate tool until its next release; the currently published tool may not have them.
 3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
 
    ```sh

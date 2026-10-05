@@ -5,19 +5,13 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
-    <ProjectReference Include="../../examples/NativeSmoke/NativeSmoke.csproj" />
+    <ProjectReference Include="../../src/Valheim.Testing.NativeSmoke/Valheim.Testing.NativeSmoke.csproj" />
     <ProjectReference Include="../../tools/regression-bundle/RegressionBundle.csproj" />
     <ProjectReference Include="../Valheim.Testing.ProcessSignalProbe/Valheim.Testing.ProcessSignalProbe.csproj" />
     <!-- The adapter package's helpers that use no game types; the rest of its source compiles in Valheim.Testing.Adapter.CompileCheck. -->
     <Compile Include="../../src/Valheim.Testing.Adapter/Adapter/Members.cs;../../src/Valheim.Testing.Adapter/Adapter/KeyValueReply.cs;../../src/Valheim.Testing.Adapter/Adapter/FixtureGate.cs;../../src/Valheim.Testing.Adapter/Adapter/ResultBudget.cs" LinkBase="Adapter" />
     <!-- Compiled twice at test time against a working BepInEx stub, as a ScriptEngine reload loads it twice. -->
     <EmbeddedResource Include="../../src/Valheim.Testing.Adapter/Adapter/QuitLogFlush.cs" LogicalName="Adapter.QuitLogFlush.cs" />
-    <Compile Include="../../examples/NativeSmoke/SmokeOutput.cs" Link="NativeSmoke/SmokeOutput.cs" />
-    <Compile Include="../../examples/NativeSmoke/CopiesCommand.cs" Link="NativeSmoke/CopiesCommand.cs" />
-    <Compile Include="../../examples/NativeSmoke/EnvCommand.cs" Link="NativeSmoke/EnvCommand.cs" />
-    <Compile Include="../../examples/NativeSmoke/SmokeInputs.cs" Link="NativeSmoke/SmokeInputs.cs" />
-    <Compile Include="../../examples/NativeSmoke/SmokeProject.cs" Link="NativeSmoke/SmokeProject.cs" />
-    <EmbeddedResource Include="../../toolkit-versions.json" LogicalName="toolkit-versions.json" />
     <Compile Include="../../tools/dev-loop/dev-loop.cs" Link="DevLoop/dev-loop.cs" />
     <!-- The ObserveCheck example's flow without its CliTransport entry point (ObserveCheckTests). -->
     <Compile Include="../../examples/ObserveCheck/ObserveCheck.cs" Link="ObserveCheck/ObserveCheck.cs" />

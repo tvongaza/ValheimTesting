@@ -34,8 +34,8 @@ Run("dotnet", "build", Solution("examples", new[] { "examples", "tools" }
 // The full-life-cycle example's external projects; its game-side mod and adapter need a game install and build elsewhere.
 Test("examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
-Run("dotnet", "pack", Solution("packages", new[] { "Valheim.Testing", "Valheim.Testing.Doubles", "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool" }
-    .Select(name => $"src/{name}/{name}.csproj").Append("examples/NativeSmoke/NativeSmoke.csproj")),
+Run("dotnet", "pack", Solution("packages", new[] { "Valheim.Testing", "Valheim.Testing.Doubles", "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke" }
+    .Select(name => $"src/{name}/{name}.csproj")),
     "-c", "Release", "-nodeReuse:false", "-o", Path.Combine(root, ".packages"));
 // A mod's view of what was just packed: outside this checkout, a new package cache, Valheim.Testing* only from .packages
 // and byte-identical to it (NuGet.org serves published packages of the same id and version).

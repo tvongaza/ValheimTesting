@@ -337,7 +337,7 @@ static string? Metadata(string packageDir, string property)
 
 string SourceVersion(string name)
 {
-    string project = name == "Valheim.Testing.NativeSmoke" ? "examples/NativeSmoke/NativeSmoke.csproj" : $"src/{name}/{name}.csproj";
+    string project = $"src/{name}/{name}.csproj";
     return Regex.Match(File.ReadAllText(Path.Combine(root, project)), "<Version>([^<]+)</Version>") is { Success: true } m
         ? m.Groups[1].Value
         : throw new InvalidOperationException("No <Version> in " + project);
