@@ -13,7 +13,9 @@
       BepInExCore    the folder holding BepInEx.dll (default: ValheimPath/BepInEx/core)
       UseValheimCli  true in a project that compiles against ValheimCLI, such as a test adapter; it then needs
       CliDll         the ValheimCLI core (valheimCLI.dll) installed in the test runtime. There is deliberately no
-                     default: an adapter compiles against the exact core it will run with.
+                     default: an adapter compiles against the exact core it will run with. The two are not redundant:
+                     UseValheimCli is the project's intent and CliDll the machine's path, which often arrives on the
+                     command line or from the environment for every project, so the mod never gains ValheimCLI from it.
 
     Before assembly references are resolved, every listed file is checked and the build stops with an error that
     names each missing file and the property that locates it. Game assemblies are never copied to the output.
