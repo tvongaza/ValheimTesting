@@ -224,7 +224,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         File.WriteAllText(sameHostManifestFile, sameHostManifest.ToJsonString());
         var sharedOverlap = new Overlap();
         sharedHost.BeforeShip = sharedOverlap.EnterAsync;
-        int claimsBefore = sharedHost.Claims.Count;
+        int claimsBefore = sharedHost.Claims.Count, checksBefore = 0;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
             Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]))
         {
@@ -233,8 +233,29 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.Contains("BepInEx/plugins/Server.dll", campaign.Listings["server"].Files.Keys);
             Assert.DoesNotContain("BepInEx/plugins/Server.dll", campaign.Listings["client-a"].Files.Keys);
             Assert.True(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+            checksBefore = sharedHost.Scripts.Count(script => script == "game-process");
         }
         Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+        // Retiring two installs and a character on one host takes its lock once and checks its game processes once (#257).
+        Assert.Equal(claimsBefore + 2, sharedHost.Claims.Count);
+        Assert.Equal(checksBefore + 1, sharedHost.Scripts.Count(script => script == "game-process"));
+
+        // VALHEIM_TESTING_KEEP_RUNTIME=1 keeps every actor's install (the disposable characters still go), and a second retire
+        // by the same owner touches nothing, not even what the first one kept.
+        var keptCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile, Path.Combine(_rig.Root, "kept-prepared"),
+            TimeSpan.FromSeconds(30), name => hosts[name]);
+        var retirement = new RunRetirement(null, "");
+        RunRetirement.KeepOverride.Value = true;
+        try { Assert.Empty(await retirement.CampaignAsync(keptCampaign, [])); }
+        finally { RunRetirement.KeepOverride.Value = null; }
+        Assert.Equal(4, keptCampaign.Copies.Count);
+        Assert.All(keptCampaign.Copies, copy => Assert.True(Directory.Exists(hosts[copy.Host].Local(copy.Runtime)), copy.Runtime));
+        Assert.All(keptCampaign.Copies, copy => Assert.True(retirement.Kept(copy.Host.ToLowerInvariant(), copy.Runtime)));
+        Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+        int scripts = hosts.Values.Sum(host => host.Scripts.Count);
+        Assert.Empty(await retirement.CampaignAsync(keptCampaign, []));
+        Assert.Equal(scripts, hosts.Values.Sum(host => host.Scripts.Count));
+        Assert.All(keptCampaign.Copies, copy => Assert.True(Directory.Exists(hosts[copy.Host].Local(copy.Runtime))));
     }
 
     // #256's acceptance in one preflight: six independent faults, each refused under its own actor and input, all in one
@@ -426,7 +447,9 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.True(result.GetProperty("CleanupVerified").GetBoolean());
         var steps = result.GetProperty("Steps").EnumerateArray().ToDictionary(step => step.GetProperty("Name").GetString()!, step => step.GetProperty("Phase").GetString());
         Assert.Equal("Setup", steps["check the hosts and prepare every actor's disposable install"]);
-        Assert.Equal("Cleanup", steps["retire the campaign's prepared installs and characters"]);
+        // One retire owner (#257): each owned path is its own Cleanup step, retired under the lock the run already holds.
+        Assert.Equal("Cleanup", Assert.Single(steps, step => step.Key.StartsWith("remove the prepared install ", StringComparison.Ordinal)).Value);
+        Assert.DoesNotContain(host.Claims, claim => claim.Contains("retire", StringComparison.Ordinal));
         Assert.True(File.Exists(Path.Combine(output, "prepared", "environment-assignments.json")));
         Assert.False(File.Exists(Path.Combine(output, "prepared", "profile.json")));
         Assert.False(File.Exists(Path.Combine(output, "campaign-times.json")));
@@ -443,6 +466,32 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal("Setup", steps["verify the prepared runtime on the server host"]);
         Assert.DoesNotContain("copy and verify pinned runtime on the server host", steps.Keys);
         Assert.Contains("vt-prep-", result.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
+
+        // A server that may still run (its start reply was lost) keeps the prepared install it may run from, named, and the
+        // host's lock; the one retire owner removes nothing it cannot prove unused.
+        host.Failures["start"] = FakeServerHost.TransportFailure;
+        Directory.Delete(host.Local(@"C:\runs\run-test"), true); // the fixed run id's world and boot evidence from the run above
+        string unknownOutput = Path.Combine(_rig.Root, "run-campaign-unknown");
+        Assert.Equal(3, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, unknownOutput, options));
+        host.Failures.Remove("start");
+        var unknown = JsonDocument.Parse(File.ReadAllText(Path.Combine(unknownOutput, "result.json"))).RootElement;
+        Assert.Contains("may still run", unknown.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
+        string kept = Assert.Single(Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*"));
+        Assert.True(Directory.Exists(Path.Combine(kept, "runtime")));
+        Assert.DoesNotContain(unknown.GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString()!.StartsWith("remove the prepared install ", StringComparison.Ordinal));
+        Assert.Equal(host.Claims.Count, host.Releases.Count + 1);
+
+        // A host retire that fails keeps the install and what it kept beside it (not fetched yet): nothing else removes it.
+        Directory.Delete(host.Local(@"C:\runs\run-test"), true);
+        host.Failures["retire"] = new HostResult(HostOutcome.Exited, 3, "", "Remove-Item: access denied", TimeSpan.Zero, false);
+        string failedOutput = Path.Combine(_rig.Root, "run-campaign-retire-failed");
+        Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, failedOutput, options));
+        host.Failures.Remove("retire");
+        var failedRetire = JsonDocument.Parse(File.ReadAllText(Path.Combine(failedOutput, "result.json"))).RootElement;
+        Assert.Equal((true, false), (failedRetire.GetProperty("RuntimeReady").GetBoolean(), failedRetire.GetProperty("CleanupVerified").GetBoolean()));
+        Assert.StartsWith("cleanup failed", failedRetire.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
+        Assert.Equal(2, Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*").Count(directory => Directory.Exists(Path.Combine(directory, "runtime"))));
+        Assert.DoesNotContain(failedRetire.GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString()!.StartsWith("remove the prepared install ", StringComparison.Ordinal));
     }
 
     // A campaign that leaves out its inventory runs on this machine: its dedicated server is the one Steam installed, with

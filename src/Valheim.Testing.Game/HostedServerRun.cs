@@ -60,16 +60,10 @@ internal sealed class HostedServerRun
         RunDirectory = HostInstall.Join(role.Runtime, runId);
         RuntimeDirectory = preparedRuntime ?? HostInstall.Join(RunDirectory, "runtime");
         WorldDirectory = HostInstall.Join(RunDirectory, "world");
-        // The retire keeps what changed beside the copy it retires (<copy's directory>/runtime-changes), then fetches it.
-        _copyDirectory = RuntimeDirectory[..RuntimeDirectory.LastIndexOfAny(['/', '\\'])];
-        _copyDirectoryName = _copyDirectory[(_copyDirectory.LastIndexOfAny(['/', '\\']) + 1)..];
     }
 
-    private readonly string _copyDirectory, _copyDirectoryName;
     /// <summary>Whether the runtime is a campaign's prepared install (verified in place) rather than a copy this run makes.</summary>
     public bool Prepared { get; }
-    /// <summary>After <see cref="TeardownAsync"/>: the runtime copy stayed (kept on request, or its server may still run).</summary>
-    public bool RuntimeRetained { get; private set; }
 
     public ResolvedEnvironment Profile { get; }
     public GameRole Role { get; }
@@ -465,12 +459,15 @@ internal sealed class HostedServerRun
     }
 
     /// <summary>
-    /// After the owned server stopped: fetches the host's world copy, closes the tunnel and releases the locks, each as its own
-    /// step. With <paramref name="serverStopped"/> false the server host's lock is kept, because the server may still run there.
-    /// Returns the failures; it never throws.
+    /// After the owned server stopped: fetches the host's world copy, retires the runtime copy (<see cref="RunRetirement"/>),
+    /// closes the tunnel, releases the clients' accounts, retires <paramref name="prepared"/>'s characters and installs under
+    /// the locks this run holds, and releases the locks, each as its own step. With <paramref name="serverStopped"/> false
+    /// the server host's lock and runtime are kept, because the server may still run there. Returns the failures; it never throws.
     /// </summary>
-    public async Task<IReadOnlyList<Exception>> TeardownAsync(ScenarioReport report, string output, bool launched, bool serverStopped, bool keepRuntime = false)
+    public async Task<IReadOnlyList<Exception>> TeardownAsync(ScenarioReport report, string output, bool launched, bool serverStopped,
+        PreparedHostedCampaign? prepared = null, RunRetirement? retirement = null)
     {
+        retirement ??= new RunRetirement(report, output);
         serverStopped &= !_serverMayRun;
         var failures = new List<Exception>();
         async Task Try(string step, Func<Task> action)
@@ -480,7 +477,9 @@ internal sealed class HostedServerRun
         }
         if (launched && _worldShipped && serverStopped)
             await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long)).ConfigureAwait(false);
-        if (_runtime != null) await Try("remove the server host's runtime copy, keeping what the run changed", () => RetireRuntimeAsync(report, output, launched, serverStopped, keepRuntime)).ConfigureAwait(false);
+        if (_runtime != null)
+            try { await retirement.HostAsync(Role.Host, Host, _runtime, RuntimeDirectory, launched, serverStopped).ConfigureAwait(false); }
+            catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         foreach (var account in _accounts)
         {
@@ -499,6 +498,16 @@ internal sealed class HostedServerRun
                 await account.Hold.ReleaseAsync().ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
+        // Every process is stopped (or named as possibly running), so the campaign's characters and prepared installs go, under the
+        // locks held here; a host whose lock this run never took (a client that never opened) is locked for its retire.
+        if (prepared != null)
+        {
+            var locked = _clientLocks.Select(held => held.Host).ToList();
+            if (_lock != null) locked.Add(Host.Name);
+            // A server that may still run kept its own copy above; the process check below only looks at the copies retired.
+            foreach (var failure in await retirement.CampaignAsync(prepared, locked).ConfigureAwait(false))
+            { failures.Add(failure); Console.Error.WriteLine("Teardown: " + failure.Message); }
+        }
         foreach (var (name, held) in _clientLocks) await Try($"release client host {name}'s lock", () =>
             _localMacProcesses.Any(item => item.Host == name && !item.Process.HasExited)
                 ? throw new HostLockException(new HostLockResult(HostLockState.Unknown, held.Owner,
@@ -509,78 +518,6 @@ internal sealed class HostedServerRun
                 : throw new HostLockException(new HostLockResult(HostLockState.Unknown, _lock.Owner,
                     $"Kept {_lock.Path} on {Host.Name}: the owned server there may still run. Remove {_lock.Path}/owner by hand once it has stopped."))).ConfigureAwait(false);
         return failures;
-    }
-
-    // As on this machine (PinnedServerRun.RetireRuntime): after a clean stop, keep what the run added or changed in the host's
-    // runtime copy (by its hashes against the listing made after copying) and remove the copy, which is about 2 GB of the
-    // host install's own files. A copy whose server may still run, or one kept on request, stays and the report says where.
-    // A cleanup problem is recorded and rethrown, so it fails the Cleanup step (the scenario's own result stands). Still
-    // under the server host's lock.
-    private async Task RetireRuntimeAsync(ScenarioReport report, string output, bool launched, bool serverStopped, bool keep)
-    {
-        string where = Host.Name + ":" + RuntimeDirectory;
-        if (keep) { RuntimeRetained = true; report.Provenance["runtimeCopy"] = $"kept {where}: kept on request ({PinnedServerRun.KeepRuntimeVariable}=1 or KeepRuntime)"; return; }
-        if (!serverStopped)
-        {
-            RuntimeRetained = true;
-            report.Provenance["runtimeCopy"] = $"kept {where}: the owned server there may still run; remove the directory once it has stopped";
-            Console.Error.WriteLine("Warning: " + report.Provenance["runtimeCopy"]);
-            return;
-        }
-        try
-        {
-            var before = _runtime!.Files;
-            var after = launched ? (await HostInstall.ListAsync(Host, RuntimeDirectory, Long).ConfigureAwait(false)).Files : before;
-            var added = after.Keys.Where(name => !before.ContainsKey(name)).Order(StringComparer.Ordinal).ToList();
-            var changed = after.Where(file => before.TryGetValue(file.Key, out var hash) && !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase))
-                .Select(file => file.Key).Order(StringComparer.Ordinal).ToList();
-            var missing = before.Keys.Where(name => !after.ContainsKey(name)).Order(StringComparer.Ordinal).ToList();
-            // The failure limits: the run's own result is not final yet (its log scan comes after this teardown, which first keeps
-            // the logs of any client still open), so keep as much as a failed run would.
-            var (perFile, total) = PinnedServerRun.RetainLimits(passed: false);
-            string keepDirectory = HostInstall.Join(_copyDirectory, "runtime-changes");
-            var result = (await Host.RunAsync(Host.Shell.Kind == HostShellKind.PowerShell ? HostedRunScripts.WindowsRetire : HostedRunScripts.Retire, new Dictionary<string, string>
-            {
-                ["runtime"] = RuntimeDirectory, ["keep"] = keepDirectory, ["run"] = _copyDirectoryName,
-                ["files"] = string.Join('\n', added.Concat(changed).Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name)))),
-                ["perfile"] = perFile.ToString(CultureInfo.InvariantCulture), ["total"] = total.ToString(CultureInfo.InvariantCulture),
-            }, Long).ConfigureAwait(false)).EnsureSuccess($"Removing the runtime copy {where}");
-            var done = InteractiveClient.Line(result.Stdout, "VT-RETIRED ")?.Split(' ');
-            if (done is not [var freed, var kept]) throw new HostOperationException($"Unexpected reply while removing the runtime copy {where}", result);
-            // "VT-NOTKEPT <base64 path> <bytes>", with -1 bytes for anything but a regular file inside the copy.
-            var notKept = new List<NotKeptFile>();
-            foreach (string line in result.Stdout.Split('\n'))
-            {
-                if (line.Split(' ') is not ["VT-NOTKEPT", var encoded, var size]) continue;
-                string name = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
-                long bytes = long.Parse(size, CultureInfo.InvariantCulture);
-                notKept.Add(bytes < 0 ? new(name, null, null, "not a regular file inside the copy")
-                    : new(name, bytes, after.GetValueOrDefault(name), $"past the size limits ({DiskSpace.Format(perFile)} per file, {DiskSpace.Format(total)} in all)"));
-            }
-            if (!launched)
-            {
-                // Nothing ran, so nothing changed: the (empty) keep folder goes too, leaving the copy's directory empty for its owner.
-                (await Host.RunAsync(Host.Shell.Kind == HostShellKind.PowerShell ? HostedRunScripts.WindowsDropKept : HostedRunScripts.DropKept,
-                    new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = _copyDirectoryName }, Quick).ConfigureAwait(false))
-                    .EnsureSuccess($"Removing {Host.Name}:{keepDirectory}");
-                report.Provenance["runtimeCopy"] = $"removed {where} ({DiskSpace.Format(long.Parse(freed, CultureInfo.InvariantCulture))}): nothing was launched";
-                return;
-            }
-            string local = Path.Combine(output, "runtime-changes");
-            await Host.FetchDirectoryAsync(keepDirectory, local, Long).ConfigureAwait(false);
-            // Fetched: the host's copy of the changes is not needed twice.
-            (await Host.RunAsync(Host.Shell.Kind == HostShellKind.PowerShell ? HostedRunScripts.WindowsDropKept : HostedRunScripts.DropKept,
-                new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = _copyDirectoryName }, Quick).ConfigureAwait(false))
-                .EnsureSuccess($"Removing {Host.Name}:{keepDirectory} after fetching it");
-            var retired = new RetiredCopy(where, local, added, changed, missing, notKept, long.Parse(kept, CultureInfo.InvariantCulture), long.Parse(freed, CultureInfo.InvariantCulture));
-            File.WriteAllText(Path.Combine(local, "changes.json"), JsonSerializer.Serialize(retired, new JsonSerializerOptions { WriteIndented = true }));
-            report.Provenance["runtimeCopy"] = retired.ToString();
-        }
-        catch (Exception error) when (error is HostOperationException or IOException or InvalidOperationException or FormatException or UnauthorizedAccessException)
-        {
-            report.Provenance["runtimeCopy"] = $"cleanup failed, {where} may remain: {error.Message}";
-            throw;
-        }
     }
 
     private static async Task ReleaseAsync(HostLock held)
