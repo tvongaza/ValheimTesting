@@ -438,6 +438,11 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(FileHash.Sha256(inventory), result.GetProperty("Provenance").GetProperty("inventorySha256").GetString());
         Assert.Equal(host.Claims.Count, host.Releases.Count);
         Assert.Empty(Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*")); // The prepared install was retired.
+        // One copy of the server install (#257): the campaign's prepared install is the runtime, verified in place, not copied again.
+        Assert.Single(host.Scripts, script => script == "copy");
+        Assert.Equal("Setup", steps["verify the prepared runtime on the server host"]);
+        Assert.DoesNotContain("copy and verify pinned runtime on the server host", steps.Keys);
+        Assert.Contains("vt-prep-", result.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
     }
 
     // A campaign that leaves out its inventory runs on this machine: its dedicated server is the one Steam installed, with
