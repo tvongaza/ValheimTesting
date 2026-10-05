@@ -93,7 +93,6 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     private readonly IReadOnlyList<(string Host, HostedCampaignCharacter Character)> _characters;
     private readonly Func<string, IGameHost>? _hostFactory;
     private readonly TimeSpan _timeout;
-    private bool _retired;
 
     internal PreparedHostedCampaign(HostedCampaignManifest manifest, ResolvedEnvironment profile, IReadOnlyDictionary<string, HostListing> listings,
         IReadOnlyDictionary<string, HostedRuntimeFile[]> selections,
@@ -183,44 +182,23 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         return selected;
     }
 
-    private readonly HashSet<string> _kept = new(StringComparer.Ordinal);
+    internal IReadOnlyList<(string Host, string Runtime, string Stage)> Copies => _copies;
+    internal IReadOnlyList<(string Host, HostedCampaignCharacter Character)> Characters => _characters;
+    internal IGameHost HostFor(string name) => _hostFactory?.Invoke(name) ?? _profile.CreateHost(name);
+    internal string LockOf(string name) => _profile.Hosts[name].Lock;
+    internal TimeSpan Timeout => _timeout;
+    /// <summary>Every character and prepared install is retired (<see cref="RunRetirement.CampaignAsync"/>).</summary>
+    internal bool Retired { get; set; }
 
     /// <summary>
-    /// Leaves <paramref name="runtime"/> (one of this campaign's prepared installs) and its staging in place at disposal: the
-    /// run that used it kept it, on request or because its server may still run, and said where.
+    /// Retires the disposable characters and prepared installs (<see cref="RunRetirement"/>), taking each host's lock for it.
+    /// A run retires them itself under the locks it holds; this is for a preparation no run used.
     /// </summary>
-    internal void Keep(string runtime) => _kept.Add(runtime);
-
     public async ValueTask DisposeAsync()
     {
-        if (_retired) return;
-        var failures = new List<Exception>();
-        foreach (var character in _characters.Reverse())
-        {
-            try
-            {
-                IGameHost host = _hostFactory?.Invoke(character.Host) ?? _profile.CreateHost(character.Host);
-                await using var claim = await host.AcquireLockAsync(_profile.Hosts[character.Host].Lock,
-                    "character-retire " + Guid.NewGuid().ToString("N"), _timeout).ConfigureAwait(false);
-                await HostedRuntimeStage.RequireStoppedAsync(host, _timeout).ConfigureAwait(false);
-                await HostedCharacterStage.RetireAsync(host, character.Character, _timeout).ConfigureAwait(false);
-            }
-            catch (Exception error) { failures.Add(new IOException($"Failed to retire the disposable character on {character.Host}", error)); }
-        }
-        foreach (var copy in _copies.Reverse().Where(copy => !_kept.Contains(copy.Runtime)))
-        {
-            try
-            {
-                IGameHost host = _hostFactory?.Invoke(copy.Host) ?? _profile.CreateHost(copy.Host);
-                await using var claim = await host.AcquireLockAsync(_profile.Hosts[copy.Host].Lock,
-                    "campaign-retire " + Guid.NewGuid().ToString("N"), _timeout).ConfigureAwait(false);
-                await HostedRuntimeStage.RequireStoppedAsync(host, _timeout, runtime: copy.Runtime, clientSession: false).ConfigureAwait(false);
-                await HostedRuntimeStage.RetireAsync(host, copy.Runtime, copy.Stage, _timeout).ConfigureAwait(false);
-            }
-            catch (Exception error) { failures.Add(new IOException($"Failed to retire the prepared {copy.Host} runtime {copy.Runtime}", error)); }
-        }
+        if (Retired) return;
+        var failures = await new RunRetirement(null, "").CampaignAsync(this, []).ConfigureAwait(false);
         if (failures.Count != 0) throw new AggregateException("Some prepared runtimes remain; inspect them before another run.", failures);
-        _retired = true;
     }
 }
 

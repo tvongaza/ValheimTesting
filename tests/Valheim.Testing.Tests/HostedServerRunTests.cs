@@ -896,12 +896,9 @@ public sealed partial class HostedServerRunTests : IDisposable
 
         // Kept on request: no retire script, and the report names the copy.
         Directory.Delete(Output, true); Directory.Delete(host.Local(RunDirectory), true);
-        var kept = Options(host, server); // the fake host launches through the server it was made with
-        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
-        {
-            Name = kept.Name, ReadPlan = kept.ReadPlan, SessionCapability = kept.SessionCapability, SessionTokenVariable = kept.SessionTokenVariable,
-            TestAccess = false, Scenario = kept.Scenario, HostSeams = kept.HostSeams, KeepRuntime = true,
-        }));
+        RunRetirement.KeepOverride.Value = true; // VALHEIM_TESTING_KEEP_RUNTIME=1, in this test's flow only
+        try { Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server))); }
+        finally { RunRetirement.KeepOverride.Value = null; }
         Assert.True(Directory.Exists(host.Local(RunDirectory + "/runtime")));
         Assert.Contains("kept on request", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
     }
@@ -1121,6 +1118,10 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Releases);
         Assert.Contains("may still run", Step("release the server host's lock").GetProperty("Error").GetString());
         Assert.True(Assert.Single(host.Tunnels).Stopped);
+        // ...and the copy it may run from stays, named, never removed (#257).
+        Assert.True(Directory.Exists(host.Local(RunDirectory + "/runtime")));
+        Assert.DoesNotContain("retire", host.Scripts);
+        Assert.Contains("may still run", result.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
     }
 
     [Fact] public async Task AnUnprovenStopIsAnUnknownOutcomeAndKeepsTheLock()

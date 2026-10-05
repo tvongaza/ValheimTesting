@@ -14,6 +14,11 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [InlineData("/owned/valheim_server.x86_64", "/owned", false, "VT-GAME busy")]
     [InlineData("/tmp/Valheim.app/Contents/MacOS/Valheim", "", true, "VT-GAME busy")]
     [InlineData("ordinary-helper", "/owned", true, "VT-GAME idle")]
+    // One check for every copy on a host (#257): a game running from any of them is busy, from none of them idle.
+    [InlineData("/second/valheim_server.x86_64", "/first\n/second", false, "VT-GAME busy")]
+    [InlineData("/first/valheim.x86_64", "/first\n/second", false, "VT-GAME busy")]
+    [InlineData("/second2/valheim_server.x86_64", "/first\n/second", false, "VT-GAME idle")]
+    [InlineData("valheim_server", "/first\n/second", false, "VT-GAME unknown")]
     public async Task BashProcessCheckRefusesConflictingUse(string process, string runtime, bool clientSession, string expected)
     {
         if (OperatingSystem.IsWindows()) return;
@@ -75,8 +80,30 @@ public sealed class HostedRuntimeStageTests : IDisposable
         if (!OperatingSystem.IsWindows()) return;
         if (System.Diagnostics.Process.GetProcessesByName("valheim").Length + System.Diagnostics.Process.GetProcessesByName("valheim_server").Length != 0) return; // a station with a game up
         var host = new LocalGameHost("windows-process", HostShell.WindowsPowerShell);
-        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtime: Path.Combine(_root, "runtime"), clientSession: true);
-        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtime: "", clientSession: false);
+        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [Path.Combine(_root, "runtime")], clientSession: true);
+        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [Path.Combine(_root, "a"), Path.Combine(_root, "b c")], clientSession: false);
+        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, clientSession: false);
+    }
+
+    // One check covers every copy on a host (#257): a "server" running from the second of two runtimes is busy, and from none
+    // of the named ones it is not. The stand-in is ping.exe copied under the server's name, so Win32_Process reports its path.
+    [Fact] public async Task WindowsProcessCheckFindsAGameRunningFromAnyOfTheNamedRuntimes()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        if (Process.GetProcessesByName("valheim").Length + Process.GetProcessesByName("valheim_server").Length != 0) return; // a station with a game up
+        string first = Path.Combine(_root, "a"), second = Path.Combine(_root, "b c");
+        Directory.CreateDirectory(first); Directory.CreateDirectory(second);
+        string standIn = Path.Combine(second, "valheim_server.exe");
+        File.Copy(Path.Combine(Environment.SystemDirectory, "ping.exe"), standIn);
+        var host = new LocalGameHost("windows-process", HostShell.WindowsPowerShell);
+        using var running = Process.Start(new ProcessStartInfo(standIn, "-n 120 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true })!;
+        try
+        {
+            Assert.Contains("owned-runtime process", (await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [first, second], clientSession: false))).Message);
+            await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [first], clientSession: false);
+        }
+        finally { running.Kill(); running.WaitForExit(10_000); }
     }
 
     // Executes the actual bash copy, shipment, listing and apply scripts on macOS. A fake host cannot catch BSD-tool

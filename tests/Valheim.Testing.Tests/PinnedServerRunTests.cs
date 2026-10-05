@@ -232,12 +232,9 @@ public sealed class PinnedServerRunTests : IDisposable
     {
         if (OperatingSystem.IsMacOS()) return;
         string plan = WritePlan(linux: HostRunsLinux);
-        var options = Options(server: new FakeOwnedServer("test.mod"));
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
-        {
-            Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
-            TestAccess = false, Scenario = options.Scenario, SessionOverride = options.SessionOverride, KeepRuntime = true,
-        }));
+        RunRetirement.KeepOverride.Value = true; // VALHEIM_TESTING_KEEP_RUNTIME=1, in this test's flow only
+        try { Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: new FakeOwnedServer("test.mod")))); }
+        finally { RunRetirement.KeepOverride.Value = null; }
         var kept = Result();
         Assert.True(Directory.Exists(Copy(kept, "runtime"))); Assert.Contains("kept on request", Copy(kept, "runtimeCopy"));
         Assert.False(Directory.Exists(Path.Combine(Output, "runtime-changes")));

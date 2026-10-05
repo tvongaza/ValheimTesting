@@ -19,12 +19,15 @@ public static class HostedRuntimeStage
     private static readonly StringComparer HostNames = StringComparer.OrdinalIgnoreCase;
     private static readonly Regex SafePath = new(@"^[A-Za-z0-9_. -]+(?:/[A-Za-z0-9_. -]+)*$", RegexOptions.CultureInvariant);
 
-    /// <summary>Refuse conflicting client use or a process executing from the owned runtime; unrelated servers may stay up.</summary>
+    /// <summary>
+    /// Refuse conflicting client use or a process executing from any of the owned <paramref name="runtimes"/>; unrelated
+    /// servers may stay up. One check covers every runtime on the host.
+    /// </summary>
     internal static async Task RequireStoppedAsync(IGameHost host, TimeSpan timeout, CancellationToken cancellation = default,
-        string runtime = "", bool clientSession = true)
+        IReadOnlyCollection<string>? runtimes = null, bool clientSession = true)
     {
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsProcessCheck : BashProcessCheck,
-            new Dictionary<string, string> { ["runtime"] = runtime, ["clientSession"] = clientSession ? "true" : "false" },
+            new Dictionary<string, string> { ["runtime"] = string.Join('\n', runtimes ?? []), ["clientSession"] = clientSession ? "true" : "false" },
             timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Checking conflicting game processes on {host.Name}");
         string state = InteractiveClient.Line(result.Stdout, "VT-GAME ") ??
             throw new HostOperationException($"No game-process verdict from {host.Name}", result);
@@ -34,24 +37,27 @@ public static class HostedRuntimeStage
 
     internal static readonly string WindowsProcessCheck = """
         $busy = $false
+        $roots = @($runtime -split "`n" | Where-Object { $_ })
         foreach ($p in @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.Name -in @('Valheim.exe', 'valheim_server.exe') })) {
             if ($clientSession -eq 'true' -and $p.Name -eq 'Valheim.exe') { $busy = $true }
-            if ($runtime) {
-                if (-not $p.ExecutablePath) { throw 'Cannot establish the running game executable path' }
-                if ($p.ExecutablePath.StartsWith($runtime.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { $busy = $true }
+            if ($roots.Count -ne 0 -and -not $p.ExecutablePath) { throw 'Cannot establish the running game executable path' }
+            foreach ($root in $roots) {
+                if ($p.ExecutablePath.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { $busy = $true }
             }
         }
         if ($busy) { 'VT-GAME busy' } else { 'VT-GAME idle' }
         """;
-    // ps errors remain errors. A dedicated server elsewhere does not use the client's character files.
+    // ps errors remain errors. A dedicated server elsewhere does not use the client's character files. The runtimes are one
+    // per line; awk takes them as one value, so the lines are joined with a byte no path holds (\034) and split again.
     internal static readonly string BashProcessCheck = """
         processes=$(ps -axo comm=) || exit 4
-        if printf '%s\n' "$processes" | awk -v root="$runtime" -v client="$clientSession" '
+        roots=$(printf '%s' "$runtime" | tr '\n' '\034')
+        if printf '%s\n' "$processes" | awk -v roots="$roots" -v client="$clientSession" '
+          BEGIN { n=split(roots, root, "\034") }
           { path=$0; sub(/^[[:space:]]+/, "", path); name=path; sub(/^.*\//, "", name);
             game=(name=="Valheim" || name=="valheim.x86_64" || index(name,"valheim_server")==1);
             if (client=="true" && (name=="Valheim" || name=="valheim.x86_64")) busy=1;
-            if (game && root!="" && index(path,root "/")==1) busy=1;
-            if (game && root!="" && index(path,"/")!=1) unknown=1 }
+            for (i=1; i<=n; i++) if (game && root[i]!="") { if (index(path,root[i] "/")==1) busy=1; if (index(path,"/")!=1) unknown=1 } }
           END { if (unknown) print "VT-GAME unknown"; else if (busy) print "VT-GAME busy"; else print "VT-GAME idle" }'; then :; else exit 4; fi
         """;
 

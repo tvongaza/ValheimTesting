@@ -1697,7 +1697,6 @@ sealed class Valheim.Testing.Game.PinnedServerRunOptions`1
   method System.Void .ctor()
   property System.Action`2<System.String,TPlan> CheckMode { get; init; }
   property System.Action`2<TPlan,System.Collections.Generic.IDictionary`2<System.String,System.String>> Provenance { get; init; }
-  property System.Boolean KeepRuntime { get; init; }
   property System.Boolean TestAccess { get; init; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> PrepareModes { get; init; }
   property System.Func`2<System.String,TPlan> ReadPlan { get; init; }

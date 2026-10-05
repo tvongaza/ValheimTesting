@@ -33,13 +33,6 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// <summary>The scenario for a launching mode, given the started, strictly pinned server.</summary>
     public required Func<PinnedServerRunContext<TPlan>, Task> Scenario { get; init; }
     /// <summary>
-    /// Keeps the whole runtime copy after the run, for hands-on debugging in it. By default a run that stopped its server
-    /// keeps only what the run added or changed in the copy (<c>runtime-changes/</c>, see <see cref="WorldFixture.Retire"/>)
-    /// and removes the rest, which is the pinned runtime's own files. Setting the environment variable
-    /// <see cref="PinnedServerRun.KeepRuntimeVariable"/> to <c>1</c> does the same for any runner.
-    /// </summary>
-    public bool KeepRuntime { get; init; }
-    /// <summary>
     /// A runtime copy the runner already made and staged (<see cref="WorldFixture.Copy"/>, then its plugins), to run in place
     /// of a second copy of it: the plan's runtime source must be this copy. The run verifies it against the plan's hashes,
     /// runs the server from it and retires it at the end like its own copy, comparing against the staged state, so a run
@@ -189,53 +182,18 @@ public static class PinnedServerRun
     /// <summary>The option that names the private environment inventory the dedicated server is placed from; it comes before the mode.</summary>
     public const string InventoryOption = "--inventory";
 
-    /// <summary>Set to <c>1</c> to keep a run's whole runtime copy (<see cref="PinnedServerRunOptions{TPlan}.KeepRuntime"/>).</summary>
+    /// <summary>
+    /// Set to <c>1</c> to keep every actor's whole runtime copy after the run, for hands-on debugging in it, with any runner.
+    /// By default a run that stopped its server keeps only what the run added or changed in the copy (<c>runtime-changes/</c>,
+    /// see <see cref="WorldFixture.Retire"/>) and removes the rest, which is the pinned runtime's own files.
+    /// </summary>
     public const string KeepRuntimeVariable = "VALHEIM_TESTING_KEEP_RUNTIME";
-    internal static bool KeepRequested(bool option) => option || Environment.GetEnvironmentVariable(KeepRuntimeVariable) == "1";
 
     /// <summary>
     /// How much of what a run wrote in its runtime copy is kept (per file, in all): 64 MB and 256 MB after a pass, and 1 GB
     /// and 2 GB after a failure, where a large file the run wrote (a mod's cache, a dump) may be the evidence.
     /// </summary>
     internal static (long PerFile, long Total) RetainLimits(bool passed) => passed ? (64L << 20, 256L << 20) : (1L << 30, 2L << 30);
-
-    // The runtime copy is the pinned runtime plus what the run wrote in it. After a clean stop, keep what the run wrote and
-    // remove the rest; a copy whose server may still run, or one kept on request, stays, and the report says where and how big.
-    // validate launches nothing, so its copy holds nothing of the run's and goes without a comparison.
-    private static void RetireRuntime(ScenarioReport report, WorldFixture runtime, string output, bool stopped, bool keepRequested, bool launchedNothing)
-    {
-        string Kept(string why)
-        {
-            string line = $"kept {runtime.DirectoryPath} ({DiskSpace.Format(DiskSpace.DirectoryBytes(runtime.DirectoryPath))}): {why}";
-            report.Provenance["runtimeCopy"] = line;
-            return line;
-        }
-        if (KeepRequested(keepRequested)) { Kept($"kept on request ({KeepRuntimeVariable}=1 or KeepRuntime)"); return; }
-        if (!stopped)
-        {
-            Console.Error.WriteLine("Warning: " + Kept("the owned server did not stop cleanly and may still use it; once no process does, remove it with " +
-                $"OwnedCopies.Remove or: valheim-test copies \"{output}\" --remove \"{runtime.DirectoryPath}\""));
-            return;
-        }
-        try
-        {
-            if (launchedNothing)
-            {
-                long bytes = DiskSpace.DirectoryBytes(runtime.DirectoryPath);
-                runtime.Preserve = false; runtime.Dispose();
-                report.Provenance["runtimeCopy"] = $"removed {runtime.DirectoryPath} ({DiskSpace.Format(bytes)}): nothing was launched";
-                return;
-            }
-            var (perFile, total) = RetainLimits(report.Passed);
-            report.Provenance["runtimeCopy"] = runtime.Retire(Path.Combine(output, "runtime-changes"), perFile, total).ToString();
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            // A cleanup problem fails the Cleanup step; the scenario's own result (ScenarioPassed) stands.
-            report.Provenance["runtimeCopy"] = "cleanup failed: " + error.Message;
-            throw;
-        }
-    }
 
     public static async Task<int> MainAsync<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
     {
@@ -480,24 +438,20 @@ public static class PinnedServerRun
                     }
                     catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); definite = true; } // Recorded as its failed step.
             }
+            // One owner retires what the run leaves (#257): a hosted run's teardown retires its copy and the campaign's characters
+            // and installs under the locks it holds; a campaign whose server run was never created is retired here.
+            var retirement = new RunRetirement(report, output);
             if (hosted != null)
-                foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped, KeepRequested(options.KeepRuntime)).ConfigureAwait(false)) Classify(failure);
-            // After every process the run started has stopped: the campaign's disposable installs and characters go, except the
-            // server's when the run kept it (it is the one copy the server ran from).
-            if (prepared != null && hosted is { Prepared: true, RuntimeRetained: true }) prepared.Keep(hosted.RuntimeDirectory);
-            if (prepared != null)
-                try
-                {
-                    await report.StepAsync(StepPhase.Cleanup, "retire the campaign's prepared installs and characters",
-                        () => prepared.DisposeAsync().AsTask()).ConfigureAwait(false);
-                }
-                catch (Exception error) { Console.Error.WriteLine("Prepared copies retained; inspect the hosts before another run: " + error.Message); Classify(error); }
+                foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped, prepared, retirement).ConfigureAwait(false)) Classify(failure);
+            else if (prepared != null)
+                foreach (var failure in await retirement.CampaignAsync(prepared, []).ConfigureAwait(false))
+                { Console.Error.WriteLine("Teardown: " + failure.Message); Classify(failure); }
             // After the stop, which keeps each boot's logs; a client's were kept when the scenario closed it. Logs missing after
             // an unknown outcome are explained by it, so the scan then decides nothing on its own.
             if (launched != null && launched.Logs.Count != 0 && !report.ScanLogs(launched.Logs, launched.Plan.LogScan) && unknown == null) definite = true;
             // A copy that could not be removed is a definite (local) failure, so it comes before the outcome is decided.
             if (runtime != null)
-                try { report.Step(StepPhase.Cleanup, "remove the runtime copy, keeping what the run changed", () => RetireRuntime(report, runtime, output, stopped, options.KeepRuntime, launchedNothing: session == null)); }
+                try { retirement.Local(runtime, stopped, launchedNothing: session == null); }
                 catch (Exception error) { Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message); definite = true; } // Recorded as its failed step.
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
