@@ -37,6 +37,8 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>Another run's claimant holding the lock.</summary>
     public string? HeldBy { get; set; }
     public Dictionary<string, HostResult> Failures { get; } = [];
+    /// <summary>What the preloader-log check replies (HostedClientScripts.Preloader): none by default.</summary>
+    public string PreloaderReply { get; set; } = "VT-PRELOADER-END\n";
     /// <summary>Scripts that hang until cancelled.</summary>
     public HashSet<string> Hang { get; } = [];
     /// <summary>Runs when a script starts, by its name.</summary>
@@ -132,6 +134,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostServerScripts.WindowsStop) ? "stop" :
         ReferenceEquals(script, InteractiveScripts.LinuxStart) ? "client-start" :
         ReferenceEquals(script, HostedClientScripts.BashKeep) ? "client-keep" :
+        ReferenceEquals(script, HostedClientScripts.BashPreloader) ? "preloader" :
+        ReferenceEquals(script, HostedClientScripts.PowerShellPreloader) ? "preloader" :
         ReferenceEquals(script, HostedClientScripts.BashMoveAside) ? "move-aside" :
         ReferenceEquals(script, HostClientPreflight.BashRead) ? "preflight-read" :
         ReferenceEquals(script, HostClientPreflight.PowerShellRead) ? "preflight-read" :
@@ -435,6 +439,7 @@ internal sealed class FakeServerHost : IGameHost
                 if (!v["keep"].Replace('\\', '/').EndsWith("/" + v["run"] + "/runtime-changes", StringComparison.Ordinal)) return new HostResult(HostOutcome.Exited, 3, "", "", TimeSpan.Zero, false);
                 if (Directory.Exists(Local(v["keep"]))) Directory.Delete(Local(v["keep"]), recursive: true);
                 return Ok("VT-DROPPED\n");
+            case "preloader": return Ok(PreloaderReply);
             case "client-keep":
             {
                 string dir = Local(v["dir"]);
@@ -1588,8 +1593,43 @@ public sealed partial class HostedServerRunTests : IDisposable
         }, clientHost, new ScriptedTransport())));
         Assert.Contains("BepInEx wrote no fresh log line", failure?.ToString());
         Assert.Contains("within 30s", failure?.ToString());
+        Assert.Contains("check winhttp.dll, doorstop_config.ini and BepInEx/core", failure?.ToString()); // no preloader log: the guess stays
         Assert.Single(clientHost.Stops);
         Assert.DoesNotContain(clientHost.Runs, run => run.Script == "follow" && run.Variables["offset"] != "0");
+    }
+
+    // #254: a preloader crash log the launch wrote explains the missing BepInEx log; an older one is named as not this launch's.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task APreloaderCrashLogExplainsAClientThatNeverLoggedAndAnOlderOneIsNamedAsStale(bool fresh)
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { ClientWritesBepInExLog = false };
+        string clientInstall = clientHost.Local("/home/tester/valheim");
+        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
+        FakeInstalls.Client(clientInstall);
+        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        FakeInstalls.LinuxLoader(clientInstall);
+        static string B(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+        clientHost.PreloaderReply = (fresh ? $"VT-PRELOADER fresh {B("preloader_20261005_190000.log")} {B("[Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core")}\n" : "") +
+            $"VT-PRELOADER stale {B("preloader_20260101_000000.log")} -\nVT-PRELOADER-END\n";
+        var (plan, profile) = Write(host, withClient: true);
+        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
+        Exception? failure = null;
+        await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
+        {
+            failure = Record.Exception(() => run.OpenClient(client));
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport()));
+        string message = failure?.ToString() ?? "";
+        Assert.Contains("Older preloader logs beside the game (preloader_20260101_000000.log) predate this launch and are not its.", message);
+        if (fresh)
+        {
+            Assert.Contains("BepInEx's preloader failed: [Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core (from preloader_20261005_190000.log", message);
+            Assert.DoesNotContain("check winhttp.dll", message);
+        }
+        else Assert.Contains("check winhttp.dll, doorstop_config.ini and BepInEx/core", message);
     }
 
     [Fact] public async Task AnArm64ProfileClientIsRefusedBeforeItsHostIsLockedOrAnythingStarts()
