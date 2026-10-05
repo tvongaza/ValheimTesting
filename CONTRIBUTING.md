@@ -33,7 +33,11 @@ dotnet run scripts/validate.cs
 # For a public API or documentation change, build the candidate reference too:
 dotnet tool restore
 dotnet run scripts/api-docs.cs
+# A public API change also rewrites the committed lists in docs/reference/public-api:
+dotnet run scripts/api-docs.cs -- surface
 ```
+
+A pull request that changes `docs/reference/public-api/` says why in its description, on a line starting `public-api:` (for example `public-api: ZoneCycleResult.Seconds is read by the FullLifecycle example`). CI regenerates the lists from the builds, refuses lists that differ, and refuses a change to them without that line.
 
 Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game example (SharedWorld) and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout. The same lines work in any shell on Windows, macOS and Linux.
 

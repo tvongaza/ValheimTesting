@@ -8,7 +8,7 @@ namespace Valheim.Testing.Game;
 /// <see cref="Backend"/> is the game's online backend: <c>PlayFab</c> on a crossplay server, <c>Steamworks</c> otherwise.
 /// A value ValheimCLI could not read is <c>unavailable</c> (with the exception type in brackets).
 /// </summary>
-public sealed record MultiplayerIdentity(string SteamId, string PlayFabLoginState, string PlayFabId, string Backend, string GameState,
+internal sealed record MultiplayerIdentity(string SteamId, string PlayFabLoginState, string PlayFabId, string Backend, string GameState,
     string ConnectionStatus, bool IsServer, bool IsOpenServer, string Server)
 {
     private static readonly string[] Keys = ["steamId", "playFabLoginState", "playFabId", "backend", "gameState", "connectionStatus", "isServer", "isOpenServer", "server"];

@@ -44,7 +44,8 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
    ```
 
    For a public API or reference change, also run `dotnet tool restore` and `dotnet run scripts/api-docs.cs`, which
-   checks the rendered pages for machine-local paths.
+   checks the rendered pages for machine-local paths, and `dotnet run scripts/api-docs.cs -- surface`, then commit the
+   changed `docs/reference/public-api/*.txt` and say why on a line starting `public-api:` in the PR description.
 
    The same commands work in any shell on any OS (a blocked sandbox: see [AGENTS.md](../AGENTS.md)). This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
 4. If the task is satisfied by local tests, stop there. Otherwise prepare a bounded native test plan with explicit independent expectations and a negative control where useful. Do not invent a whole new runner for a check an example already performs.
