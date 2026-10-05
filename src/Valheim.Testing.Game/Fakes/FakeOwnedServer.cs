@@ -103,7 +103,7 @@ public sealed class FakeOwnedServer
                 server.PinGate?.Wait(TimeSpan.FromSeconds(30));
                 return new() { Ok = !server.RefusePins, Output = [server.RefusePins ? "ERROR: pins" : "OK: EXPECT"] };
             }
-            // Test access (PinnedServerRunOptions.TestAccess), as ValheimCLI's cli_access and the game's commands answer it.
+            // Test access (OwnedServerSession.EnsureTestAccess, which PinnedServerRun sets for every owned server), as ValheimCLI's cli_access and the game's commands answer it.
             if (command == "cli_access")
                 return new() { Ok = true, Output = ["ACCESS " + JsonSerializer.Serialize(new
                 {

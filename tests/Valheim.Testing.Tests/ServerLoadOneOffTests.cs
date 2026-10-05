@@ -53,7 +53,6 @@ public sealed class ServerLoadOneOffTests : IDisposable
                 {
                     campaignFile = file; plan = runPlan; clients = bind(runPlan);
                     Assert.Equal(Path.Combine(output, "evidence"), evidence);
-                    Assert.False(options.TestAccess);
                     return Task.FromResult(0);
                 }));
         Assert.Equal(0, result);

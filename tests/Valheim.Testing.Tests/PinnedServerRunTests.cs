@@ -44,12 +44,12 @@ public sealed class PinnedServerRunTests : IDisposable
         return path;
     }
     private static PinnedServerRunOptions<ServerRunPlan> Options(Func<PinnedServerRunContext<ServerRunPlan>, Task>? scenario = null,
-        FakeOwnedServer? server = null, Action<string, ServerRunPlan>? checkMode = null, bool testAccess = false) => new()
+        FakeOwnedServer? server = null, Action<string, ServerRunPlan>? checkMode = null) => new()
     {
         Name = "toolkit-smoke",
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-        PrepareModes = ["prepare-fixture"], CheckMode = checkMode, TestAccess = testAccess,
+        PrepareModes = ["prepare-fixture"], CheckMode = checkMode,
         Scenario = scenario ?? (_ => Task.CompletedTask),
         SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60)),
     };
@@ -64,7 +64,7 @@ public sealed class PinnedServerRunTests : IDisposable
             plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); plan.Client?.Validate();
             return plan;
         },
-        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
+        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
         Scenario = _ => Task.CompletedTask,
         SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60)),
     };
@@ -118,7 +118,7 @@ public sealed class PinnedServerRunTests : IDisposable
         string plan = WritePlan(linux: HostRunsLinux);
         var server = new FakeOwnedServer("test.mod");
         TestAccessState? afterRestart = null;
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: server, testAccess: true, scenario: run =>
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: server, scenario: run =>
         {
             afterRestart = TestAccess.Read(run.Session.Restart());
             return Task.CompletedTask;
@@ -128,7 +128,7 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.True(afterRestart is { Devcommands: true, CheatsAcknowledged: true });
         Directory.Delete(Output, true);
         var stubborn = new FakeOwnedServer("test.mod") { IgnoreConfirmCheats = true };
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: stubborn, testAccess: true)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: stubborn)));
         var start = Result().GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "start and verify owned dedicated fixture");
         Assert.False(start.GetProperty("Passed").GetBoolean());
         Assert.Contains("The owned server started, but its test access was not established", start.GetProperty("Error").GetString());
@@ -267,7 +267,7 @@ public sealed class PinnedServerRunTests : IDisposable
     private static PinnedServerRunOptions<ServerRunPlan> WithStaged(PinnedServerRunOptions<ServerRunPlan> options, WorldFixture staged) => new()
     {
         Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
-        TestAccess = false, Scenario = options.Scenario, SessionOverride = options.SessionOverride, StagedRuntime = staged,
+        Scenario = options.Scenario, SessionOverride = options.SessionOverride, StagedRuntime = staged,
     };
     [Fact] public async Task AStagedRuntimeIsRunInPlaceAndRetiredAgainstItsStagedState()
     {
@@ -442,7 +442,7 @@ public sealed class KeepRuntimeVariableTests : IDisposable
         }));
         var options = new PinnedServerRunOptions<ServerRunPlan>
         {
-            Name = "toolkit-smoke", SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
+            Name = "toolkit-smoke", SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
             ReadPlan = path => { var read = ServerRunPlan.Read<ServerRunPlan>(path); read.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return read; },
             Scenario = _ => Task.CompletedTask,
         };

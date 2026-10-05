@@ -24,12 +24,6 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public Action<string, TPlan>? CheckMode { get; init; }
     /// <summary>Adds the mod's provenance (scenario details) to the report.</summary>
     public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
-    /// <summary>
-    /// Establishes test access on the owned disposable server, on its first boot and every restart (<see cref="OwnedServerSession.EnsureTestAccess"/>, <see cref="Game.TestAccess.Ensure"/>):
-    /// devcommands, then the cheat acknowledgement (<c>confirmcheats</c>), each verified through ValheimCLI's
-    /// <c>cli_access</c>. False only for a run that issues no test commands (a load smoke).
-    /// </summary>
-    public bool TestAccess { get; init; } = true;
     /// <summary>The scenario for a launching mode, given the started, strictly pinned server.</summary>
     public required Func<PinnedServerRunContext<TPlan>, Task> Scenario { get; init; }
     /// <summary>
@@ -495,7 +489,7 @@ public static class PinnedServerRun
             launched = context;
             session = context.Session = options.SessionOverride?.Invoke(context) ?? hosted?.Session(context, options) ?? OwnedSession(context, options);
             // The session owns test access on every boot it starts, so a scenario's restart comes back with it too.
-            session.EnsureTestAccess |= options.TestAccess;
+            session.EnsureTestAccess = true;
             report.Step(StepPhase.Setup, "start and verify owned dedicated fixture", () => context.Server = session.Start());
             phase = StepPhase.Scenario;
             await options.Scenario(context).ConfigureAwait(false);

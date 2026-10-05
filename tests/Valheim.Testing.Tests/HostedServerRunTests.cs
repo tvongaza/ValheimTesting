@@ -851,7 +851,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         Name = name,
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
-        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
+        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
         Scenario = scenario ?? (_ => Task.CompletedTask),
         HostSeams = new HostedSeams
         {
@@ -911,7 +911,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
         {
             Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
-            TestAccess = false, Scenario = options.Scenario, HostSeams = options.HostSeams, StagedRuntime = staged,
+            Scenario = options.Scenario, HostSeams = options.HostSeams, StagedRuntime = staged,
         }));
         Assert.DoesNotContain(host.Runs, run => run.Script == "copy");
     }
@@ -927,6 +927,9 @@ public sealed partial class HostedServerRunTests : IDisposable
             return Task.CompletedTask;
         }));
         Assert.Equal(0, code);
+        // Every owned server boot gets its test access, the restart's included; no runner option turns it off (#257 Q5).
+        Assert.Equal(["devcommands", "confirmcheats", "devcommands", "confirmcheats"],
+            server.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")).Select(e => e.TrimEnd("0123456789".ToCharArray())));
         Assert.Same(host, seenHost); Assert.Equal(RunDirectory + "/runtime", seenRuntime);
         Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
                 "copied runtime has the plan's server executable", "copied runtime is the pinned game build, loader and patchers",

@@ -410,7 +410,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var options = new PinnedServerRunOptions<SitePlan>
         {
             Name = "campaign-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
-            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
+            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
             Scenario = run => { scenarioRan = true; Assert.NotNull(run.ServerHost); return Task.CompletedTask; },
             HostSeams = new HostedSeams { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
         };
@@ -537,7 +537,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var options = new PinnedServerRunOptions<SitePlan>
         {
             Name = "this-machine-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
-            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
+            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
             Scenario = _ => Task.CompletedTask,
             HostSeams = new HostedSeams { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
         };

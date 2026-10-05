@@ -363,7 +363,6 @@ internal static class ServerLoad
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),
                     SessionCapability = NativeServerRuntime.SessionCapability,
                     SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
-                    TestAccess = false,
                     Provenance = (_, record) =>
                     {
                         if (serverLoader != null) record["serverLoaderPackage"] = BepInExLoaderPackage.Read(serverLoader).Identity;
@@ -509,7 +508,6 @@ internal static class ServerLoad
                     SessionCapability = NativeServerRuntime.SessionCapability,
                     StagedRuntime = runtime.Copy, // the run uses the staged copy itself: one server copy, not two
                     SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
-                    TestAccess = false,
                     Provenance = (_, record) =>
                     {
                         record["path"] = "staged local copies (macOS)";
