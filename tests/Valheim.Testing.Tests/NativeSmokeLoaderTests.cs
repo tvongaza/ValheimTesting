@@ -120,16 +120,17 @@ public sealed class NativeSmokeLoaderTests : IDisposable
             RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
         string output = Path.Combine(_rig.Root, "offline-run");
         var launched = new List<string[]>();
+        // The staged (macOS) path; the campaign route's equivalent is ServerLoadOneOffTests.
         int result = await ServerLoad.RunAsync(
-            ["--server", _rig.Game, "--mod", _rig.Parent, "--loader-package", manifest,
+            ["--server", _rig.Game, "--mod", _rig.Parent, "--loader-package", manifest, "--server-only",
                 "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
                 "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", adapter, "--output", output],
-            (arguments, options) =>
+            new ServerLoad.Seams(MacOS: true, Staged: (arguments, options) =>
             {
                 launched.Add(arguments);
                 Assert.True(File.Exists(arguments[1]), "The plan is written before the launch.");
                 return Task.FromResult(0);
-            });
+            }));
         Assert.Equal(0, result);
         Assert.Single(launched);
         Assert.Equal(Path.Combine(output, "plan.json"), launched[0][1]);

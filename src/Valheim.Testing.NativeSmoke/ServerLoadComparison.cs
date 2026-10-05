@@ -11,38 +11,41 @@ internal static class ServerLoadComparison
         Console.CancelKeyPress += onCancel;
         try
         {
-            if (args.Length % 2 != 0) throw new ArgumentException("Every option needs one value.");
-            var pairs = Enumerable.Range(0, args.Length / 2)
-                .Select(index => (Key: args[index * 2], Value: args[index * 2 + 1])).ToList();
-            var plain = pairs.Where(pair => pair.Key != "--remove-mod")
-                .SelectMany(pair => new[] { pair.Key, pair.Value }).ToArray();
-            if (!ServerLoad.TryRead(plain, out var options, out _, out _, out _, out _, out _, out _, out string error))
-                throw new ArgumentException(error);
-            string One(string key) => pairs.Where(pair => pair.Key == key).Select(pair => pair.Value)
-                .SingleOrDefault() ?? throw new ArgumentException("Specify exactly one " + key + ".");
-            string output = Path.GetFullPath(One("--output"));
+            // Arguments as server-load reads them, without --remove-mod: one value per option, or a switch.
+            int removeAt = Array.IndexOf(args, "--remove-mod");
+            if (removeAt < 0 || removeAt + 1 >= args.Length || Array.IndexOf(args, "--remove-mod", removeAt + 1) >= 0)
+                throw new ArgumentException("Specify exactly one --remove-mod.");
+            var rest = args.Take(removeAt).Concat(args.Skip(removeAt + 2)).ToArray();
+            if (!ServerLoad.TryRead(rest, out var parsed, out string error)) throw new ArgumentException(error);
+            if (parsed!.Switches.Contains("--preflight-only")) throw new ArgumentException("--preflight-only runs no arm; preflight each arm with server-load instead.");
+            var options = parsed!.Options;
+            if (!options.TryGetValue("--output", out string? outputOption)) throw new ArgumentException("Specify --output for the comparison's two arms.");
+            string output = Path.GetFullPath(outputOption);
             if (Path.Exists(output)) throw new IOException("--output must be new; comparison evidence will not be overwritten: " + output);
-            string removed = Path.GetFullPath(One("--remove-mod"));
+            string removed = Path.GetFullPath(args[removeAt + 1]);
             var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            var mods = pairs.Where(pair => pair.Key == "--mod").Select(pair => Path.GetFullPath(pair.Value)).ToList();
+            var mods = parsed.Mods.Select(Path.GetFullPath).ToList();
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
                 throw new ArgumentException("--remove-mod must name exactly one of at least two selected --mod DLLs.");
-            string server = Path.GetFullPath(One("--server"));
-            var serverLoader = options!.TryGetValue("--loader-package", out string? loaderFile)
+            // The server install both arms resolve against: given, or the inventory's server environment on this machine.
+            string server = options.TryGetValue("--server", out string? serverOption) ? Path.GetFullPath(serverOption)
+                : ServerLoad.Choose(parsed, Path.Combine(output, "choice")).Server.Install;
+            var serverLoader = options.TryGetValue("--loader-package", out string? loaderFile)
                 ? BepInExLoaderPackage.Read(loaderFile) : null;
             var clientLoader = options.TryGetValue("--client-loader-package", out string? clientLoaderFile)
                 ? BepInExLoaderPackage.Read(clientLoaderFile) : null;
-            var (cliManifest, cliFiles) = SmokeInputs.Cli(options!, server);
-            string? steamUserdata = options!.ContainsKey("--client") ? SmokeInputs.SteamUserdata(options) : null;
-            string[] protectedRoots = (options.TryGetValue("--client", out string? client)
-                ? new[] { server, cliFiles, Path.GetFullPath(client), steamUserdata! }
-                : [server, cliFiles]).Concat(new[] { serverLoader?.Root, clientLoader?.Root }.OfType<string>()).ToArray();
+            var (cliManifest, cliFiles) = SmokeInputs.Cli(options, server);
+            string[] protectedRoots = new[] { server, cliFiles, options.TryGetValue("--client", out string? client) ? Path.GetFullPath(client) : null,
+                options.TryGetValue("--steam-userdata", out string? userdata) ? Path.GetFullPath(userdata) : null,
+                serverLoader?.Root, clientLoader?.Root }.OfType<string>().ToArray();
             SmokeOutput.RefuseInside(output, protectedRoots);
+            var pairs = new List<(string Key, string Value)>();
+            for (int i = 0; i < rest.Length; i++)
+                pairs.Add(rest[i] is "--server-only" or "--preflight-only" ? (rest[i], "") : (rest[i], rest[++i]));
             var roots = pairs.Where(pair => pair.Key == "--search-root").Select(pair => Path.GetFullPath(pair.Value)).ToList();
             var optional = pairs.Where(pair => pair.Key == "--optional-reference").Select(pair => pair.Value).ToList();
-            var capabilities = pairs.Any(pair => pair.Key == "--client")
-                ? new List<string> { "valheim.session/state", "valheim.session/join", "valheim.session/leave" }
-                : ["valheim.session/state"];
+            var capabilities = parsed.ServerOnly ? ["valheim.session/state"]
+                : new List<string> { "valheim.session/state", "valheim.session/join", "valheim.session/leave" };
             NativeDependencyRequest Request(List<string> selected) => new()
             {
                 Mods = selected, SearchRoots = roots,
@@ -83,13 +86,12 @@ internal static class ServerLoadComparison
             before.Write(Path.Combine(output, "before-dependencies.lock.json"));
             after.Write(Path.Combine(output, "after-dependencies.lock.json"));
 
-            string[] Arm(string name, bool omit) => pairs.Where(pair => pair.Key != "--remove-mod" &&
+            string[] Arm(string name, bool omit) => pairs.Where(pair =>
                     !(omit && pair.Key == "--mod" && Path.GetFullPath(pair.Value).Equals(removed, pathComparison)))
                 .SelectMany(pair => pair.Key == "--output" ? new[] { pair.Key, Path.Combine(output, name) }
-                    : new[] { pair.Key, pair.Value })
+                    : pair.Value.Length == 0 ? new[] { pair.Key } : new[] { pair.Key, pair.Value })
                 .Concat(options.ContainsKey("--cli-manifest") ? [] : ["--cli-manifest", cliManifest])
                 .Concat(options.ContainsKey("--cli-files") ? [] : ["--cli-files", cliFiles])
-                .Concat(steamUserdata == null || options.ContainsKey("--steam-userdata") ? [] : ["--steam-userdata", steamUserdata])
                 .Concat(options.ContainsKey("--adapter") ? [] : ["--adapter", adapter])
                 .ToArray();
             int beforeResult = await runArm(Arm("before", omit: false));
@@ -108,7 +110,7 @@ internal static class ServerLoadComparison
                 : $"SERVER_MODSET_AB_FAIL: full set exit {beforeResult}, removed-mod set exit {afterResult}; inspect both private arm results before attributing the difference.");
             return beforeResult != 0 ? beforeResult : afterResult;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or System.Text.Json.JsonException or FormatException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             return 3;

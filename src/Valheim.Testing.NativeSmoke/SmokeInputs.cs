@@ -32,21 +32,28 @@ internal static class SmokeInputs
         return (manifest, files);
     }
 
+    /// <summary>--steam-userdata, or this machine's, under the Steam root the inventory's detection found (on Windows its registered path).</summary>
     internal static string SteamUserdata(IReadOnlyDictionary<string, string> options)
     {
         if (options.TryGetValue("--steam-userdata", out string? named)) return Path.GetFullPath(named);
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string[] candidates = OperatingSystem.IsWindows()
-            ? [Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Steam", "userdata")]
-            : OperatingSystem.IsMacOS()
-                ? [Path.Combine(home, "Library", "Application Support", "Steam", "userdata")]
-                : [Path.Combine(home, ".local", "share", "Steam", "userdata"), Path.Combine(home, ".steam", "steam", "userdata")];
-        string[] found = candidates.Where(Directory.Exists).Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (found.Length != 1)
-            throw new DirectoryNotFoundException(found.Length == 0
-                ? "Steam userdata was not found at the platform default. Give --steam-userdata for the account whose owned client will launch."
-                : "Several Steam userdata directories exist. Give --steam-userdata explicitly; account state is not guessed.");
-        return found[0];
+        EnvironmentInventory inventory;
+        try { inventory = EnvironmentInventory.Read(null); }
+        catch (ArgumentException failure) { throw new DirectoryNotFoundException("Steam userdata was not found: " + failure.Message + " Give --steam-userdata DIR for the account whose owned client will launch."); }
+        string userdata = inventory.SteamUserData ?? throw new DirectoryNotFoundException("Steam userdata was not found under " +
+            string.Join("; ", inventory.Detected.Where(line => line.StartsWith("Steam:", StringComparison.Ordinal))) + ". Give --steam-userdata.");
+        Console.WriteLine($"steam userdata: {userdata} (detected: this machine)");
+        return userdata;
+    }
+
+    /// <summary>This machine's Valheim install, as the inventory's detection finds it; printed with where it came from.</summary>
+    internal static string Game()
+    {
+        EnvironmentInventory inventory;
+        try { inventory = EnvironmentInventory.Read(null); }
+        catch (ArgumentException failure) { throw new DirectoryNotFoundException(failure.Message + " Give --game DIR."); }
+        string game = inventory.Environments.FirstOrDefault(recipe => recipe.Roles.Contains("client"))?.Install
+            ?? throw new DirectoryNotFoundException(string.Join(" ", inventory.Missing.Where(line => line.Contains("892970"))) + " Give --game DIR.");
+        Console.WriteLine($"game: {game} (detected: this machine)");
+        return game;
     }
 }

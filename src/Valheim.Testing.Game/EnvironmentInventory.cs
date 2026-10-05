@@ -64,6 +64,8 @@ public sealed class EnvironmentInventory
     [JsonIgnore] public IReadOnlyList<string> Detected => _detected;
     /// <summary>What the this-machine default looked for and did not find, with every path tried.</summary>
     [JsonIgnore] public IReadOnlyList<string> Missing => _missing;
+    /// <summary>This machine's Steam <c>userdata</c> under the detected Steam root, when it exists; null otherwise or when nothing was detected.</summary>
+    [JsonIgnore] public string? SteamUserData { get; private set; }
     private readonly List<string> _detected = [], _missing = [];
 
     /// <summary>
@@ -137,6 +139,7 @@ public sealed class EnvironmentInventory
         if (string.IsNullOrEmpty(local.Lock)) _detected.Add("assumed host lock " + (local.Lock = HostInstall.Join(machine.DataRoot, "lock")));
 
         var steam = SteamDetection.Find(machine, SteamDetection.GameApp, SteamDetection.DedicatedServerApp);
+        if (steam.Root != null && machine.DirectoryExists(HostInstall.Join(steam.Root, "userdata"))) SteamUserData = HostInstall.Join(steam.Root, "userdata");
         _detected.Add(steam.Root == null ? "Steam: not found (tried " + string.Join(", ", steam.RootsTried) + ")"
             : $"Steam: {steam.Root} (from {steam.RootRule}); libraries {string.Join(", ", steam.Libraries)}");
         string? game = Installed(machine, steam, SteamDetection.GameApp, windows ? ClientLaunch.WindowsExecutable
