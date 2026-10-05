@@ -407,7 +407,7 @@ Setup, in the unit-test project (not the mod project):
 ```xml
 <PropertyGroup><LangVersion>10</LangVersion></PropertyGroup> <!-- or newer; net48 test legs default to C# 7.3 -->
 <ItemGroup>
-  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.8]" PrivateAssets="all" />
+  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.11]" PrivateAssets="all" />
   <Compile Include="../MyMod/Src/RoadMath.cs" /> <!-- the mod's pure-logic sources -->
 </ItemGroup>
 ```
@@ -523,7 +523,7 @@ The doubles normally compile into the test assembly, so a type's assembly is the
 ```xml
 <!-- MyMod.Doubles/MyMod.Doubles.csproj -->
 <PropertyGroup><AssemblyName>assembly_valheim</AssemblyName><RootNamespace></RootNamespace><LangVersion>10</LangVersion></PropertyGroup>
-<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.8]" /></ItemGroup>
+<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.11]" /></ItemGroup>
 ```
 
 ```csharp
@@ -1099,7 +1099,7 @@ Run it in the job that builds the plugin, since both need the game's assemblies,
       - name: Check that game references still bind
         shell: bash
         run: |
-          dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.1 --tool-path .tools
+          dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.2 --tool-path .tools
           .tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "$VALHEIM_MANAGED"
 ```
 
