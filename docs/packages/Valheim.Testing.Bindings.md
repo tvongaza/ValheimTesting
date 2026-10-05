@@ -6,7 +6,7 @@ An offline check that a built mod's references into the game still bind, from [V
 - `Valheim.Testing.Bindings.Tool` (net10.0) is the `valheim-bindings` .NET tool for CI.
 
 ```sh
-dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.1 --tool-path .tools
+dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.2 --tool-path .tools
 .tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "path/to/valheim_Data/Managed"
 ```
 
