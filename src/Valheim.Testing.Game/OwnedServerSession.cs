@@ -160,8 +160,8 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     /// Establishes test access (<see cref="TestAccess.Ensure"/> as <see cref="TestActorRole.DedicatedServer"/>: devcommands, then
     /// <c>confirmcheats</c>, each verified through ValheimCLI's <c>cli_access</c>) on every boot this session starts, before
     /// <see cref="Start"/> returns: the first and each <see cref="Restart"/>, since a new server process has neither gate.
-    /// False for a session that issues no test commands (a load smoke). <see cref="PinnedServerRun"/> sets it from
-    /// <see cref="PinnedServerRunOptions{TPlan}.TestAccess"/>.
+    /// <see cref="PinnedServerRun"/> sets it for every owned server it starts; false only for a session a caller drives itself
+    /// that issues no test commands.
     /// </summary>
     public bool EnsureTestAccess { get; set; }
     /// <summary>
