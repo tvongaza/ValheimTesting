@@ -95,12 +95,37 @@ public static class HostInstall
     /// which must not exist yet; a directory this call created is removed again if the copy fails. Verify the copy with
     /// <see cref="ListAsync"/> before using it.
     /// </summary>
-    public static async Task CopyAsync(IGameHost host, string source, string destination, TimeSpan timeout, CancellationToken cancellation = default)
+    public static Task CopyAsync(IGameHost host, string source, string destination, TimeSpan timeout, CancellationToken cancellation = default) =>
+        CopyAsync(host, source, destination, timeout, [], cancellation);
+
+    /// <summary>
+    /// The top-level directories a dedicated server's runtime copy leaves out: <c>logs</c>, where Steam writes the server's own
+    /// runtime output (<c>connection_log_*.txt</c>, <c>stats_log.txt</c>), none of it the game's or the loader's files (#257).
+    /// </summary>
+    internal static readonly string[] ServerRuntimeSkips = ["logs"];
+
+    /// <summary><paramref name="files"/> (a manifest or listing) without what lies under a skipped top-level directory.</summary>
+    internal static Dictionary<string, string> WithoutSkipped(IReadOnlyDictionary<string, string> files, IReadOnlyCollection<string> skip, StringComparer names) =>
+        files.Where(file => !Skipped(file.Key, skip, names)).ToDictionary(file => file.Key, file => file.Value, names);
+
+    // Whatever the top-level entry is (a folder, a file or a link), as the copy scripts skip it by name.
+    internal static bool Skipped(string relative, IReadOnlyCollection<string> skip, StringComparer names)
+    {
+        int slash = relative.IndexOfAny(['/', '\\']);
+        return skip.Contains(slash < 0 ? relative : relative[..slash], names);
+    }
+
+    // skip: names of the source's top-level entries not copied (the install keeps them).
+    internal static async Task CopyAsync(IGameHost host, string source, string destination, TimeSpan timeout, IReadOnlyCollection<string> skip,
+        CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(host);
         RequireHostPath(host, source, nameof(source));
         RequireHostPath(host, destination, nameof(destination));
-        var result = (await host.RunAsync(HostInstallScripts.CopyFor(host.Shell.Kind), new Dictionary<string, string> { ["source"] = source, ["dest"] = destination }, timeout, cancellation).ConfigureAwait(false))
+        foreach (string name in skip)
+            if (name.Length == 0 || name is "." or ".." || name.IndexOfAny(['/', '\\', '\n', '\r']) >= 0) throw new ArgumentException($"'{name}' is not a directory name.", nameof(skip));
+        var result = (await host.RunAsync(HostInstallScripts.CopyFor(host.Shell.Kind), new Dictionary<string, string>
+            { ["source"] = source, ["dest"] = destination, ["skip"] = string.Join('\n', skip) }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Copying {source} to {destination} on {host.Name}");
         switch (InteractiveClient.Line(result.Stdout, "VT-COPY "))
         {
@@ -327,20 +352,30 @@ internal static class HostInstallScripts
         'VT-LIST done'
         """.ReplaceLineEndings("\n");
 
-    // Variables: source, dest.
+    // Variables: source, dest, skip (names of top-level entries left out, one per line; none copies everything).
     public static readonly string Copy = """
         set -u
         if [ ! -d "$source" ]; then echo "VT-COPY missing"; exit 0; fi
         if [ -e "$dest" ]; then echo "VT-COPY exists"; exit 0; fi
         mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" || exit 3
-        if ! cp -a -- "$source/." "$dest/"; then rm -rf -- "$dest"; exit 3; fi
+        if [ -z "${skip:-}" ]; then
+            if ! cp -a -- "$source/." "$dest/"; then rm -rf -- "$dest"; exit 3; fi
+        else
+            shopt -s nullglob dotglob
+            for entry in "$source"/*; do
+                if printf '%s\n' "$skip" | grep -Fqx -- "${entry##*/}"; then continue; fi
+                if ! cp -a -- "$entry" "$dest/"; then rm -rf -- "$dest"; exit 3; fi
+            done
+        fi
         echo "VT-COPY copied"
         """.ReplaceLineEndings("\n");
 
-    // Variables: source, dest. The source may be a game install; only a new destination can be written.
+    // Variables: source, dest, skip (as the bash copy's; names compare ignoring case). The source may be a game install; only a
+    // new destination can be written.
     public static readonly string PowerShellCopy = """
         if (-not [IO.Directory]::Exists($source)) { 'VT-COPY missing'; exit 0 }
         if ([IO.Directory]::Exists($dest) -or [IO.File]::Exists($dest)) { 'VT-COPY exists'; exit 0 }
+        $skipped = @($skip -split "`n" | Where-Object { $_ })
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dest))
         [void][IO.Directory]::CreateDirectory($dest)
         try {
@@ -352,6 +387,7 @@ internal static class HostInstallScripts
                 $to = if ($relative) { Join-Path $dest $relative } else { $dest }
                 [void][IO.Directory]::CreateDirectory($to)
                 foreach ($entry in [IO.Directory]::GetFileSystemEntries($from)) {
+                    if (-not $relative -and $skipped -contains [IO.Path]::GetFileName($entry)) { continue }
                     $attributes = [IO.File]::GetAttributes($entry)
                     if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('Refusing link in runtime: ' + $entry) }
                     if ($attributes -band [IO.FileAttributes]::Directory) { $pending.Push($entry) }

@@ -27,11 +27,12 @@ internal static class EnvCommand
             error.WriteLine("Usage: " + Usage);
             return 2;
         }
-        return manifest == null ? Inventory(inventoryFile, json, output, error) : await Campaign(manifest, hosts, json, output, error).ConfigureAwait(false);
+        return manifest == null ? await Inventory(inventoryFile, json, output, error).ConfigureAwait(false) : await Campaign(manifest, hosts, json, output, error).ConfigureAwait(false);
     }
 
-    // No campaign: what the inventory holds (this machine, or the file with its local environments filled in). A one-off needs a server and a client.
-    private static int Inventory(string? file, bool json, TextWriter output, TextWriter error)
+    // No campaign: what the inventory holds (this machine, or the file with its local environments filled in). A one-off needs a
+    // server and a client, and no run of another process going on this machine or left unrecovered by its journal (#257).
+    private static async Task<int> Inventory(string? file, bool json, TextWriter output, TextWriter error)
     {
         EnvironmentInventory inventory;
         try { inventory = EnvironmentInventory.Read(file == null ? null : Path.GetFullPath(file)); }
@@ -41,22 +42,26 @@ internal static class EnvCommand
             return 3;
         }
         var missingRoles = new[] { "server", "client" }.Where(role => !inventory.Environments.Any(recipe => recipe.Roles.Contains(role))).ToArray();
+        var problems = await inventory.LocalJournalProblemsAsync().ConfigureAwait(false);
+        bool ready = missingRoles.Length == 0 && problems.Count == 0;
         if (json)
             output.WriteLine(JsonSerializer.Serialize(new
             {
                 inventory.Detected, inventory.Missing,
                 Environments = inventory.Environments.Select(recipe => new { recipe.Name, recipe.Host, recipe.Roles, recipe.Install, recipe.Runtime, recipe.CliPort, recipe.GamePort }),
-                Ready = missingRoles.Length == 0,
+                Problems = problems, Ready = ready,
             }, new JsonSerializerOptions { WriteIndented = true }));
         else
         {
             Detected(inventory.Detected, output);
             foreach (string line in inventory.Missing) output.WriteLine("NOT FOUND: " + line);
-            output.WriteLine(missingRoles.Length == 0
-                ? "ELIGIBLE: the inventory has a server and a client environment. Campaign inputs and host readiness are checked when a campaign is given."
-                : "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment.");
+            foreach (var problem in problems) output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
+            output.WriteLine(missingRoles.Length != 0 ? "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment."
+                : problems.Count != 0 ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
+                : "ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered. " +
+                  "Campaign inputs and host readiness are checked when a campaign is given.");
         }
-        return missingRoles.Length == 0 ? 0 : 3;
+        return ready ? 0 : 3;
     }
 
     private static async Task<int> Campaign(string manifest, bool hosts, bool json, TextWriter output, TextWriter error)

@@ -83,6 +83,27 @@ internal static class HostProcessProbe
         return null;
     }
 
+    /// <summary>
+    /// The SHA-256 (lower-case hex) the probe reads for a game the launch scripts start with <paramref name="executable"/> and
+    /// <paramref name="arguments"/>, journalled before the start so a launch interrupted before its process was journalled can
+    /// still be proven its own from its pid file. Windows: the command line .NET's <c>Process.Start</c> passes to
+    /// <c>CreateProcess</c> (the executable in quotes, then a space and the joined arguments when there are any) as UTF-8. Linux:
+    /// <c>/proc/PID/cmdline</c> once <c>env</c> has executed the game: the executable as given, then each argument, each followed by a NUL.
+    /// </summary>
+    internal static string ExpectedCommandLineSha256(bool windows, string executable, IReadOnlyList<string> arguments)
+    {
+        string text;
+        if (windows)
+        {
+            string file = executable.Trim();
+            bool quoted = file.StartsWith('"') && file.EndsWith('"');
+            string joined = WindowsCommandLine.Join(arguments);
+            text = (quoted ? file : "\"" + file + "\"") + (joined.Length == 0 ? "" : " " + joined);
+        }
+        else text = string.Concat(arguments.Prepend(executable).Select(argument => argument + "\0"));
+        return FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes(text));
+    }
+
     // Variables: processes (space-separated PID:START pairs; an empty START matches any), settle (optional). One line per pair:
     // VT-PROC <pid> <start asked or -> gone|reused|same|unreadable <start read or -> <sha256 or ->, then VT-PROC-END. With
     // settle, a process still running as the recorder's env (before it execs the game) is given up to 5 s to exec.

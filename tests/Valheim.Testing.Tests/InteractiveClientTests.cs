@@ -391,6 +391,12 @@ public class InteractiveClientShellTests
                 Assert.Equal(process.SessionId, Process.GetCurrentProcess().SessionId);
             }
             Assert.NotEqual(0, Run(Path.Combine(system, "schtasks.exe"), "/Query", "/TN", client.TaskName!));
+            // #257: the journalled command line is the started client's, its pid file names it, and the launch spec is gone.
+            var probed = (await HostProcessProbe.ProbeAsync(host, [(client.Id, client.StartIdentity)], Generous))[(client.Id, client.StartIdentity)];
+            Assert.Equal(launch.CommandLineSha256(), probed.CommandLineSha256);
+            var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [launchDirectory], Generous, default));
+            Assert.Equal((client.Id, client.StartIdentity), (pidFile.Pid, pidFile.StartIdentity));
+            Assert.False(File.Exists(Path.Combine(launchDirectory, "spec.txt")));
             Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "vt-secrets-*").Where(file => !secretsBefore.Contains(file)));
             foreach (string file in Directory.GetFiles(launchDirectory)) Assert.DoesNotContain(canary, File.ReadAllText(file));
 
@@ -517,7 +523,8 @@ public class InteractiveClientDisplayTests
                 Assert.DoesNotContain(canary, text);
             }
             foreach (string file in Directory.GetFiles(launchDirectory)) Assert.DoesNotContain(canary, File.ReadAllText(file));
-            Assert.True(File.Exists(Path.Combine(launchDirectory, "spec.txt")));
+            // The launch spec stays in memory: nothing of it is left in the launch directory (#257).
+            Assert.False(File.Exists(Path.Combine(launchDirectory, "spec.txt")));
 
             Assert.Equal(InteractiveStop.Stopped, await client.StopAsync(TimeSpan.FromSeconds(30)));
             // The recorder saw the kill.

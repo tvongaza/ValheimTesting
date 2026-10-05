@@ -48,9 +48,9 @@ internal static class RunRecovery
         if (refused != null) return new(runId, run.State, refused, []);
 
         var items = run.Items.Where(item => teardown || !item.Kept).ToList();
-        if (items.Count == 0) return new(runId, run.State, null, []); // it left nothing to recover
+        if (items.Count == 0 && run.SettledLaunches.Count == 0) return new(runId, run.State, null, []); // it left nothing to recover
         var steps = new List<RecoveryStep>();
-        var connections = items.Select(item => item.Host).Distinct(StringComparer.Ordinal).ToDictionary(name => name, hostFactory, StringComparer.Ordinal);
+        var connections = items.Concat(run.SettledLaunches).Select(item => item.Host).Distinct(StringComparer.Ordinal).ToDictionary(name => name, hostFactory, StringComparer.Ordinal);
         void Step(string host, string what, string outcome, bool failed = false) => steps.Add(new(host, what, outcome, failed));
         bool Failed(string host) => steps.Any(step => step.Host == host && step.Failed);
         async Task Note(string name, JournalEntry entry)
@@ -60,6 +60,9 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + entry.Kind, "could not be journalled: " + error.Message); }
         }
         IEnumerable<JournalItem> Of(string kind) => items.Where(item => item.Kind == kind);
+        // A process adopted from a launch's pid file: once it is stopped or gone, its launch is settled too.
+        Task SettleAdopted(JournalItem process) => process.Fields.GetValueOrDefault("adoptedFrom") is { Length: > 0 } directory
+            ? Note(process.Host, Settled(process.Actor, directory)) : Task.CompletedTask;
         bool Local(JournalItem item) => item.Fields.GetValueOrDefault("local") == "true" && hosts[item.Host].Kind == "local";
 
         // 1. Every process on every host first: until all are proven gone, nothing they may use is touched anywhere.
@@ -82,7 +85,13 @@ internal static class RunRecovery
                 var probed = now[(pid, start)];
                 try
                 {
-                    if (probed.State is ProbedState.Gone or ProbedState.Reused) { Step(group.Key, what, "already gone"); await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false); continue; }
+                    if (probed.State is ProbedState.Gone or ProbedState.Reused)
+                    {
+                        Step(group.Key, what, "already gone");
+                        await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false);
+                        await SettleAdopted(process).ConfigureAwait(false);
+                        continue;
+                    }
                     if (probed.State != ProbedState.Same || commandLine.Length == 0 || !string.Equals(probed.CommandLineSha256, commandLine, StringComparison.OrdinalIgnoreCase))
                     {
                         Step(group.Key, what, "not stopped: its ID, start time and command line no longer all match the journal", failed: true);
@@ -93,9 +102,17 @@ internal static class RunRecovery
                     var outcome = await owned.StopAsync(TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
                     Step(group.Key, what, outcome == InteractiveStop.AlreadyGone ? "already gone" : "stopped");
                     await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false);
+                    await SettleAdopted(process).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is not OperationCanceledException) { Step(group.Key, what, "not stopped: " + error.Message, failed: true); }
             }
+        }
+        // A launch never journalled as started is settled once its pid file's process is gone, so no later status depends on that
+        // file still being there.
+        foreach (var launch in run.SettledLaunches)
+        {
+            Step(launch.Host, "launch " + launch.What, "settled: its pid file's process is gone");
+            await Note(launch.Host, Settled(launch.Actor, launch.What)).ConfigureAwait(false);
         }
         bool processLeft = steps.Any(step => step.Failed);
 
@@ -247,6 +264,9 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + JournalEntry.RunRecovered, "could not be journalled: " + error.Message); }
         return new(runId, run.State, null, steps);
     }
+
+    private static JournalEntry Settled(string actor, string directory) =>
+        JournalEntry.Of(JournalEntry.LaunchSettled, ("actor", actor), ("directory", directory));
 
     private static JournalEntry Stopped(int pid, string start) =>
         JournalEntry.Of(JournalEntry.ProcessStopped, ("pid", pid.ToString(CultureInfo.InvariantCulture)), ("startIdentity", start));

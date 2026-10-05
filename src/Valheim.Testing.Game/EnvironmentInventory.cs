@@ -183,6 +183,31 @@ public sealed class EnvironmentInventory
         }
     }
 
+    /// <summary>
+    /// What a bare <c>valheim-test env preflight</c> refuses from this machine's journals (its own and the inventory's local
+    /// hosts'; another host's is read by a campaign's <c>--hosts</c> preflight): a run of another process still going here, one
+    /// that left something (recoverable or not) and was not recovered, one that may still be going, and a journal that cannot be
+    /// read. The same wording as the campaign's journal check. Changes nothing.
+    /// </summary>
+    public async Task<IReadOnlyList<CampaignPreflightProblem>> LocalJournalProblemsAsync(CancellationToken cancellation = default)
+    {
+        JournalStatusReport status;
+        try
+        {
+            var (all, _) = JournalScope();
+            var hosts = all.Where(host => host.Value.Kind == "local").ToDictionary(host => host.Key, host => host.Value, StringComparer.Ordinal);
+            status = await RunJournalStatus.InspectAsync(hosts, new ResolvedEnvironment { Hosts = hosts }.CreateHost, TimeSpan.FromSeconds(60), cancellation,
+                LeaseHost, LeaseDirectory).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return [new(ThisMachineHost, "run journal", RunJournalStatus.UnreadableProblem(error.Message))];
+        }
+        // As the campaign check: a run going elsewhere that only holds a Steam lease on this machine (its lease host) uses no
+        // game here; one whose runner runs here, or that left anything but leases here, does.
+        return RunJournalStatus.Problems(status, run => run.State == JournalRunState.Live || run.Items.Any(item => item.Kind != "lease"));
+    }
+
     private Task<JournalStatusReport> StatusAsync(CancellationToken cancellation)
     {
         var (hosts, roots) = JournalScope();

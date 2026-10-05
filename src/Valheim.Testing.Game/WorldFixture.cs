@@ -21,7 +21,10 @@ public sealed class WorldFixture : IDisposable
     public IReadOnlyDictionary<string, string> SourceHashes { get; }
     public bool Preserve { get; set; }
     private bool _disposed;
+    // The journal run the copy was made under, kept for its later lines: they land in the same run whatever flow retires it.
+    private readonly RunJournal _journal = RunJournal.ThisProcess;
     private WorldFixture(string path, Dictionary<string, string> hashes) { DirectoryPath = path; SourceHashes = hashes; }
+    private WorldFixture(string path, Dictionary<string, string> hashes, RunJournal journal) : this(path, hashes) => _journal = journal;
     /// <summary>A copy an earlier process made, from its own manifest (<see cref="OwnedCopies.Remove"/>).</summary>
     internal static WorldFixture Existing(string path, Dictionary<string, string> hashes) => new(path, hashes);
     /// <summary>Copies an exact, previously pinned fixture into a new directory owned by this instance.</summary>
@@ -51,14 +54,15 @@ public sealed class WorldFixture : IDisposable
         else if (actual.Count == 0) throw new InvalidOperationException("Fixture source has no files: " + source);
         string target = Path.Combine(outputParent, "valheim-test-" + Guid.NewGuid().ToString("N"));
         // Journalled on this machine before the copy (#257): an interrupted process leaves a record of every copy it may own.
-        try { Journal(JournalEntry.CopyIntended, target); }
+        var journal = RunJournal.ThisProcess;
+        try { Journal(journal, JournalEntry.CopyIntended, target); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             throw new IOException($"Could not journal the copy in {RunJournal.LocalDirectory}, so nothing was copied: ValheimTesting records every copy " +
                 $"it makes there first, so an interrupted run's copies can be found and removed (valheim-test env status). {error.Message}", error);
         }
         Directory.CreateDirectory(target);
-        var fixture = new WorldFixture(target, actual);
+        var fixture = new WorldFixture(target, actual, journal);
         try
         {
             foreach (string directory in directories) Directory.CreateDirectory(Path.Combine(target, Path.GetRelativePath(source, directory)));
@@ -69,7 +73,7 @@ public sealed class WorldFixture : IDisposable
                 if (FileHash.Sha256(destination) != item.Value) throw new IOException("Fixture changed while copying: " + item.Key);
             }
             File.WriteAllText(Path.Combine(target, ProvenanceFile), JsonSerializer.Serialize(actual));
-            Note(JournalEntry.CopyDone, target);
+            Note(journal, JournalEntry.CopyDone, target);
             return fixture;
         }
         catch { fixture.Dispose(); throw; }
@@ -170,7 +174,7 @@ public sealed class WorldFixture : IDisposable
             throw new IOException($"Kept the run's changes in {keepIn}, but could not remove the copy {DirectoryPath} ({error.Message}). Delete it once no process uses it.", error);
         }
         _disposed = true;
-        Note(JournalEntry.CopyRetired, DirectoryPath, ("keptIn", keepIn));
+        Note(_journal, JournalEntry.CopyRetired, DirectoryPath, ("keptIn", keepIn));
         return retired;
     }
     private const string ProvenanceFile = "fixture-provenance.json";
@@ -189,11 +193,11 @@ public sealed class WorldFixture : IDisposable
     internal string? KeepReason { get; set; }
 
     // This machine's journal: before the copy a failed line stops it; after an effect a lost line is a warning.
-    private static void Journal(string kind, string copy, params (string Key, string Value)[] more) =>
-        RunJournal.ThisProcess.AppendLocal(Actor, JournalEntry.Of(kind, [("runtime", copy), ("local", "true"), .. more]));
-    private static void Note(string kind, string copy, params (string Key, string Value)[] more)
+    private static void Journal(RunJournal journal, string kind, string copy, params (string Key, string Value)[] more) =>
+        journal.AppendLocal(Actor, JournalEntry.Of(kind, [("runtime", copy), ("local", "true"), .. more]));
+    private static void Note(RunJournal journal, string kind, string copy, params (string Key, string Value)[] more)
     {
-        try { Journal(kind, copy, more); }
+        try { Journal(journal, kind, copy, more); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Console.Error.WriteLine($"Warning: could not journal {kind} for {copy}: {error.Message}"); }
     }
     /// <summary>The actor this machine's copies are journalled as.</summary>
@@ -218,9 +222,9 @@ public sealed class WorldFixture : IDisposable
         if (_disposed) return;
         if (!Preserve && Directory.Exists(DirectoryPath)) DeleteTree(DirectoryPath);
         _disposed = true;
-        if (!Preserve) Note(JournalEntry.CopyRetired, DirectoryPath);
-        else if (KeepReason != null) Note(JournalEntry.CopyKept, DirectoryPath, ("why", KeepReason));
-        else Note(JournalEntry.CopyRetired, DirectoryPath, ("handedOver", "true"));
+        if (!Preserve) Note(_journal, JournalEntry.CopyRetired, DirectoryPath);
+        else if (KeepReason != null) Note(_journal, JournalEntry.CopyKept, DirectoryPath, ("why", KeepReason));
+        else Note(_journal, JournalEntry.CopyRetired, DirectoryPath, ("handedOver", "true"));
     }
 }
 

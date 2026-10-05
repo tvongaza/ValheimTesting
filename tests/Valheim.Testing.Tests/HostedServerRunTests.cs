@@ -149,6 +149,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, RunJournal.WindowsRead) ? "journal-read" :
         ReferenceEquals(script, RunJournal.BashReadAll) ? "journal-read-all" :
         ReferenceEquals(script, RunJournal.WindowsReadAll) ? "journal-read-all" :
+        ReferenceEquals(script, RunJournalStatus.BashPidFiles) ? "pid-file" :
+        ReferenceEquals(script, RunJournalStatus.WindowsPidFiles) ? "pid-file" :
         ReferenceEquals(script, HostProcessProbe.Bash) ? "process-probe" :
         ReferenceEquals(script, HostProcessProbe.Windows) ? "process-probe" :
         ReferenceEquals(script, LeaseScripts.Bash) ? "lease" :
@@ -184,6 +186,9 @@ internal sealed class FakeServerHost : IGameHost
             }
             case "copy":
                 CopyDirectory(Local(v["source"]), Local(v["dest"]));
+                // As the scripts: a skipped top-level directory of the source is not copied.
+                foreach (string skipped in v.GetValueOrDefault("skip", "").Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                    if (Directory.Exists(Path.Combine(Local(v["dest"]), skipped))) Directory.Delete(Path.Combine(Local(v["dest"]), skipped), recursive: true);
                 AfterCopy?.Invoke(Local(v["dest"]));
                 return Ok("VT-COPY copied\n");
             case "apply-stage":
@@ -289,6 +294,18 @@ internal sealed class FakeServerHost : IGameHost
                     foreach (string file in Directory.GetFiles(directory, "*.jsonl", SearchOption.AllDirectories))
                         text.Append("VT-JOURNAL-FILE ").Append(Convert.ToBase64String(File.ReadAllBytes(file))).Append('\n');
                 return Ok(text.Append("VT-JOURNAL-END\n").ToString());
+            }
+            // As RunJournalStatus's pid-file scripts do: each launch directory's pid file, in order.
+            case "pid-file":
+            {
+                var text = new StringBuilder();
+                var dirs = v["dirs"].Split('\n');
+                for (int i = 0; i < dirs.Length; i++)
+                {
+                    string file = Path.Combine(Local(dirs[i]), "pid");
+                    text.Append(File.Exists(file) ? $"VT-PIDFILE {i} file {Convert.ToBase64String(File.ReadAllBytes(file))}\n" : $"VT-PIDFILE {i} missing\n");
+                }
+                return Ok(text.Append("VT-PIDFILE-END\n").ToString());
             }
             // As HostProcessProbe's scripts do: a process this host started runs until it exits, with a command line of its ID.
             case "process-probe":
@@ -618,6 +635,10 @@ public sealed partial class HostedServerRunTests : IDisposable
         string old = Path.Combine(install, "BepInEx", "plugins", "unrelated.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(old)!);
         File.WriteAllText(old, "unrelated");
+        Directory.CreateDirectory(Path.Combine(install, "logs"));
+        File.WriteAllText(Path.Combine(install, "logs", "connection_log_2456.txt"), "Steam's own, from another day");
+        Directory.CreateDirectory(Path.Combine(install, "BepInEx", "logs"));
+        File.WriteAllText(Path.Combine(install, "BepInEx", "logs", "kept.txt"), "the install's own");
         string chosen = Path.Combine(_root, "chosen.dll");
         File.WriteAllText(chosen, "selected plugin");
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
@@ -628,6 +649,13 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(Directory.Exists(host.Local(staging)));
         Assert.Contains("apply-stage", host.Scripts);
         Assert.Contains("copy", host.Scripts);
+        // #257: Steam's own runtime output in the install (logs/) stays in the install and is not the server's runtime.
+        Assert.Equal("logs", Assert.Single(host.Runs, run => run.Script == "copy").Variables["skip"]);
+        Assert.True(File.Exists(Path.Combine(install, "logs", "connection_log_2456.txt")));
+        Assert.False(Directory.Exists(Path.Combine(host.Local(runtime), "logs")));
+        Assert.DoesNotContain(listing.Files.Keys, file => file.StartsWith("logs/", StringComparison.OrdinalIgnoreCase));
+        // A nested logs folder is the game's own: only the install's top level is left out.
+        Assert.True(File.Exists(Path.Combine(host.Local(runtime), "BepInEx", "logs", "kept.txt")));
     }
 
     [Fact] public async Task ReviewedLoaderReplacesAnIncoherentSourceOnlyInTheDisposableRuntime()
@@ -1104,6 +1132,34 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(InstallPins.Of(host.Local(Install)).Game, provenance.GetProperty("runtimeGameSha256").GetString());
         Assert.Equal("1,2", provenance.GetProperty("ownedPids").GetString());
         Assert.False(provenance.TryGetProperty("outcome", out _));
+    }
+
+    // #257: one journal run per run. This machine's world copy is journalled under the run's own id, beside its server's
+    // entries, not under a run id of its own; and the server host's runtime copy leaves out the install's logs/ (Steam's runtime
+    // output), which the pinned manifest may list but the copy never counts, while the install keeps it.
+    [Fact] public async Task AHostedRunJournalsItsLocalCopiesUnderItsOwnIdAndItsRuntimeCopyLeavesOutSteamsLogs()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        string logs = Path.Combine(host.Local(Install), "logs");
+        Directory.CreateDirectory(logs);
+        File.WriteAllText(Path.Combine(logs, "connection_log_2456.txt"), "Steam's own, from another day");
+        var (plan, profile) = Write(host); // its manifest lists logs/connection_log_2456.txt
+        string local = Path.Combine(_root, "local-journal");
+        using var journal = RunJournal.UseLocalDirectory(local);
+
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
+
+        Assert.Equal([RunId], Directory.GetDirectories(local).Select(Path.GetFileName));
+        var copies = File.ReadAllLines(Path.Combine(local, RunId, WorldFixture.Actor + ".jsonl"));
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
+            copies.Select(line => JsonDocument.Parse(line).RootElement.GetProperty("kind").GetString()));
+        Assert.All(copies, line => Assert.Equal(RunId, JsonDocument.Parse(line).RootElement.GetProperty("run").GetString()));
+        // After the run, the process's own journal run is the process's again.
+        Assert.NotEqual(RunId, RunJournal.ThisProcess.RunId);
+
+        Assert.Equal("logs", Assert.Single(host.Runs, run => run.Script == "copy").Variables["skip"]);
+        Assert.True(File.Exists(Path.Combine(logs, "connection_log_2456.txt")));
+        Assert.DoesNotContain("logs/", File.ReadAllText(Path.Combine(Output, "runtime-changes", "changes.json")));
     }
 
     // The remote launch is the plan's launch arguments: a crossplay plan's server starts with -crossplay, any other without it.

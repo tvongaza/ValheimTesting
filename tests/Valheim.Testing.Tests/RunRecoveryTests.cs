@@ -65,6 +65,62 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Single(_host.Stops);
     }
 
+    // The native case (#257, 5 Oct 2026): a server journalled as started and a client killed between process-intended and
+    // process-started, with its pid file written. Recover stops both by identity, retires the rest, and the run is over.
+    [Fact] public async Task RecoverStopsTheProcessALaunchsPidFileNamesAndTheRunEnds()
+    {
+        InterruptedRun();
+        const string launch = "/srv/runs/run-cut/client-1";
+        _host.Running(91152, "134357104986630869");
+        Line(_host, "run-cut", "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", launch),
+            ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("91152")));
+        PidFile(_host, launch, "91152 134357104986630869");
+
+        var report = await RecoverAsync("run-cut");
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Equal(JournalRunState.Recoverable, report.Before);
+        Assert.Equal([("41", "9041"), ("91152", "134357104986630869")], _host.Stops.Order());
+        Assert.Contains(report.Steps, step => step.What == "process 91152 (started 134357104986630869)" && step.Outcome == "stopped");
+        var after = Assert.Single((await StatusAsync()).Runs);
+        Assert.Equal(JournalRunState.Ended, after.State);
+        Assert.Empty(after.Items);
+        // The launch is settled in the journal: with its evidence folder gone later, the run stays over, its pid file unread.
+        Directory.Delete(_host.Local(launch), recursive: true);
+        int before = _host.Scripts.Count;
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+        Assert.DoesNotContain("pid-file", _host.Scripts.Skip(before));
+    }
+
+    // A pid file proves no more than it says: a process whose command line is not the launch's is never stopped and the run is
+    // refused whole; an ID another process reused since is not the launch's and is left alone, the launch counting as gone.
+    [Fact] public async Task RecoverNeverStopsAProcessAPidFileDoesNotProveTheLaunchs()
+    {
+        _host.Running(77, "9077");
+        _host.CommandLines[77] = new string('b', 64);
+        Line(_host, "run-other", "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/77"), ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("77")));
+        PidFile(_host, "/l/77", "77 9077");
+        _host.Running(71, "8000");
+        Line(_host, "run-reused", "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/71"), ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("71")));
+        PidFile(_host, "/l/71", "71 9071");
+        Line(_host, "run-missing", "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/72"), ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("72")));
+
+        var other = await RecoverAsync("run-other", teardown: true);
+        Assert.Equal(JournalRunState.Unrecoverable, other.Before);
+        Assert.Contains("runs another command line than the launch's", other.Refused);
+        var missing = await RecoverAsync("run-missing", teardown: true);
+        Assert.Equal(JournalRunState.Unrecoverable, missing.Before);
+        Assert.Contains("does not exist", missing.Refused);
+        var reused = await RecoverAsync("run-reused", teardown: true);
+        Assert.True(reused.Recovered);
+        // Nothing to stop: the launch is only settled, so no later status depends on its pid file.
+        Assert.Equal("settled: its pid file's process is gone", Assert.Single(reused.Steps).Outcome);
+        Assert.Empty(_host.Stops);
+        Assert.DoesNotContain(_host.Scripts, script => script == "stop");
+        Directory.Delete(_host.Local("/l/71"), recursive: true);
+        Assert.Equal(JournalRunState.Ended, (await StatusAsync()).Runs.Single(run => run.Run == "run-reused").State);
+    }
+
     [Fact] public async Task ALiveUnknownOrUnrecoverableRunIsRefusedAndNothingChanges()
     {
         Line(_host, "run-live", "server", JournalRunner.Current, JournalEntry.CopyIntended, ("runtime", Prep + "/runtime"), ("stage", Prep + "/staging"));

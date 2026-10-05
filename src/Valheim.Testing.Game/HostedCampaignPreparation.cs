@@ -262,24 +262,12 @@ public static class HostedCampaignPreparation
         }
         // Only a host whose journal was read can say a process is no run's.
         foreach (var host in status.Hosts.Where(host => host.Error == null)) owners[host.Name] = [];
-        foreach (var host in status.Hosts.Where(host => host.Error != null))
-            failures.Add(new(host.Name, "run journal", $"could not be read, so whether another run is going there is unknown: {host.Error}"));
-        string self = JournalRunner.Current.ToString();
         // A run going elsewhere that shares only the lease host is the pool's design, not a conflict: leases keep accounts apart.
         var roleHosts = inputs.Roles.Select(role => role.Role.Host).ToHashSet(StringComparer.Ordinal);
+        foreach (var problem in RunJournalStatus.Problems(status, run => run.Hosts.Any(roleHosts.Contains))) failures.Add(problem);
+        string self = JournalRunner.Current.ToString();
         foreach (var run in status.Runs.Where(run => run.Runner != self))
         {
-            string where = string.Join(", ", run.Hosts);
-            bool here = run.Hosts.Any(roleHosts.Contains);
-            string? problem = run.State switch
-            {
-                JournalRunState.Live when here => $"run {run.Run} is still going on {where} ({run.Reason}); wait for it to end",
-                JournalRunState.Recoverable => $"run {run.Run} left {run.Items.Count} thing(s) on {where} ({run.Reason}); see valheim-test env status, then valheim-test env recover --run {run.Run}",
-                JournalRunState.Unrecoverable => $"run {run.Run} left something on {where} that cannot be proven its own ({run.Reason}); see valheim-test env status and settle it by hand",
-                JournalRunState.Unknown when run.Runner != null && here => $"run {run.Run} on {where} may still be going: {run.Reason}",
-                _ => null,
-            };
-            if (problem != null) failures.Add(new(run.Hosts[0], "run journal", problem));
             // Every process a run journalled and that still runs, live or left behind, is that run's in the session refusal.
             foreach (var process in run.Items.Where(item => item.Kind == "process"))
                 if (int.TryParse(process.Fields.GetValueOrDefault("pid"), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int pid)

@@ -15,6 +15,8 @@ internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, str
     public const string CharacterIntended = "character-intended", CharacterDone = "character-done", CharacterRetired = "character-retired";
     public const string LockHeld = "lock-held", LockReleased = "lock-released";
     public const string ProcessIntended = "process-intended", ProcessStarted = "process-started", ProcessStopped = "process-stopped";
+    /// <summary>A recovery's word that a launch never journalled as started is over: its pid file's process is stopped or proven gone.</summary>
+    public const string LaunchSettled = "launch-settled";
     public const string LeaseHeld = "lease-held", LeaseReleased = "lease-released", LeaseKept = "lease-kept";
     public const string RunEnded = "run-ended", RunRecovered = "run-recovered", CleanupAbandoned = "cleanup-abandoned";
 
@@ -129,8 +131,21 @@ internal sealed class RunJournal
     private sealed class LocalReset(string? previous) : IDisposable { public void Dispose() => s_localFlow.Value = previous; }
 
     private static readonly Lazy<RunJournal> s_process = new(() => new RunJournal(NewRunId()));
-    /// <summary>The run this process's local copies are journalled under.</summary>
-    internal static RunJournal ThisProcess => s_process.Value;
+    private static readonly AsyncLocal<RunJournal?> s_run = new();
+    /// <summary>
+    /// The run this process's local copies are journalled under: the run going in this flow (<see cref="UseRun"/>), so a run's
+    /// copies join its own journal run, else one run for the whole process.
+    /// </summary>
+    internal static RunJournal ThisProcess => s_run.Value ?? s_process.Value;
+
+    /// <summary>Journals this flow's local copies under <paramref name="runId"/> (a run's own id) until disposed.</summary>
+    internal static IDisposable UseRun(string runId)
+    {
+        var previous = s_run.Value;
+        s_run.Value = new RunJournal(runId);
+        return new RunReset(previous);
+    }
+    private sealed class RunReset(RunJournal? previous) : IDisposable { public void Dispose() => s_run.Value = previous; }
 
     /// <summary>
     /// Copies this machine's journal says a still-running process holds: made (or being made) by a runner on this machine that

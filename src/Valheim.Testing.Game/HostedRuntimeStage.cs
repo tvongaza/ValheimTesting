@@ -225,9 +225,12 @@ public static class HostedRuntimeStage
                 if (!shippedListing.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException($"The staged file {relative} on {host.Name} differs from the reviewed local file.");
             copied = true;
-            await HostInstall.CopyAsync(host, source, destination, timeout, cancellation).ConfigureAwait(false);
+            // A server's copy leaves out Steam's own runtime output in the install (logs/), which is not the game's or the loader's.
+            var skip = kind == HostedRuntimeKind.Server ? HostInstall.ServerRuntimeSkips : [];
+            await HostInstall.CopyAsync(host, source, destination, timeout, skip, cancellation).ConfigureAwait(false);
             var copy = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
-            if (sourceListing.Files.Count != copy.Files.Count || sourceListing.Files.Any(file =>
+            var sourceFiles = HostInstall.WithoutSkipped(sourceListing.Files, skip, sourceListing.Names);
+            if (sourceFiles.Count != copy.Files.Count || sourceFiles.Any(file =>
                 !copy.Files.TryGetValue(file.Key, out string? hash) || !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase)))
                 throw new IOException($"The disposable copy on {host.Name} differs from the pinned source install.");
             string names = string.Join('\n', selected.Keys.Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name))));

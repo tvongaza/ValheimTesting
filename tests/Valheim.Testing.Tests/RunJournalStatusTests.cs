@@ -192,6 +192,158 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Equal(JournalRunState.Ended, Run(report, "run-lock-gone").State);
     }
 
+    // A launcher's pid file, as the Windows launchers write it (PID and start identity) or the Linux recorders do (PID only).
+    internal static void PidFile(FakeServerHost host, string directory, string text)
+    {
+        Directory.CreateDirectory(host.Local(directory));
+        File.WriteAllText(Path.Combine(host.Local(directory), "pid"), text);
+    }
+
+    // The native recovery check of 5 Oct 2026 (#257): the runner was killed after the client's process-intended and before its
+    // process-started, with the client's pid file written and its process running. Its pid file names a process whose ID, start
+    // identity and command line match the launch: the run is recoverable, and the client is named as the run's process.
+    [Fact] public async Task ALaunchKilledBeforeItsProcessWasJournalledAdoptsTheProcessItsPidFileNames()
+    {
+        const string launch = "/srv/runs/run-native/client-1";
+        _host.Running(91152, "134357104986630869");
+        Line(_host, "run-native", "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", launch),
+            ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("91152")));
+        PidFile(_host, launch, "91152 134357104986630869");
+
+        var report = await InspectAsync();
+
+        var run = Run(report, "run-native");
+        Assert.Equal(JournalRunState.Recoverable, run.State);
+        var adopted = Assert.Single(run.Items);
+        Assert.Equal("process", adopted.Kind);
+        Assert.Equal("91152 (started 134357104986630869)", adopted.What);
+        Assert.Equal($"still runs; adopted from its pid file in {launch} (ID, start time and command line match)", adopted.Status);
+        Assert.False(adopted.Unrecoverable);
+        Assert.Equal(("91152", "134357104986630869", FakeServerHost.CommandLineSha256("91152"), launch),
+            (adopted.Fields["pid"], adopted.Fields["startIdentity"], adopted.Fields["commandLineSha256"], adopted.Fields["launchDirectory"]));
+        var text = new StringWriter();
+        RunJournalStatus.Write(report, text, json: false);
+        Assert.Contains("RECOVERABLE run-native on pc, ", text.ToString());
+        Assert.Contains("  process 91152 (started 134357104986630869) on pc (client, since ", text.ToString());
+        // One pid-file read and one process check, nothing else.
+        Assert.Equal(["journal-read-all", "pid-file", "process-probe"], _host.Scripts);
+        Assert.Equal("91152:134357104986630869", _host.Runs.Single(run => run.Script == "process-probe").Variables["processes"]);
+        Assert.Empty(_host.Stops);
+    }
+
+    // What a pid file proves, and what it does not: a process gone (or an ID reused by another start) proves the launch gone; a
+    // missing or unreadable pid file, a live process whose start identity is not recorded, a launch that journalled no command
+    // line, and another command line leave it unrecoverable, never adopted.
+    [Fact] public async Task ALaunchsPidFileProvesItsProcessGoneOrItsOwnAndNothingLess()
+    {
+        string Expected(string pid) => FakeServerHost.CommandLineSha256(pid);
+        void Launch(string run, string? pidFile, string pid, bool commandLine = true)
+        {
+            string directory = "/srv/runs/" + run + "/client-1";
+            Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, commandLine
+                ? [("launchDirectory", directory), ("expectedCommandLineSha256", Expected(pid))] : [("launchDirectory", directory)]);
+            if (pidFile != null) PidFile(_host, directory, pidFile);
+        }
+        Launch("run-exited", "70 9070", "70");                      // its process has exited: no process 70
+        _host.Running(71, "8000");                                   // ID 71 now belongs to a process started at another time
+        Launch("run-reused", "71 9071", "71");
+        Launch("run-no-pid-file", null, "72");                        // killed before the launcher wrote its pid file
+        Launch("run-garbled", "not a pid", "73");
+        _host.Running(74, "9074");                                    // a Linux recorder's pid file: the PID only
+        Launch("run-pid-only", "74\n", "74");
+        Launch("run-pid-only-gone", "75\n", "75");
+        _host.Running(76, "9076");                                    // journalled before launches journalled their command line
+        Launch("run-no-command-line", "76 9076", "76", commandLine: false);
+        _host.Running(77, "9077");                                    // another program with the pid file's ID and start identity
+        _host.CommandLines[77] = new string('b', 64);
+        Launch("run-other-command-line", "77 9077", "77");
+
+        var report = await InspectAsync();
+
+        foreach (string run in new[] { "run-exited", "run-reused", "run-pid-only-gone" })
+        {
+            Assert.Equal(JournalRunState.Ended, Run(report, run).State);
+            Assert.Empty(Run(report, run).Items);
+        }
+        string Status(string run)
+        {
+            var status = Run(report, run);
+            Assert.Equal(JournalRunState.Unrecoverable, status.State);
+            var item = Assert.Single(status.Items);
+            Assert.Equal("launch", item.Kind);
+            Assert.True(item.Unrecoverable);
+            return item.Status;
+        }
+        Assert.Contains("/srv/runs/run-no-pid-file/client-1 does not exist", Status("run-no-pid-file"));
+        Assert.Contains("names no process ID and start identity (it holds 'not a pid')", Status("run-garbled"));
+        Assert.Contains("names process 74, which runs, but no start identity", Status("run-pid-only"));
+        Assert.Contains("names process 76 (started 9076), which still runs; the launch journalled no command line", Status("run-no-command-line"));
+        Assert.Contains("names process 77 (started 9077), which runs another command line than the launch's", Status("run-other-command-line"));
+        Assert.Empty(_host.Stops);
+    }
+
+    // The pid-file read and the server copy's top-level skip through this machine's own shell (bash, or Windows PowerShell);
+    // on Linux, also the command line a game started the Linux launchers' way (env executing it) has, as the probe hashes it.
+    [Fact] public async Task ThePidFileReadAndTheServerCopysSkipRunThroughThisMachinesShell()
+    {
+        var local = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);
+        string Dir(string name) { string path = Path.Combine(_root, "launches", name); Directory.CreateDirectory(path); return path; }
+        string windows = Dir("windows client"), linux = Dir("linux client"), empty = Dir("empty"), missing = Path.Combine(_root, "launches", "never made");
+        File.WriteAllText(Path.Combine(windows, "pid"), "91152 134357104986630869");
+        File.WriteAllText(Path.Combine(linux, "pid"), "4242\n");
+        File.WriteAllText(Path.Combine(empty, "pid"), "");
+        var files = await RunJournalStatus.ReadPidFilesAsync(local, [windows, linux, empty, missing], TimeSpan.FromSeconds(60), default);
+        Assert.Equal([(RunJournalStatus.PidFileState.Found, 91152, "134357104986630869"), (RunJournalStatus.PidFileState.Found, 4242, null),
+            (RunJournalStatus.PidFileState.Malformed, 0, null), (RunJournalStatus.PidFileState.Missing, 0, null)],
+            files.Select(file => (file.State, file.Pid, file.StartIdentity)));
+
+        // The install's top-level logs/ stays behind; a nested one, the rest and the install itself are untouched.
+        string install = Path.Combine(_root, "server install"), runtime = Path.Combine(_root, "runs", "run 1", "runtime");
+        foreach (var (relative, text) in new[] { ("valheim_server.x86_64", "game"), ("logs/connection_log_2456.txt", "steam"), ("logs/stats_log.txt", "steam"),
+                     ("BepInEx/logs/kept.txt", "own"), (".hidden", "dot") })
+        {
+            string file = Path.Combine(install, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, text);
+        }
+        await HostInstall.CopyAsync(local, install, runtime, TimeSpan.FromSeconds(60), HostInstall.ServerRuntimeSkips, default);
+        Assert.Equal(new[] { "valheim_server.x86_64", ".hidden", "BepInEx/logs/kept.txt" }.Order(StringComparer.Ordinal),
+            WorldFixture.Manifest(runtime).Keys.Select(key => key.Replace('\\', '/')).Order(StringComparer.Ordinal));
+        Assert.Equal(5, WorldFixture.Manifest(install).Count);
+        string whole = Path.Combine(_root, "runs", "run 2", "runtime");
+        await HostInstall.CopyAsync(local, install, whole, TimeSpan.FromSeconds(60));
+        Assert.Equal(WorldFixture.Manifest(install), WorldFixture.Manifest(whole));
+
+        if (!OperatingSystem.IsLinux()) return;
+        string sleep = File.Exists("/usr/bin/sleep") ? "/usr/bin/sleep" : "/bin/sleep";
+        var started = (await local.RunAsync("setsid env \"$exe\" 60 > /dev/null 2>&1 < /dev/null & echo \"VT-PID $!\"",
+            new Dictionary<string, string> { ["exe"] = sleep }, TimeSpan.FromSeconds(30))).EnsureSuccess("starting sleep");
+        int pid = int.Parse(InteractiveClient.Line(started.Stdout, "VT-PID ")!, System.Globalization.CultureInfo.InvariantCulture);
+        try
+        {
+            // env executes the game in place: until it has, the command line is env's, so wait for the exec as the start's probe does.
+            var probed = (await HostProcessProbe.ProbeAsync(local, [(pid, "")], TimeSpan.FromSeconds(30), settle: true))[(pid, "")];
+            Assert.Equal(ProbedState.Same, probed.State);
+            Assert.Equal(HostProcessProbe.ExpectedCommandLineSha256(false, sleep, ["60"]), probed.CommandLineSha256);
+        }
+        finally { try { System.Diagnostics.Process.GetProcessById(pid).Kill(); } catch (ArgumentException) { } }
+    }
+
+    // A host that cannot answer for a pid file, or for the process it names, leaves the launch unrecoverable.
+    [Fact] public async Task APidFileOrItsProcessThatCannotBeCheckedLeavesTheLaunchUnrecoverable()
+    {
+        _host.Running(80, "9080");
+        Line(_host, "run-unread", "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/80"), ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("80")));
+        PidFile(_host, "/l/80", "80 9080");
+        _host.Failures["pid-file"] = FakeServerHost.TransportFailure;
+        Assert.Contains("cannot be read: ", Assert.Single(Run(await InspectAsync(), "run-unread").Items).Status);
+        _host.Failures.Remove("pid-file");
+        _host.Failures["process-probe"] = FakeServerHost.TransportFailure;
+        var item = Assert.Single(Run(await InspectAsync(), "run-unread").Items);
+        Assert.True(item.Unrecoverable);
+        Assert.Contains("names process 80 (started 9080), which cannot be checked: ", item.Status);
+    }
+
     // A lease counts only while its journalled owner still holds it on the lease host; one journalled without its lease id cannot be checked.
     [Fact] public async Task ALeaseIsLeftOnlyWhileItsOwnerHoldsItAndAnUncheckableOneIsUnrecoverable()
     {

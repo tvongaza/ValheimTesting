@@ -32,7 +32,11 @@ internal sealed record JournalItem(string Kind, string Host, string Actor, strin
 }
 
 internal sealed record JournalRunStatus(string Run, JournalRunState State, string Reason, DateTime FirstUtc, DateTime LastUtc,
-    IReadOnlyList<string> Hosts, string? Runner, IReadOnlyList<JournalItem> Items);
+    IReadOnlyList<string> Hosts, string? Runner, IReadOnlyList<JournalItem> Items)
+{
+    /// <summary>Launches never journalled as started whose pid file proves their process gone: a recovery journals them settled.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public IReadOnlyList<JournalItem> SettledLaunches { get; init; } = [];
+}
 
 /// <summary>One host's journal as read: where, how many runs, and why it (or some of it) could not be read.</summary>
 internal sealed record JournalHostStatus(string Name, string Journal, int Runs, string? Error);
@@ -130,6 +134,7 @@ internal static class RunJournalStatus
                             break;
                         }
                         case JournalEntry.ProcessStopped: left.Remove($"process {Field("pid")} {Field("startIdentity")}"); break;
+                        case JournalEntry.LaunchSettled: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
                         case JournalEntry.LeaseHeld: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "held"); break;
                         case JournalEntry.LeaseKept: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "kept: its client may still run", kept: true); break;
                         case JournalEntry.LeaseReleased: left.Remove($"lease {Field("account")} {Field("owner")}"); break;
@@ -144,18 +149,44 @@ internal static class RunJournalStatus
                 list.AddRange(left.Values);
             }
 
-        // The host's word on each process and lock still open: one process check per host, one lock check per lock.
+        // A launch left open (its process never journalled) by a run that did not end cleaned up: its pid file, read on its host,
+        // names the process it started, if any. One read per host.
+        // Every host at once, as the journals are read: one that cannot answer does not hold up the others.
+        var pidFiles = new Dictionary<(string Host, string Directory), PidFile>();
+        var pidReads = await Task.WhenAll(pending.Where(run => !(ended.TryGetValue(run.Key, out var end) && end.Cleaned)).SelectMany(run => run.Value)
+            .Where(item => item.Kind == "launch" && item.What.Length != 0).GroupBy(item => item.Host, StringComparer.Ordinal).Select(async group =>
+            {
+                var directories = group.Select(item => item.What).Distinct(StringComparer.Ordinal).ToList();
+                IReadOnlyList<PidFile> files;
+                try { files = await ReadPidFilesAsync(group.First().Connection, directories, timeout, cancellation).ConfigureAwait(false); }
+                catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidOperationException)
+                {
+                    files = directories.Select(_ => new PidFile(PidFileState.Unreadable, 0, null, error.Message)).ToList();
+                }
+                return (Host: group.Key, Directories: directories, Files: files);
+            })).ConfigureAwait(false);
+        foreach (var (host, directories, files) in pidReads)
+            for (int i = 0; i < directories.Count; i++) pidFiles[(host, directories[i])] = files[i];
+
+        // The host's word on each process and lock still open: one process check per host (the processes journalled, and those
+        // pid files name), one lock check per lock.
         var probed = new Dictionary<(string Host, int Pid, string Start), ProbedProcess>();
         var probeFailed = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var group in pending.Values.SelectMany(list => list).Where(item => item.Kind == "process").GroupBy(item => item.Host, StringComparer.Ordinal))
+        var asked = pending.Values.SelectMany(list => list).Where(item => item.Kind == "process").Select(item => (item.Host, item.Connection,
+                Pid: int.TryParse(item.Fields.GetValueOrDefault("pid"), NumberStyles.None, CultureInfo.InvariantCulture, out int pid) ? pid : 0,
+                Start: item.Fields.GetValueOrDefault("startIdentity") ?? ""))
+            .Concat(pending.Values.SelectMany(list => list).Where(item => item.Kind == "launch")
+                .Select(item => (item.Host, item.Connection, File: pidFiles.GetValueOrDefault((item.Host, item.What))))
+                .Where(launch => launch.File is { State: PidFileState.Found })
+                .Select(launch => (launch.Host, launch.Connection, Pid: launch.File!.Pid, Start: launch.File.StartIdentity ?? "")));
+        foreach (var group in asked.GroupBy(process => process.Host, StringComparer.Ordinal))
         {
-            var processes = group.Select(item => (Pid: int.TryParse(item.Fields.GetValueOrDefault("pid"), NumberStyles.None, CultureInfo.InvariantCulture, out int pid) ? pid : 0,
-                    Start: item.Fields.GetValueOrDefault("startIdentity") ?? ""))
+            var processes = group.Select(process => (process.Pid, process.Start))
                 .Where(process => process.Pid > 0 && process.Start.All(char.IsAsciiDigit)).Distinct().ToList();
             try
             {
-                foreach (var (asked, process) in await HostProcessProbe.ProbeAsync(group.First().Connection, processes, timeout, cancellation).ConfigureAwait(false))
-                    probed[(group.Key, asked.Pid, asked.StartIdentity)] = process;
+                foreach (var (question, process) in await HostProcessProbe.ProbeAsync(group.First().Connection, processes, timeout, cancellation).ConfigureAwait(false))
+                    probed[(group.Key, question.Pid, question.StartIdentity)] = process;
             }
             catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidOperationException) { probeFailed[group.Key] = error.Message; }
         }
@@ -168,18 +199,21 @@ internal static class RunJournalStatus
             var runner = ordered.LastOrDefault(entry => entry.Record.Runner != null && entry.Record.Actor != RunRecovery.Actor).Record?.Runner;
             bool isEnded = ended.TryGetValue(run.Key, out var end);
             var items = new List<JournalItem>();
+            var settled = new List<JournalItem>();
             foreach (var item in pending.GetValueOrDefault(run.Key) ?? [])
             {
-                var judged = await JudgeAsync(item, isEnded && end.Cleaned, probed, probeFailed, timeout, cancellation,
+                var judged = await JudgeAsync(item, isEnded && end.Cleaned, probed, probeFailed, pidFiles, timeout, cancellation,
                     item.Host == leaseHost && !string.IsNullOrEmpty(leaseDirectory) ? leaseDirectory : null).ConfigureAwait(false);
                 if (judged != null) items.Add(judged);
+                else if (item.Kind == "launch" && !(isEnded && end.Cleaned))
+                    settled.Add(new JournalItem(item.Kind, item.Host, item.Actor, item.What, "its pid file's process is gone", item.SinceUtc) { Fields = item.Fields });
             }
             var (state, reason) = Verdict(isEnded ? end : null, runner, items);
             if (abandoned.TryGetValue(run.Key, out string? why)) reason += $"; its cleanup was abandoned ({why})";
             if (recovered.Contains(run.Key)) reason += "; recovered by env recover/teardown" + (items.Count == 0 ? "" : ", but not all of it");
             runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc,
                 run.Select(entry => entry.Host).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(), runner?.ToString(),
-                items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList()));
+                items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList()) { SettledLaunches = settled });
         }
         // Copies made before runs journalled them: every copy any journal names is the journal's to judge.
         var comparison = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -200,14 +234,15 @@ internal static class RunJournalStatus
 
     // One open entry as the host now shows it: null when it is provably gone after all (a process that exited, a lock someone released).
     private static async Task<JournalItem?> JudgeAsync(Pending item, bool endedClean, Dictionary<(string Host, int Pid, string Start), ProbedProcess> probed,
-        Dictionary<string, string> probeFailed, TimeSpan timeout, CancellationToken cancellation, string? inventoryLeaseDirectory)
+        Dictionary<string, string> probeFailed, Dictionary<(string Host, string Directory), PidFile> pidFiles, TimeSpan timeout, CancellationToken cancellation,
+        string? inventoryLeaseDirectory)
     {
         var judged = new JournalItem(item.Kind, item.Host, item.Actor, item.What, item.Status, item.SinceUtc) { Kept = item.Kept, Fields = item.Fields };
         switch (item.Kind)
         {
             case "launch":
                 // A launch the run itself saw fail and cleaned up after is over; one an interrupted run left may have started a game.
-                return endedClean ? null : judged with { Unrecoverable = true };
+                return endedClean ? null : JudgeLaunch(item, judged, pidFiles, probed, probeFailed);
             case "process":
             {
                 if (probeFailed.TryGetValue(item.Host, out string? why)) return judged with { Status = "cannot be checked: " + why, Unrecoverable = true };
@@ -276,6 +311,118 @@ internal static class RunJournalStatus
         }
     }
 
+    // A launch whose process was never journalled (#257): its pid file, which the launcher writes as the game starts, says which
+    // process it started. Proven gone when no process has that ID and start identity now (an ID another process reused counts as
+    // gone, and is never stopped); adopted as the run's process, which env recover stops by identity, only when that process
+    // runs the command line the launch journalled. Anything else (no pid file, an unreadable one, a pid file without a start
+    // identity naming a running process, a launch journalled without its command line, another command line) stays unrecoverable.
+    private static JournalItem? JudgeLaunch(Pending item, JournalItem judged, Dictionary<(string Host, string Directory), PidFile> pidFiles,
+        Dictionary<(string Host, int Pid, string Start), ProbedProcess> probed, Dictionary<string, string> probeFailed)
+    {
+        string where = $"its pid file in {item.What}";
+        if (!pidFiles.TryGetValue((item.Host, item.What), out var file) || file.State == PidFileState.Unreadable)
+            return judged with { Status = $"launch started before its process was journalled, and {where} cannot be read: {file?.Detail ?? "no directory was journalled"}", Unrecoverable = true };
+        if (file.State == PidFileState.Missing)
+            return judged with { Status = $"launch started before its process was journalled, and {where} does not exist, so a process it may have started cannot be named", Unrecoverable = true };
+        if (file.State == PidFileState.Malformed)
+            return judged with { Status = $"launch started before its process was journalled, and {where} names no process ID and start identity ({file.Detail})", Unrecoverable = true };
+        string named = file.StartIdentity == null ? $"process {file.Pid}" : $"process {file.Pid} (started {file.StartIdentity})";
+        if (probeFailed.TryGetValue(item.Host, out string? why)) return judged with { Status = $"{where} names {named}, which cannot be checked: {why}", Unrecoverable = true };
+        if (!probed.TryGetValue((item.Host, file.Pid, file.StartIdentity ?? ""), out var process) || process.State == ProbedState.Unreadable)
+            return judged with { Status = $"{where} names {named}, whose state cannot be read on {item.Host}", Unrecoverable = true };
+        if (process.State is ProbedState.Gone or ProbedState.Reused) return null;
+        if (file.StartIdentity == null)
+            return judged with { Status = $"{where} names {named}, which runs, but no start identity, so it cannot be proven the launch's", Unrecoverable = true };
+        string expected = item.Fields.GetValueOrDefault("expectedCommandLineSha256") ?? "";
+        if (expected.Length == 0)
+            return judged with { Status = $"{where} names {named}, which still runs; the launch journalled no command line, so only its ID and start time match", Unrecoverable = true };
+        if (process.CommandLineSha256 == null)
+            return judged with { Status = $"{where} names {named}, which still runs; its command line cannot be read, so only its ID and start time match", Unrecoverable = true };
+        if (!string.Equals(process.CommandLineSha256, expected, StringComparison.OrdinalIgnoreCase))
+            return judged with { Status = $"{where} names {named}, which runs another command line than the launch's", Unrecoverable = true };
+        var fields = new Dictionary<string, string>(item.Fields, StringComparer.Ordinal)
+        {
+            ["pid"] = file.Pid.ToString(CultureInfo.InvariantCulture), ["startIdentity"] = file.StartIdentity, ["commandLineSha256"] = expected, ["adoptedFrom"] = item.What,
+        };
+        return judged with
+        {
+            Kind = "process", What = $"{file.Pid} (started {file.StartIdentity})", Fields = fields,
+            Status = $"still runs; adopted from {where} (ID, start time and command line match)",
+        };
+    }
+
+    internal enum PidFileState { Found, Missing, Unreadable, Malformed }
+
+    /// <summary>A launch's pid file as its host read it: the process ID and, where the launcher records it (Windows), the start identity.</summary>
+    internal sealed record PidFile(PidFileState State, int Pid, string? StartIdentity, string? Detail);
+
+    /// <summary>Reads <c>&lt;directory&gt;/pid</c> for each directory on <paramref name="host"/>, in order. Changes nothing.</summary>
+    internal static async Task<IReadOnlyList<PidFile>> ReadPidFilesAsync(IGameHost host, IReadOnlyList<string> directories, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsPidFiles : BashPidFiles,
+            new Dictionary<string, string> { ["dirs"] = string.Join('\n', directories) }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Reading launch pid files on {host.Name}");
+        if (InteractiveClient.Line(result.Stdout, "VT-PIDFILE-END") == null)
+            throw new HostOperationException($"The pid file check on {host.Name} did not finish", result);
+        var found = new PidFile?[directories.Count];
+        foreach (string line in result.Stdout.Split('\n'))
+        {
+            // VT-PIDFILE <index> missing|unreadable|file <base64>
+            var parts = line.Trim().Split(' ');
+            if (parts.Length < 3 || parts[0] != "VT-PIDFILE" || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out int index)
+                || index >= directories.Count) continue;
+            found[index] = parts[2] switch
+            {
+                "missing" => new(PidFileState.Missing, 0, null, null),
+                "file" => Parse(parts.Length == 4 ? parts[3] : ""),
+                _ => new(PidFileState.Unreadable, 0, null, "the host could not read it"),
+            };
+        }
+        return found.Select(file => file ?? new PidFile(PidFileState.Unreadable, 0, null, "the host's reply did not name it")).ToList();
+
+        static PidFile Parse(string encoded)
+        {
+            string text;
+            try { text = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded)).Trim(); }
+            catch (FormatException) { return new(PidFileState.Unreadable, 0, null, "the host's reply was not base64"); }
+            var words = text.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length is 1 or 2 && int.TryParse(words[0], NumberStyles.None, CultureInfo.InvariantCulture, out int pid) && pid > 0
+                && (words.Length == 1 || (words[1].Length is > 0 and <= 20 && words[1].All(char.IsAsciiDigit))))
+                return new(PidFileState.Found, pid, words.Length == 2 ? words[1] : null, null);
+            return new(PidFileState.Malformed, 0, null, text.Length == 0 ? "it is empty" : $"it holds '{(text.Length > 40 ? text[..40] + "..." : text)}'");
+        }
+    }
+
+    // Variables: dirs (one launch or boot directory per line). One line per directory, in order: VT-PIDFILE <index> missing,
+    // unreadable, or file <base64 of its first 200 bytes>; then VT-PIDFILE-END. Reads only.
+    internal static readonly string BashPidFiles = """
+        i=0
+        while IFS= read -r dir; do
+          if [ ! -e "$dir/pid" ]; then echo "VT-PIDFILE $i missing"
+          elif [ ! -f "$dir/pid" ] || [ ! -r "$dir/pid" ]; then echo "VT-PIDFILE $i unreadable"
+          else echo "VT-PIDFILE $i file $(head -c 200 -- "$dir/pid" | base64 | tr -d '\n')"; fi
+          i=$((i + 1))
+        done <<< "$dirs"
+        echo VT-PIDFILE-END
+        """.ReplaceLineEndings("\n");
+    // Shared for writing and deleting, so a launcher moving its file into place is never refused by this read.
+    internal static readonly string WindowsPidFiles = """
+        $i = 0
+        foreach ($dir in ($dirs -split "`n")) {
+            $file = Join-Path $dir 'pid'
+            if (-not [IO.File]::Exists($file)) { 'VT-PIDFILE ' + $i + ' missing' }
+            else {
+                try {
+                    $stream = [IO.File]::Open($file, 'Open', 'Read', 'ReadWrite, Delete')
+                    try { $bytes = New-Object byte[] 200; $read = $stream.Read($bytes, 0, 200) } finally { $stream.Dispose() }
+                    'VT-PIDFILE ' + $i + ' file ' + [Convert]::ToBase64String($bytes, 0, $read)
+                } catch { 'VT-PIDFILE ' + $i + ' unreadable' }
+            }
+            $i++
+        }
+        'VT-PIDFILE-END'
+        """.ReplaceLineEndings("\n");
+
     private static (JournalRunState State, string Reason) Verdict((string State, bool Cleaned)? end, JournalRunner? runner, IReadOnlyList<JournalItem> items)
     {
         string ending = end is { } e ? $"ended {e.State}" + (e.Cleaned ? "" : ", cleanup not verified") : "never journalled its end";
@@ -290,6 +437,41 @@ internal static class RunJournalStatus
         if (items.Any(item => !item.Kept)) return (JournalRunState.Recoverable, ending + "; it left what is provably its own");
         if (items.Count != 0) return (JournalRunState.Kept, ending + "; it kept copies or leases on purpose");
         return (JournalRunState.Ended, ending);
+    }
+
+    /// <summary>
+    /// Why <paramref name="run"/>, another process's, stops a new run from starting, as a preflight says it; null when it does
+    /// not. <paramref name="here"/>: the run touched a host the new run uses (a run elsewhere that shares only the lease host
+    /// is no conflict while it goes). A run that left something, provably its own or not, always stops it.
+    /// </summary>
+    internal static string? Problem(JournalRunStatus run, bool here)
+    {
+        string where = string.Join(", ", run.Hosts);
+        return run.State switch
+        {
+            JournalRunState.Live when here => $"run {run.Run} is still going on {where} ({run.Reason}); wait for it to end",
+            JournalRunState.Recoverable => $"run {run.Run} left {run.Items.Count} thing(s) on {where} ({run.Reason}); see valheim-test env status, then valheim-test env recover --run {run.Run}",
+            JournalRunState.Unrecoverable => $"run {run.Run} left something on {where} that cannot be proven its own ({run.Reason}); see valheim-test env status and settle it by hand",
+            JournalRunState.Unknown when run.Runner != null && here => $"run {run.Run} on {where} may still be going: {run.Reason}",
+            _ => null,
+        };
+    }
+
+    /// <summary>A preflight's refusal for a host whose journal could not be read.</summary>
+    internal static string UnreadableProblem(string error) => $"could not be read, so whether another run is going there is unknown: {error}";
+
+    /// <summary>
+    /// A preflight's journal refusals from <paramref name="status"/>: each host whose journal could not be read, and each run of
+    /// another process (<see cref="Problem"/>), <paramref name="here"/> saying whether that run touched a host the new run uses.
+    /// The one wording the campaign's preflight and a bare <c>env preflight</c> share.
+    /// </summary>
+    internal static List<CampaignPreflightProblem> Problems(JournalStatusReport status, Func<JournalRunStatus, bool> here)
+    {
+        var problems = status.Hosts.Where(host => host.Error != null).Select(host => new CampaignPreflightProblem(host.Name, "run journal", UnreadableProblem(host.Error!))).ToList();
+        string self = JournalRunner.Current.ToString();
+        foreach (var run in status.Runs.Where(run => run.Runner != self))
+            if (Problem(run, here(run)) is { } problem) problems.Add(new(run.Hosts[0], "run journal", problem));
+        return problems;
     }
 
     /// <summary>The report as <c>valheim-test env status</c> prints it: each host, then each run that left something, with what it left.</summary>

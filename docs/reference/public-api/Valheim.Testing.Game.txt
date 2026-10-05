@@ -614,6 +614,7 @@ static class Valheim.Testing.Game.DungeonRooms
   method static System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.SavedDungeon> Read(Valheim.Testing.Game.GameActor actor, System.String capabilityPath, System.Single x, System.Single z, System.Single radius = 64)
   method static System.Void RequireWithinZone(Valheim.Testing.Game.SavedDungeon dungeon, System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.RoomSize> sizes = null, System.Single tolerance = 0.01)
 sealed class Valheim.Testing.Game.EnvironmentInventory
+  method System.Threading.Tasks.Task`1<System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.CampaignPreflightProblem>> LocalJournalProblemsAsync(System.Threading.CancellationToken cancellation = null)
   method System.Void .ctor()
   method System.Void Validate(System.String directory)
   method static System.Threading.Tasks.Task`1<System.Boolean> RecoverRunAsync(System.String inventoryPath, System.String runId, System.Boolean teardown, System.IO.TextWriter output, System.Boolean json = false, System.Threading.CancellationToken cancellation = null)
