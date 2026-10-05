@@ -15,8 +15,12 @@ if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(a
 if (args.Length != 0 && args[0] == "copies") return CopiesCommand.Run(args[1..]);
 if (args.Length != 0 && args[0] == "env") return await EnvCommand.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "start") args = args[1..];
-if (args.Length != 0 && args[0] == "server-load") return await ServerLoad.RunAsync(args[1..]);
-if (args.Length != 0 && args[0] == "server-load-ab") return await ServerLoadComparison.RunAsync(args[1..]);
+if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
+{
+    int result = args[0] == "server-load" ? await ServerLoad.RunAsync(args[1..]) : await ServerLoadComparison.RunAsync(args[1..]);
+    if (result is 0 or 1) SmokeProject.PrintHint(server: true); // a run happened (2: usage, 3: refused)
+    return result;
+}
 
 // The default path hosts a world in an owned client; server-load uses an owned dedicated server.
 if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
@@ -64,7 +68,6 @@ try
     dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
     if (!dependencies.Ready)
         throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
-    await SmokeProject.CreateAsync(output, server: false, cancel.Token);
     NativeDependencyLock? comparison = null;
     string? compareMod = null;
     if (options.TryGetValue("--compare-mod", out string? compareFile))
@@ -128,7 +131,7 @@ try
     exitCode = passed ? 0 : 1;
     outcome = $": hosted fixture, {selectedMods.Count} selected mod(s), {environment.Mod.Arms.Count} arm(s); private evidence in {output}";
 }
-catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or HttpRequestException or OperationCanceledException)
+catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException)
 {
     Console.Error.WriteLine("REFUSED: " + failure.Message);
 }
@@ -145,7 +148,10 @@ finally
         }
 }
 if (outcome != null)
+{
     Console.WriteLine((exitCode == 0 ? "PASS" : "FAIL") + outcome + $"; {elapsed.Elapsed.TotalSeconds:F1}s");
+    SmokeProject.PrintHint(server: false);
+}
 return exitCode;
 
 file static class Arguments
