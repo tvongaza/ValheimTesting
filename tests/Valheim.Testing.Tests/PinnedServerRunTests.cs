@@ -16,7 +16,7 @@ public sealed class PinnedServerRunTests : IDisposable
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
 
     // runtimePins: the pins to write (default: the runtime's own). Unpinned: pinning "none", no pins and no fixture manifests.
-    private string WritePlan(bool linux, string[]? patchers = null, Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false,
+    private string WritePlan(bool linux, Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false,
         object? client = null)
     {
         Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
@@ -34,7 +34,6 @@ public sealed class PinnedServerRunTests : IDisposable
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
             ["pins"] = unpinned ? new Dictionary<string, string>() : new Dictionary<string, string> { ["worlduid"] = "1" },
             ["port"] = port < 1024 ? 5577 : port,
-            ["patchers"] = patchers ?? [],
             ["logScan"] = logScan ?? [],
         };
         if (unpinned) plan["pinning"] = "none";
@@ -82,13 +81,13 @@ public sealed class PinnedServerRunTests : IDisposable
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
         Assert.Equal(new[] { "enough free disk space for the copies", "copy and verify pinned runtime", "copy and verify pinned world", "copied runtime has the plan's server executable",
-                "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
+                "copied runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
                 "remove the runtime copy, keeping what the run changed" },
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
         Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
-        Assert.Equal(new[] { "Preflight", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup" },
+        Assert.Equal(new[] { "Preflight", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup" },
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
         Assert.Equal("validate", result.GetProperty("Provenance").GetProperty("mode").GetString());
         Assert.Equal(InstallPins.Of(Runtime).Game, result.GetProperty("Provenance").GetProperty("runtimeGameSha256").GetString());
@@ -342,17 +341,15 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Matches(events.Listening, "[Info   :valheimCLI] Command server listening on 127.0.0.1:5591");
         Assert.Same(StartupEvents.StartupFailures, events.Failures);
     }
-    [Fact] public async Task ALeftoverPatcherFailsValidationUnlessThePlanNamesIt()
+    [Fact] public async Task ALeftoverPatcherFailsValidationByThePatchersPin()
     {
+        WritePlan(linux: HostRunsLinux); var pinned = InstallPins.Of(Runtime); // The runtime pinned clean, with no patchers.
         Directory.CreateDirectory(Path.Combine(Runtime, "BepInEx", "patchers"));
         File.WriteAllText(Path.Combine(Runtime, "BepInEx", "patchers", "RemovedMod.Preloader.dll"), "patcher");
-        string plan = WritePlan(linux: HostRunsLinux);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
-        var step = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "copied runtime's BepInEx patchers are the plan's");
-        Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("RemovedMod.Preloader.dll", step.GetProperty("Error").GetString());
-        // Named, the same runtime passes.
-        plan = WritePlan(linux: HostRunsLinux, patchers: ["RemovedMod.Preloader.dll"]);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", plan, Output + "-named"], Options()));
+        // Its manifest is regenerated with the leftover in it, so only the pin can tell.
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", WritePlan(linux: HostRunsLinux, runtimePins: pinned), Output], Options()));
+        var step = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "copied runtime is the pinned game build, loader and patchers");
+        Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("holding RemovedMod.Preloader.dll", step.GetProperty("Error").GetString());
     }
     // A scenario-registered log (an owned client's) is scanned with the run's at teardown: a patch on a method that does
     // not exist fails a passing scenario, unless the plan reclassifies it with a reason.

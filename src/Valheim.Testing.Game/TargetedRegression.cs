@@ -457,7 +457,6 @@ public sealed class TargetedRegression
             Mode = "owned", Install = install, Port = env.Client.Port, Character = env.Client.Character,
             LaunchArguments = env.Client.LaunchArguments, StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
             Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),
-            Patchers = patchers.Select(file => Path.GetFileName(file.File.File)).ToArray(),
             InstallPins = installPins,
             CliManifest = env.Cli.Manifest,
             Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // The hosted rounds add their own.

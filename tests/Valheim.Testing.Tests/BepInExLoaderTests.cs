@@ -127,7 +127,8 @@ public class BepInExLoaderTests
     }
 }
 
-// A leftover preloader patcher rewrites game types before any plugin loads; a runtime's patchers are the plan's or none.
+// A leftover preloader patcher rewrites game types before any plugin loads. The patchers pin refuses one and names what the
+// folder holds; plans name no patchers since #295.
 public sealed class BepInExPatchersTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("patchers-").FullName;
@@ -139,32 +140,46 @@ public sealed class BepInExPatchersTests : IDisposable
         if (directory) Directory.CreateDirectory(Path.Combine(Patchers, name)); else File.WriteAllText(Path.Combine(Patchers, name), "patcher");
     }
 
-    [Fact] public void NoOrAnEmptyPatchersDirectoryIsClean()
+    [Fact] public void NoOrAnEmptyPatchersDirectoryHashesTheSame()
     {
-        BepInExLoader.RequirePatchers(_root, [], "runtime");
+        FakeInstalls.Server(_root);
+        var pins = InstallPins.Of(_root);
         Directory.CreateDirectory(Patchers);
-        BepInExLoader.RequirePatchers(_root, [], "runtime");
+        pins.Check(_root, "runtime"); // An empty folder is a clean one, as no folder is.
     }
-    [Fact] public void NamedPatchersAreAccepted()
+
+    [Fact] public void ALeftoverPatcherIsRefusedByThePinNamingWhatTheFolderHolds()
     {
-        Add("HookGenPatcher", directory: true); Add("Other.Patcher.dll");
-        BepInExLoader.RequirePatchers(_root, ["Other.Patcher.dll", "HookGenPatcher"], "runtime");
+        FakeInstalls.Server(_root);
+        Add("HookGenPatcher", directory: true); File.WriteAllText(Path.Combine(Patchers, "HookGenPatcher", "Hook.dll"), "hook");
+        var pins = InstallPins.Of(_root);
+        pins.Check(_root, "runtime"); // The control: the pinned folder, a needed patcher in it, passes.
+        Add("RemovedMod.Preloader.dll");
+        var error = Assert.Throws<InvalidOperationException>(() => pins.Check(_root, "runtime"));
+        Assert.Contains("the patchers differ", error.Message);
+        Assert.Contains("holding HookGenPatcher, RemovedMod.Preloader.dll", error.Message);
+        Assert.Contains("a clean runtime has an empty patchers folder", error.Message);
+        File.Delete(Path.Combine(Patchers, "RemovedMod.Preloader.dll"));
+        Directory.Delete(Path.Combine(Patchers, "HookGenPatcher"), true);
+        Assert.Contains(", empty, pinned patchers", Assert.Throws<InvalidOperationException>(() => pins.Check(_root, "runtime")).Message);
     }
-    [Fact] public void ALeftoverPatcherIsRefusedByName()
-    {
-        Add("HookGenPatcher", directory: true); Add("RemovedMod.Preloader.dll");
-        var error = Assert.Throws<InvalidOperationException>(() => BepInExLoader.RequirePatchers(_root, ["HookGenPatcher"], "runtime"));
-        Assert.Contains("RemovedMod.Preloader.dll", error.Message); Assert.DoesNotContain("HookGenPatcher,", error.Message);
-        Assert.Contains("empty patchers directory", error.Message);
-    }
-    [Fact] public void ANamedPatcherThatIsNotThereIsRefused()
-    {
-        var error = Assert.Throws<InvalidOperationException>(() => BepInExLoader.RequirePatchers(_root, ["HookGenPatcher"], "runtime"));
-        Assert.Contains("HookGenPatcher", error.Message);
-    }
+
+    // #295: a plan that still names its patchers, at the plan's root or in a client section, is refused with what to do.
     [Theory]
-    [InlineData("sub/Patcher.dll")] [InlineData(@"sub\Patcher.dll")] [InlineData("..")] [InlineData(" ")]
-    public void PatcherNamesAreSingleEntries(string name) =>
-        Assert.Throws<ArgumentException>(() => BepInExLoader.CheckPatcherNames([name]));
-    [Fact] public void APatcherIsNamedOnce() => Assert.Throws<ArgumentException>(() => BepInExLoader.CheckPatcherNames(["A.dll", "a.dll"]));
+    [InlineData("""{ "patchers": ["HookGenPatcher"] }""")]
+    [InlineData("""{ "patchers": [] }""")]
+    [InlineData("""{ "client": { "mode": "owned", "patchers": [] } }""")]
+    public void APlanThatStillNamesPatchersIsRefusedNamingThePin(string json)
+    {
+        string path = Path.Combine(_root, "plan.json");
+        File.WriteAllText(path, json);
+        var error = Assert.ThrowsAny<Exception>(() => ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path));
+        string message = error.Message + " " + error.InnerException?.Message;
+        Assert.Contains("patchers was removed (ValheimTesting #295)", message);
+        Assert.Contains("the patchers pin in runtimePins and installPins", message);
+        Assert.Contains("Delete patchers from the plan.", message);
+        // The control: the same plan without the names is read, and its pins keep their patchers hash.
+        File.WriteAllText(path, """{ "runtimePins": { "game": "g", "loader": "l", "patchers": "p" }, "client": { "mode": "owned" } }""");
+        Assert.Equal("p", ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path).RuntimePins!.Patchers);
+    }
 }

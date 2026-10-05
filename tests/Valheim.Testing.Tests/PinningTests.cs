@@ -319,7 +319,7 @@ public sealed class PinningTests : IDisposable
 
     private string Runtime => Path.Combine(_root, "runtime");
     private string World => Path.Combine(_root, "world");
-    private string WritePlan(object? pinning = null, InstallPins? runtimePins = null, bool manifests = true, string[]? patchers = null)
+    private string WritePlan(object? pinning = null, InstallPins? runtimePins = null, bool manifests = true)
     {
         Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
         string server = Path.Combine(Runtime, OperatingSystem.IsWindows() ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable);
@@ -333,7 +333,6 @@ public sealed class PinningTests : IDisposable
             ["world"] = new { source = World, sha256 = manifests ? WorldFixture.Manifest(World) : new Dictionary<string, string>() },
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
             ["port"] = FreePort(),
-            ["patchers"] = patchers ?? [],
         };
         if (pinning != null) plan["pinning"] = pinning;
         else { plan["pins"] = new Dictionary<string, string> { ["worlduid"] = "1" }; plan["runtimePins"] = runtimePins ?? InstallPins.Of(Runtime); }
@@ -373,15 +372,13 @@ public sealed class PinningTests : IDisposable
             case "core": File.WriteAllText(Path.Combine(Runtime, "BepInEx", "core", "BepInEx.dll"), "bepinex 5.4.24"); break;
             case "patcher": Directory.CreateDirectory(Path.Combine(Runtime, "BepInEx", "patchers")); File.WriteAllText(Path.Combine(Runtime, "BepInEx", "patchers", "Hooks.dll"), "hooks"); break;
         }
-        // A patcher is named, so the patcher-names check passes and only its build is in question.
-        string[] named = change == "patcher" ? ["Hooks.dll"] : [];
-        string plan = WritePlan(runtimePins: pinned, patchers: named);
+        string plan = WritePlan(runtimePins: pinned);
         string output = Path.Combine(_root, "out");
         Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, output], Options()));
         var step = Step(Result(output), "copied runtime is the pinned game build, loader and patchers");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains(message, step.GetProperty("Error").GetString());
         // The control: the same runtime pinned as it now is passes.
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", WritePlan(patchers: named), output + "-repinned"], Options()));
+        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", WritePlan(), output + "-repinned"], Options()));
     }
 
     [Fact] public async Task AnUnpinnedRunRunsWarnsAndMarksEveryReportAndEvidenceFile()

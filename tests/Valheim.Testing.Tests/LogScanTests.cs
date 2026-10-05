@@ -354,25 +354,24 @@ public sealed class LogScanTests : IDisposable
         Assert.Equal(1, Count(report.Logs[0], LogScanner.UnknownWarning).Count);
     }
 
-    [Fact] public void APlanReadsItsClassificationsAndPatchers()
+    [Fact] public void APlanReadsItsClassifications()
     {
         string path = Path.Combine(_directory, "plan.json");
-        File.WriteAllText(path, """{ "patchers": ["HookGenPatcher"], "logScan": { "rpc-method-missing": { "severity": "failure", "reason": "Same mods on both sides." } } }""");
+        File.WriteAllText(path, """{ "logScan": { "rpc-method-missing": { "severity": "failure", "reason": "Same mods on both sides." } } }""");
         var plan = ServerRunPlan.Read<ServerRunPlan>(path);
-        Assert.Equal(new[] { "HookGenPatcher" }, plan.Patchers);
         Assert.Equal(LogSeverity.Failure, plan.LogScan["rpc-method-missing"].Severity);
-        plan.CheckPatchersAndLogScan();
+        plan.CheckLogScan();
         plan.LogScan["rpc-method-missing"].Reason = "";
-        Assert.Throws<ArgumentException>(plan.CheckPatchersAndLogScan);
+        Assert.Throws<ArgumentException>(plan.CheckLogScan);
         File.WriteAllText(path, """{ "logScan": { "accesstools-not-found": { "expected": ["name m_optional"], "reason": "A probe." } } }""");
         plan = ServerRunPlan.Read<ServerRunPlan>(path);
         Assert.Null(plan.LogScan["accesstools-not-found"].Severity);
         Assert.Equal(new[] { "name m_optional" }, plan.LogScan["accesstools-not-found"].Expected);
-        plan.CheckPatchersAndLogScan();
+        plan.CheckLogScan();
         File.WriteAllText(path, """{ "logScan": { "mymod-fallback": { "line": "fell back to ", "frame": "MyMod\\.", "severity": "failure", "reason": "Never in a pinned runtime." } } }""");
         plan = ServerRunPlan.Read<ServerRunPlan>(path);
         Assert.Equal(("fell back to ", "MyMod\\."), (plan.LogScan["mymod-fallback"].Line, plan.LogScan["mymod-fallback"].Frame));
-        plan.CheckPatchersAndLogScan();
+        plan.CheckLogScan();
         File.WriteAllText(path, """{ "logScan": { "rpc-method-missing": { "severity": "failure", "reason": "x", "extra": 1 } } }""");
         Assert.ThrowsAny<JsonException>(() => ServerRunPlan.Read<ServerRunPlan>(path));
     }

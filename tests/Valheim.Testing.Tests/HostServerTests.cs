@@ -372,11 +372,10 @@ public sealed class HostServerTests : IDisposable
         var listing = HostInstall.ReadListing("box", HostShellKind.Bash, "/srv/rt", Reply(
             $"{a}  ./BepInEx/core/BepInEx.dll\n\\{b}  ./odd\\\\name\\nwith break.txt\n" +
             $"VT-FILE {a} {Convert.ToBase64String(Encoding.UTF8.GetBytes("with space/é.dll"))}\n" +
-            $"VT-PATCHER {Convert.ToBase64String(Encoding.UTF8.GetBytes("Leftover.dll"))}\nVT-EXEC valheim_server.x86_64\nVT-LIST done\n"));
+            "VT-EXEC valheim_server.x86_64\nVT-LIST done\n"));
         Assert.Equal(a, listing.Files["BepInEx/core/BepInEx.dll"]);
         Assert.Equal(b, listing.Files["odd\\name\nwith break.txt".Replace('\\', '/')]);
         Assert.Equal(a, listing.Files["with space/é.dll"]);
-        Assert.Equal(new[] { "Leftover.dll" }, listing.Patchers);
         Assert.Equal(new[] { "valheim_server.x86_64" }, listing.Executables);
         Assert.Throws<IOException>(() => HostInstall.ReadListing("box", HostShellKind.Bash, "/srv/rt", Reply("VT-LIST links\n./BepInEx/plugins/link\n")));
         Assert.Throws<DirectoryNotFoundException>(() => HostInstall.ReadListing("box", HostShellKind.Bash, "/srv/rt", Reply("VT-LIST missing\n")));
@@ -386,8 +385,7 @@ public sealed class HostServerTests : IDisposable
 
     private HostListing ListingOf(string directory, HostShellKind shell = HostShellKind.Bash) =>
         HostInstall.ReadListing("box", shell, "/srv/rt", Reply(string.Concat(WorldFixture.Manifest(directory).Select(pair => $"{pair.Value}  ./{pair.Key.Replace('\\', '/')}\n")) +
-            (Directory.Exists(Path.Combine(directory, "BepInEx", "patchers")) ? string.Concat(Directory.EnumerateFileSystemEntries(Path.Combine(directory, "BepInEx", "patchers"))
-                .Select(entry => "VT-PATCHER " + Convert.ToBase64String(Encoding.UTF8.GetBytes(Path.GetFileName(entry))) + "\n")) : "") + "VT-LIST done\n"));
+            "VT-LIST done\n"));
 
     // A Windows host lists a loader file in the spelling on its disk when listed whole, in the pin paths' spelling when listed
     // by PinPaths; the loader pin is the same either way. A case-sensitive host's other spelling is another file, not loader.
@@ -419,8 +417,10 @@ public sealed class HostServerTests : IDisposable
         var found = HostInstall.Pins(listing);
         Assert.Equal(local.Game, found.Game); Assert.Equal(local.Loader, found.Loader); Assert.Equal(local.Patchers, found.Patchers);
         Assert.Equal(local.Game, HostInstall.CheckPins(local, listing, "runtime").Game);
-        HostInstall.RequirePatchers(listing, ["Hooks"], "runtime");
-        Assert.Contains("Hooks", Assert.Throws<InvalidOperationException>(() => HostInstall.RequirePatchers(listing, [], "runtime")).Message);
+        // A patcher the pinned runtime did not hold is refused by the pin, naming what the host's folder holds.
+        File.WriteAllText(Path.Combine(install, "BepInEx", "patchers", "Leftover.dll"), "leftover");
+        Assert.Contains("holding Hooks, Leftover.dll", Assert.Throws<InvalidOperationException>(() => HostInstall.CheckPins(local, ListingOf(install), "runtime")).Message);
+        File.Delete(Path.Combine(install, "BepInEx", "patchers", "Leftover.dll"));
         // Another game build on the host is named, with the value found.
         File.WriteAllText(Path.Combine(install, "valheim_server_Data", "Managed", InstallPins.GameAssemblyName), "game build 2");
         var changed = Assert.Throws<InvalidOperationException>(() => HostInstall.CheckPins(local, ListingOf(install), "runtime"));
