@@ -59,9 +59,9 @@ on failure. It removes its deployed probe in `finally`; the session owner remain
 responsible for shutdown and checking restoration. Reports can contain local
 paths from `cli_build`; review before publishing.
 
-## Earlier native evidence — 26 September 2026
+## Native evidence
 
-Passed on real native ARM64 Mac Valheim (1.0.16, Unity 6000.0.75f1), launched
+On 26 September 2026 the check passed on real native ARM64 Mac Valheim (1.0.16, Unity 6000.0.75f1), launched
 headlessly at the main menu with BepInEx 5.4.23.5 and ScriptEngine 11.1. Both
 cleanup callbacks ran with zero active waits. The ValheimCLI core was unchanged.
 

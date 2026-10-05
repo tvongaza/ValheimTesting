@@ -100,7 +100,7 @@ valheim-bindings MyMod.dll \
 # A finding here needs review; either exit code alone is not proof of runtime access.
 ```
 
-See [the binding check's limits](../../docs/testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1) for the distinction between binding, declared access and actual execution.
+See [the binding check on access](../../docs/packages/Valheim.Testing.Bindings.md#publicized-assemblies-and-access) for the distinction between binding, declared access and actual execution.
 
 ## When something is missing
 

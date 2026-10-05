@@ -15,7 +15,7 @@ namespace Valheim.Testing.Adapter
     /// instances stand in it (distant ones included, and those not marked distant, which keep its terrain loaded), and how
     /// many saved objects of known prefabs this client holds for it and how many of those have no instance. With it, the
     /// zone of the client's reference position and its synced simulation distance, from which the runner computes how far
-    /// the player must go. Read-only, client only. Written against the Valheim 1.0.16 decompile; not yet run in game.
+    /// the player must go. Read-only, client only. Written against the Valheim 1.0.16 decompile and run on a 1.0.16 client (ZoneCycle).
     /// </summary>
     public static class ZonePresence
     {

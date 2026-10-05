@@ -17,7 +17,7 @@ This declares a slope, a cliff at x=100, and a terrace in the cliff's upper surf
 
 ## Zone state belongs to the terrain doubles
 
-The state a terrain writer changes is the game's own: each loaded zone's `Heightmap` and its `TerrainComp` arrays (level and smooth deltas, modified-height flags, paint mask, modified-paint flags). The [terrain doubles](testing-toolkit.md) in `Valheim.Testing.Doubles` hold exactly those arrays: `ValheimWorldScope.WithTerrain(ground).WithZdos()` generates zones from the terrain declared above, `RegisterHeightmap(new Vector2s(x, z))` loads one, `TerrainSnapshot.Of(compiler)` records it, and `TerrainAssert.Unchanged`, `OnlyChangedWithin` and `SeamAgrees(west, east)` say what a write changed and whether two neighbours still agree on their shared vertices. Each zone keeps its own copy of the shared edge, as in the game, so a write applied to one side only fails `SeamAgrees`; nothing repairs a seam for you. [SharedWorld](../examples/SharedWorld/README.md) runs that check, its failure and the fix.
+The state a terrain writer changes is the game's own: each loaded zone's `Heightmap` and its `TerrainComp` arrays (level and smooth deltas, modified-height flags, paint mask, modified-paint flags). The [terrain doubles](packages/Valheim.Testing.Doubles.md) in `Valheim.Testing.Doubles` hold exactly those arrays: `ValheimWorldScope.WithTerrain(ground).WithZdos()` generates zones from the terrain declared above, `RegisterHeightmap(new Vector2s(x, z))` loads one, `TerrainSnapshot.Of(compiler)` records it, and `TerrainAssert.Unchanged`, `OnlyChangedWithin` and `SeamAgrees(west, east)` say what a write changed and whether two neighbours still agree on their shared vertices. Each zone keeps its own copy of the shared edge, as in the game, so a write applied to one side only fails `SeamAgrees`; nothing repairs a seam for you. [SharedWorld](../examples/SharedWorld/README.md) runs that check, its failure and the fix.
 
 ## Read a grid dump
 
@@ -71,7 +71,7 @@ new TerrainRenderer(new TerrainArea(-512,-512,512,512), 2) { Coloring = TerrainC
     .Render(GridDumpTerrain.Load("world.csv")).WritePng("review.png");
 ```
 
-The output is a PNG written without a compression library: its image data uses uncompressed deflate blocks, so the bytes are identical on every platform and runtime for the same heights, at about three bytes per pixel. A terrain that refuses a coordinate fails the render; no pixel is painted in place of missing data. A picture of an input shows what the fixture declares, not what the game does. For the topographic review map (biome tints, rivers, a world-disc mask, location and route overlays), use ValheimCLI's [`examples/world-map.py`](https://github.com/tvongaza/valheimCLI/blob/b68949c/examples/world-map.py), which reads the same dump CSV; this library keeps one palette and does not version a map style.
+The output is a PNG written without a compression library: its image data uses uncompressed deflate blocks, so the bytes are identical on every platform and runtime for the same heights, at about three bytes per pixel. A terrain that refuses a coordinate fails the render; no pixel is painted in place of missing data. A picture of an input shows what the fixture declares, not what the game does. For the topographic review map (biome tints, rivers, a world-disc mask, location and route overlays), use ValheimCLI's [`examples/world-map.py`](https://github.com/tvongaza/valheimCLI/blob/80fb6cefcc99d7737ec9f9b589eff4d16e2fc5e3/examples/world-map.py), which reads the same dump CSV; this library keeps one palette and does not version a map style.
 
 ## Compare two terrain sources
 
@@ -79,12 +79,9 @@ The output is a PNG written without a compression library: its image data uses u
 
 ## Call real mod code
 
-Keep adapters, expected outcomes and mod-specific assertions in the mod repository. Both tests below were written against the removed `TerrainWorldState`; they move to the terrain doubles in [#330](https://github.com/tvongaza/ValheimTesting/issues/330).
+Keep adapters, expected outcomes and mod-specific assertions in the mod repository. [SharedWorld](../examples/SharedWorld/README.md) shows the shape: a stand-in writer applied to two zones, checked at the seam, with the failure a one-sided write causes and the fix.
 
-- [Roads shared-zone writer test](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.Tests/SharedZoneWriterTests.cs) feeds declared slope/paint into its own compiler double, calls the real road writer in both zone orders and checks the shared edge, an earlier off-road edit, paint preservation and repeat application. [TerrainTestWorld](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.Tests/TerrainTestWorld.cs) is the thin game-type adapter used by existing grade/search tests.
-- [MWL shared-zone conversion test](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.Tests/SharedZoneConversionTests.cs) runs the real authored level/smooth/paint conversion across two zones, checks matching edge results and untouched regions, and verifies that the same operation is not applied twice.
-
-The library does not call either mod or duplicate its grading, smoothing, terrain compiler, persistence ledger or paint rules. Derive expected outcomes independently. Compare complete sample sets where completeness matters; do not turn missing input into zero.
+The library does not call a mod or duplicate its grading, smoothing, terrain compiler, persistence ledger or paint rules. Derive expected outcomes independently. Compare complete sample sets where completeness matters; do not turn missing input into zero.
 
 ## Evidence limits and next layers
 

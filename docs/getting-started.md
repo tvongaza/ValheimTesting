@@ -27,9 +27,9 @@ The toolkit packages are all on NuGet.org. The versions below are the **newest r
 | [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing) | `0.1.0-preview.12` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
 | [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) | `0.1.0-preview.41` | External game observations, owned sessions, comparisons and reports |
 | [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) | `0.1.0-preview.8` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
-| [Valheim.Testing.Adapter](https://www.nuget.org/packages/Valheim.Testing.Adapter) | `0.1.0-preview.5` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](testing-toolkit.md#game-side-adapter-helpers-valheimtestingadapter-preview-1)) |
-| [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.1.0-preview.11` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](testing-toolkit.md#game-doubles)) |
-| [Valheim.Testing.Bindings](https://www.nuget.org/packages/Valheim.Testing.Bindings) | `0.1.0-preview.2` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member (see [the binding check](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1)) |
+| [Valheim.Testing.Adapter](https://www.nuget.org/packages/Valheim.Testing.Adapter) | `0.1.0-preview.5` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity (see [adapter helpers](packages/Valheim.Testing.Adapter.md)) |
+| [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.1.0-preview.11` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game (see [Doubles](packages/Valheim.Testing.Doubles.md)) |
+| [Valheim.Testing.Bindings](https://www.nuget.org/packages/Valheim.Testing.Bindings) | `0.1.0-preview.2` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member (see [the binding check](packages/Valheim.Testing.Bindings.md)) |
 | [Valheim.Testing.Bindings.Tool](https://www.nuget.org/packages/Valheim.Testing.Bindings.Tool) | `0.1.0-preview.2` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
 
 Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies. For example, from your mod checkout:
@@ -55,7 +55,7 @@ Pin only the package your test project needs:
 
 Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools and examples target net10.0. Keep the game-side plugin's existing target framework.
 
-The binding check needs no project reference in most mods. Install the tool in the CI job that builds the plugin and run it on the built DLL against the game's `Managed` directory ([CI step](testing-toolkit.md#offline-binding-check-valheimtestingbindings-preview-1)):
+The binding check needs no project reference in most mods. Install the tool in the CI job that builds the plugin and run it on the built DLL against the game's `Managed` directory ([CI step](packages/Valheim.Testing.Bindings.md#in-ci)):
 
 ```sh
 dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.2 --tool-path .tools
@@ -89,7 +89,7 @@ For a test of actual mod source, start with [`ModWithTests`](../examples/ModWith
 
 In your own tests, feed these small terrain inputs into the real mod decisions. Keep expectations independent of the algorithm under test. A plane or replay is not a replacement for Valheim's generator, Unity physics, native save encoding or networking.
 
-Roads demonstrates gradual adoption: its [SyntheticWorld adapter](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.Tests/SyntheticWorld.cs) delegates to shared terrain while keeping mod-specific tests and xUnit assertions in the mod repository. Shared game types can come from `Valheim.Testing.Doubles`; keep mod-specific extensions local. Roads-specific tests remain in Roads. Sharing a helper does not require relocating the whole suite.
+Adopt gradually: a mod's existing terrain adapter can delegate to shared terrain while its tests and xUnit assertions stay in the mod repository. Shared game types can come from `Valheim.Testing.Doubles`; keep mod-specific extensions local. Sharing a helper does not require relocating the whole suite.
 
 ## 3. Test orchestration without a game
 
@@ -115,7 +115,7 @@ For the current split ValheimCLI build, a typical disposable Roads fixture insta
 
 A clean test runtime is BepInEx core plus these plugins, with an empty `BepInEx/patchers` folder: a preloader patcher left behind by a removed mod breaks the game's types before any plugin loads. The pinned runner refuses patchers its plan does not name. For the plugin dependency and load-order concept, see the wiki's [BepInEx dependencies](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices#bepinex-dependencies-and-incompatibilities); use the [runtime hygiene checklist](runtime-hygiene.md#plugins) for this toolkit's tested rules.
 
-Core stays in plugins. Put each optional pack in plugins **or** scripts, never both. See the ValheimCLI [pack installation and ownership guide](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/docs/command-packs.md). An older monolithic ValheimCLI and extracted packs cannot be mixed.
+Core stays in plugins. Put each optional pack in plugins **or** scripts, never both. See the ValheimCLI [pack installation and ownership guide](https://github.com/tvongaza/valheimCLI/blob/80fb6cefcc99d7737ec9f9b589eff4d16e2fc5e3/docs/command-packs.md). An older monolithic ValheimCLI and extracted packs cannot be mixed.
 
 Prepare private test settings, an independently specified fixture and a disposable character. Keep credentials out of committed plans and reports. Use `cli_manifest` to inspect actual loaded plugin hashes, `cli_world` for world identity, and `cli_extensions` to confirm the required capabilities. A strict pins file uses one `key=value` per line:
 
@@ -128,13 +128,13 @@ warpalicious.ProceduralRoads=absent
 warpalicious.More_World_Locations_AIO=absent
 ```
 
-This is an illustrative **client** file, not usable pins. Include every additional loaded plugin, such as ScriptEngine or other packs. On the server use the real mod/adapter hashes instead of `absent`. SHA-256 input manifests and plugin MD5 expectation pins serve different purposes; do not substitute one for the other. `cli_expect` cannot see the game build or BepInEx itself; the pinned runner pins those on disk (`runtimePins`, a client's `installPins`), and `"pinning": "none"` is its explicit, reported opt-out: see [Pins and the opt-out](testing-toolkit.md#pins-and-the-opt-out). See [ValheimCLI expectations](https://github.com/tvongaza/valheimCLI/blob/review/cli-command-packs-ready/README.md#know-what-you-are-testing).
+This is an illustrative **client** file, not usable pins. Include every additional loaded plugin, such as ScriptEngine or other packs. On the server use the real mod/adapter hashes instead of `absent`. SHA-256 input manifests and plugin MD5 expectation pins serve different purposes; do not substitute one for the other. `cli_expect` cannot see the game build or BepInEx itself; the pinned runner pins those on disk (`runtimePins`, a client's `installPins`), and `"pinning": "none"` is its explicit, reported opt-out: see [Pins and the opt-out](packages/Valheim.Testing.Game.md#pins-and-the-opt-out). See [ValheimCLI expectations](https://github.com/tvongaza/valheimCLI/blob/80fb6cefcc99d7737ec9f9b589eff4d16e2fc5e3/README.md#know-what-you-are-testing).
 
-Wait for the world and required zone to be loaded (on events where they exist, see [Waiting](testing-toolkit.md#waiting)), arrange arrival/protection separately, and verify the client's actual position. A responsive ValheimCLI is not proof that world loading has finished. Missing maps or incomplete observations are failures, not zero-height or black-paint measurements.
+Wait for the world and required zone to be loaded (on events where they exist, see [Waiting](packages/Valheim.Testing.Game.md#waiting)), arrange arrival/protection separately, and verify the client's actual position. A responsive ValheimCLI is not proof that world loading has finished. Missing maps or incomplete observations are failures, not zero-height or black-paint measurements.
 
 For persistence, use the **same** independently declared plan before and after a confirmed save, server restart and client rejoin. Require `cli_save`'s completion result before stopping. Run a discriminating negative expectation too: unchanged pre-road paint should fail painted samples while untouched samples still pass. Never widen tolerances merely to make a fixture pass.
 
-The [Roads scenario guide](https://github.com/tvongaza/ProceduralRoads/blob/review/testing-adoption-ready/ProceduralRoads.SystemTests/README.md) shows owned process/copy setup, manifests, preparation versus acceptance, empty-save, bridge respawn and native terrain/paint. MWL's [adapter guide](https://github.com/tvongaza/MoreWorldLocations_All/blob/review/testing-adapter-ready/MoreWorldLocations.TestAdapter/README.md) keeps its port probes separate; those require full mode and their bounded full-mode payment/delivery/ownership acceptance now passes.
+[FullLifecycle](../examples/FullLifecycle/README.md) shows owned process and copy setup, pinned plans, preparation versus acceptance, and save, restart and rejoin with a client.
 
 ### On Linux, macOS or in a container
 
@@ -193,7 +193,7 @@ Most comparison examples take a new output directory and write `result.json`, `j
 
 Attachment examples never claim or restore the machine and do not own an existing game process. Owned session tools stop only processes they started; their disposable copies and reports remain for inspection. The operator owns machine/account coordination, backups, protection and restoration. Review reports for private account/world data before publishing.
 
-For composable slopes, cliffs and terraces plus independent per-zone height/paint state, use the [shared-world guide](shared-world.md). Use the shared [game doubles, world scope and terrain assertions](testing-toolkit.md#game-doubles) where they model the behavior you need. Keep mod-specific extensions, expected results and scenario tests in your mod.
+For composable slopes, cliffs and terraces plus independent per-zone height/paint state, use the [shared-world guide](shared-world.md). Use the shared [game doubles, world scope and terrain assertions](packages/Valheim.Testing.Doubles.md) where they model the behavior you need. Keep mod-specific extensions, expected results and scenario tests in your mod.
 
 ## Strict calls from tests
 

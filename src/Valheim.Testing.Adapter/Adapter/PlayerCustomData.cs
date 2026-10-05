@@ -13,7 +13,7 @@ namespace Valheim.Testing.Adapter
     /// The local player's custom data (<c>Player.m_customData</c>, which mods use to keep their own per-character state)
     /// and the profile it is saved in, for the runner's <c>LogoutCycle</c> in Valheim.Testing.Game. The game writes the
     /// custom data into the character file when it saves the player (on logout, among other times) and reads it back when
-    /// the character next spawns. Read-only, client only. Written against the Valheim 1.0.16 decompile; not yet run in game.
+    /// the character next spawns. Read-only, client only. Written against the Valheim 1.0.16 decompile and run on a 1.0.16 client (LogoutCycle).
     /// </summary>
     public static class PlayerCustomData
     {

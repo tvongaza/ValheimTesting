@@ -32,7 +32,8 @@ namespace Valheim.Testing.Adapter
     /// only once the local player has spawned. Before that the reply is <c>complete: false</c> with <c>ready: false</c> and
     /// the reason, never empty lists.
     /// </para>
-    /// Written against the Valheim 1.0.16 decompile; not yet run in game.
+    /// Written against the Valheim 1.0.16 decompile. Items, recipes and prefabs have been read on a 1.0.16 dedicated server and
+    /// joined client (the FullLifecycle example); the piece and status-effect slice has not yet run in game.
     /// </summary>
     public static class ContentCensus
     {
