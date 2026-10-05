@@ -39,7 +39,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
             if (!File.Exists(file.File) || !WorldFixture.Hash(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("A pinned ValheimCLI file changed: " + file.File);
             foreach (var plugin in PluginMetadata.Read(file.File).Plugins)
-                if (!pins.TryAdd(plugin.Guid, PluginPins.Md5(file.File)))
+                if (!pins.TryAdd(plugin.Guid, FileHash.Md5(file.File)))
                     throw new InvalidDataException("Two pinned ValheimCLI files declare " + plugin.Guid + ".");
         }
         if (!pins.ContainsKey("valheimCLI.valheimCLI")) throw new InvalidDataException("The pinned client set has no ValheimCLI core.");

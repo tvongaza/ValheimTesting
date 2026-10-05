@@ -31,7 +31,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         var error = Assert.Throws<InvalidOperationException>(plan.Preflight);
         Assert.Contains("com.jotunn.jotunn=" + new string('0', 32) + " is in neither BepInEx/plugins nor BepInEx/scripts", error.Message);
         Assert.Contains("BepInEx/plugins/Jotunn.dll is " + Md5("the fix build"), error.Message);
-        Assert.Contains("PluginPins.Of", error.Message);
+        Assert.Contains("InstallPins.Plugins", error.Message);
         plan.Pins["com.jotunn.jotunn"] = Md5("the fix build"); // Negative control: the staged file's own hash passes.
         plan.Preflight();
     }
@@ -49,10 +49,10 @@ public sealed class OwnedRunPreflightTests : IDisposable
     {
         using var install = PreflightInstall.Create();
         install.Add("BepInEx/plugins/Jotunn.dll", "the fix build");
-        var error = Assert.Throws<FileNotFoundException>(() => PluginPins.Of(install.Root, new Dictionary<string, string> { ["com.jotunn.jotunn"] = "BepInEx/plugins/Jotunn.candidate.dll" }));
+        var error = Assert.Throws<FileNotFoundException>(() => InstallPins.Plugins(install.Root, new Dictionary<string, string> { ["com.jotunn.jotunn"] = "BepInEx/plugins/Jotunn.candidate.dll" }));
         Assert.Contains("Jotunn.candidate.dll is not in the install", error.Message);
         Assert.Contains("Jotunn.dll", error.Message);
-        var pins = PluginPins.Of(install.Root, new Dictionary<string, string> { ["com.jotunn.jotunn"] = "BepInEx/plugins/Jotunn.dll", ["ProceduralRoads"] = "absent" });
+        var pins = InstallPins.Plugins(install.Root, new Dictionary<string, string> { ["com.jotunn.jotunn"] = "BepInEx/plugins/Jotunn.dll", ["ProceduralRoads"] = "absent" });
         Assert.Equal(Md5("the fix build"), pins["com.jotunn.jotunn"]);
         Assert.Equal("absent", pins["ProceduralRoads"]);
     }
@@ -64,7 +64,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         File.WriteAllText(outside, "outside");
         try
         {
-            var error = Assert.Throws<ArgumentException>(() => PluginPins.Of(install.Root,
+            var error = Assert.Throws<ArgumentException>(() => InstallPins.Plugins(install.Root,
                 new Dictionary<string, string> { ["my.mod"] = Path.Combine("..", "outside.dll") }));
             Assert.Contains("leaves the install", error.Message);
         }

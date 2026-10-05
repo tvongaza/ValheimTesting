@@ -92,7 +92,7 @@ public sealed class NativeServerRuntime : IDisposable
                 throw new InvalidDataException("The test-only session adapter must declare exactly one " + SessionAdapterPluginGuid + " BepInEx plugin.");
             foreach (var plugin in metadata.Plugins)
             {
-                if (!pins.TryAdd(plugin.Guid, PluginPins.Md5(file)))
+                if (!pins.TryAdd(plugin.Guid, FileHash.Md5(file)))
                     throw new InvalidDataException("Two selected server files declare plugin " + plugin.Guid + ".");
                 if (selectedFiles.Contains(file))
                 {

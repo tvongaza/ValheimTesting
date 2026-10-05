@@ -24,7 +24,7 @@ try
         throw new InvalidOperationException("Use an empty, dedicated ScriptEngine directory: reload affects every script.");
     const string probeGuid = "testing.cli.reload-probe";
     string baselinePins = StrictExpectations.WithPlugin(StrictExpectations.Load(args[5]), probeGuid, "absent");
-    string PinsFor(string file) => StrictExpectations.WithPlugin(baselinePins, probeGuid, Convert.ToHexString(MD5.HashData(File.ReadAllBytes(file))));
+    string PinsFor(string file) => StrictExpectations.WithPlugin(baselinePins, probeGuid, FileHash.Md5(file));
     string pinsA = PinsFor(args[1]), pinsB = PinsFor(args[2]);
     int port = int.Parse(args[0]);
     using var control = new GameActor("reload-control", new CliTransport("127.0.0.1", port)) { CommandTimeout = TimeSpan.FromSeconds(15) };

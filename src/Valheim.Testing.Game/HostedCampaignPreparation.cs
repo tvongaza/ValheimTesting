@@ -355,7 +355,7 @@ public static class HostedCampaignPreparation
             try { metadata = PluginMetadata.Read(file.Source); }
             catch (Exception error) when (error is BadImageFormatException or InvalidDataException) { continue; }
             foreach (var plugin in metadata.Plugins)
-                if (!pins.TryAdd(plugin.Guid, Valheim.Testing.Game.PluginPins.Md5(file.Source)))
+                if (!pins.TryAdd(plugin.Guid, FileHash.Md5(file.Source)))
                     throw new InvalidDataException($"The {role} runtime selects BepInEx plugin {plugin.Guid} more than once.");
         }
         return pins;

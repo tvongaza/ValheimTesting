@@ -167,7 +167,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         // The right file names and plugin GUIDs, from an older generation whose Standard pack had no valheim.session.
         using var install = Staged(builds, (Core, builds.OlderCore), (Standard, builds.OlderStandard), (WorldTools, builds.WorldTools));
         var plan = PlanFor(install, Manifest(builds));
-        plan.Pins["valheimCLI.standard"] = PluginPins.Md5(Path.Combine(install.Root, "BepInEx", "plugins", Standard)); // Pinned, as the run did: its hash matched what was staged.
+        plan.Pins["valheimCLI.standard"] = FileHash.Md5(Path.Combine(install.Root, "BepInEx", "plugins", Standard)); // Pinned, as the run did: its hash matched what was staged.
         var hosted = new HostedFixture(_root);
         plan.HostWorld = hosted.Plan;
         plan.Port = 5556; plan.Join = "";
@@ -368,7 +368,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
     private static ClientRunPlan PlanFor(PreflightInstall install, string? manifest)
     {
         var plan = install.Plan();
-        plan.Pins["valheimCLI.valheimCLI"] = PluginPins.Md5(Path.Combine(install.Root, "BepInEx", "plugins", Core));
+        plan.Pins["valheimCLI.valheimCLI"] = FileHash.Md5(Path.Combine(install.Root, "BepInEx", "plugins", Core));
         plan.CliManifest = manifest;
         return plan;
     }

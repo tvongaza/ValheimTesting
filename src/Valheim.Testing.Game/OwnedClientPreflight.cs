@@ -1,51 +1,4 @@
-using System.Security.Cryptography;
-
 namespace Valheim.Testing.Game;
-
-/// <summary>
-/// Plugin pins derived from the staged files instead of typed by hand: the MD5 that <c>cli_manifest</c> and
-/// <c>cli_expect</c> compare, of the exact file the run installs. A typed file name that is not there is refused with what
-/// the folder holds; a typed hash that matches no installed file is what <see cref="ClientRunPlan.Preflight()"/> refuses.
-/// </summary>
-public static class PluginPins
-{
-    /// <summary>The file's MD5 as ValheimCLI reports it: 32 lower-case hex characters.</summary>
-    public static string Md5(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(MD5.HashData(stream)).ToLowerInvariant();
-    }
-
-    /// <summary>
-    /// Pins for plugins by their files under <paramref name="install"/>: each value of <paramref name="files"/> is a path
-    /// relative to the install (<c>BepInEx/plugins/Jotunn.dll</c>) and becomes that file's MD5, or is <c>absent</c> and stays
-    /// so. Refuses a path that is not a file there, naming the DLLs its folder holds, so a mistyped candidate name fails before
-    /// anything launches rather than as a pin the game cannot meet.
-    /// </summary>
-    public static Dictionary<string, string> Of(string install, IReadOnlyDictionary<string, string> files)
-    {
-        ArgumentNullException.ThrowIfNull(files);
-        install = Path.GetFullPath(install);
-        var pins = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (plugin, file) in files)
-        {
-            if (file == "absent") { pins[plugin] = file; continue; }
-            if (string.IsNullOrWhiteSpace(file) || Path.IsPathRooted(file)) throw new ArgumentException($"{plugin}: give its file relative to the install, or absent.", nameof(files));
-            string path = Path.GetFullPath(Path.Combine(install, file.Replace('\\', Path.DirectorySeparatorChar)));
-            string relative = Path.GetRelativePath(install, path);
-            if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                throw new ArgumentException($"{plugin}: {file} leaves the install; give a file under {install}.", nameof(files));
-            if (!File.Exists(path))
-            {
-                string folder = Path.GetDirectoryName(path)!;
-                var there = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.dll").Select(Path.GetFileName).OfType<string>().Order(StringComparer.Ordinal).ToList() : new List<string>();
-                throw new FileNotFoundException($"{plugin}: {file} is not in the install {install}; its folder holds {(there.Count == 0 ? "no DLL" : string.Join(", ", there))}. Name the file the run stages.", path);
-            }
-            pins[plugin] = Md5(path);
-        }
-        return pins;
-    }
-}
 
 /// <summary>
 /// The static checks of an owned client install that need no game: every pinned plugin build is installed exactly once,
@@ -78,7 +31,7 @@ internal static class OwnedClientPreflight
         var installed = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (string dll in InstalledDlls(install))
         {
-            string md5 = PluginPins.Md5(dll);
+            string md5 = FileHash.Md5(dll);
             if (!installed.TryGetValue(md5, out var paths)) installed[md5] = paths = [];
             paths.Add(Path.GetRelativePath(install, dll).Replace('\\', '/'));
         }
@@ -99,7 +52,7 @@ internal static class OwnedClientPreflight
         }
         if (problems.Count != 0)
             throw new InvalidOperationException($"The client install does not hold the plugin builds the plan pins: {string.Join("; ", problems)}. " +
-                "Stage the pinned builds, or derive the pins from the staged files (PluginPins.Of) rather than typing names or hashes.");
+                "Stage the pinned builds, or derive the pins from the staged files (InstallPins.Plugins) rather than typing names or hashes.");
         return located;
     }
 

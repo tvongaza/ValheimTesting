@@ -412,7 +412,7 @@ public sealed class TargetedRegression
             File.Copy(source, target);
             RequireCopied(target, sha256);
             var read = Read(source);
-            staged.Add((new(role, "BepInEx/plugins/" + name, sha256, PluginPins.Md5(target), read.AssemblyName, read.Plugins.Select(p => $"{p.Guid} {p.Version}").ToList()), read));
+            staged.Add((new(role, "BepInEx/plugins/" + name, sha256, FileHash.Md5(target), read.AssemblyName, read.Plugins.Select(p => $"{p.Guid} {p.Version}").ToList()), read));
         }
         foreach (var (role, file, sha256) in sources) Place(role, file.File, sha256, Path.GetFileName(file.File));
 
@@ -426,7 +426,7 @@ public sealed class TargetedRegression
             string artifact = $"{name}-{env.Mod.InstallAs}";
             File.Copy(build.File, Path.Combine(artifacts, artifact));
             RequireCopied(Path.Combine(artifacts, artifact), build.Sha256);
-            arms.Add(new(name, build.Commit, artifact, build.Sha256.ToLowerInvariant(), PluginPins.Md5(Path.Combine(artifacts, artifact))));
+            arms.Add(new(name, build.Commit, artifact, build.Sha256.ToLowerInvariant(), FileHash.Md5(Path.Combine(artifacts, artifact))));
         }
         Place("mod", Path.Combine(artifacts, $"{arm}-{env.Mod.InstallAs}"), chosen.Sha256.ToLowerInvariant(), env.Mod.InstallAs);
         var allowlist = staged.Select(entry => entry.File).ToList();
@@ -442,7 +442,7 @@ public sealed class TargetedRegression
         if (!env.Configs.ContainsKey(CliConfig))
             File.WriteAllText(Path.Combine(config, CliConfig), $"[Server]\nEnabled = true\nPort = {env.Client.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n");
         var configs = Directory.EnumerateFiles(config).Order(StringComparer.Ordinal)
-            .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), WorldFixture.Hash(path), PluginPins.Md5(path), null, [])).ToList();
+            .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), WorldFixture.Hash(path), FileHash.Md5(path), null, [])).ToList();
 
         RequireDependencies(staged);
         RequireReferences(install, staged);
