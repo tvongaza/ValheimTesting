@@ -94,7 +94,8 @@ jobs:
     # toolkit-versions.json records the released versions; docs, examples and tools pin exactly those and follow every release
     # (#86). Fails on a pin that differs from the file, a recorded version NuGet.org does not serve or has superseded, a
     # released package whose Valheim.Testing* dependency the released set does not meet, or a source version older than
-    # its release. Reads NuGet.org; needs no build.
+    # its release, or a valheimCLI fork page the docs link that does not exist at releasedCliCommit. Reads NuGet.org and
+    # GitHub; needs no build.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -139,6 +140,54 @@ jobs:
           # A source version older than its release.
           sed -i -E 's#<Version>[^<]+</Version>#<Version>0.1.0-preview.1</Version>#' src/Valheim.Testing.Doubles/Valheim.Testing.Doubles.csproj
           refused versions "Valheim.Testing.Doubles 0.1.0-preview.1 in source is older than the release"
+          # A valheimCLI fork link at another commit than the released Cli's fails; write puts it back. A fork page's
+          # anchor must be one of its headings at that commit.
+          loop=tools/dev-loop/README.md
+          sed -i -E 's#(valheimCLI/blob/[0-9a-f]{40}/docs/expectations\.md\#)world-files-hash#\1no-such-heading#' "$loop"
+          refused check "FAIL $loop:$(grep -n 'no-such-heading' "$loop" | cut -d: -f1): https://github.com/tvongaza/valheimCLI/blob/*/docs/expectations.md#no-such-heading: the fork's docs/expectations.md at * has no heading with the anchor #no-such-heading"
+          fork() { sed -i -E 's#(valheimCLI/blob/)[0-9a-f]{40}/#\15c0aef02ddf15cdbf6faa152c6b75881fce7f134/#' tools/dev-loop/README.md; }
+          fork
+          refused check "FAIL $loop:$(grep -n 'valheimCLI/blob/5c0aef02' "$loop" | cut -d: -f1): releasedCliCommit 5c0aef02ddf15cdbf6faa152c6b75881fce7f134 differs from toolkit-versions.json"
+          fork
+          dotnet run scripts/pins.cs -- write
+          git diff --exit-code
+  docs:
+    name: docs (headings and links)
+    # The Markdown pages (#278): no heading names a version or a date (native-validation records are exempt), no link goes
+    # to a review branch or to a valheimCLI fork page at anything but a full commit, and every relative link, and every link
+    # to this repository's main branch, reaches an existing file and heading anchor. Offline, so it is not hidden while the
+    # pins job waits for a release record.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: dotnet run scripts/pins.cs -- docs
+      # Negative controls: each edits tracked files, expects a refusal naming the file (and line), and restores them.
+      - name: Refusals (negative controls)
+        run: |
+          refused() { # $1 a pattern the refusal must match
+            if out=$(env -u GITHUB_ACTIONS dotnet run scripts/pins.cs -- docs 2>&1); then
+              echo "$out"; echo "::error::docs passed; expected a refusal matching: $1"; return 1
+            fi
+            echo "$out"
+            case "$out" in *$1*) ;; *) echo "::error::docs refused, but not with: $1"; return 1 ;; esac
+            git checkout -- .
+          }
+          page=docs/packages/Valheim.Testing.Game.md
+          sed -i 's/^## Waiting$/## Waiting (preview 13)/' "$page"
+          refused "FAIL $page:$(grep -n '^## Waiting' "$page" | cut -d: -f1): A heading names a version or a date"
+          last() { echo "FAIL docs/adopting.md:$(wc -l < docs/adopting.md): $1"; }
+          echo '[removed](testing-toolkit.md#waiting)' >> docs/adopting.md
+          refused "$(last 'testing-toolkit.md#waiting: docs/testing-toolkit.md does not exist')"
+          echo '[stale](packages/Valheim.Testing.Game.md#waiting-preview-13)' >> docs/adopting.md
+          refused "$(last 'packages/Valheim.Testing.Game.md#waiting-preview-13: docs/packages/Valheim.Testing.Game.md has no heading with the anchor #waiting-preview-13')"
+          echo '[moving](https://github.com/tvongaza/valheimCLI/blob/review/x/README.md)' >> docs/adopting.md
+          refused "$(last 'https://github.com/tvongaza/valheimCLI/blob/review/x/README.md links a review branch')"
+          echo '[short](https://github.com/tvongaza/valheimCLI/tree/main/docs)' >> docs/adopting.md
+          refused "$(last 'https://github.com/tvongaza/valheimCLI/tree/main/docs links the valheimCLI fork at a branch or short commit')"
           git diff --exit-code
   game-hosts:
     name: game hosts (ssh to localhost, container)

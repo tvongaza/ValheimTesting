@@ -4,6 +4,7 @@
 //   dotnet run scripts/pins.cs -- write      after a release: rewrite every pin from toolkit-versions.json
 //   dotnet run scripts/pins.cs -- check      CI: the pins, toolkit-versions.json and NuGet.org agree
 //   dotnet run scripts/pins.cs -- versions   release.yml, before building
+//   dotnet run scripts/pins.cs -- docs       CI: the Markdown pages' headings and links (offline)
 //
 // toolkit-versions.json is the one record of what is released: the newest version NuGet.org lists of each package, and the
 // valheimCLI commit the released Valheim.Testing.Cli was built from. Documentation and examples pin exactly these versions
@@ -11,16 +12,24 @@
 //
 // Pins are the copyable versions in the README, CONTRIBUTING, docs, examples, tools and the packages' READMEs: a
 // PackageReference, a `dotnet tool install` or `dotnet add package` command, ToolkitPackageVersion (the Game package; a -p:
-// argument or a project property), and a backticked package ID followed by a backticked version, as in the package table. History in prose ("new in Game
-// preview 11") is not a pin. Dated native-validation records are not scanned. The NativeSmoke tool reads the released Game
-// version from the file itself (embedded at build).
+// argument or a project property), and a backticked package ID followed by a backticked version, as in the package table.
+// A link to a page of the valheimCLI fork at a full commit pins releasedCliCommit, so the docs read the fork as the
+// released Cli was built. History in prose ("new in Game preview 11") is not a pin. Dated native-validation records are
+// not scanned. The NativeSmoke tool reads the released Game version from the file itself (embedded at build).
 //
 // check reads NuGet.org and fails, naming the file and line, when: a pin differs from the file; a released version is not
 // served, is a candidate, or is superseded by a newer version NuGet.org lists (the docs lag a release; an unlisted
 // version, such as a release withdrawn as broken, supersedes nothing); the released Cli was not built from
 // releasedCliCommit; a released package's Valheim.Testing* dependency is not met by the released set (so a page pinning
 // both Doubles and Valheim.Testing names a pair that restores together); or a project's source version is older than its
-// release. write and versions read only this checkout.
+// release; or a fork link pinned to releasedCliCommit names a file or heading the fork does not have at that commit (read
+// from GitHub). write, versions and docs read only this checkout.
+//
+// docs fails, naming the file and line, on a Markdown heading that names a version or a date (a page describes what is,
+// and history belongs in release notes; native-validation records are exempt), a link to a review/ branch (which moves),
+// a valheimCLI fork page linked at anything but a full commit (so it is pinned), and a relative link, or one to this
+// repository's main branch, whose file or heading anchor does not exist (#278). It needs no network, so a docs problem is
+// never hidden behind a release the pins have not caught up with.
 //
 // versions refuses a release whose manifest or packed dependencies name a `-candidate.<sha>` version: a candidate is a
 // local build identity, and NuGet.org never lets a published id/version be replaced. Checked are each packed project's
@@ -40,6 +49,9 @@ const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
 const string Registration = "https://api.nuget.org/v3/registration5-gz-semver2";
 const string VersionsFile = "toolkit-versions.json";
 const string Cli = "Valheim.Testing.Cli";
+// The pin a valheimCLI fork link at a full commit names: releasedCliCommit, the commit the released Cli was built from.
+const string CliCommit = "releasedCliCommit";
+Regex ForkLink = new(@"https://github\.com/tvongaza/valheimCLI/blob/(?<version>[0-9a-f]{40})/(?<path>[^#?)\s]+)(?:#(?<anchor>[^)\s]*))?", RegexOptions.IgnoreCase);
 string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
 string root = FindRoot();
@@ -52,18 +64,19 @@ return mode switch
     "write" => Write(),
     "check" => await Check(),
     "versions" => Versions(),
+    "docs" => Report(DocsProblems(), "Every heading names no version or date, and every link resolves."),
     _ => Usage(mode == "" ? "no mode" : $"unknown mode '{mode}'"),
 };
 
 int Usage(string problem)
 {
-    Console.Error.WriteLine($"pins: {problem}. Usage: dotnet run scripts/pins.cs -- (write | check | versions)");
+    Console.Error.WriteLine($"pins: {problem}. Usage: dotnet run scripts/pins.cs -- (write | check | versions | docs)");
     return 2;
 }
 
 int Write()
 {
-    var released = ReadReleased();
+    var released = PinTargets(ReadReleased());
     var pins = FindPins();
     var unknown = pins.Where(p => !released.ContainsKey(p.Id)).ToList();
     if (unknown.Count > 0) return Report(unknown.Select(p => new Problem(p.File, p.Line, $"{p.Id} has no released version in {VersionsFile}.")).ToList(), "");
@@ -100,11 +113,13 @@ async Task<int> Check()
     var stated = SourceVersions();
     problems.AddRange(SourceOlderThanReleased(stated, released));
 
+    problems.AddRange(await ForkLinkProblems(http));
     var pins = FindPins();
+    var targets = PinTargets(released);
     if (pins.Count == 0) problems.Add(new(VersionsFile, 1, "No version pins found; the scan no longer matches the docs."));
     foreach (Pin pin in pins)
     {
-        string? problem = !released.TryGetValue(pin.Id, out string? version) ? $"{pin.Id} has no released version in {VersionsFile}."
+        string? problem = !targets.TryGetValue(pin.Id, out string? version) ? $"{pin.Id} has no released version in {VersionsFile}."
             : !string.Equals(pin.Version, version, StringComparison.Ordinal)
                 ? $"{pin.Id} {pin.Version} differs from {VersionsFile} ({version}). Edit only {VersionsFile}, then run `dotnet run scripts/pins.cs -- write`."
             : null;
@@ -251,17 +266,158 @@ string ReleasedCliCommit()
 int FileLine(string file, string needle) =>
     Array.FindIndex(File.ReadAllLines(Path.Combine(root, file)), l => l.Contains(needle, StringComparison.Ordinal)) is var i and >= 0 ? i + 1 : 1;
 
+// What each pin must name: the released versions, and the released Cli's commit for fork links.
+Dictionary<string, string> PinTargets(Dictionary<string, string> released) =>
+    new(released, StringComparer.Ordinal) { [CliCommit] = ReleasedCliCommit() };
+
+// The Markdown pages: a heading names no version or date, no link goes to a review/ branch or to a valheimCLI fork page
+// at anything but a full commit, and every relative link (and every link to this repository's main branch) reaches an
+// existing file and, in a Markdown file, an existing heading.
+List<Problem> DocsProblems()
+{
+    var problems = new List<Problem>();
+    var versioned = new Regex(@"preview\.?\s?\d|\bv?\d+\.\d+\.\d+\b|\b20\d\d-\d\d-\d\d\b|\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+20\d\d\b", RegexOptions.IgnoreCase);
+    var anchors = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+    foreach (string file in Walk(root, ".md"))
+    {
+        bool record = Path.GetFileName(file).StartsWith("native-validation-", StringComparison.Ordinal);
+        foreach (var (line, text, heading) in MarkdownLines(File.ReadLines(Path.Combine(root, file))))
+        {
+            if (heading != null && !record && versioned.IsMatch(heading))
+                problems.Add(new(file, line, "A heading names a version or a date, so its anchor changes with every release. Name the concept; history belongs in release notes."));
+            foreach (string url in Links(text))
+            {
+                if (Regex.IsMatch(url, @"/(blob|tree)/review/"))
+                {
+                    problems.Add(new(file, line, $"{url} links a review branch, which moves or goes away; link a released commit or main."));
+                    continue;
+                }
+                if (Regex.Match(url, @"^https?://(?:www\.)?github\.com/tvongaza/valheimCLI/(?:blob|tree)/(?<ref>[^/#?]+)", RegexOptions.IgnoreCase) is { Success: true } fork
+                    && !Regex.IsMatch(fork.Groups["ref"].Value, "^[0-9a-f]{40}$", RegexOptions.IgnoreCase))
+                {
+                    problems.Add(new(file, line, $"{url} links the valheimCLI fork at a branch or short commit; link it at the full releasedCliCommit, which write keeps in step."));
+                    continue;
+                }
+                string target, from;
+                if (Regex.Match(url, @"^https://github\.com/tvongaza/ValheimTesting/(?:blob|tree)/main/(?<path>.*)$") is { Success: true } main) (target, from) = (main.Groups["path"].Value, "");
+                else if (Regex.IsMatch(url, @"^[a-zA-Z][a-zA-Z0-9+.-]*:")) continue;
+                else if (url.StartsWith('/')) (target, from) = (url.TrimStart('/'), "");
+                else (target, from) = (url, Path.GetDirectoryName(file) ?? "");
+                int hash = target.IndexOf('#');
+                string path = hash < 0 ? target : target[..hash], anchor = hash < 0 ? "" : Uri.UnescapeDataString(target[(hash + 1)..]);
+                if (path.Contains('?')) (path, anchor) = (path[..path.IndexOf('?')], ""); // ?plain=1#L5 names a line, not a heading
+                path = Uri.UnescapeDataString(path);
+                string resolved = path == "" ? file : Path.GetRelativePath(root, Path.GetFullPath(Path.Combine(root, from, path))).Replace('\\', '/');
+                string full = Path.Combine(root, resolved);
+                if (!File.Exists(full) && !Directory.Exists(full)) { problems.Add(new(file, line, $"{url}: {resolved} does not exist.")); continue; }
+                if (anchor == "" || !resolved.EndsWith(".md", StringComparison.OrdinalIgnoreCase) || !File.Exists(full)) continue;
+                if (!anchors.TryGetValue(resolved, out var known)) anchors[resolved] = known = HeadingAnchors(File.ReadAllText(full));
+                if (!known.Contains(anchor)) problems.Add(new(file, line, $"{url}: {resolved} has no heading with the anchor #{anchor}."));
+            }
+        }
+    }
+    return problems;
+}
+
+// Each fork link write moves (a pin of releasedCliCommit) must name a page the fork has at its commit, with the heading
+// its anchor names. The pages are fetched once each, together.
+async Task<List<Problem>> ForkLinkProblems(HttpClient http)
+{
+    var links = new List<(Pin Pin, string Url, string Page, string Path, string Anchor)>();
+    foreach (Pin pin in FindPins().Where(p => p.Id == CliCommit))
+    {
+        string text = ReadText(Path.Combine(root, pin.File), out _);
+        int start = text.LastIndexOf("http", pin.Index, StringComparison.OrdinalIgnoreCase);
+        if (start < 0 || ForkLink.Match(text, start) is not { Success: true } m || m.Index != start) continue;
+        links.Add((pin, m.Value, m.Groups["version"].Value + "/" + m.Groups["path"].Value, m.Groups["path"].Value, Uri.UnescapeDataString(m.Groups["anchor"].Value)));
+    }
+    var pages = links.Select(l => l.Page).Distinct(StringComparer.Ordinal).ToList();
+    var fetched = await Task.WhenAll(pages.Select(page => Get(http, "https://raw.githubusercontent.com/tvongaza/valheimCLI/" + page)));
+    var anchors = pages.Zip(fetched, (page, content) => (page, content == null ? null : HeadingAnchors(content))).ToDictionary(p => p.page, p => p.Item2, StringComparer.Ordinal);
+    var problems = new List<Problem>();
+    foreach (var (pin, url, page, path, anchor) in links)
+    {
+        if (anchors[page] is not { } known) problems.Add(new(pin.File, pin.Line, $"{url}: the fork has no {path} at {pin.Version}."));
+        else if (anchor != "" && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !known.Contains(anchor))
+            problems.Add(new(pin.File, pin.Line, $"{url}: the fork's {path} at {pin.Version} has no heading with the anchor #{anchor}."));
+    }
+    return problems;
+}
+
+// The link targets on a Markdown line outside inline code: inline links, with or without a title, and reference definitions.
+static IEnumerable<string> Links(string text)
+{
+    string plain = Regex.Replace(text, "`[^`]*`", "");
+    foreach (Match m in Regex.Matches(plain, @"\]\((?<url>[^)\s]+)(?:\s+""[^""]*"")?\)")) yield return m.Groups["url"].Value;
+    if (Regex.Match(plain, @"^\s{0,3}\[(?!\^)[^\]]+\]:\s*<?(?<url>[^\s>]+)") is { Success: true } definition) yield return definition.Groups["url"].Value;
+}
+
+// A page's lines outside fenced code, each with its number and, for an ATX heading, the heading's text.
+static IEnumerable<(int Line, string Text, string? Heading)> MarkdownLines(IEnumerable<string> lines)
+{
+    string? fence = null;
+    int number = 0;
+    foreach (string text in lines)
+    {
+        number++;
+        // A fence closes on a line of its own character, at least as long as its opening, and nothing else.
+        if (Regex.Match(text, @"^\s{0,3}(?<fence>`{3,}|~{3,})(?<info>.*)$") is { Success: true } marker)
+        {
+            string run = marker.Groups["fence"].Value;
+            if (fence == null) { fence = run; continue; }
+            if (run[0] == fence[0] && run.Length >= fence.Length && marker.Groups["info"].Value.Trim() == "") { fence = null; continue; }
+        }
+        if (fence != null) continue;
+        yield return (number, text, Regex.Match(text, @"^#{1,6}\s+(?<text>.*?)\s*#*\s*$") is { Success: true } h ? h.Groups["text"].Value : null);
+    }
+}
+
+// GitHub's anchors for a page's headings: lower case, punctuation dropped, spaces as hyphens, a repeat numbered.
+static HashSet<string> HeadingAnchors(string content)
+{
+    var anchors = new HashSet<string>(StringComparer.Ordinal);
+    var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+    foreach (var (_, _, heading) in MarkdownLines(content.Split('\n').Select(l => l.TrimEnd('\r'))))
+    {
+        if (heading == null) continue;
+        string label = Regex.Replace(Regex.Replace(heading, @"!?\[(?<text>[^\]]*)\]\([^)]*\)", "${text}"), "<[^>]+>", "");
+        string slug = Regex.Replace(label.ToLowerInvariant(), @"[^\w\- ]", "").Replace(' ', '-');
+        int n = seen.TryGetValue(slug, out int count) ? count : 0;
+        seen[slug] = n + 1;
+        anchors.Add(n == 0 ? slug : $"{slug}-{n}");
+    }
+    return anchors;
+}
+
+// The checkout's files with one of the extensions under a directory, relative to the root with '/'. Build output,
+// artifacts and dot-directories other than .github are never entered.
+List<string> Walk(string directory, params string[] extensions)
+{
+    var found = new List<string>();
+    var pending = new Stack<string>([directory]);
+    while (pending.Count > 0)
+    {
+        string dir = pending.Pop();
+        foreach (string sub in Directory.EnumerateDirectories(dir))
+        {
+            string name = Path.GetFileName(sub);
+            if (name is "bin" or "obj" or "artifacts" or "_site" or "node_modules" || (name.StartsWith('.') && name != ".github")) continue;
+            if (!new FileInfo(sub).Attributes.HasFlag(FileAttributes.ReparsePoint)) pending.Push(sub);
+        }
+        found.AddRange(Directory.EnumerateFiles(dir).Where(f => extensions.Contains(Path.GetExtension(f)))
+            .Select(f => Path.GetRelativePath(root, f).Replace('\\', '/')));
+    }
+    return found.Order(StringComparer.Ordinal).ToList();
+}
+
 // The copyable pins in the introductory files, with the index of each version in its file's text.
 List<Pin> FindPins()
 {
-    var files = new List<string> { "README.md", "CONTRIBUTING.md" };
+    var files = Walk(root, ".md").Where(f => !f.Contains('/')).ToList(); // the root pages: README, CONTRIBUTING, AGENTS, ...
     foreach (string dir in new[] { "docs", "examples", "tools", "src" })
-        files.AddRange(Directory.GetFiles(Path.Combine(root, dir), "*", SearchOption.AllDirectories)
-            .Where(f => dir == "src" ? Path.GetExtension(f) == ".md" // a package's README, not its build
-                : Path.GetExtension(f) is ".md" or ".csproj" or ".props" or ".targets" or ".yml" or ".yaml" or ".cs")
-            .Where(f => !f.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(p => p is "bin" or "obj"))
-            .Where(f => !Path.GetFileName(f).StartsWith("native-validation-", StringComparison.Ordinal))
-            .Select(f => Path.GetRelativePath(root, f).Replace('\\', '/')));
+        files.AddRange((dir == "src" ? Walk(Path.Combine(root, dir), ".md") // a package's README, not its build
+                : Walk(Path.Combine(root, dir), ".md", ".csproj", ".props", ".targets", ".yml", ".yaml", ".cs"))
+            .Where(f => !Path.GetFileName(f).StartsWith("native-validation-", StringComparison.Ordinal)));
     const string Id = @"(?<id>Valheim\.Testing(?:\.[A-Za-z]+)*)";
     const string Version = @"(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.]*[0-9A-Za-z])?)";
     // (pattern, package when the pattern names none)
@@ -273,6 +429,7 @@ List<Pin> FindPins()
         (new Regex($@"\[{Id}\]\(https://www\.nuget\.org/packages/[^)]+\)[ \t]*\|[ \t]*`{Version}`"), null),
         (new Regex($@"ToolkitPackageVersion={Version}"), "Valheim.Testing.Game"),
         (new Regex($@"<ToolkitPackageVersion\b[^>]*>{Version}</ToolkitPackageVersion>"), "Valheim.Testing.Game"),
+        (ForkLink, CliCommit),
     };
     var pins = new List<Pin>();
     foreach (string file in files.Order(StringComparer.Ordinal))
