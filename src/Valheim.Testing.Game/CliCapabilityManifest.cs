@@ -185,33 +185,12 @@ public sealed class CliCapabilityManifest
         var wanted = capabilities.Distinct(StringComparer.Ordinal).ToList();
         if (wanted.Any(path => path == null || path.Split('/') is not [{ Length: > 0 } owner, { Length: > 0 } command] || !ValidName(owner) || !ValidName(command)))
             throw new ArgumentException("Name each capability as owner/command.", nameof(capabilities));
-        Validate();
         install = Path.GetFullPath(install);
-        var installed = OwnedClientPreflight.InstalledDlls(install)
-            .Select(path => (Path: path, Relative: Path.GetRelativePath(install, path).Replace('\\', '/'), Sha256: FileHash.Sha256(path))).ToList();
-        var problems = new List<string>();
-        var lost = new List<CliManifestFile>();
-        var located = new List<string>();
-        var claimed = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var file in Files)
-        {
-            var exact = installed.Where(dll => dll.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)).ToList();
-            foreach (var dll in exact) claimed.Add(dll.Relative);
-            if (exact.Count == 1) { located.Add(exact[0].Relative); continue; }
-            lost.Add(file);
-            if (exact.Count > 1) problems.Add($"{Name(file)} is installed {exact.Count} times ({string.Join(", ", exact.Select(dll => dll.Relative))}); BepInEx loads one and skips the rest, so keep one");
-            else if (installed.Any(dll => SameFile(dll.Relative, file))) { } // Named below as another build.
-            else problems.Add($"{Name(file)} is not installed in BepInEx/plugins or BepInEx/scripts");
-        }
-        foreach (var dll in installed.Where(dll => !claimed.Contains(dll.Relative)))
-        {
-            var plugins = CliAssembly.Plugins(dll.Path) ?? [];
-            var file = Files.FirstOrDefault(candidate => SameFile(dll.Relative, candidate)) ?? Files.FirstOrDefault(candidate => candidate.Plugins.Intersect(plugins, StringComparer.Ordinal).Any());
-            if (file == null) continue;
-            if (!lost.Contains(file)) lost.Add(file);
-            string declares = plugins.Count == 0 ? "" : $", declaring {string.Join(", ", plugins)},";
-            problems.Add($"{dll.Relative}{declares} has SHA256 {dll.Sha256}, not the manifest's {file.File} ({file.Sha256.ToLowerInvariant()}): another build of {Name(file)}");
-        }
+        var location = Locate(OwnedClientPreflight.InstalledDlls(install), "in BepInEx/plugins or BepInEx/scripts",
+            path => Path.GetRelativePath(install, path).Replace('\\', '/'));
+        var problems = location.Problems.Select(problem => problem.Message).ToList();
+        var lost = location.Problems.Select(problem => problem.File).Distinct().ToList();
+        var located = location.Located.Select(found => Path.GetRelativePath(install, found.Path).Replace('\\', '/')).ToList();
         var have = Capabilities;
         var missing = wanted.Where(path => !have.TryGetValue(path, out int version) || version != 1).ToList();
         string where = $"the ValheimCLI capability manifest of {Build}";
@@ -231,9 +210,66 @@ public sealed class CliCapabilityManifest
         return new CliManifestCheck(Build, located, wanted);
     }
 
+    /// <summary>
+    /// The one static check that <paramref name="dlls"/> hold exactly this manifest's set: each file found once by SHA256 and
+    /// declaring the manifest's plugin GUIDs, and no other DLL among them with one of its file names or GUIDs (another build,
+    /// stale or renamed). DLLs that are neither (the mods) are not judged. <paramref name="where"/> says where the DLLs were
+    /// looked for and <paramref name="show"/> how a path is named in a message. <paramref name="othersLoad"/>: whether the
+    /// DLLs that are not the located set would load beside it (an install's plugins, a lock's files), so another build among
+    /// them is a problem; false for a source folder only the located files are copied from. Every owned-client,
+    /// dependency-lock and resolver check of a ValheimCLI set is this one; only the live
+    /// <see cref="CliCapabilities.Require(GameActor, string[])"/> differs.
+    /// </summary>
+    internal CliSetLocation Locate(IEnumerable<string> dlls, string where, Func<string, string>? show = null, bool othersLoad = true)
+    {
+        ArgumentNullException.ThrowIfNull(dlls);
+        Validate();
+        show ??= path => path;
+        var candidates = dlls.Select(Path.GetFullPath).Distinct(StringComparer.Ordinal)
+            .Select(path => (Path: path, Shown: show(path), Sha256: FileHash.Sha256(path))).ToList();
+        var problems = new List<CliSetProblem>();
+        var located = new List<CliLocatedFile>();
+        var claimed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in Files)
+        {
+            var exact = candidates.Where(dll => dll.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var dll in exact) claimed.Add(dll.Path);
+            if (exact.Count > 1)
+                problems.Add(new(file, $"{Name(file)} is installed {exact.Count} times ({string.Join(", ", exact.Select(dll => dll.Shown))}); BepInEx loads one and skips the rest, so keep one", exact.Select(dll => dll.Path).ToList()));
+            else if (exact.Count == 1)
+            {
+                var declared = CliAssembly.Plugins(exact[0].Path) ?? [];
+                if (declared.Order(StringComparer.Ordinal).SequenceEqual(file.Plugins.Order(StringComparer.Ordinal), StringComparer.Ordinal))
+                    located.Add(new(file, exact[0].Path));
+                else
+                    problems.Add(new(file, $"{exact[0].Shown} has the manifest's SHA256 for {file.File} but declares {(declared.Count == 0 ? "no BepInEx plugin" : string.Join(", ", declared))}, not {string.Join(", ", file.Plugins)}; regenerate the manifest from this build", [exact[0].Path]));
+            }
+            else if (!othersLoad || !candidates.Any(dll => SameFile(dll.Shown, file))) // else named below as another build
+            {
+                var named = candidates.Where(dll => SameFile(dll.Shown, file)).ToList();
+                problems.Add(new(file, $"{Name(file)} is not installed {where}" +
+                    string.Concat(named.Select(dll => $"; {dll.Shown} there has SHA256 {dll.Sha256}, another build")), named.Select(dll => dll.Path).ToList()));
+            }
+        }
+        foreach (var dll in candidates.Where(dll => othersLoad && !claimed.Contains(dll.Path)))
+        {
+            var plugins = CliAssembly.Plugins(dll.Path) ?? [];
+            var file = Files.FirstOrDefault(candidate => SameFile(dll.Shown, candidate)) ?? Files.FirstOrDefault(candidate => candidate.Plugins.Intersect(plugins, StringComparer.Ordinal).Any());
+            if (file == null) continue;
+            string declares = plugins.Count == 0 ? "" : $", declaring {string.Join(", ", plugins)},";
+            problems.Add(new(file, $"{dll.Shown}{declares} has SHA256 {dll.Sha256}, not the manifest's {file.File} ({file.Sha256.ToLowerInvariant()}): another build of {Name(file)}", [dll.Path]));
+        }
+        return new CliSetLocation(located, problems);
+    }
+
     private static bool SameFile(string relative, CliManifestFile file) => Path.GetFileName(relative).Equals(file.File, StringComparison.OrdinalIgnoreCase);
     private static string Name(CliManifestFile file) => $"{file.File} (plugin {string.Join(", ", file.Plugins)})";
 }
+
+/// <summary>What <see cref="CliCapabilityManifest.Locate"/> found: each manifest file located once, and every problem, with the paths it saw.</summary>
+internal sealed record CliSetLocation(IReadOnlyList<CliLocatedFile> Located, IReadOnlyList<CliSetProblem> Problems);
+internal sealed record CliLocatedFile(CliManifestFile File, string Path);
+internal sealed record CliSetProblem(CliManifestFile File, string Message, IReadOnlyList<string> Candidates);
 
 /// <summary>One DLL of a <see cref="CliCapabilityManifest"/>.</summary>
 public sealed class CliManifestFile

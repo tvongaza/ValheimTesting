@@ -30,19 +30,10 @@ public sealed class NativeCleanClientRuntime : IDisposable
         loaderPackage?.Validate();
         if (loaderPackage != null && RegressionInputs.Inside(loaderPackage.Root, source))
             throw new InvalidOperationException("The client loader package must be an extracted, reviewed set outside the source game install.");
-        var files = dependencies.CliFiles.Select(file => file.File).ToList();
-        var duplicate = files.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
-        if (duplicate != null) throw new InvalidDataException("Two pinned ValheimCLI files share filename " + duplicate.Key + ".");
+        dependencies.RequireExactCliSet(); // the one static check of the set: each manifest file once, one core
         var pins = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var file in dependencies.CliFiles)
-        {
-            if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("A pinned ValheimCLI file changed: " + file.File);
-            foreach (var plugin in PluginMetadata.Read(file.File).Plugins)
-                if (!pins.TryAdd(plugin.Guid, FileHash.Md5(file.File)))
-                    throw new InvalidDataException("Two pinned ValheimCLI files declare " + plugin.Guid + ".");
-        }
-        if (!pins.ContainsKey("valheimCLI.valheimCLI")) throw new InvalidDataException("The pinned client set has no ValheimCLI core.");
+            foreach (var plugin in PluginMetadata.Read(file.File).Plugins) pins[plugin.Guid] = FileHash.Md5(file.File);
 
         var copy = WorldFixture.Copy(source, outputParent, WorldFixture.Manifest(source));
         try
@@ -55,7 +46,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
                 Directory.CreateDirectory(folder);
             }
             loaderPackage?.Apply(copy.DirectoryPath);
-            foreach (string file in files)
+            foreach (string file in dependencies.CliFiles.Select(pinned => pinned.File))
             {
                 string target = Path.Combine(bep, "plugins", Path.GetFileName(file));
                 File.Copy(file, target);

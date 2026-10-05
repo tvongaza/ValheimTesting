@@ -240,6 +240,66 @@ public sealed class CliCapabilityManifestTests : IDisposable
             Assert.Throws<InvalidOperationException>(() => plan.Preflight(CliCapabilities.HostedRounds)).Message);
     }
 
+    // The one static check of a ValheimCLI set (#296): each wrong shape is one message, from CliCapabilityManifest.Locate,
+    // whether an owned client's install, a dependency lock or the check itself asks.
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("twice")]
+    [InlineData("another build")]
+    [InlineData("other plugins")]
+    public void EachWrongSetShapeIsOneMessageFromTheOneCheck(string shape)
+    {
+        var builds = new Builds();
+        var manifest = CliCapabilityManifest.Read(Manifest(builds));
+        var files = new List<(string Relative, byte[] Image)> { (Core, builds.Core), (Standard, builds.Standard), (WorldTools, builds.WorldTools) };
+        string expected;
+        switch (shape)
+        {
+            case "missing":
+                files.RemoveAt(2);
+                expected = "Valheim.Cli.WorldTools.dll (plugin valheimCLI.worldtools) is not installed in ";
+                break;
+            case "twice":
+                files.Add(("copy/" + WorldTools, builds.WorldTools));
+                expected = "Valheim.Cli.WorldTools.dll (plugin valheimCLI.worldtools) is installed 2 times";
+                break;
+            case "another build":
+                files[1] = (Standard, builds.OlderStandard);
+                expected = "another build of Valheim.Cli.Standard.dll (plugin valheimCLI.standard)";
+                break;
+            default: // the manifest names other plugins for the pack's exact bytes: it was generated from another build
+                manifest.Files[1].Plugins = ["valheimCLI.renamed"];
+                expected = "has the manifest's SHA256 for Valheim.Cli.Standard.dll but declares valheimCLI.standard, not valheimCLI.renamed";
+                break;
+        }
+        string manifestPath = Path.Combine(_root, "shape-" + Guid.NewGuid().ToString("N") + ".json");
+        manifest.Write(manifestPath);
+        string folder = Path.Combine(_root, "set-" + Guid.NewGuid().ToString("N"));
+        var paths = files.Select(file =>
+        {
+            string path = Path.Combine(folder, file.Relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, file.Image);
+            return path;
+        }).ToList();
+
+        // The check itself.
+        Assert.Contains(manifest.Locate(paths, "in the folder").Problems, problem => problem.Message.Contains(expected, StringComparison.Ordinal));
+        // A source folder only the located files are copied from (the resolver): another build there is a missing file only
+        // when it is the one of that name; a stray copy beside the exact one is not judged.
+        var source = manifest.Locate(paths, "in the folder", othersLoad: false).Problems.Select(problem => problem.Message).ToList();
+        if (shape == "another build") Assert.Contains(source, message => message.Contains("Valheim.Cli.Standard.dll (plugin valheimCLI.standard) is not installed in the folder; ", StringComparison.Ordinal) && message.Contains("another build", StringComparison.Ordinal));
+        else Assert.Contains(source, message => message.Contains(expected, StringComparison.Ordinal));
+        // An owned client's install (ClientRunPlan.Preflight -> CliCapabilityManifest.Check).
+        using (var install = Staged(builds, [.. files]))
+            Assert.Contains(expected, Assert.Throws<InvalidOperationException>(() => PlanFor(install, manifestPath).Preflight(CliCapabilities.HostedRounds)).Message);
+        // A dependency lock (ApplyTo, ReadReady and NativeCleanClientRuntime.Prepare all ask RequireExactCliSet). A lock of the
+        // wrong count is refused for its count first; the others reach the one check.
+        var dependencyLock = new NativeDependencyLock { CliManifest = manifest, CliFiles = paths.Select(path => new NativeDependencyFile(path, FileHash.Sha256(path), "test")).ToList() };
+        string refusal = Assert.Throws<InvalidDataException>(dependencyLock.RequireExactCliSet).Message;
+        Assert.Contains(files.Count == manifest.Files.Count ? expected : "must contain exactly the ValheimCLI core and packs", refusal);
+    }
+
     [Fact] public void AManifestPackInScriptsMustLoadAtStartupEvenWhenItIsNotSeparatelyPinned()
     {
         var builds = new Builds();

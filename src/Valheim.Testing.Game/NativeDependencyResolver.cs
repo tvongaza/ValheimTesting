@@ -156,17 +156,20 @@ public sealed class NativeDependencyLock
         return plan;
     }
 
-    private void RequireExactCliSet()
+    /// <summary>The lock's ValheimCLI files are exactly its manifest's set (<see cref="CliCapabilityManifest.Locate"/>), with one core.</summary>
+    internal void RequireExactCliSet()
     {
         CliManifest.Validate();
         if (CliFiles.Count == 0 || CliFiles.Count != CliManifest.Files.Count)
             throw new InvalidDataException("The dependency lock must contain exactly the ValheimCLI core and packs selected by its capability manifest.");
         if (CliManifest.Files.Count(file => file.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal)) != 1)
             throw new InvalidDataException("The dependency lock needs exactly one ValheimCLI core.");
-        foreach (var declared in CliManifest.Files)
-            if (CliFiles.Count(file => Path.GetFileName(file.File).Equals(declared.File, StringComparison.OrdinalIgnoreCase)
-                && file.Sha256.Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase)) != 1)
-                throw new InvalidDataException($"The pinned ValheimCLI file {declared.File} is not exactly the build in the lock.");
+        foreach (var file in CliFiles)
+            if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"The pinned ValheimCLI file {file.File} is missing or changed; resolve from explicit roots again.");
+        var location = CliManifest.Locate(CliFiles.Select(file => file.File), "in the dependency lock");
+        if (location.Problems.Count != 0)
+            throw new InvalidDataException($"The dependency lock's ValheimCLI files are not the build {CliManifest.Build} its manifest describes: {string.Join("; ", location.Problems.Select(problem => problem.Message))}.");
     }
 
     private static readonly JsonSerializerOptions Json = new()
@@ -242,23 +245,16 @@ public static class NativeDependencyResolver
             result.Mods.Add(Pinned(path, "selected mod"));
             Add(path, "selected mod");
         }
-        foreach (var file in cli.Files)
+        // The ValheimCLI set: the one static check (CliCapabilityManifest.Locate) over the folder's DLLs of the manifest's file
+        // names. Only the located files are copied, so another build left in the folder is not judged.
+        var names = cli.Files.Select(file => file.File).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var location = cli.Locate(Directory.EnumerateFiles(request.CliFiles, "*.dll", SearchOption.AllDirectories).Where(path => names.Contains(Path.GetFileName(path))),
+            "in " + request.CliFiles, othersLoad: false);
+        foreach (var problem in location.Problems)
+            result.Gaps.Add(new("cli", problem.File.File, $"The pinned ValheimCLI build {cli.Build}: {problem.Message}.", problem.Candidates.Order(StringComparer.Ordinal).ToList()));
+        foreach (var (file, path) in location.Located)
         {
-            var matches = Directory.EnumerateFiles(request.CliFiles, file.File, SearchOption.AllDirectories)
-                .Where(path => FileHash.Sha256(path).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal).ToList();
-            if (matches.Count != 1)
-            {
-                result.Gaps.Add(new("cli", file.File, $"The pinned ValheimCLI build {cli.Build} needs {file.File} at SHA256 {file.Sha256}; found {matches.Count} exact copy/copies in {request.CliFiles}.", matches));
-                continue;
-            }
-            string path = matches[0];
             var actual = PluginMetadata.Read(path);
-            if (!actual.Plugins.Select(plugin => plugin.Guid).Order(StringComparer.Ordinal)
-                .SequenceEqual(file.Plugins.Order(StringComparer.Ordinal), StringComparer.Ordinal))
-            {
-                result.Gaps.Add(new("cli", file.File, $"{path} has the pinned hash but declares different BepInEx plugins from the ValheimCLI manifest; regenerate the manifest from this build.", [path]));
-                continue;
-            }
             result.CliFiles.Add(Pinned(path, file.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) ? "ValheimCLI core" : "provides " + string.Join(", ", request.Capabilities.Where(capability => file.Commands().Any(command => command.Path == capability)))));
             known[path] = actual;
             Add(path, "ValheimCLI selected build");
