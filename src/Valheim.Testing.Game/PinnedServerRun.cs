@@ -363,7 +363,7 @@ public static class PinnedServerRun
             if (environment != null)
             {
                 // The runtime is the server host's install, copied and checked there; nothing local is read for it.
-                hosted = HostedServerRun.Create(environment, plan, options.Name, options.HostSeams);
+                hosted = HostedServerRun.Create(environment, plan, options.Name, options.HostSeams, prepared: prepared != null);
                 // A client's lost Steam account lease stops that client, then the run, as Ctrl+C would.
                 hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };
                 hosted.Record(report.Provenance);
@@ -482,7 +482,9 @@ public static class PinnedServerRun
             }
             if (hosted != null)
                 foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped, KeepRequested(options.KeepRuntime)).ConfigureAwait(false)) Classify(failure);
-            // After every process the run started has stopped: the campaign's disposable installs and characters go.
+            // After every process the run started has stopped: the campaign's disposable installs and characters go, except the
+            // server's when the run kept it (it is the one copy the server ran from).
+            if (prepared != null && hosted is { Prepared: true, RuntimeRetained: true }) prepared.Keep(hosted.RuntimeDirectory);
             if (prepared != null)
                 try
                 {

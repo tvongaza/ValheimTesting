@@ -443,6 +443,27 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Runs);
     }
 
+    // #257: a campaign's prepared install is the server's runtime, verified where it is and never copied again (the campaign
+    // test proves the passing path); one that changed between preparation and the run is refused before anything launches.
+    [Fact] public async Task APreparedRuntimeThatChangedSincePreparationIsRefusedAndNotCopied()
+    {
+        var host = NewHost();
+        var (planPath, profilePath) = Write(host);
+        var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
+        var hosted = HostedServerRun.Create(TestEnvironment.Read(profilePath), plan, "test", new HostedSeams { Host = _ => host, RunId = RunId }, prepared: true);
+        Assert.True(hosted.Prepared);
+        Assert.Equal(Install, hosted.RuntimeDirectory);
+        Assert.Equal(RunDirectory, hosted.RunDirectory); // world and boot evidence stay in the run's own directory
+        File.AppendAllText(Path.Combine(host.Local(Install), ServerLaunch.LinuxExecutable), " changed after preparation");
+        var report = new ScenarioReport("prepared runtime");
+        await Assert.ThrowsAnyAsync<Exception>(() => hosted.LockAndCopyRuntimeAsync(report, plan, pinned: true, CancellationToken.None));
+        var step = Assert.Single(report.Steps, step => step.Name == "verify the prepared runtime on the server host");
+        Assert.False(step.Passed);
+        Assert.Contains(ServerLaunch.LinuxExecutable, step.Error);
+        Assert.DoesNotContain("copy", host.Scripts);
+        Assert.DoesNotContain("start", host.Scripts);
+    }
+
     [Fact] public async Task WindowsPowerShellProfileRunsTheWholeServerLifecycleAndKeepsOnlyItsEvidence()
     {
         const string windowsRuns = @"C:\vt\runs";

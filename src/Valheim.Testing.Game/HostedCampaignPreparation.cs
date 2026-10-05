@@ -183,6 +183,14 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         return selected;
     }
 
+    private readonly HashSet<string> _kept = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Leaves <paramref name="runtime"/> (one of this campaign's prepared installs) and its staging in place at disposal: the
+    /// run that used it kept it, on request or because its server may still run, and said where.
+    /// </summary>
+    internal void Keep(string runtime) => _kept.Add(runtime);
+
     public async ValueTask DisposeAsync()
     {
         if (_retired) return;
@@ -199,7 +207,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             }
             catch (Exception error) { failures.Add(new IOException($"Failed to retire the disposable character on {character.Host}", error)); }
         }
-        foreach (var copy in _copies.Reverse())
+        foreach (var copy in _copies.Reverse().Where(copy => !_kept.Contains(copy.Runtime)))
         {
             try
             {

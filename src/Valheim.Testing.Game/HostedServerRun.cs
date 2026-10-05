@@ -50,13 +50,26 @@ internal sealed class HostedServerRun
     private bool _worldShipped, _serverMayRun;
     private int _clients;
 
-    private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, HostedSeams seams)
+    private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, HostedSeams seams,
+        string? preparedRuntime)
     {
         Profile = profile; Role = role; HostProfile = hostProfile; Host = host; RunId = runId; _seams = seams; _owner = runner + " " + runId;
+        // A campaign prepared the server's disposable install already (<runtime>/vt-prep-<id>-server/runtime): that is the one
+        // copy the server runs from. A standalone run makes its own under <runtime>/<runId>.
+        Prepared = preparedRuntime != null;
         RunDirectory = HostInstall.Join(role.Runtime, runId);
-        RuntimeDirectory = HostInstall.Join(RunDirectory, "runtime");
+        RuntimeDirectory = preparedRuntime ?? HostInstall.Join(RunDirectory, "runtime");
         WorldDirectory = HostInstall.Join(RunDirectory, "world");
+        // The retire keeps what changed beside the copy it retires (<copy's directory>/runtime-changes), then fetches it.
+        _copyDirectory = RuntimeDirectory[..RuntimeDirectory.LastIndexOfAny(['/', '\\'])];
+        _copyDirectoryName = _copyDirectory[(_copyDirectory.LastIndexOfAny(['/', '\\']) + 1)..];
     }
+
+    private readonly string _copyDirectory, _copyDirectoryName;
+    /// <summary>Whether the runtime is a campaign's prepared install (verified in place) rather than a copy this run makes.</summary>
+    public bool Prepared { get; }
+    /// <summary>After <see cref="TeardownAsync"/>: the runtime copy stayed (kept on request, or its server may still run).</summary>
+    public bool RuntimeRetained { get; private set; }
 
     public ResolvedEnvironment Profile { get; }
     public GameRole Role { get; }
@@ -76,7 +89,11 @@ internal sealed class HostedServerRun
     public Action? AccountLost { get; set; }
 
     /// <summary>Refuses an environment and plan that cannot run a server on the environment's server host, before anything is touched.</summary>
-    public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams)
+    public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams) =>
+        Create(profile, plan, runner, seams, prepared: false);
+
+    /// <summary>With <paramref name="prepared"/>, the server role's install is a campaign's prepared disposable install: the run uses it as its runtime.</summary>
+    internal static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams, bool prepared)
     {
         var role = profile.Server ?? throw new ArgumentException("The environment places no dedicated server.");
         var hostProfile = profile.Hosts[role.Host];
@@ -84,7 +101,7 @@ internal sealed class HostedServerRun
         seams ??= new HostedSeams();
         string runId = seams.RunId ?? "run-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8];
         var host = seams.Host?.Invoke(role.Host) ?? profile.CreateHost(role.Host);
-        return new HostedServerRun(profile, role, hostProfile, host, runId, runner, seams);
+        return new HostedServerRun(profile, role, hostProfile, host, runId, runner, seams, prepared ? role.Install : null);
     }
 
     /// <summary>Why a server environment cannot run <paramref name="plan"/>, or null: its host's platform and shell, and the plan's ports.</summary>
@@ -126,6 +143,16 @@ internal sealed class HostedServerRun
         await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         // Only an unpinned plan may leave out the manifest; the copy is then recorded as found.
         bool verified = pinned || plan.Runtime.Sha256.Count != 0;
+        if (Prepared)
+        {
+            // The campaign's preparation made the one copy; it must still be exactly what the preparation listed and bound.
+            await report.StepAsync(StepPhase.Setup, verified ? "verify the prepared runtime on the server host" : "list the prepared runtime on the server host as found", async () =>
+            {
+                _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, Long, null, cancellation).ConfigureAwait(false);
+                if (verified) HostInstall.RequireSame(plan.Runtime.Sha256, _runtime, "prepared runtime");
+            }).ConfigureAwait(false);
+            return;
+        }
         await report.StepAsync(StepPhase.Setup, verified ? "copy and verify pinned runtime on the server host" : "copy unpinned runtime on the server host as found", async () =>
         {
             await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, Long, cancellation).ConfigureAwait(false);
@@ -492,9 +519,10 @@ internal sealed class HostedServerRun
     private async Task RetireRuntimeAsync(ScenarioReport report, string output, bool launched, bool serverStopped, bool keep)
     {
         string where = Host.Name + ":" + RuntimeDirectory;
-        if (keep) { report.Provenance["runtimeCopy"] = $"kept {where}: kept on request ({PinnedServerRun.KeepRuntimeVariable}=1 or KeepRuntime)"; return; }
+        if (keep) { RuntimeRetained = true; report.Provenance["runtimeCopy"] = $"kept {where}: kept on request ({PinnedServerRun.KeepRuntimeVariable}=1 or KeepRuntime)"; return; }
         if (!serverStopped)
         {
+            RuntimeRetained = true;
             report.Provenance["runtimeCopy"] = $"kept {where}: the owned server there may still run; remove the directory once it has stopped";
             Console.Error.WriteLine("Warning: " + report.Provenance["runtimeCopy"]);
             return;
@@ -510,10 +538,10 @@ internal sealed class HostedServerRun
             // The failure limits: the run's own result is not final yet (its log scan comes after this teardown, which first keeps
             // the logs of any client still open), so keep as much as a failed run would.
             var (perFile, total) = PinnedServerRun.RetainLimits(passed: false);
-            string keepDirectory = HostInstall.Join(RunDirectory, "runtime-changes");
+            string keepDirectory = HostInstall.Join(_copyDirectory, "runtime-changes");
             var result = (await Host.RunAsync(Host.Shell.Kind == HostShellKind.PowerShell ? HostedRunScripts.WindowsRetire : HostedRunScripts.Retire, new Dictionary<string, string>
             {
-                ["runtime"] = RuntimeDirectory, ["keep"] = keepDirectory, ["run"] = RunId,
+                ["runtime"] = RuntimeDirectory, ["keep"] = keepDirectory, ["run"] = _copyDirectoryName,
                 ["files"] = string.Join('\n', added.Concat(changed).Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name)))),
                 ["perfile"] = perFile.ToString(CultureInfo.InvariantCulture), ["total"] = total.ToString(CultureInfo.InvariantCulture),
             }, Long).ConfigureAwait(false)).EnsureSuccess($"Removing the runtime copy {where}");
@@ -531,6 +559,10 @@ internal sealed class HostedServerRun
             }
             if (!launched)
             {
+                // Nothing ran, so nothing changed: the (empty) keep folder goes too, leaving the copy's directory empty for its owner.
+                (await Host.RunAsync(Host.Shell.Kind == HostShellKind.PowerShell ? HostedRunScripts.WindowsDropKept : HostedRunScripts.DropKept,
+                    new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = _copyDirectoryName }, Quick).ConfigureAwait(false))
+                    .EnsureSuccess($"Removing {Host.Name}:{keepDirectory}");
                 report.Provenance["runtimeCopy"] = $"removed {where} ({DiskSpace.Format(long.Parse(freed, CultureInfo.InvariantCulture))}): nothing was launched";
                 return;
             }
@@ -538,7 +570,7 @@ internal sealed class HostedServerRun
             await Host.FetchDirectoryAsync(keepDirectory, local, Long).ConfigureAwait(false);
             // Fetched: the host's copy of the changes is not needed twice.
             (await Host.RunAsync(Host.Shell.Kind == HostShellKind.PowerShell ? HostedRunScripts.WindowsDropKept : HostedRunScripts.DropKept,
-                new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = RunId }, Quick).ConfigureAwait(false))
+                new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = _copyDirectoryName }, Quick).ConfigureAwait(false))
                 .EnsureSuccess($"Removing {Host.Name}:{keepDirectory} after fetching it");
             var retired = new RetiredCopy(where, local, added, changed, missing, notKept, long.Parse(kept, CultureInfo.InvariantCulture), long.Parse(freed, CultureInfo.InvariantCulture));
             File.WriteAllText(Path.Combine(local, "changes.json"), JsonSerializer.Serialize(retired, new JsonSerializerOptions { WriteIndented = true }));
