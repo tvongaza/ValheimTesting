@@ -12,7 +12,7 @@ A successful fake-transport run is an orchestration test, not an in-game pass, a
 
 ## On one Windows PC
 
-The usual setup is one Windows PC with Valheim installed through Steam. Everything runs on that machine: no inventory file, SSH or second host.
+The usual setup is one Windows PC with Valheim installed through Steam. Everything runs on that machine: no inventory file, SSH or second host. The machine's own Steam installs, ports and folders are detected; `valheim-test env preflight` prints what it found and what it assumed, and names every path it tried for anything missing ([this machine, with no file](#this-machine-with-no-file)).
 
 1. **Install** Valheim and the free **Valheim Dedicated Server** tool (Steam app 896660) through Steam, and keep the Steam client running and signed in; an owned client needs it, the dedicated server does not.
 2. **Make test copies, never use the Steam folders themselves.** A server runtime: a copy of the dedicated server folder with BepInExPack_Valheim, ValheimCLI's core and the packs the test uses (Standard, World Tools), your mod and its [test adapter](Valheim.Testing.Adapter.md). A client install: a copy of the game folder with BepInEx and ValheimCLI, and your mod when the client should have it. Give each its own ValheimCLI port. Use a disposable world and a disposable local character, never your own.
@@ -455,6 +455,34 @@ A public copy of a regression for review (scrubbed sources, a pinned project, th
 
 ## Game hosts and the environment inventory
 
+### This machine, with no file
+
+On one Windows PC with Valheim installed through Steam, there is nothing to write. With no inventory file (`EnvironmentInventory.Read(null)`, a campaign that leaves out `inventory`, or `valheim-test env preflight` with no arguments), the inventory is this machine. It contains host `local`, with `local-server` from Valheim Dedicated Server (Steam app 896660) and `local-client` from Valheim (Steam app 892970).
+
+Steam is found as follows:
+
+- Windows: the registered `HKCU\Software\Valve\Steam` `SteamPath`, then `Program Files (x86)\Steam`.
+- macOS: `~/Library/Application Support/Steam`.
+- Linux: `~/.local/share/Steam`, `~/.steam/steam`, then the Flatpak's.
+
+Each app is then found in every library `steamapps/libraryfolders.vdf` lists, through its `appmanifest_<id>.acf` `installdir`. An install counts only if its executable is there.
+
+Under ValheimTesting's own folder (`%LOCALAPPDATA%\ValheimTesting`, macOS `~/Library/Application Support/ValheimTesting`, Linux `$XDG_DATA_HOME/ValheimTesting`), the defaults are:
+
+- runtimes in `runs\<environment>`;
+- the host lock in `lock`;
+- Steam-account leases in `leases`.
+
+The ports are ValheimCLI 5688 for the server and 5689 for the client, and game port 2486. These are valheim-test's own ports, kept away from Valheim's standard 2456, so a personal server on the same machine or network keeps its port and a crossplay lobby (keyed by public IP and port) never takes another server's joins. Each further local environment takes the next CLI port not already used on this machine (by a local or host-network container environment, or an ssh tunnel) and a game port whose three-port range is clear.
+
+`valheim-test env preflight` prints each detected or assumed value on a `detected:` line. It prints each thing it looked for and did not find on a `NOT FOUND:` line, with every path it tried. It refuses an inventory without a server and a client.
+
+A missing dedicated server is reported with three ways forward: install it from Steam (it is free), add a server environment, or run `valheim-test start` for a hosted local world. A Mac gets no local dedicated server, because the campaign runner does not run a macOS server.
+
+A file lists the environments to use, in preference order. A file never gains this machine's environments unless it lists them, so an inventory of other machines is read exactly as written. An environment on this machine (on a host of kind `local`, or with no host) needs only its name and role, for example `{ "name": "local-client", "roles": ["client"] }`: its install, runtime and ports are filled in as above. If the file names its own `local`-kind host, environments without a host go to that host. `leaseHost` and `leaseDirectory` default to this machine's only when every client is on it. Two inventories on one machine exclude each other only if they share the host lock and lease folder; leave `lock` and the leases out of a file for this machine to share the defaults. Every run's `result.json` records what was detected (`inventoryDetected`), and a run with no file records `inventory: this machine`.
+
+### Several machines
+
 A mod author often edits on one machine and runs the game on another: a Windows gaming PC, a Linux box, a container, a rented VM. A macOS server runs only locally so far; a remote macOS server host is not supported yet. A private **environment inventory** lists your machines (hosts) and, in preference order, the game installs on them (environments) a run may use; an `IGameHost` does the work on that machine. A standalone run places its dedicated server from it (`--inventory`); a campaign assigns each of its declared actors (a server and named clients) an environment from it. The inventory holds no credentials and no Steam IDs: a client's identity is the one signed in on its host.
 
 ```json
@@ -478,7 +506,7 @@ A mod author often edits on one machine and runs the game on another: a Windows 
 }
 ```
 
-`EnvironmentInventory.Read(path)` refuses unknown fields (a credential or Steam field among them, without repeating its value) and validates everything at once before anything starts: known kinds, platforms and shells (`powershell` is Windows PowerShell 5.1, Windows only; `pwsh` anywhere; no `bash` on Windows), ssh destinations and options as `SshGameHost` accepts them (no password, the port given once), absolute paths in the host's own style, a runtime directory outside the install, no remote macOS server yet (local runs are supported), an environment's `roles` either `["server"]` or `["client"]`, a `gamePort` only on a server environment, and a `leaseHost` and absolute `leaseDirectory` when any client environment exists. Assigning actors then refuses one game client per host twice, a ValheimCLI port used twice on one host and two actors reached on the same port of this machine (a local host's or container's CLI port, an SSH environment's `localCliPort`). A `local` host must describe this machine's platform. An inventory describes one person's machines, so keep it beside the mod's tests, not in them. SSH uses keys or an agent only (BatchMode is always on, a password is never accepted), and the host key must already be known. Each `sshOptions` entry is `Name=value`, and the value is taken literally: ssh reads a `-o` value like a line of its config file, so a value with spaces, quotes or a leading `#` (`User=Some Name`, `IdentityFile=C:\Users\Some Name\.ssh\key`) is passed as `Name="value"`, with `"` and any backslash ssh would read as an escape escaped; other values are passed unchanged. An empty value or one with a control character (a tab, a line break) is refused. A value that needs an escape (a `"`, `\\` as in a UNC path, or a trailing backslash) needs OpenSSH 8.7 or later, which reads escapes; other quoted values, such as a Windows path with spaces, read the same in older versions.
+`EnvironmentInventory.Read(path)` refuses unknown fields (a credential or Steam field among them, without repeating its value) and validates everything at once before anything starts: known kinds, platforms and shells (`powershell` is Windows PowerShell 5.1, Windows only; `pwsh` anywhere; no `bash` on Windows), ssh destinations and options as `SshGameHost` accepts them (no password, the port given once), absolute paths in the host's own style, a runtime directory outside the install, no remote macOS server yet (local runs are supported), an environment's `roles` either `["server"]` or `["client"]`, a `gamePort` only on a server environment, and a listed `leaseHost` and absolute `leaseDirectory` when any client environment exists (left out, this machine's when every client is on it). Assigning actors then refuses one game client per host twice, a ValheimCLI port used twice on one host and two actors reached on the same port of this machine (a local host's or container's CLI port, an SSH environment's `localCliPort`). A `local` host must describe this machine's platform. An inventory describes one person's machines, so keep it beside the mod's tests, not in them. SSH uses keys or an agent only (BatchMode is always on, a password is never accepted), and the host key must already be known. Each `sshOptions` entry is `Name=value`, and the value is taken literally: ssh reads a `-o` value like a line of its config file, so a value with spaces, quotes or a leading `#` (`User=Some Name`, `IdentityFile=C:\Users\Some Name\.ssh\key`) is passed as `Name="value"`, with `"` and any backslash ssh would read as an escape escaped; other values are passed unchanged. An empty value or one with a control character (a tab, a line break) is refused. A value that needs an escape (a `"`, `\\` as in a UNC path, or a trailing backslash) needs OpenSSH 8.7 or later, which reads escapes; other quoted values, such as a Windows path with spaces, read the same in older versions.
 
 | Operation | `IGameHost` | Contract |
 |---|---|---|
