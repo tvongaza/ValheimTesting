@@ -156,6 +156,61 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task"); // an elevated host registers its S4U task
     }
 
+    // Stage 2's journal item (#257): a run another process left on a campaign host refuses the preflight and names the command;
+    // a live run's client is named as that run's in the conflicting-use refusal, an unknown one as the user's own.
+    [Fact]
+    public async Task ARunLeftOnACampaignHostRefusesThePreflightAndConflictsNameTheirRun()
+    {
+        string file = Write("campaign.json", new
+        {
+            inventory = Inventory(), server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
+        });
+        var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true);
+        void Line(string run, JournalRunner runner, string kind, params (string Key, string Value)[] fields)
+        {
+            string path = host.Local(@"C:\locks\journal\" + run + @"\server.jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllText(path, JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["utc"] = DateTime.UtcNow.AddMinutes(-5).ToString("O"), ["run"] = run, ["actor"] = "server", ["kind"] = kind,
+                ["fields"] = fields.ToDictionary(field => field.Key, field => field.Value),
+                ["runner"] = new Dictionary<string, object> { ["machine"] = runner.Machine, ["pid"] = runner.Pid, ["startedUtc"] = runner.StartedUtc.ToString("O") },
+            }) + "\n");
+        }
+        Line("run-left", RunJournalStatusTests.Gone, JournalEntry.CopyIntended, ("runtime", @"C:\runs\vt-prep-left-server\runtime"), ("stage", @"C:\runs\vt-prep-left-server\staging"));
+
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var left = Assert.Single(report.Problems, problem => problem.Input == "run journal");
+        Assert.Equal("pc", left.Actor);
+        Assert.Contains("valheim-test env recover --run run-left", left.Message);
+        Assert.DoesNotContain(host.Scripts, script => script is "copy" or "start" or "apply-stage" or "cleanup-stage");
+
+        // Recovered, it no longer refuses.
+        Assert.True((await RunRecovery.RecoverAsync(new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "ssh", Lock = @"C:\locks\test.lock" } },
+            _ => host, "run-left", false, TimeSpan.FromSeconds(2))).Recovered);
+        report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        Assert.DoesNotContain(report.Problems, problem => problem.Input == "run journal");
+
+        // Another run going on this host, whose runner is a live process on this machine: the preflight refuses it, and the
+        // session refusal names its client as that run's and another client as the user's own.
+        using var runner = OperatingSystem.IsWindows()
+            ? System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "ping.exe"), "-n 60 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true })!
+            : System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sleep", "60") { UseShellExecute = false })!;
+        var going = new JournalRunner(Environment.MachineName, runner.Id, runner.StartTime.ToUniversalTime());
+        host.Running(77, "555");
+        Line("run-going", going, JournalEntry.ProcessStarted, ("pid", "77"), ("startIdentity", "555"), ("commandLineSha256", FakeServerHost.CommandLineSha256("77")));
+        host.GameActive = true; host.GameProcessIds = "77,78";
+        try
+        {
+            report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+            Assert.Contains(report.Problems, problem => problem.Input == "run journal" && problem.Message.StartsWith("run run-going is still going on pc"));
+            string message = Assert.Single(report.Problems, problem => problem.Input == "session").Message;
+            Assert.Contains("process 77 of run run-going (LIVE)", message);
+            Assert.Contains("process 78, which no run journalled: a game of your own", message);
+        }
+        finally { runner.Kill(); runner.WaitForExit(10_000); }
+    }
+
     // A Windows server host whose account can register neither server task (not elevated, and no desktop session of its own)
     // is refused before anything is copied, naming why; the station's first zero-config launch failed there instead.
     [Fact]

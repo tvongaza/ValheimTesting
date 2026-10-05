@@ -238,6 +238,57 @@ public static class HostedCampaignPreparation
     private static bool HostCheckRefusal(Exception error) => error is ArgumentException or InvalidOperationException or IOException or
         InvalidDataException or PlatformNotSupportedException or UnauthorizedAccessException;
 
+    // Stage 2's journal item: each run another process journalled on these hosts (or the lease host) must be over and have
+    // left nothing. A run still going, or one that left something, is a problem naming the command that settles it; a run
+    // whose runner ran elsewhere may be going there; one that shares only the lease host is not a conflict. Runs of this very
+    // process are its own. Returns, per host read, the process IDs runs journalled (for the conflicting-use check's message).
+    private static async Task<Dictionary<string, Dictionary<int, string>>> InspectJournalsAsync(Inputs inputs, ConcurrentBag<CampaignPreflightProblem> failures,
+        TimeSpan timeout, Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
+    {
+        var owners = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
+        var names = inputs.Roles.Select(role => role.Role.Host).Append(inputs.Profile.SteamAccounts?.LeaseHost ?? "")
+            .Where(name => inputs.Profile.Hosts.ContainsKey(name)).Distinct(StringComparer.Ordinal).ToList();
+        JournalStatusReport status;
+        try
+        {
+            status = await RunJournalStatus.InspectAsync(names.ToDictionary(name => name, name => inputs.Profile.Hosts[name], StringComparer.Ordinal),
+                name => hostFactory?.Invoke(name) ?? inputs.Profile.CreateHost(name), timeout, cancellation,
+                inputs.Profile.SteamAccounts?.LeaseHost, inputs.Profile.SteamAccounts?.ObservedLeaseDirectory).ConfigureAwait(false);
+        }
+        catch (Exception error) when (HostCheckRefusal(error))
+        {
+            failures.Add(new("journal", "run journal", error.Message));
+            return owners;
+        }
+        // Only a host whose journal was read can say a process is no run's.
+        foreach (var host in status.Hosts.Where(host => host.Error == null)) owners[host.Name] = [];
+        foreach (var host in status.Hosts.Where(host => host.Error != null))
+            failures.Add(new(host.Name, "run journal", $"could not be read, so whether another run is going there is unknown: {host.Error}"));
+        string self = JournalRunner.Current.ToString();
+        // A run going elsewhere that shares only the lease host is the pool's design, not a conflict: leases keep accounts apart.
+        var roleHosts = inputs.Roles.Select(role => role.Role.Host).ToHashSet(StringComparer.Ordinal);
+        foreach (var run in status.Runs.Where(run => run.Runner != self))
+        {
+            string where = string.Join(", ", run.Hosts);
+            bool here = run.Hosts.Any(roleHosts.Contains);
+            string? problem = run.State switch
+            {
+                JournalRunState.Live when here => $"run {run.Run} is still going on {where} ({run.Reason}); wait for it to end",
+                JournalRunState.Recoverable => $"run {run.Run} left {run.Items.Count} thing(s) on {where} ({run.Reason}); see valheim-test env status, then valheim-test env recover --run {run.Run}",
+                JournalRunState.Unrecoverable => $"run {run.Run} left something on {where} that cannot be proven its own ({run.Reason}); see valheim-test env status and settle it by hand",
+                JournalRunState.Unknown when run.Runner != null && here => $"run {run.Run} on {where} may still be going: {run.Reason}",
+                _ => null,
+            };
+            if (problem != null) failures.Add(new(run.Hosts[0], "run journal", problem));
+            // Every process a run journalled and that still runs, live or left behind, is that run's in the session refusal.
+            foreach (var process in run.Items.Where(item => item.Kind == "process"))
+                if (int.TryParse(process.Fields.GetValueOrDefault("pid"), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int pid)
+                    && owners.TryGetValue(process.Host, out var map))
+                    map[pid] = $"{run.Run} ({run.State.ToString().ToUpperInvariant()})";
+        }
+        return owners;
+    }
+
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
     {
@@ -248,6 +299,8 @@ public static class HostedCampaignPreparation
         var observedSteamIds = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var sourceListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var characterDirectories = new ConcurrentDictionary<string, CharacterDirectories>(StringComparer.Ordinal);
+        // The run journal of every host the campaign touches (#257): no other run is going there or left something it owns.
+        var owners = await InspectJournalsAsync(inputs, failures, timeout, hostFactory, cancellation).ConfigureAwait(false);
         var hostChecks = inputs.Roles.GroupBy(role => role.Role.Host, StringComparer.Ordinal).Select(async group =>
         {
             IGameHost host;
@@ -267,7 +320,7 @@ public static class HostedCampaignPreparation
             try
             {
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation,
-                    clientSession: group.Any(role => role.Name != "server")).ConfigureAwait(false);
+                    clientSession: group.Any(role => role.Name != "server"), owners: owners.GetValueOrDefault(group.Key)).ConfigureAwait(false);
             }
             catch (Exception error) when (HostCheckRefusal(error))
             { failures.Add(new(group.Key, "session", error.Message)); }
