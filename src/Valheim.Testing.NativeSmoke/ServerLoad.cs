@@ -295,6 +295,11 @@ internal static class ServerLoad
         };
         var clients = new Dictionary<string, ClientRunPlan>(StringComparer.Ordinal);
         if (clientPlan != null) clients["client"] = clientPlan;
+        // The unbound plans beside campaign.json, for an editable consumer (`valheim-test init server`) to run the same campaign.
+        // Private: plan.json holds the server's password.
+        File.WriteAllText(Path.Combine(output, "plan.json"), JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true }));
+        if (clientPlan != null)
+            File.WriteAllText(Path.Combine(output, "client-plan.json"), JsonSerializer.Serialize(clientPlan, new JsonSerializerOptions { WriteIndented = true }));
 
         string? previousPassword = Environment.GetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable);
         if (clientPlan != null) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, password);

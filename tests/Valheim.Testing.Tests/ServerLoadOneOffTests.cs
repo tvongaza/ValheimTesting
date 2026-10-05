@@ -81,6 +81,9 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.All(clientPlan.Pins, pin => Assert.Equal("absent", pin.Value)); // the clean client loads none of the server's plugins
         Assert.NotEmpty(clientPlan.Pins);
         Assert.False(Directory.Exists(Path.Combine(output, "consumer")));
+        // The unbound plans beside it, for an editable consumer to run the same campaign again.
+        Assert.Equal("2486", ServerRunPlan.Read<ServerRunPlan>(Path.Combine(output, "plan.json")).Arguments.SkipWhile(argument => argument != "-port").ElementAt(1));
+        Assert.True(File.Exists(Path.Combine(output, "client-plan.json")));
         // The campaign is the shared one: its static preflight reads it as written.
         using (EnvironmentInventory.UseMachine(WithValheim(out _)))
             Assert.DoesNotContain(HostedCampaignPreparation.Inspect(campaignFile!).Problems, problem => problem.Input is "inventory" or "manifest");
