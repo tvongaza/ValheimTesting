@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace Valheim.Testing.Game;
@@ -9,10 +8,8 @@ public enum ServerPlatform { Windows, Linux, MacOS }
 // for inspection). Other Unix hosts behave as Linux. Injectable so every host's branches are tested on any OS.
 internal enum ServerHost { Windows, Linux, MacOS }
 
-// Builds the direct launch DirectServerProcess needs from a copied BepInEx server runtime.
-// It reproduces the variables BepInExPack_Valheim's start_server_bepinex.sh exports, without the
-// script, so the started PID is the server's own and the session's PID handshake still holds.
-// Arguments (-batchmode, -nographics, -savedir ...) remain the caller's plan.
+// What a dedicated-server runtime is: its platform, decided from its files, and its executable. GameLaunch.ForServer builds
+// the launch from it. Arguments (-batchmode, -nographics, -savedir ...) remain the caller's plan.
 public static class ServerLaunch
 {
     public const string WindowsExecutable = "valheim_server.exe";
@@ -72,92 +69,7 @@ public static class ServerLaunch
     public static string RequireExecutable(string runtimeDirectory) => RequireExecutable(runtimeDirectory, CurrentHost);
     internal static string RequireExecutable(string runtimeDirectory, ServerHost host) => Resolve(FullRuntime(runtimeDirectory), host).Executable;
 
-    /// <summary>
-    /// Start info for one owned BepInEx dedicated server. BepInEx's preloader and core and the platform's Doorstop loader
-    /// must be present; on Windows doorstop_config.ini must enable Doorstop and target BepInEx's preloader. On macOS the
-    /// server starts through <c>/usr/bin/arch</c> as the machine's own architecture (arm64 on Apple Silicon), with Doorstop
-    /// enabled for BepInEx's preloader and a Doorstop library at the runtime's root that has that slice inserted
-    /// (<c>DYLD_INSERT_LIBRARIES</c>, passed with <c>-e</c> because the kernel strips DYLD_* from the SIP-protected
-    /// <c>arch</c>); the stock BepInExPack's Doorstop and core are x86_64-only, so a native launch needs a universal
-    /// <c>libdoorstop.dylib</c> and a BepInEx core that runs natively. Caller
-    /// environment is applied first and may not set Doorstop's variables or pass <c>--doorstop-*</c> arguments; inherited
-    /// Doorstop variables are removed. On Linux, Doorstop is enabled for BepInEx's preloader and the runtime's
-    /// doorstop_libs/linux64 directories are prepended to any existing LD_LIBRARY_PATH/LD_PRELOAD, which are kept.
-    /// SteamAppId defaults to the dedicated server's unless the caller sets it.
-    /// Unlike <see cref="ClientLaunch"/>, a host may build another platform's launch: a Windows host builds a Linux launch
-    /// for inspection only. Any other mismatch refuses with <see cref="PlatformNotSupportedException"/> rather than executing
-    /// another OS's binary.
-    /// </summary>
-    public static ProcessStartInfo CreateStartInfo(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null) =>
-        CreateStartInfo(runtimeDirectory, arguments, environment, CurrentHost, MacArchitecture);
-
-    internal static ProcessStartInfo CreateStartInfo(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment, ServerHost host) =>
-        CreateStartInfo(runtimeDirectory, arguments, environment, host, MacArchitecture);
-
-    internal static ProcessStartInfo CreateStartInfo(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment, ServerHost host,
-        ClientArchitecture macArchitecture)
-    {
-        ArgumentNullException.ThrowIfNull(arguments);
-        string runtime = FullRuntime(runtimeDirectory);
-        var (platform, executable) = Resolve(runtime, host);
-        BepInExLoader.RequireCore(runtime, "runtime");
-        string? macDoorstop = null;
-        if (platform == ServerPlatform.Windows) BepInExLoader.RequireWindowsLoader(runtime, "runtime");
-        else if (platform == ServerPlatform.Linux) BepInExLoader.RequireFile(runtime, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the runtime");
-        else
-        {
-            macDoorstop = ClientLaunch.MacDoorstop(runtime, executable, macArchitecture, client: false);
-            // DYLD_INSERT_LIBRARIES splits on ':', so such a path cannot be listed.
-            if (runtime.Contains(':')) throw new ArgumentException("A macOS runtime path cannot contain ':'.", nameof(runtimeDirectory));
-        }
-        environment ??= new Dictionary<string, string>();
-        var names = host == ServerHost.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var passed = BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(ServerLaunch));
-
-        // On Windows the server gets a console of its own (with no window): stop signals that console rather than the
-        // runner's. An SSH parent can make it ignore Ctrl+C, so ProcessQuit uses Ctrl+Break in that launch context.
-        var start = new ProcessStartInfo(executable) { WorkingDirectory = runtime, UseShellExecute = false, CreateNoWindow = platform == ServerPlatform.Windows };
-        foreach (string argument in passed) start.ArgumentList.Add(argument);
-        // Inherited Doorstop values would reach the server too; only the ones set below may.
-        BepInExLoader.ApplyEnvironment(start, environment);
-        if (!environment.Keys.Any(key => names.Equals(key, "SteamAppId"))) start.Environment["SteamAppId"] = DedicatedServerSteamAppId;
-        if (platform == ServerPlatform.Linux)
-        {
-            // Both lists split on ':' (LD_LIBRARY_PATH also on ';'), so such a path cannot be represented.
-            // Checked where the launch can run; a Windows host only builds this for inspection.
-            if (host != ServerHost.Windows && runtime.IndexOfAny([':', ';']) >= 0)
-                throw new ArgumentException("A Linux runtime path cannot contain ':' or ';'.", nameof(runtimeDirectory));
-            start.Environment["DOORSTOP_ENABLED"] = "1";
-            start.Environment["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(runtime, BepInExLoader.Preloader);
-            // Same effective order as the pack's script: linux64, then doorstop_libs, then the existing value.
-            start.Environment["LD_LIBRARY_PATH"] = BepInExLoader.Prepend(start.Environment, "LD_LIBRARY_PATH", Path.Combine(runtime, "linux64"), Path.Combine(runtime, "doorstop_libs"));
-            start.Environment["LD_PRELOAD"] = BepInExLoader.Prepend(start.Environment, "LD_PRELOAD", "libdoorstop_x64.so");
-        }
-        else if (platform == ServerPlatform.MacOS)
-        {
-            start.Environment["DOORSTOP_ENABLED"] = "1";
-            start.Environment["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(runtime, BepInExLoader.Preloader);
-            // With Doorstop injected, Mono finds libmono-native.dylib only through the library path, and the server keeps it
-            // beside itself, not at the root (the Mac client's launcher value): without it, or with the root, the server never
-            // started (30 Sep 2026, build 25527701). Vanilla, without Doorstop, needs neither.
-            start.Environment["DYLD_LIBRARY_PATH"] = BepInExLoader.Prepend(start.Environment, "DYLD_LIBRARY_PATH", Path.GetDirectoryName(executable)!);
-            start.Environment["DYLD_INSERT_LIBRARIES"] = BepInExLoader.Prepend(start.Environment, "DYLD_INSERT_LIBRARIES", macDoorstop!);
-            start.FileName = ClientLaunch.MacArchLauncher;
-            start.ArgumentList.Clear();
-            start.ArgumentList.Add(macArchitecture == ClientArchitecture.Arm64 ? "-arm64" : "-x86_64");
-            foreach (string name in start.Environment.Keys.Where(key => key.StartsWith("DYLD_", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList())
-            {
-                start.ArgumentList.Add("-e");
-                start.ArgumentList.Add(name + "=" + start.Environment[name]);
-                start.Environment.Remove(name);
-            }
-            start.ArgumentList.Add(executable);
-            foreach (string argument in passed) start.ArgumentList.Add(argument);
-        }
-        return start;
-    }
-
-    private static (ServerPlatform Platform, string Executable) Resolve(string runtime, ServerHost host)
+    internal static (ServerPlatform Platform, string Executable) Resolve(string runtime, ServerHost host)
     {
         var platform = Detect(runtime);
         string executable = Path.Combine(runtime, platform switch { ServerPlatform.Windows => WindowsExecutable, ServerPlatform.Linux => LinuxExecutable, _ => MacExecutablePath });
@@ -180,7 +92,7 @@ public static class ServerLaunch
         string.Equals(Path.GetFileName(runtime), MacClientBundle, StringComparison.OrdinalIgnoreCase)
         || File.Exists(Path.Combine(runtime, "Contents", "MacOS", "Valheim"))
         || Directory.Exists(Path.Combine(runtime, MacClientBundle));
-    private static string FullRuntime(string runtimeDirectory)
+    internal static string FullRuntime(string runtimeDirectory)
     {
         ArgumentException.ThrowIfNullOrEmpty(runtimeDirectory);
         string runtime = Path.TrimEndingDirectorySeparator(Path.GetFullPath(runtimeDirectory));

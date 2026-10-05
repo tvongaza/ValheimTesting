@@ -64,7 +64,7 @@ internal static class HostServerChecks
         string bystander = (await host.RunAsync("setsid sleep 300 > /dev/null 2>&1 < /dev/null & echo $!", null, Generous)).EnsureSuccess("Starting a bystander").Stdout.Trim();
         try
         {
-            var launch = HostServerLaunch.Create(runtime, ["-batchmode", "-name", "it's a test"], new Dictionary<string, string> { ["VT_TEST_TOKEN"] = "token-123" });
+            var launch = GameLaunch.ForServer(runtime, ["-batchmode", "-name", "it's a test"], new Dictionary<string, string> { ["VT_TEST_TOKEN"] = "token-123" }, hostPlatform: ServerPlatform.Linux);
             using var evidence = new TempDirectory();
             string local = Path.Combine(evidence.Path, "boot-1");
             var process = await HostServer.StartAsync(host, launch, root + "/run/boot-1", Generous, ["BepInEx/LogOutput.log", "toolkit-unity.log"], local);
@@ -91,7 +91,7 @@ internal static class HostServerChecks
 
             // A clean stop sends SIGINT and the stand-in exits by itself (130: ended by SIGINT, not killed); one that ignores
             // SIGINT is killed once the wait is over (137). The bystander is untouched either way.
-            async Task<ProcessStop> StopAfterListening(HostServerLaunch boot, string name, TimeSpan quit)
+            async Task<ProcessStop> StopAfterListening(GameLaunch boot, string name, TimeSpan quit)
             {
                 var started = await HostServer.StartAsync(host, boot, root + "/run/" + name, Generous, ["BepInEx/LogOutput.log"], Path.Combine(evidence.Path, name));
                 (await host.WaitForLogAsync(runtime + "/BepInEx/LogOutput.log", 0, StartupEvents.CliListening, StartupEvents.StartupFailures, Generous)).EnsureMatched();
@@ -101,7 +101,7 @@ internal static class HostServerChecks
             }
             var clean = await StopAfterListening(launch, "boot-2", TimeSpan.FromSeconds(15));
             Assert.Equal((StopOutcome.Clean, 130, "SIGINT"), (clean.Outcome, clean.ExitCode, clean.Request));
-            var ignoring = HostServerLaunch.Create(runtime, ["-batchmode"], new Dictionary<string, string> { ["VT_TEST_TOKEN"] = "token-456", ["VT_IGNORE_INT"] = "1" });
+            var ignoring = GameLaunch.ForServer(runtime, ["-batchmode"], new Dictionary<string, string> { ["VT_TEST_TOKEN"] = "token-456", ["VT_IGNORE_INT"] = "1" }, hostPlatform: ServerPlatform.Linux);
             var killed = await StopAfterListening(ignoring, "boot-3", TimeSpan.FromSeconds(1));
             Assert.Equal((StopOutcome.Killed, 137), (killed.Outcome, killed.ExitCode));
             Assert.StartsWith("SIGINT; no exit within 1.0 s", killed.Request);
@@ -134,7 +134,7 @@ internal static class HostServerChecks
         WriteInstall(source.Path);
         string runtime = root + "/runtime";
         await host.ShipFilesAsync(source.Path, runtime, Generous);
-        var crossplay = HostServerLaunch.Create(runtime, ["-batchmode", "-crossplay"]);
+        var crossplay = GameLaunch.ForServer(runtime, ["-batchmode", "-crossplay"], hostPlatform: ServerPlatform.Linux);
         await Assert.ThrowsAsync<FileNotFoundException>(() => CrossplayLibraries.RequireAsync(host, runtime, Generous));
         await Assert.ThrowsAsync<FileNotFoundException>(() => HostServer.StartAsync(host, crossplay, root + "/boot-absent", Generous));
 
@@ -275,7 +275,7 @@ public class WindowsSshServerIntegrationTests
             await HostInstall.CopyAsync(host, install, runtime, TimeSpan.FromSeconds(45));
             var listing = await HostInstall.ListAsync(host, runtime, TimeSpan.FromSeconds(45));
             Assert.Equal(ServerPlatform.Windows, HostInstall.DetectServer(listing));
-            var launch = HostServerLaunch.CreateWindows(runtime, ["-n", "60", "127.0.0.1"]);
+            var launch = GameLaunch.ForServer(runtime, ["-n", "60", "127.0.0.1"], hostPlatform: ServerPlatform.Windows);
             var process = await HostServer.StartAsync(host, launch, HostInstall.Join(root, "run", "boot-1"), TimeSpan.FromSeconds(90));
             try
             {
@@ -337,9 +337,9 @@ public class WindowsSshServerIntegrationTests
                 'VT-TEST prepared'
                 """, new Dictionary<string, string> { ["runtime"] = runtime }, TimeSpan.FromMinutes(2));
             Assert.True(prune.Succeeded, prune.Describe() + " " + prune.Stderr);
-            var launch = HostServerLaunch.CreateWindows(runtime,
+            var launch = GameLaunch.ForServer(runtime,
                 ["-batchmode", "-nographics", "-name", "VT Windows host check", "-port", "2486", "-world", "VT249" + Guid.NewGuid().ToString("N")[..8],
-                 "-password", "throwaway249", "-public", "0", "-savedir", HostInstall.Join(root, "world"), "-logFile", HostInstall.Join(runtime, "toolkit-unity.log")]);
+                 "-password", "throwaway249", "-public", "0", "-savedir", HostInstall.Join(root, "world"), "-logFile", HostInstall.Join(runtime, "toolkit-unity.log")], hostPlatform: ServerPlatform.Windows);
             var process = await HostServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(90), ["BepInEx/LogOutput.log", "toolkit-unity.log"]);
             try
             {

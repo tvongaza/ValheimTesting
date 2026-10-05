@@ -1,6 +1,6 @@
 name: Native Linux server smoke
 # Manual only. Builds the private image in docker/linux-server (Valheim dedicated server via anonymous
-# SteamCMD, plus BepInEx) on the runner and boots the server once through ServerLaunch. The image is
+# SteamCMD, plus BepInEx) on the runner and boots the server once through GameLaunch.ForServer. The image is
 # never pushed, saved or uploaded: it contains game files. Only the smoke's logs and report are uploaded.
 # No secrets are used.
 on:

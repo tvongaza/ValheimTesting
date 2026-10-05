@@ -59,7 +59,7 @@ public sealed class DoorstopMixPathsTests : IDisposable
         FakeInstalls.Server(runtime);
         File.WriteAllText(Path.Combine(runtime, ServerLaunch.WindowsExecutable), "server");
         Loader(runtime, proxy, config);
-        AssertRefusal(Record.Exception(() => ServerLaunch.CreateStartInfo(runtime, [], null, ServerHost.Windows)), "runtime", expected);
+        AssertRefusal(Record.Exception(() => GameLaunch.LocalServer(runtime, [], null, ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo()), "runtime", expected);
     }
 
     [Theory] [MemberData(nameof(Loaders))]

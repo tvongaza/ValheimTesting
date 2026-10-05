@@ -1,134 +1,6 @@
 using System.Globalization;
-using System.Text;
-using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
-
-/// <summary>
-/// One BepInEx dedicated-server launch for a Linux runtime on a host, as data: what <see cref="ServerLaunch"/> builds for a
-/// local runtime. <c>SteamAppId</c> is the dedicated server's unless the caller sets it; Doorstop is enabled for BepInEx's
-/// preloader, the runtime's <c>linux64</c> and <c>doorstop_libs</c> are put in front of LD_LIBRARY_PATH and
-/// <c>libdoorstop_x64.so</c> in front of LD_PRELOAD (for the server only, never the shells that start it), and inherited
-/// Doorstop variables are removed. Doorstop variables and <c>--doorstop-*</c> arguments from the caller are refused. The
-/// runtime's files are checked on the host when the server starts (<see cref="RequiredFiles"/>), and for a
-/// <see cref="Crossplay"/> launch that the game's PlayFab library loads there (<see cref="CrossplayLibraries"/>).
-/// </summary>
-public sealed class HostServerLaunch
-{
-    private static readonly Regex VariableName = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
-
-    private HostServerLaunch(string runtime, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended, bool windows = false)
-    {
-        Runtime = runtime; Arguments = arguments; Environment = environment; Prepended = prepended; Windows = windows;
-    }
-
-    /// <summary>The runtime directory on the host; also the server's working directory.</summary>
-    public string Runtime { get; }
-    /// <summary>The server executable's full path on the host.</summary>
-    public string Executable => Windows ? HostInstall.Join(Runtime, ServerLaunch.WindowsExecutable) : Runtime + "/" + ServerLaunch.LinuxExecutable;
-    public bool Windows { get; }
-    public IReadOnlyList<string> Arguments { get; }
-    /// <summary>Variables set for the server, the caller's first.</summary>
-    public IReadOnlyDictionary<string, string> Environment { get; }
-    /// <summary>Entries put in front of the host session's own value (<c>LD_LIBRARY_PATH</c>, <c>LD_PRELOAD</c>).</summary>
-    public IReadOnlyDictionary<string, string> Prepended { get; }
-    /// <summary>Inherited variables removed before the launch: Doorstop's, apart from the ones set here.</summary>
-    public IReadOnlyList<string> Unset { get; } = ["DOORSTOP_DISABLE"];
-    /// <summary>True when the arguments hold <c>-crossplay</c> (in any case, as the game reads it): the start then refuses a host whose <c>libparty.so</c> cannot load.</summary>
-    public bool Crossplay => Arguments.Any(argument => argument.Equals("-crossplay", StringComparison.OrdinalIgnoreCase));
-    /// <summary>Files, relative to <see cref="Runtime"/>, the host must have before anything starts.</summary>
-    public IReadOnlyList<string> RequiredFiles => Windows
-        ? [ServerLaunch.WindowsExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows)]
-        : [ServerLaunch.LinuxExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux)];
-
-    /// <summary>A Windows dedicated-server launch on a PowerShell host. The server has its own console and is independent of the SSH session.</summary>
-    public static HostServerLaunch CreateWindows(string runtime, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null)
-    {
-        ArgumentNullException.ThrowIfNull(arguments);
-        ArgumentException.ThrowIfNullOrWhiteSpace(runtime);
-        if (!Regex.IsMatch(runtime, @"^[A-Za-z]:[\\/]") || runtime.Any(char.IsControl))
-            throw new ArgumentException("The runtime must be an absolute Windows drive path on the host.", nameof(runtime));
-        string root = runtime.TrimEnd('\\', '/');
-        environment ??= new Dictionary<string, string>();
-        var passed = BepInExLoader.RefuseOverrides(environment, arguments, StringComparer.OrdinalIgnoreCase, nameof(HostServerLaunch));
-        if (passed.Any(arg => arg.Contains('\0') || arg.Any(ch => ch is '\n' or '\r')))
-            throw new ArgumentException("A launch argument cannot contain NUL or a line break.", nameof(arguments));
-        var set = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (name, value) in environment)
-        {
-            if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a variable name.", nameof(environment));
-            ArgumentNullException.ThrowIfNull(value, name);
-            if (value.Contains('\0')) throw new ArgumentException($"{name} cannot contain NUL.", nameof(environment));
-            set[name!] = value;
-        }
-        if (!set.ContainsKey("SteamAppId")) set["SteamAppId"] = ServerLaunch.DedicatedServerSteamAppId;
-        return new HostServerLaunch(root, passed, set, new Dictionary<string, string>(), windows: true);
-    }
-
-    /// <summary>
-    /// A launch of the Linux dedicated server in <paramref name="runtime"/>, an absolute path on a Linux host (without ':', ';'
-    /// or '=', which the loader's search lists and <c>env</c> cannot hold). Use <see cref="CreateWindows"/> for a Windows host.
-    /// </summary>
-    public static HostServerLaunch Create(string runtime, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null)
-    {
-        ArgumentNullException.ThrowIfNull(arguments);
-        ArgumentException.ThrowIfNullOrWhiteSpace(runtime);
-        if (Regex.IsMatch(runtime, @"^([A-Za-z]:|\\\\)"))
-            throw new PlatformNotSupportedException("A Windows runtime needs HostServerLaunch.CreateWindows on a PowerShell host.");
-        if (!runtime.StartsWith('/') || runtime.Any(char.IsControl)) throw new ArgumentException("The runtime must be an absolute Linux path on the host.", nameof(runtime));
-        if (runtime.IndexOfAny([':', ';', '=']) >= 0) throw new ArgumentException("A Linux runtime path cannot contain ':', ';' or '='.", nameof(runtime));
-        string root = runtime.Length > 1 ? runtime.TrimEnd('/') : runtime;
-        environment ??= new Dictionary<string, string>();
-        var passed = BepInExLoader.RefuseOverrides(environment, arguments, StringComparer.Ordinal, nameof(HostServerLaunch));
-        foreach (string argument in passed)
-            if (argument.Contains('\0') || argument.Any(ch => ch is '\n' or '\r')) throw new ArgumentException("A launch argument cannot contain NUL or a line break.", nameof(arguments));
-        var set = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (name, value) in environment)
-        {
-            if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a variable name.", nameof(environment));
-            ArgumentNullException.ThrowIfNull(value, name);
-            if (value.Contains('\0')) throw new ArgumentException($"{name} cannot contain a NUL character.", nameof(environment));
-            if (name is "LD_LIBRARY_PATH" or "LD_PRELOAD") throw new ArgumentException($"{name} is set by the launch for BepInEx's loader; leave it out of the environment.", nameof(environment));
-            set[name!] = value;
-        }
-        if (!set.ContainsKey("SteamAppId")) set["SteamAppId"] = ServerLaunch.DedicatedServerSteamAppId;
-        set["DOORSTOP_ENABLED"] = "1";
-        set["DOORSTOP_TARGET_ASSEMBLY"] = root + "/BepInEx/core/BepInEx.Preloader.dll";
-        // Same effective order as the pack's script: linux64, then doorstop_libs, then the existing value.
-        var prepended = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["LD_LIBRARY_PATH"] = root + "/linux64:" + root + "/doorstop_libs",
-            ["LD_PRELOAD"] = "libdoorstop_x64.so",
-        };
-        return new HostServerLaunch(root, passed, set, prepended);
-    }
-
-    /// <summary>The hash of the command line the started server has (<see cref="HostProcessProbe.ExpectedCommandLineSha256"/>).</summary>
-    internal string CommandLineSha256() => HostProcessProbe.ExpectedCommandLineSha256(Windows, Executable, Arguments);
-
-    /// <summary>The launch as the start script reads it: one line per item, <c>kind base64(UTF-8)</c>. Never written to disk: arguments may hold a server password.</summary>
-    internal string Spec()
-    {
-        var text = new StringBuilder();
-        void Line(string kind, string value) => text.Append(kind).Append(' ').Append(InteractiveClient.Base64(value)).Append('\n');
-        foreach (string name in Unset) Line("unset", name);
-        foreach (var (name, value) in Environment.OrderBy(pair => pair.Key, StringComparer.Ordinal)) Line("env", name + "=" + value);
-        foreach (var (name, value) in Prepended.OrderBy(pair => pair.Key, StringComparer.Ordinal)) Line("prepend", name + "=" + value);
-        foreach (string argument in Arguments) Line("arg", argument);
-        return text.ToString();
-    }
-
-    internal string WindowsSpec()
-    {
-        var text = new StringBuilder();
-        void Line(string kind, string value) => text.Append(kind).Append(' ').Append(InteractiveClient.Base64(value)).Append('\n');
-        Line("exe", Executable);
-        Line("dir", Runtime);
-        Line("args", WindowsCommandLine.Join(Arguments));
-        foreach (var (name, value) in Environment.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)) Line("env", name + "=" + value);
-        return text.ToString();
-    }
-}
 
 /// <summary>
 /// Starts an owned dedicated server on a Linux/bash or Windows/PowerShell host and returns it identified by process ID
@@ -164,18 +36,21 @@ public static class HostServer
     /// boot directory there. Returns once the server process exists, not when it is ready. A reply lost past
     /// <paramref name="timeout"/> is an unknown outcome: a server may be running, and the exception names its boot directory.
     /// </summary>
-    public static Task<HostServerProcess> StartAsync(IGameHost host, HostServerLaunch launch, string bootDirectory, TimeSpan timeout,
+    public static Task<HostServerProcess> StartAsync(IGameHost host, GameLaunch launch, string bootDirectory, TimeSpan timeout,
         IReadOnlyList<string>? logs = null, string? evidence = null, CancellationToken cancellation = default)
         => StartAsync(host, launch, bootDirectory, timeout, logs, evidence, logonSeams: null, cancellation);
 
     // logonSeams: the test seams of Get-VtServerLogon (elevated, session, desktops), so a test forces the interactive-token task.
-    internal static async Task<HostServerProcess> StartAsync(IGameHost host, HostServerLaunch launch, string bootDirectory, TimeSpan timeout,
+    internal static async Task<HostServerProcess> StartAsync(IGameHost host, GameLaunch launch, string bootDirectory, TimeSpan timeout,
         IReadOnlyList<string>? logs, string? evidence, IReadOnlyDictionary<string, string>? logonSeams, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
         if (timeout < TimeSpan.FromSeconds(15)) throw new ArgumentOutOfRangeException(nameof(timeout), "Allow a server start at least 15 s.");
-        if ((host.Shell.Kind == HostShellKind.PowerShell) != launch.Windows)
+        if (!launch.IsServer || !launch.ForHost)
+            throw new ArgumentException("A host starts a dedicated-server launch built for it: GameLaunch.ForServer with the host's platform.", nameof(launch));
+        bool windows = launch.Platform == ClientPlatform.Windows;
+        if ((host.Shell.Kind == HostShellKind.PowerShell) != windows)
             throw new PlatformNotSupportedException($"The dedicated server launch and {host.Name}'s shell must use the same operating system.");
         HostInstall.RequireHostPath(host, bootDirectory, nameof(bootDirectory));
         string directory = bootDirectory.TrimEnd('/', '\\');
@@ -188,15 +63,15 @@ public static class HostServer
 
         var variables = new Dictionary<string, string>
         {
-            ["runtime"] = launch.Runtime, ["exe"] = launch.Windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
-            ["spec"] = launch.Windows ? launch.WindowsSpec() : launch.Spec(), ["logs"] = string.Join('\n', kept),
+            ["runtime"] = launch.WorkingDirectory, ["exe"] = windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
+            ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
             ["task"] = "VT-Server-" + Guid.NewGuid().ToString("N"), ["launcher"] = HostServerScripts.WindowsLauncher,
         };
         foreach (var (name, value) in logonSeams ?? new Dictionary<string, string>())
             variables.Add(name is "elevated" or "session" or "desktops" ? name : throw new ArgumentException("Not a logon seam: " + name, nameof(logonSeams)), value);
-        var result = await host.RunAsync(launch.Windows ? HostServerScripts.WindowsStart : HostServerScripts.Start, variables, timeout, cancellation).ConfigureAwait(false);
+        var result = await host.RunAsync(windows ? HostServerScripts.WindowsStart : HostServerScripts.Start, variables, timeout, cancellation).ConfigureAwait(false);
         if (!result.Succeeded)
             throw new HostOperationException($"Starting the dedicated server on {host.Name} (boot directory {directory}); a server may have started, see {directory}/pid", result);
         string? verdict = InteractiveClient.Line(result.Stdout, "VT-SERVER ");
@@ -208,7 +83,7 @@ public static class HostServer
             var parts = detail.Split(' ');
             if (parts.Length != 2 || !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out int id) || parts[1].Length == 0 || !parts[1].All(char.IsAsciiDigit))
                 throw new HostOperationException($"Unexpected process identity from {host.Name}; see {directory}/pid", result);
-            return new HostServerProcess(host, id, parts[1], directory, launch.Runtime, kept, evidence)
+            return new HostServerProcess(host, id, parts[1], directory, launch.WorkingDirectory, kept, evidence)
                 { TaskLogon = InteractiveClient.Line(result.Stdout, "VT-LOGON ") };
         }
         throw word switch

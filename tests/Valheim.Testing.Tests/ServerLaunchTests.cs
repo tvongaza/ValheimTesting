@@ -30,7 +30,7 @@ public class ServerLaunchTests
     {
         using var runtime = Runtime.Linux(); runtime.Add("valheim_server.exe");
         Assert.Throws<InvalidOperationException>(() => ServerLaunch.Detect(runtime.Root));
-        Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(runtime.Root, []));
+        Assert.Throws<InvalidOperationException>(() => GameLaunch.ForServer(runtime.Root, []).ToStartInfo());
     }
     [Fact] public void RuntimeWithoutAServerIsRefused()
     {
@@ -52,15 +52,15 @@ public class ServerLaunchTests
         Assert.Equal(executable, ServerLaunch.RequireExecutable(runtime.Root, ServerHost.Windows));
         if (OperatingSystem.IsWindows()) return; // Real file modes are needed for the Linux-host arm.
         Assert.Throws<InvalidOperationException>(() => ServerLaunch.RequireExecutable(runtime.Root, ServerHost.Linux));
-        Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Linux));
+        Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.Linux, ServerLaunch.MacArchitecture).ToStartInfo());
         File.SetUnixFileMode(executable, File.GetUnixFileMode(executable) | UnixFileMode.UserExecute);
         Assert.Equal(executable, ServerLaunch.RequireExecutable(runtime.Root, ServerHost.Linux));
     }
     [Fact] public void WindowsLaunchUsesRuntimeAndCallerSettingsWithoutLinuxLoader()
     {
         using var runtime = Runtime.Windows();
-        var start = ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode", "-nographics", "-savedir", "C:/saves with space"],
-            new Dictionary<string, string> { ["TEST_TOKEN"] = "abc" }, ServerHost.Windows);
+        var start = GameLaunch.LocalServer(runtime.Root, ["-batchmode", "-nographics", "-savedir", "C:/saves with space"],
+            new Dictionary<string, string> { ["TEST_TOKEN"] = "abc" }, ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo();
         Assert.Equal(Path.Combine(runtime.Root, "valheim_server.exe"), start.FileName);
         Assert.Equal(runtime.Root, start.WorkingDirectory);
         Assert.False(start.UseShellExecute);
@@ -73,10 +73,10 @@ public class ServerLaunchTests
     [Fact] public void LinuxLaunchEnablesDoorstopAndPrependsToCallerLibraryPaths()
     {
         using var runtime = Runtime.Linux();
-        var start = ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode", "-nographics"], new Dictionary<string, string>
+        var start = GameLaunch.LocalServer(runtime.Root, ["-batchmode", "-nographics"], new Dictionary<string, string>
         {
             ["LD_LIBRARY_PATH"] = "/opt/extra/lib:/opt/other/lib", ["LD_PRELOAD"] = "libcaller.so", ["TEST_TOKEN"] = "abc",
-        }, LinuxLaunchHost);
+        }, LinuxLaunchHost, ServerLaunch.MacArchitecture).ToStartInfo();
         Assert.Equal(Path.Combine(runtime.Root, "valheim_server.x86_64"), start.FileName);
         Assert.Equal(runtime.Root, start.WorkingDirectory);
         Assert.Equal("1", start.Environment["DOORSTOP_ENABLED"]);
@@ -90,7 +90,7 @@ public class ServerLaunchTests
     [Fact] public void EmptyLibraryPathsAddNoEmptyEntry()
     {
         using var runtime = Runtime.Linux();
-        var start = ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = "", ["LD_PRELOAD"] = "" }, LinuxLaunchHost);
+        var start = GameLaunch.LocalServer(runtime.Root, [], new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = "", ["LD_PRELOAD"] = "" }, LinuxLaunchHost, ServerLaunch.MacArchitecture).ToStartInfo();
         // A trailing ':' would add the working directory to the search path.
         Assert.Equal(Path.Combine(runtime.Root, "linux64") + ":" + Path.Combine(runtime.Root, "doorstop_libs"), start.Environment["LD_LIBRARY_PATH"]);
         Assert.Equal("libdoorstop_x64.so", start.Environment["LD_PRELOAD"]);
@@ -98,7 +98,7 @@ public class ServerLaunchTests
     [Fact] public void CallerSteamAppIdIsKept()
     {
         using var runtime = Runtime.Linux();
-        var start = ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { ["SteamAppId"] = "123" }, LinuxLaunchHost);
+        var start = GameLaunch.LocalServer(runtime.Root, [], new Dictionary<string, string> { ["SteamAppId"] = "123" }, LinuxLaunchHost, ServerLaunch.MacArchitecture).ToStartInfo();
         Assert.Equal("123", start.Environment["SteamAppId"]);
     }
     [Theory]
@@ -107,15 +107,15 @@ public class ServerLaunchTests
     public void CallerCannotDisableOrRedirectTheLoader(string platform, string name)
     {
         using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
-        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], new Dictionary<string, string> { [name] = "0" },
-            platform == "linux" ? LinuxLaunchHost : ServerHost.Windows));
+        Assert.Throws<ArgumentException>(() => GameLaunch.LocalServer(runtime.Root, [], new Dictionary<string, string> { [name] = "0" },
+            platform == "linux" ? LinuxLaunchHost : ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo());
     }
     [Theory] [InlineData("linux")] [InlineData("windows")]
     public void DoorstopArgumentsAreRefused(string platform)
     {
         using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
-        var error = Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode", "--doorstop-enabled", "false"], null,
-            platform == "linux" ? LinuxLaunchHost : ServerHost.Windows));
+        var error = Assert.Throws<ArgumentException>(() => GameLaunch.LocalServer(runtime.Root, ["-batchmode", "--doorstop-enabled", "false"], null,
+            platform == "linux" ? LinuxLaunchHost : ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo());
         Assert.Contains("--doorstop-enabled", error.Message);
     }
     // Set in this process, as a parent shell would: only the loader values ServerLaunch sets itself may reach the server.
@@ -126,7 +126,7 @@ public class ServerLaunchTests
         Environment.SetEnvironmentVariable("DOORSTOP_DISABLE", "1");
         try
         {
-            var start = ServerLaunch.CreateStartInfo(runtime.Root, [], null, platform == "linux" ? LinuxLaunchHost : ServerHost.Windows);
+            var start = GameLaunch.LocalServer(runtime.Root, [], null, platform == "linux" ? LinuxLaunchHost : ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo();
             Assert.False(start.Environment.ContainsKey("DOORSTOP_DISABLE"));
             if (platform == "windows") Assert.DoesNotContain(start.Environment.Keys, key => key.StartsWith("DOORSTOP_", StringComparison.OrdinalIgnoreCase));
             else Assert.Equal(Path.Combine(runtime.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
@@ -140,7 +140,7 @@ public class ServerLaunchTests
     {
         using var runtime = Runtime.Windows(); runtime.Add("BepInEx/core/Other.Preloader.dll");
         File.WriteAllText(Path.Combine(runtime.Root, "doorstop_config.ini"), config);
-        var error = Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Windows));
+        var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo());
         Assert.Contains("doorstop_config.ini", error.Message);
     }
     // The station's dedicated-server install carries Doorstop 3's section and key names.
@@ -149,7 +149,7 @@ public class ServerLaunchTests
         using var runtime = Runtime.Windows();
         File.WriteAllText(Path.Combine(runtime.Root, "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         File.WriteAllText(Path.Combine(runtime.Root, "winhttp.dll"), "MZ targetAssembly"); // Doorstop 3's own proxy
-        Assert.EndsWith("valheim_server.exe", ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Windows).FileName);
+        Assert.EndsWith("valheim_server.exe", GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo().FileName);
     }
     [Theory]
     [InlineData("linux", "BepInEx/core/BepInEx.Preloader.dll")] [InlineData("linux", "BepInEx/core/BepInEx.dll")] [InlineData("linux", "doorstop_libs/libdoorstop_x64.so")]
@@ -159,15 +159,15 @@ public class ServerLaunchTests
     {
         using var runtime = platform == "linux" ? Runtime.Linux() : Runtime.Windows();
         File.Delete(Path.Combine(runtime.Root, missing));
-        Assert.Throws<FileNotFoundException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, platform == "linux" ? LinuxLaunchHost : ServerHost.Windows));
+        Assert.Throws<FileNotFoundException>(() => GameLaunch.LocalServer(runtime.Root, [], null, platform == "linux" ? LinuxLaunchHost : ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo());
     }
     [Fact] public void LinuxRuntimePathThatCannotBeListedIsRefused()
     {
         if (OperatingSystem.IsWindows()) return; // Windows paths are not valid in Linux search lists anyway.
         using var runtime = Runtime.Linux("server:copy");
-        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.Linux, ServerLaunch.MacArchitecture).ToStartInfo());
         // A Windows host only builds the launch for inspection and does not check.
-        Assert.Equal(runtime.Root, ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Windows).WorkingDirectory);
+        Assert.Equal(runtime.Root, GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo().WorkingDirectory);
     }
 
     [Theory]
@@ -187,7 +187,7 @@ public class ServerLaunchTests
         foreach (var host in new[] { ServerHost.Windows, ServerHost.Linux, ServerHost.MacOS })
         {
             Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root, host));
-            Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, [], null, host));
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalServer(runtime.Root, [], null, host, ServerLaunch.MacArchitecture).ToStartInfo());
         }
     }
     [Fact] public void ServerExecutableWinsOverAMacClientBesideIt()
@@ -210,7 +210,7 @@ public class ServerLaunchTests
         Assert.Contains("run the macOS dedicated server (Steam app 896660", error.Message);
         Assert.Contains("--platform linux/amd64", error.Message);
         Assert.Contains("remote Windows/Linux host", error.Message);
-        Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode"], null, ServerHost.MacOS));
+        Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalServer(runtime.Root, ["-batchmode"], null, ServerHost.MacOS, ServerLaunch.MacArchitecture).ToStartInfo());
     }
     [Fact] public void MacHostRefusesBeforeReadingTheExecuteBit()
     {
@@ -224,11 +224,11 @@ public class ServerLaunchTests
         if (OperatingSystem.IsMacOS())
         {
             Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root));
-            Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, []));
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForServer(runtime.Root, []).ToStartInfo());
             return;
         }
         Assert.Equal(Path.Combine(runtime.Root, "valheim_server.x86_64"), ServerLaunch.RequireExecutable(runtime.Root));
-        Assert.Equal(runtime.Root, ServerLaunch.CreateStartInfo(runtime.Root, []).WorkingDirectory);
+        Assert.Equal(runtime.Root, GameLaunch.ForServer(runtime.Root, []).ToStartInfo().WorkingDirectory);
     }
 
     // ---- the macOS dedicated server ----
@@ -257,14 +257,14 @@ public class ServerLaunchTests
         var host = hostName == "linux" ? ServerHost.Linux : ServerHost.Windows;
         var error = Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.RequireExecutable(runtime.Root, host));
         Assert.Contains("cannot run the MacOS dedicated server", error.Message);
-        Assert.Throws<PlatformNotSupportedException>(() => ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode"], null, host, ClientArchitecture.Arm64));
+        Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalServer(runtime.Root, ["-batchmode"], null, host, ClientArchitecture.Arm64).ToStartInfo());
     }
     [Fact] public void MacLaunchStartsTheNativeSliceWithDoorstopInsertedAndTheServersLibraryPath()
     {
         if (OperatingSystem.IsWindows()) return; // A Windows path cannot be a macOS runtime (it holds ':').
         using var runtime = Runtime.Mac();
-        var start = ServerLaunch.CreateStartInfo(runtime.Root, ["-batchmode", "-nographics", "-savedir", "/saves with space"],
-            new Dictionary<string, string> { ["KEEP"] = "yes" }, ServerHost.MacOS, ClientArchitecture.Arm64);
+        var start = GameLaunch.LocalServer(runtime.Root, ["-batchmode", "-nographics", "-savedir", "/saves with space"],
+            new Dictionary<string, string> { ["KEEP"] = "yes" }, ServerHost.MacOS, ClientArchitecture.Arm64).ToStartInfo();
         string executable = Path.Combine(runtime.Root, "valheim_server", "Valheim");
         Assert.Equal("/usr/bin/arch", start.FileName);
         Assert.Equal(runtime.Root, start.WorkingDirectory);
@@ -279,20 +279,20 @@ public class ServerLaunchTests
         // server's own folder, not the root: with the root, Mono missed libmono-native.dylib.
         Assert.DoesNotContain(start.Environment.Keys, key => key.StartsWith("DYLD_", StringComparison.Ordinal));
         Assert.DoesNotContain("DYLD_LIBRARY_PATH=" + runtime.Root, start.ArgumentList);
-        var x64 = ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.MacOS, ClientArchitecture.X64);
+        var x64 = GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.MacOS, ClientArchitecture.X64).ToStartInfo();
         Assert.Equal("-x86_64", x64.ArgumentList[0]);
     }
     [Fact] public void MacLaunchRefusesAServerOrDoorstopWithoutTheNativeSlice()
     {
         if (OperatingSystem.IsWindows()) return;
         using var intelOnly = Runtime.Mac(server: Thin(X86_64));
-        Assert.Contains("no arm64 slice", Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(intelOnly.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64)).Message);
+        Assert.Contains("no arm64 slice", Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalServer(intelOnly.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64).ToStartInfo()).Message);
         using var stockDoorstop = Runtime.Mac(doorstop: Thin(X86_64));
-        var error = Assert.Throws<InvalidOperationException>(() => ServerLaunch.CreateStartInfo(stockDoorstop.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64));
+        var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalServer(stockDoorstop.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64).ToStartInfo());
         Assert.Contains("libdoorstop.dylib with an arm64 slice", error.Message);
         Assert.DoesNotContain("request x64", error.Message); // A server runs as the machine's slice; there is no other to request.
         using var noDoorstop = Runtime.Mac(withDoorstop: false);
-        Assert.Throws<FileNotFoundException>(() => ServerLaunch.CreateStartInfo(noDoorstop.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64));
+        Assert.Throws<FileNotFoundException>(() => GameLaunch.LocalServer(noDoorstop.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64).ToStartInfo());
     }
     [Fact] public void MacServerNeedsItsExecuteBitAndAListablePath()
     {
@@ -300,12 +300,67 @@ public class ServerLaunchTests
         using var runtime = Runtime.Mac(executable: false);
         Assert.Contains("chmod u+x", Assert.Throws<InvalidOperationException>(() => ServerLaunch.RequireExecutable(runtime.Root, ServerHost.MacOS)).Message);
         using var colon = Runtime.Mac("server:copy");
-        Assert.Throws<ArgumentException>(() => ServerLaunch.CreateStartInfo(colon.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64));
+        Assert.Throws<ArgumentException>(() => GameLaunch.LocalServer(colon.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64).ToStartInfo());
     }
     [Fact] public void LocalPlatformFollowsTheOperatingSystem()
     {
         var expected = OperatingSystem.IsWindows() ? ServerPlatform.Windows : OperatingSystem.IsMacOS() ? ServerPlatform.MacOS : ServerPlatform.Linux;
         Assert.Equal(expected, ServerLaunch.LocalPlatform);
+    }
+
+    // ---- GameLaunch.ForServer: one builder for this machine and for a host ----
+
+    [Theory] [InlineData("windows")] [InlineData("linux")]
+    public void ALaunchHereAndALaunchOnAHostOfOnePlatformFollowTheSameRules(string platform)
+    {
+        bool windows = platform == "windows";
+        using var runtime = windows ? Runtime.Windows() : Runtime.Linux();
+        var environment = new Dictionary<string, string> { ["MY_MOD_TOKEN"] = "abc" };
+        var here = GameLaunch.LocalServer(runtime.Root, ["-batchmode", "-name", "a b"], environment, windows ? ServerHost.Windows : LinuxLaunchHost, ServerLaunch.MacArchitecture);
+        var there = GameLaunch.ForServer(windows ? @"C:\runs\r\runtime" : "/srv/runs/r/runtime", ["-batchmode", "-name", "a b"], environment,
+            windows ? ServerPlatform.Windows : ServerPlatform.Linux);
+        Assert.Equal(here.Arguments, there.Arguments);
+        Assert.Equal(here.Environment.Keys.Order(StringComparer.Ordinal), there.Environment.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(here.Environment["SteamAppId"], there.Environment["SteamAppId"]);
+        Assert.Equal(here.Prepended.Keys.Order(StringComparer.Ordinal), there.Prepended.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(here.Unset, there.Unset);
+        Assert.Equal(windows ? new[] { "DOORSTOP_ENABLED", "DOORSTOP_TARGET_ASSEMBLY", "DOORSTOP_DISABLE" } : new[] { "DOORSTOP_DISABLE" }, there.Unset);
+        Assert.Equal(here.RequiredFiles, there.RequiredFiles);
+        // The host renders what the script reads; this machine renders a start info, and neither renders the other.
+        Assert.Throws<InvalidOperationException>(() => there.ToStartInfo());
+        Assert.Equal(here.Executable, here.ToStartInfo().FileName);
+    }
+
+    [Fact] public void AHostLaunchKeepsTheHostsPathRules()
+    {
+        Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.MacOS));
+        // A server's task may have no network credentials (S4U): a share is refused, as before.
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer(@"\\nas\share\runtime\", [], hostPlatform: ServerPlatform.Windows));
+        Assert.Equal(@"C:\valheim_server.exe", GameLaunch.ForServer(@"C:\", [], hostPlatform: ServerPlatform.Windows).Executable);
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer(@"C:\runs\""quoted""\runtime", [], hostPlatform: ServerPlatform.Windows));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer(@"runs\runtime", [], hostPlatform: ServerPlatform.Windows));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer("/srv/a=b", [], hostPlatform: ServerPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForServer("/srv/rt", [], new Dictionary<string, string> { ["NOT A NAME"] = "x" }, ServerPlatform.Linux));
+        // On Linux the executable is what the start script runs, "$runtime/$exe", so the journalled command line matches the process.
+        foreach (string runtime in new[] { "/srv/rt/", "/" })
+        {
+            var launch = GameLaunch.ForServer(runtime, [], hostPlatform: ServerPlatform.Linux);
+            Assert.Equal(launch.WorkingDirectory + "/" + ServerLaunch.LinuxExecutable, launch.Executable);
+        }
+    }
+
+    [Fact] public void AWindowsHostLaunchSpecCarriesTheCommandLineAndTheUnsetDoorstopVariables()
+    {
+        var launch = GameLaunch.ForServer(@"C:\runs\r\runtime", ["-batchmode", "-name", "with spaces"], new Dictionary<string, string> { ["MY_MOD_TOKEN"] = "abc" }, ServerPlatform.Windows);
+        var spec = launch.Spec().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Split(' '))
+            .Select(parts => (parts[0], System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(parts[1])))).ToList();
+        Assert.Equal(("exe", @"C:\runs\r\runtime\valheim_server.exe"), spec[0]);
+        Assert.Equal(("dir", @"C:\runs\r\runtime"), spec[1]);
+        Assert.Equal(("args", "-batchmode -name \"with spaces\""), spec[2]);
+        Assert.Contains(("env", "MY_MOD_TOKEN=abc"), spec);
+        Assert.Contains(("env", "SteamAppId=" + ServerLaunch.DedicatedServerSteamAppId), spec);
+        Assert.Equal(new[] { "DOORSTOP_ENABLED", "DOORSTOP_TARGET_ASSEMBLY", "DOORSTOP_DISABLE" }, spec.Where(item => item.Item1 == "unset").Select(item => item.Item2));
+        Assert.DoesNotContain(spec, item => item.Item1 is "arg" or "prepend");
     }
 
     private static byte[] Thin(int cpu)

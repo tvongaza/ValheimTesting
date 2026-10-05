@@ -535,10 +535,10 @@ public static class PinnedServerRun
         int boot = 0, connection = 0;
         return new OwnedServerSession(token =>
         {
-            // ServerLaunch adds SteamAppId and, for Linux, the Doorstop loader variables BepInEx needs; the working directory is the copied runtime.
+            // The launch adds SteamAppId and, for Linux, the Doorstop loader variables BepInEx needs; the working directory is the copied runtime.
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, run.RuntimeDirectory, run.WorldDirectory));
             environment[options.SessionTokenVariable] = token;
-            var start = ServerLaunch.CreateStartInfo(run.RuntimeDirectory, plan.LaunchArguments(run.RuntimeDirectory, run.WorldDirectory), environment);
+            var start = GameLaunch.ForServer(run.RuntimeDirectory, plan.LaunchArguments(run.RuntimeDirectory, run.WorldDirectory), environment).ToStartInfo();
             string prefix = Path.Combine(run.Output, "boot-" + ++boot);
             var process = new DirectServerProcess(start, prefix,
                 Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log"), Path.Combine(run.RuntimeDirectory, "toolkit-unity.log"));

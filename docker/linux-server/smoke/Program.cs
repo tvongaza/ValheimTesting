@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 
-// Boots one owned dedicated server with BepInEx through ServerLaunch, waits for bounded startup evidence,
+// Boots one owned dedicated server with BepInEx through GameLaunch.ForServer, waits for bounded startup evidence,
 // stops exactly that process, then boots it again on the saved world. No ValheimCLI, pins or gameplay: it
 // establishes that the runtime starts, loads BepInEx, generates a new world, saves it at a clean stop and loads
 // that save on the next boot, on this host (Windows, Linux or macOS: the runtime's own server).
@@ -69,8 +69,8 @@ Console.WriteLine((report.Passed ? "PASS" : "FAIL") + $": {report.Steps.Count(x 
 return report.Passed ? 0 : 1;
 
 string Log(int boot) => Path.Combine(output, boot == 1 ? "server.log" : $"server-{boot}.log");
-ProcessStartInfo Start(int boot) => ServerLaunch.CreateStartInfo(runtime, ["-batchmode", "-nographics", "-name", world, "-world", world,
-    "-port", port.ToString(CultureInfo.InvariantCulture), "-password", password, "-public", "0", "-savedir", saves, "-logFile", Log(Math.Max(boot, 1))]);
+ProcessStartInfo Start(int boot) => GameLaunch.ForServer(runtime, ["-batchmode", "-nographics", "-name", world, "-world", world,
+    "-port", port.ToString(CultureInfo.InvariantCulture), "-password", password, "-public", "0", "-savedir", saves, "-logFile", Log(Math.Max(boot, 1))]).ToStartInfo();
 // One owned boot: start, BepInEx's chainloader (the runtime's log starts afresh each boot), the world evidence, a clean stop.
 void Boot(int boot, string worldStep, params string[] markers)
 {
