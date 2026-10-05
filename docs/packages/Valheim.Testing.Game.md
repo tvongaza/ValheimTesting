@@ -231,7 +231,7 @@ A plan's `"logScan": { "rpc-method-missing": { "severity": "Failure", "reason": 
 
 No `accesstools-not-found`, `harmony-*`, missing-member or RPC line appeared on either side, so a failure pattern in a run of the same stack is new.
 
-Ctrl+C and SIGTERM cancel the run. Options name the session capability and token variable, gate modes against the plan (`CheckMode`) and add provenance.
+Ctrl+C and SIGTERM cancel the run. Its cleanup (stopping what it started, retiring its copies and characters, releasing its leases and locks) then runs on a token of its own, never the cancelled one, and is bounded by 5 minutes (`RunCancellation.CleanupBudget`). A second Ctrl+C while cleanup runs is the escape from a cleanup that hangs: it stops waiting, and the remaining cleanup steps are recorded as not attempted. The run's journal gets `cleanup-abandoned` with the reason in place of its end, the runner prints `ABANDONED cleanup` with the command, and it exits 3. `valheim-test env status` then lists the run as recoverable, and `env recover --run ID` finishes the cleanup. The escape never kills anything itself. Options name the session capability and token variable, gate modes against the plan (`CheckMode`) and add provenance.
 
 ## Launching servers and clients
 

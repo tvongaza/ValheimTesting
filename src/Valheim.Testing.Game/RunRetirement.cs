@@ -97,11 +97,11 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
     /// limits, removes the copy, and the folder is fetched to <c>runtime-changes/</c> here and then dropped on the host. Still
     /// under the host's lock. A retire that fails keeps the copy (and what it kept so far) for inspection. Throws the step's failure.
     /// </summary>
-    public Task HostAsync(string hostName, IGameHost host, HostListing before, string runtime, bool launched, bool serverStopped) =>
+    public Task HostAsync(string hostName, IGameHost host, HostListing before, string runtime, bool launched, bool serverStopped, CancellationToken cancellation = default) =>
         !First(Key(hostName, runtime)) ? Task.CompletedTask :
-        StepAsync("remove the server host's runtime copy, keeping what the run changed", () => RetireHostCopyAsync(hostName, host, before, runtime, launched, serverStopped));
+        StepAsync("remove the server host's runtime copy, keeping what the run changed", () => RetireHostCopyAsync(hostName, host, before, runtime, launched, serverStopped, cancellation));
 
-    private async Task RetireHostCopyAsync(string hostName, IGameHost host, HostListing before, string runtime, bool launched, bool serverStopped)
+    private async Task RetireHostCopyAsync(string hostName, IGameHost host, HostListing before, string runtime, bool launched, bool serverStopped, CancellationToken cancellation)
     {
         string where = host.Name + ":" + runtime;
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
@@ -124,7 +124,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
         try
         {
             var listed = before.Files;
-            var after = launched ? (await HostInstall.ListAsync(host, runtime, Long).ConfigureAwait(false)).Files : listed;
+            var after = launched ? (await HostInstall.ListAsync(host, runtime, Long, cancellation: cancellation).ConfigureAwait(false)).Files : listed;
             var added = after.Keys.Where(name => !listed.ContainsKey(name)).Order(StringComparer.Ordinal).ToList();
             var changed = after.Where(file => listed.TryGetValue(file.Key, out var hash) && !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase))
                 .Select(file => file.Key).Order(StringComparer.Ordinal).ToList();
@@ -138,7 +138,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                 ["runtime"] = runtime, ["keep"] = keepDirectory, ["run"] = copyName,
                 ["files"] = string.Join('\n', added.Concat(changed).Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name)))),
                 ["perfile"] = perFile.ToString(CultureInfo.InvariantCulture), ["total"] = total.ToString(CultureInfo.InvariantCulture),
-            }, Long).ConfigureAwait(false)).EnsureSuccess($"Removing the runtime copy {where}");
+            }, Long, cancellation).ConfigureAwait(false)).EnsureSuccess($"Removing the runtime copy {where}");
             var done = InteractiveClient.Line(result.Stdout, "VT-RETIRED ")?.Split(' ');
             if (done is not [var freed, var kept]) throw new HostOperationException($"Unexpected reply while removing the runtime copy {where}", result);
             // "VT-NOTKEPT <base64 path> <bytes>", with -1 bytes for anything but a regular file inside the copy.
@@ -153,7 +153,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             }
             async Task DropKeptAsync(string why) =>
                 (await host.RunAsync(windows ? HostedRunScripts.WindowsDropKept : HostedRunScripts.DropKept,
-                    new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = copyName }, Quick).ConfigureAwait(false))
+                    new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = copyName }, Quick, cancellation).ConfigureAwait(false))
                     .EnsureSuccess($"Removing {host.Name}:{keepDirectory}{why}");
             if (!launched)
             {
@@ -163,14 +163,14 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                 return;
             }
             string local = Path.Combine(output, "runtime-changes");
-            await host.FetchDirectoryAsync(keepDirectory, local, Long).ConfigureAwait(false);
+            await host.FetchDirectoryAsync(keepDirectory, local, Long, cancellation).ConfigureAwait(false);
             // Fetched: the host's copy of the changes is not needed twice.
             await DropKeptAsync(" after fetching it").ConfigureAwait(false);
             var retired = new RetiredCopy(where, local, added, changed, missing, notKept, long.Parse(kept, CultureInfo.InvariantCulture), long.Parse(freed, CultureInfo.InvariantCulture));
             File.WriteAllText(Path.Combine(local, "changes.json"), JsonSerializer.Serialize(retired, new JsonSerializerOptions { WriteIndented = true }));
             Provenance(retired.ToString());
         }
-        catch (Exception error) when (error is HostOperationException or IOException or InvalidOperationException or FormatException or UnauthorizedAccessException)
+        catch (Exception error) when (error is HostOperationException or IOException or InvalidOperationException or FormatException or UnauthorizedAccessException or OperationCanceledException)
         {
             // What the host kept beside the copy may not be fetched yet: nothing else removes the copy's directory now.
             _kept.Add(Key(hostName, runtime));
@@ -186,7 +186,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
     /// retire. A copy kept by <see cref="HostAsync"/> (kept on request, or its server may still run) stays with its staging.
     /// Returns the failures; it never throws.
     /// </summary>
-    public async Task<IReadOnlyList<Exception>> CampaignAsync(PreparedHostedCampaign prepared, IReadOnlyCollection<string> lockedHosts)
+    public async Task<IReadOnlyList<Exception>> CampaignAsync(PreparedHostedCampaign prepared, IReadOnlyCollection<string> lockedHosts, CancellationToken cancellation = default)
     {
         var failures = new List<Exception>();
         var characters = prepared.Characters.Reverse().Where(item => First("character " + Key(item.Host, item.Character.FileName))).ToList();
@@ -232,9 +232,9 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             {
                 host = prepared.HostFor(name);
                 if (!lockedHosts.Contains(name, StringComparer.OrdinalIgnoreCase))
-                    claim = await host.AcquireLockAsync(prepared.LockOf(name), "campaign-retire " + Guid.NewGuid().ToString("N"), prepared.Timeout).ConfigureAwait(false);
+                    claim = await host.AcquireLockAsync(prepared.LockOf(name), "campaign-retire " + Guid.NewGuid().ToString("N"), prepared.Timeout, cancellation).ConfigureAwait(false);
                 // Any client on a host with characters is a conflict; on a copies-only host only a process running from one of them is.
-                await HostedRuntimeStage.RequireStoppedAsync(host, prepared.Timeout, runtimes: retired.Select(copy => copy.Runtime).ToList(),
+                await HostedRuntimeStage.RequireStoppedAsync(host, prepared.Timeout, cancellation, runtimes: retired.Select(copy => copy.Runtime).ToList(),
                     clientSession: hostCharacters.Count != 0).ConfigureAwait(false);
             }
             catch (Exception error)
@@ -259,11 +259,11 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             {
                 foreach (var character in hostCharacters)
                     if (await Try($"retire the disposable character {character.Character.FileName} on {name}",
-                        () => HostedCharacterStage.RetireAsync(host, character.Character, prepared.Timeout), failures).ConfigureAwait(false))
+                        () => HostedCharacterStage.RetireAsync(host, character.Character, prepared.Timeout, cancellation), failures).ConfigureAwait(false))
                         await Journal(host, character.Actor, JournalEntry.Of(JournalEntry.CharacterRetired, ("fileName", character.Character.FileName))).ConfigureAwait(false);
                 foreach (var copy in retired)
                     if (await Try($"remove the prepared install {name}:{copy.Runtime}",
-                        () => HostedRuntimeStage.RetireAsync(host, copy.Runtime, copy.Stage, prepared.Timeout), failures).ConfigureAwait(false))
+                        () => HostedRuntimeStage.RetireAsync(host, copy.Runtime, copy.Stage, prepared.Timeout, cancellation), failures).ConfigureAwait(false))
                         await Journal(host, copy.Actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.Runtime))).ConfigureAwait(false);
             }
             finally

@@ -37,6 +37,10 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>Another run's claimant holding the lock.</summary>
     public string? HeldBy { get; set; }
     public Dictionary<string, HostResult> Failures { get; } = [];
+    /// <summary>Scripts that hang until cancelled.</summary>
+    public HashSet<string> Hang { get; } = [];
+    /// <summary>Runs when a script starts, by its name.</summary>
+    public Action<string>? BeforeScript { get; set; }
     public Exception? TunnelFailure { get; set; }
     public bool PortBusy { get; set; }
     /// <summary>The port check's whole reply when set; else free or busy by <see cref="PortBusy"/>.</summary>
@@ -150,7 +154,12 @@ internal sealed class FakeServerHost : IGameHost
     {
         var v = variables ?? new Dictionary<string, string>();
         string name = ScriptName(script);
+        // As a real host does: a script is not started on a cancelled token.
+        cancellation.ThrowIfCancellationRequested();
         lock (_sync) Runs.Add((name, v));
+        BeforeScript?.Invoke(name);
+        // A script that never answers until the caller gives up: a hung SSH session, a stuck removal.
+        if (Hang.Contains(name)) await Task.Delay(Timeout.Infinite, cancellation);
         if (Failures.TryGetValue(name, out var failure)) return failure;
         switch (name)
         {
@@ -944,7 +953,8 @@ public sealed partial class HostedServerRunTests : IDisposable
     }
 
     private static PinnedServerRunOptions<ServerRunPlan> Options(FakeServerHost host, FakeOwnedServer? server, Func<PinnedServerRunContext<ServerRunPlan>, Task>? scenario = null,
-        FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, TimeSpan? renewEvery = null, string name = "toolkit-smoke") => new()
+        FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, TimeSpan? renewEvery = null, string name = "toolkit-smoke",
+        RunCancellation? cancellation = null) => new()
     {
         Name = name,
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
@@ -954,7 +964,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         {
             Host = hostName => hostName == "linux-box" ? host : hostName == LeaseBox.Name && leaseHost != null ? leaseHost : clientHost ?? throw new InvalidOperationException("No fake host " + hostName),
             Connect = port => port == 15578 ? clientTransport! : server!.Connect(),
-            StateWaits = false, RunId = RunId, SteamRenewEvery = renewEvery,
+            StateWaits = false, RunId = RunId, SteamRenewEvery = renewEvery, Cancellation = cancellation,
         },
     };
     // Where in a fake host's script log the first journal append of that kind ran.
@@ -1217,6 +1227,40 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Runs);
         Assert.Empty(host.Releases);
         Assert.DoesNotContain("release the server host's lock", StepNames());
+    }
+
+    // #257 step 5: cleanup never runs on the cancelled token. A Ctrl+C during the scenario still lets the copy be retired and
+    // the run's end be journalled; a second Ctrl+C while a retire hangs abandons the cleanup: exit 3, journalled, recoverable.
+    [Fact] public async Task CleanupRunsOnItsOwnTokenAndASecondInterruptAbandonsIt()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host);
+        using (var once = new RunCancellation())
+        {
+            await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server,
+                _ => { once.SignalCancel(); return Task.CompletedTask; }, cancellation: once));
+            Assert.True(once.Token.IsCancellationRequested);
+            Assert.Null(once.Abandoned);
+            Assert.Contains("retire", host.Scripts);
+            Assert.Contains(await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5)), record => record.Entry.Kind == JournalEntry.RunEnded);
+        }
+
+        var server2 = NewServer(); var host2 = new FakeServerHost("linux-box", Path.Combine(_root, "mirror-2"), server2);
+        var (plan2, profile2) = Write(host2);
+        using var twice = new RunCancellation();
+        host2.Hang.Add("retire");
+        host2.BeforeScript = name => { if (name == "retire") { twice.SignalCancel(); twice.SignalCancel(); } };
+        string output2 = Path.Combine(_root, "output-2");
+        Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile2), ["run", plan2, output2], Options(host2, server2, cancellation: twice)));
+        Assert.Contains("second interrupt", twice.Abandoned);
+        var journal = await RunJournal.ReadAsync(host2, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.Contains("second interrupt", Assert.Single(journal, record => record.Entry.Kind == JournalEntry.CleanupAbandoned).Entry.Fields["reason"]);
+        Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.RunEnded);
+        // env status names it (this test is the runner, so the run reads as going until the process ends, then recoverable).
+        var status = Assert.Single((await RunJournalStatus.InspectAsync(new Dictionary<string, HostProfile> { ["linux-box"] = new() { Kind = "ssh", Lock = "/var/tmp/vt/lock" } },
+            _ => host2, TimeSpan.FromSeconds(5))).Runs, run => run.Run == RunId);
+        Assert.Contains("its cleanup was abandoned (a second interrupt during cleanup)", status.Reason);
+        Assert.NotEqual(JournalRunState.Ended, status.State);
     }
 
     // A boot whose journal entry cannot be written is never started: no process runs that the journal does not name.

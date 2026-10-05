@@ -283,14 +283,14 @@ public static class HostedRuntimeStage
 
     // Only HostedCampaignPreparation calls this for a unique directory it created and retained in memory. Its caller
     // must hold the host lock and must have stopped all game processes before retiring the prepared install.
-    internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout)
+    internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default)
     {
         string parent = destination[..destination.LastIndexOfAny(['/', '\\'])];
         if (!destination.EndsWith(host.Shell.Kind == HostShellKind.PowerShell ? @"\runtime" : "/runtime", StringComparison.OrdinalIgnoreCase) ||
             !parent.Replace('\\', '/').Split('/').Last().StartsWith("vt-prep-", StringComparison.Ordinal))
             throw new ArgumentException("Only a toolkit-created vt-prep runtime can be retired.", nameof(destination));
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
-            new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout).ConfigureAwait(false);
+            new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false);
         result.EnsureSuccess($"Retiring prepared runtime on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-STAGE-CLEANED") == null)
             throw new HostOperationException($"Unexpected cleanup reply from {host.Name}", result);

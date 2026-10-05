@@ -1,9 +1,41 @@
 using System.Diagnostics;
+using Valheim.Testing.Game;
 using Valheim.Testing.ProcessSignalProbe;
 using Xunit;
 
 public sealed class RunCancellationTests
 {
+    // #257 step 5: the first signal cancels the run, never its cleanup; a later one during cleanup abandons it; so does the budget.
+    [Fact]
+    public async Task CleanupHasItsOwnTokenThatOnlyASecondSignalOrItsBudgetEnds()
+    {
+        using (var run = new RunCancellation())
+        {
+            run.SignalCancel();
+            Assert.True(run.Token.IsCancellationRequested);
+            var cleanup = run.BeginCleanup();
+            Assert.False(cleanup.IsCancellationRequested);
+            Assert.Equal(cleanup, run.BeginCleanup());
+            run.SignalCancel();
+            Assert.True(cleanup.IsCancellationRequested);
+            Assert.Equal("a second interrupt during cleanup", run.Abandoned);
+        }
+        using (var run = new RunCancellation())
+        {
+            // One signal that arrives only during cleanup is a first signal: the cleanup goes on.
+            var cleanup = run.BeginCleanup();
+            run.SignalCancel();
+            Assert.False(cleanup.IsCancellationRequested);
+            Assert.Null(run.Abandoned);
+        }
+        using (var run = new RunCancellation())
+        {
+            var cleanup = run.BeginCleanup(TimeSpan.FromMilliseconds(50));
+            await Task.Delay(Timeout.Infinite, cleanup).ContinueWith(_ => { }, TaskScheduler.Default).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.StartsWith("cleanup did not finish within its budget of", run.Abandoned);
+        }
+    }
+
     [Fact]
     public void SigtermCancelsAConsoleRunWithoutKillingItsCleanupProcess()
     {
