@@ -522,20 +522,10 @@ internal static class WindowsCommandLine
 // with one verdict line the C# side requires. Line endings are normalised because a checkout may have converted this file to CRLF.
 internal static class InteractiveScripts
 {
-    // Variables: install, files, dir, spec, task, launcher, seconds; secrets arrive in VT_SECRETS (base64 NAME=value tokens,
-    // space separated), which the wrapper keeps in memory and this script clears at once. Runs as the SSH user (or locally). The user's
-    // desktop sessions are the sessions other than 0 (services, and SSH) in which it runs processes; tasklist reports them
-    // without administrator rights. The task runs launcher.ps1 in that session with the user's interactive token.
-    public static readonly string WindowsStart = """
-        $secrets = [Environment]::GetEnvironmentVariable('VT_SECRETS')
-        [Environment]::SetEnvironmentVariable('VT_SECRETS', $null)
-        $utf8 = New-Object Text.UTF8Encoding $false
-        $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-        foreach ($file in ($files -split "`n")) {
-            if ($file -and -not [IO.File]::Exists((Join-Path $install $file))) { 'VT-INTERACTIVE missing ' + $file; exit 0 }
-        }
-        if ([IO.Directory]::Exists($dir) -or [IO.File]::Exists($dir)) { 'VT-INTERACTIVE exists'; exit 0 }
-        $system = [Environment]::SystemDirectory
+    // The user's desktop sessions (sessions other than 0, where services and SSH run) in which $me runs processes, optionally
+    // only those running $image; tasklist reports them without administrator rights. Needs $me and $system. The client's and
+    // the server's tasks both count sessions with it.
+    internal const string WindowsSessions = """
         function Get-VtSessions([string]$image) {
             $arguments = @('/FI', ('USERNAME eq ' + $me), '/FI', 'SESSION ne 0', '/FO', 'CSV', '/NH')
             if ($image) { $arguments += @('/FI', ('IMAGENAME eq ' + $image)) }
@@ -545,6 +535,23 @@ internal static class InteractiveScripts
             foreach ($line in @($lines)) { if ($line -match '^"[^"]*","[0-9]+","[^"]*","([0-9]+)"') { $found += [int]$Matches[1] } }
             ,@($found | Sort-Object -Unique)
         }
+        """;
+
+    // Variables: install, files, dir, spec, task, launcher, seconds; secrets arrive in VT_SECRETS (base64 NAME=value tokens,
+    // space separated), which the wrapper keeps in memory and this script clears at once. Runs as the SSH user (or locally). The user's
+    // desktop sessions are the sessions other than 0 (services, and SSH) in which it runs processes; tasklist reports them
+    // without administrator rights. The task runs launcher.ps1 in that session with the user's interactive token.
+    public static readonly string WindowsStart = ("""
+        $secrets = [Environment]::GetEnvironmentVariable('VT_SECRETS')
+        [Environment]::SetEnvironmentVariable('VT_SECRETS', $null)
+        $utf8 = New-Object Text.UTF8Encoding $false
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        foreach ($file in ($files -split "`n")) {
+            if ($file -and -not [IO.File]::Exists((Join-Path $install $file))) { 'VT-INTERACTIVE missing ' + $file; exit 0 }
+        }
+        if ([IO.Directory]::Exists($dir) -or [IO.File]::Exists($dir)) { 'VT-INTERACTIVE exists'; exit 0 }
+        $system = [Environment]::SystemDirectory
+""" + "\n" + WindowsSessions + "\n" + """
         $desktops = Get-VtSessions ''
         if ($desktops.Count -eq 0) { 'VT-INTERACTIVE no-session ' + $me + ' has no desktop session here; sign in at the console or over Remote Desktop and leave the session running'; exit 0 }
         if ($desktops.Count -gt 1) { 'VT-INTERACTIVE no-session ' + $me + ' has ' + $desktops.Count + ' desktop sessions (' + ($desktops -join ', ') + ') and a task could start in any of them; sign out of all but one'; exit 0 }
@@ -630,7 +637,7 @@ internal static class InteractiveScripts
             if ($secretFile -and [IO.File]::Exists($secretFile)) { [IO.File]::Delete($secretFile) }
         }
         $verdict
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 
     // Runs in the desktop session (Windows PowerShell 5.1, started by the task). It reads the spec, takes the secrets from their
     // file and deletes it, starts the game and records its ID and start time, or the error (each moved into place, so the file is complete).

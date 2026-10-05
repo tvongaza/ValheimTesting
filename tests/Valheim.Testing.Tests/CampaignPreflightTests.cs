@@ -160,6 +160,30 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.Contains(host.Scripts, script => script == "game-process");
         Assert.Contains(host.Scripts, script => script == "list");
         Assert.DoesNotContain(host.Scripts, script => script is "copy" or "start" or "apply-stage");
+        Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task"); // an elevated host registers its S4U task
+    }
+
+    // A Windows server host whose account can register neither server task (not elevated, and no desktop session of its own)
+    // is refused before anything is copied, naming why; the station's first zero-config launch failed there instead.
+    [Fact]
+    public async Task AServerHostThatCannotRegisterTheServerTaskIsRefusedBeforeCopying()
+    {
+        string file = Write("campaign.json", new
+        {
+            inventory = Inventory(), server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
+        });
+        var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true)
+        { ServerTaskLogon = "unsupported pc\\tester is not elevated, which a session-0 server task needs, and has no desktop session for one in its own session; run from your own desktop session, or over SSH as an administrator" };
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var problem = Assert.Single(report.Problems, problem => problem.Input == "server task");
+        Assert.Equal("server", problem.Actor);
+        Assert.Contains("is not elevated", problem.Message);
+        Assert.Contains(host.Scripts, script => script == "server-logon");
+        Assert.DoesNotContain(host.Scripts, script => script is "copy" or "start");
+        // A desktop session's interactive task is as good as an elevated one's S4U task.
+        host.ServerTaskLogon = "interactive";
+        report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task");
     }
 
     [Fact]

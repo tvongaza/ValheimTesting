@@ -70,8 +70,9 @@ public sealed class HostServerTests : IDisposable
         Assert.Contains("winhttp.dll", launch.RequiredFiles);
         Assert.Contains("-name \"with spaces\"", WindowsCommandLine.Join(launch.Arguments));
         Assert.Throws<ArgumentException>(() => HostServerLaunch.CreateWindows(@"C:\r", [], new Dictionary<string, string> { ["doorstop_enabled"] = "0" }));
-        host.Replies.Enqueue(Reply("VT-SERVER started 701 123456789\n"));
+        host.Replies.Enqueue(Reply("VT-LOGON interactive\nVT-SERVER started 701 123456789\n"));
         var process = await HostServer.StartAsync(host, launch, @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60));
+        Assert.Equal("interactive", process.TaskLogon);
         Assert.Same(HostServerScripts.WindowsStart, host.Runs[0].Script);
         Assert.Contains("VT-Server-", host.Runs[0].Variables["task"]);
         Assert.DoesNotContain("Steam", host.Runs[0].Variables["launcher"]);
@@ -82,6 +83,55 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal("701", host.Runs[1].Variables["game"]);
         Assert.Equal("123456789", host.Runs[1].Variables["start"]);
         Assert.Same(HostServerScripts.WindowsKeep, host.Runs[2].Script);
+    }
+
+    // The logon decision itself, in Windows PowerShell, with the facts behind their seams: an elevated token gets the session-0
+    // S4U task; a UAC-filtered one in its own single desktop session gets the task in that session; otherwise a reason.
+    [Theory]
+    [InlineData("true", "0", "0", "s4u")]
+    [InlineData("true", "1", "2", "s4u")]
+    [InlineData("false", "1", "1", "interactive")]
+    [InlineData("false", "0", "1", "unsupported")] // an SSH session of a user also signed in at the console
+    [InlineData("false", "1", "2", "unsupported")]
+    public async Task TheServerTaskLogsOnAsTheTokenAllows(string elevated, string session, string desktops, string expected)
+    {
+        if (!OperatingSystem.IsWindows()) return; // Windows PowerShell and the Task Scheduler's rules; station and windows-latest run it
+        var host = new LocalGameHost("windows-logon", HostShell.WindowsPowerShell);
+        var result = (await host.RunAsync(HostServerScripts.WindowsServerLogonCheck,
+            new Dictionary<string, string> { ["elevated"] = elevated, ["session"] = session, ["desktops"] = desktops }, TimeSpan.FromSeconds(30))).EnsureSuccess("logon check");
+        string verdict = InteractiveClient.Line(result.Stdout, "VT-LOGON ")!;
+        Assert.StartsWith(expected, verdict);
+        if (expected == "unsupported") Assert.Contains(session == "0" ? "not a desktop session" : "desktop sessions", verdict);
+        // The real facts of this test machine give one of the three answers, never an error.
+        string real = InteractiveClient.Line((await host.RunAsync(HostServerScripts.WindowsServerLogonCheck, new Dictionary<string, string>(), TimeSpan.FromSeconds(30))).EnsureSuccess("logon check").Stdout, "VT-LOGON ")!;
+        Assert.Matches("^(s4u|interactive|unsupported .+)$", real);
+    }
+
+    [Fact] public async Task AServerTaskThatCannotLogOnIsRefusedNamingWhyAndAPowerShellHostIsAskedFirst()
+    {
+        var host = new QueueHost(HostShell.Pwsh);
+        host.Replies.Enqueue(Reply("VT-SERVER unsupported pc\\tester is not elevated and has no desktop session\n"));
+        // (a started server's reply also says how its task logged on; see WindowsServerLaunchUsesHeadlessTaskAndStopsOnlyTheOwnedIdentity)
+        var error = await Assert.ThrowsAsync<PlatformNotSupportedException>(() => HostServer.StartAsync(host,
+            HostServerLaunch.CreateWindows(@"C:\runs\r\runtime", []), @"C:\runs\r\boot-1", TimeSpan.FromSeconds(60)));
+        Assert.Contains("is not elevated", error.Message);
+        Assert.Contains("Nothing was started", error.Message);
+        // The preflight's question: the logon a Windows host would use, or its reason; a bash host needs no task.
+        host.Replies.Enqueue(Reply("VT-LOGON interactive\n"));
+        Assert.Equal("interactive", await HostServer.RequireTaskLogonAsync(host, TimeSpan.FromSeconds(5)));
+        host.Replies.Enqueue(Reply("VT-LOGON unsupported no desktop session\n"));
+        Assert.Contains("no desktop session", (await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.RequireTaskLogonAsync(host, TimeSpan.FromSeconds(5)))).Message);
+        Assert.Null(await HostServer.RequireTaskLogonAsync(new QueueHost(HostShell.Bash), TimeSpan.FromSeconds(5)));
+        // The start script decides the same way and registers the task with the logon it chose.
+        Assert.Contains("$logonType = if ($logon -eq 's4u') { 2 } else { 3 }", HostServerScripts.WindowsStart);
+        Assert.Contains("RegisterTaskDefinition($task, $definition, 2, $definition.Principal.UserId, $null, $logonType)", HostServerScripts.WindowsStart);
+        Assert.StartsWith(HostServerScripts.WindowsServerLogon.ReplaceLineEndings("\n").TrimEnd(), HostServerScripts.WindowsStart);
+        Assert.Contains(InteractiveScripts.WindowsSessions.ReplaceLineEndings("\n").Trim(), HostServerScripts.WindowsStart); // one session count for client and server
+        Assert.Contains(InteractiveScripts.WindowsSessions.ReplaceLineEndings("\n").Trim(), InteractiveScripts.WindowsStart);
+        // Each composed function starts on its own line: a script joined without one fails to parse ("}function", "...Directoryfunction").
+        foreach (string script in new[] { InteractiveScripts.WindowsStart, HostServerScripts.WindowsStart, HostServerScripts.WindowsServerLogonCheck })
+            Assert.Matches(@"(^|\n)\s*function Get-VtSessions", script);
+        Assert.Matches(@"(^|\n)\s*function Get-VtServerLogon", HostServerScripts.WindowsStart);
     }
 
     [Fact] public async Task WindowsServerRefusesAReplyLostDuringLaunchAsUnknown()

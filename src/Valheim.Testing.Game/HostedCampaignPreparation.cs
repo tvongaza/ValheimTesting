@@ -274,6 +274,12 @@ public static class HostedCampaignPreparation
             }
             catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
             { failures.Add(new(group.Key, "session", error.Message)); }
+            if (group.Any(role => role.Name == "server"))
+            {
+                try { await HostServer.RequireTaskLogonAsync(host, timeout, cancellation).ConfigureAwait(false); }
+                catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
+                { failures.Add(new("server", "server task", error.Message)); }
+            }
             var capacities = new ConcurrentBag<(string Actor, HostCopyCapacity Capacity)>();
             await Task.WhenAll(group.Select(async item =>
             {
