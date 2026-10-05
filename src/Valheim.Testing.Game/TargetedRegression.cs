@@ -34,7 +34,10 @@ public sealed class RegressionEnvironment
     public List<string> OptionalReferences { get; set; } = [];
     /// <summary>Reasoned expected log lines and patterns of the run's own for this native regression (<see cref="LogClassification"/>); unclassified BepInEx errors fail by default.</summary>
     public Dictionary<string, LogClassification> LogScan { get; set; } = [];
-    /// <summary>Optional: the game build and BepInEx core <see cref="Game"/> must have (<see cref="InstallPins"/>; its patchers value is not compared).</summary>
+    /// <summary>
+    /// Optional: the game build and loader <see cref="Game"/> must have (<see cref="InstallPins"/>; its patchers value is not
+    /// compared). With <see cref="LoaderPackage"/>, the loader is the package's (<see cref="BepInExLoaderPackage.Loader"/>).
+    /// </summary>
     public InstallPins? GamePins { get; set; }
     /// <summary>Optional extracted BepInEx/UnityDoorstop package manifest; its pinned loader and core replace the copied game's loader in the disposable install.</summary>
     public string? LoaderPackage { get; set; }
@@ -587,10 +590,10 @@ public sealed class TargetedRegression
 
     // ---- the disposable install ----
 
-    private sealed record Marker(string Tool, string GameSha256, string BepInExCoreSha256, string? Arm,
+    private sealed record Marker(string Tool, string GameSha256, string? LoaderSha256, string? Arm,
         Dictionary<string, string>? Tree, Dictionary<string, string>? LoaderFiles, string? LoaderPackage = null, bool LoaderSmoke = false);
 
-    // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build, core and loader are the game's.
+    // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build and loader are the selected ones.
     private string PrepareInstall()
     {
         var env = Environment;
@@ -603,21 +606,21 @@ public sealed class TargetedRegression
             throw new InvalidOperationException($"The disposable install {install} overlaps the pinned BepInEx package {package.Root}; keep the package outside the install so cleanup cannot delete it.");
         if (package == null && !Directory.Exists(Path.Combine(game, InstallPins.CoreDirectory)))
             throw new InvalidOperationException($"game: {game} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first; the disposable install is copied from it.");
+        // The selected loader: the game's own, or the package's, which an install it is applied to has (BepInExLoaderPackage.Loader).
         var pins = package == null ? InstallPins.Of(game) : new InstallPins
         {
             Game = InstallPins.GameHash(game),
-            BepInExCore = InstallPins.DirectoryHash(Path.Combine(package.Root, InstallPins.CoreDirectory)),
+            Loader = package.Loader,
             Patchers = InstallPins.DirectoryHash(Path.Combine(game, BepInExLoader.Patchers)),
         };
-        string expectedCore = package == null ? pins.BepInExCore : InstallPins.DirectoryHash(Path.Combine(package.Root, InstallPins.CoreDirectory));
         if (env.GamePins != null)
-            env.GamePins.Compare(new InstallPins { Game = pins.Game, BepInExCore = expectedCore, Patchers = env.GamePins.Patchers }, "prepared game and selected loader package", "Managed");
+            env.GamePins.Compare(new InstallPins { Game = pins.Game, Loader = pins.Loader, Patchers = env.GamePins.Patchers }, "prepared game and selected loader package", "Managed");
         if (Directory.Exists(install))
         {
             var marker = RequireOwned(install);
-            bool current = marker.GameSha256 == pins.Game && marker.BepInExCoreSha256 == expectedCore && marker.LoaderPackage == package?.Identity &&
+            bool current = marker.GameSha256 == pins.Game && marker.LoaderSha256 == pins.Loader && marker.LoaderPackage == package?.Identity &&
                 Directory.Exists(Path.Combine(install, InstallPins.CoreDirectory)) &&
-                InstallPins.Of(install) is var found && found.Game == pins.Game && found.BepInExCore == expectedCore &&
+                InstallPins.Of(install) is var found && found.Game == pins.Game && found.Loader == pins.Loader &&
                 (package == null ? LoaderCopied(game, install, marker.LoaderFiles) : package.Matches(install));
             if (!current) Directory.Delete(install, recursive: true);
         }
@@ -647,8 +650,8 @@ public sealed class TargetedRegression
             : Path.Combine(package.Root, "BepInEx", "config", BepInExConfig);
         if (File.Exists(settings)) File.Copy(settings, Path.Combine(install, "BepInEx", "config", BepInExConfig));
         var copied = InstallPins.Of(install);
-        if (copied.Game != pins.Game || copied.BepInExCore != expectedCore)
-            throw new InvalidOperationException($"The disposable install {install} does not match the selected game and loader after copying (game {copied.Game} vs {pins.Game}, core {copied.BepInExCore} vs {expectedCore}). Remove it and stage again.");
+        if (copied.Game != pins.Game || copied.Loader != pins.Loader)
+            throw new InvalidOperationException($"The disposable install {install} does not match the selected game and loader after copying (game {copied.Game} vs {pins.Game}, loader {copied.Loader} vs {pins.Loader}). Remove it and stage again.");
         return install;
     }
 
@@ -706,7 +709,7 @@ public sealed class TargetedRegression
         Dictionary<string, string>? loaderFiles = null, string? loaderPackage = null)
     {
         var previous = pins == null ? RequireOwned(install) : null;
-        var marker = new Marker(nameof(TargetedRegression), pins?.Game ?? previous!.GameSha256, pins?.BepInExCore ?? previous!.BepInExCoreSha256,
+        var marker = new Marker(nameof(TargetedRegression), pins?.Game ?? previous!.GameSha256, pins?.Loader ?? previous!.LoaderSha256,
             arm, tree, loaderFiles ?? previous?.LoaderFiles, loaderPackage ?? previous?.LoaderPackage, previous?.LoaderSmoke ?? false);
         File.WriteAllText(Path.Combine(install, MarkerFile), JsonSerializer.Serialize(marker, ManifestJson));
     }

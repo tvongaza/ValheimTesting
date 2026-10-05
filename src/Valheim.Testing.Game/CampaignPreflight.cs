@@ -20,6 +20,8 @@ public sealed record CampaignPreflightActor(string Name, string Kind, string Hos
 public sealed record CampaignPreflightReport(IReadOnlyList<CampaignPreflightProblem> Problems)
 {
     public IReadOnlyList<CampaignPreflightActor> Actors { get; init; } = [];
+    /// <summary>What the inventory's this-machine default detected and assumed (<see cref="EnvironmentInventory.Detected"/>), one line each.</summary>
+    public IReadOnlyList<string> Detected { get; init; } = [];
     public bool Ready => Problems.Count == 0;
 
     public void RequireReady()
