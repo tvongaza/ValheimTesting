@@ -35,7 +35,7 @@ The tests cover submerged ground, the exact allowed boundary, dry ground, horizo
 6. Keep singleton-using tests nonparallel. Use fresh scope builders, and reset your mod's own static state separately. Scope disposal restores references, not deep copies of pre-existing objects.
 7. Run the tests on every push and pull request: copy [.github/workflows/tests.yml](.github/workflows/tests.yml) to the same path in your repository and change the project path if yours differs. See [running your tests in GitHub Actions](../../docs/adopting.md#run-your-tests-in-github-actions).
 
-If compilation reports a missing game member, check the [documented doubles contract](../../docs/testing-toolkit.md#game-doubles). Extend a partial type locally for a mod-specific seam, or contribute reusable behavior with a test. A no-op stub is not evidence that the game's behavior works.
+If compilation reports a missing game member, check the [documented doubles contract](../../docs/packages/Valheim.Testing.Doubles.md). Extend a partial type locally for a mod-specific seam, or contribute reusable behavior with a test. A no-op stub is not evidence that the game's behavior works.
 
 ## Also test on .NET Framework
 
