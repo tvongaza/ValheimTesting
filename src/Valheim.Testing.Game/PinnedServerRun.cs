@@ -123,7 +123,7 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// <item>Reads the plan, detects the runtime's platform and checks the host before copying anything.</item>
 /// <item>Records provenance: plan, runner and toolkit hashes, mode, platform, <c>crossplay</c>, the copies and their input hashes.</item>
 /// <item>Copies and verifies the pinned runtime and world (kept for inspection), checks the copy's executable, its
-/// patcher names, and its game build, BepInEx core and patchers against <see cref="ServerRunPlan.RuntimePins"/> (recorded
+/// patcher names, and its game build, loader and patchers against <see cref="ServerRunPlan.RuntimePins"/> (recorded
 /// as provenance).</item>
 /// <item><c>validate</c> stops there. Otherwise: checks the CLI port is free, starts the owned session on the copies with
 /// per-boot logs (<c>boot-N.*</c>) and recorded commands (<c>connection-N.jsonl</c>), waits on the dedicated startup
@@ -330,7 +330,11 @@ public static class PinnedServerRun
                 {
                     inspection = HostedCampaignPreparation.InspectInputs(manifestFile);
                     inspection.Report.RequireReady();
-                    report.Provenance["inventorySha256"] = WorldFixture.Hash(inspection.Inputs!.Manifest.Inventory);
+                    // With no inventory file the actors are on this machine; what was detected for it is recorded either way.
+                    if (inspection.Inputs!.Manifest.Inventory.Length != 0)
+                        report.Provenance["inventorySha256"] = WorldFixture.Hash(inspection.Inputs.Manifest.Inventory);
+                    else report.Provenance["inventory"] = "this machine";
+                    if (inspection.Report.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inspection.Report.Detected);
                 });
                 report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, bind(plan)));
                 phase = StepPhase.Setup; // From here the hosts are written to.
@@ -349,7 +353,9 @@ public static class PinnedServerRun
             if (inventoryPath != null)
             {
                 // A standalone run has one actor to place: its dedicated server. Clients are a campaign's.
-                var (placed, assignment) = EnvironmentInventory.Read(inventoryPath).PlaceServer(plan);
+                var inventory = EnvironmentInventory.Read(inventoryPath);
+                var (placed, assignment) = inventory.PlaceServer(plan);
+                if (inventory.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inventory.Detected);
                 environment = placed;
                 report.Provenance["inventorySha256"] = WorldFixture.Hash(inventoryPath);
                 report.Provenance["serverEnvironment"] = assignment.Environment + ": " + assignment.Reason;
@@ -432,7 +438,7 @@ public static class PinnedServerRun
                 });
                 report.Step(StepPhase.Setup, "copied runtime's BepInEx patchers are the plan's", () => plan.CheckRuntimePatchers(runtime!.DirectoryPath));
                 // What the game cannot report in game: its build and the loader, pinned on disk before anything launches.
-                report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, BepInEx core and patchers" : "record the unpinned runtime's game build, BepInEx core and patchers",
+                report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers",
                     () => plan.CheckRuntimePins(runtime!.DirectoryPath).Record(report.Provenance, "runtime"));
                 // Only this machine's own loader can say whether a Linux runtime's libparty.so loads here.
                 if (plan.Crossplay && platform == ServerPlatform.Linux && OperatingSystem.IsLinux())

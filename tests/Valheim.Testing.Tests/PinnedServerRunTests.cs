@@ -82,7 +82,7 @@ public sealed class PinnedServerRunTests : IDisposable
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
         Assert.Equal(new[] { "enough free disk space for the copies", "copy and verify pinned runtime", "copy and verify pinned world", "copied runtime has the plan's server executable",
-                "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers", "prepared only; no game launched",
+                "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
                 "remove the runtime copy, keeping what the run changed" },
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
@@ -404,7 +404,7 @@ public sealed class PinnedServerRunTests : IDisposable
             Runtime = new() { Source = Path.GetTempPath(), Sha256 = new() { ["a"] = new string('a', 64) } },
             World = new() { Source = Path.GetTempPath(), Sha256 = new() { ["b"] = new string('b', 64) } },
             Arguments = ["-batchmode", "-nographics", "-savedir", "{world}"], Pins = new() { ["worlduid"] = "1", ["my.mod"] = new string('1', 32) },
-            RuntimePins = new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) },
+            RuntimePins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) },
         };
         plan.ValidateServerPlan(["my.mod"], "TOKEN");
         Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan(["other.mod"], "TOKEN"));

@@ -16,7 +16,7 @@ public sealed class CrossplayPlanTests : IDisposable
         Runtime = new() { Source = Path.GetTempPath(), Sha256 = new() { ["a"] = new string('a', 64) } },
         World = new() { Source = Path.GetTempPath(), Sha256 = new() { ["b"] = new string('b', 64) } },
         Arguments = ["-batchmode", "-nographics", "-savedir", "{world}", .. extra], Pins = new() { ["worlduid"] = "1" },
-        RuntimePins = new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) },
+        RuntimePins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) },
     };
 
     [Theory] [InlineData("-crossplay")] [InlineData("-Crossplay")] [InlineData("-CROSSPLAY")]
