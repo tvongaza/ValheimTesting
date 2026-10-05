@@ -278,11 +278,11 @@ public static class NativeDependencyResolver
                     var already = selected.Keys.SelectMany(candidate => known[candidate].Plugins.Where(p => p.Guid == dependency.Guid).Select(p => (candidate, p))).ToList();
                     if (already.Count != 0)
                     {
-                        if (!already.Any(item => AtLeast(item.p.Version, dependency.MinimumVersion)))
+                        if (!already.Any(item => DependencyRule.AtLeast(item.p.Version, dependency.MinimumVersion)))
                             Gap("plugin", dependency.Guid, $"{Path.GetFileName(path)} needs {dependency.Guid} >= {dependency.MinimumVersion}, but the selected {Path.GetFileName(already[0].candidate)} declares {already[0].p.Version}; select a compatible build instead of staging both.", []);
                         continue;
                     }
-                    var matches = DistinctCandidates(inventory.Where(item => item.Metadata.Plugins.Any(p => p.Guid == dependency.Guid && AtLeast(p.Version, dependency.MinimumVersion)))
+                    var matches = DistinctCandidates(inventory.Where(item => item.Metadata.Plugins.Any(p => p.Guid == dependency.Guid && DependencyRule.AtLeast(p.Version, dependency.MinimumVersion)))
                         .Select(item => item.Path).Where(candidate => !selected.ContainsKey(candidate)));
                     if (matches.Count == 1) Add(matches[0], $"hard [BepInDependency] {dependency.Guid} of {Path.GetFileName(path)}");
                     else Gap("plugin", dependency.Guid, $"{Path.GetFileName(path)} requires {dependency.Guid}{(dependency.MinimumVersion == null ? "" : " >= " + dependency.MinimumVersion)}; supply its plugin DLL in an explicit search root or choose among the candidates.", AllSources(matches));
@@ -303,14 +303,12 @@ public static class NativeDependencyResolver
                 else Gap("assembly", reference, $"{Path.GetFileName(path)} references {reference}; supply its DLL in an explicit search root, or explicitly confirm optionalReferences if it is guarded.", AllSources(matches));
             }
         }
-        foreach (var group in selected.Keys.SelectMany(path => known[path].Plugins.Select(plugin => (Path: path, plugin.Guid)))
-            .GroupBy(entry => entry.Guid, StringComparer.Ordinal).Where(group => group.Count() > 1))
-            Gap("duplicate-plugin", group.Key, $"{group.Key} is declared by multiple selected DLLs; BepInEx would skip one. Select one build.", group.Select(entry => entry.Path));
-        foreach (var (path, metadata) in selected.Keys.Select(path => (path, known[path])))
-            foreach (var plugin in metadata.Plugins)
-                foreach (string incompatible in plugin.Incompatibilities)
-                    if (selected.Keys.Any(candidate => known[candidate].Plugins.Any(p => p.Guid == incompatible)))
-                        Gap("incompatible-plugin", plugin.Guid, $"{plugin.Guid} declares [BepInIncompatibility] with selected {incompatible}; remove one mod.", [path]);
+        // The one declared-dependency rule over the selected set (TargetedRegression applies it to what it stages). A name the
+        // search above already reported keeps that gap. No process is named: one resolver serves client and server mods.
+        foreach (var problem in DependencyRule.Check(selected.Keys.Select(path => (path, known[path])).ToList(), provided, result.OptionalReferences, process: null,
+            show: path => Path.GetFileName(path)))
+            if (!result.Gaps.Any(gap => gap.Name.Equals(problem.Name, StringComparison.OrdinalIgnoreCase)))
+                Gap(problem.Kind, problem.Name, problem.Message, problem.Paths);
         foreach (var (path, reason) in selected)
             if (!request.Mods.Contains(path, StringComparer.Ordinal) && !result.CliFiles.Any(file => file.File == path))
                 result.Plugins.Add(Pinned(path, reason) with { SourcePaths = equivalentSources.GetValueOrDefault(path) ?? [path] });
@@ -320,6 +318,4 @@ public static class NativeDependencyResolver
     }
 
     private static NativeDependencyFile Pinned(string path, string reason) => new(path, FileHash.Sha256(path), reason);
-    private static bool AtLeast(string version, string? minimum) => minimum == null ||
-        Version.TryParse(version, out var have) && Version.TryParse(minimum, out var need) && have >= need;
 }
