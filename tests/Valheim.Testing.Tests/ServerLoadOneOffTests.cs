@@ -219,15 +219,46 @@ public sealed class ServerLoadOneOffTests : IDisposable
             new ServerLoad.Seams(MacOS: true, Staged: (_, _) => Task.FromResult(0))));
     }
 
-    // start's --game and Steam userdata default from the same detection.
-    [Fact] public void StartDefaultsToThisMachinesValheimAndSteamUserdata()
+    // start's client is the inventory's: this machine's Valheim, --game and --loader-package as its override, or a file's
+    // (--client-env picks one). It must be on this machine, and the chosen one is recorded beside the run's inputs.
+    [Fact] public void StartTakesItsClientFromTheInventoryAndRecordsIt()
     {
-        using (EnvironmentInventory.UseMachine(WithValheim(out string game)))
+        string output = Path.Combine(_rig.Root, "start");
+        string game;
+        using (EnvironmentInventory.UseMachine(WithValheim(out game)))
         {
-            Assert.Equal(game, SmokeInputs.Game());
+            var (_, client) = SmokeInputs.Client(new Dictionary<string, string>(), output);
+            Assert.Equal(("local-client", game), (client.Name, client.Install));
             Assert.EndsWith("userdata", SmokeInputs.SteamUserdata(new Dictionary<string, string>()));
         }
-        Assert.Contains("Give --game", Assert.Throws<DirectoryNotFoundException>(() => SmokeInputs.Game()).Message);
+        Assert.Equal(game, EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments.Single().Install);
+        var (_, overridden) = SmokeInputs.Client(new Dictionary<string, string> { ["--game"] = _rig.Game }, Path.Combine(_rig.Root, "start-game"));
+        Assert.Equal(_rig.Game, overridden.Install);
+
+        // A file with two clients here and one elsewhere: --client-env picks, and only that one is recorded.
+        string file = Path.Combine(_rig.Root, "lab.json");
+        File.WriteAllText(file, JsonSerializer.Serialize(new
+        {
+            hosts = new { lab = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@lab", @lock = "/vt/lock" } },
+            environments = new object[]
+            {
+                new { name = "lab-client", host = "lab", roles = new[] { "client" }, install = "/opt/valheim", runtime = "/vt/runs", cliPort = 5700 },
+                new { name = "first", roles = new[] { "client" }, install = _rig.Game, runtime = Path.Combine(_rig.Root, "runs-first"), cliPort = 5701 },
+                new { name = "alt", roles = new[] { "client" }, install = _rig.Game, runtime = Path.Combine(_rig.Root, "runs-alt"), cliPort = 5702 },
+            },
+            leaseHost = "lab", leaseDirectory = "/vt/leases",
+        }));
+        Assert.Contains("not this machine", Assert.Throws<ArgumentException>(() =>
+            SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file }, Path.Combine(_rig.Root, "start-remote"))).Message);
+        string chosen = Path.Combine(_rig.Root, "start-alt");
+        var (_, alt) = SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen);
+        Assert.Equal(5702, alt.CliPort);
+        var recorded = EnvironmentInventory.Read(Path.Combine(chosen, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform));
+        Assert.Equal(("alt", 5702), (recorded.Environments.Single().Name, recorded.Environments.Single().CliPort));
+
+        Assert.Contains("Give --game", Assert.Throws<ArgumentException>(() => SmokeInputs.Client(new Dictionary<string, string>(), Path.Combine(_rig.Root, "none"))).Message);
+        Assert.Contains("--inventory", Assert.Throws<ArgumentException>(() => SmokeInputs.Client(
+            new Dictionary<string, string> { ["--game"] = _rig.Game, ["--inventory"] = "f.json" }, Path.Combine(_rig.Root, "both"))).Message);
         Assert.Contains("--steam-userdata", Assert.Throws<DirectoryNotFoundException>(() => SmokeInputs.SteamUserdata(new Dictionary<string, string>())).Message);
     }
 }

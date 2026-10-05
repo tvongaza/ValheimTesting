@@ -28,7 +28,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
         source = Path.GetFullPath(source);
         _ = ClientLaunch.Detect(source);
         loaderPackage?.Validate();
-        if (loaderPackage != null && RegressionEnvironment.Inside(loaderPackage.Root, source))
+        if (loaderPackage != null && RegressionInputs.Inside(loaderPackage.Root, source))
             throw new InvalidOperationException("The client loader package must be an extracted, reviewed set outside the source game install.");
         var files = dependencies.CliFiles.Select(file => file.File).ToList();
         var duplicate = files.GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);

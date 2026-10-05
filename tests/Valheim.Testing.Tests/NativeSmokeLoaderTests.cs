@@ -138,18 +138,16 @@ public sealed class NativeSmokeLoaderTests : IDisposable
     }
 
     // #297: start goes straight to the hosted run from the tool's own assemblies; no consumer project comes first. The
-    // run stops at its first Setup step here (a Steam root not named userdata), before anything outside the output changes.
+    // run stops at its first Setup step here (this test machine has no Steam, so no userdata to check the character
+    // against), before anything outside the output changes. Its client is the --game override, written beside its inputs.
     [Fact]
     public void StartRunsTheHostedRunWithoutBuildingAConsumer()
     {
-        string notUserdata = Path.Combine(_rig.Root, "steam-root");
-        Directory.CreateDirectory(notUserdata);
         string output = Path.Combine(_rig.Root, "offline-start");
         object? exit = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
         {
             "start", "--game", _rig.Game, "--mod", _rig.Parent, "--cli-manifest", _rig.CliManifest(save: true),
-            "--cli-files", Path.Combine(_rig.Root, "cli"), "--search-root", Path.Combine(_rig.Root, "deps"),
-            "--steam-userdata", notUserdata, "--output", output,
+            "--cli-files", Path.Combine(_rig.Root, "cli"), "--search-root", Path.Combine(_rig.Root, "deps"), "--output", output,
         }]);
         Assert.Equal(1, exit);
         var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "evidence", "smoke", "result.json")));
@@ -157,6 +155,9 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         Assert.Equal("stage only the registered disposable character", steps[0].GetProperty("Name").GetString());
         Assert.Contains("userdata", steps[0].GetProperty("Error").GetString());
         Assert.False(Directory.Exists(Path.Combine(output, "consumer")));
+        // The inputs name no machine; the machine is the override beside them.
+        Assert.DoesNotContain(_rig.Game.Replace("\\", "\\\\"), File.ReadAllText(Path.Combine(output, "regression.json")));
+        Assert.True(File.Exists(Path.Combine(output, "environments.json")));
     }
 
     private NativeDependencyLock Dependencies(BepInExLoaderPackage loader)

@@ -15,13 +15,13 @@ From C# the same operation is:
 var loader = BepInExLoaderPackage.Capture(extractedPackageRoot, "BepInExPack_Valheim", "5.4.2202");
 loader.Write(privateManifestPath);
 
-var environment = RegressionEnvironment.Read(privateRegressionManifest);
-environment.LoaderPackage = privateManifestPath;
-var run = new TargetedRegression(environment);
+// The loader is a property of the client environment: its loaderPackage in the inventory (here, this machine's client).
+File.WriteAllText(privateEnvironmentsPath, $$"""{ "environments": [ { "name": "local-client", "roles": ["client"], "loaderPackage": {{JsonSerializer.Serialize(privateManifestPath)}} } ] }""");
+var run = new TargetedRegression(RegressionInputs.Read(privateRegressionInputs), inventory: EnvironmentInventory.Read(privateEnvironmentsPath));
 run.Preflight(); // checks the package and copied install without launching Valheim
 ```
 
-The package manifest and regression manifest are private: they contain machine paths. `Capture` records the files present in the extracted package, and `Read` refuses changed or missing files. On Windows, it also checks that `winhttp.dll` and `doorstop_config.ini` agree in the format they use. That static check is not a claim that Doorstop actually ran.
+The package manifest, the inventory file and the regression's inputs are private: they contain machine paths. `Capture` records the files present in the extracted package, and `Read` refuses changed or missing files. On Windows, it also checks that `winhttp.dll` and `doorstop_config.ini` agree in the format they use. That static check is not a claim that Doorstop actually ran.
 
 For `valheim-test start`, pass the captured manifest as `--loader-package`. For `valheim-test server-load` or `server-load-ab`, use `--loader-package` for the server and `--client-loader-package` when joining an unmodded client. Give each its own package built for that platform; no server package is silently copied to a client. The selected server package supplies the BepInEx references for the test adapter, and both identities enter the private result. See the [tool's README](../src/Valheim.Testing.NativeSmoke/README.md#disposable-native-mod-load-smoke).
 

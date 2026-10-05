@@ -4,20 +4,17 @@ using System.Text.RegularExpressions;
 namespace Valheim.Testing.Game;
 
 /// <summary>
-/// The environment manifest of a targeted native regression: one owned client, one disposable hosted world, one mod under
-/// test in two or more arms (conventionally <c>parent</c> and <c>candidate</c>), its runtime dependencies and an optional
-/// game-side probe. Everything machine-specific lives here: paths, the client's port and disposable character, which
-/// files are staged. The scenario source (the rounds and their assertions) stays free of them, so the same source can be
-/// shared. <see cref="Read"/> resolves relative paths against the manifest's own directory and refuses unknown fields.
+/// The inputs of a targeted native regression: one owned client hosting one disposable world, one mod under test in two
+/// or more arms (conventionally <c>parent</c> and <c>candidate</c>), its runtime dependencies and an optional game-side
+/// probe. Where it runs is not here: the client's install, port, disposable copy, save folders and loader come from the
+/// environment inventory's client environment (<see cref="TargetedRegression"/>), this machine when there is no file.
+/// The scenario source (the rounds and their assertions) stays free of both, so the same source can be shared.
+/// <see cref="Read"/> resolves relative paths against the file's own directory and refuses unknown fields.
 /// </summary>
-public sealed class RegressionEnvironment
+public sealed class RegressionInputs
 {
     /// <summary>A short name for the run: letters, digits, <c>-</c> and <c>_</c>.</summary>
     public string Name { get; set; } = "";
-    /// <summary>A Valheim install, only ever read; it needs BepInEx unless <see cref="LoaderPackage"/> supplies a pinned loader set.</summary>
-    public string Game { get; set; } = "";
-    /// <summary>The disposable install <see cref="TargetedRegression"/> creates from <see cref="Game"/> and owns; never a valued one.</summary>
-    public string Install { get; set; } = "";
     public RegressionClient Client { get; set; } = new();
     public RegressionFixture Fixture { get; set; } = new();
     public RegressionCli Cli { get; set; } = new();
@@ -35,55 +32,80 @@ public sealed class RegressionEnvironment
     /// <summary>Reasoned expected log lines and patterns of the run's own for this native regression (<see cref="LogClassification"/>); unclassified BepInEx errors fail by default.</summary>
     public Dictionary<string, LogClassification> LogScan { get; set; } = [];
     /// <summary>
-    /// Optional: the game build and loader <see cref="Game"/> must have (<see cref="InstallPins"/>; its patchers value is not
-    /// compared). With <see cref="LoaderPackage"/>, the loader is the package's (<see cref="BepInExLoaderPackage.Loader"/>).
+    /// Optional: the game build and loader the client environment's install must have (<see cref="InstallPins"/>; its patchers
+    /// value is not compared). With a loader package, the loader is the package's (<see cref="BepInExLoaderPackage.Loader"/>).
     /// </summary>
     public InstallPins? GamePins { get; set; }
-    /// <summary>Optional extracted BepInEx/UnityDoorstop package manifest; its pinned loader and core replace the copied game's loader in the disposable install.</summary>
-    public string? LoaderPackage { get; set; }
 
     private static readonly Regex Token = new(@"^[A-Za-z0-9][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant);
 
-    /// <summary>Reads and validates a manifest; relative paths are relative to the manifest's directory.</summary>
-    public static RegressionEnvironment Read(string path)
+    // Fields of the retired environment manifest that described the machine, and where each now comes from.
+    private static readonly (string Path, string Now)[] Retired =
+    [
+        ("game", "the inventory's client environment's install (this machine's Valheim with no file; --game or an environments.json entry overrides it)"),
+        ("install", "the client environment's runtime (the disposable copy is made there)"),
+        ("loaderPackage", "the client environment's loaderPackage"),
+        ("client.port", "the client environment's cliPort"),
+        ("client.saveDirectory", "the client's host (its standard save folder)"),
+        ("client.steamUserDataDirectory", "this machine's detected Steam userdata"),
+    ];
+
+    /// <summary>Reads and validates the inputs; relative paths are relative to the file's directory. A retired machine field is refused, naming where it now comes from.</summary>
+    public static RegressionInputs Read(string path)
     {
         path = Path.GetFullPath(path);
-        RegressionEnvironment manifest;
-        try { manifest = ClientPlanFile.Read<RegressionEnvironment>(path); }
-        catch (JsonException error) { throw new ArgumentException($"{path} is not a regression manifest: {error.Message}", error); }
-        manifest.Resolve(Path.GetDirectoryName(path)!);
-        manifest.Validate();
-        return manifest;
+        JsonDocument parsed;
+        try { parsed = JsonDocument.Parse(File.ReadAllText(path)); }
+        catch (JsonException error) { throw new ArgumentException($"{path} is not a regression's inputs: {error.Message}", error); }
+        using (var document = parsed)
+        {
+            var found = new List<string>();
+            foreach (var (field, now) in Retired)
+            {
+                var element = document.RootElement;
+                bool present = true;
+                foreach (string part in field.Split('.'))
+                {
+                    if (element.ValueKind != JsonValueKind.Object) { present = false; break; }
+                    var match = element.EnumerateObject().FirstOrDefault(property => property.Name.Equals(part, StringComparison.OrdinalIgnoreCase));
+                    if (match.Value.ValueKind == JsonValueKind.Undefined) { present = false; break; }
+                    element = match.Value;
+                }
+                if (present) found.Add($"{field} now comes from {now}");
+            }
+            if (found.Count != 0)
+                throw new ArgumentException($"{path} is a retired environment manifest: it names the machine, which the environment inventory now describes. Remove " +
+                    string.Join("; ", found) + ".");
+        }
+        RegressionInputs inputs;
+        try { inputs = ClientPlanFile.Read<RegressionInputs>(path); }
+        catch (JsonException error) { throw new ArgumentException($"{path} is not a regression's inputs: {error.Message}", error); }
+        inputs.Resolve(Path.GetDirectoryName(path)!);
+        inputs.Validate();
+        return inputs;
     }
 
-    /// <summary>Writes the manifest as indented JSON.</summary>
+    /// <summary>Writes the inputs as indented JSON.</summary>
     public void Write(string path) => ClientPlanFile.Write(path, this);
 
     private void Resolve(string directory)
     {
         string Full(string value) => value.Length == 0 || Path.IsPathFullyQualified(value) ? value : Path.GetFullPath(Path.Combine(directory, value));
-        Game = Full(Game); Install = Full(Install); Fixture.Root = Full(Fixture.Root);
-        if (Client.SaveDirectory != null) Client.SaveDirectory = Full(Client.SaveDirectory);
+        Fixture.Root = Full(Fixture.Root);
         if (Client.CharacterStore != null) Client.CharacterStore = Full(Client.CharacterStore);
-        if (Client.SteamUserDataDirectory != null) Client.SteamUserDataDirectory = Full(Client.SteamUserDataDirectory);
         foreach (var file in Files()) file.File = Full(file.File);
         foreach (var arm in Mod.Arms.Values) arm.File = Full(arm.File);
         foreach (string key in Configs.Keys.ToList()) Configs[key] = Full(Configs[key]);
         if (Cli.Manifest != null) Cli.Manifest = Full(Cli.Manifest);
-        if (LoaderPackage != null) LoaderPackage = Full(LoaderPackage);
     }
 
     private IEnumerable<RegressionFile> Files() =>
         new[] { Cli.Core }.Concat(Cli.Packs).Concat(Plugins).Concat(Probe == null ? [] : [Probe]).Concat(Patchers);
 
-    /// <summary>Refuses a manifest that cannot describe one clean run, naming the field and the fix. Reads no file.</summary>
+    /// <summary>Refuses inputs that cannot describe one clean run, naming the field and the fix. Reads no file.</summary>
     public void Validate()
     {
         if (!Token.IsMatch(Name)) throw new ArgumentException("name: give the run a short name of letters, digits, - and _.");
-        if (!Path.IsPathFullyQualified(Game)) throw new ArgumentException("game: give the prepared Valheim install with BepInEx (only read, never changed).");
-        if (!Path.IsPathFullyQualified(Install)) throw new ArgumentException("install: give the path of the disposable install this tool creates and owns.");
-        if (Inside(Install, Game) || Inside(Game, Install))
-            throw new ArgumentException($"install {Install} and game {Game} overlap: the disposable install is a separate directory, never the prepared install or inside it.");
         Client.Validate();
         Fixture.Validate();
         Cli.Validate();
@@ -95,8 +117,6 @@ public sealed class RegressionEnvironment
         {
             if (name.Length == 0 || name != Path.GetFileName(name) || !name.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"configs: \"{name}\" is not a BepInEx config file name (<plugin guid>.cfg, no folder).");
-            if (LoaderPackage != null && name.Equals("BepInEx.cfg", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException($"configs.{name}: the selected loader package pins BepInEx.cfg; edit and recapture that package instead of overriding its configuration during staging.");
             if (!Path.IsPathFullyQualified(source)) throw new ArgumentException($"configs.{name}: give the file to copy.");
         }
         foreach (string reference in OptionalReferences)
@@ -104,7 +124,6 @@ public sealed class RegressionEnvironment
                 throw new ArgumentException($"optionalReferences: \"{reference}\" is not an assembly name (no .dll).");
         LogScanner.CheckClassifications(LogScan);
         GamePins?.Validate("game");
-        if (LoaderPackage != null && !Path.IsPathFullyQualified(LoaderPackage)) throw new ArgumentException("loaderPackage: give the extracted package manifest's full path.");
         var names = Files().Where(file => !Patchers.Contains(file)).Select(file => Path.GetFileName(file.File)).Append(Mod.InstallAs)
             .GroupBy(name => name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1);
         if (names != null) throw new ArgumentException($"Two staged plugins are both named {names.Key} in BepInEx/plugins; rename one copy, or list the file once.");
@@ -123,32 +142,22 @@ public sealed class RegressionEnvironment
     }
 }
 
-/// <summary>The owned client: its ValheimCLI port, the disposable local character and launch options.</summary>
+/// <summary>The owned client's disposable character and launch options; its install and port are the client environment's.</summary>
 public sealed class RegressionClient
 {
-    public int Port { get; set; }
     /// <summary>An existing disposable <b>local</b> character's file name without <c>.fch</c>, never a cloud character.</summary>
     public string Character { get; set; } = "";
     public string[] LaunchArguments { get; set; } = [];
     public int StartSeconds { get; set; } = 300;
     public int JoinSeconds { get; set; } = 180;
-    /// <summary>The client's data directory (holds <c>worlds_local</c> and <c>characters_local</c>); default this user's.</summary>
-    public string? SaveDirectory { get; set; }
-    /// <summary>Optional registered, game-created disposable character to stage for the owned hosted run.</summary>
+    /// <summary>Optional registered, game-created disposable character to stage for the owned hosted run (checked against this machine's Steam userdata).</summary>
     public string? CharacterStore { get; set; }
-    /// <summary>Required with <see cref="CharacterStore"/> to refuse collisions with Steam Cloud characters.</summary>
-    public string? SteamUserDataDirectory { get; set; }
 
     public void Validate()
     {
-        if (Port is < 1024 or > 65535) throw new ArgumentException("client.port: give the client's ValheimCLI port, 1024 to 65535.");
         if (Character.Length == 0 || Character.Any(char.IsWhiteSpace) || Character.EndsWith(".fch", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("client.character: give the disposable local character's file name, without .fch.");
-        if (SaveDirectory != null && !Path.IsPathFullyQualified(SaveDirectory)) throw new ArgumentException("client.saveDirectory: give a full path, or leave it out for this user's.");
         if (CharacterStore != null && !Path.IsPathFullyQualified(CharacterStore)) throw new ArgumentException("client.characterStore: give the full path of a registered disposable character store.");
-        if (CharacterStore != null && (SteamUserDataDirectory == null || !Path.IsPathFullyQualified(SteamUserDataDirectory)))
-            throw new ArgumentException("client.steamUserDataDirectory: give Steam's full userdata path when staging a registered character.");
-        if (CharacterStore == null && SteamUserDataDirectory != null) throw new ArgumentException("client.steamUserDataDirectory is used only with client.characterStore.");
     }
 }
 
@@ -210,7 +219,7 @@ public sealed class RegressionMod
         if (InstallAs.Length == 0 || InstallAs != Path.GetFileName(InstallAs) || !InstallAs.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("mod.installAs: give the DLL's file name in BepInEx/plugins (no folder), the same for every arm.");
         if (Arms.Count == 0) throw new ArgumentException("mod.arms: name at least one arm, for example parent and candidate.");
-        foreach (var (name, arm) in Arms) { RegressionEnvironment.RequireToken(name, "mod.arms"); arm.Validate("mod.arms." + name); }
+        foreach (var (name, arm) in Arms) { RegressionInputs.RequireToken(name, "mod.arms"); arm.Validate("mod.arms." + name); }
         foreach (var same in Arms.GroupBy(arm => arm.Value.Sha256, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
             if (!Repeatability)
                 throw new ArgumentException($"mod.arms {string.Join(" and ", same.Select(arm => arm.Key))} are the same build (sha256 {same.Key}): comparing a build with itself proves nothing. " +
@@ -309,7 +318,7 @@ public sealed class StagedArm
 }
 
 /// <summary>
-/// Stages and preflights a targeted native regression from its <see cref="RegressionEnvironment"/>, without the game, then
+/// Stages and preflights a targeted native regression from its <see cref="RegressionInputs"/> on the inventory's client environment, without the game, then
 /// hands one arm to the existing strict-pinned <see cref="ClientRounds"/>.
 /// <list type="number">
 /// <item>The fixture root must hold exactly one world with the manifest's UID (<see cref="FixtureLayout"/>).</item>
@@ -338,7 +347,23 @@ public sealed class TargetedRegression
     private static bool OwnedByCli(string path) => path.StartsWith("valheim.", StringComparison.Ordinal) || path.StartsWith("cli.", StringComparison.Ordinal);
     private static readonly string[] NotCopied = ["plugins", "patchers", "config", "scripts", "cache", "DumpedAssemblies", "LogOutput.log", "LogOutput.log.1", "LogOutput.log.2"];
 
-    public RegressionEnvironment Environment { get; }
+    public RegressionInputs Inputs { get; }
+    /// <summary>The client environment the run uses (<see cref="EnvironmentRecipe.Name"/>) and why.</summary>
+    public string ClientEnvironment { get; }
+    /// <summary>The prepared Valheim install the disposable copy is made from: the client environment's install. Only read.</summary>
+    public string Game { get; }
+    /// <summary>The disposable install this runner creates and owns, in the client environment's runtime.</summary>
+    public string Install { get; }
+    /// <summary>The client's ValheimCLI port: the client environment's.</summary>
+    public int Port { get; }
+    /// <summary>The client environment's loader package, when it names one.</summary>
+    public string? LoaderPackage { get; }
+    /// <summary>What the inventory detected and assumed for this machine (<see cref="EnvironmentInventory.Detected"/>), for a caller to print.</summary>
+    public IReadOnlyList<string> Detected { get; }
+    /// <summary>This machine's detected Steam <c>userdata</c>, which a registered character is checked against; null when none was detected.</summary>
+    public string? SteamUserData { get; internal init; }
+    // The client's save root (worlds_local, characters_local): this user's by default; tests replace it.
+    internal string? SaveDirectory { get; init; }
     /// <summary>
     /// The ValheimCLI capabilities the run uses: <see cref="CliCapabilities.HostedRounds"/> and the scenario's own whose owner is
     /// ValheimCLI's (<c>valheim.*</c> or <c>cli.*</c>). They are checked against <see cref="RegressionCli.Manifest"/> before
@@ -348,11 +373,35 @@ public sealed class TargetedRegression
     /// <summary>The scenario's capabilities of any other owner (a probe's or the mod's own extension): checked live before the first round.</summary>
     public IReadOnlyList<string> LiveOnlyCapabilities { get; }
 
-    public TargetedRegression(RegressionEnvironment environment, IEnumerable<string>? scenarioCapabilities = null)
+    /// <summary>
+    /// A regression of <paramref name="inputs"/> on <paramref name="inventory"/>'s client environment: <paramref name="clientEnvironment"/>,
+    /// or its first client environment. With no inventory, this machine (<see cref="EnvironmentInventory.Read(string?)"/>).
+    /// The client runs here, so the environment must be on this machine (a <c>local</c> host).
+    /// </summary>
+    public TargetedRegression(RegressionInputs inputs, IEnumerable<string>? scenarioCapabilities = null,
+        EnvironmentInventory? inventory = null, string? clientEnvironment = null)
     {
-        ArgumentNullException.ThrowIfNull(environment);
-        environment.Validate();
-        Environment = environment;
+        ArgumentNullException.ThrowIfNull(inputs);
+        inputs.Validate();
+        Inputs = inputs;
+        inventory ??= EnvironmentInventory.Read(null);
+        var recipe = clientEnvironment != null
+            ? inventory.Environments.FirstOrDefault(item => item.Name == clientEnvironment && item.Roles.Contains("client"))
+                ?? throw new ArgumentException($"The inventory has no client environment {clientEnvironment}.")
+            : inventory.Environments.FirstOrDefault(item => item.Roles.Contains("client"))
+                ?? throw new ArgumentException("The inventory has no client environment. " + string.Join(" ", inventory.Missing));
+        if (!inventory.Hosts.TryGetValue(recipe.Host, out var host) || host.Kind != "local")
+            throw new ArgumentException($"Client environment {recipe.Name} is on {recipe.Host}, not this machine. A targeted regression runs its client here; " +
+                "name a client environment on this machine.");
+        ClientEnvironment = recipe.Name;
+        Game = recipe.Install; Port = recipe.CliPort; LoaderPackage = recipe.LoaderPackage;
+        Install = Path.Combine(recipe.Runtime, "regression-" + inputs.Name);
+        SteamUserData = inventory.SteamUserData;
+        Detected = inventory.Detected;
+        if (RegressionInputs.Inside(Install, Game) || RegressionInputs.Inside(Game, Install))
+            throw new ArgumentException($"The disposable install {Install} and the game {Game} overlap: give the client environment a runtime outside its install.");
+        if (LoaderPackage != null && inputs.Configs.Keys.Any(name => name.Equals(BepInExConfig, StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException($"configs.{BepInExConfig}: the client environment's loader package pins BepInEx.cfg; edit and recapture that package instead of overriding its configuration during staging.");
         var scenario = (scenarioCapabilities ?? []).Distinct(StringComparer.Ordinal).ToList();
         if (scenario.Any(path => path == null || path.Split('/') is not [{ Length: > 0 }, { Length: > 0 }]))
             throw new ArgumentException("Name each scenario capability as owner/command.", nameof(scenarioCapabilities));
@@ -360,8 +409,18 @@ public sealed class TargetedRegression
         LiveOnlyCapabilities = scenario.Where(path => !OwnedByCli(path)).ToList();
     }
 
+    /// <summary>
+    /// The regression a run's <c>regression.json</c> describes, on the machine it ran on: the <c>environments.json</c> beside
+    /// it when there is one (written when the run overrode this machine's client), otherwise this machine.
+    /// </summary>
+    public static TargetedRegression Read(string inputsFile, IEnumerable<string>? scenarioCapabilities = null)
+    {
+        string machine = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputsFile))!, "environments.json");
+        return new TargetedRegression(RegressionInputs.Read(inputsFile), scenarioCapabilities, EnvironmentInventory.Read(File.Exists(machine) ? machine : null));
+    }
+
     /// <summary>Stages and preflights every arm in turn, without the game; returns them in manifest order (the last stays staged).</summary>
-    public IReadOnlyList<StagedArm> Preflight() => Environment.Mod.Arms.Keys.Select(Stage).ToList();
+    public IReadOnlyList<StagedArm> Preflight() => Inputs.Mod.Arms.Keys.Select(Stage).ToList();
 
     /// <summary>
     /// Stages <paramref name="arm"/> into the disposable install and runs every static check (see the class summary).
@@ -369,7 +428,7 @@ public sealed class TargetedRegression
     /// </summary>
     public StagedArm Stage(string arm)
     {
-        var env = Environment;
+        var env = Inputs;
         if (!env.Mod.Arms.TryGetValue(arm, out var chosen))
             throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.Mod.Arms.Keys)}.");
         var identity = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
@@ -440,13 +499,13 @@ public sealed class TargetedRegression
         string config = Path.Combine(install, "BepInEx", "config");
         foreach (var (name, source) in env.Configs) File.Copy(source, Path.Combine(config, name), overwrite: true);
         if (!env.Configs.ContainsKey(CliConfig))
-            File.WriteAllText(Path.Combine(config, CliConfig), $"[Server]\nEnabled = true\nPort = {env.Client.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n");
+            File.WriteAllText(Path.Combine(config, CliConfig), $"[Server]\nEnabled = true\nPort = {Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n");
         var configs = Directory.EnumerateFiles(config).Order(StringComparer.Ordinal)
             .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), WorldFixture.Hash(path), FileHash.Md5(path), null, [])).ToList();
 
         RequireDependencies(staged);
         RequireReferences(install, staged);
-        string saveDirectory = env.Client.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(install));
+        string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(install));
         string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
         if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
         else if (!File.Exists(character))
@@ -454,7 +513,7 @@ public sealed class TargetedRegression
         var installPins = InstallPins.Of(install);
         var plan = new ClientRunPlan
         {
-            Mode = "owned", Install = install, Port = env.Client.Port, Character = env.Client.Character,
+            Mode = "owned", Install = install, Port = Port, Character = env.Client.Character,
             LaunchArguments = env.Client.LaunchArguments, StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
             Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),
             Patchers = patchers.Select(file => Path.GetFileName(file.File.File)).ToArray(),
@@ -464,7 +523,7 @@ public sealed class TargetedRegression
             HostWorld = new HostWorldPlan
             {
                 World = new PinnedDirectory { Source = Path.GetFullPath(env.Fixture.Root), Sha256 = new Dictionary<string, string>(fixture) },
-                WorldUid = env.Fixture.WorldUid, SaveDirectory = env.Client.SaveDirectory,
+                WorldUid = env.Fixture.WorldUid, SaveDirectory = SaveDirectory,
             },
         };
         plan.Validate();
@@ -499,14 +558,16 @@ public sealed class TargetedRegression
         RegisteredCharacterStage? characterStage = null;
         try
         {
-            if (Environment.LoaderPackage is { } loaderPath)
+            report.Provenance["clientEnvironment"] = ClientEnvironment;
+            if (LoaderPackage is { } loaderPath)
                 report.Provenance["bepInExPackage"] = BepInExLoaderPackage.Read(loaderPath).Identity;
-            if (Environment.Client.CharacterStore is { } store)
+            if (Inputs.Client.CharacterStore is { } store)
             {
-                string save = Environment.Client.SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(Environment.Game));
+                string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(Game));
                 report.Step(StepPhase.Setup, "stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
-                    store, Environment.Client.Character, Path.Combine(save, "characters_local"),
-                    Environment.Client.SteamUserDataDirectory!, Environment.Client.Character));
+                    store, Inputs.Client.Character, Path.Combine(save, "characters_local"),
+                    SteamUserData ?? throw new DirectoryNotFoundException("No Steam userdata was detected on this machine; a registered character is checked against it for a same-named Steam Cloud character."),
+                    Inputs.Client.Character));
                 report.Provenance["characterSource"] = "registered disposable store";
             }
             StagedArm? stagedArm = null;
@@ -518,7 +579,7 @@ public sealed class TargetedRegression
             {
                 staged.Verify();
                 var client = ClientSession.Open(staged.Plan, output, logs, cancellation);
-                if (Environment.LoaderPackage != null)
+                if (LoaderPackage != null)
                 {
                     MarkLoaderSmoke(staged.Plan.Install);
                     report.Provenance["bepInExMenuSmoke"] = "passed: fresh BepInEx log, pinned plugins and main menu";
@@ -543,7 +604,7 @@ public sealed class TargetedRegression
             if (characterStage != null)
                 try { report.Step(StepPhase.Cleanup, "remove only the staged test character", characterStage.Dispose); }
                 catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure(StepPhase.Cleanup, "character cleanup failed", error); }
-            if (logs.Count != 0) report.ScanLogs(logs, Environment.LogScan);
+            if (logs.Count != 0) report.ScanLogs(logs, Inputs.LogScan);
             // Kept for the next arm. Whoever removes it (TargetedRegression.Remove) records that in the last arm's report.
             report.Provenance["disposableInstall"] = "kept after this arm";
             report.Write(output);
@@ -556,12 +617,12 @@ public sealed class TargetedRegression
     /// happened to it (<c>disposableInstall</c>) and writes that report again to <paramref name="lastArmOutput"/>, so its
     /// <c>result.json</c> says whether cleanup was verified. Rethrows a refusal after recording it.
     /// </summary>
-    public static void Remove(RegressionEnvironment environment, ScenarioReport lastArm, string lastArmOutput)
+    public void Remove(ScenarioReport lastArm, string lastArmOutput)
     {
         ArgumentNullException.ThrowIfNull(lastArm);
         try
         {
-            lastArm.Step(StepPhase.Cleanup, "remove the disposable install", () => Remove(environment));
+            lastArm.Step(StepPhase.Cleanup, "remove the disposable install", Remove);
             lastArm.Provenance["disposableInstall"] = "removed";
         }
         catch (Exception error)
@@ -573,9 +634,9 @@ public sealed class TargetedRegression
     }
 
     /// <summary>Deletes the disposable install, only when it carries this tool's marker.</summary>
-    public static void Remove(RegressionEnvironment environment)
+    public void Remove()
     {
-        string install = Path.GetFullPath(environment.Install);
+        string install = Path.GetFullPath(Install);
         if (!Directory.Exists(install)) return;
         RequireOwned(install);
         Directory.Delete(install, recursive: true);
@@ -596,13 +657,13 @@ public sealed class TargetedRegression
     // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build and loader are the selected ones.
     private string PrepareInstall()
     {
-        var env = Environment;
-        string game = Path.GetFullPath(env.Game), install = Path.GetFullPath(env.Install);
+        var env = Inputs;
+        string game = Path.GetFullPath(Game), install = Path.GetFullPath(Install);
         if (!Directory.Exists(game)) throw new DirectoryNotFoundException($"game: {game} does not exist. Give the Valheim install to copy into the disposable run.");
-        var package = env.LoaderPackage == null ? null : BepInExLoaderPackage.Read(env.LoaderPackage);
-        if (package != null && (RegressionEnvironment.Inside(package.Root, game) || RegressionEnvironment.Inside(game, package.Root)))
+        var package = LoaderPackage == null ? null : BepInExLoaderPackage.Read(LoaderPackage);
+        if (package != null && (RegressionInputs.Inside(package.Root, game) || RegressionInputs.Inside(game, package.Root)))
             throw new InvalidOperationException($"The pinned BepInEx package {package.Root} overlaps the game {game}; extract one reviewed loader set outside the live game before staging.");
-        if (package != null && (RegressionEnvironment.Inside(package.Root, install) || RegressionEnvironment.Inside(install, package.Root)))
+        if (package != null && (RegressionInputs.Inside(package.Root, install) || RegressionInputs.Inside(install, package.Root)))
             throw new InvalidOperationException($"The disposable install {install} overlaps the pinned BepInEx package {package.Root}; keep the package outside the install so cleanup cannot delete it.");
         if (package == null && !Directory.Exists(Path.Combine(game, InstallPins.CoreDirectory)))
             throw new InvalidOperationException($"game: {game} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first; the disposable install is copied from it.");
@@ -804,7 +865,7 @@ public sealed class TargetedRegression
         foreach (string folder in new[] { managed, Path.Combine(install, InstallPins.CoreDirectory) })
             foreach (string dll in Directory.EnumerateFiles(folder, "*.dll")) provided.Add(Path.GetFileNameWithoutExtension(dll));
         foreach (var (_, metadata) in staged) provided.Add(metadata.AssemblyName);
-        provided.UnionWith(Environment.OptionalReferences);
+        provided.UnionWith(Inputs.OptionalReferences);
         var missing = staged.SelectMany(entry => entry.Metadata.References.Where(reference => !provided.Contains(reference)).Select(reference => $"{entry.File.Path} references assembly {reference}")).ToList();
         if (missing.Count != 0)
             throw new InvalidOperationException($"Assemblies the staged DLLs reference are not in the game's Managed folder, BepInEx/core or the allowlist: {string.Join("; ", missing)}. " +

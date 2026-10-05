@@ -46,7 +46,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         plan.ApplyTo(environment, Path.Combine(_rig.Root, "selected-cli.json"));
         Assert.Single(environment.Plugins);
         Assert.Equal("Dependency.dll", Path.GetFileName(environment.Plugins[0].File));
-        new TargetedRegression(environment).Stage("parent");
+        _rig.Regression(environment).Stage("parent");
         File.AppendAllText(plan.Plugins[0].File, "changed");
         Assert.Contains("missing or changed", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(lockFile)).Message);
     }

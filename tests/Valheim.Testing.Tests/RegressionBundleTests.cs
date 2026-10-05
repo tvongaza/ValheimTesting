@@ -27,10 +27,10 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("Nothing in this directory has been published", readme);
         Assert.DoesNotContain("has not itself been run", readme); // Not a port.
         string template = File.ReadAllText(Path.Combine(output, "regression.template.json"));
-        Assert.Contains("\"game\": \"<full path of a prepared Valheim install", template);
+        Assert.DoesNotContain("\"game\"", template); // The inputs name no machine; the reviewer's inventory supplies it.
         Assert.Contains(WorldFixture.Hash(_rig.Rig.Candidate), template); // Hashes are kept; paths are not.
         foreach (string file in files) Assert.DoesNotContain(_rig.Root, File.ReadAllText(Path.Combine(output, file)));
-        Assert.Contains("game", manifest.EnvironmentOnly);
+        Assert.Contains(manifest.EnvironmentOnly, field => field.StartsWith("the client environment", StringComparison.Ordinal));
         Assert.Contains("client.character", manifest.EnvironmentOnly);
         Assert.Null(manifest.Native);
         Assert.Equal(new[] { "parent", "parent", "parent", "parent", "candidate", "candidate", "candidate", "candidate" }, manifest.Evidence.Select(entry => entry.Arm));
@@ -323,6 +323,11 @@ internal sealed class BundleRig : IDisposable
     public BundleRig()
     {
         Rig.Manifest().Write(EnvironmentPath);
+        // The machine the run used, beside its inputs, as a run that overrode this machine's client writes it.
+        File.WriteAllText(Path.Combine(Root, "environments.json"), JsonSerializer.Serialize(new
+        {
+            environments = new[] { new { name = "rig-client", roles = new[] { "client" }, install = Rig.Game, runtime = Rig.Runtime, cliPort = 5560 } },
+        }));
         Directory.CreateDirectory(Path.Combine(Root, "runner"));
         File.WriteAllText(Path.Combine(Root, "runner", "Program.cs"), "using Valheim.Testing.Game;\n\n// The runner's entry point.\nConsole.WriteLine(new ScenarioReport(Scenario.Name).Passed ? \"PASS\" : \"FAIL\");\n");
         Scenario("");
@@ -339,7 +344,7 @@ internal sealed class BundleRig : IDisposable
     /// <summary>One arm's evidence as a template run writes it, its trace pinning <paramref name="md5"/> for the mod (the arm's own by default).</summary>
     public void Evidence(string arm, bool pass, string? md5 = null, string extraPins = "", string toolkit = "Valheim.Testing.Game 0.1.0-preview.17", string error = "2 markers stand there; expected 1.")
     {
-        var staged = new TargetedRegression(Rig.Manifest()).Stage(arm);
+        var staged = Rig.Regression(Rig.Manifest()).Stage(arm);
         string directory = Path.Combine(Root, "evidence", arm);
         if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         Directory.CreateDirectory(directory);

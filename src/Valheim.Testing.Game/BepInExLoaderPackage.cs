@@ -67,7 +67,7 @@ public sealed class BepInExLoaderPackage
         foreach (var (relative, sha256) in Files)
         {
             string path = Path.GetFullPath(Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar)));
-            if (!Allowed(relative) || !RegressionEnvironment.Inside(path, Root) ||
+            if (!Allowed(relative) || !RegressionInputs.Inside(path, Root) ||
                 relative != Path.GetRelativePath(Root, path).Replace('\\', '/'))
                 throw new InvalidDataException($"{relative} is not a loader/core file inside the BepInEx package.");
             if (sha256.Length != 64 || !sha256.All(Uri.IsHexDigit) || !File.Exists(path) || !WorldFixture.Hash(path).Equals(sha256, StringComparison.OrdinalIgnoreCase))

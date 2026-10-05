@@ -8,7 +8,7 @@ using Valheim.Testing.Game;
 /// </summary>
 internal static class SmokeProject
 {
-    // The consumer pins the Valheim.Testing.Game this tool was built with and runs in process, so the environment.json or
+    // The consumer pins the Valheim.Testing.Game this tool was built with and runs in process, so the regression.json or
     // plan.json the tool writes and the consumer's reader are one version by construction (one source: the Game assembly).
     internal static readonly string GameVersion = typeof(TargetedRegression).Assembly
         .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
@@ -26,7 +26,7 @@ internal static class SmokeProject
     internal static void PrintHint(bool server)
     {
         if (Unpublishable(GameVersion) == null)
-            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "plan" : "environment")}.json; needs NuGet.org).");
+            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "campaign" : "regression")}.json; needs NuGet.org).");
     }
 
     internal static async Task<int> InitAsync(string[] args)
@@ -153,17 +153,16 @@ internal static class SmokeProject
             """ : """
             using Valheim.Testing.Game;
 
-            // Run this with the environment.json a `valheim-test start` run wrote beside its evidence.
-            // Supply a fresh result directory for each run; the game install and selected DLLs remain pinned.
-            if (args is not [var environmentFile, var resultDirectory])
+            // Run this with the regression.json a `valheim-test start` run wrote beside its evidence (and its environments.json,
+            // when --game overrode this machine's Valheim). Supply a fresh result directory for each run; the selected DLLs remain pinned.
+            if (args is not [var inputsFile, var resultDirectory])
             {
-                Console.Error.WriteLine("Usage: dotnet run -- environment.json NEW_RESULT_DIRECTORY");
+                Console.Error.WriteLine("Usage: dotnet run -- regression.json NEW_RESULT_DIRECTORY");
                 return 2;
             }
             using var cancellation = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
-            var environment = RegressionEnvironment.Read(environmentFile);
-            var regression = new TargetedRegression(environment);
+            var regression = TargetedRegression.Read(inputsFile);
             var report = regression.Run("smoke", resultDirectory, "selected plugin loads and my mod's behavior",
                 ["first"], round =>
                 {
@@ -177,11 +176,11 @@ internal static class SmokeProject
 
             This project restores `Valheim.Testing.Game` {{GameVersion}} from NuGet.org only: the version the
             `valheim-test` that created it runs, so it reads that tool's files. Add your mod-specific observations in
-            `Program.cs`, then run from this directory with the {{(server ? "campaign" : "environment")}}.json a
+            `Program.cs`, then run from this directory with the {{(server ? "campaign" : "regression")}}.json a
             `valheim-test {{(server ? "server-load" : "start")}}` run wrote and a fresh result directory{{(server ? " (on a Mac, its plan.json)" : "")}}:
 
             ```sh
-            dotnet run -c Release -- RUN_OUTPUT/{{(server ? "campaign" : "environment")}}.json RUN_OUTPUT/my-assertions-1
+            dotnet run -c Release -- RUN_OUTPUT/{{(server ? "campaign" : "regression")}}.json RUN_OUTPUT/my-assertions-1
             ```
 
             Keep the fixture, installed DLL hashes and ValheimCLI pins fixed while investigating a regression.

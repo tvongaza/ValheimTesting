@@ -121,23 +121,23 @@ public sealed class NativeDependencyLock
     }
 
     /// <summary>Fills a targeted run's dependency and ValheimCLI fields from this lock, leaving its fixture and mod arms to the caller.</summary>
-    public void ApplyTo(RegressionEnvironment environment, string cliManifestPath)
+    public void ApplyTo(RegressionInputs inputs, string cliManifestPath)
     {
-        ArgumentNullException.ThrowIfNull(environment);
+        ArgumentNullException.ThrowIfNull(inputs);
         if (!Ready) throw new InvalidOperationException($"Resolve the {Gaps.Count} dependency choice(s) before applying this lock.");
         RequireExactCliSet();
         var core = CliFiles.Where(file => CliManifest.Files.Any(entry => entry.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)
             && entry.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal))).ToList();
         if (core.Count != 1) throw new InvalidDataException("The dependency lock needs exactly one ValheimCLI core.");
         CliManifest.Write(cliManifestPath);
-        environment.Cli = new RegressionCli
+        inputs.Cli = new RegressionCli
         {
             Core = new RegressionFile { File = core[0].File, Sha256 = core[0].Sha256 },
             Packs = CliFiles.Where(file => file != core[0]).Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }).ToList(),
             Manifest = Path.GetFullPath(cliManifestPath),
         };
-        environment.Plugins = Plugins.Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }).ToList();
-        environment.OptionalReferences = [.. OptionalReferences];
+        inputs.Plugins = Plugins.Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }).ToList();
+        inputs.OptionalReferences = [.. OptionalReferences];
     }
 
     public void Write(string path) => File.WriteAllText(path, JsonSerializer.Serialize(this, Json) + "\n");
