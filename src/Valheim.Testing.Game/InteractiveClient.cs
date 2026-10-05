@@ -524,8 +524,13 @@ internal static class InteractiveScripts
 {
     // The user's desktop sessions (sessions other than 0, where services and SSH run) in which $me runs processes, optionally
     // only those running $image; tasklist reports them without administrator rights. Needs $me and $system. The client's and
-    // the server's tasks both count sessions with it.
+    // the server's tasks both count sessions with it. Test-VtTaskEnded: whether a task is Ready (3) again after a run of its own,
+    // which a task that ended between two looks shows only by its result: anything but "has not run" (0x41303), "running"
+    // (0x41301) or "queued" (0x41325).
     internal const string WindowsSessions = """
+        function Test-VtTaskEnded($state, $code) {
+            ($state -eq 3) -and (@(0x41303, 0x41301, 0x41325) -notcontains [int64]$code)
+        }
         function Get-VtSessions([string]$image) {
             $arguments = @('/FI', ('USERNAME eq ' + $me), '/FI', 'SESSION ne 0', '/FO', 'CSV', '/NH')
             if ($image) { $arguments += @('/FI', ('IMAGENAME eq ' + $image)) }
@@ -593,7 +598,7 @@ internal static class InteractiveScripts
             $settings.Hidden = $true
             $action = $definition.Actions.Create(0)
             $action.Path = Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'
-            $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $launcherFile + '" "' + $dir + '"'
+            $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $launcherFile + '"'
             $action.WorkingDirectory = $dir
             # 2: create only (never replace a task); 3: interactive token, so no password is given or stored.
             $registered = $folder.RegisterTaskDefinition($task, $definition, 2, $me, $null, 3)
@@ -615,7 +620,7 @@ internal static class InteractiveScripts
                         $state = $registered.State
                         $result = '0x{0:X8}' -f $registered.LastTaskResult
                         if ($state -eq 4) { $running = $true }
-                        elseif ($running -and -not [IO.File]::Exists($pidFile) -and -not [IO.File]::Exists($errorFile)) {
+                        elseif (($running -or (Test-VtTaskEnded $state $registered.LastTaskResult)) -and -not [IO.File]::Exists($pidFile) -and -not [IO.File]::Exists($errorFile)) {
                             # The launcher moves its file into place before it ends, so an ended task without one never started the game.
                             $verdict = 'VT-INTERACTIVE failed the launcher ended without starting the game (task result ' + $result + ')'; break
                         }
@@ -641,9 +646,10 @@ internal static class InteractiveScripts
 
     // Runs in the desktop session (Windows PowerShell 5.1, started by the task). It reads the spec, takes the secrets from their
     // file and deletes it, starts the game and records its ID and start time, or the error (each moved into place, so the file is complete).
+    // Its directory is its own ($PSScriptRoot), never an argument: the task's command line carries only the quoted -File path.
     public static readonly string WindowsLauncher = """
-        param([string]$dir)
         $ErrorActionPreference = 'Stop'
+        $dir = $PSScriptRoot
         $utf8 = New-Object Text.UTF8Encoding $false
         try {
             $start = New-Object Diagnostics.ProcessStartInfo
