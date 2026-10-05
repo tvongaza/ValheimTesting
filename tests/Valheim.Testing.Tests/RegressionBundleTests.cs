@@ -21,7 +21,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("<PackageReference Include=\"Valheim.Testing.Game\" Version=\"[0.1.0-preview.17]\" />", File.ReadAllText(Path.Combine(output, "ExampleRegression.csproj")));
         string readme = File.ReadAllText(Path.Combine(output, "README.md"));
         Assert.Contains("This bundle holds 6 files", readme);
-        Assert.Contains($"| parent | `p1` | `{PluginPins.Md5(_rig.Rig.Parent)}` | `{WorldFixture.Hash(_rig.Rig.Parent)}` | fail | **fail** | 1/2 | first: exactly one marker stands there: 2 markers stand there; expected 1. |", readme);
+        Assert.Contains($"| parent | `p1` | `{FileHash.Md5(_rig.Rig.Parent)}` | `{WorldFixture.Hash(_rig.Rig.Parent)}` | fail | **fail** | 1/2 | first: exactly one marker stands there: 2 markers stand there; expected 1. |", readme);
         Assert.Contains("| pass | **pass** | 2/2 |  |", readme);
         Assert.Contains("only the mod under test differs", readme);
         Assert.Contains("Nothing in this directory has been published", readme);
@@ -174,8 +174,8 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("result.json records pinning none", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), _rig.Output(), _rig.Sources)).Message);
         File.WriteAllText(result, original);
         // A trace of another build.
-        _rig.Evidence("parent", pass: false, md5: PluginPins.Md5(_rig.Rig.Candidate));
-        Assert.Contains($"the command trace pinned example.mod={PluginPins.Md5(_rig.Rig.Candidate)}, not the arm's {PluginPins.Md5(_rig.Rig.Parent)}",
+        _rig.Evidence("parent", pass: false, md5: FileHash.Md5(_rig.Rig.Candidate));
+        Assert.Contains($"the command trace pinned example.mod={FileHash.Md5(_rig.Rig.Candidate)}, not the arm's {FileHash.Md5(_rig.Rig.Parent)}",
             Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), _rig.Output(), _rig.Sources)).Message);
         _rig.Evidence("parent", pass: false);
         // A declared result the evidence does not hold.
@@ -188,8 +188,8 @@ public sealed class RegressionBundleTests : IDisposable
             Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(spec, _rig.Output(), _rig.Sources)).Message);
         // A declared hash the evidence does not hold.
         spec = _rig.Spec();
-        spec.Arms["parent"].Md5 = PluginPins.Md5(_rig.Rig.Candidate);
-        Assert.Contains($"the declared build is not the one that ran: md5 is {PluginPins.Md5(_rig.Rig.Parent)} in run-manifest.json, {PluginPins.Md5(_rig.Rig.Candidate)} in the spec",
+        spec.Arms["parent"].Md5 = FileHash.Md5(_rig.Rig.Candidate);
+        Assert.Contains($"the declared build is not the one that ran: md5 is {FileHash.Md5(_rig.Rig.Parent)} in run-manifest.json, {FileHash.Md5(_rig.Rig.Candidate)} in the spec",
             Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(spec, _rig.Output(), _rig.Sources)).Message);
         File.Delete(Path.Combine(_rig.Root, "evidence", "parent", "client-commands.jsonl"));
         Assert.Contains("client-commands.jsonl is missing", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), _rig.Output(), _rig.Sources)).Message);
@@ -198,7 +198,7 @@ public sealed class RegressionBundleTests : IDisposable
     [Fact] public void OnlyTheModMayDifferBetweenTheArms()
     {
         string trace = Path.Combine(_rig.Root, "evidence", "candidate", "client-commands.jsonl");
-        string dependency = PluginPins.Md5(Path.Combine(_rig.Root, "deps", "Dependency.dll"));
+        string dependency = FileHash.Md5(Path.Combine(_rig.Root, "deps", "Dependency.dll"));
         File.WriteAllText(trace, File.ReadAllText(trace).Replace("example.dependency=" + dependency, "example.dependency=" + new string('0', 32)));
         var error = Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), _rig.Output(), _rig.Sources));
         Assert.Contains($"More than the mod under test differs between the arms' strict pins: example.dependency is {dependency} in parent and {new string('0', 32)} in candidate", error.Message);
@@ -222,8 +222,8 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("The native run used a hand-written runner with ValheimTesting source 0123456.", readme);
         Assert.Contains("**which has not itself been run in the game**", readme);
         Assert.Contains("- Port and character moved to the environment manifest.", readme);
-        Assert.Contains($"| parent | `p1` | `{PluginPins.Md5(_rig.Rig.Parent)}` | `{WorldFixture.Hash(_rig.Rig.Parent)}` (declared) |", readme);
-        Assert.Contains($"| candidate | `c1` | `{PluginPins.Md5(_rig.Rig.Candidate)}` | not recorded |", readme);
+        Assert.Contains($"| parent | `p1` | `{FileHash.Md5(_rig.Rig.Parent)}` | `{WorldFixture.Hash(_rig.Rig.Parent)}` (declared) |", readme);
+        Assert.Contains($"| candidate | `c1` | `{FileHash.Md5(_rig.Rig.Candidate)}` | not recorded |", readme);
         Assert.Equal(WorldFixture.Hash(native), manifest.Native!.RunnerSha256);
         Assert.Contains(manifest.Files, file => file.Path == "Scenario.cs" && file.Origin.StartsWith("the port", StringComparison.Ordinal));
         Assert.Contains(manifest.Files, file => file.Path == "Program.cs" && file.Origin.StartsWith("the harness", StringComparison.Ordinal));
@@ -407,10 +407,10 @@ internal sealed class BundleRig : IDisposable
         spec.Toolkit = new() { Commit = Commit };
         spec.Deny = ["smoketest"];
         spec.Arms["parent"].Commit = "p1";
-        spec.Arms["parent"].Md5 = PluginPins.Md5(Rig.Parent);
+        spec.Arms["parent"].Md5 = FileHash.Md5(Rig.Parent);
         spec.Arms["parent"].Sha256 = WorldFixture.Hash(Rig.Parent);
         spec.Arms["candidate"].Commit = "c1";
-        spec.Arms["candidate"].Md5 = PluginPins.Md5(Rig.Candidate);
+        spec.Arms["candidate"].Md5 = FileHash.Md5(Rig.Candidate);
         spec.Native = new()
         {
             Runner = native, RanWith = "ValheimTesting source 0123456", Excerpts = [new() { From = 4, To = 4, In = "Scenario.cs" }],

@@ -588,7 +588,7 @@ public static class RegressionBundle
             ("result.json", result.Provenance.GetValueOrDefault("modSha256")), ("the spec", arm.Sha256));
         sha256 = sha256?.ToLowerInvariant();
         if (sha256Source == "the spec") sha256Source = "declared in the spec; not in the evidence";
-        if (declared != null && File.Exists(declared.File) && (!WorldFixture.Hash(declared.File).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase) || PluginPins.Md5(declared.File) != md5))
+        if (declared != null && File.Exists(declared.File) && (!WorldFixture.Hash(declared.File).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase) || FileHash.Md5(declared.File) != md5))
             throw new InvalidOperationException($"{where}: {declared.File} is not the declared build (sha256 {declared.Sha256.ToLowerInvariant()}, md5 {md5}).");
         var guids = (run?.ModPlugin ?? spec.ModPlugin ?? throw new InvalidOperationException($"{where}: no run-manifest.json; set modPlugin in the spec to the mod's plugin GUID."))
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);

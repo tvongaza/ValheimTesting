@@ -115,6 +115,38 @@ public sealed class InstallPins
     }
 
     /// <summary>
+    /// Plugin pins derived from the staged files instead of typed by hand (a plan's <c>pins</c>, not part of an
+    /// <see cref="InstallPins"/> object): each value of <paramref name="files"/> is a path
+    /// relative to <paramref name="install"/> (<c>BepInEx/plugins/Jotunn.dll</c>) and becomes that file's MD5, the value
+    /// <c>cli_manifest</c> and <c>cli_expect</c> compare (<see cref="FileHash.Md5"/>), or is <c>absent</c> and stays
+    /// so. Refuses a path that is not a file there, naming the DLLs its folder holds, so a mistyped candidate name fails before
+    /// anything launches rather than as a pin the game cannot meet.
+    /// </summary>
+    public static Dictionary<string, string> Plugins(string install, IReadOnlyDictionary<string, string> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        install = Path.GetFullPath(install);
+        var pins = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (plugin, file) in files)
+        {
+            if (file == "absent") { pins[plugin] = file; continue; }
+            if (string.IsNullOrWhiteSpace(file) || Path.IsPathRooted(file)) throw new ArgumentException($"{plugin}: give its file relative to the install, or absent.", nameof(files));
+            string path = Path.GetFullPath(Path.Combine(install, file.Replace('\\', Path.DirectorySeparatorChar)));
+            string relative = Path.GetRelativePath(install, path);
+            if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new ArgumentException($"{plugin}: {file} leaves the install; give a file under {install}.", nameof(files));
+            if (!File.Exists(path))
+            {
+                string folder = Path.GetDirectoryName(path)!;
+                var there = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.dll").Select(Path.GetFileName).OfType<string>().Order(StringComparer.Ordinal).ToList() : new List<string>();
+                throw new FileNotFoundException($"{plugin}: {file} is not in the install {install}; its folder holds {(there.Count == 0 ? "no DLL" : string.Join(", ", there))}. Name the file the run stages.", path);
+            }
+            pins[plugin] = FileHash.Md5(path);
+        }
+        return pins;
+    }
+
+    /// <summary>
     /// Refuses the install at <paramref name="root"/> unless its game assembly, loader and patchers are these pins,
     /// naming each that differs with the value found. <paramref name="kind"/> names the install ("runtime", "client install").
     /// Returns what it found.

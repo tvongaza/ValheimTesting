@@ -37,7 +37,7 @@ public sealed class TargetedRegressionTests : IDisposable
         // Every staged plugin is pinned under its declared GUID by MD5, and nothing else: no absent pins for other mods.
         Assert.Equal(new[] { "example.dependency", "example.mod", "testing.probe", "valheimCLI.standard", "valheimCLI.valheimCLI" }, parent.Plan.Pins.Keys.Order(StringComparer.Ordinal));
         Assert.DoesNotContain("absent", parent.Plan.Pins.Values);
-        Assert.Equal(PluginPins.Md5(_rig.Parent), parent.Plan.Pins["example.mod"]);
+        Assert.Equal(FileHash.Md5(_rig.Parent), parent.Plan.Pins["example.mod"]);
         Assert.Equal(_rig.Uid, parent.Plan.HostWorld!.WorldUid);
         Assert.Equal(CliCapabilities.HostedRounds, parent.Manifest.Capabilities);
         Assert.Equal(new[] { "example.probe/read" }, parent.Manifest.LiveOnlyCapabilities); // A probe's command: live only.
@@ -55,8 +55,8 @@ public sealed class TargetedRegressionTests : IDisposable
 
         var arms = regression.Preflight();
         Assert.Equal(new[] { "parent", "candidate" }, arms.Select(arm => arm.Arm));
-        Assert.Equal(PluginPins.Md5(_rig.Candidate), arms[1].Plan.Pins["example.mod"]);
-        Assert.Equal(PluginPins.Md5(_rig.Candidate), PluginPins.Md5(Path.Combine(plugins, "ExampleMod.dll"))); // Only the mod DLL changed.
+        Assert.Equal(FileHash.Md5(_rig.Candidate), arms[1].Plan.Pins["example.mod"]);
+        Assert.Equal(FileHash.Md5(_rig.Candidate), FileHash.Md5(Path.Combine(plugins, "ExampleMod.dll"))); // Only the mod DLL changed.
         Assert.Equal(arms[0].Plan.Pins.Where(pin => pin.Key != "example.mod"), arms[1].Plan.Pins.Where(pin => pin.Key != "example.mod"));
     }
 
