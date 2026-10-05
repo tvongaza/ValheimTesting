@@ -616,6 +616,7 @@ static class Valheim.Testing.Game.DungeonRooms
 sealed class Valheim.Testing.Game.EnvironmentInventory
   method System.Void .ctor()
   method System.Void Validate(System.String directory)
+  method static System.Threading.Tasks.Task`1<System.Boolean> WriteRunStatusAsync(System.String inventoryPath, System.IO.TextWriter output, System.Boolean json = false, System.Threading.CancellationToken cancellation = null)
   method static Valheim.Testing.Game.EnvironmentInventory Read(System.String path)
   property System.Collections.Generic.Dictionary`2<System.String,Valheim.Testing.Game.HostProfile> Hosts { get; set; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> Detected { get; }

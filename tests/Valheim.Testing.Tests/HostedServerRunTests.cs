@@ -61,6 +61,11 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>Simulates a transport failure after the remote staging directory has been populated.</summary>
     public Action<string>? AfterShip { get; set; }
     public List<(string Game, string Start)> Stops { get; } = [];
+    /// <summary>What the process check reads as a running process's command-line hash, by process ID; by default <see cref="CommandLineSha256"/> of its ID.</summary>
+    public Dictionary<int, string> CommandLines { get; } = [];
+    public static string CommandLineSha256(string pid) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("fake game " + pid)));
+    /// <summary>Starts a process this host reports as running until <paramref name="exit"/> completes; for journal tests.</summary>
+    public void Running(int pid, string start, Task<int> exit) { lock (_sync) _processes[pid] = (start, ct => exit.WaitAsync(ct), () => { }); }
     public IReadOnlyList<string> Scripts { get { lock (_sync) return Runs.Select(run => run.Script).ToList(); } }
 
     public string Local(string hostPath) => Path.Combine([_mirror, .. hostPath.Replace(':', '/').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)]);
@@ -123,7 +128,11 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, RunJournal.BashAppend) ? "journal" :
         ReferenceEquals(script, RunJournal.WindowsAppend) ? "journal" :
         ReferenceEquals(script, RunJournal.BashRead) ? "journal-read" :
-        ReferenceEquals(script, RunJournal.WindowsRead) ? "journal-read" : "other";
+        ReferenceEquals(script, RunJournal.WindowsRead) ? "journal-read" :
+        ReferenceEquals(script, RunJournal.BashReadAll) ? "journal-read-all" :
+        ReferenceEquals(script, RunJournal.WindowsReadAll) ? "journal-read-all" :
+        ReferenceEquals(script, HostProcessProbe.Bash) ? "process-probe" :
+        ReferenceEquals(script, HostProcessProbe.Windows) ? "process-probe" : "other";
 
     public async Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default)
     {
@@ -246,6 +255,30 @@ internal sealed class FakeServerHost : IGameHost
                         foreach (string line in File.ReadAllLines(file).Where(line => line.Length != 0))
                             text.Append("VT-JOURNAL ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(line))).Append('\n');
                 return Ok(text.Append("VT-JOURNAL-END\n").ToString());
+            }
+            case "journal-read-all":
+            {
+                string directory = Local(v["journal"]);
+                var text = new StringBuilder();
+                if (Directory.Exists(directory))
+                    foreach (string file in Directory.GetFiles(directory, "*.jsonl", SearchOption.AllDirectories))
+                        text.Append("VT-JOURNAL-FILE ").Append(Convert.ToBase64String(File.ReadAllBytes(file))).Append('\n');
+                return Ok(text.Append("VT-JOURNAL-END\n").ToString());
+            }
+            // As HostProcessProbe's scripts do: a process this host started runs until it exits, with a command line of its ID.
+            case "process-probe":
+            {
+                var text = new StringBuilder();
+                foreach (string pair in v["processes"].Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string id = pair[..pair.IndexOf(':')], start = pair[(pair.IndexOf(':') + 1)..], asked = start.Length == 0 ? "-" : start;
+                    (string Start, Func<CancellationToken, Task<int>> Exit, Action Stop) process;
+                    bool known; lock (_sync) known = _processes.TryGetValue(int.Parse(id), out process);
+                    if (!known || process.Exit(CancellationToken.None).IsCompleted) text.Append($"VT-PROC {id} {asked} gone - -\n");
+                    else if (start.Length != 0 && start != process.Start) text.Append($"VT-PROC {id} {asked} reused {process.Start} -\n");
+                    else text.Append($"VT-PROC {id} {asked} same {process.Start} {CommandLines.GetValueOrDefault(int.Parse(id)) ?? CommandLineSha256(id)}\n");
+                }
+                return Ok(text.Append("VT-PROC-END\n").ToString());
             }
             case "list":
             {
@@ -390,7 +423,11 @@ internal sealed class FakeServerHost : IGameHost
         lock (_sync) Claims.Add(claimant);
         return Task.FromResult(new HostLock(this, lockPath, claimant, timeout));
     }
-    public Task<HostLockResult> CheckLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
+    public Task<HostLockResult> CheckLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        bool held; lock (_sync) held = Claims.Contains(owner) && !Releases.Contains(owner);
+        return Task.FromResult(held ? new HostLockResult(HostLockState.Yours, owner, "yours") : new HostLockResult(HostLockState.Free, null, "free"));
+    }
     public Task<HostLockResult> ReleaseLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default)
     {
         lock (_sync) Releases.Add(owner);
@@ -962,6 +999,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted, JournalEntry.ProcessIntended, JournalEntry.ProcessStarted],
             journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
         Assert.Equal(RunDirectory + "/boot-2", journal.Where(record => record.Actor == "server").Last().Entry.Fields["bootDirectory"]);
+        // Each started process carries its command line's hash, read on the host right after the start (#257 Q2's third fact).
+        Assert.All(journal.Where(record => record.Entry.Kind == JournalEntry.ProcessStarted), record =>
+            Assert.Equal(FakeServerHost.CommandLineSha256(record.Entry.Fields["pid"]), record.Entry.Fields["commandLineSha256"]));
         Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased, JournalEntry.RunEnded], journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
         Assert.Equal("passed", journal.Last(record => record.Actor == "run").Entry.Fields["state"]);
         Assert.True(JournalIndex(host, JournalEntry.ProcessIntended) < host.Runs.ToList().FindIndex(run => run.Script == "start"));
@@ -1313,6 +1353,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var clientJournal = await RunJournal.ReadAsync(clientHost, "/home/tester/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
         Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
+        Assert.Equal(FakeServerHost.CommandLineSha256("77"), clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["commandLineSha256"]);
         Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased], clientJournal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
         Assert.True(JournalIndex(clientHost, JournalEntry.ProcessIntended) < clientHost.Runs.ToList().FindIndex(run => run.Script == "client-start"));
         // The earlier log moved aside first, the new one was awaited from its start; only that client was stopped.

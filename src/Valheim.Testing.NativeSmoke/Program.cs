@@ -8,7 +8,7 @@ if (args is ["help" or "--help"])
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
     Console.WriteLine(CopiesCommand.Usage + " (list, then remove chosen game copies runs left behind)");
-    Console.WriteLine(EnvCommand.Usage + " (read-only local campaign preflight)");
+    Console.WriteLine(EnvCommand.Usage + " (read-only: local campaign preflight; what earlier runs left on each host)");
     return 0;
 }
 if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(args[1..]);

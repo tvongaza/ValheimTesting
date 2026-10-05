@@ -291,8 +291,11 @@ internal sealed class HostedServerRun
                 }, plan.Pinned)));
             }
             catch { process.Stop(TimeSpan.FromSeconds(15)); throw; }
+            // The command line's hash is the third fact env recover requires before it stops the process (#257 Q2).
+            string commandLine = HostProcessProbe.CommandLineAsync(Host, process.Id, process.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
             NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", process.Id.ToString(CultureInfo.InvariantCulture)),
-                ("startIdentity", process.StartIdentity), ("bootDirectory", bootDirectory), ("taskLogon", process.TaskLogon ?? ""))).GetAwaiter().GetResult();
+                ("startIdentity", process.StartIdentity), ("commandLineSha256", commandLine), ("bootDirectory", bootDirectory),
+                ("taskLogon", process.TaskLogon ?? ""))).GetAwaiter().GetResult();
             return process;
         }, () => new RecordingTransport(Connect(tunnel), Path.Combine(run.Output, "connection-" + ++connection + ".jsonl"), plan.Pinned ? null : EnvironmentPinning.NotPinned),
             WorldDirectory, plan.ExpectCommand, options.SessionCapability,
@@ -425,8 +428,9 @@ internal sealed class HostedServerRun
                     var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
                         : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
                     var client = started.GetAwaiter().GetResult();
+                    string commandLine = HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
                     NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
-                        ("startIdentity", client.StartIdentity), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
+                        ("startIdentity", client.StartIdentity), ("commandLineSha256", commandLine), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
                     var process = new HostedClientProcess(client, host, role.Install, tunnel, local);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
                     return process;
