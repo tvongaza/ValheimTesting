@@ -106,11 +106,13 @@ internal static class ServerLoad
         public bool Started { get; set; }
     }
 
-    // A loader refusal (a mismatched Doorstop pair, an incomplete BepInEx) names the reviewed-package fix for that actor.
-    private static string LoaderHint(CampaignPreflightProblem problem) =>
-        problem.Input != "game and loader" ? "" // the source install's loader; a bad --loader-package is the "loader" input
-            : problem.Actor == "server" ? " (--loader-package FILE gives the server's disposable copy a reviewed loader)"
-            : problem.Actor == "client" ? " (--client-loader-package FILE gives the client's disposable copy a reviewed loader)" : "";
+    // A source loader refusal (a mismatched Doorstop pair, an incomplete BepInEx) names the reviewed-package fix for that actor.
+    // Not when the actor already runs with a package: then the refusal is the package's own (another platform's loader), and
+    // the hint would name the very option that caused it.
+    private static string LoaderHint(CampaignPreflightProblem problem, string? serverLoader, string? clientLoader) =>
+        problem.Input != "game and loader" ? "" // an unreadable --loader-package is the "loader" input
+            : problem.Actor == "server" && serverLoader == null ? " (--loader-package FILE gives the server's disposable copy a reviewed loader)"
+            : problem.Actor == "client" && clientLoader == null ? " (--client-loader-package FILE gives the client's disposable copy a reviewed loader)" : "";
     // --output, or a new timestamped directory under ./valheim-test-runs. Never an existing one.
     private static string Output(Arguments parsed)
     {
@@ -323,7 +325,7 @@ internal static class ServerLoad
             Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
         if (!report.Ready)
         {
-            var lines = report.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}" + LoaderHint(problem) +
+            var lines = report.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}" + LoaderHint(problem, serverLoader, clientLoader) +
                 (problem.Actor is "client" or "clients" ? " (--server-only skips the client)" : "")).ToList();
             foreach (string line in lines) Console.Error.WriteLine("REFUSED " + line);
             MarkRefused(output, lines);
