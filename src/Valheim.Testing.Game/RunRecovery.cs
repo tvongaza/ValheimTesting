@@ -60,6 +60,7 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + entry.Kind, "could not be journalled: " + error.Message); }
         }
         IEnumerable<JournalItem> Of(string kind) => items.Where(item => item.Kind == kind);
+        bool Local(JournalItem item) => item.Fields.GetValueOrDefault("local") == "true" && hosts[item.Host].Kind == "local";
 
         // 1. Every process on every host first: until all are proven gone, nothing they may use is touched anywhere.
         foreach (var group in Of("process").GroupBy(item => item.Host, StringComparer.Ordinal))
@@ -98,8 +99,42 @@ internal static class RunRecovery
         }
         bool processLeft = steps.Any(step => step.Failed);
 
-        // 2. Each host's characters and copies, under its lock, once no process of the run is left on it.
-        foreach (var group in Of("character").Concat(Of("copy")).GroupBy(item => item.Host, StringComparer.Ordinal))
+        // 2a. Copies this machine journalled in process (WorldFixture): no host lock; OwnedCopies refuses one a process uses.
+        foreach (var copy in Of("copy").Where(Local))
+        {
+            string what = $"copy {copy.What}";
+            if (Failed(copy.Host)) { Step(copy.Host, what, "not attempted: a process on this host was not stopped", failed: true); continue; }
+            try
+            {
+                string path = copy.What;
+                if (!Directory.Exists(path)) { Step(copy.Host, what, "already gone"); await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"))).ConfigureAwait(false); continue; }
+                if (!OwnedCopies.IsCopyName(path)) throw new InvalidDataException("not a valheim-test-<32 hex> copy directory");
+                var found = OwnedCopies.Find(path);
+                if (found.Count == 0)
+                {
+                    // Interrupted before its manifest was written: nothing in it was the run's yet.
+                    WorldFixture.DeleteTree(path);
+                    Step(copy.Host, what, "removed (the copy never finished)");
+                    await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"))).ConfigureAwait(false);
+                }
+                else if (found[0].Kind == OwnedCopyKind.World)
+                {
+                    // A run's save is evidence: handed over to the output it is in, as a run that ends does.
+                    Step(copy.Host, what, "kept as the run's save (handed over to its output)");
+                    await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"), ("handedOver", "true"))).ConfigureAwait(false);
+                }
+                else
+                {
+                    var retired = OwnedCopies.Remove(path);
+                    Step(copy.Host, what, $"removed; its changes are in {retired.KeptIn}");
+                    await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"), ("keptIn", retired.KeptIn))).ConfigureAwait(false);
+                }
+            }
+            catch (Exception error) when (error is not OperationCanceledException) { Step(copy.Host, what, "not removed: " + error.Message, failed: true); }
+        }
+
+        // 2b. Each host's characters and prepared copies, under its lock, once no process of the run is left on it.
+        foreach (var group in Of("character").Concat(Of("copy").Where(item => !Local(item))).GroupBy(item => item.Host, StringComparer.Ordinal))
         {
             var host = connections[group.Key];
             var characters = group.Where(item => item.Kind == "character").ToList();

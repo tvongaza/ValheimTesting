@@ -39,8 +39,10 @@ internal sealed record JournalHostStatus(string Name, string Journal, int Runs, 
 
 internal sealed record JournalStatusReport(IReadOnlyList<JournalHostStatus> Hosts, IReadOnlyList<JournalRunStatus> Runs)
 {
-    /// <summary>Every host's journal was read whole and every run left nothing.</summary>
-    public bool Clean => Hosts.All(host => host.Error == null) && Runs.All(run => run.State == JournalRunState.Ended);
+    /// <summary>Copies on this machine that no journal names (made before runs journalled them): removed only by name.</summary>
+    public IReadOnlyList<OwnedCopy> Unjournalled { get; init; } = [];
+    /// <summary>Every host's journal was read whole, every run left nothing and no unjournalled copy is left.</summary>
+    public bool Clean => Hosts.All(host => host.Error == null) && Runs.All(run => run.State == JournalRunState.Ended) && Unjournalled.Count == 0;
 }
 
 /// <summary>
@@ -53,8 +55,9 @@ internal static class RunJournalStatus
 {
     /// <param name="leaseHost">The inventory's lease host and <paramref name="leaseDirectory"/> its lease directory: where a lease journalled
     /// before leases named their directory is checked.</param>
+    /// <param name="copyRoots">Directories on this machine searched for copies no journal names (<see cref="OwnedCopies.Find"/>).</param>
     public static async Task<JournalStatusReport> InspectAsync(IReadOnlyDictionary<string, HostProfile> hosts, Func<string, IGameHost> hostFactory,
-        TimeSpan timeout, CancellationToken cancellation = default, string? leaseHost = null, string? leaseDirectory = null)
+        TimeSpan timeout, CancellationToken cancellation = default, string? leaseHost = null, string? leaseDirectory = null, IReadOnlyList<string>? copyRoots = null)
     {
         // Every host at once: one that cannot be reached does not hold up the others.
         var reads = await Task.WhenAll(hosts.OrderBy(host => host.Key, StringComparer.Ordinal).Select(async pair =>
@@ -175,7 +178,18 @@ internal static class RunJournalStatus
                 run.Select(entry => entry.Host).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(), runner?.ToString(),
                 items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList()));
         }
-        return new(hostStatus, runs.OrderBy(run => run.FirstUtc).ToList());
+        // Copies made before runs journalled them: every copy any journal names is the journal's to judge.
+        var comparison = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var journalled = read.SelectMany(host => host.Records).Select(record => record.Entry.Fields.GetValueOrDefault("runtime")).OfType<string>()
+            .Select(path => Path.TrimEndingDirectorySeparator(path)).ToHashSet(comparison);
+        var roots = (copyRoots ?? []).Where(Directory.Exists).Select(root => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root))).Distinct(comparison).ToList();
+        // A root inside another is already searched with it.
+        roots = roots.Where(root => !roots.Any(other => other != root && root.StartsWith(other + Path.DirectorySeparatorChar,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))).ToList();
+        var unjournalled = roots
+            .SelectMany(root => { try { return OwnedCopies.Find(root); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; } })
+            .Where(copy => !journalled.Contains(Path.TrimEndingDirectorySeparator(copy.Path))).DistinctBy(copy => copy.Path, comparison).ToList();
+        return new(hostStatus, runs.OrderBy(run => run.FirstUtc).ToList()) { Unjournalled = unjournalled };
     }
 
     private sealed record Pending(string Kind, string Host, IGameHost Connection, string Actor, string What, string Status, bool Kept, DateTime SinceUtc,
@@ -280,7 +294,7 @@ internal static class RunJournalStatus
     {
         if (json)
         {
-            output.WriteLine(JsonSerializer.Serialize(new { report.Hosts, report.Runs, report.Clean },
+            output.WriteLine(JsonSerializer.Serialize(new { report.Hosts, report.Runs, report.Unjournalled, report.Clean },
                 new JsonSerializerOptions { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } }));
             return;
         }
@@ -294,6 +308,10 @@ internal static class RunJournalStatus
             foreach (var item in run.Items)
                 output.WriteLine($"  {item.Kind} {item.What} on {item.Host} ({item.Actor}, since {Time(item.SinceUtc)}): {(item.Unrecoverable ? "UNRECOVERABLE " : "")}{item.Status}");
         }
+        foreach (var copy in report.Unjournalled)
+            output.WriteLine($"UNJOURNALLED copy {copy.Path} ({copy.Kind}, {DiskSpace.Format(copy.Bytes)}, made {Time(copy.CreatedUtc)}" +
+                (copy.InUse ? $", used by process {string.Join(", ", copy.InUseBy)}" : "") + "): made before runs journalled their copies; " +
+                $"once its run is over, remove it with: valheim-test env teardown --copy \"{copy.Path}\"");
         output.WriteLine($"{Count(report.Runs.Count(run => run.State == JournalRunState.Ended), "run")} ended and left nothing. Nothing was changed.");
     }
 

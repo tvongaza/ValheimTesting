@@ -93,6 +93,27 @@ public sealed class RunJournalTests : IDisposable
         finally { sleeper.Kill(); }
     }
 
+    // Runs append while env status and OwnedCopies read (#257): a reader shares the file for writing, so on Windows neither an
+    // append nor a read is refused because the other has the file open.
+    [Fact] public async Task TheJournalIsReadWhileAWriterHasItOpen()
+    {
+        string journal = Path.Combine(_root, "local journal");
+        using var local = RunJournal.UseLocalDirectory(journal);
+        var run = new RunJournal("run-shared");
+        string copy = Path.Combine(_root, "valheim-test-" + new string('c', 32));
+        run.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", copy), ("local", "true")));
+        string file = Path.Combine(journal, "run-shared", WorldFixture.Actor + ".jsonl");
+        using (var writer = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+        {
+            Assert.Single((await RunJournal.ReadAllAsync(Host(), journal, TimeSpan.FromSeconds(30))).Records);
+            Assert.Single((await RunJournal.ReadAsync(Host(), journal, "run-shared", TimeSpan.FromSeconds(30))));
+            // This process, the record's runner, still runs: it holds the copy.
+            Assert.Equal(Environment.ProcessId, RunJournal.LocalHolders()[copy]);
+            run.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", copy), ("local", "true")));
+        }
+        Assert.Equal(2, File.ReadAllLines(file).Length);
+    }
+
     [Fact] public void TheJournalSitsBesideTheHostsLockAndNamesAreChecked()
     {
         Assert.Equal("/srv/vt/journal", RunJournal.DirectoryFor(new HostProfile { Lock = "/srv/vt/lock" }));

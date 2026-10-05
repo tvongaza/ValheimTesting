@@ -39,6 +39,7 @@ public static class OwnedCopies
         root = System.IO.Path.GetFullPath(root);
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException("No such directory: " + root);
         var processes = Processes();
+        var holders = RunJournal.LocalHolders();
         var found = new List<OwnedCopy>();
         void Walk(string directory)
         {
@@ -49,11 +50,11 @@ public static class OwnedCopies
             foreach (string child in children)
             {
                 if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0) continue;
-                if (IsCopy(child)) found.Add(Describe(child, root, processes));
+                if (IsCopy(child)) found.Add(Describe(child, root, processes, holders));
                 else Walk(child);
             }
         }
-        if (IsCopy(root)) found.Add(Describe(root, root, processes)); else Walk(root);
+        if (IsCopy(root)) found.Add(Describe(root, root, processes, holders)); else Walk(root);
         return found.OrderByDescending(copy => copy.Bytes).ThenBy(copy => copy.Path, StringComparer.Ordinal).ToList();
     }
 
@@ -67,7 +68,7 @@ public static class OwnedCopies
         path = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(path));
         if (!IsCopy(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             throw new ArgumentException($"Not a copy the toolkit made (a valheim-test-<32 hex> directory with {Provenance}): {path}", nameof(path));
-        var copy = Describe(path, System.IO.Path.GetPathRoot(path)!, Processes());
+        var copy = Describe(path, System.IO.Path.GetPathRoot(path)!, Processes(), RunJournal.LocalHolders());
         if (copy.InUse) throw new InvalidOperationException($"Process {string.Join(", ", copy.InUseBy)} runs from {path}; stop it before removing the copy.");
         if (copy.Kind == OwnedCopyKind.World && !allowWorld)
             throw new InvalidOperationException($"{path} is a world copy, a run's save: kept unless removing worlds is asked for explicitly.");
@@ -82,16 +83,22 @@ public static class OwnedCopies
         return WorldFixture.Existing(path, hashes).Retire(keep, perFile, total);
     }
 
+    /// <summary>Whether <paramref name="directory"/> is named as a copy is (<c>valheim-test-</c> and 32 hex digits), finished or not.</summary>
+    internal static bool IsCopyName(string directory) => CopyName.IsMatch(System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(directory)));
+
     private static bool IsCopy(string directory) =>
         CopyName.IsMatch(System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(directory))) && File.Exists(System.IO.Path.Combine(directory, Provenance));
 
-    private static OwnedCopy Describe(string copy, string root, IReadOnlyList<(int Pid, string Executable)> processes)
+    private static OwnedCopy Describe(string copy, string root, IReadOnlyList<(int Pid, string Executable)> processes, IReadOnlyDictionary<string, int> holders)
     {
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         // The system reports an executable's path with links resolved (on macOS /private/var/... for /var/...): match either form.
         string[] forms = [copy + System.IO.Path.DirectorySeparatorChar, Resolved(copy) + System.IO.Path.DirectorySeparatorChar];
         var users = processes.Where(process => forms.Any(form => process.Executable.StartsWith(form, comparison)))
-            .Select(process => process.Pid).Append(LiveOwner(copy) ?? -1).Where(pid => pid >= 0).Distinct().Order().ToList();
+            .Select(process => process.Pid).Append(LiveOwner(copy) ?? -1)
+            // The run that made the copy holds it while its process runs (this machine's journal), before any game runs from it.
+            .Append(holders.TryGetValue(copy, out int holder) || holders.TryGetValue(Resolved(copy), out holder) ? holder : -1)
+            .Where(pid => pid >= 0).Distinct().Order().ToList();
         var (result, passed) = RunResult(copy, root);
         return new(copy, KindOf(copy), DiskSpace.DirectoryBytes(copy), File.GetLastWriteTimeUtc(System.IO.Path.Combine(copy, Provenance)), users, result, passed);
     }

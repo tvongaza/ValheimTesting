@@ -8,7 +8,7 @@ using Valheim.Testing.Game;
 internal static class EnvCommand
 {
     internal const string Usage = "valheim-test env preflight [MANIFEST [--hosts] | --inventory FILE] [--json] | valheim-test env status [--inventory FILE] [--json] | " +
-        "valheim-test env recover|teardown --run ID [--inventory FILE] [--json]";
+        "valheim-test env recover|teardown --run ID [--inventory FILE] [--json] | valheim-test env teardown --copy PATH [--inventory FILE]";
 
     public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
     {
@@ -97,7 +97,7 @@ internal static class EnvCommand
     }
 
     // From each host's run journal: status (what earlier runs left; changes nothing), recover (clear what one run provably
-    // left, except what it kept on purpose) or teardown (that too). Exit 0 when nothing is left (status: of any run; recover and
+    // left, except what it kept on purpose) or teardown (that too, or one unjournalled copy by --copy). Exit 0 when nothing is left (status: of any run; recover and
     // teardown: of that run); 3 otherwise or when refused; 2 for a usage error.
     private static async Task<int> Journal(string action, string[] args, TextWriter output, TextWriter error)
     {
@@ -112,8 +112,8 @@ internal static class EnvCommand
             rest.RemoveRange(at, 2);
             return value;
         }
-        string? file = Option("--inventory"), run = action == "status" ? null : Option("--run");
-        if (rest.Count != 0 || (action != "status" && run == null))
+        string? file = Option("--inventory"), run = action == "status" ? null : Option("--run"), copy = action == "teardown" ? Option("--copy") : null;
+        if (rest.Count != 0 || (action != "status" && (run == null) == (copy == null)) || (copy != null && json))
         {
             error.WriteLine("Usage: " + Usage);
             return 2;
@@ -122,6 +122,7 @@ internal static class EnvCommand
         {
             string? inventory = file == null ? null : Path.GetFullPath(file);
             bool clean = action == "status" ? await EnvironmentInventory.WriteRunStatusAsync(inventory, output, json).ConfigureAwait(false)
+                : copy != null ? await EnvironmentInventory.TeardownCopyAsync(inventory, copy, output).ConfigureAwait(false)
                 : await EnvironmentInventory.RecoverRunAsync(inventory, run!, action == "teardown", output, json).ConfigureAwait(false);
             return clean ? 0 : 3;
         }

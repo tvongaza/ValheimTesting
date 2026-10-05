@@ -121,8 +121,7 @@ public sealed class EnvironmentInventory
         ArgumentNullException.ThrowIfNull(output);
         var inventory = ReadHosts(inventoryPath, ThisMachine);
         if (!json) foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
-        var report = await RunJournalStatus.InspectAsync(inventory.Hosts, new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost,
-            TimeSpan.FromSeconds(60), cancellation, inventory.LeaseHost, inventory.LeaseDirectory).ConfigureAwait(false);
+        var report = await inventory.StatusAsync(cancellation).ConfigureAwait(false);
         RunJournalStatus.Write(report, output, json);
         return report.Clean;
     }
@@ -132,7 +131,8 @@ public sealed class EnvironmentInventory
     /// machine when null), as <see cref="WriteRunStatusAsync"/> judged it, and writes what was done. A run that is still going,
     /// whose runner cannot be checked, or that left anything that cannot be proven its own is refused before anything changes.
     /// A process is stopped only when its ID, start time and command line still all match the run's journal. Copies and leases
-    /// the run kept on purpose stay unless <paramref name="teardown"/>. Returns true when nothing of the run is left.
+    /// the run kept on purpose stay unless <paramref name="teardown"/>; a world copy, a run's save, is handed over to the output
+    /// it is in, never removed by a run's recovery. Returns true when nothing of the run is left.
     /// </summary>
     public static async Task<bool> RecoverRunAsync(string? inventoryPath, string runId, bool teardown, TextWriter output, bool json = false,
         CancellationToken cancellation = default)
@@ -140,11 +140,78 @@ public sealed class EnvironmentInventory
         ArgumentNullException.ThrowIfNull(output);
         var inventory = ReadHosts(inventoryPath, ThisMachine);
         if (!json) foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
-        var report = await RunRecovery.RecoverAsync(inventory.Hosts, new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost, runId, teardown,
+        var (hosts, _) = inventory.JournalScope();
+        var report = await RunRecovery.RecoverAsync(hosts, new ResolvedEnvironment { Hosts = hosts }.CreateHost, runId, teardown,
             TimeSpan.FromSeconds(60), cancellation, inventory.LeaseHost, inventory.LeaseDirectory).ConfigureAwait(false);
         RunRecovery.Write(report, output, json);
         return report.Recovered;
     }
+
+    /// <summary>
+    /// Removes one copy on this machine that no run's journal names (made before runs journalled their copies), keeping what
+    /// its run changed in <c>&lt;copy&gt;-changes</c> beside it (<see cref="OwnedCopies.Remove"/>). Refuses a copy a journal names
+    /// (<see cref="RecoverRunAsync"/> owns those) and one a running process uses. Returns true when it was removed.
+    /// </summary>
+    public static async Task<bool> TeardownCopyAsync(string? inventoryPath, string copyPath, TextWriter output, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        var inventory = ReadHosts(inventoryPath, ThisMachine);
+        string path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(copyPath));
+        var (hosts, _) = inventory.JournalScope();
+        var report = await RunJournalStatus.InspectAsync(hosts, new ResolvedEnvironment { Hosts = hosts }.CreateHost, TimeSpan.FromSeconds(60), cancellation,
+            copyRoots: [Path.GetDirectoryName(path)!]).ConfigureAwait(false);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        // The same copy named through a link (macOS /var and /private/var) is the same copy.
+        string resolved = OwnedCopies.Resolved(path);
+        bool Same(string other) => string.Equals(Path.TrimEndingDirectorySeparator(other), path, comparison)
+            || string.Equals(OwnedCopies.Resolved(Path.TrimEndingDirectorySeparator(other)), resolved, comparison);
+        if (report.Runs.FirstOrDefault(run => run.Items.Any(item => Same(item.What))) is { } owner)
+        {
+            output.WriteLine($"REFUSED {path}: run {owner.Run} ({owner.State.ToString().ToUpperInvariant()}) journalled it; use valheim-test env recover|teardown --run {owner.Run}.");
+            return false;
+        }
+        if (!report.Unjournalled.Any(copy => Same(copy.Path)) && report.Hosts.Any(host => host.Error != null))
+        {
+            output.WriteLine($"REFUSED {path}: a journal could not be read, so whether a run owns this copy is unknown.");
+            return false;
+        }
+        try { output.WriteLine("REMOVED " + OwnedCopies.Remove(path, allowWorld: true)); return true; }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
+        {
+            output.WriteLine($"REFUSED {path}: {error.Message}");
+            return false;
+        }
+    }
+
+    private Task<JournalStatusReport> StatusAsync(CancellationToken cancellation)
+    {
+        var (hosts, roots) = JournalScope();
+        return RunJournalStatus.InspectAsync(hosts, new ResolvedEnvironment { Hosts = hosts }.CreateHost, TimeSpan.FromSeconds(60), cancellation,
+            LeaseHost, LeaseDirectory, roots);
+    }
+
+    // The hosts whose journals are read: the inventory's, and this machine's own journal (where its copies are journalled)
+    // when no local host of the inventory already reads it. The roots searched for copies no journal names: this machine's
+    // data folder and the runtimes of its environments.
+    private (Dictionary<string, HostProfile> Hosts, IReadOnlyList<string> CopyRoots) JournalScope()
+    {
+        var hosts = new Dictionary<string, HostProfile>(Hosts, StringComparer.Ordinal);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!hosts.Values.Any(host => host.Kind == "local" && string.Equals(RunJournal.DirectoryFor(host), RunJournal.LocalDirectory, comparison)))
+        {
+            string name = hosts.ContainsKey(ThisMachineHost) ? ThisMachineHost + "-" + Guid.NewGuid().ToString("N")[..6] : ThisMachineHost;
+            hosts[name] = new HostProfile
+            {
+                Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = OperatingSystem.IsWindows() ? "powershell" : "bash",
+                Lock = Path.Combine(Path.GetDirectoryName(RunJournal.LocalDirectory)!, "lock"),
+            };
+        }
+        var locals = Hosts.Where(host => host.Value.Kind == "local").Select(host => host.Key).ToHashSet(StringComparer.Ordinal);
+        var roots = Environments.Where(recipe => locals.Contains(recipe.Host) && !string.IsNullOrEmpty(recipe.Runtime)).Select(recipe => recipe.Runtime)
+            .Prepend(ThisMachine.DataRoot).ToList();
+        return (hosts, roots);
+    }
+    private const string ThisMachineHost = "this-machine";
 
     // As Read, but checks only the hosts: a host's journal needs the host and its lock, not an install or an environment.
     internal static EnvironmentInventory ReadHosts(string? path, ISteamLocator machine)
