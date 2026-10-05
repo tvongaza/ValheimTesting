@@ -48,7 +48,7 @@ try
     string game = client.Install;
     var selectedMods = mods!.Select(Path.GetFullPath).ToList();
     string mod = selectedMods[0];
-    var (cliManifest, cliFiles) = SmokeInputs.Cli(options, game);
+    var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
     string? loader = client.LoaderPackage;
     foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);

@@ -210,7 +210,7 @@ internal static class ServerLoad
         if (!Directory.Exists(core))
             throw new DirectoryNotFoundException($"The server install {serverInstall} has no BepInEx ({InstallPins.CoreDirectory}). Install BepInExPack_Valheim into it, " +
                 "or give --loader-package with a reviewed loader package; the mod is resolved against that core.");
-        var (cliManifest, cliFiles) = SmokeInputs.Cli(parsed.Options, serverInstall);
+        var (cliManifest, cliFiles) = SmokeInputs.Cli(parsed.Options);
         string? adapter = parsed.Options.TryGetValue("--adapter", out string? adapterFile) ? Path.GetFullPath(adapterFile) : null;
         foreach (string path in new[] { adapter, cliManifest }.OfType<string>().Concat(parsed.Mods.Select(Path.GetFullPath)))
             if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
@@ -428,7 +428,7 @@ internal static class ServerLoad
         var serverLoader = parsed.Options.TryGetValue("--loader-package", out string? serverLoaderFile) ? BepInExLoaderPackage.Read(serverLoaderFile) : null;
         var clientLoader = parsed.Options.TryGetValue("--client-loader-package", out string? clientLoaderFile) ? BepInExLoaderPackage.Read(clientLoaderFile) : null;
         string? adapter = parsed.Options.TryGetValue("--adapter", out string? adapterFile) ? Path.GetFullPath(adapterFile) : null;
-        var (cliManifest, cliFiles) = SmokeInputs.Cli(parsed.Options, server);
+        var (cliManifest, cliFiles) = SmokeInputs.Cli(parsed.Options);
         const int cliPort = 5688, gamePort = 2486, clientCliPort = 5689; // the inventory's own defaults
         Console.WriteLine($"server: {server}; ValheimCLI port {cliPort}, game port {gamePort}" + (client == null ? "" : $"; client ValheimCLI port {clientCliPort}"));
         string? steamUserdata = client != null ? SmokeInputs.SteamUserdata(parsed.Options) : null;

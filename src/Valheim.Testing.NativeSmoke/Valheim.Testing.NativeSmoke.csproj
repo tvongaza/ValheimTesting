@@ -28,5 +28,24 @@
     <EmbeddedResource Include="../Valheim.Testing.Adapter/Adapter/Members.cs" LogicalName="NativeSmoke.Adapter.Members.cs" />
     <EmbeddedResource Include="../../tools/game-references/Valheim.GameReferences.props" LogicalName="NativeSmoke.Adapter.Valheim.GameReferences.props" />
     <EmbeddedResource Include="../../tools/game-references/Valheim.GameReferences.targets" LogicalName="NativeSmoke.Adapter.Valheim.GameReferences.targets" />
+    <!-- The pinned ValheimCLI plugin bundle: cli-dependency.json's bundle, which bootstrap-cli.cs fetches into .packages and
+         checks. A build without it (bundle not yet published or not fetched) carries none and says so at run time. -->
+    <EmbeddedResource Include="../../cli-dependency.json" LogicalName="cli-dependency.json" />
+    <EmbeddedResource Include="../../.packages/valheimcli-bundle.zip" LogicalName="valheimcli-bundle.zip" Condition="Exists('../../.packages/valheimcli-bundle.zip')" />
   </ItemGroup>
+  <!-- A stale zip beside a moved pin would make every run refuse on the user's machine: the build refuses instead. A CI
+       or release build with a pinned bundle must embed it (bootstrap-cli.cs fetches it). -->
+  <Target Name="CheckValheimCliBundle" BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <_CliPin>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../cli-dependency.json'))</_CliPin>
+      <_CliBundleSha256>$([System.Text.RegularExpressions.Regex]::Match($(_CliPin), '"bundle"\s*:\s*\{[^}]*"sha256"\s*:\s*"([0-9a-fA-F]{64})"').Groups[1].Value.ToLowerInvariant())</_CliBundleSha256>
+      <_CliBundleZip>$(MSBuildThisFileDirectory)../../.packages/valheimcli-bundle.zip</_CliBundleZip>
+    </PropertyGroup>
+    <GetFileHash Files="$(_CliBundleZip)" Algorithm="SHA256" Condition="Exists('$(_CliBundleZip)')">
+      <Output TaskParameter="Hash" PropertyName="_CliBundleFound" />
+    </GetFileHash>
+    <Error Condition="Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' == ''" Text=".packages/valheimcli-bundle.zip is present but cli-dependency.json pins no bundle; delete the zip or pin it." />
+    <Error Condition="Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' != '' And '$(_CliBundleFound.ToLowerInvariant())' != '$(_CliBundleSha256)'" Text=".packages/valheimcli-bundle.zip is sha256 $(_CliBundleFound.ToLowerInvariant()), not the pinned $(_CliBundleSha256): run dotnet run scripts/bootstrap-cli.cs." />
+    <Error Condition="!Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' != '' And '$(ContinuousIntegrationBuild)' == 'true'" Text="cli-dependency.json pins a ValheimCLI bundle, and this build has none to embed: run dotnet run scripts/bootstrap-cli.cs first." />
+  </Target>
 </Project>

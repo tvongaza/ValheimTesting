@@ -5,33 +5,61 @@ using Valheim.Testing.Game;
 /// <summary>Resolve optional local setup inputs without guessing among builds or account roots.</summary>
 internal static class SmokeInputs
 {
-    internal static (string Manifest, string Files) Cli(IReadOnlyDictionary<string, string> options, string game)
+    /// <summary>
+    /// The ValheimCLI core-and-pack set to stage, printed with where it came from: --cli-manifest/--cli-files, then
+    /// VALHEIMCLI_BUNDLE (a folder with one manifest and its DLLs), then the pinned bundle this tool ships, extracted once under
+    /// ValheimTesting's own folder. Whatever ValheimCLI an install happens to hold is never used unless named with --cli-files.
+    /// </summary>
+    internal static (string Manifest, string Files) Cli(IReadOnlyDictionary<string, string> options) => Cli(options, Shipped);
+
+    internal static (string Manifest, string Files) Cli(IReadOnlyDictionary<string, string> options, Func<CliBundleSource?> shipped)
     {
         string? manifest = options.TryGetValue("--cli-manifest", out string? namedManifest) ? Path.GetFullPath(namedManifest) : null;
         string? files = options.TryGetValue("--cli-files", out string? namedFiles) ? Path.GetFullPath(namedFiles) : null;
-        if (manifest != null && files != null) return (manifest, files);
-        if (manifest != null) return (manifest, Path.GetDirectoryName(manifest)!);
-
-        string? bundle = Environment.GetEnvironmentVariable("VALHEIMCLI_BUNDLE");
-        if (files == null && !string.IsNullOrWhiteSpace(bundle)) files = Path.GetFullPath(bundle);
-        string[] roots = files == null
-            ? [Path.Combine(game, "BepInEx", "plugins"), Path.Combine(game, "BepInEx", "scripts")]
-            : [files];
-        string[] candidates = roots.Where(Directory.Exists)
-            .SelectMany(root => Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories))
-            .Where(path => Path.GetFileName(path) is "cli-manifest.json" or "cli-capabilities.json")
-            .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
-        if (candidates.Length != 1)
-            throw new InvalidDataException(candidates.Length == 0
-                ? "No ValheimCLI capability manifest was found. Give --cli-manifest and --cli-files from one build, " +
-                  "or set VALHEIMCLI_BUNDLE to a directory containing its manifest and DLLs."
-                : "Several ValheimCLI capability manifests were found: " + string.Join(", ", candidates) +
-                  ". Choose one build with --cli-manifest and --cli-files; never mix packs.");
-        manifest = candidates[0];
+        string origin = "given (--cli-manifest/--cli-files)";
+        if (manifest == null && files == null && Environment.GetEnvironmentVariable("VALHEIMCLI_BUNDLE") is { } bundle && !string.IsNullOrWhiteSpace(bundle))
+        {
+            files = Path.GetFullPath(bundle);
+            origin = "VALHEIMCLI_BUNDLE";
+        }
+        if (manifest == null && files == null)
+        {
+            var source = shipped() ?? throw new InvalidDataException("This valheim-test carries no ValheimCLI bundle (its build had none to embed). " +
+                "Give --cli-manifest and --cli-files from one build, or set VALHEIMCLI_BUNDLE to a folder with its manifest and DLLs.");
+            Console.WriteLine("ValheimCLI: " + source.Origin);
+            return (source.Manifest, source.Files);
+        }
+        if (manifest == null)
+        {
+            string[] candidates = Directory.Exists(files) ? Directory.EnumerateFiles(files!, "*.json", SearchOption.AllDirectories)
+                .Where(path => Path.GetFileName(path) is "cli-manifest.json" or "cli-capabilities.json")
+                .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray() : [];
+            if (candidates.Length != 1)
+                throw new InvalidDataException(candidates.Length == 0
+                    ? $"No ValheimCLI capability manifest is in {files} ({origin}). Give --cli-manifest and --cli-files from one build, " +
+                      "or set VALHEIMCLI_BUNDLE to a directory containing its manifest and DLLs."
+                    : "Several ValheimCLI capability manifests were found: " + string.Join(", ", candidates) +
+                      ". Choose one build with --cli-manifest and --cli-files; never mix packs.");
+            manifest = candidates[0];
+        }
         files ??= Path.GetDirectoryName(manifest)!;
         // The resolver checks the chosen manifest's capabilities, GUIDs and exact DLL hashes before launch.
         CliCapabilityManifest.Read(manifest);
+        Console.WriteLine($"ValheimCLI: {manifest} ({origin})");
         return (manifest, files);
+    }
+
+    // The bundle this tool was built with: cli-dependency.json's pinned commit and bundle hash, and the zip, both embedded.
+    private static CliBundleSource? Shipped()
+    {
+        var tool = typeof(SmokeInputs).Assembly;
+        using var zip = tool.GetManifestResourceStream("valheimcli-bundle.zip");
+        using var pinStream = tool.GetManifestResourceStream("cli-dependency.json");
+        if (zip == null || pinStream == null) return null;
+        using var pin = System.Text.Json.JsonDocument.Parse(pinStream);
+        if (!pin.RootElement.TryGetProperty("bundle", out var bundle)) return null;
+        string commit = pin.RootElement.GetProperty("commit").GetString() ?? "";
+        return CliBundle.Extract(zip, bundle.GetProperty("sha256").GetString()!, commit, $"the {commit[..Math.Min(7, commit.Length)]} bundle shipped with valheim-test");
     }
 
     /// <summary>--steam-userdata, or this machine's, under the Steam root the inventory's detection found (on Windows its registered path).</summary>
