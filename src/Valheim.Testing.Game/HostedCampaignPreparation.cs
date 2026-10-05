@@ -89,16 +89,18 @@ public sealed class HostedCampaignManifest
 public sealed class PreparedHostedCampaign : IAsyncDisposable
 {
     private readonly ResolvedEnvironment _profile;
-    private readonly IReadOnlyList<(string Host, string Runtime, string Stage)> _copies;
-    private readonly IReadOnlyList<(string Host, HostedCampaignCharacter Character)> _characters;
+    private readonly IReadOnlyList<(string Host, string Actor, string Runtime, string Stage)> _copies;
+    private readonly IReadOnlyList<(string Host, string Actor, HostedCampaignCharacter Character)> _characters;
     private readonly Func<string, IGameHost>? _hostFactory;
     private readonly TimeSpan _timeout;
 
     internal PreparedHostedCampaign(HostedCampaignManifest manifest, ResolvedEnvironment profile, IReadOnlyDictionary<string, HostListing> listings,
         IReadOnlyDictionary<string, HostedRuntimeFile[]> selections,
-        IReadOnlyList<(string Host, string Runtime, string Stage)> copies,
-        IReadOnlyList<(string Host, HostedCampaignCharacter Character)> characters, Func<string, IGameHost>? hostFactory, TimeSpan timeout)
+        IReadOnlyList<(string Host, string Actor, string Runtime, string Stage)> copies,
+        IReadOnlyList<(string Host, string Actor, HostedCampaignCharacter Character)> characters, Func<string, IGameHost>? hostFactory, TimeSpan timeout,
+        RunJournal journal)
     {
+        Journal = journal;
         Manifest = manifest; _profile = profile; Listings = listings; Selections = selections;
         _copies = copies; _characters = characters; _hostFactory = hostFactory; _timeout = timeout;
     }
@@ -182,11 +184,14 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         return selected;
     }
 
-    internal IReadOnlyList<(string Host, string Runtime, string Stage)> Copies => _copies;
-    internal IReadOnlyList<(string Host, HostedCampaignCharacter Character)> Characters => _characters;
+    internal IReadOnlyList<(string Host, string Actor, string Runtime, string Stage)> Copies => _copies;
+    internal IReadOnlyList<(string Host, string Actor, HostedCampaignCharacter Character)> Characters => _characters;
     internal IGameHost HostFor(string name) => _hostFactory?.Invoke(name) ?? _profile.CreateHost(name);
     internal string LockOf(string name) => _profile.Hosts[name].Lock;
     internal TimeSpan Timeout => _timeout;
+    /// <summary>The run's journal: the preparation wrote each copy and character there before making it.</summary>
+    internal RunJournal Journal { get; }
+    internal string JournalOf(string host) => RunJournal.DirectoryFor(_profile.Hosts[host]);
     /// <summary>Every character and prepared install is retired (<see cref="RunRetirement.CampaignAsync"/>).</summary>
     internal bool Retired { get; set; }
 
@@ -542,8 +547,27 @@ public static class HostedCampaignPreparation
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
         PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation);
 
+    // A preparation that failed ends its run in the journal of every host it was to touch, best effort: the entry is a record,
+    // and the preparation's own failure is the one to report.
+    private static async Task JournalEndAsync(RunJournal journal, ResolvedEnvironment profile, IEnumerable<(string Name, GameRole Role, HostedCampaignRole Input)> roles,
+        Func<string, IGameHost>? hostFactory, TimeSpan timeout, bool cleaned)
+    {
+        foreach (string hostName in roles.Select(item => item.Role.Host).Distinct(StringComparer.OrdinalIgnoreCase))
+            try
+            {
+                await journal.AppendAsync(hostFactory?.Invoke(hostName) ?? profile.CreateHost(hostName), RunJournal.DirectoryFor(profile.Hosts[hostName]), "run",
+                    JournalEntry.Of(JournalEntry.RunEnded, ("state", "failed in preparation"), ("cleanupVerified", cleaned ? "true" : "false")), timeout, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the failed preparation's end on {hostName}: {error.Message}"); }
+    }
+
+    /// <summary>
+    /// Prepares every actor under run <paramref name="runId"/> (one is minted when null): each actor's install is
+    /// <c>&lt;runtime&gt;/vt-prep-&lt;runId&gt;-&lt;actor&gt;</c>, and every copy and character is journalled on its host before it is made
+    /// (<see cref="RunJournal"/>).
+    /// </summary>
     internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
+        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, string? runId = null)
     {
         inspection.Report.RequireReady();
         var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation).ConfigureAwait(false);
@@ -567,9 +591,10 @@ public static class HostedCampaignPreparation
                 role.CliPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
             selections[name] = [.. selections[name], new HostedRuntimeFile(config, configName)];
         }
-        string id = Guid.NewGuid().ToString("N");
-        var copies = new ConcurrentBag<(string Host, string Runtime, string Stage)>();
-        var stagedCharacters = new ConcurrentBag<(string Host, HostedCampaignCharacter Character)>();
+        var journal = new RunJournal(runId ?? RunJournal.NewRunId());
+        string id = journal.RunId;
+        var copies = new ConcurrentBag<(string Host, string Actor, string Runtime, string Stage)>();
+        var stagedCharacters = new ConcurrentBag<(string Host, string Actor, HostedCampaignCharacter Character)>();
         var listings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         try
         {
@@ -588,36 +613,51 @@ public static class HostedCampaignPreparation
                     (item.Name, Capacity: await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
                         item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)))).ConfigureAwait(false);
                 HostCopyCapacityProbe.RequireCombined(hostName, capacities.Select(item => (Actor: item.Name, item.Capacity)));
+                string journalDirectory = RunJournal.DirectoryFor(profile.Hosts[hostName]);
                 await Task.WhenAll(group.Select(async item =>
                 {
                     var (name, role, _) = item;
                     string parent = HostInstall.Join(role.Runtime, "vt-prep-" + id + "-" + name);
                     string runtime = HostInstall.Join(parent, "runtime"), stage = HostInstall.Join(parent, "staging");
+                    // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
+                    await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
+                        ("runtime", runtime), ("stage", stage), ("parent", parent)), timeout, cancellation).ConfigureAwait(false);
                     listings[name] = await HostedRuntimeStage.PrepareWithInspectedSourceAsync(host, name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
                         role.Install, runtime, stage, selections[name], timeout, cancellation,
                         item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage),
                         readiness.SourceListings[name]).ConfigureAwait(false);
-                    copies.Add((hostName, runtime, stage));
+                    copies.Add((hostName, name, runtime, stage));
+                    await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyDone,
+                        ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture))), timeout, cancellation).ConfigureAwait(false);
                     if (characters.TryGetValue(name, out var selected))
                     {
                         // The folders the host check resolved, never the manifest's object.
                         var folders = readiness.CharacterDirectories[name];
                         var character = selected with { Input = selected.Input.WithDirectories(folders.Characters!, folders.UserData!) };
+                        await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CharacterIntended,
+                            ("characters", folders.Characters!), ("userData", folders.UserData!), ("fileName", character.Input.FileName)), timeout, cancellation).ConfigureAwait(false);
                         await HostedCharacterStage.StageAsync(host, character, HostInstall.Join(parent, "character-stage"), timeout, cancellation).ConfigureAwait(false);
-                        stagedCharacters.Add((hostName, character.Input));
+                        stagedCharacters.Add((hostName, name, character.Input));
+                        await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CharacterDone,
+                            ("fileName", character.Input.FileName)), timeout, cancellation).ConfigureAwait(false);
                     }
                     role.Install = runtime;
                 })).ConfigureAwait(false);
             })).ConfigureAwait(false);
-            return new PreparedHostedCampaign(manifest, profile, listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout);
+            return new PreparedHostedCampaign(manifest, profile, listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout, journal);
         }
         catch (Exception original)
         {
             try
             {
-                await new PreparedHostedCampaign(manifest, profile, listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout).DisposeAsync().ConfigureAwait(false);
+                await new PreparedHostedCampaign(manifest, profile, listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout, journal).DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception cleanup) { throw new AggregateException("Campaign preparation failed and cleanup was not proven.", original, cleanup); }
+            catch (Exception cleanup)
+            {
+                await JournalEndAsync(journal, profile, roles, hostFactory, timeout, cleaned: false).ConfigureAwait(false);
+                throw new AggregateException("Campaign preparation failed and cleanup was not proven.", original, cleanup);
+            }
+            await JournalEndAsync(journal, profile, roles, hostFactory, timeout, cleaned: true).ConfigureAwait(false);
             throw;
         }
     }

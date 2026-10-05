@@ -86,14 +86,14 @@ internal sealed class HostedServerRun
     public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams) =>
         Create(profile, plan, runner, seams, prepared: false);
 
-    /// <summary>With <paramref name="prepared"/>, the server role's install is a campaign's prepared disposable install: the run uses it as its runtime.</summary>
-    internal static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams, bool prepared)
+    /// <summary>With <paramref name="prepared"/>, the server role's install is a campaign's prepared disposable install: the run uses it as its runtime, under the campaign's run id.</summary>
+    internal static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams, bool prepared, string? campaignRunId = null)
     {
         var role = profile.Server ?? throw new ArgumentException("The environment places no dedicated server.");
         var hostProfile = profile.Hosts[role.Host];
         if (Refusal(hostProfile, role, plan) is { } refusal) throw new ArgumentException($"The server environment on host '{role.Host}': {refusal}");
         seams ??= new HostedSeams();
-        string runId = seams.RunId ?? "run-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8];
+        string runId = seams.RunId ?? campaignRunId ?? RunJournal.NewRunId();
         var host = seams.Host?.Invoke(role.Host) ?? profile.CreateHost(role.Host);
         return new HostedServerRun(profile, role, hostProfile, host, runId, runner, seams, prepared ? role.Install : null);
     }

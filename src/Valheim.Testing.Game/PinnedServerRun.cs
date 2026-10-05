@@ -278,6 +278,9 @@ public static class PinnedServerRun
                 Directory.CreateDirectory(output); ownOutput = true;
                 report.Provenance["campaignSha256"] = FileHash.Sha256(manifestFile);
                 HostedCampaignPreparation.Inspection inspection = null!;
+                // One run id for the whole campaign: its prepared installs, its journal and the server run's directory.
+                string campaignRunId = RunJournal.NewRunId();
+                report.Provenance["runId"] = campaignRunId;
                 report.Step(StepPhase.Preflight, "campaign inputs and actor assignment", () =>
                 {
                     inspection = HostedCampaignPreparation.InspectInputs(manifestFile);
@@ -292,7 +295,7 @@ public static class PinnedServerRun
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
-                        options.HostSeams?.Host, cancellation.Token).ConfigureAwait(false)).ConfigureAwait(false);
+                        options.HostSeams?.Host, cancellation.Token, campaignRunId).ConfigureAwait(false)).ConfigureAwait(false);
                 report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
                 {
                     prepared!.ApplyTo(plan, prepared.Manifest, bind(plan), Path.Combine(output, "prepared"));
@@ -315,7 +318,7 @@ public static class PinnedServerRun
             if (environment != null)
             {
                 // The runtime is the server host's install, copied and checked there; nothing local is read for it.
-                hosted = HostedServerRun.Create(environment, plan, options.Name, options.HostSeams, prepared: prepared != null);
+                hosted = HostedServerRun.Create(environment, plan, options.Name, options.HostSeams, prepared: prepared != null, prepared?.Journal.RunId);
                 // A client's lost Steam account lease stops that client, then the run, as Ctrl+C would.
                 hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };
                 hosted.Record(report.Provenance);
@@ -449,6 +452,16 @@ public static class PinnedServerRun
                 catch (Exception error) { Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message); definite = true; } // Recorded as its failed step.
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
+            // The journal's last word on each host the campaign prepared: how the run ended and whether its cleanup was proven.
+            if (prepared != null)
+                foreach (string hostName in prepared.Copies.Select(copy => copy.Host).Distinct(StringComparer.OrdinalIgnoreCase))
+                    try
+                    {
+                        await prepared.Journal.AppendAsync(prepared.HostFor(hostName), prepared.JournalOf(hostName), "run", JournalEntry.Of(JournalEntry.RunEnded,
+                            ("state", report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed"),
+                            ("cleanupVerified", report.CleanupVerified ? "true" : "false")), prepared.Timeout).ConfigureAwait(false);
+                    }
+                    catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the run's end on {hostName}: {error.Message}"); }
             // The run ends here: it no longer holds the copies it keeps (their owner records go; see OwnedCopies).
             runtime?.Dispose(); world?.Dispose();
             if (ownOutput)
