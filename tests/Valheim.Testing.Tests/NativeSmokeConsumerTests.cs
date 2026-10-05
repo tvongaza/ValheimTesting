@@ -64,7 +64,7 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         Assert.Contains("<clear/>", config);
         Assert.Contains("https://api.nuget.org/v3/index.json", config);
         string source = File.ReadAllText(Path.Combine(_root, "Program.cs"));
-        Assert.Contains(server ? "PinnedServerRun.MainAsync" : "new TargetedRegression", source);
+        Assert.Contains(server ? "PinnedServerRun.MainAsync" : "TargetedRegression.Read", source);
         if (server) Assert.Contains("PinnedServerRun.RunCampaignAsync", source); // a server-load run off a Mac is a campaign
     }
 

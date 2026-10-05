@@ -24,7 +24,10 @@ public sealed class BundleSpec
     public string Issue { get; set; } = "";
     /// <summary>A short description of what the scenario does, for the README.</summary>
     public string Summary { get; set; } = "";
-    /// <summary>The run's <see cref="RegressionEnvironment"/> manifest (private; only read). Its template is generated.</summary>
+    /// <summary>
+    /// The run's <see cref="RegressionInputs"/> file, <c>regression.json</c> (private; only read), on the machine it ran on
+    /// (<see cref="TargetedRegression.Read"/>: the <c>environments.json</c> beside it, or this machine). Its template is generated.
+    /// </summary>
     public string? Environment { get; set; }
     /// <summary>Instead of <see cref="Environment"/>: a manifest whose machine-specific values are all <c>&lt;...&gt;</c> placeholders, bundled as is.</summary>
     public string? Template { get; set; }
@@ -87,7 +90,7 @@ public sealed class BundleSpec
         if (Arms.Count == 0) throw new ArgumentException("arms: name each arm's evidence directory and declared result.");
         foreach (var (name, arm) in Arms)
         {
-            // The rule RegressionEnvironment applies to its arm names, which a bundle's arms repeat.
+            // The rule RegressionInputs applies to its arm names, which a bundle's arms repeat.
             if (!Regex.IsMatch(name, @"^[A-Za-z0-9][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant))
                 throw new ArgumentException($"arms: \"{name}\" is not a name of letters, digits, - and _.");
             arm.Validate("arms." + name);
@@ -277,8 +280,8 @@ public static class RegressionBundle
         spec.Validate();
         output = Path.GetFullPath(output);
         if (Path.Exists(output)) throw new IOException($"{output} already exists; give the bundle a new directory.");
-        var environment = spec.Environment == null ? null : RegressionEnvironment.Read(spec.Environment);
-        var (template, environmentOnly) = environment != null ? Template(environment) : ReadTemplate(spec.Template!);
+        var environment = spec.Environment == null ? null : TargetedRegression.Read(spec.Environment);
+        var (template, environmentOnly) = environment != null ? Template(environment.Inputs) : ReadTemplate(spec.Template!);
         var evidence = CheckEvidence(spec, environment, template);
         var checks = evidence.Checks.ToList();
         checks.Add(CheckToolkit(spec, evidence.Toolkits, sources));
@@ -307,7 +310,7 @@ public static class RegressionBundle
             if (environment != null)
             {
                 File.WriteAllText(Path.Combine(staging, TemplateFile), JsonSerializer.Serialize(template, TemplateJson) + "\n");
-                files.Add(new(TemplateFile, "", "generated from the environment manifest: every machine-specific value replaced by a placeholder; hashes kept"));
+                files.Add(new(TemplateFile, "", "generated from the run's inputs: every machine-specific value replaced by a placeholder; hashes kept"));
             }
             else
             {
@@ -316,7 +319,7 @@ public static class RegressionBundle
             }
             var omitted = new List<BundleOmission>
             {
-                new("the environment manifest", "it holds machine paths, the disposable character and the fixture; regression.template.json has its shape with placeholders"),
+                new("the run's inputs and its machine", "they hold machine paths, the disposable character and the fixture; regression.template.json has the inputs' shape with placeholders"),
                 new("each arm's result.json, junit.xml, run-manifest.json and client-commands.jsonl", "private evidence with machine context; checked here and summarised in README.md, listed by SHA256 below"),
                 new("logs, saves, the fixture world and the staged DLLs", "never bundled"),
             };
@@ -349,15 +352,15 @@ public static class RegressionBundle
     {
         ArgumentNullException.ThrowIfNull(spec);
         spec.Validate();
-        var environment = spec.Environment == null ? null : RegressionEnvironment.Read(spec.Environment);
+        var environment = spec.Environment == null ? null : TargetedRegression.Read(spec.Environment);
         string template = Path.Combine(Path.GetFullPath(bundle), TemplateFile);
-        RegressionEnvironment? bundled = null;
-        try { bundled = ReadStrict<RegressionEnvironment>(template); }
+        RegressionTemplate? bundled = null;
+        try { bundled = ReadStrict<RegressionTemplate>(template); }
         catch (Exception error) when (error is IOException or JsonException or ArgumentException) { }
         Verify(bundle, spec, environment, CheckEvidence(spec, environment, bundled));
     }
 
-    private static void Verify(string bundle, BundleSpec spec, RegressionEnvironment? environment, EvidenceCheck evidence)
+    private static void Verify(string bundle, BundleSpec spec, TargetedRegression? environment, EvidenceCheck evidence)
     {
         bundle = Path.GetFullPath(bundle);
         var problems = new List<string>();
@@ -385,9 +388,9 @@ public static class RegressionBundle
         }
         try
         {
-            foreach (string problem in TemplateProblems(ReadStrict<RegressionEnvironment>(Path.Combine(bundle, TemplateFile)))) problems.Add($"{TemplateFile}: {problem}");
+            foreach (string problem in TemplateProblems(ReadStrict<RegressionTemplate>(Path.Combine(bundle, TemplateFile)))) problems.Add($"{TemplateFile}: {problem}");
         }
-        catch (Exception error) when (error is IOException or JsonException or ArgumentException) { problems.Add($"{TemplateFile}: missing or not an environment manifest ({error.Message})"); }
+        catch (Exception error) when (error is IOException or JsonException or ArgumentException) { problems.Add($"{TemplateFile}: missing or not a regression template ({error.Message})"); }
         problems.AddRange(Scrub(bundle, actual, RulesFor(spec, environment, evidence)));
         if (problems.Count != 0)
             throw new InvalidOperationException($"The bundle in {bundle} is not ready to share:\n  " + string.Join("\n  ", problems) +
@@ -490,8 +493,9 @@ public static class RegressionBundle
     private sealed record EvidenceCheck(IReadOnlyList<BundleArmResult> Results, IReadOnlyList<BundleEvidence> Files, IReadOnlyList<string> Checks, IReadOnlyList<string> Toolkits,
         IReadOnlySet<string> Unrelated, IReadOnlyList<string> Private, IReadOnlyList<string> ModPlugins);
 
-    private static EvidenceCheck CheckEvidence(BundleSpec spec, RegressionEnvironment? environment, RegressionEnvironment? template)
+    private static EvidenceCheck CheckEvidence(BundleSpec spec, TargetedRegression? run, RegressionTemplate? template)
     {
+        var environment = run?.Inputs;
         if (environment != null && !environment.Mod.Arms.Keys.Order(StringComparer.Ordinal).SequenceEqual(spec.Arms.Keys.Order(StringComparer.Ordinal), StringComparer.Ordinal))
             throw new InvalidOperationException($"The spec's arms ({string.Join(", ", spec.Arms.Keys)}) are not the environment's ({string.Join(", ", environment.Mod.Arms.Keys)}).");
         var arms = spec.Arms.Select(entry => CheckArm(spec, environment, entry.Key, entry.Value)).ToList();
@@ -537,7 +541,7 @@ public static class RegressionBundle
             arms.SelectMany(arm => arm.ModPlugins).Distinct(StringComparer.Ordinal).ToList());
     }
 
-    private static ArmCheck CheckArm(BundleSpec spec, RegressionEnvironment? environment, string name, BundleArm arm)
+    private static ArmCheck CheckArm(BundleSpec spec, RegressionInputs? environment, string name, BundleArm arm)
     {
         string where = $"arm {name} ({arm.Evidence})";
         string resultPath = Path.Combine(arm.Evidence, "result.json"), junitPath = Path.Combine(arm.Evidence, "junit.xml"), tracePath = Path.Combine(arm.Evidence, "client-commands.jsonl");
@@ -761,21 +765,19 @@ public static class RegressionBundle
         return text.ToString();
     }
 
-    // The environment manifest's shape with every machine-specific value replaced; returns it and the fields replaced.
-    private static (RegressionEnvironment Template, List<string> Replaced) Template(RegressionEnvironment environment)
+    // The inputs' shape with every machine-specific value replaced; returns it and the fields replaced.
+    private static (RegressionTemplate Template, List<string> Replaced) Template(RegressionInputs environment)
     {
         var replaced = new List<string>();
         string Placeholder(string field, string text) { replaced.Add(field); return $"<{text}>"; }
         string FileOf(string field, string file) => Placeholder(field, "path of " + Path.GetFileNameWithoutExtension(file)) + "/" + Path.GetFileName(file);
         RegressionFile Copy(RegressionFile file, string field) => new() { File = FileOf(field + ".file", file.File), Sha256 = file.Sha256.ToLowerInvariant() };
-        var template = new RegressionEnvironment
+        var template = new RegressionTemplate
         {
             Name = environment.Name,
-            Game = Placeholder("game", "full path of a prepared Valheim install with BepInEx; only read"),
-            Install = Placeholder("install", "full path of a new directory for the disposable install"),
             Client = new()
             {
-                Port = environment.Client.Port, LaunchArguments = environment.Client.LaunchArguments, StartSeconds = environment.Client.StartSeconds, JoinSeconds = environment.Client.JoinSeconds,
+                LaunchArguments = environment.Client.LaunchArguments, StartSeconds = environment.Client.StartSeconds, JoinSeconds = environment.Client.JoinSeconds,
                 Character = Placeholder("client.character", "a disposable local character's file name"),
             },
             Fixture = new() { Root = Placeholder("fixture.root", "directory holding exactly one world folder"), WorldUid = Placeholder("fixture.worldUid", "that world's UID") },
@@ -799,22 +801,22 @@ public static class RegressionBundle
                 }),
             },
         };
-        if (environment.Client.SaveDirectory != null) replaced.Add("client.saveDirectory (left out)");
-        replaced.Add("client.port (kept as a default)");
+        if (environment.Client.CharacterStore != null) replaced.Add("client.characterStore (left out)");
+        replaced.Add("the client environment (install, port, disposable copy, loader): the reviewer's inventory");
         if (TemplateProblems(template).FirstOrDefault() is { } problem) throw new InvalidOperationException("The generated template is not all placeholders: " + problem);
         return (template, replaced);
     }
 
-    private static (RegressionEnvironment Template, List<string> Replaced) ReadTemplate(string path)
+    private static (RegressionTemplate Template, List<string> Replaced) ReadTemplate(string path)
     {
-        RegressionEnvironment template;
-        try { template = ReadStrict<RegressionEnvironment>(path); }
+        RegressionTemplate template;
+        try { template = ReadStrict<RegressionTemplate>(path); }
         catch (JsonException error) { throw new ArgumentException($"template: {path} is not an environment manifest's shape: {error.Message}", error); }
         var problems = TemplateProblems(template).ToList();
         if (problems.Count != 0) throw new InvalidOperationException($"template: {path} holds machine-specific values; make each a <...> placeholder: " + string.Join("; ", problems));
         var replaced = new List<string>();
         foreach (var (field, value) in Fields(template)) if (value != null && (IsPlaceholder(value) || IsPlaceholderFile(value))) replaced.Add(field);
-        replaced.Add("client.port (kept as a default)");
+        if (template.Client.Port != null) replaced.Add("client.port (kept as a default)");
         return (template, replaced);
     }
 
@@ -822,12 +824,16 @@ public static class RegressionBundle
     private static bool IsPlaceholderFile(string value) => Regex.IsMatch(value, @"^<[^<>\r\n]+>/[^/\\<>\r\n]+\z", RegexOptions.CultureInvariant);
 
     // Every machine-specific field of a manifest, by name.
-    private static IEnumerable<(string Field, string? Value)> Fields(RegressionEnvironment manifest)
+    private static IEnumerable<(string Field, string? Value)> Fields(RegressionTemplate manifest)
     {
-        yield return ("game", manifest.Game);
-        yield return ("install", manifest.Install);
+        // An older template (from an environment manifest) also names the machine: those values are placeholders too.
+        if (manifest.Game != null) yield return ("game", manifest.Game);
+        if (manifest.Install != null) yield return ("install", manifest.Install);
+        if (manifest.LoaderPackage != null) yield return ("loaderPackage", manifest.LoaderPackage);
         yield return ("client.character", manifest.Client.Character);
         yield return ("client.saveDirectory", manifest.Client.SaveDirectory);
+        yield return ("client.characterStore", manifest.Client.CharacterStore);
+        yield return ("client.steamUserDataDirectory", manifest.Client.SteamUserDataDirectory);
         yield return ("fixture.root", manifest.Fixture.Root);
         yield return ("fixture.worldUid", manifest.Fixture.WorldUid);
         yield return ("cli.manifest", manifest.Cli.Manifest);
@@ -840,18 +846,18 @@ public static class RegressionBundle
         foreach (var (name, arm) in manifest.Mod.Arms) yield return ($"mod.arms.{name}.file", arm.File);
     }
 
-    private static IEnumerable<string> TemplateProblems(RegressionEnvironment template)
+    private static IEnumerable<string> TemplateProblems(RegressionTemplate template)
     {
         foreach (var (field, value) in Fields(template))
         {
-            bool file = field.EndsWith(".file", StringComparison.Ordinal) || field.StartsWith("configs.", StringComparison.Ordinal) || field == "cli.manifest";
-            bool optional = field is "client.saveDirectory" or "cli.manifest";
+            bool file = field.EndsWith(".file", StringComparison.Ordinal) || field.StartsWith("configs.", StringComparison.Ordinal) || field is "cli.manifest" or "loaderPackage";
+            bool optional = field is "client.saveDirectory" or "cli.manifest" or "client.characterStore" or "client.steamUserDataDirectory";
             if (value == null ? !optional : !(IsPlaceholder(value) || (file && IsPlaceholderFile(value))))
                 yield return $"{field} is \"{value}\", not a <...> placeholder" + (file ? " (or <...>/file name)" : "");
         }
     }
 
-    private static string Readme(BundleSpec spec, RegressionEnvironment template, EvidenceCheck evidence, BundleNativeRecord? native, IReadOnlyList<BundleFileEntry> files, int count)
+    private static string Readme(BundleSpec spec, RegressionTemplate template, EvidenceCheck evidence, BundleNativeRecord? native, IReadOnlyList<BundleFileEntry> files, int count)
     {
         var text = new StringBuilder();
         text.Append($"# {spec.Title}\n\n");
@@ -961,7 +967,7 @@ public static class RegressionBundle
         }
     }
 
-    private static ScrubRules RulesFor(BundleSpec spec, RegressionEnvironment? environment, EvidenceCheck evidence)
+    private static ScrubRules RulesFor(BundleSpec spec, TargetedRegression? run, EvidenceCheck evidence)
     {
         var secrets = new List<(Regex, string)>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -979,9 +985,18 @@ public static class RegressionBundle
             .Concat(spec.Arms.Values.Select(arm => arm.Evidence)))
             Secret(path, "a path");
         foreach (string text in evidence.Private) Secret(text, LooksLikePath(text) ? "a path" : "a name or ID of the fixture world");
-        if (environment != null)
+        if (run != null)
         {
-            foreach (string? path in new[] { environment.Game, environment.Install, environment.Fixture.Root, environment.Client.SaveDirectory, environment.Cli.Manifest }
+            var environment = run.Inputs;
+            // The machine the run used: its game, disposable install and save folder are private paths too.
+            string? save = null;
+            try { save = HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(run.Game)); }
+            catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException) { } // no install left to look at
+            string? loaderRoot = null;
+            try { loaderRoot = run.LoaderPackage == null ? null : BepInExLoaderPackage.Read(run.LoaderPackage).Root; }
+            catch (Exception error) when (error is IOException or InvalidDataException or ArgumentException or JsonException) { }
+            foreach (string? path in new[] { run.Game, run.Install, Path.GetDirectoryName(run.Install), save, run.SteamUserData, run.LoaderPackage, loaderRoot,
+                    environment.Fixture.Root, environment.Client.CharacterStore, environment.Cli.Manifest }
                 .Concat(environment.Configs.Values.Select(path => Path.GetDirectoryName(path)))
                 .Concat(new[] { environment.Cli.Core }.Concat(environment.Cli.Packs).Concat(environment.Plugins).Concat(environment.Patchers).Concat(environment.Probe == null ? [] : [environment.Probe]).Select(file => Path.GetDirectoryName(file.File)))
                 .Concat(environment.Mod.Arms.Values.Select(arm => Path.GetDirectoryName(arm.File))))
@@ -989,7 +1004,7 @@ public static class RegressionBundle
             Secret(environment.Client.Character, "the disposable character's name");
             Secret(environment.Fixture.WorldUid, "the fixture world's UID");
             // Plugins of the prepared game that the run does not load: environment detail, never named in the bundle.
-            string plugins = Path.Combine(environment.Game, "BepInEx", "plugins");
+            string plugins = Path.Combine(run.Game, "BepInEx", "plugins");
             if (Directory.Exists(plugins))
             {
                 var staged = new[] { environment.Cli.Core }.Concat(environment.Cli.Packs).Concat(environment.Plugins).Concat(environment.Probe == null ? [] : [environment.Probe])
@@ -1006,4 +1021,41 @@ public static class RegressionBundle
         denied.RemoveWhere(name => Allowed(spec, name) || name.Length < 3);
         return new(secrets, denied, spec);
     }
+}
+
+/// <summary>
+/// The shape of a bundle's <c>regression.template.json</c>: a run's <see cref="RegressionInputs"/> with placeholders. A bundle
+/// made before the inputs replaced the environment manifest also holds that manifest's machine fields (game, install,
+/// loaderPackage and the client's port, save and userdata folders), each a placeholder except the port, so it still verifies.
+/// </summary>
+public sealed class RegressionTemplate
+{
+    public string Name { get; set; } = "";
+    public string? Game { get; set; }
+    public string? Install { get; set; }
+    public string? LoaderPackage { get; set; }
+    public RegressionTemplateClient Client { get; set; } = new();
+    public RegressionFixture Fixture { get; set; } = new();
+    public RegressionCli Cli { get; set; } = new();
+    public List<RegressionFile> Plugins { get; set; } = [];
+    public RegressionFile? Probe { get; set; }
+    public RegressionMod Mod { get; set; } = new();
+    public Dictionary<string, string> Configs { get; set; } = [];
+    public List<RegressionFile> Patchers { get; set; } = [];
+    public List<string> OptionalReferences { get; set; } = [];
+    public Dictionary<string, LogClassification> LogScan { get; set; } = [];
+    public InstallPins? GamePins { get; set; }
+}
+
+/// <summary>The client part of a <see cref="RegressionTemplate"/>; an older template's port and folders included.</summary>
+public sealed class RegressionTemplateClient
+{
+    public int? Port { get; set; }
+    public string Character { get; set; } = "";
+    public string[] LaunchArguments { get; set; } = [];
+    public int StartSeconds { get; set; } = 300;
+    public int JoinSeconds { get; set; } = 180;
+    public string? SaveDirectory { get; set; }
+    public string? CharacterStore { get; set; }
+    public string? SteamUserDataDirectory { get; set; }
 }
