@@ -77,7 +77,7 @@ namespace Valheim.Testing.Adapter
                     var zone = new Vector2s(zx, zz);
                     zones++;
                     if (system.IsZoneLoaded(zone)) loaded++;
-                    foreach (ZDO zdo in ZoneTerrain.ZoneObjects(zone, MaxObjects))
+                    foreach (ZDO zdo in SavedObjects.InZone(zone, MaxObjects))
                     {
                         if (ReferenceEquals(zdo, own)) continue;
                         Vector3 position = zdo.GetPosition();

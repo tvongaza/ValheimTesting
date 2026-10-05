@@ -10,12 +10,10 @@
     <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <AssemblyName>MyMod.TestAdapter</AssemblyName><Version>0.1.0</Version>
     <UseValheimCli>true</UseValheimCli>
-    <DefineConstants>$(DefineConstants);VALHEIM_TESTING_REVIEW_CLIP</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../src/Valheim.Testing.Adapter/Adapter/*.cs" LinkBase="ValheimTestingAdapter" />
-    <!-- The adapter helpers' collider sampling (ZoneTerrain) needs Unity's physics module. -->
-    <ValheimReference Include="UnityEngine.PhysicsModule" />
+    <!-- The review clip frames (ReviewClipFrames) render through Unity's UI and image-conversion modules. -->
     <ValheimReference Include="UnityEngine.UIModule" />
     <ValheimReference Include="UnityEngine.ImageConversionModule" />
   </ItemGroup>

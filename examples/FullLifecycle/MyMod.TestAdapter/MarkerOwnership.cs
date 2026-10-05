@@ -104,7 +104,7 @@ internal static class MarkerOwnership
         var max = ZoneSystem.GetZone(new Vector3(x + 1.5f, 0f, z + 1.5f));
         for (int zx = min.x; zx <= max.x; zx++)
             for (int zz = min.y; zz <= max.y; zz++)
-                foreach (ZDO candidate in ZoneTerrain.ZoneObjects(new Vector2s(zx, zz), 50000, zdo => zdo.GetPrefab() == MarkerObservation.Marker.GetStableHashCode()))
+                foreach (ZDO candidate in SavedObjects.InZone(new Vector2s(zx, zz), 50000, zdo => zdo.GetPrefab() == MarkerObservation.Marker.GetStableHashCode()))
                 {
                     Vector3 at = candidate.GetPosition();
                     if ((at.x - x) * (at.x - x) + (at.z - z) * (at.z - z) > 2.25f ||
