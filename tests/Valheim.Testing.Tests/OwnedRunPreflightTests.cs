@@ -203,9 +203,19 @@ public sealed class OwnedRunPreflightTests : IDisposable
 
     [Theory]
     [InlineData(4, Doorstop4)] [InlineData(3, Doorstop3)] [InlineData(3, Doorstop3 + Doorstop4)]
-    [InlineData(0, Doorstop3)] [InlineData(0, Doorstop4)] // A proxy that shows no version: only the configuration is checked.
     public void AProxyWithItsOwnVersionsConfigurationIsAccepted(int proxy, string config) =>
-        BepInExLoader.RequireWindowsLoader(Loader(proxy == 0 ? Encoding.ASCII.GetBytes("fake") : Proxy(proxy), config), "client install");
+        BepInExLoader.RequireWindowsLoader(Loader(Proxy(proxy), config), "client install");
+
+    // Every real Doorstop 3 and 4 proxy holds exactly one of the two keys; one holding neither or both is refused, never
+    // passed with only its configuration checked (#256: an unrecognised proxy is a failure).
+    [Theory]
+    [InlineData("neither", Doorstop4)] [InlineData("neither", Doorstop3)] [InlineData("both", Doorstop4)]
+    public void AProxyThatShowsNoDoorstopVersionIsRefused(string holds, string config)
+    {
+        byte[] proxy = Encoding.ASCII.GetBytes(holds == "both" ? "MZ target_assembly targetAssembly" : "MZ fake");
+        var error = Assert.Throws<InvalidOperationException>(() => BepInExLoader.RequireWindowsLoader(Loader(proxy, config), "client install"));
+        Assert.Contains("winhttp.dll is not a Doorstop proxy this check recognises", error.Message);
+    }
 
     // ---- BepInEx's fresh startup log ----
 

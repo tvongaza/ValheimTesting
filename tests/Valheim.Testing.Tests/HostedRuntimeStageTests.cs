@@ -47,7 +47,10 @@ public sealed class HostedRuntimeStageTests : IDisposable
         string executable = Path.Combine(source, "Valheim.app", "Contents", "MacOS", "Valheim");
         string managed = Path.Combine(source, "Valheim.app", "Contents", "Resources", "Data", "Managed", InstallPins.GameAssemblyName);
         string core = Path.Combine(source, "BepInEx", "core", "BepInEx.dll");
-        foreach (string path in new[] { executable, managed, core })
+        // A complete loader: the preloader beside the core and BepInExPack's own Doorstop library.
+        string preloader = Path.Combine(source, "BepInEx", "core", "BepInEx.Preloader.dll");
+        string doorstop = Path.Combine(source, "doorstop_libs", "libdoorstop_x64.dylib");
+        foreach (string path in new[] { executable, managed, core, preloader, doorstop })
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, Path.GetFileName(path));
