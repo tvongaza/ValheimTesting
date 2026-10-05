@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Reflection;
 
 namespace Valheim.Testing.Game;
@@ -14,12 +13,8 @@ public enum ClientPlatform { Windows, Linux, MacOS }
 // BepInEx core whose MonoMod can hook on arm64. Both are modded paths; neither is chosen for the caller.
 public enum ClientArchitecture { X64, Arm64 }
 
-// Builds the direct launch of one BepInEx game client from its install directory: the client twin of GameLaunch.ForServer.
-// It reproduces what BepInExPack_Valheim's start_game_bepinex.sh exports on Linux and macOS, without the script,
-// so the started PID is the game's own. On Windows the pack's winhttp.dll proxy loads BepInEx and no variable is needed.
-// This only builds the ProcessStartInfo. A client needs an interactive desktop session with a display, a GPU and a
-// running, signed-in Steam client; one started from a service or an SSH session usually has no display and fails
-// or never shows a window. Starting it inside the user's session is a host adapter's job, not this class's.
+// What a game-client install is: its platform, decided from its contents, its executable and the architectures it can launch
+// as. GameLaunch.ForClient builds the launch from it.
 public static class ClientLaunch
 {
     public const string WindowsExecutable = "valheim.exe";
@@ -77,7 +72,7 @@ public static class ClientLaunch
     /// <summary>
     /// The architectures this install can be launched as, host aside: x64 for Windows and Linux; on macOS, the slices
     /// both the game executable and one of its Doorstop libraries contain, arm64 only when the BepInEx core also runs
-    /// natively (<c>CreateStartInfo</c> explains the rule). Empty when no Doorstop library matches.
+    /// natively (<see cref="GameLaunch.ForClient"/> explains the rule). Empty when no Doorstop library matches.
     /// </summary>
     public static IReadOnlyList<ClientArchitecture> LaunchArchitectures(string installDirectory)
     {
@@ -89,82 +84,7 @@ public static class ClientLaunch
             && (architecture != ClientArchitecture.Arm64 || MacNativeCoreProblem(install) == null)).ToList();
     }
 
-    /// <summary>
-    /// Start info for one BepInEx game client. BepInEx's preloader and the platform's Doorstop loader must be present; on
-    /// Windows doorstop_config.ini must enable Doorstop and target BepInEx's preloader. <c>-console</c> is added first unless
-    /// <paramref name="console"/> is false or the caller passed it; other arguments follow unchanged. Caller environment is
-    /// applied first and may not set Doorstop's variables or pass <c>--doorstop-*</c> arguments. SteamAppId defaults to the
-    /// game's unless the caller sets it. Linux enables Doorstop and prepends doorstop_libs to LD_LIBRARY_PATH and the
-    /// library to LD_PRELOAD. macOS enables Doorstop and starts the bundle through <c>/usr/bin/arch</c> as the requested
-    /// <paramref name="architecture"/>, inserting a Doorstop library that has that slice; <c>arch</c> fails rather than run
-    /// another slice, so an arm64 request never falls back to Rosetta. X64, the default, is the Rosetta compatibility path on
-    /// Apple Silicon. Arm64 is the native path and also needs a BepInEx core whose <c>MonoMod.RuntimeDetour.dll</c> is version
-    /// 25 or later (legacy MonoMod cannot hook on arm64); an install without it is refused here, before anything starts.
-    /// Windows and Linux clients are x64 only. The host must be the client's own OS.
-    /// </summary>
-    public static ProcessStartInfo CreateStartInfo(string installDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null,
-        ClientArchitecture architecture = ClientArchitecture.X64, bool console = true) =>
-        CreateStartInfo(installDirectory, arguments, environment, architecture, console, CurrentHost);
-
-    internal static ProcessStartInfo CreateStartInfo(string installDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
-        ClientArchitecture architecture, bool console, ClientPlatform host)
-    {
-        ArgumentNullException.ThrowIfNull(arguments);
-        string install = FullInstall(installDirectory);
-        var (platform, executable) = Resolve(install, host);
-        if (platform != ClientPlatform.MacOS && architecture != ClientArchitecture.X64)
-            throw new ArgumentException($"The {platform} client is x64 only; {architecture} exists for the macOS client alone.", nameof(architecture));
-        BepInExLoader.RequireCore(install, "install");
-        string? macDoorstop = null;
-        if (platform == ClientPlatform.Windows) BepInExLoader.RequireWindowsLoader(install, "install");
-        else if (platform == ClientPlatform.Linux) BepInExLoader.RequireFile(install, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the install");
-        else macDoorstop = RequireMacArchitecture(install, architecture);
-
-        environment ??= new Dictionary<string, string>();
-        var names = host == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var passed = BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(ClientLaunch));
-        if (console && !passed.Contains(ConsoleArgument, StringComparer.OrdinalIgnoreCase)) passed.Insert(0, ConsoleArgument);
-        // Search lists split on ':' (LD_LIBRARY_PATH also on ';'), so such a path cannot be represented. Checked only
-        // where the launch can run; a Windows machine builds these launches only when a test injects the host.
-        if (platform != ClientPlatform.Windows && !OperatingSystem.IsWindows()
-            && install.IndexOfAny(platform == ClientPlatform.Linux ? [':', ';'] : [':']) >= 0)
-            throw new ArgumentException($"A {platform} install path cannot contain ':'" + (platform == ClientPlatform.Linux ? " or ';'." : "."), nameof(installDirectory));
-
-        var start = new ProcessStartInfo(executable) { WorkingDirectory = install, UseShellExecute = false };
-        // Inherited Doorstop values would reach the game too; only the ones set below may.
-        BepInExLoader.ApplyEnvironment(start, environment);
-        if (!environment.Keys.Any(key => names.Equals(key, "SteamAppId"))) start.Environment["SteamAppId"] = GameSteamAppId;
-        if (platform != ClientPlatform.Windows)
-        {
-            start.Environment["DOORSTOP_ENABLED"] = "1";
-            start.Environment["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(install, BepInExLoader.Preloader);
-        }
-        if (platform == ClientPlatform.Linux)
-        {
-            // Same effective order as the pack's script: doorstop_libs, then the existing value.
-            start.Environment["LD_LIBRARY_PATH"] = BepInExLoader.Prepend(start.Environment, "LD_LIBRARY_PATH", Path.Combine(install, "doorstop_libs"));
-            start.Environment["LD_PRELOAD"] = BepInExLoader.Prepend(start.Environment, "LD_PRELOAD", "libdoorstop_x64.so");
-        }
-        else if (platform == ClientPlatform.MacOS)
-        {
-            // Named by full path, so the script's DYLD_LIBRARY_PATH entry is not needed. An explicit slice, because a
-            // universal game otherwise starts as the parent's architecture, which the library may lack.
-            start.Environment["DYLD_INSERT_LIBRARIES"] = BepInExLoader.Prepend(start.Environment, "DYLD_INSERT_LIBRARIES", macDoorstop!);
-            start.FileName = MacArchLauncher;
-            start.ArgumentList.Add(architecture == ClientArchitecture.Arm64 ? "-arm64" : "-x86_64");
-            foreach (string name in start.Environment.Keys.Where(key => key.StartsWith("DYLD_", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList())
-            {
-                start.ArgumentList.Add("-e");
-                start.ArgumentList.Add(name + "=" + start.Environment[name]);
-                start.Environment.Remove(name);
-            }
-            start.ArgumentList.Add(executable);
-        }
-        foreach (string argument in passed) start.ArgumentList.Add(argument);
-        return start;
-    }
-
-    private static (ClientPlatform Platform, string Executable) Resolve(string install, ClientPlatform host)
+    internal static (ClientPlatform Platform, string Executable) Resolve(string install, ClientPlatform host)
     {
         var platform = Detect(install);
         string executable = platform switch
@@ -176,7 +96,7 @@ public static class ClientLaunch
         // Refused before any file mode is read: exec of another OS's binary fails with an opaque error.
         if (platform != host)
             throw new PlatformNotSupportedException($"This {host} host cannot run the {platform} Valheim client {executable}; " +
-                $"start it on a {platform} machine. ClientLaunch does not support Wine, Proton or other cross-OS launches.");
+                $"start it on a {platform} machine. GameLaunch does not support Wine, Proton or other cross-OS launches.");
         if (!File.Exists(executable)) throw new FileNotFoundException($"{MacBundle} has no executable: {MacExecutable}", executable);
         // The outer check is the real OS (Unix modes exist); the inner one is the host this launch is built for.
         if (!OperatingSystem.IsWindows())
@@ -273,7 +193,7 @@ public static class ClientLaunch
     // Steam installs name it Valheim.app; a case-insensitive match also finds it on a case-sensitive file system.
     private static string? FindMacBundle(string install) =>
         Directory.EnumerateDirectories(install).FirstOrDefault(path => Path.GetFileName(path).Equals(MacBundle, StringComparison.OrdinalIgnoreCase));
-    private static string FullInstall(string installDirectory)
+    internal static string FullInstall(string installDirectory)
     {
         ArgumentException.ThrowIfNullOrEmpty(installDirectory);
         string install = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDirectory));

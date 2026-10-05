@@ -392,7 +392,7 @@ internal sealed class HostedServerRun
         if (plan.LaunchArchitecture != ClientArchitecture.X64)
             throw new ArgumentException($"Profile client '{name}' starts in a remote host's desktop session, where only x64 Windows and Linux clients run; " +
                 "architecture arm64 is for a macOS client launched locally in this runner's GUI session. Leave architecture out.");
-        var launch = HostClientLaunch.Create(platform, role.Install, plan.LaunchArguments, secretVariables: plan.PasswordVariable is { } password ? new[] { password } : null);
+        var launch = GameLaunch.ForClient(role.Install, plan.LaunchArguments, hostPlatform: platform, secretVariables: plan.PasswordVariable is { } password ? new[] { password } : null);
         var host = ClientHost(role);
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
         // The server's lock covers its own host; another client host is locked for the rest of the run.

@@ -55,10 +55,10 @@ public static class ServerLaunch
         if (linux) return ServerPlatform.Linux;
         if (mac) return ServerPlatform.MacOS;
         if (IsMacClient(runtime))
-            throw new PlatformNotSupportedException($"{runtime} is the macOS Valheim game client ({MacClientBundle}), not a dedicated server; ClientLaunch builds its launch. " + MacServerHint);
+            throw new PlatformNotSupportedException($"{runtime} is the macOS Valheim game client ({MacClientBundle}), not a dedicated server; GameLaunch.ForClient builds its launch. " + MacServerHint);
         string? client = new[] { ClientLaunch.WindowsExecutable, ClientLaunch.LinuxExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(runtime, name)));
         throw new FileNotFoundException($"Runtime contains none of {WindowsExecutable}, {LinuxExecutable} or {MacExecutable} (with {MacData})." +
-            (client == null ? "" : $" It holds the game client {client}; launch it with ClientLaunch."), runtime);
+            (client == null ? "" : $" It holds the game client {client}; launch it with GameLaunch.ForClient."), runtime);
     }
 
     /// <summary>

@@ -9,7 +9,7 @@ namespace Valheim.Testing.Game;
 // stand in for without hiding another (BepInExLoaderPackage.DoorstopMismatch).
 internal sealed class DoorstopPairingException(string message) : InvalidOperationException(message);
 
-// The BepInEx loader policy every launch (GameLaunch, ClientLaunch) shares: the files a BepInEx launch needs, the Windows Doorstop
+// The BepInEx loader policy every launch (GameLaunch) shares: the files a BepInEx launch needs, the Windows Doorstop
 // configuration, and the caller settings that would disable or redirect the loader. It checks an install before launch;
 // it cannot prove the loader ran, which the session's plugin pins do.
 internal static class BepInExLoader
@@ -53,7 +53,7 @@ internal static class BepInExLoader
     /// <summary>
     /// The files a BepInEx launch needs on a Windows or Linux host, relative with <c>/</c>: the preloader and core, and the
     /// platform's Doorstop (the Windows proxy and its configuration, or the Linux <c>libdoorstop_x64.so</c>). The one list the
-    /// launches for a host (<see cref="GameLaunch.RequiredFiles"/>, <see cref="HostClientLaunch"/>) and the checks of an
+    /// launches for a host (<see cref="GameLaunch.RequiredFiles"/>) and the checks of an
     /// install on another host use; a macOS install needs either of its Doorstop libraries (<see cref="RequireLoaderFiles"/>).
     /// </summary>
     internal static string[] LoaderFiles(ClientPlatform platform) => platform switch
@@ -66,7 +66,7 @@ internal static class BepInExLoader
     /// <summary>
     /// Refuses an install on another host whose <paramref name="present"/> files (its listing, or what an existence check found)
     /// lack one of <see cref="LoaderFiles"/>, naming each missing one; a macOS install needs the preloader, the core and either
-    /// Doorstop library <see cref="ClientLaunch"/> accepts (the root <c>libdoorstop.dylib</c> or BepInExPack's
+    /// Doorstop library <see cref="GameLaunch.ForClient"/> accepts (the root <c>libdoorstop.dylib</c> or BepInExPack's
     /// <c>doorstop_libs/libdoorstop_x64.dylib</c>).
     /// </summary>
     internal static void RequireLoaderFiles(ClientPlatform platform, Func<string, bool> present, string kind)

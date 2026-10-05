@@ -55,135 +55,6 @@ public sealed class LinuxDisplay
     }
 }
 
-/// <summary>
-/// One BepInEx game client launch for an install on another machine: what <see cref="ClientLaunch"/> builds for a Windows or
-/// Linux install, as data. The install's files are checked on the host when the client starts
-/// (<see cref="RequiredFiles"/>), not here. Environment values are not secret (on Windows they pass through a launch file the
-/// launcher deletes once read); a secret is named in <see cref="SecretVariables"/> instead, and its value is read from this process's environment at launch.
-/// </summary>
-public sealed class HostClientLaunch
-{
-    private static readonly Regex VariableName = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
-
-    private HostClientLaunch(ClientPlatform platform, string install, string executable, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment,
-        IReadOnlyDictionary<string, string> prepended, IReadOnlyList<string> unset, IReadOnlyList<string> secretVariables, IReadOnlyList<string> requiredFiles)
-    {
-        Platform = platform; Install = install; Executable = executable; Arguments = arguments; Environment = environment;
-        Prepended = prepended; Unset = unset; SecretVariables = secretVariables; RequiredFiles = requiredFiles;
-    }
-
-    public ClientPlatform Platform { get; }
-    /// <summary>The install directory on the host; also the game's working directory.</summary>
-    public string Install { get; }
-    /// <summary>The game executable's full path on the host.</summary>
-    public string Executable { get; }
-    /// <summary>The game's arguments, <c>-console</c> first unless left out.</summary>
-    public IReadOnlyList<string> Arguments { get; }
-    /// <summary>Variables set for the game, the caller's first. <c>SteamAppId</c> is 892970 unless the caller sets it.</summary>
-    public IReadOnlyDictionary<string, string> Environment { get; }
-    /// <summary>Linux: entries put in front of the session's own value (<c>LD_LIBRARY_PATH</c>, <c>LD_PRELOAD</c>), as the pack's script does.</summary>
-    public IReadOnlyDictionary<string, string> Prepended { get; }
-    /// <summary>Inherited variables removed before the launch (Doorstop's, which would redirect or disable BepInEx).</summary>
-    public IReadOnlyList<string> Unset { get; }
-    /// <summary>Names of variables whose values come from this process's environment at launch and reach only the game's environment.</summary>
-    public IReadOnlyList<string> SecretVariables { get; }
-    /// <summary>Files, relative to <see cref="Install"/>, the host must have before anything starts: the game and BepInEx's loader.</summary>
-    public IReadOnlyList<string> RequiredFiles { get; }
-
-    /// <summary>
-    /// A Windows or Linux client launch from <paramref name="install"/>, an absolute path on the host. As with
-    /// <see cref="ClientLaunch"/>, Doorstop's variables and <c>--doorstop-*</c> arguments are refused, <c>-console</c> is added
-    /// unless <paramref name="console"/> is false or the caller passed it, and a Linux install path may not contain ':', ';' or '='.
-    /// A macOS client cannot be started in its desktop session from another machine and is refused.
-    /// </summary>
-    /// <param name="secretVariables">Variables (for example the join password's) read from this process at launch; never logged or written as evidence.</param>
-    public static HostClientLaunch Create(ClientPlatform platform, string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null,
-        IEnumerable<string>? secretVariables = null, bool console = true)
-    {
-        ArgumentNullException.ThrowIfNull(arguments);
-        if (platform == ClientPlatform.MacOS)
-            throw new PlatformNotSupportedException("A macOS client cannot be started in its desktop session from another machine: a process started over SSH is not in the " +
-                "logged-in user's GUI session and cannot reach its Steam client. Run the test runner inside that session and use ClientSession.Launch, or use a Windows or Linux client host.");
-        bool windows = platform == ClientPlatform.Windows;
-        ArgumentException.ThrowIfNullOrWhiteSpace(install);
-        if (install.Any(char.IsControl) || (windows ? !Regex.IsMatch(install, @"^([A-Za-z]:[\\/]|\\\\[^\\/])") || install.Contains('"') : !install.StartsWith('/')))
-            throw new ArgumentException($"The install must be an absolute {platform} path on the host.", nameof(install));
-        // ':' and ';' separate search-list entries; '=' would make env read the game's path as a variable.
-        if (!windows && install.IndexOfAny([':', ';', '=']) >= 0) throw new ArgumentException("A Linux install path cannot contain ':', ';' or '='.", nameof(install));
-        string root = install.Length > 3 ? install.TrimEnd('/', '\\') : install;
-        string Join(string relative) => windows ? root.TrimEnd('\\', '/') + "\\" + relative.Replace('/', '\\') : root.TrimEnd('/') + "/" + relative;
-
-        environment ??= new Dictionary<string, string>();
-        var names = windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var passed = BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(HostClientLaunch));
-        if (console && !passed.Contains(ClientLaunch.ConsoleArgument, StringComparer.OrdinalIgnoreCase)) passed.Insert(0, ClientLaunch.ConsoleArgument);
-        foreach (string argument in passed)
-            if (argument.Contains('\0') || (!windows && argument.Any(ch => ch is '\n' or '\r'))) throw new ArgumentException("A launch argument cannot contain NUL or, on Linux, a line break.", nameof(arguments));
-
-        var set = new Dictionary<string, string>(names);
-        foreach (var (name, value) in environment)
-        {
-            if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a variable name.", nameof(environment));
-            ArgumentNullException.ThrowIfNull(value, name);
-            if (value.Contains('\0')) throw new ArgumentException($"{name} cannot contain a NUL character.", nameof(environment));
-            set[name!] = value;
-        }
-        if (!set.ContainsKey("SteamAppId")) set["SteamAppId"] = ClientLaunch.GameSteamAppId;
-        var prepended = new Dictionary<string, string>(names);
-        string[] required;
-        string[] unset;
-        string executable;
-        if (windows)
-        {
-            executable = Join(ClientLaunch.WindowsExecutable);
-            unset = [.. BepInExLoader.Variables];
-            required = [ClientLaunch.WindowsExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows).Select(file => file.Replace('/', '\\'))];
-        }
-        else
-        {
-            executable = Join(ClientLaunch.LinuxExecutable);
-            unset = ["DOORSTOP_DISABLE"];
-            set["DOORSTOP_ENABLED"] = "1";
-            set["DOORSTOP_TARGET_ASSEMBLY"] = Join("BepInEx/core/BepInEx.Preloader.dll");
-            prepended["LD_LIBRARY_PATH"] = Join("doorstop_libs");
-            prepended["LD_PRELOAD"] = "libdoorstop_x64.so";
-            required = [ClientLaunch.LinuxExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux)];
-        }
-
-        var secrets = new List<string>();
-        foreach (string name in secretVariables ?? [])
-        {
-            if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a variable name.", nameof(secretVariables));
-            if (set.ContainsKey(name!) || prepended.ContainsKey(name!) || unset.Contains(name!, names) || secrets.Contains(name!, names))
-                throw new ArgumentException($"{name} is given twice or set by the launch itself; a secret variable is only a secret.", nameof(secretVariables));
-            secrets.Add(name!);
-        }
-        return new HostClientLaunch(platform, root, executable, passed, set, prepended, unset, secrets, required);
-    }
-
-    /// <summary>The hash of the command line the started game has (<see cref="HostProcessProbe.ExpectedCommandLineSha256"/>): the Linux start runs <c>$install/$exe</c>.</summary>
-    internal string CommandLineSha256() => HostProcessProbe.ExpectedCommandLineSha256(Platform == ClientPlatform.Windows,
-        Platform == ClientPlatform.Windows ? Executable : Install + "/" + ClientLaunch.LinuxExecutable, Arguments);
-
-    /// <summary>
-    /// The launch as the host scripts read it: one line per item, <c>kind base64(UTF-8)</c>. It holds no secret values. The Windows
-    /// launcher deletes its copy in the launch directory once it has read it, as the server's does; Linux keeps it in memory only.
-    /// </summary>
-    internal string Spec()
-    {
-        var text = new StringBuilder();
-        void Line(string kind, string value) => text.Append(kind).Append(' ').Append(InteractiveClient.Base64(value)).Append('\n');
-        Line("exe", Executable);
-        Line("dir", Install);
-        if (Platform == ClientPlatform.Windows) Line("args", WindowsCommandLine.Join(Arguments));
-        else foreach (string argument in Arguments) Line("arg", argument);
-        foreach (string name in Unset) Line("unset", name);
-        foreach (var (name, value) in Environment.OrderBy(pair => pair.Key, StringComparer.Ordinal)) Line("env", name + "=" + value);
-        foreach (var (name, value) in Prepended.OrderBy(pair => pair.Key, StringComparer.Ordinal)) Line("prepend", name + "=" + value);
-        return text.ToString();
-    }
-}
-
 /// <summary>What stopping an interactive client found: it was killed, had gone already, or quit by itself when asked.</summary>
 public enum InteractiveStop { Stopped, AlreadyGone, Quit }
 
@@ -197,7 +68,7 @@ public enum InteractiveStop { Stopped, AlreadyGone, Quit }
 /// whatever happened.</item>
 /// <item>Linux (a bash host): the game starts in its own session (setsid) with the <see cref="LinuxDisplay"/>'s DISPLAY,
 /// WAYLAND_DISPLAY, XDG_RUNTIME_DIR, XAUTHORITY and session bus. The host user must be the display's user.</item>
-/// <item>macOS: not supported from another machine (<see cref="HostClientLaunch.Create"/> refuses it).</item>
+/// <item>macOS: not supported from another machine (<see cref="GameLaunch.ForClient"/> refuses it).</item>
 /// </list>
 /// The host refuses before anything starts when the user has no desktop session there (on Windows, also when it has more than one),
 /// when no Steam client runs as the user in it, when a required install file is missing or when the launch directory exists.
@@ -219,12 +90,14 @@ public static class InteractiveClient
     /// </summary>
     /// <param name="timeout">How long the start may take, at least 15 s. A reply lost past it is an unknown outcome: a client (and, on
     /// Windows, its task) may exist, named in the exception.</param>
-    public static async Task<InteractiveClientProcess> StartAsync(IGameHost host, HostClientLaunch launch, string launchDirectory, TimeSpan timeout,
+    public static async Task<InteractiveClientProcess> StartAsync(IGameHost host, GameLaunch launch, string launchDirectory, TimeSpan timeout,
         LinuxDisplay? display = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
         if (timeout < TimeSpan.FromSeconds(15)) throw new ArgumentOutOfRangeException(nameof(timeout), "Allow a client start at least 15 s.");
+        if (launch.IsServer || !launch.ForHost)
+            throw new ArgumentException("A host starts a client launch built for it: GameLaunch.ForClient with the host's platform.", nameof(launch));
         bool windows = launch.Platform == ClientPlatform.Windows;
         if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
             throw new ArgumentException(windows ? $"A Windows client starts through a PowerShell host; {host.Name} runs {host.Shell}."
@@ -252,7 +125,7 @@ public static class InteractiveClient
         string? task = windows ? TaskPrefix + Guid.NewGuid().ToString("N") : null;
         var variables = new Dictionary<string, string>
         {
-            ["install"] = launch.Install, ["dir"] = launchDirectory, ["spec"] = launch.Spec(), ["seconds"] = seconds,
+            ["install"] = launch.WorkingDirectory, ["dir"] = launchDirectory, ["spec"] = launch.Spec(), ["seconds"] = seconds,
             ["files"] = string.Join('\n', launch.RequiredFiles),
         };
         if (windows) { variables["task"] = task!; variables["launcher"] = InteractiveScripts.WindowsLauncher; }
@@ -271,11 +144,11 @@ public static class InteractiveClient
     }
 
     /// <summary>
-    /// <see cref="StartAsync(IGameHost, HostClientLaunch, string, TimeSpan, LinuxDisplay, CancellationToken)"/> on the leased Steam
+    /// <see cref="StartAsync(IGameHost, GameLaunch, string, TimeSpan, LinuxDisplay, CancellationToken)"/> on the leased Steam
     /// account <paramref name="account"/>: refused before anything runs on the host unless its lease is live, was taken for a client
     /// on this host, and passed the signed-in check when the profile asks for one.
     /// </summary>
-    public static Task<InteractiveClientProcess> StartAsync(SteamAccountHold account, IGameHost host, HostClientLaunch launch, string launchDirectory, TimeSpan timeout,
+    public static Task<InteractiveClientProcess> StartAsync(SteamAccountHold account, IGameHost host, GameLaunch launch, string launchDirectory, TimeSpan timeout,
         LinuxDisplay? display = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(account);

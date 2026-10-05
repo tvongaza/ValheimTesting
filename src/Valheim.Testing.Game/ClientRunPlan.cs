@@ -16,7 +16,7 @@ public sealed class ClientRunPlan
     public string Mode { get; set; } = "";
     /// <summary>Owned only: the client install to launch, with BepInEx and ValheimCLI.</summary>
     public string Install { get; set; } = "";
-    /// <summary>Owned only: extra game arguments; <see cref="ClientLaunch"/> adds <c>-console</c>.</summary>
+    /// <summary>Owned only: extra game arguments; <see cref="GameLaunch.ForClient"/> adds <c>-console</c>.</summary>
     public string[] LaunchArguments { get; set; } = [];
     /// <summary>
     /// Owned only: the slice a macOS client (<c>Valheim.app</c>) runs as, <c>x64</c> or <c>arm64</c>. Left out, it is <c>x64</c>:
