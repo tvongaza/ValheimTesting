@@ -40,7 +40,7 @@ public partial class ServerRunPlan
     /// <summary>Strict ValheimCLI expectations: <c>worlduid</c> and an exact MD5 for every listed plugin.</summary>
     public Dictionary<string, string> Pins { get; set; } = [];
     /// <summary>
-    /// The runtime's game build, loader and patchers by SHA256 (<see cref="InstallPins.Of"/> computes them), checked
+    /// The runtime's game build, BepInEx core and patchers by SHA256 (<see cref="InstallPins.Of"/> computes them), checked
     /// on the copy before launch: what ValheimCLI cannot report in game. Required unless <see cref="Pinning"/> is <c>none</c>.
     /// </summary>
     public InstallPins? RuntimePins { get; set; }
@@ -122,7 +122,7 @@ public partial class ServerRunPlan
             throw new ArgumentException("All listed plugins require exact MD5 pins.");
         if (Pins.ContainsKey("worldfiles")) throw new ArgumentException("World bytes change after save; pin input SHA256 and persistent worlduid instead.");
         if (RuntimePins == null)
-            throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\".");
+            throw new ArgumentException("Pin the runtime's game build, BepInEx core and patchers in runtimePins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\".");
         RuntimePins.Validate("runtime");
     }
     public static string ExecutableFor(ServerPlatform platform) => platform switch
@@ -159,11 +159,11 @@ public partial class ServerRunPlan
     /// <summary>Refuses a runtime whose <c>BepInEx/patchers</c> holds an entry <see cref="Patchers"/> does not name, or lacks one it names.</summary>
     public void CheckRuntimePatchers(string runtime) => BepInExLoader.RequirePatchers(runtime, Patchers, "runtime");
     /// <summary>
-    /// Pinned: refuses a runtime whose game build, loader or patchers are not <see cref="RuntimePins"/>. Unpinned:
+    /// Pinned: refuses a runtime whose game build, BepInEx core or patchers are not <see cref="RuntimePins"/>. Unpinned:
     /// checks nothing. Either way returns what the runtime holds, for the report.
     /// </summary>
     public InstallPins CheckRuntimePins(string runtime) => !Pinned ? InstallPins.Of(runtime) :
-        (RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."))
+        (RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, BepInEx core and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."))
             .Check(runtime, "runtime");
     public void CheckOutput(string output)
     {

@@ -21,9 +21,6 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], WorldFixture.Hash(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Equal(changed, WorldFixture.Hash(sourceCore));
         Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
-        // One loader identity: the install the package was applied to has the package's loader pin, which its identity names.
-        Assert.Equal(package.Loader, InstallPins.Of(_rig.Install).Loader);
-        Assert.EndsWith("(" + package.Loader + ")", package.Identity);
         staged.Verify();
         new TargetedRegression(environment).Stage("candidate").Verify(); // The package remains selected across arms.
     }
@@ -93,48 +90,6 @@ public sealed class BepInExLoaderPackageTests : IDisposable
 
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], WorldFixture.Hash(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
-    }
-
-    [Fact] public void GamePinsNameThePackagesLoaderWhenOneIsSelected()
-    {
-        var package = Package();
-        string manifest = Path.Combine(_rig.Root, "loader.json");
-        package.Write(manifest);
-        File.WriteAllText(Path.Combine(_rig.Game, "BepInEx", "core", "BepInEx.dll"), "another live core");
-        var environment = _rig.Manifest();
-        environment.LoaderPackage = manifest;
-        // The live game's own loader is not what the disposable install will run.
-        environment.GamePins = new InstallPins { Game = InstallPins.GameHash(_rig.Game), Loader = InstallPins.Of(_rig.Game).Loader, Patchers = new string('0', 64) };
-        Assert.Contains("the loader differs", Assert.Throws<InvalidOperationException>(() => new TargetedRegression(environment).Stage("parent")).Message);
-        Assert.False(Directory.Exists(_rig.Install));
-        // The control: the package's loader is.
-        environment.GamePins.Loader = package.Loader;
-        new TargetedRegression(environment).Stage("parent").Verify();
-    }
-
-    [Fact] public void ThePackagesLoaderLeavesOutItsBepInExSettings()
-    {
-        var package = Package();
-        Assert.Contains("BepInEx/config/BepInEx.cfg", package.Files.Keys);
-        string loader = package.Loader;
-        File.AppendAllText(Path.Combine(package.Root, "BepInEx", "config", "BepInEx.cfg"), "\n[Logging.Disk]\nEnabled = true\n");
-        var recaptured = BepInExLoaderPackage.Capture(package.Root, package.Name, package.Version);
-        Assert.NotEqual(package.Files["BepInEx/config/BepInEx.cfg"], recaptured.Files["BepInEx/config/BepInEx.cfg"]);
-        Assert.Equal(loader, recaptured.Loader);
-        // Negative control: another Doorstop library is a new loader.
-        Directory.CreateDirectory(Path.Combine(package.Root, "doorstop_libs"));
-        File.WriteAllText(Path.Combine(package.Root, "doorstop_libs", "libdoorstop_x64.so"), "another doorstop");
-        Assert.NotEqual(loader, BepInExLoaderPackage.Capture(package.Root, package.Name, package.Version).Loader);
-    }
-
-    [Fact] public void AManifestWithUppercaseHashesHasTheSameLoader()
-    {
-        // Get-FileHash writes uppercase hex, which Validate accepts; the loader pin is lowercase like every listing's.
-        var package = Package();
-        string manifest = Path.Combine(_rig.Root, "upper.json");
-        new BepInExLoaderPackage { Name = package.Name, Version = package.Version, Root = package.Root,
-            Files = package.Files.ToDictionary(file => file.Key, file => file.Value.ToUpperInvariant(), StringComparer.Ordinal) }.Write(manifest);
-        Assert.Equal(package.Loader, BepInExLoaderPackage.Read(manifest).Loader);
     }
 
     private BepInExLoaderPackage Package()

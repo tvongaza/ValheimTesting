@@ -14,7 +14,7 @@ public sealed class PlanRuleTests
         World = new() { Source = Path.GetTempPath(), Sha256 = new() { ["worlds_local/test.db"] = new('b', 64) } },
         Executable = "valheim_server.exe", Arguments = ["-batchmode", "-nographics", "-savedir", "{world}"],
         Pins = new() { ["worlduid"] = "123", ["my.mod"] = new('1', 32), ["valheimCLI.valheimCLI"] = new('2', 32) },
-        RuntimePins = new() { Game = new('c', 64), Loader = new('d', 64), Patchers = new('e', 64) },
+        RuntimePins = new() { Game = new('c', 64), BepInExCore = new('d', 64), Patchers = new('e', 64) },
     };
     private static void Validate(ServerRunPlan plan) => plan.ValidateServerPlan(Required, Token);
     private static void Refused(ServerRunPlan plan) => Assert.Throws<ArgumentException>(() => Validate(plan));

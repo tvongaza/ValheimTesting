@@ -48,8 +48,6 @@ internal sealed class FakeServerHost : IGameHost
     public List<FakeForward> Tunnels { get; } = [];
     /// <summary>What the copy does to the runtime after copying, for example editing a file.</summary>
     public Action<string>? AfterCopy { get; set; }
-    /// <summary>What the staging apply leaves in the runtime after applying, for example a loader file it failed to remove.</summary>
-    public Action<string>? AfterApply { get; set; }
     /// <summary>Controlled delay for tests that prove independent actors prepare concurrently.</summary>
     public Func<Task>? BeforeShip { get; set; }
     /// <summary>Simulates a transport failure after the remote staging directory has been populated.</summary>
@@ -149,11 +147,12 @@ internal sealed class FakeServerHost : IGameHost
                     if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
                     Directory.CreateDirectory(directory);
                 }
-                // As the scripts: each loader file or folder named, removed when a reviewed package replaces the loader.
-                foreach (string entry in v["loader"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                if (v.TryGetValue("replaceLoader", out var replace) && replace == "true")
                 {
-                    if (File.Exists(Path.Combine(runtime, entry))) File.Delete(Path.Combine(runtime, entry));
-                    else if (Directory.Exists(Path.Combine(runtime, entry))) Directory.Delete(Path.Combine(runtime, entry), true);
+                    foreach (string file in new[] { "winhttp.dll", "doorstop_config.ini", "libdoorstop.dylib" })
+                        File.Delete(Path.Combine(runtime, file));
+                    foreach (string dir in new[] { "BepInEx/core", "doorstop_libs" })
+                        if (Directory.Exists(Path.Combine(runtime, dir))) Directory.Delete(Path.Combine(runtime, dir), true);
                 }
                 foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
                 {
@@ -163,7 +162,6 @@ internal sealed class FakeServerHost : IGameHost
                     File.Copy(Path.Combine(stage, relative), target, overwrite: true);
                 }
                 Directory.Delete(stage, recursive: true);
-                AfterApply?.Invoke(runtime);
                 return Ok("VT-STAGED selected files only\n");
             }
             case "cleanup-stage":
@@ -507,37 +505,8 @@ public sealed partial class HostedServerRunTests : IDisposable
             files, TimeSpan.FromSeconds(30), loaderPackage: package);
         foreach (var file in package.Files) Assert.Equal(file.Value, listing.Files[file.Key]);
         Assert.False(listing.Files.ContainsKey("BepInEx/core/stale.dll"));
-        Assert.Equal(package.Loader, HostInstall.Pins(listing).Loader);
         WorldFixture.Verify(install, before);
         Assert.Equal(before.Count, WorldFixture.Manifest(install).Count);
-    }
-
-    [Fact] public async Task ALoaderFileOutsideTheReviewedPackageFailsPreparation()
-    {
-        var host = new FakeServerHost("windows-client", Mirror, windows: true);
-        const string source = @"C:\game\client", runtime = @"C:\runs\loader\runtime", staging = @"C:\runs\loader\staging";
-        string install = host.Local(source);
-        FakeInstalls.Client(install);
-        File.WriteAllText(Path.Combine(install, ClientLaunch.WindowsExecutable), "client");
-        StageLoader(install);
-        string packageRoot = Path.Combine(_root, "approved-loader");
-        Directory.CreateDirectory(Path.Combine(packageRoot, "BepInEx/core"));
-        File.WriteAllText(Path.Combine(packageRoot, BepInExLoader.Core), "core");
-        File.WriteAllText(Path.Combine(packageRoot, BepInExLoader.Preloader), "preloader");
-        StageLoader(packageRoot);
-        var package = BepInExLoaderPackage.Capture(packageRoot, "test-loader", "1");
-        // A replacement that left a loader file the package does not hold.
-        host.AfterApply = prepared =>
-        {
-            Directory.CreateDirectory(Path.Combine(prepared, "doorstop_libs"));
-            File.WriteAllText(Path.Combine(prepared, "doorstop_libs", "libdoorstop_x64.so"), "left behind");
-        };
-        string plugin = Path.Combine(_root, "selected.dll");
-        File.WriteAllText(plugin, "plugin");
-        var files = new[] { new HostedRuntimeFile(plugin, "BepInEx/plugins/selected.dll") };
-        var error = await Assert.ThrowsAsync<IOException>(() => HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
-            files, TimeSpan.FromSeconds(30), loaderPackage: package));
-        Assert.Contains("is not the reviewed package's (" + package.Loader + ")", error.Message);
     }
 
     [Fact] public async Task ClientPreparationRefusesAServerAndLeavesItsSourceAlone()
@@ -880,7 +849,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(0, code);
         Assert.Same(host, seenHost); Assert.Equal(RunDirectory + "/runtime", seenRuntime);
         Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
-                "copied runtime has the plan's server executable", "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, loader and patchers",
+                "copied runtime has the plan's server executable", "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, BepInEx core and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "remove the server host's runtime copy, keeping what the run changed", "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
 

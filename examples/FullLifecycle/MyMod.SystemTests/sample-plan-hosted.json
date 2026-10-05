@@ -21,7 +21,7 @@
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
-      "loader": "<InstallPins.Of(install).Loader>",
+      "bepinexCore": "<InstallPins.Of(install).BepInExCore>",
       "patchers": "<InstallPins.Of(install).Patchers>"
     },
     "character": "mymodtester",

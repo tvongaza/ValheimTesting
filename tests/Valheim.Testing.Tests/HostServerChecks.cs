@@ -48,9 +48,9 @@ internal static class HostServerChecks
         var pins = InstallPins.Of(source.Path);
         Assert.Equal(pins.Game, HostInstall.CheckPins(pins, listing, "runtime").Game);
         Assert.Equal(ServerPlatform.Linux, HostInstall.DetectServer(listing));
-        var partial = await HostInstall.ListAsync(host, runtime, Generous, HostInstall.PinPaths);
+        var partial = await HostInstall.ListAsync(host, runtime, Generous, ["*_Data/Managed", "BepInEx/core", "BepInEx/patchers"]);
         Assert.DoesNotContain(ServerLaunch.LinuxExecutable, partial.Files.Keys);
-        Assert.Equal(pins.Loader, HostInstall.Pins(partial).Loader);
+        Assert.Equal(pins.BepInExCore, HostInstall.Pins(partial).BepInExCore);
 
         // A listener here is a listener there: the host shares this machine's network.
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
@@ -164,30 +164,16 @@ internal static class HostServerChecks
         Directory.CreateDirectory(Path.Combine(install.Path, "BepInEx", "patchers", "Hooks"));
         File.WriteAllText(Path.Combine(install.Path, "BepInEx", "patchers", "Hooks", "Hook.dll"), "hook");
         File.WriteAllText(Path.Combine(install.Path, "with space é.txt"), "name");
-        // The loader's root files: the pins' listing names them as files, beside its folders.
-        File.WriteAllText(Path.Combine(install.Path, "winhttp.dll"), "MZ target_assembly");
-        File.WriteAllText(Path.Combine(install.Path, "doorstop_config.ini"), "[General]\nenabled=true\n");
-        Directory.CreateDirectory(Path.Combine(install.Path, "doorstop_libs"));
-        File.WriteAllText(Path.Combine(install.Path, "doorstop_libs", "libdoorstop_x64.so"), "so");
         {
             var listing = await HostInstall.ListAsync(host, install.Path, Generous);
             HostInstall.RequireSame(WorldFixture.Manifest(install.Path), listing, "install");
             Assert.Equal(new[] { "Hooks" }, listing.Patchers);
             var pins = InstallPins.Of(install.Path);
             var found = HostInstall.Pins(listing);
-            Assert.Equal((pins.Game, pins.Loader, pins.Patchers), (found.Game, found.Loader, found.Patchers));
-            var partial = await HostInstall.ListAsync(host, install.Path, Generous, HostInstall.PinPaths);
+            Assert.Equal((pins.Game, pins.BepInExCore, pins.Patchers), (found.Game, found.BepInExCore, found.Patchers));
+            var partial = await HostInstall.ListAsync(host, install.Path, Generous, ["*_Data/Managed", "BepInEx/core", "BepInEx/patchers"]);
             Assert.DoesNotContain("with space é.txt", partial.Files.Keys);
-            Assert.Contains("winhttp.dll", partial.Files.Keys);
-            Assert.Equal((pins.Game, pins.Loader, pins.Patchers), (HostInstall.Pins(partial).Game, HostInstall.Pins(partial).Loader, HostInstall.Pins(partial).Patchers));
-            // A named loader file that is a link is refused, as a link anywhere in a whole listing is, never left out.
-            if (!OperatingSystem.IsWindows())
-            {
-                File.Move(Path.Combine(install.Path, "winhttp.dll"), Path.Combine(install.Path, "real-winhttp.dll"));
-                File.CreateSymbolicLink(Path.Combine(install.Path, "winhttp.dll"), Path.Combine(install.Path, "real-winhttp.dll"));
-                var linked = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(host, install.Path, Generous, HostInstall.PinPaths));
-                Assert.Contains("winhttp.dll", linked.Message);
-            }
+            Assert.Equal(pins.Patchers, HostInstall.Pins(partial).Patchers);
             await Assert.ThrowsAsync<DirectoryNotFoundException>(() => HostInstall.ListAsync(host, Path.Combine(install.Path, "missing"), Generous));
         }
     }

@@ -59,7 +59,7 @@ Then add ValheimCLI and your plugins to `BepInEx/plugins`, compute `installPins`
   "mode": "owned",
   "install": "<client install>",
   "architecture": "arm64",
-  "installPins": { "game": "...", "loader": "...", "patchers": "..." }
+  "installPins": { "game": "...", "bepinexCore": "...", "patchers": "..." }
 }
 ```
 

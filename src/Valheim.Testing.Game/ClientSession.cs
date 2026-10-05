@@ -114,7 +114,7 @@ public sealed class ClientSession : IDisposable
     /// when something already listens on the client's CLI port (a command could reach a client this session does not own),
     /// when no Steam client is running here, when the plan's password variable is not set in this process (the client
     /// inherits it), when the install's <c>BepInEx/patchers</c> holds anything the plan's <see cref="ClientRunPlan.Patchers"/>
-    /// does not name, when its game build, loader or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>,
+    /// does not name, when its game build, BepInEx core or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>,
     /// when <see cref="ClientLaunch"/> refuses the install for the plan's <see cref="ClientRunPlan.Architecture"/> (an
     /// arm64 request without an arm64 Doorstop library or a native BepInEx core is refused, never run under Rosetta) or its
     /// Doorstop proxy and configuration are from different versions, or when the rest of
