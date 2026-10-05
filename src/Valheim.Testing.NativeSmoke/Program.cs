@@ -3,9 +3,9 @@ using Valheim.Testing.Game;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start --game DIR --mod DLL [--mod DLL ...] --output NEW_DIR [setup options]");
-    Console.WriteLine("valheim-test server-load --server DIR --mod DLL [--mod DLL ...] --output NEW_DIR [--client DIR] [--loader-package FILE] [--client-loader-package FILE] [setup options]");
-    Console.WriteLine("valheim-test server-load-ab --server DIR --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [--client DIR] [--loader-package FILE] [--client-loader-package FILE] [setup options]");
+    Console.WriteLine("valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--game DIR] [setup options] (--game: this machine's Valheim when left out)");
+    Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
+    Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
     Console.WriteLine(CopiesCommand.Usage + " (list, then remove chosen game copies runs left behind)");
     Console.WriteLine(EnvCommand.Usage + " (read-only local campaign preflight)");
@@ -26,7 +26,7 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start --game DIR --mod DLL [--mod DLL ...] --output NEW_DIR [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--steam-userdata DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--port 9500] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--game DIR] --mod DLL [--mod DLL ...] --output NEW_DIR [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--steam-userdata DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--port 9500] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -41,7 +41,7 @@ try
 {
     string output = Path.GetFullPath(options!["--output"]);
     if (Path.Exists(output)) throw new IOException("--output must be a new directory; an earlier run or personal files will not be changed: " + output);
-    string game = Path.GetFullPath(options["--game"]);
+    string game = options.TryGetValue("--game", out string? givenGame) ? Path.GetFullPath(givenGame) : SmokeInputs.Game();
     var selectedMods = mods!.Select(Path.GetFullPath).ToList();
     string mod = selectedMods[0];
     var (cliManifest, cliFiles) = SmokeInputs.Cli(options, game);
@@ -156,8 +156,8 @@ return exitCode;
 
 file static class Arguments
 {
-    private static readonly HashSet<string> Required = ["--game", "--mod", "--output"];
-    private static readonly HashSet<string> Allowed = [.. Required, "--source", "--cli-manifest", "--cli-files", "--steam-userdata", "--loader-package", "--port", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
+    private static readonly HashSet<string> Required = ["--mod", "--output"];
+    private static readonly HashSet<string> Allowed = [.. Required, "--game", "--source", "--cli-manifest", "--cli-files", "--steam-userdata", "--loader-package", "--port", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
 
     public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
         out List<string>? roots, out List<string>? optionalReferences, out string error)

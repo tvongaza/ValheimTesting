@@ -106,13 +106,14 @@ internal static class SmokeProject
             using valheimCLI;
             using Valheim.Testing.Game;
 
-            // The plan was written by valheim-test server-load. Supply a new result directory for each run.
-            if (args is not [var planFile, var resultDirectory])
+            // Run this with the campaign.json valheim-test server-load wrote (plan.json and client-plan.json beside it), or on a
+            // Mac with its plan.json. Supply a new result directory for each run.
+            if (args is not [var runFile, var resultDirectory])
             {
-                Console.Error.WriteLine("Usage: dotnet run -- plan.json NEW_RESULT_DIRECTORY");
+                Console.Error.WriteLine("Usage: dotnet run -- RUN_OUTPUT/campaign.json NEW_RESULT_DIRECTORY (on a Mac: RUN_OUTPUT/plan.json)");
                 return 2;
             }
-            return await PinnedServerRun.MainAsync(["run", planFile, resultDirectory], new PinnedServerRunOptions<ServerRunPlan>
+            var options = new PinnedServerRunOptions<ServerRunPlan>
             {
                 Name = "my-native-server-check",
                 ReadPlan = path =>
@@ -135,7 +136,20 @@ internal static class SmokeProject
                     // Add your mod's focused observation and assertion here using run.Server and run.Report.Step(...).
                     return Task.CompletedTask;
                 },
-            });
+            };
+            if (Path.GetFileName(runFile) != "campaign.json") return await PinnedServerRun.MainAsync(["run", runFile, resultDirectory], options);
+            // The campaign's server plan (and its clean client's), unbound: the run binds them to the prepared actors again.
+            string directory = Path.GetDirectoryName(Path.GetFullPath(runFile))!;
+            var serverPlan = ServerRunPlan.Read<ServerRunPlan>(Path.Combine(directory, "plan.json"));
+            var clients = new Dictionary<string, ClientRunPlan>();
+            string clientFile = Path.Combine(directory, "client-plan.json");
+            if (File.Exists(clientFile))
+            {
+                clients["client"] = System.Text.Json.JsonSerializer.Deserialize<ClientRunPlan>(File.ReadAllText(clientFile))!;
+                // The clean client joins with the server's password, passed only through the environment.
+                Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, serverPlan.Arguments[serverPlan.Arguments.IndexOf("-password") + 1]);
+            }
+            return await PinnedServerRun.RunCampaignAsync(runFile, serverPlan, _ => clients, resultDirectory, options);
             """ : """
             using Valheim.Testing.Game;
 
@@ -163,11 +177,11 @@ internal static class SmokeProject
 
             This project restores `Valheim.Testing.Game` {{GameVersion}} from NuGet.org only: the version the
             `valheim-test` that created it runs, so it reads that tool's files. Add your mod-specific observations in
-            `Program.cs`, then run from this directory with the {{(server ? "plan" : "environment")}}.json a
-            `valheim-test {{(server ? "server-load" : "start")}}` run wrote and a fresh result directory:
+            `Program.cs`, then run from this directory with the {{(server ? "campaign" : "environment")}}.json a
+            `valheim-test {{(server ? "server-load" : "start")}}` run wrote and a fresh result directory{{(server ? " (on a Mac, its plan.json)" : "")}}:
 
             ```sh
-            dotnet run -c Release -- RUN_OUTPUT/{{(server ? "plan" : "environment")}}.json RUN_OUTPUT/my-assertions-1
+            dotnet run -c Release -- RUN_OUTPUT/{{(server ? "campaign" : "environment")}}.json RUN_OUTPUT/my-assertions-1
             ```
 
             Keep the fixture, installed DLL hashes and ValheimCLI pins fixed while investigating a regression.

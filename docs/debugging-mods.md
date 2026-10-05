@@ -9,7 +9,7 @@ Use the smallest run that can answer the question. A load smoke checks setup and
 - Keep the initial check cheap. If expensive world generation is irrelevant to loading, supply a known test config with `--config`. Use a small fixture plugin when checking the runner itself; run the real mod when investigating a real failure.
 - Run one native campaign at a time per game install, Steam account and fixture character. The output may contain a server password, account identifiers and machine paths. Keep it private.
 
-Install the published preview tool with `dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease`. The commands below work from any directory; no ValheimTesting checkout is needed. Replace the example paths with prepared installs and built artifacts. `--output` **must name a directory that does not exist yet**. If CLI discovery is ambiguous, add `--cli-manifest FILE --cli-files DIR` from one build; if the Steam account root is not found uniquely, add `--steam-userdata DIR`.
+Install the published preview tool with `dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease`. The commands below work from any directory; no ValheimTesting checkout is needed. Replace the example paths with prepared installs and built artifacts. `--output` **must name a directory that does not exist yet**. If CLI discovery is ambiguous, add `--cli-manifest FILE --cli-files DIR` from one build. `server-load` takes its server and client from this machine's Steam installs unless `--server`/`--client` name prepared ones; it prints what it chose.
 
 The loader-package options are part of this checkout's candidate tool until its next release. To try them before publication, bootstrap this checkout and run `dotnet run --project src/Valheim.Testing.NativeSmoke -- server-load ...` in place of `valheim-test server-load ...`; the [tool's README](../src/Valheim.Testing.NativeSmoke/README.md#disposable-native-mod-load-smoke) shows the complete option set. Check the installed tool's help after release rather than assuming an older preview supports these options.
 
@@ -19,22 +19,22 @@ The loader-package options are part of this checkout's candidate tool until its 
 valheim-test server-load \
   --server /path/to/prepared/server \
   --mod /path/to/FirstMod.dll \
+  --server-only \
   --output /private/runs/first-alone
 ```
 
-Repeat with `SecondMod.dll` and a new output directory. `SERVER_LOAD_PASS` establishes that the selected server plugins loaded, the packaged world identity matched and the server accepted a game connection. It **does not** establish that a client joined. To test a claim of vanilla-compatible server-only loading, add a prepared client and Steam userdata directory:
+Repeat with `SecondMod.dll` and a new output directory. `SERVER_LOAD_PASS` establishes that the selected server plugins loaded, the packaged world identity matched and the server accepted a game connection. It **does not** establish that a client joined. To test a claim of vanilla-compatible server-only loading, leave out `--server-only`: by default one clean client joins (this machine's Valheim, or `--client DIR`):
 
 ```sh
 valheim-test server-load \
   --server /path/to/prepared/server \
   --mod /path/to/FirstMod.dll \
-  --client /path/to/prepared/client \
   --output /private/runs/first-with-clean-client
 ```
 
 `SERVER_JOIN_PASS` adds evidence that a client with ValheimCLI but without the selected server mods entered the world. The runner pins the selected mods absent on that client. Use this path only when their absence is the compatibility claim; a mod required on both peers needs a different scenario.
 
-For a **client-side** pair, use `start` with `--game` and repeat `--mod`:
+For a **client-side** pair, use `start` and repeat `--mod` (`--game` defaults to this machine's Valheim):
 
 ```sh
 valheim-test start \
