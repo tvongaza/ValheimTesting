@@ -281,7 +281,6 @@ static class Valheim.Testing.Game.ClientLaunch
   field const System.String MacBundle = "Valheim.app"
   field const System.String WindowsExecutable = "valheim.exe"
   method static System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.ClientArchitecture> LaunchArchitectures(System.String installDirectory)
-  method static System.Diagnostics.ProcessStartInfo CreateStartInfo(System.String installDirectory, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, Valheim.Testing.Game.ClientArchitecture architecture = 0, System.Boolean console = true)
   method static System.String RequireExecutable(System.String installDirectory)
   method static Valheim.Testing.Game.ClientPlatform Detect(System.String installDirectory)
 enum Valheim.Testing.Game.ClientPlatform
@@ -841,11 +840,13 @@ enum Valheim.Testing.Game.GameHostKind
   field const Valheim.Testing.Game.GameHostKind Ssh = 1
 sealed class Valheim.Testing.Game.GameLaunch
   method System.Diagnostics.ProcessStartInfo ToStartInfo()
+  method static Valheim.Testing.Game.GameLaunch ForClient(System.String install, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, System.Nullable`1<Valheim.Testing.Game.ClientPlatform> hostPlatform = null, Valheim.Testing.Game.ClientArchitecture architecture = 0, System.Boolean console = true, System.Collections.Generic.IEnumerable`1<System.String> secretVariables = null)
   method static Valheim.Testing.Game.GameLaunch ForServer(System.String runtime, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, System.Nullable`1<Valheim.Testing.Game.ServerPlatform> hostPlatform = null)
   property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> Environment { get; }
   property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> Prepended { get; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> Arguments { get; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> RequiredFiles { get; }
+  property System.Collections.Generic.IReadOnlyList`1<System.String> SecretVariables { get; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> Unset { get; }
   property System.String Executable { get; }
   property System.String WorkingDirectory { get; }
@@ -939,17 +940,6 @@ sealed class Valheim.Testing.Game.HeightMeasurement : System.IEquatable`1<Valhei
   property System.Single Expected { get; init; }
   property System.Single X { get; init; }
   property System.Single Z { get; init; }
-sealed class Valheim.Testing.Game.HostClientLaunch
-  method static Valheim.Testing.Game.HostClientLaunch Create(Valheim.Testing.Game.ClientPlatform platform, System.String install, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, System.Collections.Generic.IEnumerable`1<System.String> secretVariables = null, System.Boolean console = true)
-  property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> Environment { get; }
-  property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> Prepended { get; }
-  property System.Collections.Generic.IReadOnlyList`1<System.String> Arguments { get; }
-  property System.Collections.Generic.IReadOnlyList`1<System.String> RequiredFiles { get; }
-  property System.Collections.Generic.IReadOnlyList`1<System.String> SecretVariables { get; }
-  property System.Collections.Generic.IReadOnlyList`1<System.String> Unset { get; }
-  property System.String Executable { get; }
-  property System.String Install { get; }
-  property Valheim.Testing.Game.ClientPlatform Platform { get; }
 static class Valheim.Testing.Game.HostInstall
   method static System.Threading.Tasks.Task CopyAsync(Valheim.Testing.Game.IGameHost host, System.String source, System.String destination, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null)
   method static System.Threading.Tasks.Task RequirePortFreeAsync(Valheim.Testing.Game.IGameHost host, System.Int32 port, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null)
@@ -1212,8 +1202,8 @@ sealed class Valheim.Testing.Game.InstallPins
   property System.String Loader { get; set; }
   property System.String Patchers { get; set; }
 static class Valheim.Testing.Game.InteractiveClient
-  method static System.Threading.Tasks.Task`1<Valheim.Testing.Game.InteractiveClientProcess> StartAsync(Valheim.Testing.Game.IGameHost host, Valheim.Testing.Game.HostClientLaunch launch, System.String launchDirectory, System.TimeSpan timeout, Valheim.Testing.Game.LinuxDisplay display = null, System.Threading.CancellationToken cancellation = null)
-  method static System.Threading.Tasks.Task`1<Valheim.Testing.Game.InteractiveClientProcess> StartAsync(Valheim.Testing.Game.SteamAccountHold account, Valheim.Testing.Game.IGameHost host, Valheim.Testing.Game.HostClientLaunch launch, System.String launchDirectory, System.TimeSpan timeout, Valheim.Testing.Game.LinuxDisplay display = null, System.Threading.CancellationToken cancellation = null)
+  method static System.Threading.Tasks.Task`1<Valheim.Testing.Game.InteractiveClientProcess> StartAsync(Valheim.Testing.Game.IGameHost host, Valheim.Testing.Game.GameLaunch launch, System.String launchDirectory, System.TimeSpan timeout, Valheim.Testing.Game.LinuxDisplay display = null, System.Threading.CancellationToken cancellation = null)
+  method static System.Threading.Tasks.Task`1<Valheim.Testing.Game.InteractiveClientProcess> StartAsync(Valheim.Testing.Game.SteamAccountHold account, Valheim.Testing.Game.IGameHost host, Valheim.Testing.Game.GameLaunch launch, System.String launchDirectory, System.TimeSpan timeout, Valheim.Testing.Game.LinuxDisplay display = null, System.Threading.CancellationToken cancellation = null)
 sealed class Valheim.Testing.Game.InteractiveClientProcess : System.IAsyncDisposable, System.IDisposable, Valheim.Testing.Game.IOwnedProcess
   method System.Threading.Tasks.Task`1<System.Int32> WaitForExitAsync(System.Threading.CancellationToken cancellation)
   method System.Threading.Tasks.Task`1<Valheim.Testing.Game.InteractiveStop> StopAsync(System.TimeSpan quit, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null)

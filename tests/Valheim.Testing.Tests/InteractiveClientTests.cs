@@ -24,18 +24,17 @@ public class InteractiveClientTests
         .Select(line => line.Split(' ', 2)).Select(parts => (parts[0], Encoding.UTF8.GetString(Convert.FromBase64String(parts[1])))).ToList();
     internal static string Base64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
 
-    [Fact] public void AWindowsLaunchIsWhatClientLaunchBuildsThere()
+    [Fact] public void AWindowsLaunchIsWhatTheClientBuilderBuildsThere()
     {
-        var launch = HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall + "\\", ["+connect", "server.example:2456", "a b", "say \"hi\""],
-            new Dictionary<string, string> { ["MY_FLAG"] = "1" }, ["VT_JOIN_PASSWORD"]);
-        Assert.Equal(WindowsInstall, launch.Install);
+        var launch = GameLaunch.ForClient(WindowsInstall + "\\", ["+connect", "server.example:2456", "a b", "say \"hi\""], new Dictionary<string, string> { ["MY_FLAG"] = "1" }, hostPlatform: ClientPlatform.Windows, secretVariables: ["VT_JOIN_PASSWORD"]);
+        Assert.Equal(WindowsInstall, launch.WorkingDirectory);
         Assert.Equal(WindowsInstall + @"\valheim.exe", launch.Executable);
         Assert.Equal(new[] { "-console", "+connect", "server.example:2456", "a b", "say \"hi\"" }, launch.Arguments);
         Assert.Equal("892970", launch.Environment["SteamAppId"]);
         Assert.Equal("1", launch.Environment["my_flag"]); // Windows variable names ignore case.
         Assert.Equal(new[] { "DOORSTOP_ENABLED", "DOORSTOP_TARGET_ASSEMBLY", "DOORSTOP_DISABLE" }, launch.Unset);
         Assert.Empty(launch.Prepended);
-        Assert.Equal(new[] { "valheim.exe", @"BepInEx\core\BepInEx.Preloader.dll", @"BepInEx\core\BepInEx.dll", "winhttp.dll", "doorstop_config.ini" }, launch.RequiredFiles);
+        Assert.Equal(new[] { "valheim.exe", "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "winhttp.dll", "doorstop_config.ini" }, launch.RequiredFiles);
         Assert.Equal(new[] { "VT_JOIN_PASSWORD" }, launch.SecretVariables);
 
         var spec = Decode(launch.Spec());
@@ -50,7 +49,7 @@ public class InteractiveClientTests
 
     [Fact] public void ALinuxLaunchSetsTheLoaderAsThePacksScriptDoes()
     {
-        var launch = HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, ["+name", "it's"], new Dictionary<string, string> { ["LD_PRELOAD"] = "mine.so" }, console: false);
+        var launch = GameLaunch.ForClient(LinuxInstall, ["+name", "it's"], new Dictionary<string, string> { ["LD_PRELOAD"] = "mine.so" }, hostPlatform: ClientPlatform.Linux, console: false);
         Assert.Equal(LinuxInstall + "/valheim.x86_64", launch.Executable);
         Assert.Equal(new[] { "+name", "it's" }, launch.Arguments);
         Assert.Equal("1", launch.Environment["DOORSTOP_ENABLED"]);
@@ -67,18 +66,30 @@ public class InteractiveClientTests
         Assert.True(spec.FindIndex(line => line.Kind == "env") < spec.FindIndex(line => line.Kind == "prepend"));
     }
 
+    [Fact] public async Task AHostStartsOnlyAClientLaunchBuiltForAHost()
+    {
+        // A launch built for this machine (its files read here) and a dedicated server's are never started as a host's client.
+        using var install = ClientLaunchTests.Install.Linux();
+        var local = GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Linux);
+        var server = GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux);
+        var fake = new FakeLauncher();
+        foreach (var launch in new[] { local, server })
+            Assert.Contains("GameLaunch.ForClient", (await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(LinuxHost(fake), launch, LinuxLaunch, Timeout))).Message);
+        Assert.Empty(fake.Calls);
+    }
+
     [Fact] public void ALaunchThatWouldNotLoadBepInExOrCannotBeStartedIsRefused()
     {
-        Assert.Throws<PlatformNotSupportedException>(() => HostClientLaunch.Create(ClientPlatform.MacOS, "/Users/tester/Valheim", []));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, [], new Dictionary<string, string> { ["doorstop_enabled"] = "0" }));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, ["--doorstop-enabled", "false"]));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Linux, "games/valheim", []));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Linux, "/games/val:heim", []));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Windows, "/games/valheim", []));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, ["a\nb"]));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, [], null, ["DOORSTOP_ENABLED"]));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, [], new Dictionary<string, string> { ["PW"] = "x" }, ["PW"]));
-        Assert.Throws<ArgumentException>(() => HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, [], null, ["not a name"]));
+        Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClient("/Users/tester/Valheim", [], hostPlatform: ClientPlatform.MacOS));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(WindowsInstall, [], new Dictionary<string, string> { ["doorstop_enabled"] = "0" }, hostPlatform: ClientPlatform.Windows));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, ["--doorstop-enabled", "false"], hostPlatform: ClientPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient("games/valheim", [], hostPlatform: ClientPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient("/games/val:heim", [], hostPlatform: ClientPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient("/games/valheim", [], hostPlatform: ClientPlatform.Windows));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, ["a\nb"], hostPlatform: ClientPlatform.Linux));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux, secretVariables: ["DOORSTOP_ENABLED"]));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, [], new Dictionary<string, string> { ["PW"] = "x" }, hostPlatform: ClientPlatform.Linux, secretVariables: ["PW"]));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux, secretVariables: ["not a name"]));
     }
 
     [Theory]
@@ -97,7 +108,7 @@ public class InteractiveClientTests
             .Exits(0, Reply("VT-TASK removed", "VT-INTERACTIVE started 4242 133700000000000000"), FakeLauncher.Report(0))
             .Exits(0, Reply("VT-TASK removed", "VT-INTERACTIVE started 4343 133700000000000001"), FakeLauncher.Report(0));
         var host = WindowsHost(fake);
-        var launch = HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, []);
+        var launch = GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows);
         var client = await InteractiveClient.StartAsync(host, launch, WindowsLaunch + "\\", Timeout);
         Assert.Equal(4242, client.Id); Assert.Equal("133700000000000000", client.StartIdentity);
         Assert.Equal(WindowsLaunch, client.LaunchDirectory); Assert.Equal("gaming-pc", client.HostName);
@@ -128,7 +139,7 @@ public class InteractiveClientTests
     {
         var fake = new FakeLauncher().Exits(0, Reply("VT-INTERACTIVE started 812 4711"), FakeLauncher.Report(0));
         var host = new ContainerGameHost("client", "vt", HostShell.Bash, "steam", "docker", fake);
-        var client = await InteractiveClient.StartAsync(host, HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, []), LinuxLaunch, Timeout, new LinuxDisplay());
+        var client = await InteractiveClient.StartAsync(host, GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux), LinuxLaunch, Timeout, new LinuxDisplay());
         Assert.Equal(812, client.Id); Assert.Null(client.TaskName);
         Assert.Equal(new[] { "exec", "-i", "--user", "steam", "vt", "bash", "-c", HostScripts.BashWrapper }, fake.Calls[0].Arguments);
         string script = FakeLauncher.Script(fake.Calls[0]);
@@ -159,8 +170,8 @@ public class InteractiveClientTests
         {
             var fake = new FakeLauncher().Exits(0, Reply("VT-INTERACTIVE " + verdict) + (windows && verdict.StartsWith("failed") ? "VT-TASK removed\n" : ""), FakeLauncher.Report(0));
             var error = await Record.ExceptionAsync(() => windows
-                ? InteractiveClient.StartAsync(WindowsHost(fake), HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, []), WindowsLaunch, Timeout)
-                : InteractiveClient.StartAsync(LinuxHost(fake), HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, []), LinuxLaunch, Timeout));
+                ? InteractiveClient.StartAsync(WindowsHost(fake), GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows), WindowsLaunch, Timeout)
+                : InteractiveClient.StartAsync(LinuxHost(fake), GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux), LinuxLaunch, Timeout));
             Assert.IsType(expected, error);
             if (error is InteractiveSessionException refused)
                 Assert.Equal(verdict.StartsWith("no-steam") ? InteractiveRefusal.NoSteam : InteractiveRefusal.NoSession, refused.Reason);
@@ -174,7 +185,7 @@ public class InteractiveClientTests
             .Exits(0, Reply("VT-INTERACTIVE started 4242 1", "VT-TASK kept"), FakeLauncher.Report(0))
             .Exits(0, Reply("VT-STOP stopped"), FakeLauncher.Report(0));
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            InteractiveClient.StartAsync(WindowsHost(fake), HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, []), WindowsLaunch, Timeout));
+            InteractiveClient.StartAsync(WindowsHost(fake), GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows), WindowsLaunch, Timeout));
         Assert.Contains("schtasks /Delete /TN " + InteractiveClient.TaskPrefix, error.Message);
         Assert.Contains("$game = '4242'", FakeLauncher.Script(fake.Calls[1]));
     }
@@ -183,7 +194,7 @@ public class InteractiveClientTests
     {
         var fake = new FakeLauncher().TimesOut();
         var error = await Assert.ThrowsAsync<HostOperationException>(() =>
-            InteractiveClient.StartAsync(WindowsHost(fake), HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, []), WindowsLaunch, Timeout));
+            InteractiveClient.StartAsync(WindowsHost(fake), GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows), WindowsLaunch, Timeout));
         Assert.Equal(HostOutcome.Unknown, error.Outcome);
         Assert.Contains("schtasks /Query /TN " + InteractiveClient.TaskPrefix, error.Message);
         Assert.Contains(WindowsLaunch, error.Message);
@@ -192,8 +203,8 @@ public class InteractiveClientTests
     [Fact] public async Task AMisfittingHostOrLaunchIsRefusedBeforeAnythingRuns()
     {
         var fake = new FakeLauncher();
-        var windows = HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, []);
-        var linux = HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, []);
+        var windows = GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows);
+        var linux = GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux);
         await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(LinuxHost(fake), windows, "/srv/launch", Timeout));
         await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(WindowsHost(fake), linux, WindowsLaunch, Timeout));
         await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(WindowsHost(fake), windows, WindowsLaunch, Timeout, new LinuxDisplay()));
@@ -202,7 +213,7 @@ public class InteractiveClientTests
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => InteractiveClient.StartAsync(LinuxHost(fake), linux, LinuxLaunch, TimeSpan.FromSeconds(5)));
         string missing = "VT_TEST_UNSET_" + Guid.NewGuid().ToString("N");
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            InteractiveClient.StartAsync(LinuxHost(fake), HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, [], null, [missing]), LinuxLaunch, Timeout));
+            InteractiveClient.StartAsync(LinuxHost(fake), GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux, secretVariables: [missing]), LinuxLaunch, Timeout));
         Assert.Contains(missing, error.Message);
         Assert.Empty(fake.Calls);
     }
@@ -218,8 +229,8 @@ public class InteractiveClientTests
             // A host that echoes the secret back (in plain and encoded form) as it fails.
             var fake = new FakeLauncher().Exits(1, "partial " + canary + "\n", "boom: " + canary + " " + line + "\n" + FakeLauncher.Report(1));
             var host = windows ? WindowsHost(fake) : LinuxHost(fake);
-            var launch = windows ? HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, [], null, [variable])
-                : HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, [], null, [variable]);
+            var launch = windows ? GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows, secretVariables: [variable])
+                : GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux, secretVariables: [variable]);
             var error = await Assert.ThrowsAsync<HostOperationException>(() => InteractiveClient.StartAsync(host, launch, windows ? WindowsLaunch : LinuxLaunch, Timeout));
             Assert.Contains("[redacted]", error.Message);
             // The composed script counts as visible: the host's wrapper writes it to a temporary file.
@@ -230,8 +241,8 @@ public class InteractiveClientTests
             Assert.Equal(line, FakeLauncher.Secrets(fake.Calls[0]));
 
             // Negative control: the same value as a plain environment value is evidence, and the same scan finds it.
-            var leaky = windows ? HostClientLaunch.Create(ClientPlatform.Windows, WindowsInstall, [], new Dictionary<string, string> { ["LEAKY"] = canary })
-                : HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, [], new Dictionary<string, string> { ["LEAKY"] = canary });
+            var leaky = windows ? GameLaunch.ForClient(WindowsInstall, [], new Dictionary<string, string> { ["LEAKY"] = canary }, hostPlatform: ClientPlatform.Windows)
+                : GameLaunch.ForClient(LinuxInstall, [], new Dictionary<string, string> { ["LEAKY"] = canary }, hostPlatform: ClientPlatform.Linux);
             Assert.Contains(Decode(leaky.Spec()), item => item.Value.Contains(canary));
         }
         finally { Environment.SetEnvironmentVariable(variable, null); }
@@ -240,7 +251,7 @@ public class InteractiveClientTests
     [Fact] public async Task StoppingChecksTheIdentityAndMayBeRepeatedOnlyAfterAFailure()
     {
         var fake = new FakeLauncher().Exits(0, Reply("VT-INTERACTIVE started 900 55"), FakeLauncher.Report(0));
-        var client = await InteractiveClient.StartAsync(LinuxHost(fake), HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, []), LinuxLaunch, Timeout);
+        var client = await InteractiveClient.StartAsync(LinuxHost(fake), GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux), LinuxLaunch, Timeout);
 
         fake.TimesOut();
         var lost = await Assert.ThrowsAsync<HostOperationException>(() => client.StopAsync(TimeSpan.FromSeconds(10)));
@@ -263,7 +274,7 @@ public class InteractiveClientTests
             .Exits(0, Reply("VT-WAIT running"), FakeLauncher.Report(0))
             .Exits(0, Reply("VT-WAIT exited 3"), FakeLauncher.Report(0))
             .Exits(0, Reply("VT-WAIT exited ?"), FakeLauncher.Report(0));
-        var client = await InteractiveClient.StartAsync(LinuxHost(fake), HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, []), LinuxLaunch, Timeout);
+        var client = await InteractiveClient.StartAsync(LinuxHost(fake), GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux), LinuxLaunch, Timeout);
         Assert.Equal(3, await client.WaitForExitAsync(CancellationToken.None));
         Assert.True(client.HasExited);
         Assert.Equal(-1, await client.WaitForExitAsync(CancellationToken.None));
@@ -320,7 +331,7 @@ public class InteractiveClientShellTests
         using var root = new TempDirectory();
         string install = FakeLinuxInstall(root.Path, Path.Combine(root.Path, "args.txt"));
         var host = new LocalGameHost("here", HostShell.Bash);
-        var launch = HostClientLaunch.Create(ClientPlatform.Linux, install, []);
+        var launch = GameLaunch.ForClient(install, [], hostPlatform: ClientPlatform.Linux);
         string launchDirectory = Path.Combine(root.Path, "launch");
 
         var refused = await Assert.ThrowsAsync<InteractiveSessionException>(() => InteractiveClient.StartAsync(host, launch, launchDirectory, Generous, new LinuxDisplay(":87")));
@@ -337,7 +348,7 @@ public class InteractiveClientShellTests
     [OsFact("macos")] public async Task AMacHostRefusesALinuxClient()
     {
         using var root = new TempDirectory();
-        var launch = HostClientLaunch.Create(ClientPlatform.Linux, FakeLinuxInstall(root.Path, Path.Combine(root.Path, "args.txt")), []);
+        var launch = GameLaunch.ForClient(FakeLinuxInstall(root.Path, Path.Combine(root.Path, "args.txt")), [], hostPlatform: ClientPlatform.Linux);
         await Assert.ThrowsAsync<PlatformNotSupportedException>(() =>
             InteractiveClient.StartAsync(new LocalGameHost("here", HostShell.Bash), launch, Path.Combine(root.Path, "launch"), Generous));
     }
@@ -361,7 +372,7 @@ public class InteractiveClientShellTests
         }
         string game = CopyPing(ping, install, "valheim.exe");
         string variable = "VT_TEST_CANARY_" + Guid.NewGuid().ToString("N"), canary = "canary-" + Guid.NewGuid().ToString("N");
-        var launch = HostClientLaunch.Create(ClientPlatform.Windows, install, ["-n", "600", "127.0.0.1"], null, [variable], console: false);
+        var launch = GameLaunch.ForClient(install, ["-n", "600", "127.0.0.1"], hostPlatform: ClientPlatform.Windows, secretVariables: [variable], console: false);
         var host = new LocalGameHost("here", HostShell.WindowsPowerShell);
         Environment.SetEnvironmentVariable(variable, canary);
         var started = new List<Process>();
@@ -481,7 +492,7 @@ public class InteractiveClientDisplayTests
         string argumentsFile = Path.Combine(root.Path, "args.txt");
         string install = InteractiveClientShellTests.FakeLinuxInstall(root.Path, argumentsFile);
         string variable = "VT_TEST_CANARY_" + Guid.NewGuid().ToString("N"), canary = "canary-" + Guid.NewGuid().ToString("N");
-        var launch = HostClientLaunch.Create(ClientPlatform.Linux, install, ["+name", "it's $HOME"], new Dictionary<string, string> { ["VT_VISIBLE"] = "plain value" }, [variable]);
+        var launch = GameLaunch.ForClient(install, ["+name", "it's $HOME"], new Dictionary<string, string> { ["VT_VISIBLE"] = "plain value" }, hostPlatform: ClientPlatform.Linux, secretVariables: [variable]);
         var host = Host(kind);
         var started = new List<Process>();
         InteractiveClientProcess? client = null;

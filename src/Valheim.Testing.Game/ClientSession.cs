@@ -108,13 +108,13 @@ public sealed class ClientSession : IDisposable
     }
 
     /// <summary>
-    /// Launches the plan's client install with <see cref="ClientLaunch"/> and waits, on events, until it reaches its main
+    /// Launches the plan's client install with <see cref="GameLaunch.ForClient"/> and waits, on events, until it reaches its main
     /// menu: ValheimCLI's listening line in this launch's BepInEx log, then the main-menu state push. Every wait races the process exit, which ends
     /// startup at once with its exit code. Refuses before launching
     /// when something already listens on the client's CLI port (a command could reach a client this session does not own),
     /// when no Steam client is running here, when the plan's password variable is not set in this process (the client
     /// inherits it), when the install's game build, loader or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>,
-    /// when <see cref="ClientLaunch"/> refuses the install for the plan's <see cref="ClientRunPlan.Architecture"/> (an
+    /// when <see cref="GameLaunch.ForClient"/> refuses the install for the plan's <see cref="ClientRunPlan.Architecture"/> (an
     /// arm64 request without an arm64 Doorstop library or a native BepInEx core is refused, never run under Rosetta) or its
     /// Doorstop proxy and configuration are from different versions, or when the rest of
     /// <see cref="ClientRunPlan.Preflight()"/>'s install checks fail (a pinned plugin build that is not installed, a script
@@ -180,7 +180,7 @@ public sealed class ClientSession : IDisposable
 
     /// <summary>The owned launch of the plan's install as the plan's architecture, built for <paramref name="host"/> (injectable for tests).</summary>
     internal static ProcessStartInfo StartInfo(ClientRunPlan plan, ClientPlatform host) =>
-        ClientLaunch.CreateStartInfo(plan.Install, plan.LaunchArguments, null, plan.LaunchArchitecture, true, host);
+        GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, null, plan.LaunchArchitecture, true, host).ToStartInfo();
 
     /// <summary>Where Unity writes the game client's Player.log on <paramref name="platform"/> (company IronGate, product Valheim).</summary>
     internal static string PlayerLog(ClientPlatform platform)

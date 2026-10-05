@@ -8,14 +8,16 @@ namespace Valheim.Testing.Game;
 /// One BepInEx game process's launch, as data: the executable, its working directory and arguments, the variables set for it,
 /// the entries put in front of a search list's existing value, and the inherited variables removed. It reproduces what
 /// BepInExPack_Valheim's start scripts export, without the script, so the started process ID is the game's own.
-/// <see cref="ForServer"/> builds one for a dedicated server. A launch is built for this machine (render it with
-/// <see cref="ToStartInfo"/>) or, given a host platform, for an <see cref="IGameHost"/>, where <see cref="HostServer.StartAsync(IGameHost, GameLaunch, string, TimeSpan, IReadOnlyList{string}, string, CancellationToken)"/> starts it.
+/// <see cref="ForServer"/> builds one for a dedicated server and <see cref="ForClient"/> one for a game client. A launch is built
+/// for this machine (render it with <see cref="ToStartInfo"/>) or, given a host platform, for an <see cref="IGameHost"/>, where
+/// <see cref="HostServer.StartAsync(IGameHost, GameLaunch, string, TimeSpan, IReadOnlyList{string}, string, CancellationToken)"/> or
+/// <see cref="InteractiveClient.StartAsync(IGameHost, GameLaunch, string, TimeSpan, LinuxDisplay, CancellationToken)"/> starts it.
 /// </summary>
 /// <remarks>
 /// Both kinds share one rule set. The caller's Doorstop variables and <c>--doorstop-*</c> arguments are refused, inherited Doorstop
 /// variables are removed apart from the ones the launch sets, and <c>SteamAppId</c> defaults to 892970. On Linux and macOS,
 /// Doorstop is enabled for BepInEx's preloader and its library directories are put in front of the existing value. A launch for
-/// this machine checks the runtime's files before it is built. A launch for a host checks only the path rules there, and
+/// this machine checks the runtime's or install's files before it is built. A launch for a host checks only the path rules there, and
 /// the host checks <see cref="RequiredFiles"/> when it starts.
 /// </remarks>
 public sealed class GameLaunch
@@ -24,11 +26,12 @@ public sealed class GameLaunch
 
     private GameLaunch(bool server, ClientPlatform platform, bool forHost, string workingDirectory, string executable, IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended, IReadOnlyList<string> requiredFiles,
-        ClientArchitecture macArchitecture = ClientArchitecture.X64)
+        ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null)
     {
         IsServer = server; Platform = platform; ForHost = forHost; WorkingDirectory = workingDirectory; Executable = executable; Arguments = arguments;
         Environment = environment; Prepended = prepended; RequiredFiles = requiredFiles; MacArchitecture = macArchitecture;
         Unset = BepInExLoader.Variables.Where(name => !environment.ContainsKey(name)).ToList();
+        SecretVariables = Secrets(secretVariables, environment, prepended, Unset, platform == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     }
 
     /// <summary>The runtime or install directory: the process's working directory.</summary>
@@ -46,8 +49,13 @@ public sealed class GameLaunch
     public IReadOnlyDictionary<string, string> Prepended { get; }
     /// <summary>Inherited variables removed before the launch: Doorstop's, apart from the ones set here.</summary>
     public IReadOnlyList<string> Unset { get; }
-    /// <summary>Files, relative to <see cref="WorkingDirectory"/>, the game and BepInEx's loader need.</summary>
+    /// <summary>Files, relative to <see cref="WorkingDirectory"/> and written with <c>/</c>, the game and BepInEx's loader need.</summary>
     public IReadOnlyList<string> RequiredFiles { get; }
+    /// <summary>
+    /// Names of variables whose values come from this process's environment at launch and reach only the game's environment (a
+    /// client's join password, for example); never logged or written as evidence. A launch for this machine inherits them anyway.
+    /// </summary>
+    public IReadOnlyList<string> SecretVariables { get; }
 
     internal bool IsServer { get; }
     // The operating system the launch runs on (ClientPlatform is also the host type).
@@ -105,36 +113,10 @@ public sealed class GameLaunch
         if (platform == ServerPlatform.Linux && builtOn != ServerHost.Windows && runtime.IndexOfAny([':', ';']) >= 0)
             throw new ArgumentException("A Linux runtime path cannot contain ':' or ';'.", nameof(runtimeDirectory));
 
-        var set = new Dictionary<string, string>(names);
-        foreach (var (name, value) in environment) set[name] = value;
-        if (!set.ContainsKey("SteamAppId")) set["SteamAppId"] = ServerLaunch.DedicatedServerSteamAppId;
-        var prepended = new Dictionary<string, string>(names);
-        string relative = Path.GetRelativePath(runtime, executable).Replace('\\', '/');
-        string[] required;
-        if (platform == ServerPlatform.Windows) required = [relative, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows)];
-        else
-        {
-            set["DOORSTOP_ENABLED"] = "1";
-            set["DOORSTOP_TARGET_ASSEMBLY"] = Path.Combine(runtime, BepInExLoader.Preloader);
-            if (platform == ServerPlatform.Linux)
-            {
-                // Same effective order as the pack's script: linux64, then doorstop_libs, then the existing value.
-                prepended["LD_LIBRARY_PATH"] = Path.Combine(runtime, "linux64") + ":" + Path.Combine(runtime, "doorstop_libs");
-                prepended["LD_PRELOAD"] = "libdoorstop_x64.so";
-                required = [relative, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux)];
-            }
-            else
-            {
-                // With Doorstop injected, Mono finds libmono-native.dylib only through the library path, and the server keeps it
-                // beside itself, not at the root (the Mac client's launcher value): without it, or with the root, the server never
-                // started (30 Sep 2026, build 25527701). Vanilla, without Doorstop, needs neither.
-                prepended["DYLD_LIBRARY_PATH"] = Path.GetDirectoryName(executable)!;
-                prepended["DYLD_INSERT_LIBRARIES"] = macDoorstop!;
-                required = [relative, BepInExLoader.CorePreloader, BepInExLoader.CoreLibrary, Path.GetRelativePath(runtime, macDoorstop!).Replace('\\', '/')];
-            }
-        }
-        return new GameLaunch(server: true, platform == ServerPlatform.Windows ? ClientPlatform.Windows : platform == ServerPlatform.Linux ? ClientPlatform.Linux : ClientPlatform.MacOS,
-            forHost: false, runtime, executable, passed, set, prepended, required, macArchitecture);
+        var os = platform == ServerPlatform.Windows ? ClientPlatform.Windows : platform == ServerPlatform.Linux ? ClientPlatform.Linux : ClientPlatform.MacOS;
+        var (set, prepended, required) = Loader(server: true, os, environment, names, LocalJoin(runtime), Relative(runtime, executable),
+            macDoorstop == null ? null : Relative(runtime, macDoorstop));
+        return new GameLaunch(server: true, os, forHost: false, runtime, executable, passed, set, prepended, required, macArchitecture);
     }
 
     private static GameLaunch ServerOnHost(ServerPlatform platform, string runtime, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment)
@@ -143,31 +125,157 @@ public sealed class GameLaunch
         if (platform == ServerPlatform.MacOS)
             throw new PlatformNotSupportedException("A macOS dedicated server starts only on this machine: build its launch without a host platform.");
         bool windows = platform == ServerPlatform.Windows;
-        // A server's task may log on without network credentials (S4U), so a Windows runtime is a drive path, never a share.
-        string root = HostRoot(windows, runtime, nameof(runtime), "runtime", share: false);
+        string root = HostRoot(windows, runtime, nameof(runtime), "runtime", server: true);
         var names = windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var passed = HostArguments(environment, arguments, names);
-        var set = HostEnvironment(environment, names, windows);
-        if (!set.ContainsKey("SteamAppId")) set["SteamAppId"] = ServerLaunch.DedicatedServerSteamAppId;
+        var passed = BepInExLoader.RefuseOverrides(environment ?? new Dictionary<string, string>(), arguments, names, nameof(GameLaunch));
+        RequireHostArguments(passed, lineBreaks: false);
+        // The server's start script prepends to the host session's value only, so a caller's LD_LIBRARY_PATH/LD_PRELOAD would be lost.
+        RequireHostEnvironment(environment, refuseLoaderPaths: !windows);
+        var os = windows ? ClientPlatform.Windows : ClientPlatform.Linux;
+        string executable = windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable;
+        var (set, prepended, required) = Loader(server: true, os, environment, names, relative => HostJoin(root, windows, relative), executable, null);
+        return new GameLaunch(server: true, os, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required);
+    }
+
+    /// <summary>
+    /// The launch of one BepInEx game client. A client needs an interactive desktop session with a display, a GPU and a running,
+    /// signed-in Steam client. Starting it inside that session is <see cref="ClientSession"/>'s job on this machine and
+    /// <see cref="InteractiveClient"/>'s on a host. <c>-console</c> is added first unless <paramref name="console"/> is false or the
+    /// caller passed it; other arguments follow unchanged. On Windows the pack's <c>winhttp.dll</c> proxy loads BepInEx and no
+    /// variable is needed. On Linux, Doorstop is enabled for BepInEx's preloader, <c>doorstop_libs</c> goes in front of
+    /// <c>LD_LIBRARY_PATH</c> and the library in front of <c>LD_PRELOAD</c>.
+    /// Without <paramref name="hostPlatform"/> it is for this machine. <paramref name="install"/> is then the install directory here,
+    /// whose contents decide the platform (<see cref="ClientLaunch.Detect"/>). BepInEx's preloader and the platform's Doorstop
+    /// loader must be present, and on Windows <c>doorstop_config.ini</c> must enable Doorstop and target BepInEx's preloader. macOS
+    /// starts the bundle through <c>/usr/bin/arch</c> as the requested <paramref name="architecture"/>, inserting a Doorstop library
+    /// that has that slice. <c>arch</c> fails rather than run another slice, so an arm64 request never falls back to Rosetta. X64,
+    /// the default, is the Rosetta compatibility path on Apple Silicon. Arm64 is the native path and also needs a BepInEx core
+    /// whose <c>MonoMod.RuntimeDetour.dll</c> is version 25 or later (legacy MonoMod cannot hook on arm64); an install without it is
+    /// refused here, before anything starts. The machine must be the client's own OS.
+    /// With <paramref name="hostPlatform"/> (Windows or Linux) the launch is for an <see cref="IGameHost"/> of that platform.
+    /// <paramref name="install"/> is then an absolute path there: a drive or UNC path on Windows, and on Linux a path without
+    /// ':', ';' or '='. The caller's variables must be plain names; on Linux a caller's <c>LD_LIBRARY_PATH</c>/<c>LD_PRELOAD</c>
+    /// stays behind the loader's entries. A macOS client cannot be started in its desktop session from another machine and
+    /// is refused. Windows and Linux clients are x64 only.
+    /// </summary>
+    /// <param name="secretVariables">For a host only: variables (for example the join password's) read from this process at launch and given only to
+    /// the game; never logged or written as evidence. A launch for this machine inherits this process's environment and refuses them.</param>
+    public static GameLaunch ForClient(string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null,
+        ClientPlatform? hostPlatform = null, ClientArchitecture architecture = ClientArchitecture.X64, bool console = true, IEnumerable<string>? secretVariables = null)
+    {
+        if (hostPlatform is { } platform) return ClientOnHost(platform, install, arguments, environment, architecture, console, secretVariables);
+        if (secretVariables?.Any() == true)
+            throw new ArgumentException("A launch for this machine inherits this process's environment; secret variables are named only for a host's launch.", nameof(secretVariables));
+        return LocalClient(install, arguments, environment, architecture, console, ClientLaunch.CurrentHost);
+    }
+
+    // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
+    internal static GameLaunch LocalClient(string installDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
+        ClientArchitecture architecture, bool console, ClientPlatform builtOn)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        string install = ClientLaunch.FullInstall(installDirectory);
+        var (platform, executable) = ClientLaunch.Resolve(install, builtOn);
+        RequireX64(platform, architecture);
+        BepInExLoader.RequireCore(install, "install");
+        string? macDoorstop = null;
+        if (platform == ClientPlatform.Windows) BepInExLoader.RequireWindowsLoader(install, "install");
+        else if (platform == ClientPlatform.Linux) BepInExLoader.RequireFile(install, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the install");
+        else macDoorstop = ClientLaunch.RequireMacArchitecture(install, architecture);
+
+        environment ??= new Dictionary<string, string>();
+        var names = builtOn == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var passed = WithConsole(BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(GameLaunch)), console);
+        // Search lists split on ':' (LD_LIBRARY_PATH also on ';'), so such a path cannot be represented. Checked only
+        // where the launch can run; a Windows machine builds these launches only when a test injects the host.
+        if (platform != ClientPlatform.Windows && !OperatingSystem.IsWindows()
+            && install.IndexOfAny(platform == ClientPlatform.Linux ? [':', ';'] : [':']) >= 0)
+            throw new ArgumentException($"A {platform} install path cannot contain ':'" + (platform == ClientPlatform.Linux ? " or ';'." : "."), nameof(installDirectory));
+
+        var (set, prepended, required) = Loader(server: false, platform, environment, names, LocalJoin(install), Relative(install, executable),
+            macDoorstop == null ? null : Relative(install, macDoorstop));
+        return new GameLaunch(server: false, platform, forHost: false, install, executable, passed, set, prepended, required, architecture);
+    }
+
+    private static GameLaunch ClientOnHost(ClientPlatform platform, string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
+        ClientArchitecture architecture, bool console, IEnumerable<string>? secretVariables)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (platform == ClientPlatform.MacOS)
+            throw new PlatformNotSupportedException("A macOS client cannot be started in its desktop session from another machine: a process started over SSH is not in the " +
+                "logged-in user's GUI session and cannot reach its Steam client. Run the test runner inside that session and use ClientSession.Launch, or use a Windows or Linux client host.");
+        RequireX64(platform, architecture);
+        bool windows = platform == ClientPlatform.Windows;
+        string root = HostRoot(windows, install, nameof(install), "install", server: false);
+        var names = windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var passed = WithConsole(BepInExLoader.RefuseOverrides(environment ?? new Dictionary<string, string>(), arguments, names, nameof(GameLaunch)), console);
+        // A Windows client's arguments travel as one quoted command line, which can hold a line break.
+        RequireHostArguments(passed, lineBreaks: windows);
+        // The client's start script puts the loader's entries in front of the caller's own value.
+        RequireHostEnvironment(environment, refuseLoaderPaths: false);
+        string executable = windows ? ClientLaunch.WindowsExecutable : ClientLaunch.LinuxExecutable;
+        var (set, prepended, required) = Loader(server: false, platform, environment, names, relative => HostJoin(root, windows, relative), executable, null);
+        return new GameLaunch(server: false, platform, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required, secretVariables: secretVariables);
+    }
+
+    // The loader's part of every launch, one rule set for both roles, here and on a host: the caller's variables first, then
+    // SteamAppId's default, Doorstop's variables on Linux and macOS, the entries the pack's scripts put in front of a search list,
+    // and the files the launch needs. join turns a path relative to the root (written with '/') into the launch's own form;
+    // executable and macDoorstop are relative the same way.
+    private static (Dictionary<string, string> Set, Dictionary<string, string> Prepended, string[] Required) Loader(bool server, ClientPlatform platform,
+        IReadOnlyDictionary<string, string>? caller, StringComparer names, Func<string, string> join, string executable, string? macDoorstop)
+    {
+        var set = new Dictionary<string, string>(names);
+        foreach (var (name, value) in caller ?? new Dictionary<string, string>()) set[name] = value;
+        set.TryAdd("SteamAppId", server ? ServerLaunch.DedicatedServerSteamAppId : ClientLaunch.GameSteamAppId);
         var prepended = new Dictionary<string, string>(names);
-        string executable;
-        string[] required;
-        if (windows)
+        if (platform == ClientPlatform.Windows) return (set, prepended, [executable, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows)]);
+        set["DOORSTOP_ENABLED"] = "1";
+        set["DOORSTOP_TARGET_ASSEMBLY"] = join(BepInExLoader.CorePreloader);
+        if (platform == ClientPlatform.Linux)
         {
-            executable = HostJoin(root, true, ServerLaunch.WindowsExecutable);
-            required = [ServerLaunch.WindowsExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows)];
-        }
-        else
-        {
-            executable = HostJoin(root, false, ServerLaunch.LinuxExecutable);
-            set["DOORSTOP_ENABLED"] = "1";
-            set["DOORSTOP_TARGET_ASSEMBLY"] = HostJoin(root, false, BepInExLoader.CorePreloader);
-            // Same effective order as the pack's script: linux64, then doorstop_libs, then the existing value.
-            prepended["LD_LIBRARY_PATH"] = HostJoin(root, false, "linux64") + ":" + HostJoin(root, false, "doorstop_libs");
+            // Same effective order as the pack's scripts: (the server's linux64, then) doorstop_libs, then the existing value.
+            prepended["LD_LIBRARY_PATH"] = server ? join("linux64") + ":" + join("doorstop_libs") : join("doorstop_libs");
             prepended["LD_PRELOAD"] = "libdoorstop_x64.so";
-            required = [ServerLaunch.LinuxExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux)];
+            return (set, prepended, [executable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux)]);
         }
-        return new GameLaunch(server: true, windows ? ClientPlatform.Windows : ClientPlatform.Linux, forHost: true, root, executable, passed, set, prepended, required);
+        // macOS, on this machine only. With Doorstop injected, Mono finds the server's libmono-native.dylib only through the library
+        // path, and the server keeps it beside itself, not at the root: without it, or with the root, the server never started
+        // (30 Sep 2026, build 25527701). The client's Doorstop library is named by full path, so it needs no library path.
+        if (server) prepended["DYLD_LIBRARY_PATH"] = join(executable[..executable.LastIndexOf('/')]);
+        prepended["DYLD_INSERT_LIBRARIES"] = join(macDoorstop!);
+        return (set, prepended, [executable, BepInExLoader.CorePreloader, BepInExLoader.CoreLibrary, macDoorstop!]);
+    }
+
+    private static Func<string, string> LocalJoin(string root) => relative => Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+    private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
+
+    // -console first unless left out or already passed (in any case, as the game reads it).
+    private static List<string> WithConsole(List<string> passed, bool console)
+    {
+        if (console && !passed.Contains(ClientLaunch.ConsoleArgument, StringComparer.OrdinalIgnoreCase)) passed.Insert(0, ClientLaunch.ConsoleArgument);
+        return passed;
+    }
+
+    private static void RequireX64(ClientPlatform platform, ClientArchitecture architecture)
+    {
+        if (platform != ClientPlatform.MacOS && architecture != ClientArchitecture.X64)
+            throw new ArgumentException($"The {platform} client is x64 only; {architecture} exists for the macOS client alone.", nameof(architecture));
+    }
+
+    // A secret is a plain variable name given once that the launch does not set, prepend or unset itself.
+    private static List<string> Secrets(IEnumerable<string>? names, IReadOnlyDictionary<string, string> set, IReadOnlyDictionary<string, string> prepended,
+        IReadOnlyList<string> unset, StringComparer comparer)
+    {
+        var secrets = new List<string>();
+        foreach (string name in names ?? [])
+        {
+            if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a variable name.", "secretVariables");
+            if (set.ContainsKey(name!) || prepended.ContainsKey(name!) || unset.Contains(name!, comparer) || secrets.Contains(name!, comparer))
+                throw new ArgumentException($"{name} is given twice or set by the launch itself; a secret variable is only a secret.", "secretVariables");
+            secrets.Add(name!);
+        }
+        return secrets;
     }
 
     /// <summary>
@@ -225,15 +333,16 @@ public sealed class GameLaunch
         return text.ToString();
     }
 
-    // An absolute path on a Windows (drive, or UNC when share) or Linux host, without its trailing separator. ':' and ';' separate a
-    // Linux search list's entries, and '=' would make env read the game's path as a variable.
-    private static string HostRoot(bool windows, string path, string parameter, string kind, bool share)
+    // An absolute path on a Windows or Linux host, without its trailing separator. A server's task may log on without network
+    // credentials (S4U), so its Windows runtime is a drive path; a client runs with the user's own credentials, so a share is an
+    // install too. ':' and ';' separate a Linux search list's entries, and '=' would make env read the game's path as a variable.
+    private static string HostRoot(bool windows, string path, string parameter, string kind, bool server)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path, parameter);
-        if (!windows && Regex.IsMatch(path, @"^([A-Za-z]:|\\\\)"))
+        if (server && !windows && Regex.IsMatch(path, @"^([A-Za-z]:|\\\\)"))
             throw new PlatformNotSupportedException($"A Windows {kind} path cannot be launched on a Linux host.");
-        if (path.Any(char.IsControl) || (windows ? !Regex.IsMatch(path, share ? @"^([A-Za-z]:[\\/]|\\\\[^\\/])" : @"^[A-Za-z]:[\\/]") || path.Contains('"') : !path.StartsWith('/')))
-            throw new ArgumentException($"The {kind} must be an absolute {(windows ? share ? "Windows" : "Windows drive" : "Linux")} path on the host.", parameter);
+        if (path.Any(char.IsControl) || (windows ? !Regex.IsMatch(path, server ? @"^[A-Za-z]:[\\/]" : @"^([A-Za-z]:[\\/]|\\\\[^\\/])") || path.Contains('"') : !path.StartsWith('/')))
+            throw new ArgumentException($"The {kind} must be an absolute {(windows ? server ? "Windows drive" : "Windows" : "Linux")} path on the host.", parameter);
         if (!windows && path.IndexOfAny([':', ';', '=']) >= 0) throw new ArgumentException($"A Linux {kind} path cannot contain ':', ';' or '='.", parameter);
         string trimmed = path.TrimEnd('/', '\\');
         return trimmed.Length == 0 || trimmed.EndsWith(':') || trimmed == "\\" ? path : trimmed;
@@ -243,28 +352,23 @@ public sealed class GameLaunch
     private static string HostJoin(string root, bool windows, string relative) =>
         windows ? root.TrimEnd('\\', '/') + "\\" + relative.Replace('/', '\\') : root + "/" + relative;
 
-    // The arguments travel through a spec line; a line break would end a Linux argument early, and NUL ends a string anywhere.
-    private static List<string> HostArguments(IReadOnlyDictionary<string, string>? environment, IEnumerable<string> arguments, StringComparer names)
+    // NUL ends a string anywhere; a line break would end a Linux argument (one spec line each) early.
+    private static void RequireHostArguments(List<string> passed, bool lineBreaks)
     {
-        var passed = BepInExLoader.RefuseOverrides(environment ?? new Dictionary<string, string>(), arguments, names, nameof(GameLaunch));
         foreach (string argument in passed)
-            if (argument.Contains('\0') || argument.Any(ch => ch is '\n' or '\r')) throw new ArgumentException("A launch argument cannot contain NUL or a line break.", nameof(arguments));
-        return passed;
+            if (argument.Contains('\0') || (!lineBreaks && argument.Any(ch => ch is '\n' or '\r')))
+                throw new ArgumentException(lineBreaks ? "A launch argument cannot contain NUL." : "A launch argument cannot contain NUL or a line break.", "arguments");
     }
 
-    // A host shell sets these by name, so a name must be a plain variable name and a value cannot hold NUL. On Linux the host
-    // session's own LD_LIBRARY_PATH/LD_PRELOAD are what the launch prepends to.
-    private static Dictionary<string, string> HostEnvironment(IReadOnlyDictionary<string, string>? environment, StringComparer names, bool windows)
+    // A host shell sets these by name, so a name must be a plain variable name and a value cannot hold NUL.
+    private static void RequireHostEnvironment(IReadOnlyDictionary<string, string>? environment, bool refuseLoaderPaths)
     {
-        var set = new Dictionary<string, string>(names);
         foreach (var (name, value) in environment ?? new Dictionary<string, string>())
         {
             if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a variable name.", nameof(environment));
             ArgumentNullException.ThrowIfNull(value, name);
             if (value.Contains('\0')) throw new ArgumentException($"{name} cannot contain a NUL character.", nameof(environment));
-            if (!windows && name is "LD_LIBRARY_PATH" or "LD_PRELOAD") throw new ArgumentException($"{name} is set by the launch for BepInEx's loader; leave it out of the environment.", nameof(environment));
-            set[name!] = value;
+            if (refuseLoaderPaths && name is "LD_LIBRARY_PATH" or "LD_PRELOAD") throw new ArgumentException($"{name} is set by the launch for BepInEx's loader; leave it out of the environment.", nameof(environment));
         }
-        return set;
     }
 }
