@@ -1,9 +1,0 @@
-#!/bin/bash
-# Container-wide cleanup: stop EVERY live process in this container whose program is exactly <name>, whoever started
-# it (TERM, then KILL after <seconds>, default 30): vt-stop-all <program-name> [seconds]
-# For the client vt-launch-valheim started, use vt-stop-game, which stops only that process.
-set -uo pipefail
-N="${1:?usage: vt-stop-all <program-name> [seconds]}"; S="${2:-30}"
-P=$(vt-pids "$N") || { echo "vt-stop-all: no $N running"; exit 0; }
-kill $P 2>/dev/null; for _ in $(seq 1 "$S"); do vt-pids "$N" >/dev/null || { echo "vt-stop-all: $N stopped"; exit 0; }; sleep 1; done
-kill -9 $(vt-pids "$N") 2>/dev/null; sleep 1; vt-pids "$N" >/dev/null && { echo "vt-stop-all: $N still running"; exit 1; }; echo "vt-stop-all: $N killed"

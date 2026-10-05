@@ -355,7 +355,7 @@ internal sealed class HostedServerRun
         try
         {
             string local = Path.Combine(output, "client-" + n);
-            var display = platform != ClientPlatform.Linux ? null : host.Kind == GameHostKind.Container ? LinuxDisplay.ClientContainer : new LinuxDisplay();
+            var display = platform != ClientPlatform.Linux ? null : new LinuxDisplay();
             var start = TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds));
             var session = ClientSession.Launch(plan, output,
                 () =>

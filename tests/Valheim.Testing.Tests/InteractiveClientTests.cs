@@ -124,11 +124,11 @@ public class InteractiveClientTests
         Assert.Equal(3, fake.Calls.Count);
     }
 
-    [Fact] public async Task ALinuxClientStartsOnTheDisplayOfTheContainerSession()
+    [Fact] public async Task ALinuxClientInAContainerStartsAsTheContainersUserOnItsDisplay()
     {
         var fake = new FakeLauncher().Exits(0, Reply("VT-INTERACTIVE started 812 4711"), FakeLauncher.Report(0));
         var host = new ContainerGameHost("client", "vt", HostShell.Bash, "steam", "docker", fake);
-        var client = await InteractiveClient.StartAsync(host, HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, []), LinuxLaunch, Timeout, LinuxDisplay.ClientContainer);
+        var client = await InteractiveClient.StartAsync(host, HostClientLaunch.Create(ClientPlatform.Linux, LinuxInstall, []), LinuxLaunch, Timeout, new LinuxDisplay());
         Assert.Equal(812, client.Id); Assert.Null(client.TaskName);
         Assert.Equal(new[] { "exec", "-i", "--user", "steam", "vt", "bash", "-c", HostScripts.BashWrapper }, fake.Calls[0].Arguments);
         string script = FakeLauncher.Script(fake.Calls[0]);

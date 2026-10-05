@@ -44,12 +44,6 @@ public sealed class LinuxDisplay
         Display = display!; WaylandDisplay = waylandDisplay; RuntimeDirectory = runtimeDirectory; XAuthority = xAuthority;
     }
 
-    /// <summary>
-    /// The session docker/linux-client provides: Xorg on <c>:0</c>, no runtime
-    /// directory. Reach it with a <see cref="ContainerGameHost"/> whose user is <c>steam</c>, the user Steam runs as there.
-    /// </summary>
-    public static LinuxDisplay ClientContainer { get; } = new(":0");
-
     public string Display { get; }
     public string? WaylandDisplay { get; }
     public string? RuntimeDirectory { get; }
@@ -198,8 +192,7 @@ public enum InteractiveStop { Stopped, AlreadyGone, Quit }
 /// user's desktop session, which starts the game and records its process ID and start time. The task is always removed again,
 /// whatever happened.</item>
 /// <item>Linux (a bash host): the game starts in its own session (setsid) with the <see cref="LinuxDisplay"/>'s DISPLAY,
-/// WAYLAND_DISPLAY, XDG_RUNTIME_DIR, XAUTHORITY and session bus. The host user must be the display's user; for
-/// docker/linux-client that is <c>steam</c> in the container.</item>
+/// WAYLAND_DISPLAY, XDG_RUNTIME_DIR, XAUTHORITY and session bus. The host user must be the display's user.</item>
 /// <item>macOS: not supported from another machine (<see cref="HostClientLaunch.Create"/> refuses it).</item>
 /// </list>
 /// The host refuses before anything starts when the user has no desktop session there (on Windows, also when it has more than one),
