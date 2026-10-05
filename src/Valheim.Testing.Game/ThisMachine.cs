@@ -23,6 +23,11 @@ internal interface ISteamLocator
     bool FileExists(string path);
     /// <summary>The file's text, or null when it does not exist.</summary>
     string? ReadText(string path);
+    /// <summary>
+    /// <paramref name="path"/> as the file system spells it, when it exists: Steam's registered path is lower case on
+    /// Windows (<c>c:/program files (x86)/steam</c>), and what preflight prints should be the folder the user sees.
+    /// </summary>
+    string OnDiskPath(string path);
 }
 
 /// <summary>This machine, read through the file system and (on Windows) the current user's registry.</summary>
@@ -47,6 +52,23 @@ internal sealed class LocalSteamLocator : ISteamLocator
     public bool DirectoryExists(string path) => Directory.Exists(path);
     public bool FileExists(string path) => File.Exists(path);
     public string? ReadText(string path) => File.Exists(path) ? File.ReadAllText(path) : null;
+    public string OnDiskPath(string path)
+    {
+        if (!Path.Exists(path)) return path;
+        string full = Path.GetFullPath(path), root = Path.GetPathRoot(full) ?? "";
+        // A drive letter as Windows shows it; each further part as its directory lists it (an exact match first).
+        string current = root.Length >= 2 && root[1] == ':' ? char.ToUpperInvariant(root[0]) + root[1..] : root;
+        var options = new EnumerationOptions { MatchCasing = MatchCasing.CaseInsensitive, RecurseSubdirectories = false, AttributesToSkip = 0 };
+        foreach (string part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string[] found;
+            try { found = Directory.GetFileSystemEntries(current, part, options); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return path; }
+            // No match (an 8.3 short name such as RUNNER~1, which listings do not show): keep the part as given and go on.
+            current = found.FirstOrDefault(entry => Path.GetFileName(entry) == part) ?? (found.Length == 1 ? found[0] : Path.Combine(current, part));
+        }
+        return current;
+    }
 }
 
 /// <summary>One Steam app's install as found in this machine's Steam libraries, and every manifest looked for.</summary>
@@ -87,6 +109,7 @@ internal sealed record SteamDetection(string? Root, string? RootRule, IReadOnlyL
         }
         var tried = candidates.Select(candidate => candidate.Path).ToList();
         var (root, rule) = candidates.FirstOrDefault(candidate => machine.DirectoryExists(candidate.Path));
+        if (root != null) root = machine.OnDiskPath(root); // what is printed; libraries keep their vdf spelling
         var comparer = machine.Platform == "windows" ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var libraries = new List<string>();
         if (root != null)
@@ -112,7 +135,7 @@ internal sealed record SteamDetection(string? Root, string? RootRule, IReadOnlyL
                 manifests.Add(manifest);
                 if (machine.ReadText(manifest) is not { } text || InstallDir.Match(text) is not { Success: true } found) continue;
                 string candidate = HostInstall.Join(library, "steamapps", "common", Unescape(found.Groups[1].Value));
-                if (machine.DirectoryExists(candidate)) { install = candidate; break; }
+                if (machine.DirectoryExists(candidate)) { install = machine.OnDiskPath(candidate); break; }
                 manifests[^1] += $" (names {candidate}, which does not exist)";
             }
             apps[app] = new SteamAppInstall(app, install, manifests);
