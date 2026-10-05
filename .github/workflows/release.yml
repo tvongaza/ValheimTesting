@@ -41,7 +41,8 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       # A `-candidate.<sha>` version is a local build identity; NuGet.org would keep it forever. Refused before building, as is a
-      # source version older than the release recorded in toolkit-versions.json.
+      # source version older than the release recorded in toolkit-versions.json, and a change under a version NuGet.org already
+      # serves in a package the valheim-test tool embeds (it would ship other bytes than its consumer restores; needs fetch-depth: 0).
       - name: Refuse candidate versions
         run: dotnet run scripts/pins.cs -- versions
       - run: dotnet run scripts/bootstrap-cli.cs
