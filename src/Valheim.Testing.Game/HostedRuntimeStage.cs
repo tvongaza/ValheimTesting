@@ -66,7 +66,7 @@ public static class HostedRuntimeStage
         var selected = new Dictionary<string, HostedRuntimeFile>(HostNames);
         foreach (var file in dependencies.Mods.Concat(dependencies.Plugins).Concat(dependencies.CliFiles))
         {
-            if (!File.Exists(file.File) || !WorldFixture.Hash(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+            if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("A pinned dependency changed before staging: " + file.File);
             string name = "BepInEx/plugins/" + Path.GetFileName(file.File);
             if (!selected.TryAdd(name, new HostedRuntimeFile(file.File, name)))
@@ -156,7 +156,7 @@ public static class HostedRuntimeStage
             string local = Path.GetFullPath(file.Source);
             if (!File.Exists(local) || (File.GetAttributes(local) & FileAttributes.ReparsePoint) != 0)
                 throw new FileNotFoundException("A selected runtime file is missing or linked: " + local, local);
-            if (!selected.TryAdd(file.RelativePath, (local, WorldFixture.Hash(local))))
+            if (!selected.TryAdd(file.RelativePath, (local, FileHash.Sha256(local))))
                 throw new ArgumentException("Two selected runtime files have the same target path: " + file.RelativePath, nameof(files));
         }
         // Use the existing reviewed package contract, not a hand-repaired source install.
@@ -186,7 +186,7 @@ public static class HostedRuntimeStage
                 string target = Path.Combine(payload, relative.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 File.Copy(value.Source, target);
-                if (!WorldFixture.Hash(target).Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
+                if (!FileHash.Sha256(target).Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("The local staging copy changed: " + relative);
             }
             shipped = true;

@@ -255,7 +255,7 @@ public static class PinnedServerRun
         }
         string planFile = args[1];
         using var cancellation = new RunCancellation();
-        return await RunAsync(args[0], () => options.ReadPlan(planFile), () => WorldFixture.Hash(planFile), Path.GetFileName(planFile),
+        return await RunAsync(args[0], () => options.ReadPlan(planFile), () => FileHash.Sha256(planFile), Path.GetFileName(planFile),
             args[2], options, cancellation, inventoryPath, campaign: null).ConfigureAwait(false);
     }
 
@@ -265,7 +265,7 @@ public static class PinnedServerRun
         if (args.Length != 3) throw new ArgumentException("mode, plan and output.", nameof(args));
         string planFile = args[1];
         using var cancellation = new RunCancellation();
-        return await RunAsync(args[0], () => options.ReadPlan(planFile), () => WorldFixture.Hash(planFile), Path.GetFileName(planFile),
+        return await RunAsync(args[0], () => options.ReadPlan(planFile), () => FileHash.Sha256(planFile), Path.GetFileName(planFile),
             args[2], options, cancellation, inventoryPath: null, campaign: null, environment).ConfigureAwait(false);
     }
 
@@ -287,7 +287,7 @@ public static class PinnedServerRun
         using var cancellation = new RunCancellation();
         // The bound plan is kept as evidence (prepared/plan.json, never read back): its hash is the run's planSha256.
         string full = Path.GetFullPath(output);
-        return await RunAsync("run", () => plan, () => WorldFixture.Hash(Path.Combine(full, "prepared", "plan.json")),
+        return await RunAsync("run", () => plan, () => FileHash.Sha256(Path.Combine(full, "prepared", "plan.json")),
             Path.GetFileName(manifestFile), output, options, cancellation, inventoryPath: null, campaign: (manifestFile, clients)).ConfigureAwait(false);
     }
 
@@ -324,7 +324,7 @@ public static class PinnedServerRun
             {
                 // Stages 1 and 2 never copy: every independent problem is reported before the first host write.
                 Directory.CreateDirectory(output); ownOutput = true;
-                report.Provenance["campaignSha256"] = WorldFixture.Hash(manifestFile);
+                report.Provenance["campaignSha256"] = FileHash.Sha256(manifestFile);
                 HostedCampaignPreparation.Inspection inspection = null!;
                 report.Step(StepPhase.Preflight, "campaign inputs and actor assignment", () =>
                 {
@@ -332,7 +332,7 @@ public static class PinnedServerRun
                     inspection.Report.RequireReady();
                     // With no inventory file the actors are on this machine; what was detected for it is recorded either way.
                     if (inspection.Inputs!.Manifest.Inventory.Length != 0)
-                        report.Provenance["inventorySha256"] = WorldFixture.Hash(inspection.Inputs.Manifest.Inventory);
+                        report.Provenance["inventorySha256"] = FileHash.Sha256(inspection.Inputs.Manifest.Inventory);
                     else report.Provenance["inventory"] = "this machine";
                     if (inspection.Report.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inspection.Report.Detected);
                 });
@@ -357,7 +357,7 @@ public static class PinnedServerRun
                 var (placed, assignment) = inventory.PlaceServer(plan);
                 if (inventory.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inventory.Detected);
                 environment = placed;
-                report.Provenance["inventorySha256"] = WorldFixture.Hash(inventoryPath);
+                report.Provenance["inventorySha256"] = FileHash.Sha256(inventoryPath);
                 report.Provenance["serverEnvironment"] = assignment.Environment + ": " + assignment.Reason;
             }
             if (environment != null)
@@ -380,8 +380,8 @@ public static class PinnedServerRun
             report.Provenance["planSha256"] = planHash();
             report.Provenance["scenario"] = plan.Scenario;
             options.Provenance?.Invoke(plan, report.Provenance);
-            if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = WorldFixture.Hash(runner);
-            report.Provenance["toolkitSha256"] = WorldFixture.Hash(typeof(GameActor).Assembly.Location);
+            if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = FileHash.Sha256(runner);
+            report.Provenance["toolkitSha256"] = FileHash.Sha256(typeof(GameActor).Assembly.Location);
             report.Provenance["mode"] = mode;
             report.Provenance["serverPlatform"] = platform.ToString();
             report.Provenance["crossplay"] = plan.Crossplay ? "true" : "false";

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -83,7 +82,7 @@ public sealed class TerrainCapture
         }
         return new TerrainCapture(d,expected,provenance,samples.AsReadOnly());
     }
-    private static string Digest(JsonElement data)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(data))));
+    private static string Digest(JsonElement data)=>FileHash.Sha256(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(data))).ToUpperInvariant();
     public void Save(string path)
     {
         using var file=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None);
@@ -93,7 +92,7 @@ public sealed class TerrainCapture
     {
         if(new FileInfo(path).Length>1048576)throw new InvalidDataException("Capture file exceeds 1MiB.");
         using var doc=JsonDocument.Parse(File.ReadAllText(path));var root=doc.RootElement;var d=root.GetProperty("payload");
-        if(root.GetProperty("fileVersion").GetInt32()!=1 || root.GetProperty("sha256").GetString()!=Digest(d))throw new InvalidDataException("Capture checksum/version mismatch.");
+        if(root.GetProperty("fileVersion").GetInt32()!=1 || !string.Equals(root.GetProperty("sha256").GetString(),Digest(d),StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Capture checksum/version mismatch.");
         var grid=new TerrainGridRequest(d.GetProperty("originX").GetSingle(),d.GetProperty("originZ").GetSingle(),d.GetProperty("spacing").GetSingle(),
             d.GetProperty("countX").GetInt32(),d.GetProperty("countZ").GetInt32(),d.GetProperty("layer").GetString()!);
         return FromObservation(new Observation("terrain-grid",d.GetProperty("complete").GetBoolean(),d),grid,root.GetProperty("provenance").GetString()!);

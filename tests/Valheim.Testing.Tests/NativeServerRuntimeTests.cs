@@ -89,7 +89,7 @@ public sealed class NativeServerRuntimeTests : IDisposable
             RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
         var dependencies = new NativeDependencyLock
         {
-            Mods = [new(primary, WorldFixture.Hash(primary), "selected mod")],
+            Mods = [new(primary, FileHash.Sha256(primary), "selected mod")],
         };
         string output = Path.Combine(_rig.Root, "refused-server-output");
         Assert.Contains("declare plugin " + NativeServerRuntime.SessionAdapterPluginGuid, Assert.Throws<InvalidDataException>(() =>
@@ -104,7 +104,7 @@ public sealed class NativeServerRuntimeTests : IDisposable
             RegressionRig.Assembly("NativeSmoke.SessionAdapter", new("another.testing.plugin")));
         var dependencies = new NativeDependencyLock
         {
-            Mods = [new(_rig.Parent, WorldFixture.Hash(_rig.Parent), "selected mod")],
+            Mods = [new(_rig.Parent, FileHash.Sha256(_rig.Parent), "selected mod")],
         };
         string output = Path.Combine(_rig.Root, "wrong-adapter-output");
         Assert.Contains(NativeServerRuntime.SessionAdapterPluginGuid, Assert.Throws<InvalidDataException>(() =>

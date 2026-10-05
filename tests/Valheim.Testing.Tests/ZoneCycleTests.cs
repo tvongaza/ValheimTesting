@@ -174,7 +174,7 @@ public sealed class ZoneCycleTests : IDisposable
         Assert.True(evidence.GetProperty("reloadSeconds").GetDouble() >= 0);
         report.Write(_output);
         var link = Assert.Single(report.Evidence);
-        Assert.Equal(new EvidenceReference("zone-cycle", "first", "1", "first-zone-cycle.json", WorldFixture.Hash(Path.Combine(_output, "first-zone-cycle.json"))), link);
+        Assert.Equal(new EvidenceReference("zone-cycle", "first", "1", "first-zone-cycle.json", FileHash.Sha256(Path.Combine(_output, "first-zone-cycle.json"))), link);
     }
 
     [Fact] public void ABadEvidenceNameIsRefusedBeforeTheClientMoves()

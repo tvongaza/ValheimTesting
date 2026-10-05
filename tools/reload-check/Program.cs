@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Text.Json;
 using Valheim.Testing.Game;
 using valheim_cli.Testing;
@@ -56,7 +55,7 @@ try
         control.InvalidateEnvironment();
         ownsProbe = true;
         ExtensionReload.Install(source, deployed);
-        evidence.Add(new { installed = Path.GetFileName(source), sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(deployed))) });
+        evidence.Add(new { installed = Path.GetFileName(source), sha256 = FileHash.Sha256(deployed) });
     }
     void Require(bool condition, string description)
     {

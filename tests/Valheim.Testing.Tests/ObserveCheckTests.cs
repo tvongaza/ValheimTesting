@@ -87,8 +87,8 @@ public sealed class ObserveCheckTests : IDisposable
         Assert.Equal(0, Run("paint", PaintPlanFile));
         var provenance = Result().GetProperty("Provenance");
         Assert.Equal("paint paint.json", provenance.GetProperty("probe").GetString());
-        Assert.Equal(WorldFixture.Hash(PaintPlanFile), provenance.GetProperty("inputSha256").GetString());
-        Assert.Equal(WorldFixture.Hash(Pins), provenance.GetProperty("pinsSha256").GetString());
+        Assert.Equal(FileHash.Sha256(PaintPlanFile), provenance.GetProperty("inputSha256").GetString());
+        Assert.Equal(FileHash.Sha256(Pins), provenance.GetProperty("pinsSha256").GetString());
     }
 
     [Fact]

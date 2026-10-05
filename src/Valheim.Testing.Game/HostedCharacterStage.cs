@@ -50,7 +50,7 @@ internal static class HostedCharacterStage
         var store = DisposableCharacterStore.Open(input.Store);
         var handle = store.Get(input.RegisteredName);
         string file = store.StoredFile(handle.Name);
-        if (!WorldFixture.Hash(file).Equals(handle.Sha256, StringComparison.OrdinalIgnoreCase))
+        if (!FileHash.Sha256(file).Equals(handle.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The registered character changed before staging: " + input.RegisteredName);
         return new(input, handle, file);
     }
@@ -105,7 +105,7 @@ internal static class HostedCharacterStage
             string saveFile = DisposableCharacterStore.SaveFile(selected.Input.FileName);
             string target = Path.Combine(payload, saveFile);
             File.Copy(selected.File, target);
-            if (!WorldFixture.Hash(target).Equals(selected.Handle.Sha256, StringComparison.OrdinalIgnoreCase))
+            if (!FileHash.Sha256(target).Equals(selected.Handle.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The local copy of the registered character changed.");
             shipped = true;
             await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);

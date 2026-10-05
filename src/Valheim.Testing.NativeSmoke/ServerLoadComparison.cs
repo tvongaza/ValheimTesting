@@ -82,7 +82,7 @@ internal static class ServerLoadComparison
                 .Concat(pairs.Where(pair => pair.Key is "--config" or "--plugin-file" or "--loader-package" or "--client-loader-package")
                     .Select(pair => Path.GetFullPath(pair.Value)))
                 .Distinct(StringComparer.Ordinal)
-                .ToDictionary(path => path, WorldFixture.Hash, StringComparer.Ordinal);
+                .ToDictionary(path => path, FileHash.Sha256, StringComparer.Ordinal);
             before.Write(Path.Combine(output, "before-dependencies.lock.json"));
             after.Write(Path.Combine(output, "after-dependencies.lock.json"));
 
@@ -102,7 +102,7 @@ internal static class ServerLoadComparison
             NativeDependencyLock.ReadReady(Path.Combine(output, "after-dependencies.lock.json"));
             foreach (var (path, manifest) in directoryInputs) WorldFixture.Verify(path, manifest);
             foreach (var (path, hash) in fileInputs)
-                if (!WorldFixture.Hash(path).Equals(hash, StringComparison.OrdinalIgnoreCase))
+                if (!FileHash.Sha256(path).Equals(hash, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("A fixed A/B input changed after the first arm: " + path);
             int afterResult = await runArm(Arm("after", omit: true));
             Console.WriteLine(beforeResult == 0 && afterResult == 0

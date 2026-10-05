@@ -175,11 +175,11 @@ public static class HostInstall
             throw new InvalidOperationException($"The install on {listing.HostName} has a nested BepInEx/core/core. Replace the loader as one coherent tree before launch.");
         return new InstallPins
         {
-            Game = InstallPins.ListingHash(Under(listing, prefix).Where(file => !file.Relative.Contains('/') &&
+            Game = FileHash.Listing(Under(listing, prefix).Where(file => !file.Relative.Contains('/') &&
                 file.Relative.StartsWith("assembly_", StringComparison.Ordinal) && file.Relative.EndsWith(".dll", StringComparison.Ordinal))),
-            Loader = InstallPins.ListingHash(listing.Files.Select(pair => (Relative: InstallPins.LoaderPath(pair.Key, Comparison(listing)), Sha256: pair.Value))
+            Loader = FileHash.Listing(listing.Files.Select(pair => (Relative: InstallPins.LoaderPath(pair.Key, Comparison(listing)), Sha256: pair.Value))
                 .Where(file => file.Relative != null).Select(file => (file.Relative!, file.Sha256))),
-            Patchers = InstallPins.ListingHash(Under(listing, "BepInEx/patchers/")),
+            Patchers = FileHash.Listing(Under(listing, "BepInEx/patchers/")),
         };
     }
 
@@ -277,11 +277,8 @@ internal static class HostInstallScripts
             while IFS= read -r pattern; do
                 [ -n "$pattern" ] || continue
                 IFS=$'\n'
-                # A named file that is a link is kept, so the link check below refuses it rather than leave it out.
-                for d in $pattern; do
-                  if [ -d "$d" ] && [ ! -L "$d" ]; then roots+=("./$d")
-                  elif [ ! -d "$d" ] && { [ -f "$d" ] || [ -L "$d" ]; }; then roots+=("./$d"); fi
-                done
+                # A named path that is a link is kept, so the link check below refuses it rather than leave it out.
+                for d in $pattern; do if [ -e "$d" ] || [ -L "$d" ]; then roots+=("./$d"); fi; done
                 unset IFS
             done <<< "$dirs"
         fi
@@ -322,7 +319,7 @@ internal static class HostInstallScripts
                 foreach ($dir in $current) {
                     $attributes = [IO.File]::GetAttributes($dir)
                     if (-not ($attributes -band [IO.FileAttributes]::ReparsePoint)) { $roots += $dir }
-                    elseif (-not ($attributes -band [IO.FileAttributes]::Directory)) { $links.Add($dir) } # a named file that is a link is refused below
+                    else { $links.Add($dir) } # a named path that is a link is refused below, never left out
                 }
             }
         }

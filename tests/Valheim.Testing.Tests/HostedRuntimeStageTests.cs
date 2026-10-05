@@ -95,7 +95,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source,
             Path.Combine(run, "runtime"), Path.Combine(run, "staging"),
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30));
-        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/selected.dll"]);
+        Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/selected.dll"]);
         Assert.False(listing.Files.ContainsKey("BepInEx/plugins/old.dll"));
         Assert.True(File.Exists(old));
         Assert.False(Directory.Exists(Path.Combine(run, "staging")));

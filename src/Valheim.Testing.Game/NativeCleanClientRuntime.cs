@@ -36,7 +36,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
         var pins = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var file in dependencies.CliFiles)
         {
-            if (!File.Exists(file.File) || !WorldFixture.Hash(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+            if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("A pinned ValheimCLI file changed: " + file.File);
             foreach (var plugin in PluginMetadata.Read(file.File).Plugins)
                 if (!pins.TryAdd(plugin.Guid, FileHash.Md5(file.File)))
@@ -59,7 +59,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
             {
                 string target = Path.Combine(bep, "plugins", Path.GetFileName(file));
                 File.Copy(file, target);
-                if (WorldFixture.Hash(target) != WorldFixture.Hash(file))
+                if (FileHash.Sha256(target) != FileHash.Sha256(file))
                     throw new IOException("A staged ValheimCLI file changed: " + file);
             }
             File.WriteAllText(Path.Combine(bep, "config", "valheimCLI.valheimCLI.cfg"),

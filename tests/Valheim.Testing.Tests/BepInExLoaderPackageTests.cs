@@ -13,13 +13,13 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         package.Write(manifest);
         string sourceCore = Path.Combine(_rig.Game, "BepInEx", "core", "BepInEx.dll");
         File.WriteAllText(sourceCore, "another live core");
-        string changed = WorldFixture.Hash(sourceCore);
+        string changed = FileHash.Sha256(sourceCore);
 
         var environment = _rig.Manifest();
         environment.LoaderPackage = manifest;
         var staged = new TargetedRegression(environment).Stage("parent");
-        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], WorldFixture.Hash(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
-        Assert.Equal(changed, WorldFixture.Hash(sourceCore));
+        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
+        Assert.Equal(changed, FileHash.Sha256(sourceCore));
         Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
         // One loader identity: the install the package was applied to has the package's loader pin, which its identity names.
         Assert.Equal(package.Loader, InstallPins.Of(_rig.Install).Loader);
@@ -51,7 +51,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         environment.LoaderPackage = manifest;
         new TargetedRegression(environment).Stage("parent").Verify();
         Assert.False(Directory.Exists(Path.Combine(_rig.Game, "BepInEx", "core")));
-        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], WorldFixture.Hash(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
+        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
     }
 
     [Fact] public void AManifestCannotOverrideThePinnedLoaderConfiguration()
@@ -91,7 +91,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         package.Write(manifest);
         new TargetedRegression(environment).Stage("parent").Verify();
 
-        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], WorldFixture.Hash(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
+        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
     }
 

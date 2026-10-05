@@ -37,10 +37,10 @@ internal static class ObserveCheck
             var probe = Probe(name, args[5..]);
             if (probe == null) { Console.Error.WriteLine(Usage); return 2; }
             string pins = StrictExpectations.Load(args[2]);
-            report.Provenance["pinsSha256"] = WorldFixture.Hash(args[2]);
+            report.Provenance["pinsSha256"] = FileHash.Sha256(args[2]);
             // Input files by name only, and no join address or character: reports get shared.
             report.Provenance["probe"] = name == "session" ? "session " + args[5] : string.Join(' ', args[4..].Select(arg => File.Exists(arg) ? Path.GetFileName(arg) : arg));
-            foreach (string input in args[5..].Where(File.Exists)) report.Provenance["inputSha256"] = WorldFixture.Hash(input);
+            foreach (string input in args[5..].Where(File.Exists)) report.Provenance["inputSha256"] = FileHash.Sha256(input);
             if (Path.Exists(output)) throw new IOException("Use a new output directory.");
             Directory.CreateDirectory(output);
             try
@@ -137,7 +137,7 @@ internal static class ObserveCheck
             }
             var evidence = WalkingProbe.Assess(route, samples);
             string review = Save(output, "review.json", new WalkingReview(evidence));
-            report.Attach(new EvidenceReference("walking-review", "route", world, review, WorldFixture.Hash(review)));
+            report.Attach(new EvidenceReference("walking-review", "route", world, review, FileHash.Sha256(review)));
             if (!evidence.Sufficient) throw new InvalidOperationException("The trace does not qualify for review: " + string.Join(", ", evidence.Issues));
         };
     }

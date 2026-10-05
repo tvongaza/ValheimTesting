@@ -45,7 +45,7 @@ public sealed class TargetedRegressionTests : IDisposable
         // Each arm under its own artifact name, with its commit and hash, for review.
         Assert.Equal(new[] { "parent-ExampleMod.dll", "candidate-ExampleMod.dll" }, parent.Manifest.Arms.Select(arm => arm.Artifact));
         Assert.Equal(new[] { "p1", "c1" }, parent.Manifest.Arms.Select(arm => arm.Commit));
-        Assert.Contains(parent.Describe(), line => line.Contains("arm candidate") && line.Contains(WorldFixture.Hash(_rig.Candidate)));
+        Assert.Contains(parent.Describe(), line => line.Contains("arm candidate") && line.Contains(FileHash.Sha256(_rig.Candidate)));
         // The run manifest holds the allowlist and hashes only: no machine path, nothing outside the allowlist.
         string json = System.Text.Json.JsonSerializer.Serialize(parent.Manifest, TargetedRegression.ManifestJson);
         Assert.DoesNotContain(_rig.Root, json);
@@ -108,15 +108,15 @@ public sealed class TargetedRegressionTests : IDisposable
         // A file named like the dependency that declares no plugin does not meet it.
         string impostor = _rig.Write("impostor/Dependency.dll", RegressionRig.Assembly("Dependency", null));
         var manifest = _rig.Manifest();
-        manifest.Plugins = [new() { File = impostor, Sha256 = WorldFixture.Hash(impostor) }];
+        manifest.Plugins = [new() { File = impostor, Sha256 = FileHash.Sha256(impostor) }];
         Assert.Contains("that nothing staged declares", Assert.Throws<InvalidOperationException>(() => new TargetedRegression(manifest).Stage("parent")).Message);
         // A renamed file that declares it does.
         string renamed = _rig.Write("renamed/SomethingElse.dll", RegressionRig.Assembly("Dependency", new("example.dependency", "1.3.0")));
-        manifest.Plugins = [new() { File = renamed, Sha256 = WorldFixture.Hash(renamed) }];
+        manifest.Plugins = [new() { File = renamed, Sha256 = FileHash.Sha256(renamed) }];
         new TargetedRegression(manifest).Stage("parent");
         // An older build than the mod requires is named with both versions.
         string old = _rig.Write("old/Dependency.dll", RegressionRig.Assembly("Dependency", new("example.dependency", "1.1.0")));
-        manifest.Plugins = [new() { File = old, Sha256 = WorldFixture.Hash(old) }];
+        manifest.Plugins = [new() { File = old, Sha256 = FileHash.Sha256(old) }];
         var error = Assert.Throws<InvalidOperationException>(() => new TargetedRegression(manifest).Stage("parent"));
         Assert.Contains("needs example.dependency 1.2.0 or newer, and the staged BepInEx/plugins/Dependency.dll declares 1.1.0", error.Message);
     }
@@ -125,13 +125,13 @@ public sealed class TargetedRegressionTests : IDisposable
     {
         string uses = _rig.Write("uses/Library.dll", RegressionRig.Assembly("UsesLibrary", null, reference: typeof(FactAttribute)));
         var manifest = _rig.Manifest();
-        manifest.Plugins.Add(new() { File = uses, Sha256 = WorldFixture.Hash(uses) });
+        manifest.Plugins.Add(new() { File = uses, Sha256 = FileHash.Sha256(uses) });
         var error = Assert.Throws<InvalidOperationException>(() => new TargetedRegression(manifest).Stage("parent"));
         Assert.Contains("BepInEx/plugins/Library.dll references assembly xunit.core", error.Message);
         Assert.Contains("optionalReferences", error.Message);
         // Staging the library that provides it, by its assembly name, meets it.
         string library = _rig.Write("lib/xunit.core.dll", RegressionRig.Assembly("xunit.core", null));
-        manifest.Plugins.Add(new() { File = library, Sha256 = WorldFixture.Hash(library) });
+        manifest.Plugins.Add(new() { File = library, Sha256 = FileHash.Sha256(library) });
         new TargetedRegression(manifest).Stage("parent");
         manifest.Plugins.RemoveAt(manifest.Plugins.Count - 1);
         manifest.OptionalReferences = ["xunit.core"];
@@ -144,7 +144,7 @@ public sealed class TargetedRegressionTests : IDisposable
         string server = _rig.Write("server/ServerOnly.dll", RegressionRig.Assembly("ServerOnly", new("example.serveronly") { Processes = ["valheim_server.exe"] }));
         string clash = _rig.Write("clash/Clash.dll", RegressionRig.Assembly("Clash", new("example.clash") { Incompatible = ["example.mod"] }));
         string twin = _rig.Write("twin/Twin.dll", RegressionRig.Assembly("Twin", new("example.dependency", "2.0.0")));
-        foreach (string file in new[] { server, clash, twin }) manifest.Plugins.Add(new() { File = file, Sha256 = WorldFixture.Hash(file) });
+        foreach (string file in new[] { server, clash, twin }) manifest.Plugins.Add(new() { File = file, Sha256 = FileHash.Sha256(file) });
         var error = Assert.Throws<InvalidOperationException>(() => new TargetedRegression(manifest).Stage("parent"));
         Assert.Contains("example.serveronly (BepInEx/plugins/ServerOnly.dll) loads only in valheim_server.exe ([BepInProcess])", error.Message);
         Assert.Contains("example.clash (BepInEx/plugins/Clash.dll) declares [BepInIncompatibility(\"example.mod\")]", error.Message);
@@ -280,7 +280,7 @@ public sealed class TargetedRegressionTests : IDisposable
         // The Epic Loot shape: a pack with the expected file name and plugin GUID, from another build.
         var coherent = manifest.Cli.Packs;
         string stale = _rig.Write("stale/Valheim.Cli.Standard.dll", RegressionRig.Assembly("Valheim.Cli.Standard", new("valheimCLI.standard", "0.3.0") { Hard = ["valheimCLI.valheimCLI"] }, marker: "Stale"));
-        manifest.Cli.Packs = [new() { File = stale, Sha256 = WorldFixture.Hash(stale) }];
+        manifest.Cli.Packs = [new() { File = stale, Sha256 = FileHash.Sha256(stale) }];
         var error = Assert.Throws<InvalidOperationException>(() => new TargetedRegression(manifest).Stage("parent"));
         Assert.Contains("another build of Valheim.Cli.Standard.dll", error.Message);
         Assert.Contains("Install the manifest's core and packs together", error.Message);
@@ -301,7 +301,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var manifest = _rig.Manifest();
         manifest.Mod.Arms["candidate"].Sha256 = new string('c', 64);
         var error = Assert.Throws<InvalidOperationException>(() => new TargetedRegression(manifest).Stage("parent")); // Every arm is checked.
-        Assert.Contains($"mod.arms.candidate: {_rig.Candidate} is sha256 {WorldFixture.Hash(_rig.Candidate)}, but the manifest pins {new string('c', 64)} for commit c1", error.Message);
+        Assert.Contains($"mod.arms.candidate: {_rig.Candidate} is sha256 {FileHash.Sha256(_rig.Candidate)}, but the manifest pins {new string('c', 64)} for commit c1", error.Message);
         Assert.Contains("Rebuild candidate from c1", error.Message);
         manifest.Mod.Arms["candidate"].File = Path.Combine(_rig.Root, "Jotunn.candidate.dll"); // A mistyped artifact name.
         Assert.Contains("Build commit c1, or correct the path", Assert.Throws<FileNotFoundException>(() => new TargetedRegression(manifest).Stage("parent")).Message);
@@ -310,7 +310,7 @@ public sealed class TargetedRegressionTests : IDisposable
     [Fact] public void TwoArmsWithOneInstalledHashAreRefusedUnlessARepeatabilityRun()
     {
         var manifest = _rig.Manifest();
-        manifest.Mod.Arms["candidate"] = new() { File = _rig.Parent, Sha256 = WorldFixture.Hash(_rig.Parent), Commit = "c1" };
+        manifest.Mod.Arms["candidate"] = new() { File = _rig.Parent, Sha256 = FileHash.Sha256(_rig.Parent), Commit = "c1" };
         var error = Assert.Throws<ArgumentException>(() => new TargetedRegression(manifest));
         Assert.Contains("mod.arms parent and candidate are the same build", error.Message);
         Assert.Contains("set mod.repeatability to true", error.Message);
@@ -323,14 +323,14 @@ public sealed class TargetedRegressionTests : IDisposable
         var manifest = _rig.Manifest();
         manifest.Plugins[0].Sha256 = "";
         var error = Assert.Throws<InvalidOperationException>(() => new TargetedRegression(manifest).Stage("parent"));
-        Assert.Contains($"plugins[0]: pin {manifest.Plugins[0].File} by its SHA256. It is {WorldFixture.Hash(manifest.Plugins[0].File)}", error.Message);
+        Assert.Contains($"plugins[0]: pin {manifest.Plugins[0].File} by its SHA256. It is {FileHash.Sha256(manifest.Plugins[0].File)}", error.Message);
     }
 
     [Fact] public void ArmsOfDifferentModsAreRefused()
     {
         var manifest = _rig.Manifest();
         string other = _rig.Write("other/Other.dll", RegressionRig.Assembly("Other", new("example.other")));
-        manifest.Mod.Arms["candidate"] = new() { File = other, Sha256 = WorldFixture.Hash(other), Commit = "c1" };
+        manifest.Mod.Arms["candidate"] = new() { File = other, Sha256 = FileHash.Sha256(other), Commit = "c1" };
         Assert.Contains("The arms declare different plugins", Assert.Throws<InvalidOperationException>(() => new TargetedRegression(manifest).Stage("parent")).Message);
     }
 
@@ -423,8 +423,8 @@ internal sealed class RegressionRig : IDisposable
             InstallAs = "ExampleMod.dll",
             Arms = new()
             {
-                ["parent"] = new() { File = Parent, Sha256 = WorldFixture.Hash(Parent), Commit = "p1" },
-                ["candidate"] = new() { File = Candidate, Sha256 = WorldFixture.Hash(Candidate), Commit = "c1" },
+                ["parent"] = new() { File = Parent, Sha256 = FileHash.Sha256(Parent), Commit = "p1" },
+                ["candidate"] = new() { File = Candidate, Sha256 = FileHash.Sha256(Candidate), Commit = "c1" },
             },
         },
     };
@@ -439,10 +439,10 @@ internal sealed class RegressionRig : IDisposable
             Build = "valheimCLI test build",
             Files =
             [
-                new() { File = "valheimCLI.dll", Sha256 = WorldFixture.Hash(_core), Plugins = ["valheimCLI.valheimCLI"] },
+                new() { File = "valheimCLI.dll", Sha256 = FileHash.Sha256(_core), Plugins = ["valheimCLI.valheimCLI"] },
                 new()
                 {
-                    File = "Valheim.Cli.Standard.dll", Sha256 = WorldFixture.Hash(_pack), Plugins = ["valheimCLI.standard"],
+                    File = "Valheim.Cli.Standard.dll", Sha256 = FileHash.Sha256(_pack), Plugins = ["valheimCLI.standard"],
                     Extensions = new(StringComparer.Ordinal) { ["valheim.session"] = session },
                 },
             ],
@@ -452,7 +452,7 @@ internal sealed class RegressionRig : IDisposable
         return path;
     }
 
-    private static RegressionFile Pinned(string path) => new() { File = path, Sha256 = WorldFixture.Hash(path) };
+    private static RegressionFile Pinned(string path) => new() { File = path, Sha256 = FileHash.Sha256(path) };
 
     public string Write(string relative, byte[] content)
     {

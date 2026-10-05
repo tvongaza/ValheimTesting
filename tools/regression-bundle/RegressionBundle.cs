@@ -325,7 +325,7 @@ public static class RegressionBundle
             files.Add(new(ReadmeFile, "", "generated from the checked results"));
             int count = files.Count + 1; // And the manifest itself.
             File.WriteAllText(Path.Combine(staging, ReadmeFile), Readme(spec, template, evidence, native, files, count));
-            files = files.Select(file => file with { Sha256 = WorldFixture.Hash(Path.Combine(staging, file.Path.Replace('/', Path.DirectorySeparatorChar))) }).ToList();
+            files = files.Select(file => file with { Sha256 = FileHash.Sha256(Path.Combine(staging, file.Path.Replace('/', Path.DirectorySeparatorChar))) }).ToList();
             var manifest = new BundleManifest(1, spec.Title, spec.Runner, spec.Toolkit, files, omitted, environmentOnly, native, evidence.Files, evidence.Results, spec.Plugins, checks);
             File.WriteAllText(Path.Combine(staging, ManifestFile), JsonSerializer.Serialize(manifest, Json) + "\n");
             Verify(staging, spec, environment, evidence);
@@ -373,7 +373,7 @@ public static class RegressionBundle
             {
                 string path = Path.Combine(bundle, file.Path.Replace('/', Path.DirectorySeparatorChar));
                 if (!File.Exists(path)) problems.Add($"{file.Path}: listed in {ManifestFile} but missing");
-                else if (!WorldFixture.Hash(path).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)) problems.Add($"{file.Path}: changed after the bundle was generated");
+                else if (!FileHash.Sha256(path).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)) problems.Add($"{file.Path}: changed after the bundle was generated");
             }
             string readme = Path.Combine(bundle, ReadmeFile);
             var stated = File.Exists(readme) ? Regex.Match(File.ReadAllText(readme), @"This bundle holds (\d+) files") : Match.Empty;
@@ -588,7 +588,7 @@ public static class RegressionBundle
             ("result.json", result.Provenance.GetValueOrDefault("modSha256")), ("the spec", arm.Sha256));
         sha256 = sha256?.ToLowerInvariant();
         if (sha256Source == "the spec") sha256Source = "declared in the spec; not in the evidence";
-        if (declared != null && File.Exists(declared.File) && (!WorldFixture.Hash(declared.File).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase) || FileHash.Md5(declared.File) != md5))
+        if (declared != null && File.Exists(declared.File) && (!FileHash.Sha256(declared.File).Equals(declared.Sha256, StringComparison.OrdinalIgnoreCase) || FileHash.Md5(declared.File) != md5))
             throw new InvalidOperationException($"{where}: {declared.File} is not the declared build (sha256 {declared.Sha256.ToLowerInvariant()}, md5 {md5}).");
         var guids = (run?.ModPlugin ?? spec.ModPlugin ?? throw new InvalidOperationException($"{where}: no run-manifest.json; set modPlugin in the spec to the mod's plugin GUID."))
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -609,7 +609,7 @@ public static class RegressionBundle
         if (arm.Expect == "fail" && failed == null) throw new InvalidOperationException($"{where}: declared fail, but every step in result.json passed.");
         if (arm.FailingStep != null && failed!.Name != arm.FailingStep)
             throw new InvalidOperationException($"{where}: declared to fail at \"{arm.FailingStep}\", but result.json first fails at \"{failed.Name}\": {failed.Error}");
-        var files = new[] { resultPath, junitPath, tracePath, manifestPath }.Where(File.Exists).Select(path => new BundleEvidence(name, Path.GetFileName(path), WorldFixture.Hash(path))).ToList();
+        var files = new[] { resultPath, junitPath, tracePath, manifestPath }.Where(File.Exists).Select(path => new BundleEvidence(name, Path.GetFileName(path), FileHash.Sha256(path))).ToList();
         // What the evidence shows of the private environment: the world's name and any machine path a provenance value holds.
         var privateNames = result.Provenance.Where(entry => entry.Key == "hostWorld" || LooksLikePath(entry.Value)).Select(entry => entry.Value).Concat(pins.Worlds).ToList();
         string check = $"arm {name}: result.json agrees with junit.xml ({result.Steps.Count} steps, strict pinning) and with the declared {arm.Expect}" +
@@ -713,7 +713,7 @@ public static class RegressionBundle
             }
             checks.Add($"native: lines {excerpt.From}-{excerpt.To} of the native runner ({wanted.Count} non-blank lines) appear verbatim in {excerpt.In}, whitespace aside");
         }
-        return new(WorldFixture.Hash(native.Runner), native.RanWith.Trim(), checks, native.Differences.Select(difference => difference.Trim()).ToList());
+        return new(FileHash.Sha256(native.Runner), native.RanWith.Trim(), checks, native.Differences.Select(difference => difference.Trim()).ToList());
     }
 
     // ---- what the bundle holds ----
@@ -725,7 +725,7 @@ public static class RegressionBundle
         foreach (string path in Directory.EnumerateFiles(probe.Directory, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
         {
             string relative = Path.GetRelativePath(probe.Directory, path).Replace('\\', '/');
-            if (relative.Split('/') is [("bin" or "obj"), ..] || InstallPins.IsMacMetadata(path)) continue;
+            if (relative.Split('/') is [("bin" or "obj"), ..] || FileHash.IsMacMetadata(path)) continue;
             if (!AllowedExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"probe: {relative} is not source ({string.Join(", ", AllowedExtensions)}); a bundle carries no binaries, logs or saves.");
             if (path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(File.ReadAllText(path), @"(Include|Project)=""\.\.[\\/]"))

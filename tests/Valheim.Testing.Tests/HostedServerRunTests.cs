@@ -471,7 +471,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(chosen, "selected plugin");
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen.dll")], TimeSpan.FromSeconds(30));
-        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/chosen.dll"]);
+        Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/chosen.dll"]);
         Assert.True(File.Exists(old));
         Assert.False(File.Exists(Path.Combine(host.Local(runtime), "BepInEx", "plugins", "unrelated.dll")));
         Assert.False(Directory.Exists(host.Local(staging)));
@@ -555,7 +555,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(chosen, "selected CLI");
         var files = new[] { new HostedRuntimeFile(chosen, "BepInEx/plugins/cli.dll") };
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging, files, TimeSpan.FromSeconds(30));
-        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/cli.dll"]);
+        Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/cli.dll"]);
         Assert.False(listing.Files.ContainsKey("BepInEx/plugins/unrelated.dll"));
         Assert.True(File.Exists(old));
         Assert.False(Directory.Exists(host.Local(staging)));
@@ -621,7 +621,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(chosen, "selected CLI");
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/mac-cli.dll")], TimeSpan.FromSeconds(30));
-        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/mac-cli.dll"]);
+        Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/mac-cli.dll"]);
         Assert.True(File.Exists(executable));
     }
 
@@ -1161,7 +1161,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains($"local-other: it is a local {other} host, but this machine is {HostProfile.CurrentPlatform}.", placed);
         Assert.Contains("packaged: it names a loaderPackage, which only a campaign's preparation applies", placed);
         Assert.Contains("other-port: the plan's ValheimCLI port 5577 is not its cliPort 5590", placed);
-        Assert.Equal(WorldFixture.Hash(inventory), provenance.GetProperty("inventorySha256").GetString());
+        Assert.Equal(FileHash.Sha256(inventory), provenance.GetProperty("inventorySha256").GetString());
         Assert.Contains("start", host.Scripts);
 
         Inventory(Environment("other-port", 5590));

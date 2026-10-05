@@ -118,7 +118,7 @@ public static class ServerFixture
                 WritePlan(planPath, runtime, runtimeHashes, world, platform, arguments, pins, facts.Uid, sites.Dry, sites.Wet);
                 LifecyclePlan.ReadValidated(planPath);
             });
-            report.Provenance["planSha256"] = WorldFixture.Hash(planPath);
+            report.Provenance["planSha256"] = FileHash.Sha256(planPath);
         }
         catch (Exception error)
         {
@@ -152,8 +152,7 @@ public static class ServerFixture
         {
             var matches = files.Where(file => Path.GetFileName(file) == name).ToArray();
             if (matches.Length != 1) throw new InvalidOperationException($"Expected one {name} under BepInEx/plugins for {guid}; found {matches.Length}.");
-            using var stream = File.OpenRead(matches[0]);
-            pins[guid] = Convert.ToHexString(MD5.HashData(stream)).ToLowerInvariant();
+            pins[guid] = FileHash.Md5(matches[0]);
         }
         return pins;
     }

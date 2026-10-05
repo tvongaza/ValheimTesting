@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Valheim.Testing.Game;
@@ -60,7 +59,7 @@ public sealed class WorldFixture : IDisposable
             {
                 string destination = Path.Combine(target, item.Key); Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 File.Copy(Path.Combine(source, item.Key), destination);
-                if (Hash(destination) != item.Value) throw new IOException("Fixture changed while copying: " + item.Key);
+                if (FileHash.Sha256(destination) != item.Value) throw new IOException("Fixture changed while copying: " + item.Key);
             }
             File.WriteAllText(Path.Combine(target, ProvenanceFile), JsonSerializer.Serialize(actual));
             return fixture;
@@ -97,21 +96,9 @@ public sealed class WorldFixture : IDisposable
         if (manifest.Count == 0) throw new InvalidOperationException("Fixture source has no files: " + source);
         return manifest;
     }
+    // Every file under the source by this platform's relative path, links refused; directories receives each directory walked.
     private static Dictionary<string, string> Hashes(string source, List<string> directories) =>
-        Files(source, directories).ToDictionary(p => Path.GetRelativePath(source, p), Hash, StringComparer.Ordinal);
-    private static IEnumerable<string> Files(string directory, List<string> directories)
-    {
-        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) throw new IOException("Fixture links are unsupported.");
-        directories.Add(directory);
-        foreach (string path in Directory.EnumerateFileSystemEntries(directory))
-        {
-            var attrs = File.GetAttributes(path);
-            if ((attrs & FileAttributes.ReparsePoint) != 0) throw new IOException("Fixture links are unsupported.");
-            if ((attrs & FileAttributes.Directory) != 0) { foreach (string child in Files(path, directories)) yield return child; }
-            else yield return path;
-        }
-    }
-    public static string Hash(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(); }
+        FileHash.Files(source, directories).ToDictionary(p => Path.GetRelativePath(source, p), FileHash.Sha256, StringComparer.Ordinal);
 
     /// <summary>
     /// Keeps what changed in the copy since it was made, then deletes the copy. Every file added, and every copied file whose
@@ -144,7 +131,7 @@ public sealed class WorldFixture : IDisposable
                 // The copy's own record, written over any source file of that name (a copy of a copy has one): never the run's.
                 if (relative == ProvenanceFile) continue;
                 if (!SourceHashes.TryGetValue(relative, out var source)) added.Add(relative);
-                else if (!Hash(path).Equals(source, StringComparison.OrdinalIgnoreCase)) changed.Add(relative);
+                else if (!FileHash.Sha256(path).Equals(source, StringComparison.OrdinalIgnoreCase)) changed.Add(relative);
             }
         }
         Walk(DirectoryPath);
@@ -159,7 +146,7 @@ public sealed class WorldFixture : IDisposable
             long length = new FileInfo(from).Length;
             if (length > maxFileBytes || kept + length > maxKeptBytes)
             {
-                notKept.Add(new(relative, length, Hash(from), length > maxFileBytes ? $"larger than {DiskSpace.Format(maxFileBytes)}" : $"past {DiskSpace.Format(maxKeptBytes)} kept in all"));
+                notKept.Add(new(relative, length, FileHash.Sha256(from), length > maxFileBytes ? $"larger than {DiskSpace.Format(maxFileBytes)}" : $"past {DiskSpace.Format(maxKeptBytes)} kept in all"));
                 continue;
             }
             string to = Path.Combine(keepIn, relative);

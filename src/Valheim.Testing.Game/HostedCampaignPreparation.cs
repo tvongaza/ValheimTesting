@@ -144,7 +144,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             string target = Path.Combine(serverWorld, targetRelative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(Path.Combine(manifest.World, relative), target);
-            if (!WorldFixture.Hash(target).Equals(hash, StringComparison.OrdinalIgnoreCase))
+            if (!FileHash.Sha256(target).Equals(hash, StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The campaign's server-world copy changed while it was staged: " + relative);
             // WorldFixture uses paths relative to the machine running the campaign.
             // Keep its native separator so a Windows-run campaign can verify the copy.
