@@ -175,8 +175,8 @@ internal sealed class HostedServerRun
                 throw new InvalidOperationException($"{ServerLaunch.LinuxExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
         });
         report.Step(StepPhase.Setup, "copied runtime's BepInEx patchers are the plan's", () => HostInstall.RequirePatchers(runtime, plan.Patchers, "runtime"));
-        report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, BepInEx core and patchers" : "record the unpinned runtime's game build, BepInEx core and patchers", () =>
-            (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, BepInEx core and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, "runtime")
+        report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers", () =>
+            (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, "runtime")
                 : HostInstall.Pins(runtime)).Record(report.Provenance, "runtime"));
     }
 
@@ -338,10 +338,10 @@ internal sealed class HostedServerRun
         int n = Interlocked.Increment(ref _clients);
         string runDirectory = HostInstall.Join(role.Runtime, RunId), launchDirectory = HostInstall.Join(runDirectory, "client-" + n);
         string log = HostInstall.Join(role.Install, BepInExLog);
-        var listing = await HostInstall.ListAsync(host, role.Install, Long, ["*_Data/Managed", "BepInEx/core", "BepInEx/patchers"], cancellation).ConfigureAwait(false);
+        var listing = await HostInstall.ListAsync(host, role.Install, Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
         HostInstall.RequirePatchers(listing, plan.Patchers, "client install");
         if (plan.Pinned)
-            HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, BepInEx core and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, "client install");
+            HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, "client install");
         await HostClientPreflight.CheckAsync(host, role.Install, platform, plan, Quick, cancellation).ConfigureAwait(false);
         await HostInstall.RequirePortFreeAsync(host, role.CliPort, Quick, cancellation).ConfigureAwait(false);
         // BepInEx rewrites its log at each start; an earlier one moves aside so the wait from offset 0 sees this start's lines only.

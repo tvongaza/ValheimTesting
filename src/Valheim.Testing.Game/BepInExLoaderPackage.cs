@@ -15,7 +15,14 @@ public sealed class BepInExLoaderPackage
     public string Version { get; set; } = "";
     public string Root { get; set; } = "";
     public Dictionary<string, string> Files { get; set; } = new(StringComparer.Ordinal);
-    [JsonIgnore] public string Identity => Name + " " + Version + " (" + InstallPins.ListingHash(Files.Select(file => (file.Key, file.Value))) + ")";
+    /// <summary>
+    /// The package's loader files as <see cref="InstallPins.Loader"/> hashes them: an install this package was applied to has
+    /// this loader pin. <c>BepInEx/config/BepInEx.cfg</c>, which the package may also pin, is configuration and not part of it.
+    /// </summary>
+    [JsonIgnore] public string Loader => InstallPins.ListingHash(Files.Where(file => InstallPins.IsLoaderFile(file.Key)).Select(file => (file.Key, file.Value.ToLowerInvariant())));
+    /// <summary>Name, version and <see cref="Loader"/>, as evidence records the package.</summary>
+    [JsonIgnore] public string Identity => Name + " " + Version + " (" + Loader + ")";
+    private const string Settings = "BepInEx/config/BepInEx.cfg";
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -28,8 +35,7 @@ public sealed class BepInExLoaderPackage
     {
         root = Path.GetFullPath(root);
         var package = new BepInExLoaderPackage { Name = name, Version = version, Root = root };
-        foreach (string path in Directory.EnumerateFiles(Path.Combine(root, InstallPins.CoreDirectory), "*", SearchOption.AllDirectories)
-            .Concat(LoaderPaths(root)).Where(path => !InstallPins.IsMacMetadata(path)))
+        foreach (string path in InstallPins.LoaderFiles(root).Append(Path.Combine(root, Settings)).Where(File.Exists))
         {
             string relative = Path.GetRelativePath(root, path).Replace('\\', '/');
             package.Files.Add(relative, WorldFixture.Hash(path));
@@ -75,7 +81,7 @@ public sealed class BepInExLoaderPackage
             if (!Files.ContainsKey(BepInExLoader.WindowsConfig)) throw new InvalidDataException("A Windows loader package needs both winhttp.dll and doorstop_config.ini.");
             BepInExLoader.RequireWindowsLoader(Root, "package");
         }
-        if (!Files.Keys.Any(key => key == BepInExLoader.WindowsProxy || key == "libdoorstop.dylib" || key.StartsWith("doorstop_libs/", StringComparison.Ordinal)))
+        if (!Files.Keys.Any(key => key == BepInExLoader.WindowsProxy || ClientLaunch.MacDoorstopFiles.Contains(key) || key.StartsWith("doorstop_libs/", StringComparison.Ordinal)))
             throw new InvalidDataException("The BepInEx package has no Doorstop library or Windows proxy.");
     }
 
@@ -83,9 +89,9 @@ public sealed class BepInExLoaderPackage
     internal void Apply(string install)
     {
         Validate();
-        foreach (string file in new[] { BepInExLoader.WindowsProxy, BepInExLoader.WindowsConfig, "libdoorstop.dylib", "BepInEx/config/BepInEx.cfg" })
+        foreach (string file in InstallPins.LoaderRootFiles.Append(Settings))
             if (File.Exists(Path.Combine(install, file))) File.Delete(Path.Combine(install, file));
-        foreach (string folder in new[] { InstallPins.CoreDirectory, "doorstop_libs" })
+        foreach (string folder in InstallPins.LoaderFolders)
             if (Directory.Exists(Path.Combine(install, folder))) Directory.Delete(Path.Combine(install, folder), recursive: true);
         foreach (var (relative, sha256) in Files)
         {
@@ -97,18 +103,12 @@ public sealed class BepInExLoaderPackage
         }
     }
 
-    /// <summary>Whether a reusable disposable install still has this exact package's files.</summary>
-    internal bool Matches(string install) => Files.All(file => File.Exists(Path.Combine(install, file.Key.Replace('/', Path.DirectorySeparatorChar)))
+    /// <summary>
+    /// Whether a reusable disposable install still has this exact package's loader files. <c>BepInEx.cfg</c>, which BepInEx
+    /// rewrites, is not compared: staging copies it from the package again on every run.
+    /// </summary>
+    internal bool Matches(string install) => Files.Where(file => InstallPins.IsLoaderFile(file.Key)).All(file => File.Exists(Path.Combine(install, file.Key.Replace('/', Path.DirectorySeparatorChar)))
         && WorldFixture.Hash(Path.Combine(install, file.Key.Replace('/', Path.DirectorySeparatorChar))).Equals(file.Value, StringComparison.OrdinalIgnoreCase));
 
-    private static bool Allowed(string relative) =>
-        relative == BepInExLoader.WindowsProxy || relative == BepInExLoader.WindowsConfig || relative == "libdoorstop.dylib" ||
-        relative == "BepInEx/config/BepInEx.cfg" ||
-        relative.StartsWith("BepInEx/core/", StringComparison.Ordinal) || relative.StartsWith("doorstop_libs/", StringComparison.Ordinal);
-
-    private static IEnumerable<string> LoaderPaths(string root) =>
-        new[] { BepInExLoader.WindowsProxy, BepInExLoader.WindowsConfig, "libdoorstop.dylib", "BepInEx/config/BepInEx.cfg" }
-            .Select(name => Path.Combine(root, name)).Where(File.Exists)
-        .Concat(Directory.Exists(Path.Combine(root, "doorstop_libs"))
-            ? Directory.EnumerateFiles(Path.Combine(root, "doorstop_libs"), "*", SearchOption.AllDirectories) : []);
+    private static bool Allowed(string relative) => InstallPins.IsLoaderFile(relative) || relative == Settings;
 }

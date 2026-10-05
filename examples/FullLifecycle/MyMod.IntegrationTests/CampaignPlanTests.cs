@@ -32,7 +32,7 @@ public sealed class CampaignPlanTests : IDisposable
         client["mode"] = "owned";
         client["character"] = name;
         client["install"] = Path.Combine(_directory, "install-" + name);
-        client["installPins"] = new JsonObject { ["game"] = new string('a', 64), ["bepinexCore"] = new string('b', 64), ["patchers"] = new string('c', 64) };
+        client["installPins"] = new JsonObject { ["game"] = new string('a', 64), ["loader"] = new string('b', 64), ["patchers"] = new string('c', 64) };
         return client;
     }
 
@@ -47,7 +47,7 @@ public sealed class CampaignPlanTests : IDisposable
             ["world"] = new JsonObject { ["source"] = Path.Combine(_directory, "world"), ["sha256"] = new JsonObject { ["adminlist.txt"] = hash } },
             ["arguments"] = new JsonArray("-batchmode", "-nographics", "-port", "2466", "-savedir", "{world}", "-public", "0"),
             ["pins"] = new JsonObject { ["worlduid"] = "4242", ["valheimCLI.valheimCLI"] = Cli, [LifecyclePlan.ModPlugin] = Mod, [LifecyclePlan.AdapterPlugin] = Adapter },
-            ["runtimePins"] = new JsonObject { ["game"] = new string('c', 64), ["bepinexCore"] = new string('d', 64), ["patchers"] = new string('e', 64) },
+            ["runtimePins"] = new JsonObject { ["game"] = new string('c', 64), ["loader"] = new string('d', 64), ["patchers"] = new string('e', 64) },
             ["client"] = Client(),
         };
         if (scenario is LifecyclePlan.WorldScenario or LifecyclePlan.VanillaClientScenario or LifecyclePlan.CrossplayScenario or LifecyclePlan.OwnershipHandoffScenario)

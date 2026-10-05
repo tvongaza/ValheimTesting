@@ -11,7 +11,7 @@ public sealed class ClientSessionTests : IDisposable
     {
         Mode = mode, Install = mode == "owned" ? Path.GetFullPath("client-install") : "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
         Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), ["my.mod"] = "absent" },
-        InstallPins = mode == "owned" ? new() { Game = new string('c', 64), BepInExCore = new string('d', 64), Patchers = new string('e', 64) } : null,
+        InstallPins = mode == "owned" ? new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) } : null,
     };
 
     // With an environment profile the client runs on another machine: a Windows install is validated from macOS or Linux too.
