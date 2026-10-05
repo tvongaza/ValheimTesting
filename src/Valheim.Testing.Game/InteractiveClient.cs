@@ -551,7 +551,7 @@ internal static class InteractiveScripts
         }
         if ([IO.Directory]::Exists($dir) -or [IO.File]::Exists($dir)) { 'VT-INTERACTIVE exists'; exit 0 }
         $system = [Environment]::SystemDirectory
-""" + WindowsSessions + """
+""" + "\n" + WindowsSessions + "\n" + """
         $desktops = Get-VtSessions ''
         if ($desktops.Count -eq 0) { 'VT-INTERACTIVE no-session ' + $me + ' has no desktop session here; sign in at the console or over Remote Desktop and leave the session running'; exit 0 }
         if ($desktops.Count -gt 1) { 'VT-INTERACTIVE no-session ' + $me + ' has ' + $desktops.Count + ' desktop sessions (' + ($desktops -join ', ') + ') and a task could start in any of them; sign out of all but one'; exit 0 }

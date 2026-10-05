@@ -128,6 +128,10 @@ public sealed class HostServerTests : IDisposable
         Assert.StartsWith(HostServerScripts.WindowsServerLogon.ReplaceLineEndings("\n").TrimEnd(), HostServerScripts.WindowsStart);
         Assert.Contains(InteractiveScripts.WindowsSessions.ReplaceLineEndings("\n").Trim(), HostServerScripts.WindowsStart); // one session count for client and server
         Assert.Contains(InteractiveScripts.WindowsSessions.ReplaceLineEndings("\n").Trim(), InteractiveScripts.WindowsStart);
+        // Each composed function starts on its own line: a script joined without one fails to parse ("}function", "...Directoryfunction").
+        foreach (string script in new[] { InteractiveScripts.WindowsStart, HostServerScripts.WindowsStart, HostServerScripts.WindowsServerLogonCheck })
+            Assert.Matches(@"(^|\n)\s*function Get-VtSessions", script);
+        Assert.Matches(@"(^|\n)\s*function Get-VtServerLogon", HostServerScripts.WindowsStart);
     }
 
     [Fact] public async Task WindowsServerRefusesAReplyLostDuringLaunchAsUnknown()

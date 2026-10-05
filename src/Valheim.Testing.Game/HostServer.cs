@@ -395,7 +395,7 @@ internal static class HostServerScripts
     // is itself in that one desktop session, so the stop, run from the same session, reaches the server's console. Otherwise
     // the reply names why. Test seams replace the facts: elevated ('true'/'false'), session (this process's session id) and
     // desktops (how many desktop sessions the user has, this one among them).
-    internal const string WindowsServerLogon = InteractiveScripts.WindowsSessions + """
+    internal const string WindowsServerLogon = InteractiveScripts.WindowsSessions + "\n" + """
         function Get-VtServerLogon {
             $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
             $system = [Environment]::SystemDirectory
