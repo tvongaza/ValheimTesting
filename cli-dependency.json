@@ -6,5 +6,9 @@
   "version": "0.1.0-preview.4",
   "packageVersion": "0.1.0-preview.8",
   "targetFramework": "net10.0",
-  "status": "fork preview; upstream merge pending; ValheimTesting publishes this transport as Valheim.Testing.Cli"
+  "status": "fork preview; upstream merge pending; ValheimTesting publishes this transport as Valheim.Testing.Cli",
+  "bundle": {
+    "url": "https://github.com/tvongaza/valheimCLI/releases/download/cli-bundle-80fb6ce/valheimcli-bundle-80fb6ce.zip",
+    "sha256": "7082e13c3b1ef64c960be99ab97898713dfff417d9c9211631ee5bffd13b23cf"
+  }
 }
