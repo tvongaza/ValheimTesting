@@ -21,14 +21,14 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("<PackageReference Include=\"Valheim.Testing.Game\" Version=\"[0.1.0-preview.17]\" />", File.ReadAllText(Path.Combine(output, "ExampleRegression.csproj")));
         string readme = File.ReadAllText(Path.Combine(output, "README.md"));
         Assert.Contains("This bundle holds 6 files", readme);
-        Assert.Contains($"| parent | `p1` | `{FileHash.Md5(_rig.Rig.Parent)}` | `{WorldFixture.Hash(_rig.Rig.Parent)}` | fail | **fail** | 1/2 | first: exactly one marker stands there: 2 markers stand there; expected 1. |", readme);
+        Assert.Contains($"| parent | `p1` | `{FileHash.Md5(_rig.Rig.Parent)}` | `{FileHash.Sha256(_rig.Rig.Parent)}` | fail | **fail** | 1/2 | first: exactly one marker stands there: 2 markers stand there; expected 1. |", readme);
         Assert.Contains("| pass | **pass** | 2/2 |  |", readme);
         Assert.Contains("only the mod under test differs", readme);
         Assert.Contains("Nothing in this directory has been published", readme);
         Assert.DoesNotContain("has not itself been run", readme); // Not a port.
         string template = File.ReadAllText(Path.Combine(output, "regression.template.json"));
         Assert.Contains("\"game\": \"<full path of a prepared Valheim install", template);
-        Assert.Contains(WorldFixture.Hash(_rig.Rig.Candidate), template); // Hashes are kept; paths are not.
+        Assert.Contains(FileHash.Sha256(_rig.Rig.Candidate), template); // Hashes are kept; paths are not.
         foreach (string file in files) Assert.DoesNotContain(_rig.Root, File.ReadAllText(Path.Combine(output, file)));
         Assert.Contains("game", manifest.EnvironmentOnly);
         Assert.Contains("client.character", manifest.EnvironmentOnly);
@@ -222,9 +222,9 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("The native run used a hand-written runner with ValheimTesting source 0123456.", readme);
         Assert.Contains("**which has not itself been run in the game**", readme);
         Assert.Contains("- Port and character moved to the environment manifest.", readme);
-        Assert.Contains($"| parent | `p1` | `{FileHash.Md5(_rig.Rig.Parent)}` | `{WorldFixture.Hash(_rig.Rig.Parent)}` (declared) |", readme);
+        Assert.Contains($"| parent | `p1` | `{FileHash.Md5(_rig.Rig.Parent)}` | `{FileHash.Sha256(_rig.Rig.Parent)}` (declared) |", readme);
         Assert.Contains($"| candidate | `c1` | `{FileHash.Md5(_rig.Rig.Candidate)}` | not recorded |", readme);
-        Assert.Equal(WorldFixture.Hash(native), manifest.Native!.RunnerSha256);
+        Assert.Equal(FileHash.Sha256(native), manifest.Native!.RunnerSha256);
         Assert.Contains(manifest.Files, file => file.Path == "Scenario.cs" && file.Origin.StartsWith("the port", StringComparison.Ordinal));
         Assert.Contains(manifest.Files, file => file.Path == "Program.cs" && file.Origin.StartsWith("the harness", StringComparison.Ordinal));
         Assert.Contains(manifest.Checks, check => check.StartsWith("native: lines 4-4 of the native runner", StringComparison.Ordinal));
@@ -408,7 +408,7 @@ internal sealed class BundleRig : IDisposable
         spec.Deny = ["smoketest"];
         spec.Arms["parent"].Commit = "p1";
         spec.Arms["parent"].Md5 = FileHash.Md5(Rig.Parent);
-        spec.Arms["parent"].Sha256 = WorldFixture.Hash(Rig.Parent);
+        spec.Arms["parent"].Sha256 = FileHash.Sha256(Rig.Parent);
         spec.Arms["candidate"].Commit = "c1";
         spec.Arms["candidate"].Md5 = FileHash.Md5(Rig.Candidate);
         spec.Native = new()

@@ -47,7 +47,7 @@ internal static class ReviewLease
         foreach (var (name, value) in JsonSerializer.SerializeToNode(details)!.AsObject()) sidecar[name] = value?.DeepClone();
         sidecar["recordedUtc"] = DateTimeOffset.UtcNow;
         File.WriteAllText(path, sidecar.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-        return WorldFixture.Hash(path);
+        return FileHash.Sha256(path);
     }
 
     /// <summary>

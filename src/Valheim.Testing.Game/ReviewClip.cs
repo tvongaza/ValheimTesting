@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -86,7 +85,7 @@ public static class ReviewClip
             cancellation.ThrowIfCancellationRequested();
             if (copied.Files != plan.Frames + 1) throw new InvalidDataException("The frame transfer is incomplete.");
             var frames = ReadFrames(staging, plan);
-            string manifestSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(staging, "frames.csv")))).ToLowerInvariant();
+            string manifestSha = FileHash.Sha256(Path.Combine(staging, "frames.csv"));
             long bytes = frames.Sum(f => f.Bytes);
             int duration = frames[^1].ElapsedMs - frames[0].ElapsedMs;
             string sidecarSha = ReviewLease.WriteSidecar(Path.Combine(staging, plan.Id + ".json"), "human-review-world-clip", plan.Id, plan.WorldUid, plan.GameBuild, plan.PluginPins, new
@@ -144,7 +143,7 @@ public static class ReviewClip
             string path = Path.Combine(directory, "frame-" + index.ToString("D3", CultureInfo.InvariantCulture) + ".png");
             if (!File.Exists(path)) throw new InvalidDataException("A captured frame is missing.");
             using var stream = File.OpenRead(path);
-            if (stream.Length != bytes || Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant() != cells[3])
+            if (stream.Length != bytes || FileHash.Sha256(stream) != cells[3])
                 throw new InvalidDataException("A captured frame differs from its game-side digest.");
             frames.Add(new Frame(path, elapsed, cells[3], bytes));
             previous = elapsed;

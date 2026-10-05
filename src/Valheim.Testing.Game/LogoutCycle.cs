@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Valheim.Testing.Game;
@@ -53,7 +52,7 @@ public sealed record ProfileFileState(string Path, bool Exists, long Length, str
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            string hash = Convert.ToHexStringLower(SHA256.HashData(stream));
+            string hash = FileHash.Sha256(stream);
             info.Refresh();
             return new(path, true, info.Length, hash, info.LastWriteTimeUtc);
         }

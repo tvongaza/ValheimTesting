@@ -300,7 +300,7 @@ public sealed class ClientSessionTests : IDisposable
     [Fact] public void APinnedFileMustStillMatch()
     {
         string file = Path.Combine(_output, "plan.json"); File.WriteAllText(file, "{}");
-        var pinned = new PinnedFile { Source = file, Sha256 = WorldFixture.Hash(file) };
+        var pinned = new PinnedFile { Source = file, Sha256 = FileHash.Sha256(file) };
         pinned.Validate("plan"); Assert.Equal(file, pinned.Verified());
         File.WriteAllText(file, "{ }");
         Assert.Throws<InvalidOperationException>(pinned.Verified);

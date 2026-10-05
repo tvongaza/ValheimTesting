@@ -63,7 +63,7 @@ internal static class OwnedClientPreflight
         {
             string root = Path.Combine(install, folder);
             if (!Directory.Exists(root)) continue;
-            foreach (string dll in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !InstallPins.IsMacMetadata(path)).Order(StringComparer.Ordinal))
+            foreach (string dll in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !FileHash.IsMacMetadata(path)).Order(StringComparer.Ordinal))
                 yield return dll;
         }
     }

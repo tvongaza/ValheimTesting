@@ -98,7 +98,7 @@ try
         Client = new RegressionClient { Port = port, Character = DefaultSmokeCharacter.Name,
             CharacterStore = character.Root, SteamUserDataDirectory = steamUserdata },
         Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
-            { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = WorldFixture.Hash(mod),
+            { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = FileHash.Sha256(mod),
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
                 Commit = options.GetValueOrDefault("--source") } } },
         LoaderPackage = loader,
@@ -112,7 +112,7 @@ try
     environment.Plugins.AddRange(dependencies.Mods.Skip(1).Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }));
     if (comparison != null)
         environment.Mod.Arms.Add("after", new RegressionArm
-        { File = compareMod!, Sha256 = WorldFixture.Hash(compareMod!), Commit = options["--compare-source"] });
+        { File = compareMod!, Sha256 = FileHash.Sha256(compareMod!), Commit = options["--compare-source"] });
     environment.Write(Path.Combine(output, "environment.json"));
     var runner = new TargetedRegression(environment);
     bool passed = true;

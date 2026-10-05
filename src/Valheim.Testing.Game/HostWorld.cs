@@ -126,7 +126,7 @@ public sealed class HostedWorld : IDisposable
                 using (var from = File.OpenRead(Path.Combine(copy.DirectoryPath, item.Key)))
                 using (var to = new FileStream(target, FileMode.CreateNew, FileAccess.Write))
                     from.CopyTo(to);
-                if (WorldFixture.Hash(target) != item.Value) throw new IOException("The placed fixture world changed while copying: " + item.Key);
+                if (FileHash.Sha256(target) != item.Value) throw new IOException("The placed fixture world changed while copying: " + item.Key);
             }
         }
         catch

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -201,7 +200,7 @@ public sealed class ScenarioReport
             string path = Path.Combine(directory, file);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(evidence, evidence.GetType(), new JsonSerializerOptions { WriteIndented = true }));
-            Evidence.Add(new(evidence.Kind, evidence.Site, evidence.WorldUid, file, WorldFixture.Hash(path)) { Phase = phase });
+            Evidence.Add(new(evidence.Kind, evidence.Site, evidence.WorldUid, file, FileHash.Sha256(path)) { Phase = phase });
         }
         File.WriteAllText(Path.Combine(directory, "result.json"), JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         bool unpinned = Pinning != EnvironmentPinning.Strict;

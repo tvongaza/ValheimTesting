@@ -108,7 +108,7 @@ public sealed class CliCapabilityManifest
             if (!Path.IsPathFullyQualified(path) || !File.Exists(path)) throw new FileNotFoundException($"Give each DLL of the set by its full path; {path} is not a file.", path);
             var plugins = CliAssembly.Plugins(path) ?? throw new InvalidDataException($"{path} is not a .NET assembly.");
             if (plugins.Count == 0) throw new InvalidDataException($"{path} declares no [BepInPlugin]; list only the ValheimCLI core and its packs.");
-            manifest.Files.Add(new CliManifestFile { File = Path.GetFileName(path), Sha256 = WorldFixture.Hash(path), Plugins = [.. plugins], Extensions = CliAssembly.Extensions(path) });
+            manifest.Files.Add(new CliManifestFile { File = Path.GetFileName(path), Sha256 = FileHash.Sha256(path), Plugins = [.. plugins], Extensions = CliAssembly.Extensions(path) });
         }
         try { manifest.Validate(); }
         catch (ArgumentException error) { throw new InvalidDataException("These files do not make one set: " + error.Message, error); }
@@ -188,7 +188,7 @@ public sealed class CliCapabilityManifest
         Validate();
         install = Path.GetFullPath(install);
         var installed = OwnedClientPreflight.InstalledDlls(install)
-            .Select(path => (Path: path, Relative: Path.GetRelativePath(install, path).Replace('\\', '/'), Sha256: WorldFixture.Hash(path))).ToList();
+            .Select(path => (Path: path, Relative: Path.GetRelativePath(install, path).Replace('\\', '/'), Sha256: FileHash.Sha256(path))).ToList();
         var problems = new List<string>();
         var lost = new List<CliManifestFile>();
         var located = new List<string>();

@@ -185,7 +185,7 @@ public sealed class PinningTests : IDisposable
         FakeInstalls.Client(Install);
         WindowsLoader(Install);
         // What InstallPins documents and the shell recipe computes: sha256sum's lines for the loader files, relative to the root.
-        string Line(string relative) => WorldFixture.Hash(Path.Combine(Install, relative.Replace('/', Path.DirectorySeparatorChar))) + "  " + relative + "\n";
+        string Line(string relative) => FileHash.Sha256(Path.Combine(Install, relative.Replace('/', Path.DirectorySeparatorChar))) + "  " + relative + "\n";
         string listing = string.Concat(new[] { "BepInEx/core/BepInEx.dll", "BepInEx/core/BepInEx.Preloader.dll", "doorstop_config.ini", "doorstop_libs/libdoorstop_x64.so", "winhttp.dll" }
             .Order(StringComparer.Ordinal).Select(Line));
         string expected = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(listing))).ToLowerInvariant();

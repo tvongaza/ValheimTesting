@@ -67,7 +67,7 @@ public sealed class ScenarioReportPhaseTests : IDisposable
     {
         var report = new ScenarioReport("evidence");
         string file = Path.Combine(_output, "x.json"); File.WriteAllText(file, "{}");
-        EvidenceReference Ref(string kind) => new(kind, "site", "1", file, WorldFixture.Hash(file));
+        EvidenceReference Ref(string kind) => new(kind, "site", "1", file, FileHash.Sha256(file));
         report.Step(StepPhase.Setup, "arrive", () => report.Attach(Ref("arrival")));
         report.Attach(Ref("outside"));
         await report.StepAsync(StepPhase.Cleanup, "collect", () => { report.Attach(Ref("collected")); return Task.CompletedTask; });

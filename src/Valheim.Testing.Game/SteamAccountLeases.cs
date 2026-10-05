@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -175,7 +174,7 @@ public sealed class SteamPoolAccount
     // A stable lease key across inventories without printing the observed SteamID in lease filenames or reports.
     internal static string LeaseKey(string steamId) => AccountId(steamId) == null
         ? throw new ArgumentException("A lease key needs an individual SteamID64.", nameof(steamId))
-        : "steam_" + Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes(steamId)))[..40].ToLowerInvariant();
+        : "steam_" + FileHash.Sha256(Encoding.ASCII.GetBytes(steamId))[..40];
 }
 
 public enum SteamAccountState { Free, Held, Contended, Unreadable }

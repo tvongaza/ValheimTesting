@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -202,8 +200,9 @@ public sealed class InstallPins
     {
         string managed = Path.GetDirectoryName(GameAssembly(root))!;
         // Filtered by name here rather than by the search pattern, so every platform matches alike (case-sensitive, as a shell glob).
-        return ListingHash(managed, Directory.EnumerateFiles(managed).Where(path =>
-            Path.GetFileName(path) is var name && name.StartsWith("assembly_", StringComparison.Ordinal) && name.EndsWith(".dll", StringComparison.Ordinal)));
+        return FileHash.Listing(managed, Directory.EnumerateFiles(managed).Where(path =>
+            Path.GetFileName(path) is var name && name.StartsWith("assembly_", StringComparison.Ordinal) && name.EndsWith(".dll", StringComparison.Ordinal))
+            .Select(path => { FileHash.RefuseLink(path); return path; }));
     }
 
     /// <summary>
@@ -233,42 +232,21 @@ public sealed class InstallPins
     internal static IEnumerable<string> LoaderEntries => LoaderRootFiles.Concat(LoaderFolders);
     private static readonly string LoaderFilesText = string.Join(", ", LoaderEntries.SkipLast(1)) + " and " + LoaderEntries.Last();
 
-    /// <summary>The loader files (<see cref="IsLoaderFile"/>) under the install at <paramref name="root"/>, as full paths, Mac metadata left out.</summary>
+    /// <summary>The loader files (<see cref="IsLoaderFile"/>) under the install at <paramref name="root"/>, as full paths; a link among them is refused.</summary>
     internal static IEnumerable<string> LoaderFiles(string root) =>
-        LoaderRootFiles.Select(file => Path.Combine(root, file)).Where(File.Exists)
-            .Concat(LoaderFolders.Select(folder => Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar))).Where(Directory.Exists)
-                .SelectMany(folder => Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)))
-            .Where(path => !IsMacMetadata(path));
+        LoaderRootFiles.Concat(LoaderFolders).Select(entry => Path.Combine(root, entry.Replace('/', Path.DirectorySeparatorChar)))
+            .Where(path => File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget != null)
+            .SelectMany(path => { FileHash.RefuseLink(path); return Directory.Exists(path) ? FileHash.Files(path) : [path]; });
 
     /// <summary>The <see cref="Loader"/> value of the install at <paramref name="root"/>: the listing hash of its loader files, relative to the root.</summary>
-    public static string LoaderHash(string root) => ListingHash(Path.GetFullPath(root), LoaderFiles(Path.GetFullPath(root)));
+    public static string LoaderHash(string root) => FileHash.Listing(Path.GetFullPath(root), LoaderFiles(Path.GetFullPath(root)));
 
-    /// <summary>The SHA256 of a folder's listing (see <see cref="InstallPins"/>); an empty or absent folder hashes the empty listing.</summary>
+    /// <summary>
+    /// The SHA256 of a folder's listing (<see cref="FileHash.Listing(string, IEnumerable{string})"/>); an empty or absent
+    /// folder hashes the empty listing, and a link in it is refused, as a host's listing refuses it.
+    /// </summary>
     public static string DirectoryHash(string directory) =>
-        ListingHash(directory, Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories) : []);
-
-    /// <summary>Finder's <c>.DS_Store</c> and AppleDouble <c>._*</c> files, which copying through macOS adds; never part of a listing.</summary>
-    public static bool IsMacMetadata(string path)
-    {
-        string name = Path.GetFileName(path);
-        return name == ".DS_Store" || name.StartsWith("._", StringComparison.Ordinal);
-    }
-
-    private static string ListingHash(string directory, IEnumerable<string> files) =>
-        ListingHash(files.Where(path => !IsMacMetadata(path))
-            .Select(path => (Relative: Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '/'), Sha256: (Func<string>)(() => WorldFixture.Hash(path)))));
-
-    /// <summary>The listing hash of files already hashed elsewhere: relative paths with <c>/</c> separators and their SHA256.</summary>
-    internal static string ListingHash(IEnumerable<(string Relative, string Sha256)> files) =>
-        ListingHash(files.Where(file => !IsMacMetadata(file.Relative)).Select(file => (file.Relative, (Func<string>)(() => file.Sha256))));
-
-    private static string ListingHash(IEnumerable<(string Relative, Func<string> Sha256)> files)
-    {
-        var listing = new StringBuilder();
-        foreach (var file in files.OrderBy(file => file.Relative, StringComparer.Ordinal))
-            listing.Append(file.Sha256()).Append("  ").Append(file.Relative).Append('\n');
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(listing.ToString()))).ToLowerInvariant();
-    }
+        FileHash.Listing(directory, Directory.Exists(directory) ? FileHash.Files(directory) : []);
 
     /// <summary>The values as report provenance, under <paramref name="prefix"/> (for example <c>runtime</c>: <c>runtimeGameSha256</c>).</summary>
     public void Record(IDictionary<string, string> provenance, string prefix)

@@ -297,7 +297,7 @@ public sealed class PinnedFile
     /// <summary>The file's path after checking that its hash still matches.</summary>
     public string Verified()
     {
-        if (!string.Equals(WorldFixture.Hash(Source), Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"{Source} changed after it was pinned.");
+        if (!string.Equals(FileHash.Sha256(Source), Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"{Source} changed after it was pinned.");
         return Source;
     }
 }

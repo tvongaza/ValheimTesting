@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -136,7 +135,7 @@ public sealed class DisposableCharacterStore
     {
         Entry entry = Find(ReadManifest(), name);
         byte[] bytes = ReadStored(entry);
-        return new DisposableCharacter(this, entry.Name, entry.PlayerId, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+        return new DisposableCharacter(this, entry.Name, entry.PlayerId, FileHash.Sha256(bytes));
     }
 
     /// <summary>
@@ -161,7 +160,7 @@ public sealed class DisposableCharacterStore
         if (entry.PlayerId != character.PlayerId)
             throw new InvalidDataException($"{character.Name} was re-registered as a different character; get it from the store again.");
         byte[] bytes = ReadStored(entry);
-        if (!Convert.ToHexString(SHA256.HashData(bytes)).Equals(character.Sha256, StringComparison.OrdinalIgnoreCase))
+        if (!FileHash.Sha256(bytes).Equals(character.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"{character.Name}'s stored copy changed since it was taken from the store; get it again.");
         return bytes;
     }

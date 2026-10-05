@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using valheimCLI;
@@ -112,7 +111,7 @@ public static class WorldDump
             var manifest = new WorldDumpManifest
             {
                 Name = name, Path = csv, WorldUid = before.Uid, Seed = before.Seed, GameBuild = gameBuild,
-                Command = command, Reply = reply, Sha256 = Hash(csv), Step = step,
+                Command = command, Reply = reply, Sha256 = FileHash.Sha256(csv), Step = step,
                 MinX = grid.OriginX, MinZ = grid.OriginZ, MaxX = grid.MaxX, MaxZ = grid.MaxZ,
             };
             manifest.Verify();
@@ -183,9 +182,4 @@ public static class WorldDump
     private static bool SameDirectory(string a, string b) =>
         string.Equals(a.Replace('\\', '/').TrimEnd('/'), b.Replace('\\', '/').TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
 
-    private static string Hash(string path)
-    {
-        using var input = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant();
-    }
 }

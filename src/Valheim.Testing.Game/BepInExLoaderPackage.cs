@@ -19,7 +19,7 @@ public sealed class BepInExLoaderPackage
     /// The package's loader files as <see cref="InstallPins.Loader"/> hashes them: an install this package was applied to has
     /// this loader pin. <c>BepInEx/config/BepInEx.cfg</c>, which the package may also pin, is configuration and not part of it.
     /// </summary>
-    [JsonIgnore] public string Loader => InstallPins.ListingHash(Files.Where(file => InstallPins.IsLoaderFile(file.Key)).Select(file => (file.Key, file.Value.ToLowerInvariant())));
+    [JsonIgnore] public string Loader => FileHash.Listing(Files.Where(file => InstallPins.IsLoaderFile(file.Key)).Select(file => (file.Key, file.Value)));
     /// <summary>Name, version and <see cref="Loader"/>, as evidence records the package.</summary>
     [JsonIgnore] public string Identity => Name + " " + Version + " (" + Loader + ")";
     private const string Settings = "BepInEx/config/BepInEx.cfg";
@@ -38,7 +38,7 @@ public sealed class BepInExLoaderPackage
         foreach (string path in InstallPins.LoaderFiles(root).Append(Path.Combine(root, Settings)).Where(File.Exists))
         {
             string relative = Path.GetRelativePath(root, path).Replace('\\', '/');
-            package.Files.Add(relative, WorldFixture.Hash(path));
+            package.Files.Add(relative, FileHash.Sha256(path));
         }
         package.Validate();
         return package;
@@ -70,7 +70,7 @@ public sealed class BepInExLoaderPackage
             if (!Allowed(relative) || !RegressionEnvironment.Inside(path, Root) ||
                 relative != Path.GetRelativePath(Root, path).Replace('\\', '/'))
                 throw new InvalidDataException($"{relative} is not a loader/core file inside the BepInEx package.");
-            if (sha256.Length != 64 || !sha256.All(Uri.IsHexDigit) || !File.Exists(path) || !WorldFixture.Hash(path).Equals(sha256, StringComparison.OrdinalIgnoreCase))
+            if (sha256.Length != 64 || !sha256.All(Uri.IsHexDigit) || !File.Exists(path) || !FileHash.Sha256(path).Equals(sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"BepInEx package file {path} is missing or changed; recapture the exact package.");
         }
         foreach (string required in new[] { BepInExLoader.Preloader, BepInExLoader.Core })
@@ -99,7 +99,7 @@ public sealed class BepInExLoaderPackage
             string target = Path.Combine(install, relative.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(source, target, overwrite: true);
-            if (!WorldFixture.Hash(target).Equals(sha256, StringComparison.OrdinalIgnoreCase)) throw new IOException($"The copied BepInEx loader file {target} changed during staging.");
+            if (!FileHash.Sha256(target).Equals(sha256, StringComparison.OrdinalIgnoreCase)) throw new IOException($"The copied BepInEx loader file {target} changed during staging.");
         }
     }
 
@@ -108,7 +108,7 @@ public sealed class BepInExLoaderPackage
     /// rewrites, is not compared: staging copies it from the package again on every run.
     /// </summary>
     internal bool Matches(string install) => Files.Where(file => InstallPins.IsLoaderFile(file.Key)).All(file => File.Exists(Path.Combine(install, file.Key.Replace('/', Path.DirectorySeparatorChar)))
-        && WorldFixture.Hash(Path.Combine(install, file.Key.Replace('/', Path.DirectorySeparatorChar))).Equals(file.Value, StringComparison.OrdinalIgnoreCase));
+        && FileHash.Sha256(Path.Combine(install, file.Key.Replace('/', Path.DirectorySeparatorChar))).Equals(file.Value, StringComparison.OrdinalIgnoreCase));
 
     private static bool Allowed(string relative) => InstallPins.IsLoaderFile(relative) || relative == Settings;
 }

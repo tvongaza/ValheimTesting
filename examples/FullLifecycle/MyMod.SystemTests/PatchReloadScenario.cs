@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using Valheim.Testing.Game;
 
 namespace MyMod.SystemTests;
@@ -33,7 +32,7 @@ public sealed class PatchReloadSettings
     {
         foreach (var (name, path) in new[] { ("revisionA", RevisionA), ("revisionB", RevisionB) })
             if (!Path.IsPathFullyQualified(path) || !File.Exists(path)) throw new ArgumentException($"patchReload.{name} is the full path of a built PatchReload probe on this machine.");
-        if (Md5(RevisionA) == Md5(RevisionB)) throw new ArgumentException("patchReload.revisionA and revisionB are the same build: build B with -p:ProbeRevision=B.");
+        if (FileHash.Md5(RevisionA) == FileHash.Md5(RevisionB)) throw new ArgumentException("patchReload.revisionA and revisionB are the same build: build B with -p:ProbeRevision=B.");
         if (ReloadSeconds is < 5 or > 600) throw new ArgumentException("patchReload.reloadSeconds is 5 to 600.");
         if (!plan.Pins.TryGetValue(ScriptEngine, out var engine) || engine.Length != 32)
             throw new ArgumentException($"patchReload needs ScriptEngine in the server runtime's plugins: pin {ScriptEngine} by its MD5.");
@@ -41,7 +40,6 @@ public sealed class PatchReloadSettings
             throw new ArgumentException($"Do not pin {PatchReloadScenario.Probe}: the scenario installs it after the start and pins each build as it loads.");
     }
 
-    internal static string Md5(string path) => Convert.ToHexString(MD5.HashData(File.ReadAllBytes(path)));
 }
 
 /// <summary>
@@ -71,8 +69,8 @@ public static class PatchReloadScenario
         string deployed = Path.Combine(scripts, ProbeFile);
         var timeout = TimeSpan.FromSeconds(settings.ReloadSeconds);
         string Pins(string md5OrAbsent) => StrictExpectations.WithPlugin(plan.ExpectCommand, Probe, md5OrAbsent);
-        report.Provenance["patchReloadA"] = PatchReloadSettings.Md5(settings.RevisionA);
-        report.Provenance["patchReloadB"] = PatchReloadSettings.Md5(settings.RevisionB);
+        report.Provenance["patchReloadA"] = FileHash.Md5(settings.RevisionA);
+        report.Provenance["patchReloadB"] = FileHash.Md5(settings.RevisionB);
         // The whole census, not one owner's methods: once a control removes MyMod's patches, a census filtered to MyMod lists no
         // method at all, and the probe's own patch on the same method would vanish from it too (run-prc2, 30 Sep).
         HarmonyCensus Census(string stage)
