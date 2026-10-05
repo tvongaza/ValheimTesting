@@ -10,6 +10,17 @@ using Xunit;
 internal static class FakeInstalls
 {
     public static void Server(string root) => Write(root, Path.Combine("valheim_server_Data", "Managed"));
+    /// <summary>A world fixture directory with one .fwl header (version 41, the name, seed and UID the campaign reviews) and a .db.</summary>
+    public static string World(string directory, string name = "Campaign", long uid = 4242L, string seed = "AbCdEf1234")
+    {
+        Directory.CreateDirectory(directory);
+        using var payload = new MemoryStream();
+        using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
+        { writer.Write(41); writer.Write(name); writer.Write(seed); writer.Write(1234); writer.Write(uid); }
+        File.WriteAllBytes(Path.Combine(directory, name + ".fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
+        File.WriteAllText(Path.Combine(directory, name + ".db"), "fixture");
+        return directory;
+    }
     public static void Client(string root) => Write(root, Path.Combine("valheim_Data", "Managed"));
     private static void Write(string root, string managed)
     {

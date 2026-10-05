@@ -241,6 +241,12 @@ public static class HostedCampaignPreparation
         IReadOnlyDictionary<string, string> ObservedSteamIds, IReadOnlyDictionary<string, HostListing> SourceListings,
         IReadOnlyDictionary<string, CharacterDirectories> CharacterDirectories);
 
+    // Every host check reports a refusal under its own input and goes on; only an unexpected exception type still escapes.
+    // One list for all of them: a probe's new refusal type (a loader package for another platform, a host that cannot
+    // tell which ports are in use) otherwise crashed the whole concurrent preflight instead of filling one line.
+    private static bool HostCheckRefusal(Exception error) => error is ArgumentException or InvalidOperationException or IOException or
+        InvalidDataException or PlatformNotSupportedException or UnauthorizedAccessException;
+
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
     {
@@ -255,7 +261,7 @@ public static class HostedCampaignPreparation
         {
             IGameHost host;
             try { host = hostFactory?.Invoke(group.Key) ?? inputs.Profile.CreateHost(group.Key); }
-            catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+            catch (Exception error) when (HostCheckRefusal(error))
             {
                 failures.Add(new(group.Key, "host", error.Message));
                 return;
@@ -264,7 +270,7 @@ public static class HostedCampaignPreparation
                 inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" })
             {
                 try { MacGuiSession.Require(); }
-                catch (Exception error) when (error is InvalidOperationException or PlatformNotSupportedException)
+                catch (Exception error) when (HostCheckRefusal(error))
                 { failures.Add(new(group.Key, "desktop session", error.Message)); }
             }
             try
@@ -272,12 +278,12 @@ public static class HostedCampaignPreparation
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation,
                     clientSession: group.Any(role => role.Name != "server")).ConfigureAwait(false);
             }
-            catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
+            catch (Exception error) when (HostCheckRefusal(error))
             { failures.Add(new(group.Key, "session", error.Message)); }
             if (group.Any(role => role.Name == "server"))
             {
                 try { await HostServer.RequireTaskLogonAsync(host, timeout, cancellation).ConfigureAwait(false); }
-                catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
+                catch (Exception error) when (HostCheckRefusal(error))
                 { failures.Add(new("server", "server task", error.Message)); }
             }
             var capacities = new ConcurrentBag<(string Actor, HostCopyCapacity Capacity)>();
@@ -287,14 +293,14 @@ public static class HostedCampaignPreparation
                 {
                     await HostInstall.RequirePortFreeAsync(host, item.Role.CliPort, timeout, cancellation).ConfigureAwait(false);
                 }
-                catch (Exception error) when (error is ArgumentException or InvalidOperationException or HostOperationException or IOException)
+                catch (Exception error) when (HostCheckRefusal(error))
                 { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
                 try
                 {
                     capacities.Add((item.Name, await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
                         item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)));
                 }
-                catch (Exception error) when (error is ArgumentException or InvalidOperationException or HostOperationException or IOException)
+                catch (Exception error) when (HostCheckRefusal(error))
                 { failures.Add(new(item.Name, "copy space", error.Message)); }
                 if (!inspection.Report.Problems.Any(problem => problem.Actor == item.Name && problem.Input == "loader"))
                 {
@@ -305,7 +311,7 @@ public static class HostedCampaignPreparation
                             item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
                             item.Role.Install, loader, timeout, cancellation).ConfigureAwait(false);
                     }
-                    catch (Exception error) when (error is ArgumentException or InvalidOperationException or HostOperationException or IOException)
+                    catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "game and loader", error.Message)); }
                 }
                 if (item.Name == "server") return;
@@ -320,7 +326,7 @@ public static class HostedCampaignPreparation
                         if (directories.Missing != null) failures.Add(new(item.Name, "character folders", directories.Missing));
                         else characterDirectories[item.Name] = directories;
                     }
-                    catch (Exception error) when (error is ArgumentException or InvalidOperationException or HostOperationException or IOException)
+                    catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "character folders", error.Message)); }
                 }
                 try
@@ -331,12 +337,12 @@ public static class HostedCampaignPreparation
                         throw new InvalidOperationException($"Client {item.Name} has no verifiable signed-in Steam identity on {host.Name}.");
                     observedSteamIds[item.Name] = SteamPoolAccount.SteamId64(id);
                 }
-                catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException)
+                catch (Exception error) when (HostCheckRefusal(error))
                 { failures.Add(new(item.Name, "Steam identity", error.Message)); }
                 await folders.ConfigureAwait(false);
             })).ConfigureAwait(false);
             try { HostCopyCapacityProbe.RequireCombined(group.Key, capacities); }
-            catch (IOException error) { failures.Add(new(group.Key, "copy space", error.Message)); }
+            catch (Exception error) when (HostCheckRefusal(error)) { failures.Add(new(group.Key, "copy space", error.Message)); }
         });
         await Task.WhenAll(hostChecks).ConfigureAwait(false);
         cancellation.ThrowIfCancellationRequested();

@@ -62,14 +62,7 @@ public sealed class CampaignPreflightTests : IDisposable
     {
         string inventory = Inventory();
         string world = Path.Combine(_root, "world");
-        Directory.CreateDirectory(world);
-        using (var payload = new MemoryStream())
-        {
-            using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
-            { writer.Write(41); writer.Write("Small"); writer.Write("Seed"); writer.Write(1234); writer.Write(4242L); }
-            File.WriteAllBytes(Path.Combine(world, "Small.fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
-        }
-        File.WriteAllText(Path.Combine(world, "Small.db"), "fixture");
+        FakeInstalls.World(world, "Small", seed: "Seed");
         string file = Write("campaign.json", new
         {
             inventory, world, worldUid = "9999", server = new { dependencyLock = "missing-lock.json" },
@@ -184,6 +177,33 @@ public sealed class CampaignPreflightTests : IDisposable
         host.ServerTaskLogon = "interactive";
         report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task");
+    }
+
+    // A probe's refusal of a kind no check listed (a bash host that cannot tell which ports are in use) fills its own line
+    // beside the others; it used to escape the concurrent preflight as an exception and lose every other fault.
+    [Fact]
+    public async Task AHostThatCannotTellItsPortsIsReportedBesideTheOtherFaultsNotThrown()
+    {
+        string inventory = Write("linux-inventory.json", new
+        {
+            hosts = new { box = new { kind = "ssh", platform = "linux", shell = "bash", @lock = "/vt/lock", destination = "test@box" } },
+            environments = new object[]
+            {
+                new { name = "box-server", host = "box", roles = new[] { "server" }, install = "/opt/server", runtime = "/vt/runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
+            },
+            leaseHost = "box", leaseDirectory = "/vt/leases",
+        });
+        string file = Write("campaign.json", new
+        {
+            inventory, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
+        });
+        var host = new FakeServerHost("box", Path.Combine(_root, "mirror")) { PortReply = "VT-PORT unknown\n", GameActive = true };
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        Assert.False(report.Ready);
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "ValheimCLI port" && problem.Message.Contains("cannot tell which ports are in use"));
+        Assert.Contains(report.Problems, problem => problem.Actor == "box" && problem.Input == "session");
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
+        Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start" or "apply-stage");
     }
 
     [Fact]

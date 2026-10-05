@@ -37,6 +37,8 @@ internal sealed class FakeServerHost : IGameHost
     public Dictionary<string, HostResult> Failures { get; } = [];
     public Exception? TunnelFailure { get; set; }
     public bool PortBusy { get; set; }
+    /// <summary>The port check's whole reply when set; else free or busy by <see cref="PortBusy"/>.</summary>
+    public string? PortReply { get; set; }
     public bool GameActive { get; set; }
     public long AvailableCopyBytes { get; set; } = 100L << 30;
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
@@ -228,7 +230,7 @@ internal sealed class FakeServerHost : IGameHost
                 if (File.Exists(Path.Combine(root, ServerLaunch.LinuxExecutable))) text.Append("VT-EXEC ").Append(ServerLaunch.LinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }
-            case "port": return Ok(PortBusy ? "VT-PORT busy\n" : "VT-PORT free\n");
+            case "port": return Ok(PortReply ?? (PortBusy ? "VT-PORT busy\n" : "VT-PORT free\n"));
             case "party": return Ok(PartyReply);
             case "steam-user": return Ok(SteamUserReply);
             case "start":
@@ -593,6 +595,17 @@ public sealed partial class HostedServerRunTests : IDisposable
         var unrecognised = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             HostedRuntimeStage.InspectSourceAsync(windows, HostedRuntimeKind.Client, @"C:\game\source", null, TimeSpan.FromSeconds(30)));
         Assert.Contains("not a Doorstop proxy this check recognises", unrecognised.Message);
+        // A reviewed package complete for another platform is refused as the package's fault, before the source is listed.
+        string linuxPackage = Path.Combine(_root, "linux-package");
+        foreach (string relative in new[] { "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "doorstop_libs/libdoorstop_x64.so" })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(linuxPackage, relative))!);
+            File.WriteAllText(Path.Combine(linuxPackage, relative), relative);
+        }
+        var wrongPlatform = await Assert.ThrowsAsync<InvalidDataException>(() => HostedRuntimeStage.InspectSourceAsync(windows, HostedRuntimeKind.Client, @"C:\game\source",
+            BepInExLoaderPackage.Capture(linuxPackage, "BepInExPack_Valheim", "5.4.2333"), TimeSpan.FromSeconds(30)));
+        Assert.Contains("does not match the host platform", wrongPlatform.Message);
+        Assert.Equal(1, windows.Runs.Count(run => run.Script == "list")); // the unrecognised proxy's listing only; the package was refused first
 
         var linux = new FakeServerHost("linux-client", Path.Combine(_root, "linux-source"));
         string linuxSource = linux.Local("/game/source");
