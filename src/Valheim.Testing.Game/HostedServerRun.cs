@@ -80,6 +80,10 @@ internal sealed class HostedServerRun
     private Task NoteLockAsync(IGameHost host, string hostName, HostLock held, string kind) =>
         NoteAsync(host, hostName, "run", JournalEntry.Of(kind, ("lock", held.Path), ("claimant", held.Owner)));
 
+    private static JournalEntry LeaseEntry(string kind, SteamAccountHold hold, params (string Key, string Value)[] more) =>
+        JournalEntry.Of(kind, [("account", hold.Account), ("pool", hold.Pool), ("owner", hold.Owner),
+            ("expiresUtc", hold.ExpiresUtc.ToString("O", CultureInfo.InvariantCulture)), .. more]);
+
     /// <summary>
     /// The run's end in its server host's journal, when the run wrote there at all (a standalone run; a campaign's preparation
     /// journals its own hosts). A run refused before it touched the host leaves it untouched.
@@ -352,9 +356,11 @@ internal sealed class HostedServerRun
                 cancellation).ConfigureAwait(false);
             lock (_clientState)
             {
-                _accounts.Add(held = new ClientAccount(name, hold));
+                _accounts.Add(held = new ClientAccount(name, hold, leaseHost, section.LeaseHost));
                 hold.Record(report);
             }
+            // On the lease host, where the lease lives: which account this run holds for the client, and as whom.
+            await NoteAsync(leaseHost, section.LeaseHost, name, LeaseEntry(JournalEntry.LeaseHeld, hold)).ConfigureAwait(false);
             hold.Lost.Register(() => AccountLost?.Invoke());
         }).ConfigureAwait(false);
         if (section.CheckSignedIn)
@@ -534,10 +540,13 @@ internal sealed class HostedServerRun
                 if (account.Process is { HasExited: false })
                 {
                     await account.Hold.KeepAsync().ConfigureAwait(false);
+                    await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseKept, account.Hold,
+                        ("why", "its client may still run"))).ConfigureAwait(false);
                     throw new SteamAccountLeaseException(SteamAccountLeaseState.Unknown, account.Hold.Pool, [], $"Kept the lease on Steam account {account.Hold.Account}: the client " +
                         $"{account.Client} may still run on {account.Hold.ClientHost}. Without renewals it ends at {account.Hold.ExpiresUtc:u}.");
                 }
                 await account.Hold.ReleaseAsync().ConfigureAwait(false);
+                await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseReleased, account.Hold)).ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
         // Every process is stopped (or named as possibly running), so the campaign's characters and prepared installs go, under the
@@ -592,12 +601,15 @@ internal sealed class HostedServerRun
 }
 
 /// <summary>A campaign client's leased Steam account, with what must be gone before its lease is released.</summary>
-internal sealed class ClientAccount(string client, SteamAccountHold hold)
+internal sealed class ClientAccount(string client, SteamAccountHold hold, IGameHost leaseHost, string leaseHostName)
 {
     public string Client { get; } = client;
     public SteamAccountHold Hold { get; } = hold;
     public ClientSession? Session { get; set; }
     public IOwnedProcess? Process { get; set; }
+    /// <summary>The host the lease lives on, and its inventory name: where the run journals the lease.</summary>
+    public IGameHost LeaseHost { get; } = leaseHost;
+    public string LeaseHostName { get; } = leaseHostName;
 }
 
 /// <summary>

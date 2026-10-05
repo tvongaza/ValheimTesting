@@ -54,6 +54,8 @@ public sealed partial class HostedServerRunTests
         Assert.DoesNotContain(plainProvenance, name => name.StartsWith("steamAccount", StringComparison.Ordinal));
 
         LeaseBox.WritePool(_root, Leases);
+        // The lease box is this machine, shared by this class's runs (one run id): start this run's journal there afresh.
+        if (Directory.Exists(Path.Combine(LeaseBox.Journal, RunId))) Directory.Delete(Path.Combine(LeaseBox.Journal, RunId), recursive: true);
         var leased = WithClient(Accounts());
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(leased.Profile), ["run", leased.Plan, Output], Options(leased.Host, leased.Server, run =>
         {
@@ -71,6 +73,11 @@ public sealed partial class HostedServerRunTests
         Assert.Equal(start, Assert.Single(leased.Client.Runs, run => run.Script == "client-start").Variables);
         Assert.Equal(plain.Client.Runs.Select(run => run.Script), leased.Client.Runs.Select(run => run.Script));
         Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(PoolFile)).State);
+        // The lease host's journal (#257): the account held for the client, then released, with its holder.
+        var journal = (await RunJournal.ReadAsync(LeaseBox.Host(), LeaseBox.Journal, RunId, TimeSpan.FromSeconds(30))).Where(record => record.Actor == "player").ToList();
+        Assert.Equal([JournalEntry.LeaseHeld, JournalEntry.LeaseReleased], journal.Select(record => record.Entry.Kind));
+        Assert.Equal(LeaseBox.Account, journal[0].Entry.Fields["account"]);
+        Assert.Contains("client player", journal[0].Entry.Fields["owner"]);
     }
 
     [Fact] public async Task AProfileClientHoldsItsAccountWhileItRunsAndReleasesItAfterItStopped()
@@ -157,6 +164,7 @@ public sealed partial class HostedServerRunTests
     [Fact] public async Task AClientWhoseStopIsUnprovenKeepsItsLease()
     {
         LeaseBox.WritePool(_root, Leases);
+        if (Directory.Exists(Path.Combine(LeaseBox.Journal, RunId))) Directory.Delete(Path.Combine(LeaseBox.Journal, RunId), recursive: true);
         var run = WithClient(Accounts());
         Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
@@ -171,6 +179,10 @@ public sealed partial class HostedServerRunTests
         Assert.Contains("Kept the lease on Steam account vt_client_one", release.GetProperty("Error").GetString());
         var status = await LeaseBox.StatusAsync(PoolFile);
         Assert.Equal((SteamAccountState.Held, "toolkit-smoke run-test client player"), (status.State, status.Holder));
+        // The lease host's journal says it was kept, and why: never released while its client may run.
+        var journal = (await RunJournal.ReadAsync(LeaseBox.Host(), LeaseBox.Journal, RunId, TimeSpan.FromSeconds(30))).Where(record => record.Actor == "player").ToList();
+        Assert.Equal([JournalEntry.LeaseHeld, JournalEntry.LeaseKept], journal.Select(record => record.Entry.Kind));
+        Assert.Equal("its client may still run", journal[1].Entry.Fields["why"]);
     }
 
     [Theory]

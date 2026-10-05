@@ -15,7 +15,10 @@ internal static class LeaseBox
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
     public static string Shell => OperatingSystem.IsWindows() ? "powershell" : "bash";
     public static IGameHost Host() => new LocalGameHost(Name, HostShell.Parse(Shell));
-    public static object Profile => new { kind = "local", platform = HostProfile.CurrentPlatform, shell = Shell, @lock = OperatingSystem.IsWindows() ? @"C:\vt\lease-lock" : "/var/tmp/vt/lease-lock" };
+    // Under this test process's temp folder: the run journal goes beside the lock, on this real machine.
+    public static readonly string Root = Path.Combine(Path.GetTempPath(), "vt-lease-box-" + Environment.ProcessId);
+    public static object Profile => new { kind = "local", platform = HostProfile.CurrentPlatform, shell = Shell, @lock = Path.Combine(Root, "lease-lock") };
+    public static string Journal => Path.Combine(Root, "journal");
 
     /// <summary>Writes <c>steam-accounts.json</c> in <paramref name="directory"/>, its leases in <paramref name="leases"/>; one account with a steamId by default.</summary>
     public static string WritePool(string directory, string leases, object[]? accounts = null)
