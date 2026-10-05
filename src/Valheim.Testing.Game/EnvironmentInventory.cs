@@ -57,13 +57,168 @@ public sealed class EnvironmentInventory
     /// <summary>An absolute lease directory on <see cref="LeaseHost"/>, shared by inventories using these Steam accounts.</summary>
     public string LeaseDirectory { get; set; } = "";
 
-    public static EnvironmentInventory Read(string path)
+    /// <summary>
+    /// What the this-machine default detected and assumed, one line each, for preflight to print; empty for an inventory
+    /// that was not read through <see cref="Read(string?)"/>.
+    /// </summary>
+    [JsonIgnore] public IReadOnlyList<string> Detected => _detected;
+    /// <summary>What the this-machine default looked for and did not find, with every path tried.</summary>
+    [JsonIgnore] public IReadOnlyList<string> Missing => _missing;
+    private readonly List<string> _detected = [], _missing = [];
+
+    /// <summary>
+    /// The inventory at <paramref name="path"/>, or this machine alone when <paramref name="path"/> is null: host <c>local</c>
+    /// with <c>local-server</c> (Valheim Dedicated Server, Steam app 896660) and <c>local-client</c> (Valheim), found in its
+    /// Steam libraries. A file lists the environments to use, in preference order; one on this machine (a host of kind
+    /// <c>local</c>, or no host) needs only its name and roles, and its install, runtime and ports default as
+    /// <see cref="Detected"/> reports. A file never gains environments it does not list.
+    /// </summary>
+    public static EnvironmentInventory Read(string? path) => Read(path, ThisMachine);
+
+    /// <summary>
+    /// The machine <see cref="Read(string?)"/> detects. Controlled tests replace it so the test machine's own Steam never
+    /// decides a result: the default for every test, or one for a test's own flow (<see cref="UseMachine"/>).
+    /// </summary>
+    internal static ISteamLocator ThisMachine { get => FlowMachine.Value ?? _thisMachine; set => _thisMachine = value; }
+    private static ISteamLocator _thisMachine = new LocalSteamLocator();
+    private static readonly AsyncLocal<ISteamLocator?> FlowMachine = new();
+    /// <summary>Detects <paramref name="machine"/> in this flow until disposed.</summary>
+    internal static IDisposable UseMachine(ISteamLocator machine)
     {
-        string content = File.ReadAllText(path);
-        var inventory = JsonSerializer.Deserialize<EnvironmentInventory>(content, Json)
-            ?? throw new InvalidDataException("Empty environment inventory.");
-        inventory.Validate(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        var previous = FlowMachine.Value;
+        FlowMachine.Value = machine;
+        return new FlowReset(previous);
+    }
+    private sealed class FlowReset(ISteamLocator? previous) : IDisposable { public void Dispose() => FlowMachine.Value = previous; }
+
+    internal static EnvironmentInventory Read(string? path, ISteamLocator machine)
+    {
+        EnvironmentInventory inventory;
+        string directory;
+        if (path == null) { inventory = new EnvironmentInventory(); directory = Environment.CurrentDirectory; }
+        else
+        {
+            inventory = JsonSerializer.Deserialize<EnvironmentInventory>(File.ReadAllText(path), Json)
+                ?? throw new InvalidDataException("Empty environment inventory.");
+            directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        }
+        inventory.AddThisMachine(machine, fromFile: path != null);
+        inventory.Validate(directory);
         return inventory;
+    }
+
+    internal const string LocalHost = "local", LocalServer = "local-server", LocalClient = "local-client";
+    // valheim-test's own defaults, away from Valheim's standard 2456: a personal server on this machine or network keeps its
+    // port, and a crossplay lobby (keyed by public IP and port) never takes another server's joins.
+    private const int FirstCliPort = 5688, FirstGamePort = 2486;
+    private readonly Dictionary<string, string> _noInstall = new(StringComparer.Ordinal);
+
+    // Fills this machine's host and the left-out fields of its environments, saying what it detected and assumed. With no
+    // file it also lists the detected environments; a file's list is kept as written.
+    private void AddThisMachine(ISteamLocator machine, bool fromFile)
+    {
+        if (Hosts == null || Environments == null || Environments.Any(recipe => recipe == null || recipe.Roles == null) ||
+            Hosts.Any(host => host.Value == null)) return; // Validate names these.
+        var locals = Hosts.Where(host => host.Value.Kind == "local").Select(host => host.Key).ToList();
+        if (locals.Count > 1) return; // Validate's host rules and assignment see each; nothing is defaulted between two.
+        bool needed = !fromFile || Environments.Any(recipe => string.IsNullOrEmpty(recipe.Host) || recipe.Host == (locals.FirstOrDefault() ?? LocalHost));
+        if (!needed) return;
+        string name = locals.FirstOrDefault() ?? LocalHost;
+        if (!Hosts.TryGetValue(name, out var local))
+        {
+            Hosts[name] = local = new HostProfile { Kind = "local" };
+            _detected.Add($"host {name}: this machine ({machine.Platform})");
+        }
+        if (string.IsNullOrEmpty(local.Kind)) local.Kind = "local";
+        if (local.Kind != "local") return; // A file's own host of that name that is not this machine: Validate judges it as written.
+        bool windows = machine.Platform == "windows";
+        if (string.IsNullOrEmpty(local.Platform)) local.Platform = machine.Platform;
+        if (string.IsNullOrEmpty(local.Shell)) local.Shell = windows ? "powershell" : "bash";
+        if (string.IsNullOrEmpty(local.Lock)) _detected.Add("assumed host lock " + (local.Lock = HostInstall.Join(machine.DataRoot, "lock")));
+
+        var steam = SteamDetection.Find(machine, SteamDetection.GameApp, SteamDetection.DedicatedServerApp);
+        _detected.Add(steam.Root == null ? "Steam: not found (tried " + string.Join(", ", steam.RootsTried) + ")"
+            : $"Steam: {steam.Root} (from {steam.RootRule}); libraries {string.Join(", ", steam.Libraries)}");
+        string? game = Installed(machine, steam, SteamDetection.GameApp, windows ? ClientLaunch.WindowsExecutable
+            : machine.Platform == "macos" ? ClientLaunch.MacBundle + "/Contents/MacOS/Valheim" : ClientLaunch.LinuxExecutable, "Valheim", out string? noGame);
+        string? server = null, noServer;
+        if (machine.Platform == "macos")
+            noServer = "No local dedicated server: the campaign runner does not run a macOS dedicated server. Add a Windows or Linux " +
+                "server environment, or run `valheim-test start` for a hosted local world.";
+        else
+        {
+            server = Installed(machine, steam, SteamDetection.DedicatedServerApp, windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable,
+                "Valheim Dedicated Server", out noServer);
+            if (noServer != null)
+                noServer += " Install Valheim Dedicated Server from Steam (it is free), add a server environment, or run `valheim-test start` for a hosted local world.";
+        }
+        if (game != null) _detected.Add($"Valheim (Steam app {SteamDetection.GameApp}): {game}");
+        if (server != null) _detected.Add($"Valheim Dedicated Server (Steam app {SteamDetection.DedicatedServerApp}): {server}");
+        if (!fromFile)
+            foreach (var (recipeName, role, install, missing) in new[] { (LocalServer, "server", server, noServer), (LocalClient, "client", game, noGame) })
+            {
+                if (install == null) _missing.Add(missing!);
+                else Environments.Add(new EnvironmentRecipe { Name = recipeName, Host = name, Roles = [role] });
+            }
+
+        // First every left-out host, so each port choice sees every environment on this machine.
+        foreach (var recipe in Environments.Where(recipe => string.IsNullOrEmpty(recipe.Host))) recipe.Host = name;
+        // Ports reached on this machine: a local or container host's CLI port, an ssh environment's tunnel port.
+        var taken = Environments.Select(recipe => Hosts.TryGetValue(recipe.Host, out var host) && host.Kind is "local" or "container"
+            ? recipe.CliPort : recipe.LocalCliPort).Where(port => port != 0).ToHashSet();
+        // A server binds its game port and the next two (crossplay); a local or host-network container server binds them here.
+        var games = Environments.Where(recipe => Hosts.TryGetValue(recipe.Host, out var host) && host.Kind is "local" or "container")
+            .Select(recipe => recipe.GamePort).Where(port => port != 0).ToList();
+        foreach (var recipe in Environments.Where(recipe => recipe.Host == name))
+        {
+            bool serves = recipe.Roles.Contains("server");
+            if (string.IsNullOrEmpty(recipe.Install))
+            {
+                recipe.Install = (serves ? server : recipe.Roles.Contains("client") ? game : null) ?? "";
+                if (recipe.Install.Length == 0)
+                {
+                    _noInstall[recipe.Name ?? ""] = (serves ? noServer : noGame) ?? "";
+                    _missing.Add($"Environment {recipe.Name} has no install: {_noInstall[recipe.Name ?? ""]}");
+                }
+            }
+            var assumed = new List<string>();
+            if (string.IsNullOrEmpty(recipe.Runtime)) assumed.Add("runtime " + (recipe.Runtime = HostInstall.Join(machine.DataRoot, "runs", recipe.Name ?? "")));
+            if (recipe.CliPort == 0)
+            {
+                taken.Add(recipe.CliPort = Enumerable.Range(FirstCliPort, 1000).First(port => !taken.Contains(port)));
+                assumed.Add("ValheimCLI port " + recipe.CliPort);
+            }
+            if (serves && recipe.GamePort == 0)
+            {
+                games.Add(recipe.GamePort = Enumerable.Range(0, 100).Select(step => FirstGamePort + 10 * step)
+                    .First(port => games.All(other => Math.Abs(other - port) >= 3)));
+                assumed.Add("game port " + recipe.GamePort);
+            }
+            _detected.Add($"{recipe.Name} ({string.Join(",", recipe.Roles)}) on {name}: install {(recipe.Install.Length == 0 ? "not found" : recipe.Install)}" +
+                (assumed.Count == 0 ? "" : "; assumed " + string.Join(", ", assumed)));
+        }
+        // Leases default to this machine only when every client is on it: clients elsewhere share a lease host the file names.
+        var clients = Environments.Where(recipe => recipe.Roles.Contains("client")).ToList();
+        if (string.IsNullOrWhiteSpace(LeaseHost) && string.IsNullOrWhiteSpace(LeaseDirectory) && clients.Count != 0 && clients.All(recipe => recipe.Host == name))
+        {
+            LeaseHost = name;
+            LeaseDirectory = HostInstall.Join(machine.DataRoot, "leases");
+            _detected.Add($"assumed Steam-account leases on {name} in {LeaseDirectory}");
+        }
+    }
+
+    // The app's install when its executable is there; otherwise null, with every path tried.
+    private static string? Installed(ISteamLocator machine, SteamDetection steam, string appId, string executable, string title, out string? missing)
+    {
+        var app = steam.Apps[appId];
+        missing = null;
+        if (app.Install != null && machine.FileExists(HostInstall.Join(app.Install, executable))) return app.Install;
+        missing = app.Install != null
+            ? $"No {title} (Steam app {appId}) on this machine: {app.Install} has no {executable}."
+            : $"No {title} (Steam app {appId}) on this machine: " + (steam.Root == null
+                ? "Steam was not found (tried " + string.Join(", ", steam.RootsTried) + ")."
+                : "tried " + string.Join(", ", app.Tried) + ".");
+        return null;
     }
 
     /// <summary>Validate the whole inventory before any actor assignment or host contact.</summary>
@@ -79,7 +234,8 @@ public sealed class EnvironmentInventory
             if (!NamePattern.IsMatch(name)) errors.Add("Invalid host name: " + name);
             host.Validate(name, errors);
         }
-        if (Environments.Count == 0) errors.Add("List at least one environment recipe in preference order.");
+        if (Environments.Count == 0) errors.Add("List at least one environment recipe in preference order." +
+            (_missing.Count == 0 ? "" : " This machine has none: " + string.Join(" ", _missing)));
         foreach (var recipe in Environments)
         {
             if (recipe.Roles == null)
@@ -90,7 +246,8 @@ public sealed class EnvironmentInventory
             if (recipe.Roles is not (["server"] or ["client"]))
                 errors.Add($"Environment {recipe.Name} needs roles [\"server\"] or [\"client\"]: a dedicated server recipe cannot also be a client process.");
             if (!host.IsAbsolutePath(recipe.Install) || !host.IsAbsolutePath(recipe.Runtime))
-                errors.Add($"Environment {recipe.Name} needs absolute install and runtime paths on {recipe.Host}.");
+                errors.Add($"Environment {recipe.Name} needs absolute install and runtime paths on {recipe.Host}." +
+                    (_noInstall.TryGetValue(recipe.Name ?? "", out string? why) ? " " + why : ""));
             if (recipe.CliPort is < 1024 or > 65535 || recipe.LocalCliPort is < 0 or > 65535)
                 errors.Add($"Environment {recipe.Name} needs valid ValheimCLI ports.");
             bool serves = recipe.Roles.Contains("server");
@@ -105,7 +262,7 @@ public sealed class EnvironmentInventory
         }
         foreach (var duplicate in Environments.GroupBy(recipe => recipe.Name, StringComparer.Ordinal).Where(group => group.Count() > 1))
             errors.Add("Environment " + duplicate.Key + " is listed twice.");
-        bool hasClients = Environments.Any(recipe => recipe.Roles.Contains("client"));
+        bool hasClients = Environments.Any(recipe => recipe.Roles?.Contains("client") == true);
         if (hasClients && (string.IsNullOrWhiteSpace(LeaseHost) || !Hosts.TryGetValue(LeaseHost, out var leaseHost) ||
             string.IsNullOrWhiteSpace(LeaseDirectory) || !leaseHost.IsAbsolutePath(LeaseDirectory)))
             errors.Add("Client environments need a listed leaseHost and an absolute leaseDirectory on it.");
@@ -151,7 +308,7 @@ public sealed class EnvironmentInventory
             if (failedActor == null) { failedActor = actor.Name; refusals.AddRange(skipped); }
             return false;
         }
-        if (!Search(0)) throw new ArgumentException($"No environment assignment for {failedActor}: " + string.Join("; ", refusals));
+        if (!Search(0)) throw new ArgumentException($"No environment assignment for {failedActor}: " + string.Join("; ", refusals) + MissingNote);
         var profile = new ResolvedEnvironment
         {
             Hosts = Hosts,
@@ -196,8 +353,10 @@ public sealed class EnvironmentInventory
                 skipped.Count == 0 ? "first server recipe in inventory order" : "first server recipe that can run the plan after " + string.Join("; ", skipped)));
         }
         throw new ArgumentException("No server environment in the inventory can run this plan" +
-            (skipped.Count == 0 ? ": it lists none." : ": " + string.Join("; ", skipped)));
+            (skipped.Count == 0 ? ": it lists none." : ": " + string.Join("; ", skipped)) + MissingNote);
     }
+
+    private string MissingNote => _missing.Count == 0 ? "" : ". This machine: " + string.Join(" ", _missing);
 
     private static string? Refusal(string actor, string kind, HostedCampaignRole input, EnvironmentRecipe recipe,
         IReadOnlyDictionary<string, EnvironmentRecipe> chosen,

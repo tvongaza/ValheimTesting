@@ -365,6 +365,72 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Empty(Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*")); // The prepared install was retired.
     }
 
+    // A campaign that leaves out its inventory runs on this machine: its dedicated server is the one Steam installed, with
+    // the defaults preflight reported, and the run records them as its inventory. (A Mac gets no local dedicated server.)
+    [Fact] public async Task ACampaignWithoutAnInventoryRunsOnThisMachinesSteamServer()
+    {
+        if (OperatingSystem.IsMacOS()) return;
+        bool windows = OperatingSystem.IsWindows();
+        string serverDll = _rig.Write("this-machine/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
+        var resolved = NativeDependencyResolver.Resolve(Request(serverDll));
+        string serverLock = Path.Combine(_rig.Root, "this-machine-lock.json");
+        resolved.Write(serverLock);
+        string world = Path.Combine(_rig.Root, "this-machine-world");
+        Directory.CreateDirectory(world);
+        using (var payload = new MemoryStream())
+        {
+            using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
+            { writer.Write(41); writer.Write("Campaign"); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(4242L); }
+            File.WriteAllBytes(Path.Combine(world, "Campaign.fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
+        }
+        File.WriteAllText(Path.Combine(world, "Campaign.db"), "fixture");
+        // This machine, as the detection reads it: Steam with Valheim Dedicated Server installed.
+        var machine = new FakeMachine(windows ? "windows" : "linux") { SteamPath = windows ? @"C:\Steam" : null };
+        string steam = windows ? @"C:\Steam" : "/home/tester/.local/share/Steam";
+        machine.Directories.Add(steam);
+        string install = machine.App(steam, "896660", "Valheim dedicated server", windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable);
+        string runs = HostInstall.Join(machine.DataRoot, "runs", "local-server");
+        var server = new FakeOwnedServer("test.mod", saveRoot: HostInstall.Join(runs, "run-test", "world"));
+        var host = new FakeServerHost("local", Path.Combine(_rig.Root, "this-machine-host"), server, kind: GameHostKind.Local, windows: windows);
+        string source = host.Local(install);
+        FakeInstalls.Server(source);
+        File.WriteAllText(Path.Combine(source, windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable), "server");
+        if (windows)
+        {
+            File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
+            File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        }
+        else FakeInstalls.LinuxLoader(source);
+        string manifest = Path.Combine(_rig.Root, "this-machine-campaign.json");
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new
+        {
+            world, join = "127.0.0.1:2486", server = new { dependencyLock = serverLock }, clients = new Dictionary<string, object>(),
+        }));
+        var plan = new SitePlan
+        {
+            Scenario = "smoke", Port = 5688,
+            Arguments = ["-batchmode", "-nographics", "-savedir", "{world}", "-port", "2486", "-password", "secret", "-logFile", "{runtime}/toolkit-unity.log"],
+            Pins = new() { ["example.server"] = "<md5 of the server's plugin>" },
+        };
+        var options = new PinnedServerRunOptions<SitePlan>
+        {
+            Name = "this-machine-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
+            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN", TestAccess = false,
+            Scenario = _ => Task.CompletedTask,
+            HostSeams = new HostedSeams { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
+        };
+        string output = Path.Combine(_rig.Root, "this-machine-out");
+        using (EnvironmentInventory.UseMachine(machine))
+            Assert.Equal(0, await PinnedServerRun.RunCampaignAsync(manifest, plan, _ => new Dictionary<string, ClientRunPlan>(), output, options));
+        var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
+        Assert.Equal("this machine", result.GetProperty("Provenance").GetProperty("inventory").GetString());
+        string detected = result.GetProperty("Provenance").GetProperty("inventoryDetected").GetString()!;
+        Assert.Contains($"Valheim Dedicated Server (Steam app 896660): {install}", detected);
+        Assert.Contains("game port 2486", detected);
+        Assert.False(result.GetProperty("Provenance").TryGetProperty("inventorySha256", out _));
+        Assert.True(result.GetProperty("CleanupVerified").GetBoolean());
+    }
+
     private sealed class SitePlan : ServerRunPlan { public float Ground { get; set; } = float.NaN; }
 
     // A barrier, not a delay: each ship waits until a second one is inside at the same time. Overlapping setups always meet

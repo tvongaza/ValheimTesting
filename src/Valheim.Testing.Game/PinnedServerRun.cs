@@ -330,7 +330,11 @@ public static class PinnedServerRun
                 {
                     inspection = HostedCampaignPreparation.InspectInputs(manifestFile);
                     inspection.Report.RequireReady();
-                    report.Provenance["inventorySha256"] = WorldFixture.Hash(inspection.Inputs!.Manifest.Inventory);
+                    // With no inventory file the actors are on this machine; what was detected for it is recorded either way.
+                    if (inspection.Inputs!.Manifest.Inventory.Length != 0)
+                        report.Provenance["inventorySha256"] = WorldFixture.Hash(inspection.Inputs.Manifest.Inventory);
+                    else report.Provenance["inventory"] = "this machine";
+                    if (inspection.Report.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inspection.Report.Detected);
                 });
                 report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, bind(plan)));
                 phase = StepPhase.Setup; // From here the hosts are written to.
@@ -349,7 +353,9 @@ public static class PinnedServerRun
             if (inventoryPath != null)
             {
                 // A standalone run has one actor to place: its dedicated server. Clients are a campaign's.
-                var (placed, assignment) = EnvironmentInventory.Read(inventoryPath).PlaceServer(plan);
+                var inventory = EnvironmentInventory.Read(inventoryPath);
+                var (placed, assignment) = inventory.PlaceServer(plan);
+                if (inventory.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inventory.Detected);
                 environment = placed;
                 report.Provenance["inventorySha256"] = WorldFixture.Hash(inventoryPath);
                 report.Provenance["serverEnvironment"] = assignment.Environment + ": " + assignment.Reason;
