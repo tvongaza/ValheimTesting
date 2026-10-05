@@ -11,7 +11,7 @@ namespace MyMod.TestAdapter;
 /// The mod's own observation, <c>markers &lt;x&gt; &lt;z&gt; [radius]</c>: the markers (<c>wood_pole2</c> saved objects)
 /// this process knows within <c>radius</c> metres (default 1.5, at most 64) of a point, each with the label MyMod saves on
 /// it (<c>mymod_label</c>) and whether it has an instance here. It reads saved data only, through the adapter's
-/// <see cref="ZoneTerrain.ZoneObjects"/>, never MyMod's types, so it also runs where MyMod is absent. Read-only.
+/// <see cref="SavedObjects.InZone"/>, never MyMod's types, so it also runs where MyMod is absent. Read-only.
 /// </summary>
 internal static class MarkerObservation
 {
@@ -35,7 +35,7 @@ internal static class MarkerObservation
         Vector2s max = ZoneSystem.GetZone(new Vector3(x + radius, 0f, z + radius));
         for (int zx = min.x; zx <= max.x; zx++)
             for (int zz = min.y; zz <= max.y; zz++)
-                foreach (ZDO zdo in ZoneTerrain.ZoneObjects(new Vector2s(zx, zz), 50000, candidate => candidate.GetPrefab() == hash))
+                foreach (ZDO zdo in SavedObjects.InZone(new Vector2s(zx, zz), 50000, candidate => candidate.GetPrefab() == hash))
                 {
                     Vector3 at = zdo.GetPosition();
                     float dx = at.x - x, dz = at.z - z;

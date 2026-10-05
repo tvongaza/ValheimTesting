@@ -77,7 +77,7 @@ namespace Valheim.Testing.Adapter
             int scanned = 0;
             for (int zx = min.x; zx <= max.x; zx++)
                 for (int zz = min.y; zz <= max.y; zz++)
-                    foreach (ZDO zdo in ZoneTerrain.ZoneObjects(new Vector2s(zx, zz), MaxObjects))
+                    foreach (ZDO zdo in SavedObjects.InZone(new Vector2s(zx, zz), MaxObjects))
                     {
                         if (++scanned > MaxObjects) throw new InvalidOperationException($"More than {MaxObjects} objects to search; nothing is returned rather than a partial answer.");
                         Vector3 position = zdo.GetPosition();
