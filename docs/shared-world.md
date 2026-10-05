@@ -85,7 +85,7 @@ The library does not call a mod or duplicate its grading, smoothing, terrain com
 
 ## Evidence limits and next layers
 
-These fixtures model declared terrain and mutable state. They do not reproduce native noise, biome blending, physics, ZDO ownership, compiler serialization, paint texture sampling or Unity scheduling. Keep a few independent native checks for those boundaries and human review for how the result looks and walks. The previously measured Roads paint/reload campaign remains separate evidence; it did not validate every synthetic shape introduced here.
+These fixtures model declared terrain and mutable state. They do not reproduce native noise, biome blending, physics, ZDO ownership, compiler serialization, paint texture sampling or Unity scheduling. Keep a few independent native checks for those boundaries and human review for how the result looks and walks.
 
 [ObserveCheck `capture`](../examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay) now imports validated bounded grids for exact replay. Its [bounded native capture/reload check passed](native-validation-20260927.md). Interpolation exists only in `GridDumpTerrain`, as its documented bilinear rule; replay never interpolates.
 

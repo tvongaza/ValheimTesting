@@ -58,6 +58,8 @@ build/Valheim.GameReferences.props, build/Valheim.GameReferences.targets
 
 [FullLifecycle](../examples/FullLifecycle/README.md) shows the whole path on one small feature: the unit test, integration tests of the scenario against scripted replies, and a native run with an owned server and an owned or attached client through save, restart and rejoin, plus an optional human look. Copy its layout; the steps below explain the choices.
 
+The native run needs nothing beyond the Windows PC you build on: Valheim and the free Valheim Dedicated Server tool from Steam, test copies of both with BepInEx and ValheimCLI, and the runner, which starts and stops its own server and client there ([one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc)). Other machines are optional ([platforms](platforms.md)).
+
 Before the first native run, go through the [runtime hygiene checklist](runtime-hygiene.md): a clean runtime, load order, test characters, join and teleport timing, and what counts as evidence.
 
 For a mod that writes terrain on the server, a useful next check is: “the client without my mod sees the declared ground and paint, including after a save/restart.” For another kind of mod, replace this with one observable behavior at its actual game boundary.
@@ -69,7 +71,7 @@ For a mod that writes terrain on the server, a useful next check is: “the clie
 5. **Add a game-side adapter only if needed.** Existing ValheimCLI capabilities can already read terrain and session state. A mod-specific action or observation belongs in that mod's optional adapter; reusable observations belong in ValheimCLI. Use the [capability authoring guide](https://github.com/tvongaza/valheimCLI/blob/80fb6cefcc99d7737ec9f9b589eff4d16e2fc5e3/docs/command-packs.md).
 6. **Test the lifecycle you claim.** Confirm the server save completes; leave, restart only the owned server, rejoin, reverify pins and repeat the original expectation plan. Retain logs and per-attempt results. Never retry a mutation simply because its reply was lost.
 
-Client arrival/protection remains required even if your first check is read-only. [`PlayerPlacement`](packages/Valheim.Testing.Game.md#joining-protecting-and-placing-a-player) (Game preview.11) protects a joined player, arranges its arrival and requires stationary support. Check the toolkit reference for your installed preview before relying on any other helper. Human walking and visual quality remain separate from stationary support checks.
+Client arrival/protection remains required even if your first check is read-only. [`PlayerPlacement`](packages/Valheim.Testing.Game.md#joining-protecting-and-placing-a-player) protects a joined player, arranges its arrival and requires stationary support. Check the package page before relying on any other helper. Human walking and visual quality remain separate from stationary support checks.
 
 ## Quick answers for an agent
 
