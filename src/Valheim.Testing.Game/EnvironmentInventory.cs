@@ -122,9 +122,28 @@ public sealed class EnvironmentInventory
         var inventory = ReadHosts(inventoryPath, ThisMachine);
         if (!json) foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
         var report = await RunJournalStatus.InspectAsync(inventory.Hosts, new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost,
-            TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
+            TimeSpan.FromSeconds(60), cancellation, inventory.LeaseHost, inventory.LeaseDirectory).ConfigureAwait(false);
         RunJournalStatus.Write(report, output, json);
         return report.Clean;
+    }
+
+    /// <summary>
+    /// Clears what run <paramref name="runId"/> left on the hosts of the inventory at <paramref name="inventoryPath"/> (this
+    /// machine when null), as <see cref="WriteRunStatusAsync"/> judged it, and writes what was done. A run that is still going,
+    /// whose runner cannot be checked, or that left anything that cannot be proven its own is refused before anything changes.
+    /// A process is stopped only when its ID, start time and command line still all match the run's journal. Copies and leases
+    /// the run kept on purpose stay unless <paramref name="teardown"/>. Returns true when nothing of the run is left.
+    /// </summary>
+    public static async Task<bool> RecoverRunAsync(string? inventoryPath, string runId, bool teardown, TextWriter output, bool json = false,
+        CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        var inventory = ReadHosts(inventoryPath, ThisMachine);
+        if (!json) foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
+        var report = await RunRecovery.RecoverAsync(inventory.Hosts, new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost, runId, teardown,
+            TimeSpan.FromSeconds(60), cancellation, inventory.LeaseHost, inventory.LeaseDirectory).ConfigureAwait(false);
+        RunRecovery.Write(report, output, json);
+        return report.Recovered;
     }
 
     // As Read, but checks only the hosts: a host's journal needs the host and its lock, not an install or an environment.

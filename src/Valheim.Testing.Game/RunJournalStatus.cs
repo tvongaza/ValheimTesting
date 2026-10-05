@@ -23,6 +23,8 @@ internal enum JournalRunState
 /// <summary>Something a run journalled and never journalled as gone: a copy, character, process, lease or lock on one host.</summary>
 internal sealed record JournalItem(string Kind, string Host, string Actor, string What, string Status, DateTime SinceUtc)
 {
+    /// <summary>Every field its entries journalled (later entries over earlier ones): what a recovery acts on.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public IReadOnlyDictionary<string, string> Fields { get; init; } = new Dictionary<string, string>();
     /// <summary>Kept on purpose by a run that ended.</summary>
     public bool Kept { get; init; }
     /// <summary>Cannot be proven gone or the run's own.</summary>
@@ -49,8 +51,10 @@ internal sealed record JournalStatusReport(IReadOnlyList<JournalHostStatus> Host
 /// </summary>
 internal static class RunJournalStatus
 {
+    /// <param name="leaseHost">The inventory's lease host and <paramref name="leaseDirectory"/> its lease directory: where a lease journalled
+    /// before leases named their directory is checked.</param>
     public static async Task<JournalStatusReport> InspectAsync(IReadOnlyDictionary<string, HostProfile> hosts, Func<string, IGameHost> hostFactory,
-        TimeSpan timeout, CancellationToken cancellation = default)
+        TimeSpan timeout, CancellationToken cancellation = default, string? leaseHost = null, string? leaseDirectory = null)
     {
         // Every host at once: one that cannot be reached does not hold up the others.
         var reads = await Task.WhenAll(hosts.OrderBy(host => host.Key, StringComparer.Ordinal).Select(async pair =>
@@ -78,6 +82,7 @@ internal static class RunJournalStatus
         // What each run left, host by host, from its own entries in the order written.
         var pending = new Dictionary<string, List<Pending>>(StringComparer.Ordinal);
         var ended = new Dictionary<string, (string State, bool Cleaned)>(StringComparer.Ordinal);
+        var recovered = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (hostName, connection, records) in read)
             foreach (var run in records.GroupBy(record => record.Run, StringComparer.Ordinal))
             {
@@ -86,8 +91,14 @@ internal static class RunJournalStatus
                 {
                     var fields = record.Entry.Fields;
                     string Field(string key) => fields.TryGetValue(key, out string? value) ? value : "";
-                    void Open(string key, string kind, string what, string status, bool kept = false) =>
-                        left[key] = new(kind, hostName, connection, record.Actor, what, status, kept, left.TryGetValue(key, out var was) ? was.SinceUtc : record.Utc, fields);
+                    void Open(string key, string kind, string what, string status, bool kept = false)
+                    {
+                        // Later entries add to what earlier ones journalled (copy-done names no staging; copy-intended does).
+                        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+                        if (left.TryGetValue(key, out var was)) foreach (var (name, value) in was.Fields) merged[name] = value;
+                        foreach (var (name, value) in fields) merged[name] = value;
+                        left[key] = new(kind, hostName, connection, record.Actor, what, status, kept, was?.SinceUtc ?? record.Utc, merged);
+                    }
                     switch (record.Entry.Kind)
                     {
                         case JournalEntry.CopyIntended: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copy started, never finished"); break;
@@ -95,12 +106,12 @@ internal static class RunJournalStatus
                         case JournalEntry.CopyKept: Open("copy " + Field("runtime"), "copy", Field("runtime"), "kept: " + Field("why"), kept: true); break;
                         case JournalEntry.CopyRetired: left.Remove("copy " + Field("runtime")); break;
                         case JournalEntry.CharacterIntended:
-                            Open($"character {record.Actor} {Field("fileName")}", "character", $"{Field("fileName")} in {Field("characters")}", "staging started, never finished"); break;
+                            Open($"character {Field("fileName")}", "character", $"{Field("fileName")} in {Field("characters")}", "staging started, never finished"); break;
                         case JournalEntry.CharacterDone:
-                            if (left.TryGetValue($"character {record.Actor} {Field("fileName")}", out var staged))
-                                left[$"character {record.Actor} {Field("fileName")}"] = staged with { Status = "staged, not retired" };
+                            if (left.TryGetValue($"character {Field("fileName")}", out var staged))
+                                left[$"character {Field("fileName")}"] = staged with { Status = "staged, not retired" };
                             break;
-                        case JournalEntry.CharacterRetired: left.Remove($"character {record.Actor} {Field("fileName")}"); break;
+                        case JournalEntry.CharacterRetired: left.Remove($"character {Field("fileName")}"); break;
                         case JournalEntry.ProcessIntended:
                         {
                             string directory = Field("bootDirectory") is { Length: > 0 } boot ? boot : Field("launchDirectory");
@@ -114,12 +125,14 @@ internal static class RunJournalStatus
                             Open($"process {Field("pid")} {Field("startIdentity")}", "process", $"{Field("pid")} (started {Field("startIdentity")})", "");
                             break;
                         }
+                        case JournalEntry.ProcessStopped: left.Remove($"process {Field("pid")} {Field("startIdentity")}"); break;
                         case JournalEntry.LeaseHeld: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "held"); break;
                         case JournalEntry.LeaseKept: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "kept: its client may still run", kept: true); break;
                         case JournalEntry.LeaseReleased: left.Remove($"lease {Field("account")} {Field("owner")}"); break;
                         case JournalEntry.LockHeld: Open($"lock {Field("lock")} {Field("claimant")}", "lock", Field("lock"), "held"); break;
                         case JournalEntry.LockReleased: left.Remove($"lock {Field("lock")} {Field("claimant")}"); break;
                         case JournalEntry.RunEnded: ended[run.Key] = (Field("state"), Field("cleanupVerified") == "true"); break;
+                        case JournalEntry.RunRecovered: recovered.Add(run.Key); break;
                     }
                 }
                 if (!pending.TryGetValue(run.Key, out var list)) pending[run.Key] = list = [];
@@ -146,15 +159,18 @@ internal static class RunJournalStatus
         foreach (var run in read.SelectMany(host => host.Records.Select(record => (host.Host, Record: record))).GroupBy(entry => entry.Record.Run, StringComparer.Ordinal))
         {
             var ordered = run.OrderBy(entry => entry.Record.Utc).ToList();
-            var runner = ordered.LastOrDefault(entry => entry.Record.Runner != null).Record?.Runner;
+            // The run's own runner: a recovery journals as its own actor, and its process is not the run's.
+            var runner = ordered.LastOrDefault(entry => entry.Record.Runner != null && entry.Record.Actor != RunRecovery.Actor).Record?.Runner;
             bool isEnded = ended.TryGetValue(run.Key, out var end);
             var items = new List<JournalItem>();
             foreach (var item in pending.GetValueOrDefault(run.Key) ?? [])
             {
-                var judged = await JudgeAsync(item, isEnded && end.Cleaned, probed, probeFailed, timeout, cancellation).ConfigureAwait(false);
+                var judged = await JudgeAsync(item, isEnded && end.Cleaned, probed, probeFailed, timeout, cancellation,
+                    item.Host == leaseHost && !string.IsNullOrEmpty(leaseDirectory) ? leaseDirectory : null).ConfigureAwait(false);
                 if (judged != null) items.Add(judged);
             }
             var (state, reason) = Verdict(isEnded ? end : null, runner, items);
+            if (recovered.Contains(run.Key)) reason += "; recovered by env recover/teardown" + (items.Count == 0 ? "" : ", but not all of it");
             runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc,
                 run.Select(entry => entry.Host).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(), runner?.ToString(),
                 items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList()));
@@ -167,9 +183,9 @@ internal static class RunJournalStatus
 
     // One open entry as the host now shows it: null when it is provably gone after all (a process that exited, a lock someone released).
     private static async Task<JournalItem?> JudgeAsync(Pending item, bool endedClean, Dictionary<(string Host, int Pid, string Start), ProbedProcess> probed,
-        Dictionary<string, string> probeFailed, TimeSpan timeout, CancellationToken cancellation)
+        Dictionary<string, string> probeFailed, TimeSpan timeout, CancellationToken cancellation, string? inventoryLeaseDirectory)
     {
-        var judged = new JournalItem(item.Kind, item.Host, item.Actor, item.What, item.Status, item.SinceUtc) { Kept = item.Kept };
+        var judged = new JournalItem(item.Kind, item.Host, item.Actor, item.What, item.Status, item.SinceUtc) { Kept = item.Kept, Fields = item.Fields };
         switch (item.Kind)
         {
             case "launch":
@@ -206,6 +222,35 @@ internal static class RunJournalStatus
                     };
                 }
                 catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidOperationException)
+                {
+                    return judged with { Status = "cannot be checked: " + error.Message, Unrecoverable = true };
+                }
+            }
+            case "lease":
+            {
+                // Checked on the lease host by its claim: held by this run's owner, or not (released, lapsed, or another run's now).
+                var fields = item.Fields;
+                // A lease journalled before leases named their id and directory is looked up in the inventory's lease directory.
+                bool withId = fields.ContainsKey("leaseId");
+                string? directory = fields.GetValueOrDefault("directory") ?? inventoryLeaseDirectory;
+                if (directory == null)
+                    return judged with { Status = $"journalled without its lease directory, so it cannot be checked; it lapses by itself, or check pool {fields.GetValueOrDefault("pool")} by hand",
+                        Unrecoverable = true };
+                try
+                {
+                    var pool = new SteamAccountPool { Pool = fields.GetValueOrDefault("pool") ?? "", LeaseDirectory = directory, Accounts = [new SteamPoolAccount { Name = fields.GetValueOrDefault("account") ?? "" }] };
+                    var account = (await pool.ListAsync(item.Connection, timeout, cancellation).ConfigureAwait(false)).SingleOrDefault();
+                    return account switch
+                    {
+                        { State: SteamAccountState.Held } when account.Holder == fields.GetValueOrDefault("owner") && !withId =>
+                            judged with { Status = $"held by this run until {account.ExpiresUtc:yyyy-MM-dd HH:mm}Z, but journalled without its lease id, so only its lapse ends it", Unrecoverable = true },
+                        { State: SteamAccountState.Held } when account.Holder == fields.GetValueOrDefault("owner") =>
+                            judged with { Status = (item.Kept ? item.Status + "; " : "") + $"held by this run until {account.ExpiresUtc:yyyy-MM-dd HH:mm}Z unless released" },
+                        { State: SteamAccountState.Free } or { State: SteamAccountState.Held } => null,
+                        _ => judged with { Status = "cannot be checked: " + (account?.Describe() ?? "the lease host named no such account"), Unrecoverable = true },
+                    };
+                }
+                catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or ArgumentException or InvalidOperationException)
                 {
                     return judged with { Status = "cannot be checked: " + error.Message, Unrecoverable = true };
                 }

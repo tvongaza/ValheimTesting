@@ -82,7 +82,8 @@ internal sealed class HostedServerRun
 
     private static JournalEntry LeaseEntry(string kind, SteamAccountHold hold, params (string Key, string Value)[] more) =>
         JournalEntry.Of(kind, [("account", hold.Account), ("pool", hold.Pool), ("owner", hold.Owner),
-            ("expiresUtc", hold.ExpiresUtc.ToString("O", CultureInfo.InvariantCulture)), .. more]);
+            ("expiresUtc", hold.ExpiresUtc.ToString("O", CultureInfo.InvariantCulture)), ("leaseId", hold.LeaseId),
+            ("number", hold.LeaseNumber.ToString(CultureInfo.InvariantCulture)), ("directory", hold.LeaseDirectory), .. more]);
 
     /// <summary>
     /// The run's end in its server host's journal, when the run wrote there at all (a standalone run; a campaign's preparation

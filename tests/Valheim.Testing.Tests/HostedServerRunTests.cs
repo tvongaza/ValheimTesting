@@ -61,11 +61,19 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>Simulates a transport failure after the remote staging directory has been populated.</summary>
     public Action<string>? AfterShip { get; set; }
     public List<(string Game, string Start)> Stops { get; } = [];
+    /// <summary>The Steam-account leases on this (lease) host: account → holder and lease id.</summary>
+    public Dictionary<string, (string Holder, string LeaseId)> Leases { get; } = [];
     /// <summary>What the process check reads as a running process's command-line hash, by process ID; by default <see cref="CommandLineSha256"/> of its ID.</summary>
     public Dictionary<int, string> CommandLines { get; } = [];
+    /// <summary>Runs after each process check, for example to change a process between two checks.</summary>
+    public Action? AfterProbe { get; set; }
     public static string CommandLineSha256(string pid) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("fake game " + pid)));
-    /// <summary>Starts a process this host reports as running until <paramref name="exit"/> completes; for journal tests.</summary>
-    public void Running(int pid, string start, Task<int> exit) { lock (_sync) _processes[pid] = (start, ct => exit.WaitAsync(ct), () => { }); }
+    /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
+    public void Running(int pid, string start)
+    {
+        var exit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_sync) _processes[pid] = (start, ct => exit.Task.WaitAsync(ct), () => exit.TrySetResult(137));
+    }
     public IReadOnlyList<string> Scripts { get { lock (_sync) return Runs.Select(run => run.Script).ToList(); } }
 
     public string Local(string hostPath) => Path.Combine([_mirror, .. hostPath.Replace(':', '/').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)]);
@@ -132,7 +140,9 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, RunJournal.BashReadAll) ? "journal-read-all" :
         ReferenceEquals(script, RunJournal.WindowsReadAll) ? "journal-read-all" :
         ReferenceEquals(script, HostProcessProbe.Bash) ? "process-probe" :
-        ReferenceEquals(script, HostProcessProbe.Windows) ? "process-probe" : "other";
+        ReferenceEquals(script, HostProcessProbe.Windows) ? "process-probe" :
+        ReferenceEquals(script, LeaseScripts.Bash) ? "lease" :
+        ReferenceEquals(script, LeaseScripts.PowerShell) ? "lease" : "other";
 
     public async Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default)
     {
@@ -278,8 +288,30 @@ internal sealed class FakeServerHost : IGameHost
                     else if (start.Length != 0 && start != process.Start) text.Append($"VT-PROC {id} {asked} reused {process.Start} -\n");
                     else text.Append($"VT-PROC {id} {asked} same {process.Start} {CommandLines.GetValueOrDefault(int.Parse(id)) ?? CommandLineSha256(id)}\n");
                 }
+                AfterProbe?.Invoke();
                 return Ok(text.Append("VT-PROC-END\n").ToString());
             }
+            // As LeaseScripts do for list and release: an account is held by its holder until released with its own lease id.
+            case "lease":
+                switch (v["action"])
+                {
+                    case "list":
+                    {
+                        var text = new StringBuilder();
+                        foreach (string account in v["accounts"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                            lock (_sync)
+                                text.Append(Leases.TryGetValue(account, out var held) ? $"VT-LEASE-ACCOUNT held {account} 1893456000 {held.Holder}\n" : $"VT-LEASE-ACCOUNT free {account}\n");
+                        return Ok(text.Append("VT-LEASE listed\n").ToString());
+                    }
+                    case "release":
+                        lock (_sync)
+                        {
+                            if (!Leases.TryGetValue(v["account"], out var held) || held.LeaseId != v["lease"]) return Ok("VT-LEASE lost released\n");
+                            Leases.Remove(v["account"]);
+                            return Ok("VT-LEASE released\n");
+                        }
+                }
+                break;
             case "list":
             {
                 string root = Local(v["root"]);
