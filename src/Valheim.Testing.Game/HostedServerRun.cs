@@ -22,6 +22,8 @@ internal sealed class HostedSeams
     public Action? RequireMacGui { get; init; }
     /// <summary>Starts a local macOS client without opening the real game in controlled tests.</summary>
     public Func<ClientRunPlan, string, SteamAccountHold?, CancellationToken, Action<IOwnedProcess>?, ClientSession>? LocalMacLaunch { get; init; }
+    /// <summary>The run's Ctrl+C owner instead of one the runner makes, so a test can signal it.</summary>
+    public RunCancellation? Cancellation { get; init; }
 }
 
 /// <summary>
@@ -89,8 +91,10 @@ internal sealed class HostedServerRun
     /// The run's end in its server host's journal, when the run wrote there at all (a standalone run; a campaign's preparation
     /// journals its own hosts). A run refused before it touched the host leaves it untouched.
     /// </summary>
-    public Task JournalEndAsync(string state, bool cleanupVerified) => !_serverJournalled ? Task.CompletedTask :
-        NoteAsync(Host, Role.Host, "run", JournalEntry.Of(JournalEntry.RunEnded, ("state", state), ("cleanupVerified", cleanupVerified ? "true" : "false")));
+    public Task JournalEndAsync(string state, bool cleanupVerified) =>
+        JournalEndAsync(JournalEntry.Of(JournalEntry.RunEnded, ("state", state), ("cleanupVerified", cleanupVerified ? "true" : "false")));
+    /// <summary>The run's last journal entry on its server host: its end, or that its cleanup was abandoned.</summary>
+    internal Task JournalEndAsync(JournalEntry last) => !_serverJournalled ? Task.CompletedTask : NoteAsync(Host, Role.Host, "run", last);
 
     /// <summary>Whether the runtime is a campaign's prepared install (verified in place) rather than a copy this run makes.</summary>
     public bool Prepared { get; }
@@ -518,20 +522,22 @@ internal sealed class HostedServerRun
     /// the server host's lock and runtime are kept, because the server may still run there. Returns the failures; it never throws.
     /// </summary>
     public async Task<IReadOnlyList<Exception>> TeardownAsync(ScenarioReport report, string output, bool launched, bool serverStopped,
-        PreparedHostedCampaign? prepared = null, RunRetirement? retirement = null)
+        PreparedHostedCampaign? prepared = null, RunRetirement? retirement = null, CancellationToken cleanup = default)
     {
         retirement ??= new RunRetirement(report, output);
         serverStopped &= !_serverMayRun;
         var failures = new List<Exception>();
         async Task Try(string step, Func<Task> action)
         {
+            // An abandoned cleanup (RunCancellation.BeginCleanup) attempts nothing more; the journal names what is left.
+            if (cleanup.IsCancellationRequested) action = () => throw new OperationCanceledException("Not attempted: the cleanup was abandoned.", cleanup);
             try { await report.StepAsync(StepPhase.Cleanup, step, action).ConfigureAwait(false); }
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         }
         if (launched && _worldShipped && serverStopped)
-            await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long)).ConfigureAwait(false);
+            await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long, cleanup)).ConfigureAwait(false);
         if (_runtime != null)
-            try { await retirement.HostAsync(Role.Host, Host, _runtime, RuntimeDirectory, launched, serverStopped).ConfigureAwait(false); }
+            try { await retirement.HostAsync(Role.Host, Host, _runtime, RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false); }
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         foreach (var account in _accounts)
@@ -561,7 +567,7 @@ internal sealed class HostedServerRun
             var locked = _clientLocks.Select(held => held.Host).ToList();
             if (_lock != null) locked.Add(Host.Name);
             // A server that may still run kept its own copy above; the process check below only looks at the copies retired.
-            foreach (var failure in await retirement.CampaignAsync(prepared, locked).ConfigureAwait(false))
+            foreach (var failure in await retirement.CampaignAsync(prepared, locked, cleanup).ConfigureAwait(false))
             { failures.Add(failure); Console.Error.WriteLine("Teardown: " + failure.Message); }
         }
         foreach (var (name, held) in _clientLocks) await Try($"release client host {name}'s lock", () =>

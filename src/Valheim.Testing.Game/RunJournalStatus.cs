@@ -86,6 +86,7 @@ internal static class RunJournalStatus
         var pending = new Dictionary<string, List<Pending>>(StringComparer.Ordinal);
         var ended = new Dictionary<string, (string State, bool Cleaned)>(StringComparer.Ordinal);
         var recovered = new HashSet<string>(StringComparer.Ordinal);
+        var abandoned = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (hostName, connection, records) in read)
             foreach (var run in records.GroupBy(record => record.Run, StringComparer.Ordinal))
             {
@@ -136,6 +137,7 @@ internal static class RunJournalStatus
                         case JournalEntry.LockReleased: left.Remove($"lock {Field("lock")} {Field("claimant")}"); break;
                         case JournalEntry.RunEnded: ended[run.Key] = (Field("state"), Field("cleanupVerified") == "true"); break;
                         case JournalEntry.RunRecovered: recovered.Add(run.Key); break;
+                        case JournalEntry.CleanupAbandoned: abandoned[run.Key] = Field("reason"); break;
                     }
                 }
                 if (!pending.TryGetValue(run.Key, out var list)) pending[run.Key] = list = [];
@@ -173,6 +175,7 @@ internal static class RunJournalStatus
                 if (judged != null) items.Add(judged);
             }
             var (state, reason) = Verdict(isEnded ? end : null, runner, items);
+            if (abandoned.TryGetValue(run.Key, out string? why)) reason += $"; its cleanup was abandoned ({why})";
             if (recovered.Contains(run.Key)) reason += "; recovered by env recover/teardown" + (items.Count == 0 ? "" : ", but not all of it");
             runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc,
                 run.Select(entry => entry.Host).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(), runner?.ToString(),

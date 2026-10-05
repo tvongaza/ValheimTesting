@@ -157,11 +157,11 @@ internal static class HostedCharacterStage
         }
     }
 
-    internal static async Task RetireAsync(IGameHost host, HostedCampaignCharacter input, TimeSpan timeout)
+    internal static async Task RetireAsync(IGameHost host, HostedCampaignCharacter input, TimeSpan timeout, CancellationToken cancellation = default)
     {
         CheckHostPaths(host, input);
         var reply = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsRetire : BashRetire,
-            Variables(input, ""), timeout).ConfigureAwait(false);
+            Variables(input, ""), timeout, cancellation).ConfigureAwait(false);
         reply.EnsureSuccess($"Retiring disposable character on {host.Name}");
         if (InteractiveClient.Line(reply.Stdout, "VT-CHAR-RETIRED") == null)
             throw new HostOperationException($"Unexpected character retirement reply from {host.Name}", reply);
