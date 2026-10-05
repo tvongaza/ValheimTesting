@@ -72,14 +72,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string serverLock = Lock(parent, "server"), clientLock = Lock(client, "client");
         string[] stores = [Store("one", 101), Store("two", 202), Store("three", 303)];
         string world = Path.Combine(_rig.Root, "campaign-world");
-        Directory.CreateDirectory(world);
-        using (var payload = new MemoryStream())
-        {
-            using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
-            { writer.Write(41); writer.Write("Campaign"); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(4242L); }
-            File.WriteAllBytes(Path.Combine(world, "Campaign.fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
-        }
-        File.WriteAllText(Path.Combine(world, "Campaign.db"), "fixture");
+        FakeInstalls.World(world);
         var hosts = new Dictionary<string, FakeServerHost>(StringComparer.Ordinal);
         foreach (string name in new[] { "server", "client-a", "client-b", "client-c" })
         {
@@ -242,28 +235,117 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.True(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
         }
         Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+    }
 
-        object Character(string store, string registeredName, string fileName) => new
+    // #256's acceptance in one preflight: six independent faults, each refused under its own actor and input, all in one
+    // report, before any host is written to. A bad account (an unreadable signed-in Steam identity), a loader mix (a Doorstop 4
+    // proxy beside a Doorstop 3 file), a missing pack (a lock whose ValheimCLI set lacks one), a wrong package (a client's
+    // loader package for Linux on a Windows host), a stale world UID, and conflicting use of the host the server and a client
+    // share (a game client already running in its session). The same campaign with the faults removed is ready.
+    [Fact] public async Task OnePreflightReportsSixIndependentFaultsBeforeAnyHostWrite()
+    {
+        string serverMod = _rig.Write("six/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
+        string clientMod = _rig.Write("six/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
+        string serverLock = Lock(serverMod, "six-server"), clientLock = Lock(clientMod, "six-client");
+        // Missing pack: the client's lock with one ValheimCLI pack taken out of its set.
+        var withoutPack = JsonNode.Parse(File.ReadAllText(clientLock))!;
+        var cliFiles = withoutPack["cliFiles"]!.AsArray();
+        cliFiles.RemoveAt(cliFiles.Count - 1);
+        string clientLockWithoutPack = Path.Combine(_rig.Root, "six-client-without-pack-lock.json");
+        File.WriteAllText(clientLockWithoutPack, withoutPack.ToJsonString());
+        string storeA = Store("one", 101, "six/"), storeB = Store("two", 202, "six/");
+        string world = Path.Combine(_rig.Root, "six-world");
+        FakeInstalls.World(world);
+        // Wrong package: a reviewed loader package complete for Linux only.
+        string linuxLoader = Path.Combine(_rig.Root, "six-linux-loader");
+        foreach (string file in new[] { "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "doorstop_libs/libdoorstop_x64.so" })
         {
-            store, registeredName, fileName,
-            charactersLocalDirectory = @"C:\save\characters_local", steamUserDataDirectory = @"C:\Steam\userdata",
-        };
-        string Store(string name, long id)
-        {
-            string local = _rig.Write("characters_local/" + name + ".fch", CharacterSaveReaderTests.Profile(playerId: id).File);
-            string store = Path.Combine(_rig.Root, "registered-" + name);
-            DisposableCharacterStore.Create(store).Register(name, local);
-            return store;
+            string path = Path.Combine(linuxLoader, file);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, file);
         }
+        string linuxPackage = Path.Combine(_rig.Root, "six-linux-loader.json");
+        BepInExLoaderPackage.Capture(linuxLoader, "BepInExPack_Valheim", "5.4.2333").Write(linuxPackage);
 
-        string Lock(string mod, string name)
+        // Two Windows hosts: "pc" runs the server and client-a, "laptop" client-b.
+        var hosts = new Dictionary<string, FakeServerHost>(StringComparer.Ordinal);
+        foreach (string name in new[] { "pc", "laptop" })
         {
-            var resolved = NativeDependencyResolver.Resolve(Request(mod));
-            Assert.True(resolved.Ready, string.Join("; ", resolved.Gaps.Select(gap => gap.Reason)));
-            string path = Path.Combine(_rig.Root, name + "-lock.json");
-            resolved.Write(path);
+            var host = new FakeServerHost(name, Path.Combine(_rig.Root, "six-mirror-" + name), windows: true);
+            hosts[name] = host;
+            host.SteamUserReply = "VT-STEAMUSER account " + (name == "pc" ? 101 : 202) + "\n";
+            foreach (var (install, server) in new[] { (@"C:\game\server", true), (@"C:\game\client", false) })
+            {
+                string source = host.Local(install);
+                if (server) FakeInstalls.Server(source); else FakeInstalls.Client(source);
+                File.WriteAllText(Path.Combine(source, server ? ServerLaunch.WindowsExecutable : ClientLaunch.WindowsExecutable), "game");
+                File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
+                File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+            }
+            Directory.CreateDirectory(host.Local(@"C:\save\characters_local"));
+            Directory.CreateDirectory(host.Local(@"C:\Steam\userdata"));
+        }
+        object Recipe(string name, string host, string role, string install, int port) => new
+        {
+            name, host, roles = new[] { role }, install, runtime = @"C:\runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
+        };
+        string inventory = Path.Combine(_rig.Root, "six-inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\six.lock", destination = "test@" + name }),
+            environments = new[] { Recipe("pc-server", "pc", "server", @"C:\game\server", 5577), Recipe("pc-client", "pc", "client", @"C:\game\client", 5578),
+                Recipe("laptop-client", "laptop", "client", @"C:\game\client", 5579) },
+            leaseHost = "pc", leaseDirectory = @"C:\leases",
+        }));
+        string Campaign(string file, string worldUid, string bLock, string? bLoader) => WriteJson(file, new
+        {
+            inventory, world, worldUid, join = "pc.example:2456",
+            server = new { dependencyLock = serverLock },
+            clients = new Dictionary<string, object>
+            {
+                ["client-a"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "pc-client" }, character = Character(storeA, "one", "vt-one") },
+                ["client-b"] = bLoader == null
+                    ? new { dependencyLock = bLock, environmentCandidates = new[] { "laptop-client" }, character = Character(storeB, "two", "vt-two") }
+                    : (object)new { dependencyLock = bLock, environmentCandidates = new[] { "laptop-client" }, loaderPackage = bLoader, character = Character(storeB, "two", "vt-two") },
+            },
+        });
+        string WriteJson(string name, object value)
+        {
+            string path = Path.Combine(_rig.Root, name);
+            File.WriteAllText(path, JsonSerializer.Serialize(value));
             return path;
         }
+
+        // The six faults at once.
+        string faulty = Campaign("six-faulty.json", worldUid: "9999", bLock: clientLockWithoutPack, bLoader: linuxPackage);
+        hosts["pc"].SteamUserReply = "VT-STEAMUSER unreadable\n";
+        File.WriteAllText(Path.Combine(hosts["pc"].Local(@"C:\game\server"), "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        hosts["pc"].GameActive = true;
+        var report = await HostedCampaignPreparation.InspectAsync(faulty, TimeSpan.FromSeconds(30), name => hosts[name]);
+        Assert.False(report.Ready);
+        void Has(string actor, string input, string text) => Assert.True(report.Problems.Any(problem => problem.Actor == actor && problem.Input == input && problem.Message.Contains(text, StringComparison.Ordinal)),
+            $"expected {actor} {input} containing \"{text}\" in: " + string.Join(" | ", report.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
+        Has("client-a", "Steam identity", "");                    // bad account
+        Has("server", "game and loader", "Doorstop 4");           // loader mix
+        Has("client-b", "dependencies and CLI packs", "");        // missing pack
+        Has("client-b", "game and loader", "does not match the host platform"); // wrong package
+        Has("server", "world fixture", "world UID");              // stale world UID
+        Has("pc", "session", "conflicting");                      // server + client on one host, already in use
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "ship" or "copy" or "start" or "apply-stage" or "character-install"));
+        // The static part through the CLI (no host): the missing pack and the stale UID together, exit 3.
+        using var output = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", faulty], output, new StringWriter()));
+        Assert.Contains("REFUSED client-b dependencies and CLI packs", output.ToString());
+        Assert.Contains("REFUSED server world fixture", output.ToString());
+
+        // The same campaign without the faults: server and client on one host are no conflict when nothing runs there.
+        string clean = Campaign("six-clean.json", worldUid: "4242", bLock: clientLock, bLoader: null);
+        hosts["pc"].SteamUserReply = "VT-STEAMUSER account 101\n";
+        File.WriteAllText(Path.Combine(hosts["pc"].Local(@"C:\game\server"), "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        hosts["pc"].GameActive = false;
+        var ready = await HostedCampaignPreparation.InspectAsync(clean, TimeSpan.FromSeconds(30), name => hosts[name]);
+        Assert.True(ready.Ready, string.Join("; ", ready.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
+        Assert.Equal(["pc", "pc", "laptop"], ready.Actors.Select(actor => actor.Host));
     }
 
     // RunCampaignAsync: one report from the campaign's preflight through the run to retiring the prepared install, with the
@@ -277,14 +359,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string serverLock = Path.Combine(_rig.Root, "run-campaign-lock.json");
         resolved.Write(serverLock);
         string world = Path.Combine(_rig.Root, "run-campaign-world");
-        Directory.CreateDirectory(world);
-        using (var payload = new MemoryStream())
-        {
-            using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
-            { writer.Write(41); writer.Write("Campaign"); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(4242L); }
-            File.WriteAllBytes(Path.Combine(world, "Campaign.fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
-        }
-        File.WriteAllText(Path.Combine(world, "Campaign.db"), "fixture");
+        FakeInstalls.World(world);
         var server = new FakeOwnedServer("test.mod", saveRoot: @"C:\runs\run-test\world");
         var host = new FakeServerHost("pc", Path.Combine(_rig.Root, "run-campaign-pc"), server, windows: true);
         string source = host.Local(@"C:\game\source");
@@ -376,14 +451,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string serverLock = Path.Combine(_rig.Root, "this-machine-lock.json");
         resolved.Write(serverLock);
         string world = Path.Combine(_rig.Root, "this-machine-world");
-        Directory.CreateDirectory(world);
-        using (var payload = new MemoryStream())
-        {
-            using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
-            { writer.Write(41); writer.Write("Campaign"); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(4242L); }
-            File.WriteAllBytes(Path.Combine(world, "Campaign.fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
-        }
-        File.WriteAllText(Path.Combine(world, "Campaign.db"), "fixture");
+        FakeInstalls.World(world);
         // This machine, as the detection reads it: Steam with Valheim Dedicated Server installed.
         var machine = new FakeMachine(windows ? "windows" : "linux") { SteamPath = windows ? @"C:\Steam" : null };
         string steam = windows ? @"C:\Steam" : "/home/tester/.local/share/Steam";
@@ -753,6 +821,28 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains("ValheimCLI files changed", Assert.Throws<InvalidDataException>(() =>
             before.RequireSameExceptRemovedMod(after, _rig.Parent)).Message);
     }
+
+    // A campaign's inputs as the tests write them: a ready lock for a mod, a registered character store, and the campaign's
+    // character object for a Windows client host.
+    private string Lock(string mod, string name)
+    {
+        var resolved = NativeDependencyResolver.Resolve(Request(mod));
+        Assert.True(resolved.Ready, string.Join("; ", resolved.Gaps.Select(gap => gap.Reason)));
+        string path = Path.Combine(_rig.Root, name + "-lock.json");
+        resolved.Write(path);
+        return path;
+    }
+    private string Store(string name, long id, string prefix = "")
+    {
+        string local = _rig.Write(prefix + "characters_local/" + name + ".fch", CharacterSaveReaderTests.Profile(playerId: id).File);
+        string store = Path.Combine(_rig.Root, (prefix + "registered-" + name).Replace('/', '-'));
+        DisposableCharacterStore.Create(store).Register(name, local);
+        return store;
+    }
+    private static object Character(string store, string registeredName, string fileName) => new
+    {
+        store, registeredName, fileName, charactersLocalDirectory = @"C:\save\characters_local", steamUserDataDirectory = @"C:\Steam\userdata",
+    };
 
     private NativeDependencyRequest Request(string mod) => new()
     {

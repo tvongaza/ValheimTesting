@@ -2,7 +2,7 @@
   <!--
     Source package: Adapter/*.cs are compiled INTO a mod's game-side test adapter (contentFiles, build action Compile),
     which references ValheimCLI, BepInEx (with HarmonyX) and the game (assembly_valheim, assembly_utils, UnityEngine,
-    UnityEngine.CoreModule, UnityEngine.PhysicsModule), so this project compiles nothing itself: those assemblies are never
+    UnityEngine.CoreModule, UnityEngine.UIModule, UnityEngine.ImageConversionModule), so this project compiles nothing itself: those assemblies are never
     in this repository or its CI. tests/Valheim.Testing.Adapter.CompileCheck compiles the sources against declared
     signatures instead. A development dependency, so it never flows to packages that reference the adapter.
   -->
@@ -12,7 +12,7 @@
     <IncludeBuildOutput>false</IncludeBuildOutput><DevelopmentDependency>true</DevelopmentDependency>
     <!-- NU5128: a source package has no lib/ folder by design. -->
     <NoWarn>$(NoWarn);NU5128</NoWarn>
-    <Version>0.1.0-preview.5</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Source-only helpers for a mod's game-side test adapter (a BepInEx plugin using ValheimCLI's extension API): registration once the API is ready, the owned-session identity capability the Valheim.Testing.Game runners check, zone and terrain fixture pieces, exact reflection, console aliases, a plugin-installed capability, a reply-field parser, a census of applied Harmony patches, a census of registered items, recipes, prefabs, build pieces and status effects, a flush that keeps quit-time plugin lines in BepInEx's disk log, and observations of global keys, live config entries, unresolved prefab hashes and saved dungeon rooms. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
+    <Version>0.1.0-preview.6</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Source-only helpers for a mod's game-side test adapter (a BepInEx plugin using ValheimCLI's extension API): registration once the API is ready, the owned-session identity capability the Valheim.Testing.Game runners check, a capped census of a zone's saved objects, exact reflection, a census of applied Harmony patches, a census of registered items, recipes, prefabs, build pieces and status effects, a flush that keeps quit-time plugin lines in BepInEx's disk log, and observations of global keys, live config entries, unresolved prefab hashes and saved dungeon rooms. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
     <PackageId>Valheim.Testing.Adapter</PackageId><PackageProjectUrl>https://github.com/tvongaza/ValheimTesting</PackageProjectUrl><RepositoryUrl>https://github.com/tvongaza/ValheimTesting.git</RepositoryUrl><RepositoryType>git</RepositoryType><PackageTags>valheim;modding;testing;bepinex;valheimcli</PackageTags>
   </PropertyGroup>
   <ItemGroup>

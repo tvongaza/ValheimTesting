@@ -72,8 +72,6 @@ namespace UnityEngine
     }
     public struct Rect { public Rect(float x, float y, float width, float height) { } }
     public sealed class WaitForSecondsRealtime { public WaitForSecondsRealtime(float time) { } }
-    public class Collider : Component { public bool Raycast(Ray ray, out RaycastHit hitInfo, float maxDistance) => throw null; }
-    public sealed class MeshCollider : Collider { }
     public struct Vector3
     {
         public float x, y, z;
@@ -85,8 +83,6 @@ namespace UnityEngine
         public static Quaternion identity => throw null;
         public Vector3 eulerAngles => throw null;
     }
-    public struct Ray { public Ray(Vector3 origin, Vector3 direction) => throw null; }
-    public struct RaycastHit { public Vector3 point => throw null; }
     public sealed class Time { public static float realtimeSinceStartup => throw null; }
     public enum FindObjectsInactive { Include, Exclude }
     public enum FindObjectsSortMode { None, InstanceID }
@@ -188,10 +184,8 @@ public class ZoneSystem : UnityEngine.MonoBehaviour
         public UnityEngine.Vector3 m_position;
     }
     public static ZoneSystem instance => throw null;
-    public UnityEngine.GameObject m_zonePrefab;
     public float m_zoneSize = 64f;
     public System.Collections.Generic.Dictionary<Vector2s, LocationInstance> m_locationInstances;
-    public static UnityEngine.Vector3 GetZonePos(Vector2s id) => throw null;
     public static Vector2s GetZone(UnityEngine.Vector3 point) => throw null;
     public bool IsZoneLoaded(Vector2s zoneID) => throw null;
     public System.Collections.Generic.List<string> GetGlobalKeys() => throw null;
@@ -254,7 +248,6 @@ public struct ZDOID { }
 public class ZDO
 {
     public ZDOID m_uid;
-    public bool IsOwner() => throw null;
     public int GetPrefab() => throw null;
     public UnityEngine.Vector3 GetPosition() => throw null;
     public int GetInt(string name, int defaultValue = 0) => throw null;
@@ -266,7 +259,6 @@ public class ZDO
 public class ZDOMan
 {
     public static ZDOMan instance => throw null;
-    public void DestroyZDO(ZDO zdo) => throw null;
     public void FindSectorObjects(Vector2s sector, SimulationDistance simulationDistance, System.Collections.Generic.List<ZDO> sectorObjects, System.Collections.Generic.List<ZDO> distantSectorObjects = null) => throw null;
 }
 public class ZNetView : UnityEngine.MonoBehaviour
@@ -274,9 +266,6 @@ public class ZNetView : UnityEngine.MonoBehaviour
     public bool m_distant;
     public ZDO GetZDO() => throw null;
     public bool IsValid() => throw null;
-    public bool IsOwner() => throw null;
-    public static void StartGhostInit() => throw null;
-    public static void FinishGhostInit() => throw null;
 }
 public class Player : UnityEngine.MonoBehaviour
 {
@@ -323,41 +312,8 @@ public class Game : UnityEngine.MonoBehaviour
     public static Game instance => throw null;
     public PlayerProfile GetPlayerProfile() => throw null;
 }
-public class WorldGenerator { public static WorldGenerator instance => throw null; }
-public class HeightmapBuilder
-{
-    public static HeightmapBuilder instance => throw null;
-    public bool IsTerrainReady(UnityEngine.Vector3 center, int width, float scale, bool distantLod, WorldGenerator worldGen) => throw null;
-}
-public class Heightmap : UnityEngine.MonoBehaviour
-{
-    public UnityEngine.GameObject m_terrainCompilerPrefab;
-    public int m_width = 32;
-    public float m_scale = 1f;
-    public bool IsDistantLod => throw null;
-    public void Regenerate() => throw null;
-    public bool GetWorldHeight(UnityEngine.Vector3 worldPos, out float height) => throw null;
-    public static Heightmap FindHeightmap(UnityEngine.Vector3 point) => throw null;
-}
-public class TerrainComp : UnityEngine.MonoBehaviour { public static TerrainComp FindTerrainCompiler(UnityEngine.Vector3 pos) => throw null; }
 public abstract class Terminal : UnityEngine.MonoBehaviour
 {
-    public class ConsoleEventArgs
-    {
-        public string[] Args;
-        public Terminal Context;
-        public int Length => throw null;
-        public string this[int i] => throw null;
-    }
-    public delegate object ConsoleEventFailable(ConsoleEventArgs args);
-    public delegate void ConsoleEvent(ConsoleEventArgs args);
-    public delegate System.Collections.Generic.List<string> ConsoleOptionsFetcher();
-    public class ConsoleCommand
-    {
-        public ConsoleCommand(string command, string description, ConsoleEventFailable action, bool isCheat = false, bool isNetwork = false, bool onlyServer = false, bool isSecret = false, bool allowInDevBuild = false, bool hideBehindDevCommands = false, ConsoleOptionsFetcher optionsFetcher = null, bool alwaysRefreshTabOptions = false, bool remoteCommand = false, bool onlyAdmin = false) => throw null;
-        public ConsoleCommand(string command, string description, ConsoleEvent action, bool isCheat = false, bool isNetwork = false, bool onlyServer = false, bool isSecret = false, bool allowInDevBuild = false, bool hideBehindDevCommands = false, ConsoleOptionsFetcher optionsFetcher = null, bool alwaysRefreshTabOptions = false, bool remoteCommand = false, bool onlyAdmin = false) => throw null;
-    }
-    public void AddString(string text) => throw null;
 }
 public class Console : Terminal { public static Console instance => throw null; public void updateCommandList() => throw null; }
 
@@ -401,15 +357,5 @@ namespace valheimCLI.Extensions
     public sealed class ExtensionRegistry
     {
         public ExtensionRegistration Register(string id, string version, int apiVersion, params ExtensionCommand[] commands) => throw null!;
-        public System.Collections.Generic.IReadOnlyList<ExtensionCommand> Commands(ExtensionRegistration owner) => throw null!;
-    }
-    public static class ExtensionHost
-    {
-        public static void Execute(ExtensionRegistry registry, string path, string[] arguments, System.Action<string> output) => throw null!;
-    }
-    public sealed class OwnedCommandSet<T> : System.IDisposable where T : class
-    {
-        public static OwnedCommandSet<T> Register(System.Collections.Generic.IDictionary<string, T> table, System.Action register) => throw null!;
-        public void Dispose() => throw null!;
     }
 }

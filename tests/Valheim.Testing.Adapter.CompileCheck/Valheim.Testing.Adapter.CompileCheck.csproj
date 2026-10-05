@@ -15,7 +15,6 @@
     <!-- Package advisories are not the adapter source's warnings; they must not fail this check. -->
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <DefineConstants>$(DefineConstants);VALHEIM_TESTING_REVIEW_CLIP</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/Valheim.Testing.Adapter/Adapter/*.cs" LinkBase="Adapter" />

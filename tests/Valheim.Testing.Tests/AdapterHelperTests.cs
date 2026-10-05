@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Reflection;
 using Valheim.Testing.Adapter;
 using Xunit;
@@ -63,30 +62,6 @@ public class AdapterHelperTests
         Assert.Equal("AdapterHelperTests+Derived::Save(System.Boolean)", Members.Describe(Members.Method(typeof(Derived), "Save", typeof(bool))));
         Assert.Equal("System.String::Concat(System.String,System.String)", Members.Describe(typeof(string).GetMethod("Concat", [typeof(string), typeof(string)])!));
         Assert.Equal("System.Collections.Generic.List`1[System.Int32]::Add(System.Int32)", Members.Describe(typeof(List<int>).GetMethod("Add")!));
-    }
-
-    [Fact] public void ReplyFieldsKeepQuotedSpacesAndIgnoreOtherWords()
-    {
-        var fields = KeyValueReply.Parse("MYMOD_STATUS result=FIXED port='Port With Spaces' cost=20 empty= note=a=b");
-        Assert.Equal("FIXED", fields["result"]); Assert.Equal("Port With Spaces", fields["port"]);
-        Assert.Equal("20", fields["cost"]); Assert.Equal("", fields["empty"]); Assert.Equal("a=b", fields["note"]);
-        Assert.Equal(5, fields.Count);
-    }
-    [Fact] public void ARepeatedFieldIsAnErrorNotAChoice() =>
-        Assert.Throws<FormatException>(() => KeyValueReply.Parse("result=BUG_PRESENT result=FIXED"));
-    [Fact] public void OnlyOneMatchingReplyAndNoErrorLineCountsAsAnAnswer()
-    {
-        Assert.Equal("2", KeyValueReply.Single(["noise", "OK: MYMOD_STATUS ports=2"], "OK: MYMOD_STATUS ")["ports"]);
-        Assert.Throws<InvalidOperationException>(() => KeyValueReply.Single([], "OK: MYMOD_STATUS "));
-        Assert.Throws<InvalidOperationException>(() => KeyValueReply.Single(["OK: MYMOD_STATUS a=1", "OK: MYMOD_STATUS a=2"], "OK: MYMOD_STATUS "));
-        var error = Assert.Throws<InvalidOperationException>(() => KeyValueReply.Single(["ERROR: no world", "OK: MYMOD_STATUS a=1"], "OK: MYMOD_STATUS "));
-        Assert.Equal("ERROR: no world", error.Message);
-    }
-    [Fact] public void ReplyFieldsDoNotDependOnTheCurrentCulture()
-    {
-        var old = CultureInfo.CurrentCulture;
-        try { CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("tr-TR"); Assert.Equal("1.5", KeyValueReply.Parse("I=1.5")["I"]); }
-        finally { CultureInfo.CurrentCulture = old; }
     }
 
     [Fact] public void FixtureCommandsRefuseUnlessTheOwnedSessionTurnedThemOn()

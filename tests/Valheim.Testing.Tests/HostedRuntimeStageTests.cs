@@ -68,6 +68,17 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(listing.Files.ContainsKey("doorstop_libs/libdoorstop_x64.dylib"));
     }
 
+    // The Windows conflicting-use check for real: it runs in Windows PowerShell and, with no Valheim here, finds the host idle
+    // for a client session and for an owned runtime path alike.
+    [Fact] public async Task WindowsProcessCheckRunsAndFindsAnIdleHostIdle()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        if (System.Diagnostics.Process.GetProcessesByName("valheim").Length + System.Diagnostics.Process.GetProcessesByName("valheim_server").Length != 0) return; // a station with a game up
+        var host = new LocalGameHost("windows-process", HostShell.WindowsPowerShell);
+        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtime: Path.Combine(_root, "runtime"), clientSession: true);
+        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtime: "", clientSession: false);
+    }
+
     // Executes the actual bash copy, shipment, listing and apply scripts on macOS. A fake host cannot catch BSD-tool
     // option mismatches, which have repeatedly consumed native-test setup time.
     [Fact] public async Task MacShellStagesASelectedClientWithoutRunningTheGame()

@@ -161,8 +161,13 @@ public static class HostServer
     /// boot directory there. Returns once the server process exists, not when it is ready. A reply lost past
     /// <paramref name="timeout"/> is an unknown outcome: a server may be running, and the exception names its boot directory.
     /// </summary>
-    public static async Task<HostServerProcess> StartAsync(IGameHost host, HostServerLaunch launch, string bootDirectory, TimeSpan timeout,
+    public static Task<HostServerProcess> StartAsync(IGameHost host, HostServerLaunch launch, string bootDirectory, TimeSpan timeout,
         IReadOnlyList<string>? logs = null, string? evidence = null, CancellationToken cancellation = default)
+        => StartAsync(host, launch, bootDirectory, timeout, logs, evidence, logonSeams: null, cancellation);
+
+    // logonSeams: the test seams of Get-VtServerLogon (elevated, session, desktops), so a test forces the interactive-token task.
+    internal static async Task<HostServerProcess> StartAsync(IGameHost host, HostServerLaunch launch, string bootDirectory, TimeSpan timeout,
+        IReadOnlyList<string>? logs, string? evidence, IReadOnlyDictionary<string, string>? logonSeams, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
@@ -178,14 +183,17 @@ public static class HostServer
                 throw new ArgumentException($"'{log}' is not a path inside the runtime.", nameof(logs));
         if (evidence != null && (Directory.Exists(evidence) || File.Exists(evidence))) throw new ArgumentException("The evidence directory must be new: " + evidence, nameof(evidence));
 
-        var result = await host.RunAsync(launch.Windows ? HostServerScripts.WindowsStart : HostServerScripts.Start, new Dictionary<string, string>
+        var variables = new Dictionary<string, string>
         {
             ["runtime"] = launch.Runtime, ["exe"] = launch.Windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
             ["spec"] = launch.Windows ? launch.WindowsSpec() : launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
             ["task"] = "VT-Server-" + Guid.NewGuid().ToString("N"), ["launcher"] = HostServerScripts.WindowsLauncher,
-        }, timeout, cancellation).ConfigureAwait(false);
+        };
+        foreach (var (name, value) in logonSeams ?? new Dictionary<string, string>())
+            variables.Add(name is "elevated" or "session" or "desktops" ? name : throw new ArgumentException("Not a logon seam: " + name, nameof(logonSeams)), value);
+        var result = await host.RunAsync(launch.Windows ? HostServerScripts.WindowsStart : HostServerScripts.Start, variables, timeout, cancellation).ConfigureAwait(false);
         if (!result.Succeeded)
             throw new HostOperationException($"Starting the dedicated server on {host.Name} (boot directory {directory}); a server may have started, see {directory}/pid", result);
         string? verdict = InteractiveClient.Line(result.Stdout, "VT-SERVER ");
@@ -460,18 +468,40 @@ internal static class HostServerScripts
             $definition.Settings.ExecutionTimeLimit = 'PT5M'
             $action = $definition.Actions.Create(0)
             $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-            $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $launcherFile + '" "' + $dir + '"'
+            # The launcher finds its directory itself ($PSScriptRoot): the only argument is the quoted script path.
+            $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $launcherFile + '"'
             $action.WorkingDirectory = $dir
             $registered = $folder.RegisterTaskDefinition($task, $definition, 2, $definition.Principal.UserId, $null, $logonType)
             try {
                 [void]$registered.Run($null)
                 $deadline = [DateTime]::UtcNow.AddSeconds([double]$seconds)
                 $watcher = New-Object IO.FileSystemWatcher -ArgumentList $dir
+                $running = $false
+                $unread = $null
                 try {
                     while ($null -eq $verdict) {
-                        if ([IO.File]::Exists($pidFile)) { $verdict = 'VT-SERVER started ' + [IO.File]::ReadAllText($pidFile, $utf8).Trim(); break }
-                        if ([IO.File]::Exists($errorFile)) { $verdict = 'VT-SERVER failed ' + ([IO.File]::ReadAllText($errorFile, $utf8) -replace '\s+', ' ').Trim(); break }
-                        if ([DateTime]::UtcNow -ge $deadline) { $verdict = 'VT-SERVER failed no process within ' + $seconds + ' s'; break }
+                        # Both files are moved into place complete, but another process (an antivirus scan of the new file) can
+                        # hold one for a moment: a file that cannot be read yet is read again on the next look.
+                        $started = $null; $reported = $null
+                        try { if ([IO.File]::Exists($pidFile)) { $started = [IO.File]::ReadAllText($pidFile, $utf8) } } catch { $unread = $_.Exception.Message }
+                        if ($null -ne $started) { $verdict = 'VT-SERVER started ' + $started.Trim(); break }
+                        try { if ([IO.File]::Exists($errorFile)) { $reported = [IO.File]::ReadAllText($errorFile, $utf8) } } catch { $unread = $_.Exception.Message }
+                        if ($null -ne $reported) { $verdict = 'VT-SERVER failed the launcher reported: ' + ($reported -replace '\s+', ' ').Trim(); break }
+                        # The task's own account of itself: a task that ran and ended without the launcher's file never reached
+                        # the launcher, or the launcher died before its catch, and the result code says how.
+                        $state = $registered.State
+                        $result = '0x{0:X8}' -f $registered.LastTaskResult
+                        if ($state -eq 4) { $running = $true }
+                        elseif (($running -or (Test-VtTaskEnded $state $registered.LastTaskResult)) -and -not [IO.File]::Exists($pidFile) -and -not [IO.File]::Exists($errorFile)) {
+                            $verdict = 'VT-SERVER failed the task ended without the launcher starting the server (task result ' + $result + ')'
+                            if (-not [IO.File]::Exists((Join-Path $dir 'launcher.started'))) { $verdict += '; the launcher never ran' }
+                            break
+                        }
+                        if ([DateTime]::UtcNow -ge $deadline) {
+                            $verdict = 'VT-SERVER failed no process within ' + $seconds + ' s (task state ' + $state + ', result ' + $result + ')'
+                            if ($unread) { $verdict += '; the launcher''s file could not be read: ' + ($unread -replace '\s+', ' ').Trim() }
+                            break
+                        }
                         [void]$watcher.WaitForChanged([IO.WatcherChangeTypes]::All, 500)
                     }
                 } finally { $watcher.Dispose() }
@@ -484,11 +514,15 @@ internal static class HostServerScripts
         $verdict
         """).ReplaceLineEndings("\n");
 
+    // Runs in the task's session (Windows PowerShell 5.1). Its directory is its own ($PSScriptRoot), never an argument: a path
+    // with spaces, as a user's profile has, is then only ever the quoted -File path.
     public static readonly string WindowsLauncher = """
-        param([string]$dir)
         $ErrorActionPreference = 'Stop'
+        $dir = $PSScriptRoot
         $utf8 = New-Object Text.UTF8Encoding $false
         try {
+            # Evidence that the task reached this script, and where: its process and session.
+            [IO.File]::WriteAllText((Join-Path $dir 'launcher.started'), [string]$PID + ' session ' + (Get-Process -Id $PID).SessionId, $utf8)
             $start = New-Object Diagnostics.ProcessStartInfo
             $start.UseShellExecute = $false
             $start.CreateNoWindow = $false

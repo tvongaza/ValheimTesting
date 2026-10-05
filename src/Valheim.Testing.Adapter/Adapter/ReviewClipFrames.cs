@@ -1,6 +1,5 @@
 // Source compiled into a mod's game-side test adapter. This is a scene-only frame source for a bounded private clip,
 // not a desktop recorder. The host owns fetching, validation and deletion after a failed run.
-#if VALHEIM_TESTING_REVIEW_CLIP
 #nullable enable
 using System;
 using System.Collections;
@@ -161,4 +160,3 @@ namespace Valheim.Testing.Adapter
             c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
     }
 }
-#endif
