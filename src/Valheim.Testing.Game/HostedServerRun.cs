@@ -184,9 +184,10 @@ internal sealed class HostedServerRun
         }
         await report.StepAsync(StepPhase.Setup, verified ? "copy and verify pinned runtime on the server host" : "copy unpinned runtime on the server host as found", async () =>
         {
-            await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, Long, cancellation).ConfigureAwait(false);
+            // Steam's own runtime output in the install (logs/) is not the runtime's: the copy leaves it out, and the pins never count it.
+            await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, Long, HostInstall.ServerRuntimeSkips, cancellation).ConfigureAwait(false);
             _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, Long, null, cancellation).ConfigureAwait(false);
-            if (verified) HostInstall.RequireSame(plan.Runtime.Sha256, _runtime, "runtime copy");
+            if (verified) HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostInstall.ServerRuntimeSkips, _runtime.Names), _runtime, "runtime copy");
         }).ConfigureAwait(false);
     }
 
@@ -274,7 +275,10 @@ internal sealed class HostedServerRun
             string local = Path.Combine(run.Output, "boot-" + n), bootDirectory = HostInstall.Join(RunDirectory, "boot-" + n);
             HostServerProcess process;
             // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
-            JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory)), run.Cancellation).GetAwaiter().GetResult();
+            // With the command line the server will have, so its pid file alone proves it the run's (#257).
+            string expected = launch.CommandLineSha256();
+            JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
+                ("expectedCommandLineSha256", expected)), run.Cancellation).GetAwaiter().GetResult();
             try { process = HostServer.StartAsync(Host, launch, bootDirectory, Quick, [BepInExLog, UnityLog], local, run.Cancellation).GetAwaiter().GetResult(); }
             catch (Exception error) when (UnknownOutcome(error) != null)
             {
@@ -298,6 +302,7 @@ internal sealed class HostedServerRun
             catch { process.Stop(TimeSpan.FromSeconds(15)); throw; }
             // The command line's hash is the third fact env recover requires before it stops the process (#257 Q2).
             string commandLine = HostProcessProbe.CommandLineAsync(Host, process.Id, process.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
+            WarnUnexpectedCommandLine(Host, process.Id, expected, commandLine);
             NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", process.Id.ToString(CultureInfo.InvariantCulture)),
                 ("startIdentity", process.StartIdentity), ("commandLineSha256", commandLine), ("bootDirectory", bootDirectory),
                 ("taskLogon", process.TaskLogon ?? ""))).GetAwaiter().GetResult();
@@ -429,11 +434,14 @@ internal sealed class HostedServerRun
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
-                    JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory)), cancellation).GetAwaiter().GetResult();
+                    string expected = launch.CommandLineSha256();
+                    JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),
+                        ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
                     var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
                         : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
                     var client = started.GetAwaiter().GetResult();
                     string commandLine = HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
+                    WarnUnexpectedCommandLine(host, client.Id, expected, commandLine);
                     NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
                         ("startIdentity", client.StartIdentity), ("commandLineSha256", commandLine), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
                     var process = new HostedClientProcess(client, host, role.Install, tunnel, local);
@@ -600,6 +608,15 @@ internal sealed class HostedServerRun
     {
         var result = await held.ReleaseAsync().ConfigureAwait(false);
         if (result.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(result);
+    }
+
+    // The started game's command line should be the one its launch journalled: where it is not, a run interrupted before its
+    // process was journalled could not prove that process its own from the pid file (env status leaves it unrecoverable).
+    private static void WarnUnexpectedCommandLine(IGameHost host, int pid, string expected, string read)
+    {
+        if (read.Length != 0 && !string.Equals(read, expected, StringComparison.OrdinalIgnoreCase))
+            Console.Error.WriteLine($"Warning: process {pid} on {host.Name} runs another command line than its launch journalled (SHA-256 {read}, expected {expected}); " +
+                "had the run been interrupted before journalling it, env recover could not have proven it the run's from its pid file.");
     }
 
     /// <summary>

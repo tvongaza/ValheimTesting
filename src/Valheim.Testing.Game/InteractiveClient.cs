@@ -58,8 +58,8 @@ public sealed class LinuxDisplay
 /// <summary>
 /// One BepInEx game client launch for an install on another machine: what <see cref="ClientLaunch"/> builds for a Windows or
 /// Linux install, as data. The install's files are checked on the host when the client starts
-/// (<see cref="RequiredFiles"/>), not here. Environment values are evidence (they are written to the launch directory); a
-/// secret is named in <see cref="SecretVariables"/> instead, and its value is read from this process's environment at launch.
+/// (<see cref="RequiredFiles"/>), not here. Environment values are not secret (on Windows they pass through a launch file the
+/// launcher deletes once read); a secret is named in <see cref="SecretVariables"/> instead, and its value is read from this process's environment at launch.
 /// </summary>
 public sealed class HostClientLaunch
 {
@@ -161,9 +161,13 @@ public sealed class HostClientLaunch
         return new HostClientLaunch(platform, root, executable, passed, set, prepended, unset, secrets, required);
     }
 
+    /// <summary>The hash of the command line the started game has (<see cref="HostProcessProbe.ExpectedCommandLineSha256"/>): the Linux start runs <c>$install/$exe</c>.</summary>
+    internal string CommandLineSha256() => HostProcessProbe.ExpectedCommandLineSha256(Platform == ClientPlatform.Windows,
+        Platform == ClientPlatform.Windows ? Executable : Install + "/" + ClientLaunch.LinuxExecutable, Arguments);
+
     /// <summary>
-    /// The launch as the host scripts read it: one line per item, <c>kind base64(UTF-8)</c>. It holds no secret values; it is kept in
-    /// the launch directory as evidence of what was started.
+    /// The launch as the host scripts read it: one line per item, <c>kind base64(UTF-8)</c>. It holds no secret values. The Windows
+    /// launcher deletes its copy in the launch directory once it has read it, as the server's does; Linux keeps it in memory only.
     /// </summary>
     internal string Spec()
     {
@@ -206,8 +210,8 @@ public static class InteractiveClient
     /// <summary>
     /// Starts <paramref name="launch"/> in <paramref name="host"/>'s desktop session and returns the game's process, identified by
     /// process ID and start time. <paramref name="launchDirectory"/> is a new absolute directory on the host for this launch's evidence:
-    /// the launch spec (no secrets), the recorded process identity, and the game's standard output (Linux) or the launcher's error
-    /// (Windows). Secret variables are read here first; a missing one is refused before anything runs. Their values never enter the
+    /// the recorded process identity (its <c>pid</c> file), and the game's standard output (Linux) or the launcher's error (Windows);
+    /// the launch spec is not kept there. Secret variables are read here first; a missing one is refused before anything runs. Their values never enter the
     /// composed script (which the host's wrapper writes to a temporary file): they follow it on standard input, the wrapper keeps
     /// them in memory, and they reach only the game's environment (on Windows through a file in the user's temporary directory
     /// that the launcher deletes as it reads it). They are redacted from every reply. It returns when the game process exists, not
@@ -633,6 +637,7 @@ internal static class InteractiveScripts
             }
         } finally {
             if ($secretFile -and [IO.File]::Exists($secretFile)) { [IO.File]::Delete($secretFile) }
+            if ([IO.File]::Exists($specFile)) { [IO.File]::Delete($specFile) }
         }
         $verdict
         """).ReplaceLineEndings("\n");
@@ -659,6 +664,7 @@ internal static class InteractiveScripts
                 elseif ($kind -ceq 'env') { $at = $text.IndexOf('='); $start.Environment[$text.Substring(0, $at)] = $text.Substring($at + 1) }
                 elseif ($kind -ceq 'secrets') { $secretFile = $text }
             }
+            [IO.File]::Delete((Join-Path $dir 'spec.txt'))
             if ($secretFile) {
                 $lines = [IO.File]::ReadAllLines($secretFile, $utf8)
                 [IO.File]::Delete($secretFile)
@@ -724,7 +730,8 @@ internal static class InteractiveScripts
     // (base64 NAME=value tokens, space separated), which the wrapper keeps in memory and this script clears at once. Steam is a process named
     // steam running as this user, on the display when its environment says. The game runs under a small recorder in its own
     // session (setsid), so the SSH session's end does not reach it; the recorder writes the game's PID (env execs the game in
-    // place, so it is the game's), then its exit code.
+    // place, so it is the game's) and start identity to the pid file, which is all an interrupted run's recovery has to go on
+    // (#257), then its exit code.
     public static readonly string LinuxStart = ("set -u\nsecrets=${VT_SECRETS:-}\nunset VT_SECRETS\n" + LinuxStarted + "\n" + """
         if [ "$(uname -s)" != Linux ]; then echo "VT-INTERACTIVE unsupported this host runs $(uname -s); a Linux client needs a Linux host"; exit 0; fi
         while IFS= read -r f; do
@@ -760,7 +767,6 @@ internal static class InteractiveScripts
         if [ -z "$steam" ]; then echo "VT-INTERACTIVE no-steam no Steam client (a process named steam) runs as $user on display $display"; exit 0; fi
 
         mkdir -p -- "$(dirname -- "$dir")" && mkdir -- "$dir" || exit 3
-        printf '%s' "$spec" > "$dir/spec.txt" || exit 3
         decode() { printf '%s' "$1" | base64 -d && printf x; }
         export DISPLAY="$display"
         if [ -n "$wayland" ]; then export WAYLAND_DISPLAY="$wayland"; fi
@@ -790,13 +796,13 @@ internal static class InteractiveScripts
             export "${text%x}"
         done
         cd -- "$install" || exit 3
-        setsid bash -c 'p=$1; x=$2; shift 2; "$@" & g=$!; printf "%s\n" "$g" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
+        setsid bash -c 'p=$1; x=$2; shift 2; "$@" & g=$!; s=$(cat "/proc/$g/stat" 2> /dev/null); s=${s##*) }; set -- $s; printf "%s %s\n" "$g" "${20:-}" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
             vt-client "$dir/pid" "$dir/exit" env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$install/$exe" ${args[@]+"${args[@]}"} \
             > "$dir/game.stdout.log" 2> "$dir/game.stderr.log" < /dev/null &
         i=0
         while [ ! -s "$dir/pid" ] && [ "$i" -lt $((seconds * 10)) ]; do sleep 0.1; i=$((i + 1)); done
         if [ ! -s "$dir/pid" ]; then echo "VT-INTERACTIVE failed no game process within $seconds s"; exit 0; fi
-        game=$(cat -- "$dir/pid")
+        read -r game _ < "$dir/pid"
         start=$(started "$game")
         if [ -z "$start" ]; then echo "VT-INTERACTIVE failed the game exited at once: $(tail -c 300 "$dir/game.stderr.log" 2> /dev/null | tr '\n' ' ')"; exit 0; fi
         echo "VT-INTERACTIVE started $game $start"

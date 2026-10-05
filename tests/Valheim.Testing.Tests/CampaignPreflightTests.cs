@@ -96,6 +96,8 @@ public sealed class CampaignPreflightTests : IDisposable
     [Fact]
     public async Task EnvPreflightWithoutACampaignReportsTheInventoryAndWhatIsMissing()
     {
+        // This machine's journal is this test's own: runs other test processes left in the shared one never decide it.
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
         using var output = new StringWriter();
         using var error = new StringWriter();
         Assert.Equal(3, await EnvCommand.RunAsync(["preflight"], output, error));
@@ -119,6 +121,47 @@ public sealed class CampaignPreflightTests : IDisposable
         // An empty file is refused, not a crash.
         File.WriteAllText(local, "null");
         Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", local], new StringWriter(), new StringWriter()));
+    }
+
+    // #257: a bare preflight reads this machine's journal (through its own shell) and refuses while a run of another process
+    // left something there unrecovered, in the campaign check's words; once that run is over, the inventory is eligible again.
+    [Fact]
+    public async Task EnvPreflightWithoutACampaignRefusesWhileThisMachinesJournalHoldsAnUnrecoveredRun()
+    {
+        var mirror = new FakeServerHost("mirror", Path.Combine(_root, "machine"));
+        using var journal = RunJournal.UseLocalDirectory(mirror.Local(RunJournalStatusTests.Journal));
+        RunJournalStatusTests.Line(mirror, "run-left", "server", RunJournalStatusTests.Gone, JournalEntry.CopyIntended, ("runtime", "/srv/runs/left/runtime"));
+        string inventory = Inventory();
+
+        using var refused = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], refused, new StringWriter()));
+        Assert.Contains("REFUSED this-machine run journal: run run-left left 1 thing(s) on this-machine (never journalled its end; its runner is gone; " +
+            "it left what is provably its own); see valheim-test env status, then valheim-test env recover --run run-left", refused.ToString());
+        Assert.Contains("REFUSED: a run on this machine is going or was left unrecovered", refused.ToString());
+        Assert.DoesNotContain("ELIGIBLE", refused.ToString());
+        using var json = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", inventory, "--json"], json, new StringWriter()));
+        using (var document = JsonDocument.Parse(json.ToString()))
+        {
+            Assert.False(document.RootElement.GetProperty("Ready").GetBoolean());
+            Assert.Equal("run journal", Assert.Single(document.RootElement.GetProperty("Problems").EnumerateArray()).GetProperty("Input").GetString());
+        }
+
+        RunJournalStatusTests.Line(mirror, "run-left", "server", RunJournalStatusTests.Gone, JournalEntry.CopyRetired, ("runtime", "/srv/runs/left/runtime"));
+        RunJournalStatusTests.Line(mirror, "run-left", "run", RunJournalStatusTests.Gone, JournalEntry.RunEnded, ("state", "passed"), ("cleanupVerified", "true"));
+        // A run of another machine that used this one only as its lease host, and holds nothing here now, is no conflict (as in a
+        // campaign's check); one that left a copy here may still be going and is.
+        var elsewhere = new JournalRunner("another-machine-" + Guid.NewGuid().ToString("N")[..6], 4242, DateTime.UtcNow.AddHours(-1));
+        RunJournalStatusTests.Line(mirror, "run-lease-host", "player", elsewhere, JournalEntry.LeaseReleased, ("account", "alt1"), ("owner", "o"));
+        RunJournalStatusTests.Line(mirror, "run-uses-here", "server", elsewhere, JournalEntry.CopyIntended, ("runtime", "/srv/runs/elsewhere/runtime"));
+        using var elsewhereUsed = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], elsewhereUsed, new StringWriter()));
+        Assert.Contains("run run-uses-here on this-machine may still be going", elsewhereUsed.ToString());
+        Assert.DoesNotContain("run-lease-host", elsewhereUsed.ToString());
+        RunJournalStatusTests.Line(mirror, "run-uses-here", "server", elsewhere, JournalEntry.CopyRetired, ("runtime", "/srv/runs/elsewhere/runtime"));
+        using var eligible = new StringWriter();
+        Assert.Equal(0, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], eligible, new StringWriter()));
+        Assert.Contains("ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered.", eligible.ToString());
     }
 
     // A campaign that leaves out its inventory is assigned on this machine; without Steam that is refused with what was tried.

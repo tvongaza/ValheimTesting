@@ -195,6 +195,15 @@ public sealed class HostServerTests : IDisposable
             using var child = System.Diagnostics.Process.GetProcessById(process.Id);
             Assert.False(child.HasExited);
             Assert.True(File.Exists(Path.Combine(boot, "launcher.started")), "the launcher records that the task reached it");
+            // #257: the command line the run journals before the start is the one Windows PowerShell's Process.Start gave the
+            // server, and the boot's pid file names it, through the real pid-file read: a run killed in between can prove it its own.
+            var probed = (await HostProcessProbe.ProbeAsync(host, [(process.Id, process.StartIdentity)], TimeSpan.FromSeconds(30)))[(process.Id, process.StartIdentity)];
+            Assert.Equal(ProbedState.Same, probed.State);
+            Assert.Equal(launch.CommandLineSha256(), probed.CommandLineSha256);
+            var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [boot], TimeSpan.FromSeconds(30), default));
+            Assert.Equal((RunJournalStatus.PidFileState.Found, process.Id, process.StartIdentity), (pidFile.State, pidFile.Pid, pidFile.StartIdentity));
+            Assert.Equal(RunJournalStatus.PidFileState.Missing, Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [Path.Combine(root, "no boot")], TimeSpan.FromSeconds(30), default)).State);
+            Assert.False(File.Exists(Path.Combine(boot, "spec.txt")));
             // A wrong start identity must not kill a live process with this PID.
             string foreignBoot = Path.Combine(root, "foreign boot");
             Directory.CreateDirectory(foreignBoot);

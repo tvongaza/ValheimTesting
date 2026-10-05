@@ -258,6 +258,8 @@ public static class PinnedServerRun
         string output = Path.GetFullPath(outputArgument);
         bool ownOutput = false, pinned = true, definite = false, unknownOutcome = false;
         string? unknown = null, abandoned = null;
+        // A run with its own id (a campaign's, a hosted run's) journals this machine's copies under it too: one journal run per run.
+        IDisposable? journalRun = null;
         var phase = StepPhase.Preflight; // Where a failure outside any step happened: before copying, until the scenario, or in it.
         // A host operation with an unknown outcome is not a failure of the test; anything else is.
         void Classify(Exception error) { if (HostedServerRun.UnknownOutcome(error) is { } why) unknown ??= why; else definite = true; }
@@ -283,6 +285,7 @@ public static class PinnedServerRun
                 // One run id for the whole campaign: its prepared installs, its journal and the server run's directory.
                 string campaignRunId = RunJournal.NewRunId();
                 report.Provenance["runId"] = campaignRunId;
+                journalRun = RunJournal.UseRun(campaignRunId);
                 report.Step(StepPhase.Preflight, "campaign inputs and actor assignment", () =>
                 {
                     inspection = HostedCampaignPreparation.InspectInputs(manifestFile);
@@ -321,6 +324,7 @@ public static class PinnedServerRun
             {
                 // The runtime is the server host's install, copied and checked there; nothing local is read for it.
                 hosted = HostedServerRun.Create(environment, plan, options.Name, options.HostSeams, prepared: prepared != null, prepared?.Journal.RunId);
+                if (RunJournal.ThisProcess.RunId != hosted.RunId) { journalRun?.Dispose(); journalRun = RunJournal.UseRun(hosted.RunId); }
                 // A client's lost Steam account lease stops that client, then the run, as Ctrl+C would.
                 hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };
                 hosted.Record(report.Provenance);
@@ -457,6 +461,9 @@ public static class PinnedServerRun
                 catch (Exception error) { Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message); definite = true; } // Recorded as its failed step.
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
+            // The run lets go of this machine's copies before its end is journalled, so the end stays the run's last line: the
+            // copies it keeps (their owner records go; see OwnedCopies) are journalled as kept or handed over first.
+            runtime?.Dispose(); world?.Dispose();
             // The journal's last word on each host the campaign prepared: how the run ended and whether its cleanup was proven, or
             // that its cleanup was abandoned, which leaves the run for env recover (it never journals an end it did not reach).
             abandoned = cancellation.Abandoned;
@@ -470,8 +477,7 @@ public static class PinnedServerRun
                     catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the run's end on {hostName}: {error.Message}"); }
             else if (hosted != null)
                 await hosted.JournalEndAsync(last).ConfigureAwait(false);
-            // The run ends here: it no longer holds the copies it keeps (their owner records go; see OwnedCopies).
-            runtime?.Dispose(); world?.Dispose();
+            journalRun?.Dispose();
             if (ownOutput)
             {
                 long bytes = DiskSpace.DirectoryBytes(output);

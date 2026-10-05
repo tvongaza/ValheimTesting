@@ -103,6 +103,9 @@ public sealed class HostServerLaunch
         return new HostServerLaunch(root, passed, set, prepended);
     }
 
+    /// <summary>The hash of the command line the started server has (<see cref="HostProcessProbe.ExpectedCommandLineSha256"/>).</summary>
+    internal string CommandLineSha256() => HostProcessProbe.ExpectedCommandLineSha256(Windows, Executable, Arguments);
+
     /// <summary>The launch as the start script reads it: one line per item, <c>kind base64(UTF-8)</c>. Never written to disk: arguments may hold a server password.</summary>
     internal string Spec()
     {
@@ -571,8 +574,8 @@ internal static class HostServerScripts
         """;
 
     // Variables: runtime, exe, files, dir, spec, logs, seconds, crossplay, libraries. A crossplay launch first proves the game's
-    // libparty.so loads (CrossplayLibraryScripts), and otherwise replies with that check's lines and "libraries". The recorder hands the server's PID back through a FIFO the
-    // script already holds open, so the start waits for that event (bounded by seconds) rather than looking for a file; the
+    // libparty.so loads (CrossplayLibraryScripts), and otherwise replies with that check's lines and "libraries". The recorder writes the server's PID and start identity to
+    // the boot's pid file (what an interrupted run's recovery reads, #257) and hands the PID back through a FIFO the script already holds open, so the start waits for that event (bounded by seconds) rather than looking for a file; the
     // FIFO is opened read-write at both ends, so neither side can block on a missing partner. The server's own descriptors
     // are only the logs and /dev/null. Nothing here is written to disk but the evidence files: arguments may hold a password.
     public static readonly string Start = ("set -u\n" + Started + "\n" + CrossplayLibraryScripts.Body + "\n" + """
@@ -615,7 +618,7 @@ internal static class HostServerScripts
         mkfifo -m 600 -- "$dir/started" || exit 3
         exec 3<> "$dir/started"
         cd -- "$runtime" || exit 3
-        setsid bash -c 'f=$1; p=$2; x=$3; shift 3; exec 4<> "$f"; "$@" 4>&- & g=$!; printf "%s\n" "$g" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; printf "%s\n" "$g" >&4; exec 4>&-; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
+        setsid bash -c 'f=$1; p=$2; x=$3; shift 3; exec 4<> "$f"; "$@" 4>&- & g=$!; s=$(cat "/proc/$g/stat" 2> /dev/null); s=${s##*) }; set -- $s; printf "%s %s\n" "$g" "${20:-}" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; printf "%s\n" "$g" >&4; exec 4>&-; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
             vt-server "$dir/started" "$dir/pid" "$dir/exit" env ${signals[@]+"${signals[@]}"} ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"} \
             > "$dir/stdout.log" 2> "$dir/stderr.log" < /dev/null 3<&- &
         game=

@@ -72,6 +72,9 @@ internal static class HostServerChecks
             {
                 string line = (await host.WaitForLogAsync(runtime + "/BepInEx/LogOutput.log", 0, StartupEvents.CliListening, StartupEvents.StartupFailures, Generous)).EnsureMatched();
                 Assert.EndsWith("this boot", line);
+                // #257: the boot's pid file names the server by ID and start identity, as an interrupted run's recovery reads it.
+                var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [root + "/run/boot-1"], Generous, default));
+                Assert.Equal((RunJournalStatus.PidFileState.Found, process.Id, process.StartIdentity), (pidFile.State, pidFile.Pid, pidFile.StartIdentity));
                 await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(host, launch, root + "/run/boot-1", Generous));
             }
             catch
