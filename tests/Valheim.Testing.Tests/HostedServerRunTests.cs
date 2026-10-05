@@ -31,6 +31,8 @@ internal sealed class FakeServerHost : IGameHost
     public int TunnelPort { get; }
     public List<(string Script, IReadOnlyDictionary<string, string> Variables)> Runs { get; } = [];
     public List<string> Claims { get; } = [];
+    /// <summary>The journal kind whose append this host refuses (a full disk), or null.</summary>
+    public string? JournalFailsFor { get; set; }
     public List<string> Releases { get; } = [];
     /// <summary>Another run's claimant holding the lock.</summary>
     public string? HeldBy { get; set; }
@@ -228,6 +230,8 @@ internal sealed class FakeServerHost : IGameHost
             // As RunJournal's scripts do (RunJournalShellTests runs the real bash pair): one decoded line appended per entry.
             case "journal":
             {
+                if (JournalFailsFor != null && Encoding.UTF8.GetString(Convert.FromBase64String(v["line"])).Contains($"\"kind\":\"{JournalFailsFor}\"", StringComparison.Ordinal))
+                    return new HostResult(HostOutcome.Exited, 4, "", "No space left on device", TimeSpan.Zero, false);
                 string file = Local(v["journal"] + "/" + v["run"] + "/" + v["actor"] + ".jsonl");
                 Directory.CreateDirectory(Path.GetDirectoryName(file)!);
                 File.AppendAllText(file, Encoding.UTF8.GetString(Convert.FromBase64String(v["line"])) + "\n");
@@ -882,6 +886,9 @@ public sealed partial class HostedServerRunTests : IDisposable
             StateWaits = false, RunId = RunId, SteamRenewEvery = renewEvery,
         },
     };
+    // Where in a fake host's script log the first journal append of that kind ran.
+    private static int JournalIndex(FakeServerHost host, string kind) => host.Runs.ToList().FindIndex(run => run.Script == "journal" &&
+        Encoding.UTF8.GetString(Convert.FromBase64String(run.Variables["line"])).Contains($"\"kind\":\"{kind}\"", StringComparison.Ordinal));
     private JsonElement Result() => JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "result.json"))).RootElement;
     private IReadOnlyList<string?> StepNames() => Result().GetProperty("Steps").EnumerateArray().Select(step => step.GetProperty("Name").GetString()).ToList();
     private JsonElement Step(string name) => Result().GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == name);
@@ -949,6 +956,15 @@ public sealed partial class HostedServerRunTests : IDisposable
             return Task.CompletedTask;
         }));
         Assert.Equal(0, code);
+        // The run journal on the server host (#257): the lock once held, each boot journalled before its start and its process after,
+        // the lock's release and the run's end. Each boot's intent precedes its start script.
+        var journal = await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted, JournalEntry.ProcessIntended, JournalEntry.ProcessStarted],
+            journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
+        Assert.Equal(RunDirectory + "/boot-2", journal.Where(record => record.Actor == "server").Last().Entry.Fields["bootDirectory"]);
+        Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased, JournalEntry.RunEnded], journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
+        Assert.Equal("passed", journal.Last(record => record.Actor == "run").Entry.Fields["state"]);
+        Assert.True(JournalIndex(host, JournalEntry.ProcessIntended) < host.Runs.ToList().FindIndex(run => run.Script == "start"));
         // Every owned server boot gets its test access, the restart's included; no runner option turns it off (#257 Q5).
         Assert.Equal(["devcommands", "confirmcheats", "devcommands", "confirmcheats"],
             server.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")).Select(e => e.TrimEnd("0123456789".ToCharArray())));
@@ -1129,6 +1145,18 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.DoesNotContain("release the server host's lock", StepNames());
     }
 
+    // A boot whose journal entry cannot be written is never started: no process runs that the journal does not name.
+    [Fact] public async Task AServerBootThatCannotBeJournalledIsNotStarted()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host);
+        host.JournalFailsFor = JournalEntry.ProcessIntended;
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
+        Assert.DoesNotContain("start", host.Scripts);
+        Assert.Contains("Journalling process-intended", Step("start and verify owned dedicated fixture").GetProperty("Error").GetString());
+        Assert.Equal(host.Claims.Count, host.Releases.Count);
+    }
+
     [Fact] public async Task ALostStartReplyIsAnUnknownOutcomeAndKeepsTheLock()
     {
         var server = NewServer(); var host = NewHost(server);
@@ -1281,6 +1309,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal("/home/tester/valheim", start.Variables["install"]);
         Assert.Equal("/home/tester/runs/" + RunId + "/client-1", start.Variables["dir"]);
         Assert.Contains(FakeServerHost.Spec(start.Variables["spec"]), line => line.Kind == "arg" && line.Text == "+connect");
+        // The client host's journal (#257): its lock held and released, the client journalled before its start, then its process.
+        var clientJournal = await RunJournal.ReadAsync(clientHost, "/home/tester/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
+        Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
+        Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased], clientJournal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
+        Assert.True(JournalIndex(clientHost, JournalEntry.ProcessIntended) < clientHost.Runs.ToList().FindIndex(run => run.Script == "client-start"));
         // The earlier log moved aside first, the new one was awaited from its start; only that client was stopped.
         Assert.Equal("/home/tester/runs/" + RunId + "/client-1.previous-LogOutput.log", Assert.Single(clientHost.Runs, run => run.Script == "move-aside").Variables["to"]);
         Assert.Equal(2, clientHost.Runs.Count(run => run.Script == "follow")); // fresh BepInEx line, then ValheimCLI listening

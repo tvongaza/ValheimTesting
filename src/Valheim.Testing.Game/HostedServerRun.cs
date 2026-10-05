@@ -54,6 +54,7 @@ internal sealed class HostedServerRun
         string? preparedRuntime)
     {
         Profile = profile; Role = role; HostProfile = hostProfile; Host = host; RunId = runId; _seams = seams; _owner = runner + " " + runId;
+        _journal = new RunJournal(runId);
         // A campaign prepared the server's disposable install already (<runtime>/vt-prep-<id>-server/runtime): that is the one
         // copy the server runs from. A standalone run makes its own under <runtime>/<runId>.
         Prepared = preparedRuntime != null;
@@ -61,6 +62,30 @@ internal sealed class HostedServerRun
         RuntimeDirectory = preparedRuntime ?? HostInstall.Join(RunDirectory, "runtime");
         WorldDirectory = HostInstall.Join(RunDirectory, "world");
     }
+
+    // The run's journal on each host it touches (RunJournal): a process is journalled before it starts, a lock once held.
+    private readonly RunJournal _journal;
+    private async Task JournalAsync(IGameHost host, string hostName, string actor, JournalEntry entry, CancellationToken cancellation)
+    {
+        await _journal.AppendAsync(host, RunJournal.DirectoryFor(Profile.Hosts[hostName]), actor, entry, Quick, cancellation).ConfigureAwait(false);
+        if (hostName == Role.Host) _serverJournalled = true;
+    }
+    private bool _serverJournalled;
+    // After its effect a lost line is a warning: the effect happened, and the entry before it already names where to look.
+    private async Task NoteAsync(IGameHost host, string hostName, string actor, JournalEntry entry)
+    {
+        try { await JournalAsync(host, hostName, actor, entry, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal {entry.Kind} for {actor} on {hostName}: {error.Message}"); }
+    }
+    private Task NoteLockAsync(IGameHost host, string hostName, HostLock held, string kind) =>
+        NoteAsync(host, hostName, "run", JournalEntry.Of(kind, ("lock", held.Path), ("claimant", held.Owner)));
+
+    /// <summary>
+    /// The run's end in its server host's journal, when the run wrote there at all (a standalone run; a campaign's preparation
+    /// journals its own hosts). A run refused before it touched the host leaves it untouched.
+    /// </summary>
+    public Task JournalEndAsync(string state, bool cleanupVerified) => !_serverJournalled ? Task.CompletedTask :
+        NoteAsync(Host, Role.Host, "run", JournalEntry.Of(JournalEntry.RunEnded, ("state", state), ("cleanupVerified", cleanupVerified ? "true" : "false")));
 
     /// <summary>Whether the runtime is a campaign's prepared install (verified in place) rather than a copy this run makes.</summary>
     public bool Prepared { get; }
@@ -135,6 +160,7 @@ internal sealed class HostedServerRun
         if (Host.Shell.Kind == HostShellKind.PowerShell)
             await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, Quick, cancellation)).ConfigureAwait(false);
         await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
+        await NoteLockAsync(Host, Role.Host, _lock!, JournalEntry.LockHeld).ConfigureAwait(false);
         // Only an unpinned plan may leave out the manifest; the copy is then recorded as found.
         bool verified = pinned || plan.Runtime.Sha256.Count != 0;
         if (Prepared)
@@ -238,6 +264,8 @@ internal sealed class HostedServerRun
             int n = ++boot;
             string local = Path.Combine(run.Output, "boot-" + n), bootDirectory = HostInstall.Join(RunDirectory, "boot-" + n);
             HostServerProcess process;
+            // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
+            JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory)), run.Cancellation).GetAwaiter().GetResult();
             try { process = HostServer.StartAsync(Host, launch, bootDirectory, Quick, [BepInExLog, UnityLog], local, run.Cancellation).GetAwaiter().GetResult(); }
             catch (Exception error) when (UnknownOutcome(error) != null)
             {
@@ -259,6 +287,8 @@ internal sealed class HostedServerRun
                 }, plan.Pinned)));
             }
             catch { process.Stop(TimeSpan.FromSeconds(15)); throw; }
+            NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", process.Id.ToString(CultureInfo.InvariantCulture)),
+                ("startIdentity", process.StartIdentity), ("bootDirectory", bootDirectory), ("taskLogon", process.TaskLogon ?? ""))).GetAwaiter().GetResult();
             return process;
         }, () => new RecordingTransport(Connect(tunnel), Path.Combine(run.Output, "connection-" + ++connection + ".jsonl"), plan.Pinned ? null : EnvironmentPinning.NotPinned),
             WorldDirectory, plan.ExpectCommand, options.SessionCapability,
@@ -354,7 +384,11 @@ internal sealed class HostedServerRun
             try
             {
                 if (!_clientLocks.Any(held => held.Host == role.Host))
-                    _clientLocks.Add((role.Host, await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)));
+                {
+                    var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false);
+                    _clientLocks.Add((role.Host, taken));
+                    await NoteLockAsync(host, role.Host, taken, JournalEntry.LockHeld).ConfigureAwait(false);
+                }
             }
             finally { _clientLockGate.Release(); }
         }
@@ -381,9 +415,13 @@ internal sealed class HostedServerRun
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
+                    JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory)), cancellation).GetAwaiter().GetResult();
                     var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
                         : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
-                    var process = new HostedClientProcess(started.GetAwaiter().GetResult(), host, role.Install, tunnel, local);
+                    var client = started.GetAwaiter().GetResult();
+                    NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
+                        ("startIdentity", client.StartIdentity), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
+                    var process = new HostedClientProcess(client, host, role.Install, tunnel, local);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
                     return process;
                 },
@@ -437,7 +475,11 @@ internal sealed class HostedServerRun
             try
             {
                 if (!_clientLocks.Any(held => held.Host == role.Host))
-                    _clientLocks.Add((role.Host, await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)));
+                {
+                    var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false);
+                    _clientLocks.Add((role.Host, taken));
+                    await NoteLockAsync(host, role.Host, taken, JournalEntry.LockHeld).ConfigureAwait(false);
+                }
             }
             finally { _clientLockGate.Release(); }
         }
@@ -512,12 +554,18 @@ internal sealed class HostedServerRun
             _localMacProcesses.Any(item => item.Host == name && !item.Process.HasExited)
                 ? throw new HostLockException(new HostLockResult(HostLockState.Unknown, held.Owner,
                     $"Kept {held.Path} on {name}: an owned local Mac client may still run. Confirm its recorded process has stopped before releasing this lock."))
-                : ReleaseAsync(held)).ConfigureAwait(false);
+                : ReleaseAndNoteAsync(ClientHost(Profile.Clients.Values.First(client => client.Host == name)), name, held)).ConfigureAwait(false);
         if (_lock != null)
-            await Try("release the server host's lock", () => serverStopped ? ReleaseAsync(_lock)
+            await Try("release the server host's lock", () => serverStopped ? ReleaseAndNoteAsync(Host, Role.Host, _lock)
                 : throw new HostLockException(new HostLockResult(HostLockState.Unknown, _lock.Owner,
                     $"Kept {_lock.Path} on {Host.Name}: the owned server there may still run. Remove {_lock.Path}/owner by hand once it has stopped."))).ConfigureAwait(false);
         return failures;
+    }
+
+    private async Task ReleaseAndNoteAsync(IGameHost host, string hostName, HostLock held)
+    {
+        await ReleaseAsync(held).ConfigureAwait(false);
+        await NoteLockAsync(host, hostName, held, JournalEntry.LockReleased).ConfigureAwait(false);
     }
 
     private static async Task ReleaseAsync(HostLock held)
