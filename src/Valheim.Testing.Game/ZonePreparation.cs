@@ -4,7 +4,7 @@ using valheim_cli.Testing;
 namespace Valheim.Testing.Game;
 
 /// <summary>Parses ValheimCLI's <c>VALUE</c> replies (for example from <c>cli_call</c>).</summary>
-public static class CliReply
+internal static class CliReply
 {
     /// <summary>The reply's one boolean value line (<c>VALUE true</c> or <c>VALUE false</c>); anything else is refused.</summary>
     public static bool Bool(IReadOnlyList<string> lines)

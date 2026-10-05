@@ -25,6 +25,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read # the public-api check reads the pull request's current description
     env:
       # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
       # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
@@ -37,6 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 2 # a pull request's merge commit and its base (HEAD^1), for the public-api check
           persist-credentials: false
       - uses: ./.github/actions/setup
       # Packages from NuGet.org, reused across runs. Never this repository's own packages (Valheim.Testing*, and the CLI
@@ -69,6 +73,40 @@ jobs:
         run: |
           dotnet tool restore
           dotnet run scripts/api-docs.cs
+      # The committed public-api lists match the builds; a pull request that changes them says why on a line starting
+      # "public-api:" in its description, read here rather than from the event, so editing it and re-running the job is enough.
+      - name: Public API lists
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            body=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq .body) || { echo "::error::could not read PR #$PR_NUMBER's description"; exit 1; }
+            PR_BODY=$body dotnet run scripts/api-docs.cs -- check --base HEAD^1
+          else
+            dotnet run scripts/api-docs.cs -- check
+          fi
+          # Negative controls, each restored after. GITHUB_ACTIONS is unset so the expected failures are not annotations.
+          refused() { # $1 a pattern the refusal must match; the rest, the check's arguments
+            pattern=$1; shift
+            if out=$(env -u GITHUB_ACTIONS dotnet run scripts/api-docs.cs -- check "$@" 2>&1); then
+              echo "$out"; echo "::error::api-docs check $* passed; expected a refusal matching: $pattern"; return 1
+            fi
+            echo "$out"
+            case "$out" in *"$pattern"*) ;; *) echo "::error::api-docs check $* refused, but not with: $pattern"; return 1 ;; esac
+          }
+          # A list out of step with the build (one type line removed) is refused, naming the line.
+          list=docs/reference/public-api/Valheim.Testing.txt
+          removed=$(sed -n '2p' "$list")
+          sed -i '2d' "$list"
+          refused "  +$removed" || exit 1
+          git checkout -- "$list"
+          # A change to the lists since a base (the empty tree: every list is new) needs the description line, and passes with it.
+          empty=$(git hash-object -t tree /dev/null)
+          PR_BODY='' refused 'no line starting "public-api:"' --base "$empty" || exit 1
+          PR_BODY='public-api: negative control' dotnet run scripts/api-docs.cs -- check --base "$empty"
+          git diff --exit-code
       - name: Save the NuGet package cache
         if: steps.nuget-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6

@@ -29,7 +29,7 @@ public enum CensusState
 }
 
 /// <summary>Writes an enum as its camelCase name (<c>server</c>, <c>missing</c>) in evidence files.</summary>
-public sealed class CamelCaseEnum<T>() : JsonStringEnumConverter<T>(JsonNamingPolicy.CamelCase) where T : struct, Enum { }
+internal sealed class CamelCaseEnum<T>() : JsonStringEnumConverter<T>(JsonNamingPolicy.CamelCase) where T : struct, Enum { }
 
 /// <summary>
 /// One piece of content a mod declares by stable identity: its <see cref="Kind"/> (<c>item</c>, <c>prefab</c>,
