@@ -34,7 +34,7 @@ internal static class ServerLoadComparison
                 ? BepInExLoaderPackage.Read(loaderFile) : null;
             var clientLoader = options.TryGetValue("--client-loader-package", out string? clientLoaderFile)
                 ? BepInExLoaderPackage.Read(clientLoaderFile) : null;
-            var (cliManifest, cliFiles) = SmokeInputs.Cli(options, server);
+            var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
             string[] protectedRoots = new[] { server, cliFiles, options.TryGetValue("--client", out string? client) ? Path.GetFullPath(client) : null,
                 options.TryGetValue("--steam-userdata", out string? userdata) ? Path.GetFullPath(userdata) : null,
                 serverLoader?.Root, clientLoader?.Root }.OfType<string>().ToArray();
@@ -90,8 +90,7 @@ internal static class ServerLoadComparison
                     !(omit && pair.Key == "--mod" && Path.GetFullPath(pair.Value).Equals(removed, pathComparison)))
                 .SelectMany(pair => pair.Key == "--output" ? new[] { pair.Key, Path.Combine(output, name) }
                     : pair.Value.Length == 0 ? new[] { pair.Key } : new[] { pair.Key, pair.Value })
-                .Concat(options.ContainsKey("--cli-manifest") ? [] : ["--cli-manifest", cliManifest])
-                .Concat(options.ContainsKey("--cli-files") ? [] : ["--cli-files", cliFiles])
+                // Each arm chooses its ValheimCLI the same way and prints where it came from; the set is pinned between arms below.
                 .Concat(options.ContainsKey("--adapter") ? [] : ["--adapter", adapter])
                 .ToArray();
             int beforeResult = await runArm(Arm("before", omit: false));

@@ -13,7 +13,7 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         Directory.CreateDirectory(bundle);
         string manifest = Path.Combine(bundle, "cli-manifest.json");
         File.WriteAllText(manifest, Manifest());
-        var resolved = SmokeInputs.Cli(new Dictionary<string, string> { ["--cli-files"] = bundle }, _root);
+        var resolved = SmokeInputs.Cli(new Dictionary<string, string> { ["--cli-files"] = bundle });
         Assert.Equal(manifest, resolved.Manifest);
         Assert.Equal(bundle, resolved.Files);
     }
@@ -27,7 +27,7 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         File.WriteAllText(Path.Combine(bundle, "older", "cli-manifest.json"), Manifest());
         File.WriteAllText(Path.Combine(bundle, "newer", "cli-manifest.json"), Manifest());
         var error = Assert.Throws<InvalidDataException>(() =>
-            SmokeInputs.Cli(new Dictionary<string, string> { ["--cli-files"] = bundle }, _root));
+            SmokeInputs.Cli(new Dictionary<string, string> { ["--cli-files"] = bundle }));
         Assert.Contains("Several ValheimCLI capability manifests", error.Message);
         Assert.Contains("never mix packs", error.Message);
     }
@@ -38,7 +38,7 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         string bundle = Path.Combine(_root, "cli");
         Directory.CreateDirectory(bundle);
         var error = Assert.Throws<InvalidDataException>(() =>
-            SmokeInputs.Cli(new Dictionary<string, string> { ["--cli-files"] = bundle }, _root));
+            SmokeInputs.Cli(new Dictionary<string, string> { ["--cli-files"] = bundle }));
         Assert.Contains("No ValheimCLI capability manifest", error.Message);
         Assert.Contains("VALHEIMCLI_BUNDLE", error.Message);
     }

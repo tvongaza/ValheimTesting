@@ -79,7 +79,44 @@ finally
     DeleteTree(temp);
 }
 Console.WriteLine($"Pinned CLI dependency ready as {packageId} {packageVersion} ({targetFramework}, upstream {version}): {feed}");
+
+// The game-side ValheimCLI bundle (core, packs, manifest) built from the same commit and published once, by its SHA-256:
+// valheim-test embeds .packages/valheimcli-bundle.zip, so a run needs no plugins in the game and no network.
+string bundleFile = Path.Combine(feed, "valheimcli-bundle.zip");
+if (!pinDoc.RootElement.TryGetProperty("bundle", out JsonElement bundlePin))
+{
+    Console.WriteLine("No ValheimCLI plugin bundle is pinned in cli-dependency.json yet: valheim-test builds without one and asks for --cli-files or VALHEIMCLI_BUNDLE.");
+    return 0;
+}
+string bundleUrl = bundlePin.GetProperty("url").GetString()!, bundleSha256 = bundlePin.GetProperty("sha256").GetString()!.ToLowerInvariant();
+if (File.Exists(bundleFile) && Sha256(bundleFile) == bundleSha256)
+{
+    Console.WriteLine($"Pinned ValheimCLI bundle present: {bundleFile} (sha256 {bundleSha256})");
+    return 0;
+}
+string download = bundleFile + ".download-" + Guid.NewGuid().ToString("N");
+try
+{
+    using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+    using (var response = await http.GetAsync(bundleUrl, HttpCompletionOption.ResponseHeadersRead))
+    {
+        response.EnsureSuccessStatusCode();
+        await using var file = File.Create(download);
+        await response.Content.CopyToAsync(file);
+    }
+    string got = Sha256(download);
+    if (got != bundleSha256) throw new InvalidOperationException($"The ValheimCLI bundle at {bundleUrl} is sha256 {got}, not the pinned {bundleSha256}.");
+    File.Move(download, bundleFile, overwrite: true);
+}
+finally { if (File.Exists(download)) File.Delete(download); }
+Console.WriteLine($"Pinned ValheimCLI bundle fetched and checked: {bundleFile} (sha256 {bundleSha256})");
 return 0;
+
+static string Sha256(string path)
+{
+    using var stream = File.OpenRead(path);
+    return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
+}
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
 
