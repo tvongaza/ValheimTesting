@@ -7,14 +7,14 @@ namespace Valheim.Testing.Game;
 /// <summary>
 /// The files of a directory on a host as <see cref="HostInstall.ListAsync"/> found them: every regular file's SHA256 by its
 /// relative path with <c>/</c> separators (the same manifest <see cref="WorldFixture.Manifest"/> records for a local
-/// directory), the entries directly in <c>BepInEx/patchers</c>, and, on a bash host, which game executables at the root carry
+/// directory) and, on a bash host, which game executables at the root carry
 /// the user-execute bit.
 /// </summary>
 public sealed class HostListing
 {
-    internal HostListing(string hostName, HostShellKind shell, string root, IReadOnlyDictionary<string, string> files, IReadOnlyList<string> patchers, IReadOnlyList<string> executables)
+    internal HostListing(string hostName, HostShellKind shell, string root, IReadOnlyDictionary<string, string> files, IReadOnlyList<string> executables)
     {
-        HostName = hostName; Shell = shell; Root = root; Files = files; Patchers = patchers; Executables = executables;
+        HostName = hostName; Shell = shell; Root = root; Files = files; Executables = executables;
     }
     public string HostName { get; }
     public HostShellKind Shell { get; }
@@ -22,8 +22,6 @@ public sealed class HostListing
     public string Root { get; }
     /// <summary>Relative path (<c>/</c> separators) to lower-case SHA256.</summary>
     public IReadOnlyDictionary<string, string> Files { get; }
-    /// <summary>The names of the entries (files and directories) directly in <c>BepInEx/patchers</c>.</summary>
-    public IReadOnlyList<string> Patchers { get; }
     /// <summary>Bash hosts: which of <c>valheim_server.x86_64</c> and <c>valheim.x86_64</c> at the root the user may execute.</summary>
     public IReadOnlyList<string> Executables { get; }
     /// <summary>Paths compare ignoring case on a Windows (PowerShell) host.</summary>
@@ -32,7 +30,7 @@ public sealed class HostListing
 
 /// <summary>
 /// Reads and copies game installs and runtimes on a host, so a run on another machine keeps the same pins as one here: the
-/// runtime manifest, the game build, loader and patchers (<see cref="InstallPins"/>), the patcher names and the server's
+/// runtime manifest, the game build, loader and patchers (<see cref="InstallPins"/>) and the server's
 /// execute bit are all checked against what the host holds, not against a local copy.
 /// </summary>
 public static class HostInstall
@@ -70,7 +68,6 @@ public static class HostInstall
         if (!lines.Contains("VT-LIST done")) throw new HostOperationException($"Unexpected reply while listing {root} on {hostName}", result);
         var names = shell == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var files = new Dictionary<string, string>(names);
-        var patchers = new List<string>();
         var executables = new List<string>();
         foreach (string line in lines)
         {
@@ -83,7 +80,6 @@ public static class HostInstall
                 // sha256sum escapes a name holding a backslash or a line break, and marks the line with a leading backslash.
                 if (sum.Groups[1].Value.Length != 0) relative = Unescape(relative);
             }
-            else if (line.StartsWith("VT-PATCHER ", StringComparison.Ordinal)) { patchers.Add(Decode(line["VT-PATCHER ".Length..])); continue; }
             else if (line.StartsWith("VT-EXEC ", StringComparison.Ordinal)) { executables.Add(line["VT-EXEC ".Length..]); continue; }
             else throw new HostOperationException($"Unexpected line while listing {root} on {hostName}: {line}", result);
             relative = relative.Replace('\\', '/');
@@ -91,7 +87,7 @@ public static class HostInstall
             if (files.TryGetValue(relative, out string? seen) && seen != sha256) throw new IOException($"{relative} changed while {root} on {hostName} was listed.");
             files[relative] = sha256;
         }
-        return new HostListing(hostName, shell, root, files, patchers.Distinct(names).Order(StringComparer.Ordinal).ToList(), executables);
+        return new HostListing(hostName, shell, root, files, executables);
     }
 
     /// <summary>
@@ -197,23 +193,8 @@ public static class HostInstall
     {
         ArgumentNullException.ThrowIfNull(pinned);
         var found = Pins(listing, out string managed);
-        return pinned.Compare(found, kind + " on " + listing.HostName, managed);
-    }
-
-    /// <summary>
-    /// Refuses a listing whose <c>BepInEx/patchers</c> holds an entry <paramref name="named"/> does not list, or lacks one it lists,
-    /// as a local runtime is refused. Names compare ignoring case on a Windows host.
-    /// </summary>
-    public static void RequirePatchers(HostListing listing, IReadOnlyCollection<string> named, string kind)
-    {
-        BepInExLoader.CheckPatcherNames(named);
-        var unnamed = listing.Patchers.Where(entry => !named.Contains(entry, listing.Names)).ToList();
-        if (unnamed.Count != 0)
-            throw new InvalidOperationException($"The {kind}'s BepInEx/patchers on {listing.HostName} holds {string.Join(", ", unnamed)}, which the plan's patchers do not name. " +
-                "A clean runtime is BepInEx core and your plugins with an empty patchers directory: remove what a removed mod left behind, or name each patcher the run needs.");
-        var missing = named.Where(entry => !listing.Patchers.Contains(entry, listing.Names)).ToList();
-        if (missing.Count != 0)
-            throw new InvalidOperationException($"The plan names patchers the {kind}'s BepInEx/patchers on {listing.HostName} does not hold: {string.Join(", ", missing)}.");
+        return pinned.Compare(found, kind + " on " + listing.HostName, managed,
+            () => Under(listing, "BepInEx/patchers/").Select(file => file.Relative.Split('/')[0]).Distinct(listing.Names).ToList());
     }
 
     /// <summary>The dedicated server's platform from the files at the root, as <see cref="ServerLaunch.Detect"/> decides it for a local runtime.</summary>
@@ -287,7 +268,6 @@ internal static class HostInstallScripts
             if [ -n "$links" ]; then echo "VT-LIST links"; printf '%s\n' "$links"; exit 0; fi
             find "${roots[@]}" -type f -exec "${hasher[@]}" {} + || exit 3
         fi
-        for e in BepInEx/patchers/*; do printf 'VT-PATCHER %s\n' "$(printf %s "${e##*/}" | base64 | tr -d '\n')"; done
         for e in valheim_server.x86_64 valheim.x86_64; do if [ -f "$e" ] && [ -x "$e" ]; then echo "VT-EXEC $e"; fi; done
         echo "VT-LIST done"
         """.ReplaceLineEndings("\n");
@@ -344,10 +324,6 @@ internal static class HostInstallScripts
                 'VT-FILE ' + $hash + ' ' + [Convert]::ToBase64String($utf8.GetBytes($relative))
             }
         } finally { $sha.Dispose() }
-        $patchers = Join-Path $full 'BepInEx\patchers'
-        if ([IO.Directory]::Exists($patchers)) {
-            foreach ($entry in [IO.Directory]::GetFileSystemEntries($patchers)) { 'VT-PATCHER ' + [Convert]::ToBase64String($utf8.GetBytes([IO.Path]::GetFileName($entry))) }
-        }
         'VT-LIST done'
         """.ReplaceLineEndings("\n");
 

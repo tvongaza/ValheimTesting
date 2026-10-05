@@ -172,7 +172,6 @@ internal static class HostServerChecks
         {
             var listing = await HostInstall.ListAsync(host, install.Path, Generous);
             HostInstall.RequireSame(WorldFixture.Manifest(install.Path), listing, "install");
-            Assert.Equal(new[] { "Hooks" }, listing.Patchers);
             var pins = InstallPins.Of(install.Path);
             var found = HostInstall.Pins(listing);
             Assert.Equal((pins.Game, pins.Loader, pins.Patchers), (found.Game, found.Loader, found.Patchers));

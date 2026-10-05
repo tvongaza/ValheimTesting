@@ -29,7 +29,7 @@ public static class EnvironmentPinning
 
     /// <summary>What an unpinned run prints when the opt-out takes effect.</summary>
     public static string Warning(string what) =>
-        $"WARNING: {NotPinned}: {what} runs with pinning \"{None}\". Nothing checks the game build, BepInEx, the plugins or the world it runs against, " +
+        $"WARNING: {NotPinned}: {what} runs with pinning \"{None}\". Nothing checks the game build, BepInEx, its patchers, the plugins or the world it runs against, " +
         "so its result is not evidence for any particular build. Use strict pins for results you rely on.";
 
     internal static void Warn(string what) => Console.Error.WriteLine(Warning(what));
@@ -60,7 +60,8 @@ public static class EnvironmentPinning
 /// loader package, so a plan, a package and every check of an install share one loader identity.
 /// <c>BepInEx/config/BepInEx.cfg</c> is configuration, not loader: BepInEx rewrites it when it binds its settings.</item>
 /// <item><see cref="Patchers"/>: the contents of <c>BepInEx/patchers</c>, which rewrite game assemblies before any plugin
-/// loads (the plan's patcher names say which entries it holds; this says which builds).</item>
+/// loads: a clean runtime has none, so a patcher a removed mod left behind changes this pin, and a refusal names the folder's
+/// entries.</item>
 /// </list>
 /// Each value is the SHA256 of a listing: one line per file, <c>&lt;sha256&gt;  &lt;relative path&gt;\n</c> with
 /// <c>/</c> separators, ordered by path (ordinal), as <c>sha256sum</c> prints it; <see cref="Loader"/>'s paths are relative
@@ -152,14 +153,18 @@ public sealed class InstallPins
     public InstallPins Check(string root, string kind)
     {
         Validate(kind);
-        return Compare(Of(root), kind, Path.GetRelativePath(Path.GetFullPath(root), Path.GetDirectoryName(GameAssembly(root))!));
+        root = Path.GetFullPath(root);
+        string patchers = Path.Combine(root, BepInExLoader.Patchers);
+        return Compare(Of(root), kind, Path.GetRelativePath(root, Path.GetDirectoryName(GameAssembly(root))!),
+            () => Directory.Exists(patchers) ? Directory.EnumerateFileSystemEntries(patchers).Select(Path.GetFileName).OfType<string>().ToList() : []);
     }
 
     /// <summary>
     /// <see cref="Check"/> for pins found elsewhere (an install on another host): refuses <paramref name="found"/> unless it is
-    /// these pins. <paramref name="gameFolder"/> names the Managed folder in the message. Returns <paramref name="found"/>.
+    /// these pins. <paramref name="gameFolder"/> names the Managed folder and <paramref name="patcherEntries"/> lists what
+    /// <c>BepInEx/patchers</c> holds, read only for the message. Returns <paramref name="found"/>.
     /// </summary>
-    internal InstallPins Compare(InstallPins found, string kind, string gameFolder)
+    internal InstallPins Compare(InstallPins found, string kind, string gameFolder, Func<IReadOnlyCollection<string>>? patcherEntries = null)
     {
         Validate(kind);
         var differences = new List<string>();
@@ -168,7 +173,13 @@ public sealed class InstallPins
         if (!Same(found.Loader, Loader))
             differences.Add($"the loader differs ({LoaderFilesText} is {found.Loader}, pinned loader {Loader}): another BepInEx, BepInExPack or Doorstop build, or a proxy or configuration replaced on its own");
         if (!Same(found.Patchers, Patchers))
-            differences.Add($"the patchers differ ({BepInExLoader.Patchers} is {found.Patchers}, pinned patchers {Patchers})");
+        {
+            var entries = patcherEntries?.Invoke().Where(entry => !FileHash.IsMacMetadata(entry)).Order(StringComparer.Ordinal).ToList();
+            differences.Add($"the patchers differ ({BepInExLoader.Patchers} is {found.Patchers}" +
+                (entries == null ? "" : entries.Count == 0 ? ", empty" : $", holding {string.Join(", ", entries)}") +
+                $", pinned patchers {Patchers}): a preloader patcher a removed mod left behind, or a patcher the run needs that is missing or another build; " +
+                "a clean runtime has an empty patchers folder, and a leftover patcher breaks the game's types before any plugin loads");
+        }
         if (differences.Count != 0)
             throw new InvalidOperationException($"The {kind} is not the pinned one: {string.Join("; ", differences)}. Restore the pinned install, or review the change and pin the new values.");
         return found;

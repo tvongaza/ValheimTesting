@@ -81,8 +81,9 @@ public sealed class ClientRunPlan
     public int BepInExSeconds { get; set; } = 60;
     public int JoinSeconds { get; set; } = 180;
     public int ArrivalSeconds { get; set; } = 120;
-    /// <summary>Owned only: every entry the install's <c>BepInEx/patchers</c> holds, by name; the launch refuses any other.</summary>
-    public string[] Patchers { get; set; } = [];
+    // Removed (#295): patcher names beside the installPins patchers hash described one folder twice.
+    [JsonInclude, JsonPropertyName("patchers"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedPatchers { get => null; set => throw Removed("patchers", 295, ServerRunPlan.PatchersInstead); }
     /// <summary>
     /// Owned only: the install's game build, loader and patchers by SHA256 (<see cref="Valheim.Testing.Game.InstallPins.Of"/>),
     /// checked before launch. Required for an owned client unless <see cref="Pinning"/> is <c>none</c>. An attached
@@ -148,8 +149,8 @@ public sealed class ClientRunPlan
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
         var architecture = LaunchArchitecture;
-        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Patchers.Length != 0 || InstallPins != null || Architecture.Length != 0))
-            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, patchers and architecture.");
+        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || InstallPins != null || Architecture.Length != 0))
+            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments and architecture.");
         var platform = Owned ? InstallPlatform() : null;
         if (architecture == ClientArchitecture.Arm64 && platform is { } other && other != ClientPlatform.MacOS)
             throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {other} client is x64 only. Leave architecture out.");
@@ -160,7 +161,6 @@ public sealed class ClientRunPlan
             {
                 throw new ArgumentException($"The client install cannot launch as {ClientLaunch.PlanName(architecture)}: {error.Message}", error);
             }
-        BepInExLoader.CheckPatcherNames(Patchers);
         if (string.IsNullOrWhiteSpace(Host) || Port is < 1024 or > 65535) throw new ArgumentException("Give the client's ValheimCLI host and port.");
         if (Owned && Host is not ("127.0.0.1" or "localhost")) throw new ArgumentException("An owned client runs on this machine; its ValheimCLI host is 127.0.0.1.");
         if (HostWorld != null && (Join.Length != 0 || PasswordVariable != null || Crossplay))
@@ -215,7 +215,7 @@ public sealed class ClientRunPlan
     /// The static preflight of the run, after <see cref="Validate"/> and before anything is copied or started; every fact it
     /// needs is on disk here. A hosting client's fixture must still be its pinned files and must hold the world
     /// <see cref="HostWorldPlan.WorldUid"/> names (<see cref="HostWorldPlan.Preflight"/>). An owned client's install must pass
-    /// what its launch checks first: its patchers, <see cref="InstallPins"/> and BepInEx loader (a Doorstop proxy and
+    /// what its launch checks first: its <see cref="InstallPins"/> (patchers included) and BepInEx loader (a Doorstop proxy and
     /// configuration from different versions included). Then: every pinned plugin build is installed exactly once in
     /// <c>BepInEx/plugins</c> or <c>BepInEx/scripts</c> (a hash typed by hand or a wrong staged file matches none), a pinned
     /// plugin in <c>scripts</c> has ScriptEngine pinned and set to <c>LoadOnStart</c>, and ValheimCLI's standing expectations
@@ -243,7 +243,6 @@ public sealed class ClientRunPlan
     /// <summary>The owned launch's checks on this machine's install, in order, returning the launch they allow.</summary>
     internal System.Diagnostics.ProcessStartInfo CheckOwnedInstall(string? hostWorldName = null, IEnumerable<string>? capabilities = null)
     {
-        BepInExLoader.RequirePatchers(Install, Patchers, "client install");
         CheckInstallPins();
         var start = ClientSession.StartInfo(this, ClientLaunch.CurrentHost); // The install's loader and slices.
         var located = OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);

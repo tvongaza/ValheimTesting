@@ -96,12 +96,14 @@ public static class HostedRuntimeStage
             if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
                 throw new InvalidOperationException($"The client install on {host.Name} does not match its host platform.");
         }
-        if (loaderPackage == null)
+        var platform = host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
+            : sourceListing.Files.ContainsKey("Valheim.app/Contents/MacOS/Valheim") ? ClientPlatform.MacOS : ClientPlatform.Linux;
+        // A reviewed package replaces the copied loader, so it, not the source, must be this platform's complete loader.
+        if (loaderPackage != null) loaderPackage.RequireFor(platform, $"reviewed loader package for {host.Name}");
+        else
         {
             _ = HostInstall.Pins(sourceListing); // Also refuses a nested BepInEx/core/core.
             // Every platform's loader files from the listing; a Windows proxy and configuration also as one Doorstop version.
-            var platform = host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
-                : sourceListing.Files.ContainsKey("Valheim.app/Contents/MacOS/Valheim") ? ClientPlatform.MacOS : ClientPlatform.Linux;
             BepInExLoader.RequireLoaderFiles(platform, sourceListing.Files.ContainsKey, $"source install on {host.Name}");
             if (platform == ClientPlatform.Windows)
                 await HostClientPreflight.RequireWindowsLoaderAsync(host, source, $"source install on {host.Name}", timeout, cancellation).ConfigureAwait(false);
