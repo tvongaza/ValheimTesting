@@ -31,6 +31,68 @@ public sealed class RunJournalTests : IDisposable
         Assert.Empty(await RunJournal.ReadAsync(host, journal, "run-unknown", TimeSpan.FromSeconds(30)));
     }
 
+    [Fact] public async Task EveryRunIsReadBackWithTheRunnerThatWroteIt()
+    {
+        var host = Host();
+        string journal = Path.Combine(_root, "data dir", "journal");
+        Assert.Empty((await RunJournal.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30))).Records);
+        foreach (string run in new[] { "run-a", "run-b" })
+            await new RunJournal(run).AppendAsync(host, journal, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", "/x/" + run)), TimeSpan.FromSeconds(30));
+        await new RunJournal("run-b").AppendAsync(host, journal, "run", JournalEntry.Of(JournalEntry.RunEnded, ("state", "passed")), TimeSpan.FromSeconds(30));
+        var (all, unreadable) = await RunJournal.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30));
+        Assert.Equal(["run-a", "run-b", "run-b"], all.Select(record => record.Run).Order());
+        Assert.Equal(0, unreadable);
+        Assert.All(all, record => Assert.Equal(JournalRunner.Current, record.Runner));
+        // A line cut short (a full disk, a killed write) is counted and skipped; the lines around it still read.
+        File.AppendAllText(Path.Combine(journal, "run-a", "server.jsonl"), "{\"utc\":\"2026-10-05T18:");
+        (all, unreadable) = await RunJournal.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30));
+        Assert.Equal(3, all.Count);
+        Assert.Equal(1, unreadable);
+        Assert.True(JournalRunner.Current.StillRuns());
+        Assert.Equal(Environment.ProcessId, JournalRunner.Current.Pid);
+    }
+
+    // The process check through the host's own shell, on this test's process: Linux reads /proc and Windows the process and
+    // its CIM command line; a macOS host has neither and says so rather than guessing.
+    [Fact] public async Task TheProcessCheckReadsStartIdentityAndCommandLineOrSaysItCannot()
+    {
+        var host = Host();
+        int self = Environment.ProcessId;
+        using var exited = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh") { ArgumentList = { OperatingSystem.IsWindows() ? "/c" : "-c", "exit 0" } })!;
+        exited.WaitForExit();
+        var first = await HostProcessProbe.ProbeAsync(host, [(self, ""), (exited.Id, "1")], TimeSpan.FromSeconds(60));
+        if (OperatingSystem.IsMacOS())
+        {
+            Assert.All(first.Values, probed => Assert.Equal(ProbedState.Unreadable, probed.State));
+            return;
+        }
+        var probed = first[(self, "")];
+        Assert.Equal(ProbedState.Same, probed.State);
+        Assert.Matches("^[0-9]+$", probed.StartIdentity);
+        Assert.Matches("^[0-9a-f]{64}$", probed.CommandLineSha256);
+        Assert.Equal(ProbedState.Gone, first[(exited.Id, "1")].State);
+        // The same start identity matches again with the same command line; another one is a reused ID. Both asked at once
+        // get one answer each (#257 review: a reused ID journalled by two runs).
+        var both = await HostProcessProbe.ProbeAsync(host, [(self, probed.StartIdentity!), (self, probed.StartIdentity + "1")], TimeSpan.FromSeconds(60));
+        Assert.Equal(probed, both[(self, probed.StartIdentity!)]);
+        Assert.Equal(ProbedState.Reused, both[(self, probed.StartIdentity + "1")].State);
+        Assert.Null(both[(self, probed.StartIdentity + "1")].CommandLineSha256);
+    }
+
+    // A Linux recorder's game is `env ... game` until env execs it: the hash journalled at the start is the game's command
+    // line, not env's, once the check waits for the exec.
+    [Fact] public async Task OnLinuxTheStartCheckHashesTheCommandLineAfterEnvExecs()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var sleeper = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("env") { ArgumentList = { "sleep", "30" } })!;
+        try
+        {
+            string? hash = await HostProcessProbe.CommandLineAsync(Host(), sleeper.Id, "", TimeSpan.FromSeconds(60));
+            Assert.Equal(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData("sleep\u000030\u0000"u8.ToArray())), hash);
+        }
+        finally { sleeper.Kill(); }
+    }
+
     [Fact] public void TheJournalSitsBesideTheHostsLockAndNamesAreChecked()
     {
         Assert.Equal("/srv/vt/journal", RunJournal.DirectoryFor(new HostProfile { Lock = "/srv/vt/lock" }));

@@ -95,17 +95,52 @@ public sealed class EnvironmentInventory
 
     internal static EnvironmentInventory Read(string? path, ISteamLocator machine)
     {
-        EnvironmentInventory inventory;
-        string directory;
-        if (path == null) { inventory = new EnvironmentInventory(); directory = Environment.CurrentDirectory; }
-        else
-        {
-            inventory = JsonSerializer.Deserialize<EnvironmentInventory>(File.ReadAllText(path), Json)
-                ?? throw new InvalidDataException("Empty environment inventory.");
-            directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
-        }
+        var inventory = Load(path, machine);
+        inventory.Validate(path == null ? Environment.CurrentDirectory : Path.GetDirectoryName(Path.GetFullPath(path))!);
+        return inventory;
+    }
+
+    // The file (or nothing) with this machine's host and environments filled in, not yet validated.
+    private static EnvironmentInventory Load(string? path, ISteamLocator machine)
+    {
+        var inventory = path == null ? new EnvironmentInventory()
+            : JsonSerializer.Deserialize<EnvironmentInventory>(File.ReadAllText(path), Json) ?? throw new InvalidDataException("Empty environment inventory.");
         inventory.AddThisMachine(machine, fromFile: path != null);
-        inventory.Validate(directory);
+        return inventory;
+    }
+
+    /// <summary>
+    /// Writes what earlier runs left on each host of the inventory at <paramref name="inventoryPath"/> (this machine when null),
+    /// from each host's run journal (<c>journal</c> beside the host's lock): every run that has not ended, or left copies,
+    /// disposable characters, processes, Steam leases or host locks it never journalled as gone, each checked on its host.
+    /// Only the hosts are needed, not an install. Changes nothing. Returns true when every host was read and every run left
+    /// nothing. <paramref name="json"/> writes the report as JSON instead of text (without the <c>detected:</c> lines).
+    /// </summary>
+    public static async Task<bool> WriteRunStatusAsync(string? inventoryPath, TextWriter output, bool json = false, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        var inventory = ReadHosts(inventoryPath, ThisMachine);
+        if (!json) foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
+        var report = await RunJournalStatus.InspectAsync(inventory.Hosts, new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost,
+            TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
+        RunJournalStatus.Write(report, output, json);
+        return report.Clean;
+    }
+
+    // As Read, but checks only the hosts: a host's journal needs the host and its lock, not an install or an environment.
+    internal static EnvironmentInventory ReadHosts(string? path, ISteamLocator machine)
+    {
+        var inventory = Load(path, machine);
+        if (inventory.Hosts == null || inventory.Hosts.Any(host => host.Value == null))
+            throw new ArgumentException("Invalid environment inventory: hosts must contain objects, not null.");
+        var errors = new List<string>();
+        if (inventory.Hosts.Count == 0) errors.Add("List at least one host.");
+        foreach (var (name, host) in inventory.Hosts)
+        {
+            if (!NamePattern.IsMatch(name)) errors.Add("Invalid host name: " + name);
+            host.Validate(name, errors);
+        }
+        if (errors.Count != 0) throw new ArgumentException("Invalid environment inventory: " + string.Join(" ", errors));
         return inventory;
     }
 
@@ -124,7 +159,8 @@ public sealed class EnvironmentInventory
         var locals = Hosts.Where(host => host.Value.Kind == "local").Select(host => host.Key).ToList();
         if (locals.Count > 1) return; // Validate's host rules and assignment see each; nothing is defaulted between two.
         bool needed = !fromFile || Environments.Any(recipe => string.IsNullOrEmpty(recipe.Host) || recipe.Host == (locals.FirstOrDefault() ?? LocalHost));
-        if (!needed) return;
+        // A file's own local host gets this machine's platform, shell and lock even when no environment uses it (env status reads its journal).
+        if (!needed && locals.Count == 0) return;
         string name = locals.FirstOrDefault() ?? LocalHost;
         if (!Hosts.TryGetValue(name, out var local))
         {
@@ -137,6 +173,7 @@ public sealed class EnvironmentInventory
         if (string.IsNullOrEmpty(local.Platform)) local.Platform = machine.Platform;
         if (string.IsNullOrEmpty(local.Shell)) local.Shell = windows ? "powershell" : "bash";
         if (string.IsNullOrEmpty(local.Lock)) _detected.Add("assumed host lock " + (local.Lock = HostInstall.Join(machine.DataRoot, "lock")));
+        if (!needed) return;
 
         var steam = SteamDetection.Find(machine, SteamDetection.GameApp, SteamDetection.DedicatedServerApp);
         if (steam.Root != null && machine.DirectoryExists(HostInstall.Join(steam.Root, "userdata"))) SteamUserData = HostInstall.Join(steam.Root, "userdata");

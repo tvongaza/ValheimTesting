@@ -1,15 +1,19 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 
-/// <summary>Read-only local campaign eligibility; runtime readiness is checked again under the host leases.</summary>
+/// <summary>
+/// Read-only local campaign eligibility (runtime readiness is checked again under the host leases), and what earlier runs left
+/// on each host, from their journals (<c>status</c>).
+/// </summary>
 internal static class EnvCommand
 {
-    internal const string Usage = "valheim-test env preflight [MANIFEST [--hosts] | --inventory FILE] [--json]";
+    internal const string Usage = "valheim-test env preflight [MANIFEST [--hosts] | --inventory FILE] [--json] | valheim-test env status [--inventory FILE] [--json]";
 
     public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
+        if (args.Length != 0 && args[0] == "status") return await Status(args[1..], output, error).ConfigureAwait(false);
         var rest = args.Skip(1).ToList();
         bool json = rest.Remove("--json"), hosts = rest.Remove("--hosts");
         string? inventoryFile = null;
@@ -89,6 +93,28 @@ internal static class EnvCommand
                 output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
         }
         return report.Ready ? 0 : 3;
+    }
+
+    // What earlier runs left on every host of the inventory, from each host's run journal. Changes nothing. Exit 0 when every
+    // host was read and every run left nothing; 3 otherwise; 2 for a usage error.
+    private static async Task<int> Status(string[] args, TextWriter output, TextWriter error)
+    {
+        var rest = args.ToList();
+        bool json = rest.Remove("--json");
+        string? file = null;
+        int at = rest.IndexOf("--inventory");
+        if (at >= 0 && at + 1 < rest.Count) { file = rest[at + 1]; rest.RemoveRange(at, 2); }
+        if (rest.Count != 0 || (at >= 0 && file == null))
+        {
+            error.WriteLine("Usage: " + Usage);
+            return 2;
+        }
+        try { return await EnvironmentInventory.WriteRunStatusAsync(file == null ? null : Path.GetFullPath(file), output, json).ConfigureAwait(false) ? 0 : 3; }
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
+        {
+            error.WriteLine("REFUSED: " + failure.Message);
+            return 3;
+        }
     }
 
     private static void Detected(IReadOnlyList<string> lines, TextWriter output)

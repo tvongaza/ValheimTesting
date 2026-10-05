@@ -22,8 +22,49 @@ internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, str
         new(kind, fields.ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal));
 }
 
-/// <summary>A journal line as read back: its time, actor and entry.</summary>
-internal sealed record JournalRecord(DateTime Utc, string Actor, JournalEntry Entry);
+/// <summary>A journal line as read back: its time, actor and entry, the run it belongs to and the runner that wrote it (null on lines written before runners were recorded).</summary>
+internal sealed record JournalRecord(DateTime Utc, string Actor, JournalEntry Entry)
+{
+    public string Run { get; init; } = "";
+    public JournalRunner? Runner { get; init; }
+}
+
+/// <summary>
+/// The <c>valheim-test</c> process that wrote a journal line: its machine, process ID and start time. A run whose runner is
+/// still that process on that machine is going; one whose runner is proven gone and that never journalled its end was interrupted.
+/// </summary>
+internal sealed record JournalRunner(string Machine, int Pid, DateTime StartedUtc)
+{
+    private static readonly Lazy<JournalRunner> s_current = new(() =>
+    {
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        return new(Environment.MachineName, self.Id, self.StartTime.ToUniversalTime());
+    });
+    /// <summary>This process.</summary>
+    public static JournalRunner Current => s_current.Value;
+
+    /// <summary>Whether the runner ran on this machine, where its process can be checked.</summary>
+    public bool OnThisMachine => string.Equals(Machine, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// On this machine: whether the runner still runs (the same process ID with the same start time, so a reused ID does not
+    /// count). A process whose start time cannot be read counts as running. Never call for a runner on another machine.
+    /// </summary>
+    public bool StillRuns()
+    {
+        if (!OnThisMachine) throw new InvalidOperationException($"The runner ran on {Machine}, not on this machine.");
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(Pid);
+            try { if (Math.Abs((process.StartTime.ToUniversalTime() - StartedUtc).TotalSeconds) > 2) return false; }
+            catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) { }
+            return !process.HasExited;
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException) { return false; } // no such process
+    }
+
+    public override string ToString() => $"process {Pid.ToString(System.Globalization.CultureInfo.InvariantCulture)} on {Machine} (started {StartedUtc:yyyy-MM-dd HH:mm:ss}Z)";
+}
 
 /// <summary>
 /// A run's durable journal on each host it touches (#257): <c>&lt;journal&gt;/&lt;runId&gt;/&lt;actor&gt;.jsonl</c>, one JSON object
@@ -63,6 +104,10 @@ internal sealed class RunJournal
         var line = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["utc"] = DateTime.UtcNow.ToString("O"), ["run"] = RunId, ["actor"] = actor, ["kind"] = entry.Kind, ["fields"] = entry.Fields,
+            ["runner"] = new Dictionary<string, object>(StringComparer.Ordinal)
+            {
+                ["machine"] = JournalRunner.Current.Machine, ["pid"] = JournalRunner.Current.Pid, ["startedUtc"] = JournalRunner.Current.StartedUtc.ToString("O"),
+            },
         };
         // Base64 keeps the line one shell word whatever the paths hold; the host decodes it before appending.
         string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(line, Json)));
@@ -81,19 +126,59 @@ internal sealed class RunJournal
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsRead : BashRead,
             new Dictionary<string, string> { ["journal"] = journal, ["run"] = runId }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Reading run {runId}'s journal on {host.Name}");
-        var records = new List<JournalRecord>();
-        foreach (string raw in result.Stdout.Split('\n'))
-        {
-            if (!raw.StartsWith("VT-JOURNAL ", StringComparison.Ordinal)) continue;
-            using var document = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(raw["VT-JOURNAL ".Length..].Trim())));
-            var root = document.RootElement;
-            var fields = root.GetProperty("fields").EnumerateObject().ToDictionary(field => field.Name, field => field.Value.GetString() ?? "", StringComparer.Ordinal);
-            records.Add(new(DateTime.Parse(root.GetProperty("utc").GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind),
-                root.GetProperty("actor").GetString()!, new JournalEntry(root.GetProperty("kind").GetString()!, fields)));
-        }
         if (InteractiveClient.Line(result.Stdout, "VT-JOURNAL-END") == null)
             throw new HostOperationException($"Run {runId}'s journal on {host.Name} was not read to its end", result);
-        return records;
+        return Parse(result.Stdout);
+    }
+
+    /// <summary>
+    /// Every entry of every run journalled on <paramref name="host"/>, in the order written per run and actor, and how many
+    /// lines could not be read (a line cut short by a full disk or a killed write): those are skipped and counted, never guessed.
+    /// Changes nothing.
+    /// </summary>
+    public static async Task<(IReadOnlyList<JournalRecord> Records, int Unreadable)> ReadAllAsync(IGameHost host, string journal, TimeSpan timeout,
+        CancellationToken cancellation = default)
+    {
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsReadAll : BashReadAll,
+            new Dictionary<string, string> { ["journal"] = journal }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Reading the run journal on {host.Name}");
+        if (InteractiveClient.Line(result.Stdout, "VT-JOURNAL-END") == null)
+            throw new HostOperationException($"The run journal on {host.Name} was not read to its end", result);
+        var records = new List<JournalRecord>();
+        int unreadable = 0;
+        // One base64 word per file (one encoder per file, not per line), each file's lines in order.
+        foreach (string raw in result.Stdout.Split('\n'))
+        {
+            if (!raw.StartsWith("VT-JOURNAL-FILE ", StringComparison.Ordinal)) continue;
+            string text;
+            try { text = Encoding.UTF8.GetString(Convert.FromBase64String(raw["VT-JOURNAL-FILE ".Length..].Trim())); }
+            catch (FormatException) { unreadable++; continue; }
+            foreach (string line in text.Split('\n'))
+            {
+                if (line.Trim().Length == 0) continue;
+                try { records.Add(ParseLine(line)); }
+                catch (Exception error) when (error is JsonException or FormatException or KeyNotFoundException or InvalidOperationException) { unreadable++; }
+            }
+        }
+        return (records, unreadable);
+    }
+
+    private static List<JournalRecord> Parse(string stdout) =>
+        stdout.Split('\n').Where(raw => raw.StartsWith("VT-JOURNAL ", StringComparison.Ordinal))
+            .Select(raw => ParseLine(Encoding.UTF8.GetString(Convert.FromBase64String(raw["VT-JOURNAL ".Length..].Trim())))).ToList();
+
+    private static JournalRecord ParseLine(string line)
+    {
+        using var document = JsonDocument.Parse(line);
+        var root = document.RootElement;
+        var fields = root.GetProperty("fields").EnumerateObject().ToDictionary(field => field.Name, field => field.Value.GetString() ?? "", StringComparer.Ordinal);
+        JournalRunner? runner = null;
+        if (root.TryGetProperty("runner", out var by) && by.ValueKind == JsonValueKind.Object)
+            runner = new(by.GetProperty("machine").GetString()!, by.GetProperty("pid").GetInt32(),
+                DateTime.Parse(by.GetProperty("startedUtc").GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind).ToUniversalTime());
+        return new(DateTime.Parse(root.GetProperty("utc").GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind),
+            root.GetProperty("actor").GetString()!, new JournalEntry(root.GetProperty("kind").GetString()!, fields))
+        { Run = root.GetProperty("run").GetString()!, Runner = runner };
     }
 
     private static bool SafeName(string name) =>
@@ -134,6 +219,24 @@ internal sealed class RunJournal
                 foreach ($entry in [IO.File]::ReadAllLines($file, [Text.Encoding]::UTF8)) {
                     if ($entry) { 'VT-JOURNAL ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($entry)) }
                 }
+            }
+        }
+        'VT-JOURNAL-END'
+        """;
+    // Variables: journal. Every run's files, each sent whole as one base64 word; a missing journal reads as empty.
+    internal static readonly string BashReadAll = """
+        if [ -d "$journal" ]; then
+          for file in "$journal"/*/*.jsonl; do
+            [ -f "$file" ] || continue
+            printf 'VT-JOURNAL-FILE %s\n' "$(base64 < "$file" | tr -d '\n')"
+          done
+        fi
+        echo VT-JOURNAL-END
+        """;
+    internal static readonly string WindowsReadAll = """
+        if ([IO.Directory]::Exists($journal)) {
+            foreach ($dir in [IO.Directory]::GetDirectories($journal)) {
+                foreach ($file in [IO.Directory]::GetFiles($dir, '*.jsonl')) { 'VT-JOURNAL-FILE ' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) }
             }
         }
         'VT-JOURNAL-END'
