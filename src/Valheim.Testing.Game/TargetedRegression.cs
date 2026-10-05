@@ -501,7 +501,7 @@ public sealed class TargetedRegression
         if (!env.Configs.ContainsKey(CliConfig))
             File.WriteAllText(Path.Combine(config, CliConfig), $"[Server]\nEnabled = true\nPort = {Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n");
         var configs = Directory.EnumerateFiles(config).Order(StringComparer.Ordinal)
-            .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), WorldFixture.Hash(path), FileHash.Md5(path), null, [])).ToList();
+            .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), FileHash.Sha256(path), FileHash.Md5(path), null, [])).ToList();
 
         RequireDependencies(staged);
         RequireReferences(install, staged);
@@ -516,7 +516,6 @@ public sealed class TargetedRegression
             Mode = "owned", Install = install, Port = Port, Character = env.Client.Character,
             LaunchArguments = env.Client.LaunchArguments, StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
             Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),
-            Patchers = patchers.Select(file => Path.GetFileName(file.File.File)).ToArray(),
             InstallPins = installPins,
             CliManifest = env.Cli.Manifest,
             Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // The hosted rounds add their own.
@@ -723,8 +722,8 @@ public sealed class TargetedRegression
     {
         string libraries = Path.Combine(game, "doorstop_libs");
         return Directory.EnumerateFiles(game).Concat(Directory.Exists(libraries) ? Directory.EnumerateFiles(libraries, "*", SearchOption.AllDirectories) : [])
-            .Where(path => !InstallPins.IsMacMetadata(path))
-            .ToDictionary(path => Path.GetRelativePath(game, path).Replace('\\', '/'), WorldFixture.Hash, StringComparer.Ordinal);
+            .Where(path => !FileHash.IsMacMetadata(path))
+            .ToDictionary(path => Path.GetRelativePath(game, path).Replace('\\', '/'), FileHash.Sha256, StringComparer.Ordinal);
     }
 
     private static bool LoaderCopied(string game, string install, Dictionary<string, string>? recorded)
@@ -733,7 +732,7 @@ public sealed class TargetedRegression
         var current = LoaderFiles(game);
         return current.Count == recorded.Count && current.All(file =>
             recorded.TryGetValue(file.Key, out string? hash) && hash == file.Value &&
-            File.Exists(Path.Combine(install, file.Key)) && WorldFixture.Hash(Path.Combine(install, file.Key)) == file.Value);
+            File.Exists(Path.Combine(install, file.Key)) && FileHash.Sha256(Path.Combine(install, file.Key)) == file.Value);
     }
 
     private static void Copy(string source, string target, string root)
@@ -789,8 +788,8 @@ public sealed class TargetedRegression
         {
             string root = Path.Combine(install, "BepInEx", folder);
             if (!Directory.Exists(root)) continue;
-            foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => !InstallPins.IsMacMetadata(path)))
-                tree[Path.GetRelativePath(install, file).Replace('\\', '/')] = WorldFixture.Hash(file);
+            foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => !FileHash.IsMacMetadata(path)))
+                tree[Path.GetRelativePath(install, file).Replace('\\', '/')] = FileHash.Sha256(file);
         }
         return tree;
     }
@@ -800,7 +799,7 @@ public sealed class TargetedRegression
     private static string RequirePinned(string path, string sha256, string field)
     {
         if (!File.Exists(path)) throw new FileNotFoundException($"{field}: {path} does not exist. Build or download it, or correct the path.", path);
-        string actual = WorldFixture.Hash(path);
+        string actual = FileHash.Sha256(path);
         if (sha256.Length == 0)
             throw new InvalidOperationException($"{field}: pin {path} by its SHA256. It is {actual} now; check that this is the build you intend, then add \"sha256\": \"{actual}\".");
         if (!actual.Equals(sha256, StringComparison.OrdinalIgnoreCase))
@@ -811,7 +810,7 @@ public sealed class TargetedRegression
     private static void RequireArm(string name, RegressionArm arm)
     {
         if (!File.Exists(arm.File)) throw new FileNotFoundException($"mod.arms.{name}: {arm.File} does not exist. Build {(arm.Commit != null ? "commit " + arm.Commit : "it")}, or correct the path.", arm.File);
-        string actual = WorldFixture.Hash(arm.File);
+        string actual = FileHash.Sha256(arm.File);
         if (!actual.Equals(arm.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"mod.arms.{name}: {arm.File} is sha256 {actual}, but the manifest pins {arm.Sha256.ToLowerInvariant()}{(arm.Commit != null ? " for commit " + arm.Commit : "")}: " +
                 $"the file is another build. Rebuild {name}{(arm.Commit != null ? " from " + arm.Commit : "")} and stage that file, or review this one and pin {actual}.");
@@ -819,7 +818,7 @@ public sealed class TargetedRegression
 
     private static void RequireCopied(string target, string sha256)
     {
-        if (!WorldFixture.Hash(target).Equals(sha256, StringComparison.OrdinalIgnoreCase)) throw new IOException($"{target} changed while it was copied; stage again.");
+        if (!FileHash.Sha256(target).Equals(sha256, StringComparison.OrdinalIgnoreCase)) throw new IOException($"{target} changed while it was copied; stage again.");
     }
 
     // ---- what the staged DLLs declare ----

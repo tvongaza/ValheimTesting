@@ -174,7 +174,6 @@ internal sealed class HostedServerRun
             if (platform == ServerPlatform.Linux && !runtime.Executables.Contains(ServerLaunch.LinuxExecutable))
                 throw new InvalidOperationException($"{ServerLaunch.LinuxExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
         });
-        report.Step(StepPhase.Setup, "copied runtime's BepInEx patchers are the plan's", () => HostInstall.RequirePatchers(runtime, plan.Patchers, "runtime"));
         report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers", () =>
             (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, "runtime")
                 : HostInstall.Pins(runtime)).Record(report.Provenance, "runtime"));
@@ -258,7 +257,7 @@ internal sealed class HostedServerRun
     /// <summary>
     /// An owned client on its environment's client host, started in its desktop session (<see cref="InteractiveClient"/>) with the
     /// checks <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/> makes locally, made on the host: the
-    /// install's patchers and pins, a free CLI port. ValheimCLI is reached through the host's tunnel. Disposing the session stops
+    /// install's pins, a free CLI port. ValheimCLI is reached through the host's tunnel. Disposing the session stops
     /// only that client, keeps its logs, fetches them to <c>client-N</c> in the output and closes the tunnel. With the environment's
     /// Steam leases, the client's observed identity is leased (and its host's signed-in user checked, when asked) before anything
     /// else on its host is touched, and released at teardown once the client is gone.
@@ -339,7 +338,6 @@ internal sealed class HostedServerRun
         string runDirectory = HostInstall.Join(role.Runtime, RunId), launchDirectory = HostInstall.Join(runDirectory, "client-" + n);
         string log = HostInstall.Join(role.Install, BepInExLog);
         var listing = await HostInstall.ListAsync(host, role.Install, Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
-        HostInstall.RequirePatchers(listing, plan.Patchers, "client install");
         if (plan.Pinned)
             HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, "client install");
         await HostClientPreflight.CheckAsync(host, role.Install, platform, plan, Quick, cancellation).ConfigureAwait(false);

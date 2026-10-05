@@ -18,7 +18,6 @@
     "-savedir", "{world}", "-public", "0", "-logFile", "{runtime}/toolkit-unity.log"
   ],
   "environment": {},
-  "patchers": [],
   "pins": {
     "worlduid": "<the fixture world's UID>",
     "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",

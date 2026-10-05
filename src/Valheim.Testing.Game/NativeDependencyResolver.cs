@@ -150,7 +150,7 @@ public sealed class NativeDependencyLock
         if (!plan.Ready) throw new InvalidDataException($"The native dependency lock {path} still has {plan.Gaps.Count} unresolved choice(s): {string.Join("; ", plan.Gaps.Select(gap => gap.Name))}.");
         plan.CliManifest.Validate();
         foreach (var file in plan.Mods.Concat(plan.Plugins).Concat(plan.CliFiles))
-            if (!File.Exists(file.File) || !WorldFixture.Hash(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+            if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"The pinned file {file.File} ({file.Reason}) is missing or changed; resolve from explicit roots again.");
         plan.RequireExactCliSet();
         return plan;
@@ -213,7 +213,7 @@ public static class NativeDependencyResolver
                 var metadata = known[candidate];
                 string plugins = string.Join(";", metadata.Plugins
                     .Select(plugin => plugin.Guid + "@" + plugin.Version).Order(StringComparer.Ordinal));
-                return metadata.AssemblyName + "|" + plugins + "|" + WorldFixture.Hash(candidate);
+                return metadata.AssemblyName + "|" + plugins + "|" + FileHash.Sha256(candidate);
             }, StringComparer.OrdinalIgnoreCase);
             var choices = new List<string>();
             foreach (var group in groups)
@@ -245,7 +245,7 @@ public static class NativeDependencyResolver
         foreach (var file in cli.Files)
         {
             var matches = Directory.EnumerateFiles(request.CliFiles, file.File, SearchOption.AllDirectories)
-                .Where(path => WorldFixture.Hash(path).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal).ToList();
+                .Where(path => FileHash.Sha256(path).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal).ToList();
             if (matches.Count != 1)
             {
                 result.Gaps.Add(new("cli", file.File, $"The pinned ValheimCLI build {cli.Build} needs {file.File} at SHA256 {file.Sha256}; found {matches.Count} exact copy/copies in {request.CliFiles}.", matches));
@@ -323,7 +323,7 @@ public static class NativeDependencyResolver
         return result;
     }
 
-    private static NativeDependencyFile Pinned(string path, string reason) => new(path, WorldFixture.Hash(path), reason);
+    private static NativeDependencyFile Pinned(string path, string reason) => new(path, FileHash.Sha256(path), reason);
     private static bool AtLeast(string version, string? minimum) => minimum == null ||
         Version.TryParse(version, out var have) && Version.TryParse(minimum, out var need) && have >= need;
 }

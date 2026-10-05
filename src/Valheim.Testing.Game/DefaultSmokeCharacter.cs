@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Valheim.Testing.Game;
@@ -82,7 +81,7 @@ public static class DefaultSmokeCharacter
                     throw new IOException("The default character store has an unfamiliar entry: " + Path.GetFileName(entry));
 
         string copy = Path.Combine(storePath, Name + ".fch");
-        if (File.Exists(copy) && FileHash(copy) == Sha256)
+        if (File.Exists(copy) && FileHash.Sha256(copy) == Sha256)
         {
             try { return DisposableCharacterStore.Open(storePath).Get(Name).Store; }
             catch (Exception error) when (error is IOException or InvalidDataException or KeyNotFoundException or NotSupportedException or JsonException) { }
@@ -118,12 +117,11 @@ public static class DefaultSmokeCharacter
         using var output = new MemoryStream();
         input.CopyTo(output);
         byte[] bytes = output.ToArray();
-        if (!Convert.ToHexString(SHA256.HashData(bytes)).Equals(Sha256, StringComparison.OrdinalIgnoreCase) ||
+        if (!FileHash.Sha256(bytes).Equals(Sha256, StringComparison.OrdinalIgnoreCase) ||
             CharacterSaveReader.ReadIdentity(bytes).Name != "VTSeedClean" || !CharacterSaveReader.IsFreshSmokeSeed(bytes))
             throw new InvalidDataException("The packaged default character changed from its verified game save.");
         return bytes;
     }
 
-    private static string FileHash(string file) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))).ToLowerInvariant();
     private static bool IsLink(string entry) => (File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0;
 }

@@ -31,12 +31,12 @@ public sealed class NativeSmokeLoaderTests : IDisposable
             serverCopy = server.RuntimeDirectory;
             clientCopy = client.RuntimeDirectory;
             Assert.Equal(serverLoader.Files["BepInEx/core/BepInEx.dll"],
-                WorldFixture.Hash(Path.Combine(server.RuntimeDirectory, "BepInEx", "core", "BepInEx.dll")));
+                FileHash.Sha256(Path.Combine(server.RuntimeDirectory, "BepInEx", "core", "BepInEx.dll")));
             Assert.Equal(clientLoader.Files["BepInEx/core/BepInEx.dll"],
-                WorldFixture.Hash(Path.Combine(client.RuntimeDirectory, "BepInEx", "core", "BepInEx.dll")));
+                FileHash.Sha256(Path.Combine(client.RuntimeDirectory, "BepInEx", "core", "BepInEx.dll")));
             foreach (var (runtime, loader) in new[] { (server.RuntimeDirectory, serverLoader), (client.RuntimeDirectory, clientLoader) })
                 Assert.Equal(loader.Files["BepInEx/config/BepInEx.cfg"],
-                    WorldFixture.Hash(Path.Combine(runtime, "BepInEx", "config", "BepInEx.cfg")));
+                    FileHash.Sha256(Path.Combine(runtime, "BepInEx", "config", "BepInEx.cfg")));
             Assert.Equal("absent", client.Plan(5589, 2486, ["example.mod"]).Pins["example.mod"]);
         }
         Assert.Equal(source.OrderBy(item => item.Key), WorldFixture.Manifest(_rig.Game).OrderBy(item => item.Key));

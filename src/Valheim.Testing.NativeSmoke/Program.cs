@@ -100,7 +100,7 @@ try
         Fixture = new RegressionFixture { Root = Path.Combine(output, "world-source"), WorldUid = world.UidText },
         Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root },
         Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
-            { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = WorldFixture.Hash(mod),
+            { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = FileHash.Sha256(mod),
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
                 Commit = options.GetValueOrDefault("--source") } } },
     };
@@ -113,7 +113,7 @@ try
     inputs.Plugins.AddRange(dependencies.Mods.Skip(1).Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }));
     if (comparison != null)
         inputs.Mod.Arms.Add("after", new RegressionArm
-        { File = compareMod!, Sha256 = WorldFixture.Hash(compareMod!), Commit = options["--compare-source"] });
+        { File = compareMod!, Sha256 = FileHash.Sha256(compareMod!), Commit = options["--compare-source"] });
     inputs.Write(Path.Combine(output, "regression.json"));
     runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
     Console.WriteLine($"disposable install: {runner.Install}");

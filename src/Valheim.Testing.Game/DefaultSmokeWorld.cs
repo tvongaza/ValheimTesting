@@ -45,7 +45,7 @@ public static class DefaultSmokeWorld
                     ?? throw new InvalidDataException("The packaged smoke world is missing " + name);
                 string target = Path.Combine(world, name);
                 using (var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None)) source.CopyTo(output);
-                if (!WorldFixture.Hash(target).Equals(hash, StringComparison.OrdinalIgnoreCase))
+                if (!FileHash.Sha256(target).Equals(hash, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("The packaged smoke world has a changed file: " + name);
             }
             var identity = WorldIdentity.Read(newRoot);

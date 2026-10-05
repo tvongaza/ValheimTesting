@@ -63,8 +63,8 @@ public sealed class NativeServerRuntime : IDisposable
         if (duplicateConfig != null) throw new InvalidDataException("Two selected server configs share filename " + duplicateConfig.Key + ".");
         if (configs.Any(config => Path.GetFileName(config).Equals("valheimCLI.valheimCLI.cfg", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException("ValheimCLI config is owned by the smoke; do not supply it as a mod config.");
-        var configHashes = configs.ToDictionary(config => config, WorldFixture.Hash, StringComparer.Ordinal);
-        var sidecarHashes = sidecarFiles.ToDictionary(file => file, WorldFixture.Hash, StringComparer.Ordinal);
+        var configHashes = configs.ToDictionary(config => config, FileHash.Sha256, StringComparer.Ordinal);
+        var sidecarHashes = sidecarFiles.ToDictionary(file => file, FileHash.Sha256, StringComparer.Ordinal);
         var directoryHashes = sidecarDirectories.ToDictionary(directory => directory, WorldFixture.Manifest, StringComparer.Ordinal);
         if (directoryHashes.Any(entry => entry.Value.Keys.Any(path => Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase))))
             throw new InvalidDataException("Plugin sidecar directories cannot contain DLLs; select each plugin or library through dependency resolution.");
@@ -85,7 +85,7 @@ public sealed class NativeServerRuntime : IDisposable
         {
             if (!File.Exists(file)) throw new FileNotFoundException("A selected server file is missing.", file);
             var pinned = dependencies.CliFiles.Concat(dependencies.Mods).Concat(dependencies.Plugins).FirstOrDefault(item => item.File == file);
-            if (pinned != null && !WorldFixture.Hash(file).Equals(pinned.Sha256, StringComparison.OrdinalIgnoreCase))
+            if (pinned != null && !FileHash.Sha256(file).Equals(pinned.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("A selected server file changed after dependency resolution: " + file);
             var metadata = PluginMetadata.Read(file);
             if (file == adapter && (metadata.Plugins.Count != 1 || metadata.Plugins[0].Guid != SessionAdapterPluginGuid))
@@ -119,13 +119,13 @@ public sealed class NativeServerRuntime : IDisposable
             {
                 string target = Path.Combine(plugins, Path.GetFileName(file));
                 File.Copy(file, target);
-                if (WorldFixture.Hash(target) != WorldFixture.Hash(file)) throw new IOException("Staged server file changed while copying: " + file);
+                if (FileHash.Sha256(target) != FileHash.Sha256(file)) throw new IOException("Staged server file changed while copying: " + file);
             }
             foreach (string file in sidecarFiles)
             {
                 string target = Path.Combine(plugins, Path.GetFileName(file));
                 File.Copy(file, target);
-                if (!WorldFixture.Hash(target).Equals(sidecarHashes[file], StringComparison.OrdinalIgnoreCase))
+                if (!FileHash.Sha256(target).Equals(sidecarHashes[file], StringComparison.OrdinalIgnoreCase))
                     throw new IOException("A staged plugin sidecar changed while copying: " + file);
             }
             foreach (string directory in sidecarDirectories)
@@ -136,7 +136,7 @@ public sealed class NativeServerRuntime : IDisposable
                     string destination = Path.Combine(target, relative);
                     Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                     File.Copy(Path.Combine(directory, relative), destination);
-                    if (!WorldFixture.Hash(destination).Equals(hash, StringComparison.OrdinalIgnoreCase))
+                    if (!FileHash.Sha256(destination).Equals(hash, StringComparison.OrdinalIgnoreCase))
                         throw new IOException("A staged plugin sidecar changed while copying: " + relative);
                 }
                 WorldFixture.Verify(directory, directoryHashes[directory]);
@@ -145,11 +145,11 @@ public sealed class NativeServerRuntime : IDisposable
                 "[Server]\nEnabled = true\nPort = " + cliPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
             foreach (string config in configs)
             {
-                if (!WorldFixture.Hash(config).Equals(configHashes[config], StringComparison.OrdinalIgnoreCase))
+                if (!FileHash.Sha256(config).Equals(configHashes[config], StringComparison.OrdinalIgnoreCase))
                     throw new IOException("A selected server config changed while staging: " + config);
                 string target = Path.Combine(bep, "config", Path.GetFileName(config));
                 File.Copy(config, target);
-                if (!WorldFixture.Hash(target).Equals(configHashes[config], StringComparison.OrdinalIgnoreCase))
+                if (!FileHash.Sha256(target).Equals(configHashes[config], StringComparison.OrdinalIgnoreCase))
                     throw new IOException("A staged server config changed while copying: " + config);
             }
             return new NativeServerRuntime(copy, pins, selected, cliPort);

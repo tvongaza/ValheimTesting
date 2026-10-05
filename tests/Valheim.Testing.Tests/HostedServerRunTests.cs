@@ -221,9 +221,6 @@ internal sealed class FakeServerHost : IGameHost
                 if (!Directory.Exists(root)) return Ok("VT-LIST missing\n");
                 var text = new StringBuilder();
                 foreach (var (relative, sha) in WorldFixture.Manifest(root)) text.Append(sha).Append("  ./").Append(relative.Replace('\\', '/')).Append('\n');
-                string patchers = Path.Combine(root, "BepInEx", "patchers");
-                if (Directory.Exists(patchers))
-                    foreach (string entry in Directory.EnumerateFileSystemEntries(patchers)) text.Append("VT-PATCHER ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(Path.GetFileName(entry)))).Append('\n');
                 if (File.Exists(Path.Combine(root, ServerLaunch.LinuxExecutable))) text.Append("VT-EXEC ").Append(ServerLaunch.LinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }
@@ -471,7 +468,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(chosen, "selected plugin");
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen.dll")], TimeSpan.FromSeconds(30));
-        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/chosen.dll"]);
+        Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/chosen.dll"]);
         Assert.True(File.Exists(old));
         Assert.False(File.Exists(Path.Combine(host.Local(runtime), "BepInEx", "plugins", "unrelated.dll")));
         Assert.False(Directory.Exists(host.Local(staging)));
@@ -555,7 +552,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(chosen, "selected CLI");
         var files = new[] { new HostedRuntimeFile(chosen, "BepInEx/plugins/cli.dll") };
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging, files, TimeSpan.FromSeconds(30));
-        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/cli.dll"]);
+        Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/cli.dll"]);
         Assert.False(listing.Files.ContainsKey("BepInEx/plugins/unrelated.dll"));
         Assert.True(File.Exists(old));
         Assert.False(Directory.Exists(host.Local(staging)));
@@ -621,7 +618,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(chosen, "selected CLI");
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/mac-cli.dll")], TimeSpan.FromSeconds(30));
-        Assert.Equal(WorldFixture.Hash(chosen), listing.Files["BepInEx/plugins/mac-cli.dll"]);
+        Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/mac-cli.dll"]);
         Assert.True(File.Exists(executable));
     }
 
@@ -880,7 +877,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(0, code);
         Assert.Same(host, seenHost); Assert.Equal(RunDirectory + "/runtime", seenRuntime);
         Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
-                "copied runtime has the plan's server executable", "copied runtime's BepInEx patchers are the plan's", "copied runtime is the pinned game build, loader and patchers",
+                "copied runtime has the plan's server executable", "copied runtime is the pinned game build, loader and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "remove the server host's runtime copy, keeping what the run changed", "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
 
@@ -1161,7 +1158,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains($"local-other: it is a local {other} host, but this machine is {HostProfile.CurrentPlatform}.", placed);
         Assert.Contains("packaged: it names a loaderPackage, which only a campaign's preparation applies", placed);
         Assert.Contains("other-port: the plan's ValheimCLI port 5577 is not its cliPort 5590", placed);
-        Assert.Equal(WorldFixture.Hash(inventory), provenance.GetProperty("inventorySha256").GetString());
+        Assert.Equal(FileHash.Sha256(inventory), provenance.GetProperty("inventorySha256").GetString());
         Assert.Contains("start", host.Scripts);
 
         Inventory(Environment("other-port", 5590));

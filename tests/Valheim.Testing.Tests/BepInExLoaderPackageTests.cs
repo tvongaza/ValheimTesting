@@ -13,13 +13,13 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         package.Write(manifest);
         string sourceCore = Path.Combine(_rig.Game, "BepInEx", "core", "BepInEx.dll");
         File.WriteAllText(sourceCore, "another live core");
-        string changed = WorldFixture.Hash(sourceCore);
+        string changed = FileHash.Sha256(sourceCore);
 
         var environment = _rig.Manifest();
         _rig.LoaderPackage = manifest;
         var staged = _rig.Regression(environment).Stage("parent");
-        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], WorldFixture.Hash(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
-        Assert.Equal(changed, WorldFixture.Hash(sourceCore));
+        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
+        Assert.Equal(changed, FileHash.Sha256(sourceCore));
         Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
         // One loader identity: the install the package was applied to has the package's loader pin, which its identity names.
         Assert.Equal(package.Loader, InstallPins.Of(_rig.Install).Loader);
@@ -51,7 +51,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         _rig.LoaderPackage = manifest;
         _rig.Regression(environment).Stage("parent").Verify();
         Assert.False(Directory.Exists(Path.Combine(_rig.Game, "BepInEx", "core")));
-        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], WorldFixture.Hash(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
+        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
     }
 
     [Fact] public void AManifestCannotOverrideThePinnedLoaderConfiguration()
@@ -91,7 +91,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         package.Write(manifest);
         _rig.Regression(environment).Stage("parent").Verify();
 
-        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], WorldFixture.Hash(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
+        Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
     }
 
@@ -135,6 +135,29 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         new BepInExLoaderPackage { Name = package.Name, Version = package.Version, Root = package.Root,
             Files = package.Files.ToDictionary(file => file.Key, file => file.Value.ToUpperInvariant(), StringComparer.Ordinal) }.Write(manifest);
         Assert.Equal(package.Loader, BepInExLoaderPackage.Read(manifest).Loader);
+    }
+
+    // A package is a complete loader for some platform, by the launches' one list of loader files (BepInExLoader.LoaderFiles).
+    [Fact] public void APackageThatIsNoPlatformsCompleteLoaderIsRefused()
+    {
+        string root = Path.Combine(_rig.Root, "partial-loader");
+        void Write(string relative) { Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(root, relative))!); File.WriteAllText(Path.Combine(root, relative), relative); }
+        Write("BepInEx/core/BepInEx.dll"); Write("BepInEx/core/BepInEx.Preloader.dll"); Write("doorstop_libs/readme.txt");
+        var error = Assert.Throws<InvalidDataException>(() => BepInExLoaderPackage.Capture(root, "partial", "1"));
+        Assert.Contains("not a complete loader for any platform", error.Message);
+        Assert.Contains("Linux lacks doorstop_libs/libdoorstop_x64.so", error.Message);
+        Assert.Contains("Windows lacks winhttp.dll, doorstop_config.ini", error.Message);
+        Write("doorstop_libs/libdoorstop_x64.so");
+        BepInExLoaderPackage.Capture(root, "partial", "1"); // The control: with Linux's Doorstop library it is Linux's loader.
+        // A macOS-only package (a root libdoorstop.dylib) is complete too, on every OS that captures it.
+        string mac = Path.Combine(_rig.Root, "mac-loader");
+        foreach (string relative in new[] { "BepInEx/core/BepInEx.dll", "BepInEx/core/BepInEx.Preloader.dll", "libdoorstop.dylib" })
+        { Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(mac, relative))!); File.WriteAllText(Path.Combine(mac, relative), relative); }
+        var macPackage = BepInExLoaderPackage.Capture(mac, "mac", "1");
+        macPackage.RequireFor(ClientPlatform.MacOS, "package");
+        Assert.Contains("lacks doorstop_libs/libdoorstop_x64.so", Assert.Throws<FileNotFoundException>(() => macPackage.RequireFor(ClientPlatform.Linux, "package")).Message);
+        File.Delete(Path.Combine(root, "BepInEx", "core", "BepInEx.Preloader.dll"));
+        Assert.Contains("lacks BepInEx/core/BepInEx.Preloader.dll", Assert.Throws<InvalidDataException>(() => BepInExLoaderPackage.Capture(root, "partial", "1")).Message);
     }
 
     private BepInExLoaderPackage Package()

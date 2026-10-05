@@ -368,7 +368,7 @@ public sealed class ClientRound
         string path = Path.Combine(Output, $"{Name}-{name}.json");
         using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
             JsonSerializer.Serialize(file, value, value.GetType(), new JsonSerializerOptions { WriteIndented = true });
-        Report.Attach(new EvidenceReference(name, Name, WorldUid, path, WorldFixture.Hash(path)));
+        Report.Attach(new EvidenceReference(name, Name, WorldUid, path, FileHash.Sha256(path)));
         return path;
     }
 }

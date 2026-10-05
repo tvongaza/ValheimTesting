@@ -51,7 +51,7 @@ public class ToolkitTests
     [Fact] public void FixtureOwnsOnlyItsCopyAndCanPreserveFailure()
     {
         using var dirs = new Directories(); string file = Path.Combine(dirs.Source, "world.db"); File.WriteAllText(file, "original");
-        var hashes = new Dictionary<string, string> { ["world.db"] = WorldFixture.Hash(file) };
+        var hashes = new Dictionary<string, string> { ["world.db"] = FileHash.Sha256(file) };
         var fixture = WorldFixture.Copy(dirs.Source, dirs.Output, hashes); string copy = fixture.DirectoryPath;
         File.WriteAllText(Path.Combine(copy, "world.db"), "edited"); fixture.Dispose(); Assert.False(Directory.Exists(copy)); Assert.Equal("original", File.ReadAllText(file));
         using var kept = WorldFixture.Copy(dirs.Source, dirs.Output, hashes); kept.Preserve = true; kept.Dispose(); Assert.True(Directory.Exists(kept.DirectoryPath));
@@ -63,7 +63,7 @@ public class ToolkitTests
         Directory.CreateDirectory(Path.Combine(dirs.Source, "BepInEx", "plugins")); File.WriteAllText(Path.Combine(dirs.Source, "BepInEx", "plugins", "Mod.dll"), "mod");
         var manifest = WorldFixture.Manifest(dirs.Source);
         Assert.Equal(new[] { Path.Combine("BepInEx", "plugins", "Mod.dll"), "world.db" }, manifest.Keys.Order(StringComparer.Ordinal));
-        Assert.Equal(WorldFixture.Hash(Path.Combine(dirs.Source, "world.db")), manifest["world.db"]);
+        Assert.Equal(FileHash.Sha256(Path.Combine(dirs.Source, "world.db")), manifest["world.db"]);
         using var copy = WorldFixture.Copy(dirs.Source, dirs.Output, manifest);
         Assert.Equal("mod", File.ReadAllText(Path.Combine(copy.DirectoryPath, "BepInEx", "plugins", "Mod.dll")));
         // A file changed after the manifest was taken is refused, as for any pinned plan.
@@ -81,7 +81,7 @@ public class ToolkitTests
         using var dirs = new Directories();
         Directory.CreateDirectory(Path.Combine(dirs.Source, "BepInEx", "scripts"));
         string file = Path.Combine(dirs.Source, "server.exe"); File.WriteAllText(file, "fixture");
-        using var copy = WorldFixture.Copy(dirs.Source, dirs.Output, new Dictionary<string, string> { ["server.exe"] = WorldFixture.Hash(file) });
+        using var copy = WorldFixture.Copy(dirs.Source, dirs.Output, new Dictionary<string, string> { ["server.exe"] = FileHash.Sha256(file) });
         Assert.True(Directory.Exists(Path.Combine(copy.DirectoryPath, "BepInEx", "scripts")));
         Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(copy.DirectoryPath, "BepInEx", "scripts")));
     }

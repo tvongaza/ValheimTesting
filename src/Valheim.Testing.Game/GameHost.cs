@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Formats.Tar;
 using System.Globalization;
 using System.Net;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -442,7 +441,7 @@ public abstract class ScriptedGameHost : IGameHost
             result.EnsureSuccess("Packing " + hostDirectory + " on " + Name);
             var reported = Regex.Match(result.Stderr, @"^VT-FETCH ([0-9a-f]{64}) ([0-9]+)$", RegexOptions.Multiline | RegexOptions.CultureInvariant);
             if (!reported.Success) throw new HostOperationException("The host did not report the archive's hash", result);
-            string sha256 = await Sha256Async(archive, cancellation).ConfigureAwait(false);
+            string sha256 = await FileHash.Sha256Async(archive, cancellation).ConfigureAwait(false);
             long bytes = new FileInfo(archive).Length;
             if (sha256 != reported.Groups[1].Value || bytes.ToString(CultureInfo.InvariantCulture) != reported.Groups[2].Value)
                 throw new IOException($"The archive of {hostDirectory} arrived as {bytes} bytes with SHA-256 {sha256}; the host sent {reported.Groups[2].Value} bytes with {reported.Groups[1].Value}.");
@@ -460,7 +459,7 @@ public abstract class ScriptedGameHost : IGameHost
 
     private async Task<Shipment> ShipArchiveAsync(string archive, string hostDirectory, string record, string? commit, string? tree, TimeSpan timeout, CancellationToken cancellation)
     {
-        string sha256 = await Sha256Async(archive, cancellation).ConfigureAwait(false);
+        string sha256 = await FileHash.Sha256Async(archive, cancellation).ConfigureAwait(false);
         long bytes = new FileInfo(archive).Length;
         HostResult result;
         var variables = new Dictionary<string, string> { ["dest"] = hostDirectory, ["sha256"] = sha256, ["record"] = record };
@@ -694,9 +693,4 @@ public abstract class ScriptedGameHost : IGameHost
         return exit.Stdout;
     }
 
-    private static async Task<string> Sha256Async(string file, CancellationToken cancellation)
-    {
-        await using var stream = File.OpenRead(file);
-        return Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, cancellation).ConfigureAwait(false));
-    }
 }

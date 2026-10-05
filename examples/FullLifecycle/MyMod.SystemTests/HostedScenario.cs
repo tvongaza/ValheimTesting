@@ -149,7 +149,7 @@ public static class HostedRun
         {
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
             plan = HostedPlan.ReadValidated(args[1]);
-            report.Provenance["planSha256"] = WorldFixture.Hash(args[1]);
+            report.Provenance["planSha256"] = FileHash.Sha256(args[1]);
             report.Provenance["scenario"] = plan.Scenario;
             report.Provenance["clientMode"] = plan.Client.Mode;
             Directory.CreateDirectory(output); ownOutput = true;

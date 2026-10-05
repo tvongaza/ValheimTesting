@@ -35,7 +35,6 @@
   "environment": {
     "MYMOD_TEST_FIXTURES": "1"
   },
-  "patchers": [],
   "logScan": {
     "unknown-error": {
       "expected": ["[Error  :   BepInEx] Unable to start Unity log writer"],

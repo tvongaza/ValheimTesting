@@ -151,7 +151,7 @@ public sealed class ClientSessionTests : IDisposable
             Assert.Contains("neither x64 nor arm64", Assert.Throws<ArgumentException>(() => refused.Validate()).Message);
         }
         var attached = Plan("attach"); attached.Architecture = "x64";
-        Assert.Contains("leave out install, installPins, launch arguments, patchers and architecture", Assert.Throws<ArgumentException>(() => attached.Validate("my.mod")).Message);
+        Assert.Contains("leave out install, installPins, launch arguments and architecture", Assert.Throws<ArgumentException>(() => attached.Validate("my.mod")).Message);
     }
 
     [Fact] public void TheLaunchedArchitectureIsRecordedAndAnAttachedClientHasNone()
@@ -233,12 +233,14 @@ public sealed class ClientSessionTests : IDisposable
 
     [Fact] public void ALeftoverPatcherInTheInstallRefusesTheLaunch()
     {
+        // The install pinned clean; a removed mod then left its patcher behind. The patchers pin refuses it, naming it.
         string install = Path.Combine(_output, "install");
+        FakeInstalls.Client(install);
+        var plan = Plan(); plan.Install = install; plan.InstallPins = InstallPins.Of(install);
         Directory.CreateDirectory(Path.Combine(install, "BepInEx", "patchers"));
         File.WriteAllText(Path.Combine(install, "BepInEx", "patchers", "RemovedMod.Preloader.dll"), "patcher");
-        var plan = Plan(); plan.Install = install;
         var error = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _output));
-        Assert.Contains("RemovedMod.Preloader.dll", error.Message);
+        Assert.Contains("holding RemovedMod.Preloader.dll", error.Message);
         Assert.False(File.Exists(Path.Combine(_output, "client-process.json")));
     }
 
@@ -267,8 +269,6 @@ public sealed class ClientSessionTests : IDisposable
     [InlineData("loose-pin", "exact MD5 or absent")]
     [InlineData("spaced-character", "single tokens")]
     [InlineData("join-seconds", "timeouts")]
-    [InlineData("attach-with-patchers", "leave out install")]
-    [InlineData("patcher-path", "not paths")]
     public void PlanRulesRefuseBeforeAnythingStarts(string defect, string message)
     {
         var plan = Plan();
@@ -284,8 +284,6 @@ public sealed class ClientSessionTests : IDisposable
             case "loose-pin": plan.Pins["other.mod"] = "any"; break;
             case "spaced-character": plan.Character = "Test Er"; break;
             case "join-seconds": plan.JoinSeconds = 5; break;
-            case "attach-with-patchers": plan.Mode = "attach"; plan.Install = ""; plan.Patchers = ["HookGenPatcher"]; break;
-            case "patcher-path": plan.Patchers = ["../HookGenPatcher"]; break;
         }
         Assert.Contains(message, Assert.Throws<ArgumentException>(() => plan.Validate("my.mod")).Message);
     }
@@ -300,7 +298,7 @@ public sealed class ClientSessionTests : IDisposable
     [Fact] public void APinnedFileMustStillMatch()
     {
         string file = Path.Combine(_output, "plan.json"); File.WriteAllText(file, "{}");
-        var pinned = new PinnedFile { Source = file, Sha256 = WorldFixture.Hash(file) };
+        var pinned = new PinnedFile { Source = file, Sha256 = FileHash.Sha256(file) };
         pinned.Validate("plan"); Assert.Equal(file, pinned.Verified());
         File.WriteAllText(file, "{ }");
         Assert.Throws<InvalidOperationException>(pinned.Verified);

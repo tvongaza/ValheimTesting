@@ -172,7 +172,6 @@ internal static class HostServerChecks
         {
             var listing = await HostInstall.ListAsync(host, install.Path, Generous);
             HostInstall.RequireSame(WorldFixture.Manifest(install.Path), listing, "install");
-            Assert.Equal(new[] { "Hooks" }, listing.Patchers);
             var pins = InstallPins.Of(install.Path);
             var found = HostInstall.Pins(listing);
             Assert.Equal((pins.Game, pins.Loader, pins.Patchers), (found.Game, found.Loader, found.Patchers));
@@ -187,6 +186,13 @@ internal static class HostServerChecks
                 File.CreateSymbolicLink(Path.Combine(install.Path, "winhttp.dll"), Path.Combine(install.Path, "real-winhttp.dll"));
                 var linked = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(host, install.Path, Generous, HostInstall.PinPaths));
                 Assert.Contains("winhttp.dll", linked.Message);
+                // A named folder that is a link is refused too, never listed as empty (the local pins refuse it alike).
+                File.Delete(Path.Combine(install.Path, "winhttp.dll"));
+                File.Move(Path.Combine(install.Path, "real-winhttp.dll"), Path.Combine(install.Path, "winhttp.dll"));
+                Directory.Move(Path.Combine(install.Path, "doorstop_libs"), Path.Combine(install.Path, "real-libs"));
+                Directory.CreateSymbolicLink(Path.Combine(install.Path, "doorstop_libs"), Path.Combine(install.Path, "real-libs"));
+                var linkedFolder = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(host, install.Path, Generous, HostInstall.PinPaths));
+                Assert.Contains("doorstop_libs", linkedFolder.Message);
             }
             await Assert.ThrowsAsync<DirectoryNotFoundException>(() => HostInstall.ListAsync(host, Path.Combine(install.Path, "missing"), Generous));
         }

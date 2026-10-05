@@ -357,10 +357,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(File.Exists(Path.Combine(output, "campaign-times.json")));
         // The bound plan is evidence (NaN sites included), hashed as the run's plan; the campaign and inventory are hashed too.
         string bound = Path.Combine(output, "prepared", "plan.json");
-        Assert.Equal(WorldFixture.Hash(bound), result.GetProperty("Provenance").GetProperty("planSha256").GetString());
+        Assert.Equal(FileHash.Sha256(bound), result.GetProperty("Provenance").GetProperty("planSha256").GetString());
         Assert.Contains("NaN", File.ReadAllText(bound));
-        Assert.Equal(WorldFixture.Hash(manifest), result.GetProperty("Provenance").GetProperty("campaignSha256").GetString());
-        Assert.Equal(WorldFixture.Hash(inventory), result.GetProperty("Provenance").GetProperty("inventorySha256").GetString());
+        Assert.Equal(FileHash.Sha256(manifest), result.GetProperty("Provenance").GetProperty("campaignSha256").GetString());
+        Assert.Equal(FileHash.Sha256(inventory), result.GetProperty("Provenance").GetProperty("inventorySha256").GetString());
         Assert.Equal(host.Claims.Count, host.Releases.Count);
         Assert.Empty(Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*")); // The prepared install was retired.
     }

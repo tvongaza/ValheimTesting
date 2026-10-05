@@ -113,8 +113,7 @@ public sealed class ClientSession : IDisposable
     /// startup at once with its exit code. Refuses before launching
     /// when something already listens on the client's CLI port (a command could reach a client this session does not own),
     /// when no Steam client is running here, when the plan's password variable is not set in this process (the client
-    /// inherits it), when the install's <c>BepInEx/patchers</c> holds anything the plan's <see cref="ClientRunPlan.Patchers"/>
-    /// does not name, when its game build, loader or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>,
+    /// inherits it), when the install's game build, loader or patchers are not the plan's <see cref="ClientRunPlan.InstallPins"/>,
     /// when <see cref="ClientLaunch"/> refuses the install for the plan's <see cref="ClientRunPlan.Architecture"/> (an
     /// arm64 request without an arm64 Doorstop library or a native BepInEx core is refused, never run under Rosetta) or its
     /// Doorstop proxy and configuration are from different versions, or when the rest of
@@ -142,7 +141,7 @@ public sealed class ClientSession : IDisposable
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
         account?.RequireReady(null);
-        var start = plan.CheckOwnedInstall(); // Patchers, install pins, loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
+        var start = plan.CheckOwnedInstall(); // Install pins (patchers included), loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
         try { reservation.Start(); }
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }

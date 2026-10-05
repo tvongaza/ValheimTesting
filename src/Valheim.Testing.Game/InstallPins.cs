@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -31,7 +29,7 @@ public static class EnvironmentPinning
 
     /// <summary>What an unpinned run prints when the opt-out takes effect.</summary>
     public static string Warning(string what) =>
-        $"WARNING: {NotPinned}: {what} runs with pinning \"{None}\". Nothing checks the game build, BepInEx, the plugins or the world it runs against, " +
+        $"WARNING: {NotPinned}: {what} runs with pinning \"{None}\". Nothing checks the game build, BepInEx, its patchers, the plugins or the world it runs against, " +
         "so its result is not evidence for any particular build. Use strict pins for results you rely on.";
 
     internal static void Warn(string what) => Console.Error.WriteLine(Warning(what));
@@ -62,7 +60,8 @@ public static class EnvironmentPinning
 /// loader package, so a plan, a package and every check of an install share one loader identity.
 /// <c>BepInEx/config/BepInEx.cfg</c> is configuration, not loader: BepInEx rewrites it when it binds its settings.</item>
 /// <item><see cref="Patchers"/>: the contents of <c>BepInEx/patchers</c>, which rewrite game assemblies before any plugin
-/// loads (the plan's patcher names say which entries it holds; this says which builds).</item>
+/// loads: a clean runtime has none, so a patcher a removed mod left behind changes this pin, and a refusal names the folder's
+/// entries.</item>
 /// </list>
 /// Each value is the SHA256 of a listing: one line per file, <c>&lt;sha256&gt;  &lt;relative path&gt;\n</c> with
 /// <c>/</c> separators, ordered by path (ordinal), as <c>sha256sum</c> prints it; <see cref="Loader"/>'s paths are relative
@@ -154,14 +153,18 @@ public sealed class InstallPins
     public InstallPins Check(string root, string kind)
     {
         Validate(kind);
-        return Compare(Of(root), kind, Path.GetRelativePath(Path.GetFullPath(root), Path.GetDirectoryName(GameAssembly(root))!));
+        root = Path.GetFullPath(root);
+        string patchers = Path.Combine(root, BepInExLoader.Patchers);
+        return Compare(Of(root), kind, Path.GetRelativePath(root, Path.GetDirectoryName(GameAssembly(root))!),
+            () => Directory.Exists(patchers) ? Directory.EnumerateFileSystemEntries(patchers).Select(Path.GetFileName).OfType<string>().ToList() : []);
     }
 
     /// <summary>
     /// <see cref="Check"/> for pins found elsewhere (an install on another host): refuses <paramref name="found"/> unless it is
-    /// these pins. <paramref name="gameFolder"/> names the Managed folder in the message. Returns <paramref name="found"/>.
+    /// these pins. <paramref name="gameFolder"/> names the Managed folder and <paramref name="patcherEntries"/> lists what
+    /// <c>BepInEx/patchers</c> holds, read only for the message. Returns <paramref name="found"/>.
     /// </summary>
-    internal InstallPins Compare(InstallPins found, string kind, string gameFolder)
+    internal InstallPins Compare(InstallPins found, string kind, string gameFolder, Func<IReadOnlyCollection<string>>? patcherEntries = null)
     {
         Validate(kind);
         var differences = new List<string>();
@@ -170,7 +173,13 @@ public sealed class InstallPins
         if (!Same(found.Loader, Loader))
             differences.Add($"the loader differs ({LoaderFilesText} is {found.Loader}, pinned loader {Loader}): another BepInEx, BepInExPack or Doorstop build, or a proxy or configuration replaced on its own");
         if (!Same(found.Patchers, Patchers))
-            differences.Add($"the patchers differ ({BepInExLoader.Patchers} is {found.Patchers}, pinned patchers {Patchers})");
+        {
+            var entries = patcherEntries?.Invoke().Where(entry => !FileHash.IsMacMetadata(entry)).Order(StringComparer.Ordinal).ToList();
+            differences.Add($"the patchers differ ({BepInExLoader.Patchers} is {found.Patchers}" +
+                (entries == null ? "" : entries.Count == 0 ? ", empty" : $", holding {string.Join(", ", entries)}") +
+                $", pinned patchers {Patchers}): a preloader patcher a removed mod left behind, or a patcher the run needs that is missing or another build; " +
+                "a clean runtime has an empty patchers folder, and a leftover patcher breaks the game's types before any plugin loads");
+        }
         if (differences.Count != 0)
             throw new InvalidOperationException($"The {kind} is not the pinned one: {string.Join("; ", differences)}. Restore the pinned install, or review the change and pin the new values.");
         return found;
@@ -202,8 +211,9 @@ public sealed class InstallPins
     {
         string managed = Path.GetDirectoryName(GameAssembly(root))!;
         // Filtered by name here rather than by the search pattern, so every platform matches alike (case-sensitive, as a shell glob).
-        return ListingHash(managed, Directory.EnumerateFiles(managed).Where(path =>
-            Path.GetFileName(path) is var name && name.StartsWith("assembly_", StringComparison.Ordinal) && name.EndsWith(".dll", StringComparison.Ordinal)));
+        return FileHash.Listing(managed, Directory.EnumerateFiles(managed).Where(path =>
+            Path.GetFileName(path) is var name && name.StartsWith("assembly_", StringComparison.Ordinal) && name.EndsWith(".dll", StringComparison.Ordinal))
+            .Select(path => { FileHash.RefuseLink(path); return path; }));
     }
 
     /// <summary>
@@ -233,42 +243,21 @@ public sealed class InstallPins
     internal static IEnumerable<string> LoaderEntries => LoaderRootFiles.Concat(LoaderFolders);
     private static readonly string LoaderFilesText = string.Join(", ", LoaderEntries.SkipLast(1)) + " and " + LoaderEntries.Last();
 
-    /// <summary>The loader files (<see cref="IsLoaderFile"/>) under the install at <paramref name="root"/>, as full paths, Mac metadata left out.</summary>
+    /// <summary>The loader files (<see cref="IsLoaderFile"/>) under the install at <paramref name="root"/>, as full paths; a link among them is refused.</summary>
     internal static IEnumerable<string> LoaderFiles(string root) =>
-        LoaderRootFiles.Select(file => Path.Combine(root, file)).Where(File.Exists)
-            .Concat(LoaderFolders.Select(folder => Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar))).Where(Directory.Exists)
-                .SelectMany(folder => Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)))
-            .Where(path => !IsMacMetadata(path));
+        LoaderRootFiles.Concat(LoaderFolders).Select(entry => Path.Combine(root, entry.Replace('/', Path.DirectorySeparatorChar)))
+            .Where(path => File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget != null)
+            .SelectMany(path => { FileHash.RefuseLink(path); return Directory.Exists(path) ? FileHash.Files(path) : [path]; });
 
     /// <summary>The <see cref="Loader"/> value of the install at <paramref name="root"/>: the listing hash of its loader files, relative to the root.</summary>
-    public static string LoaderHash(string root) => ListingHash(Path.GetFullPath(root), LoaderFiles(Path.GetFullPath(root)));
+    public static string LoaderHash(string root) => FileHash.Listing(Path.GetFullPath(root), LoaderFiles(Path.GetFullPath(root)));
 
-    /// <summary>The SHA256 of a folder's listing (see <see cref="InstallPins"/>); an empty or absent folder hashes the empty listing.</summary>
+    /// <summary>
+    /// The SHA256 of a folder's listing (<see cref="FileHash.Listing(string, IEnumerable{string})"/>); an empty or absent
+    /// folder hashes the empty listing, and a link in it is refused, as a host's listing refuses it.
+    /// </summary>
     public static string DirectoryHash(string directory) =>
-        ListingHash(directory, Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories) : []);
-
-    /// <summary>Finder's <c>.DS_Store</c> and AppleDouble <c>._*</c> files, which copying through macOS adds; never part of a listing.</summary>
-    public static bool IsMacMetadata(string path)
-    {
-        string name = Path.GetFileName(path);
-        return name == ".DS_Store" || name.StartsWith("._", StringComparison.Ordinal);
-    }
-
-    private static string ListingHash(string directory, IEnumerable<string> files) =>
-        ListingHash(files.Where(path => !IsMacMetadata(path))
-            .Select(path => (Relative: Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '/'), Sha256: (Func<string>)(() => WorldFixture.Hash(path)))));
-
-    /// <summary>The listing hash of files already hashed elsewhere: relative paths with <c>/</c> separators and their SHA256.</summary>
-    internal static string ListingHash(IEnumerable<(string Relative, string Sha256)> files) =>
-        ListingHash(files.Where(file => !IsMacMetadata(file.Relative)).Select(file => (file.Relative, (Func<string>)(() => file.Sha256))));
-
-    private static string ListingHash(IEnumerable<(string Relative, Func<string> Sha256)> files)
-    {
-        var listing = new StringBuilder();
-        foreach (var file in files.OrderBy(file => file.Relative, StringComparer.Ordinal))
-            listing.Append(file.Sha256()).Append("  ").Append(file.Relative).Append('\n');
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(listing.ToString()))).ToLowerInvariant();
-    }
+        FileHash.Listing(directory, Directory.Exists(directory) ? FileHash.Files(directory) : []);
 
     /// <summary>The values as report provenance, under <paramref name="prefix"/> (for example <c>runtime</c>: <c>runtimeGameSha256</c>).</summary>
     public void Record(IDictionary<string, string> provenance, string prefix)

@@ -68,7 +68,7 @@ public sealed class ReviewCaptureTests
             {
                 var receipt = ReviewCapture.CaptureCore(server, client, Plan(Path.Combine(run, "review-shot-1")), HostShellKind.PowerShell,
                     Fetch, () => { }, CancellationToken.None);
-                Assert.Equal(new EvidenceReference("review-still", "shot-1", "1716468958", receipt.MetadataPath, WorldFixture.Hash(receipt.MetadataPath)), receipt.Evidence);
+                Assert.Equal(new EvidenceReference("review-still", "shot-1", "1716468958", receipt.MetadataPath, FileHash.Sha256(receipt.MetadataPath)), receipt.Evidence);
                 Assert.Contains(receipt.Sha256, File.ReadAllText(receipt.MetadataPath)); // The sidecar carries the image's digest.
                 var report = new ScenarioReport("review evidence");
                 report.Step("capture", () => { });
@@ -79,7 +79,7 @@ public sealed class ReviewCaptureTests
                 using var result = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(run, "result.json")));
                 var linked = result.RootElement.GetProperty("Evidence")[0];
                 Assert.Equal("review-still", linked.GetProperty("Kind").GetString());
-                Assert.Equal(WorldFixture.Hash(receipt.MetadataPath), linked.GetProperty("Sha256").GetString());
+                Assert.Equal(FileHash.Sha256(receipt.MetadataPath), linked.GetProperty("Sha256").GetString());
             }
         }
         finally { Directory.Delete(run, true); }

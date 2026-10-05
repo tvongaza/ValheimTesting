@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -111,7 +110,7 @@ public static class ReviewCapture
                 throw new InvalidDataException("The fetched capture has an unexpected filename.");
             byte[] png = File.ReadAllBytes(files[0]);
             if (!CompletePng(png)) throw new InvalidDataException("The fetched image is not a complete PNG.");
-            string sha = Convert.ToHexString(SHA256.HashData(png)).ToLowerInvariant();
+            string sha = FileHash.Sha256(png);
             string sidecarSha = ReviewLease.WriteSidecar(Path.Combine(staging, plan.Id + ".json"), "human-review-still", plan.Id, plan.WorldUid, plan.GameBuild, plan.PluginPins, new
             {
                 location = new { plan.Arrival.X, y = plan.Arrival.Height, plan.Arrival.Z },
