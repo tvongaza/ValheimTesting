@@ -26,7 +26,7 @@ internal static class SmokeProject
     internal static void PrintHint(bool server)
     {
         if (Unpublishable(GameVersion) == null)
-            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "campaign" : "regression")}.json; needs NuGet.org).");
+            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "the run's campaign.json and the plan.json beside it, or a Mac run's plan.json" : "the run's regression.json")}; needs NuGet.org).");
     }
 
     internal static async Task<int> InitAsync(string[] args)

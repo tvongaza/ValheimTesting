@@ -17,6 +17,7 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
     public bool DirectoryExists(string path) => Directories.Contains(path);
     public bool FileExists(string path) => Files.ContainsKey(path);
     public string? ReadText(string path) => Files.GetValueOrDefault(path);
+    public string OnDiskPath(string path) => Directories.TryGetValue(path, out string? actual) ? actual : path;
 
     private char Separator => Platform == "windows" ? '\\' : '/';
     public void File(string path, string text = "")
@@ -77,6 +78,26 @@ public sealed class ThisMachineTests : IDisposable
         // It resolves a one-server, one-client campaign with no file at all.
         var resolved = inventory.Resolve(new HostedCampaignManifest { Server = new(), Clients = new() { ["client"] = new() } });
         Assert.Equal(["local-server", "local-client"], resolved.Assignments.Select(assignment => assignment.Environment));
+    }
+
+    // Steam registers its path in lower case with forward slashes; detection prints the folders as the disk spells them.
+    [Fact] public void PathsArePrintedAsTheDiskSpellsThem()
+    {
+        var pc = new FakeMachine { SteamPath = "c:/program files (x86)/steam" };
+        pc.Directories.Add(@"C:\Program Files (x86)\Steam");
+        string game = pc.App(@"C:\Program Files (x86)\Steam", "892970", "Valheim", "valheim.exe");
+        var inventory = EnvironmentInventory.Read(null, pc);
+        Assert.Contains(inventory.Detected, line => line.StartsWith(@"Steam: C:\Program Files (x86)\Steam (from registry", StringComparison.Ordinal));
+        Assert.Equal(game, inventory.Environments.Single().Install);
+        Assert.StartsWith(@"C:\Program Files (x86)\Steam\steamapps\common", game);
+
+        // The real file system: a case-insensitive one (Windows, macOS) gives the folder's own spelling back.
+        string dir = Path.Combine(_root, "CasedFolder", "Inner");
+        Directory.CreateDirectory(dir);
+        string lower = Path.Combine(_root, "casedfolder", "inner");
+        string spelled = new LocalSteamLocator().OnDiskPath(lower);
+        Assert.Equal(OperatingSystem.IsLinux() ? lower : dir, spelled);
+        Assert.Equal(Path.Combine(_root, "missing"), new LocalSteamLocator().OnDiskPath(Path.Combine(_root, "missing")));
     }
 
     [Fact] public void WithoutTheRegistryValueSteamIsFoundInProgramFiles()

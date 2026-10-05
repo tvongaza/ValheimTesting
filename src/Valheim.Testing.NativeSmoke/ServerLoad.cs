@@ -55,28 +55,62 @@ internal static class ServerLoad
         ConsoleCancelEventHandler onCancel = (_, press) => { press.Cancel = true; cancel.Cancel(); };
         Console.CancelKeyPress += onCancel;
         var clock = Stopwatch.StartNew();
+        string? output = null;
+        var state = new RunState();
         try
         {
-            string output = Output(parsed!);
+            output = Output(parsed!);
             if (seams.MacOS ?? OperatingSystem.IsMacOS())
             {
                 foreach (string option in new[] { "--inventory", "--server-env", "--client-env", "--join", "--preflight-only" })
                     if (parsed!.Options.ContainsKey(option) || parsed.Switches.Contains(option))
                         throw new ArgumentException(option + " needs the campaign runner, which has no macOS dedicated server yet; on a Mac, server-load stages local copies.");
-                return await RunStagedAsync(parsed!, output, clock, seams.Staged ?? PinnedServerRun.MainAsync, cancel.Token).ConfigureAwait(false);
+                return await RunStagedAsync(parsed!, output, clock, seams.Staged ?? PinnedServerRun.MainAsync, state, cancel.Token).ConfigureAwait(false);
             }
             if (parsed!.Options.ContainsKey("--steam-userdata"))
                 throw new ArgumentException("--steam-userdata is for a Mac's staged client; a campaign client's userdata is resolved on its own host.");
-            return await RunCampaignAsync(parsed!, output, clock, seams, cancel.Token).ConfigureAwait(false);
+            return await RunCampaignAsync(parsed!, output, clock, seams, state, cancel.Token).ConfigureAwait(false);
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or JsonException or OperationCanceledException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
+            // Only before anything was copied or launched, and never into a folder that was itself refused as protected.
+            if (state.OutputChecked && !state.Started) MarkRefused(output, [failure.Message]);
             return 3;
         }
         finally { Console.CancelKeyPress -= onCancel; }
     }
 
+    /// <summary>
+    /// A refused run's output is marked as such (REFUSED.txt with the reasons), so the inputs a preflight wrote there
+    /// (campaign.json, locks, adapter, world and character sources) never look like a prepared run. Nothing was copied to a
+    /// host or launched.
+    /// </summary>
+    internal static void MarkRefused(string? output, IEnumerable<string> reasons)
+    {
+        if (output == null || !Directory.Exists(output)) return;
+        try
+        {
+            File.WriteAllText(Path.Combine(output, "REFUSED.txt"),
+                "This folder is a refused server-load, not a prepared run: nothing was copied to a host or launched. The inputs it wrote are kept for review.\n" +
+                string.Concat(reasons.Select(reason => "- " + reason + "\n")));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { } // the refusal itself was printed
+
+    }
+
+    /// <summary>Where a run is: its output checked against the installs it must stay out of, and whether anything was copied or started.</summary>
+    internal sealed class RunState
+    {
+        public bool OutputChecked { get; set; }
+        public bool Started { get; set; }
+    }
+
+    // A loader refusal (a mismatched Doorstop pair, an incomplete BepInEx) names the reviewed-package fix for that actor.
+    private static string LoaderHint(CampaignPreflightProblem problem) =>
+        problem.Input != "game and loader" ? "" // the source install's loader; a bad --loader-package is the "loader" input
+            : problem.Actor == "server" ? " (--loader-package FILE gives the server's disposable copy a reviewed loader)"
+            : problem.Actor == "client" ? " (--client-loader-package FILE gives the client's disposable copy a reviewed loader)" : "";
     // --output, or a new timestamped directory under ./valheim-test-runs. Never an existing one.
     private static string Output(Arguments parsed)
     {
@@ -158,7 +192,7 @@ internal static class ServerLoad
         return new Choice(inventory, file, serverRecipe, serverReason, clientRecipe, clientReason, join);
     }
 
-    private static async Task<int> RunCampaignAsync(Arguments parsed, string output, Stopwatch clock, Seams seams, CancellationToken cancellation)
+    private static async Task<int> RunCampaignAsync(Arguments parsed, string output, Stopwatch clock, Seams seams, RunState state, CancellationToken cancellation)
     {
         var choice = Choose(parsed, output);
         foreach (string line in choice.Inventory.Detected) Console.WriteLine("detected: " + line);
@@ -181,6 +215,7 @@ internal static class ServerLoad
         foreach (string path in new[] { adapter, cliManifest }.OfType<string>().Concat(parsed.Mods.Select(Path.GetFullPath)))
             if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
         SmokeOutput.RefuseInside(output, new[] { serverInstall, cliFiles, choice.Client?.Install }.OfType<string>().ToArray());
+        state.OutputChecked = true;
 
         var dependencies = NativeDependencyResolver.Resolve(new NativeDependencyRequest
         {
@@ -260,20 +295,6 @@ internal static class ServerLoad
             foreach (string empty in role.Where(pair => pair.Value == null).Select(pair => pair.Key).ToList()) role.Remove(empty);
         File.WriteAllText(campaignFile, json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n");
 
-        // The read-only host checks, before anything is copied: a client that cannot run is refused with the reason, never dropped.
-        var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(60), cancellation: cancellation)))(campaignFile).ConfigureAwait(false);
-        foreach (var actor in report.Actors.Where(actor => actor.CharactersDirectory != null))
-            Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
-        if (!report.Ready)
-        {
-            foreach (var problem in report.Problems)
-                Console.Error.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}" +
-                    (problem.Actor is "client" or "clients" ? " (--server-only skips the client)" : ""));
-            return 3;
-        }
-        Console.WriteLine($"PREFLIGHT PASSED: the derived campaign is {campaignFile}");
-        if (parsed.Switches.Contains("--preflight-only")) return 0;
-
         string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
         var plan = new ServerRunPlan
         {
@@ -295,17 +316,33 @@ internal static class ServerLoad
         };
         var clients = new Dictionary<string, ClientRunPlan>(StringComparer.Ordinal);
         if (clientPlan != null) clients["client"] = clientPlan;
-        // The unbound plans beside campaign.json, for an editable consumer (`valheim-test init server`) to run the same campaign.
+
+        // The read-only host checks, before anything is copied: a client that cannot run is refused with the reason, never dropped.
+        var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(60), cancellation: cancellation)))(campaignFile).ConfigureAwait(false);
+        foreach (var actor in report.Actors.Where(actor => actor.CharactersDirectory != null))
+            Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
+        if (!report.Ready)
+        {
+            var lines = report.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}" + LoaderHint(problem) +
+                (problem.Actor is "client" or "clients" ? " (--server-only skips the client)" : "")).ToList();
+            foreach (string line in lines) Console.Error.WriteLine("REFUSED " + line);
+            MarkRefused(output, lines);
+            return 3;
+        }
+        // Only once the preflight passed: the unbound plans beside campaign.json, for an editable consumer (`valheim-test init server`) to run the same campaign.
         // Private: plan.json holds the server's password.
         File.WriteAllText(Path.Combine(output, "plan.json"), JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true }));
         if (clientPlan != null)
             File.WriteAllText(Path.Combine(output, "client-plan.json"), JsonSerializer.Serialize(clientPlan, new JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine($"PREFLIGHT PASSED: the derived campaign is {campaignFile}");
+        if (parsed.Switches.Contains("--preflight-only")) return 0;
 
         string? previousPassword = Environment.GetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable);
         if (clientPlan != null) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, password);
         int result;
         try
         {
+            state.Started = true;
             result = await (seams.Campaign ?? PinnedServerRun.RunCampaignAsync)(campaignFile, plan, _ => clients, Path.Combine(output, "evidence"),
                 new PinnedServerRunOptions<ServerRunPlan>
                 {
@@ -369,7 +406,7 @@ internal static class ServerLoad
     /// <see cref="NativeServerRuntime"/> and <see cref="NativeCleanClientRuntime"/>; it goes when the hosted runner runs a Mac server.
     /// </summary>
     private static async Task<int> RunStagedAsync(Arguments parsed, string output, Stopwatch clock,
-        Func<string[], PinnedServerRunOptions<ServerRunPlan>, Task<int>> launch, CancellationToken cancellation)
+        Func<string[], PinnedServerRunOptions<ServerRunPlan>, Task<int>> launch, RunState state, CancellationToken cancellation)
     {
         Console.WriteLine("path: staged local copies (macOS; the campaign runner has no macOS dedicated server yet)");
         if (!parsed.Options.TryGetValue("--server", out string? serverOption))
@@ -401,6 +438,7 @@ internal static class ServerLoad
             throw new DirectoryNotFoundException("The clean client's Steam userdata directory is missing: " + steamUserdata);
         string[] protectedRoots = new[] { server, cliFiles, client, steamUserdata, serverLoader?.Root, clientLoader?.Root }.OfType<string>().ToArray();
         SmokeOutput.RefuseInside(output, protectedRoots);
+        state.OutputChecked = true;
         SmokeOutput.RequireSpace(output, server, client);
         foreach (string path in new[] { adapter, cliManifest }.OfType<string>().Concat(parsed.Mods.Select(Path.GetFullPath)))
             if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
@@ -421,6 +459,7 @@ internal static class ServerLoad
         adapter ??= await SmokeAdapter.BuildAsync(server, dependencies, output, cancellation, request.BepInExCore).ConfigureAwait(false);
         string world = Path.Combine(output, "world-source");
         DefaultSmokeWorld.PrepareServerSaveRoot(world);
+        state.Started = true; // from here the installs are copied
         using var runtime = NativeServerRuntime.Prepare(server, Path.Combine(output, "staged-runtime"), dependencies, adapter,
             cliPort, parsed.Configs.Select(Path.GetFullPath).ToList(), parsed.PluginFiles.Select(Path.GetFullPath).ToList(),
             parsed.PluginDirectories.Select(Path.GetFullPath).ToList(), serverLoader);
