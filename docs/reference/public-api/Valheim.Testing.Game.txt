@@ -204,6 +204,23 @@ sealed class Valheim.Testing.Game.CensusTotals : System.IEquatable`1<Valheim.Tes
 static class Valheim.Testing.Game.Check
   method static System.Void Near(System.Double actual, System.Double expected, System.Double tolerance)
   method static System.Void SameIdentities(System.Collections.Generic.IEnumerable`1<System.String> actual, System.Collections.Generic.IEnumerable`1<System.String> expected)
+static class Valheim.Testing.Game.CliBundle
+  field const System.String ManifestFile = "cli-manifest.json"
+  method static Valheim.Testing.Game.CliBundleSource Extract(System.IO.Stream zip, System.String sha256, System.String commit, System.String origin, System.String dataRoot = null)
+  property static System.String DataRoot { get; }
+sealed class Valheim.Testing.Game.CliBundleSource : System.IEquatable`1<Valheim.Testing.Game.CliBundleSource>
+  method System.Boolean Equals(Valheim.Testing.Game.CliBundleSource other)
+  method System.Void .ctor(System.String Manifest, System.String Files, System.String Origin)
+  method System.Void Deconstruct(out System.String& Manifest, out System.String& Files, out System.String& Origin)
+  method Valheim.Testing.Game.CliBundleSource <Clone>$()
+  method static System.Boolean op_Equality(Valheim.Testing.Game.CliBundleSource left, Valheim.Testing.Game.CliBundleSource right)
+  method static System.Boolean op_Inequality(Valheim.Testing.Game.CliBundleSource left, Valheim.Testing.Game.CliBundleSource right)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+  property System.String Files { get; init; }
+  property System.String Manifest { get; init; }
+  property System.String Origin { get; init; }
 static class Valheim.Testing.Game.CliCapabilities
   field const System.String TeleportSignals = "valheim.session/teleport-signals"
   field static readonly System.Collections.Generic.IReadOnlyList`1<System.String> HostedRounds
