@@ -33,7 +33,9 @@ public static class ClientLaunch
     private static readonly string MacExecutable = Path.Combine("Contents", "MacOS", "Valheim");
     // The pack's x64 library first (its route, under Rosetta on Apple Silicon), then libdoorstop.dylib at the install's
     // root, where a native install puts UnityDoorstop 4.5 or later: universal or arm64-only, what matters is its arm64 slice.
-    private static readonly string[] MacDoorstops = [Path.Combine("doorstop_libs", "libdoorstop_x64.dylib"), "libdoorstop.dylib"];
+    // The Doorstop libraries a macOS install may load BepInEx through, relative with '/': BepInExPack's x64 one or a root one.
+    internal static readonly string[] MacDoorstopFiles = ["doorstop_libs/libdoorstop_x64.dylib", "libdoorstop.dylib"];
+    private static readonly string[] MacDoorstops = MacDoorstopFiles.Select(file => file.Replace('/', Path.DirectorySeparatorChar)).ToArray();
     // Legacy MonoMod (before 25), which BepInExPack_Valheim's core uses, cannot apply detours on arm64: Apple Silicon keeps JIT
     // pages writable or executable, never both. Its reorganised releases (25 and later) can, so a native core is built on them.
     internal static readonly string MacNativeDetour = Path.Combine("BepInEx", "core", "MonoMod.RuntimeDetour.dll");

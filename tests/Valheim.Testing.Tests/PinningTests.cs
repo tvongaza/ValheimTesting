@@ -6,7 +6,7 @@ using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
 
-/// <summary>Fake install trees: a game assembly in the platform's data folder and a BepInEx core, no game. Existing files are kept.</summary>
+/// <summary>Fake install trees: a game assembly in the platform's data folder and a BepInEx core (preloader and BepInEx.dll), no game. Existing files are kept.</summary>
 internal static class FakeInstalls
 {
     public static void Server(string root) => Write(root, Path.Combine("valheim_server_Data", "Managed"));
@@ -17,7 +17,12 @@ internal static class FakeInstalls
         Keep(Path.Combine(root, managed, "assembly_utils.dll"), "utils build 1");
         Keep(Path.Combine(root, managed, "UnityEngine.dll"), "unity");
         Keep(Path.Combine(root, "BepInEx", "core", "BepInEx.dll"), "bepinex 5.4.23");
+        Keep(Path.Combine(root, "BepInEx", "core", "BepInEx.Preloader.dll"), "bepinex preloader 5.4.23");
     }
+    /// <summary>A Linux install's Doorstop library, which a BepInEx launch needs beside the core.</summary>
+    public static void LinuxLoader(string root) => Keep(Path.Combine(root, "doorstop_libs", "libdoorstop_x64.so"), "doorstop 4");
+    /// <summary>A macOS install's Doorstop library at its root.</summary>
+    public static void MacLoader(string root) => Keep(Path.Combine(root, "libdoorstop.dylib"), "doorstop 4");
     private static void Keep(string path, string text)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);

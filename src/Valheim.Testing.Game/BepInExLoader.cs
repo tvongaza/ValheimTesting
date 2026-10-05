@@ -9,11 +9,16 @@ namespace Valheim.Testing.Game;
 // it cannot prove the loader ran, which the session's plugin pins do.
 internal static class BepInExLoader
 {
-    internal static readonly string Preloader = Path.Combine("BepInEx", "core", "BepInEx.Preloader.dll");
-    internal static readonly string Core = Path.Combine("BepInEx", "core", "BepInEx.dll");
+    // The loader's paths relative to an install, written with '/' (the form a host listing and a remote check use); the
+    // OS-separator forms below are derived from them for this machine's file system.
+    internal const string CorePreloader = "BepInEx/core/BepInEx.Preloader.dll", CoreLibrary = "BepInEx/core/BepInEx.dll",
+        LinuxDoorstop = "doorstop_libs/libdoorstop_x64.so";
+    internal static readonly string Preloader = Local(CorePreloader);
+    internal static readonly string Core = Local(CoreLibrary);
     internal const string WindowsProxy = "winhttp.dll";
     internal const string WindowsConfig = "doorstop_config.ini";
-    internal static readonly string LinuxLibrary = Path.Combine("doorstop_libs", "libdoorstop_x64.so");
+    internal static readonly string LinuxLibrary = Local(LinuxDoorstop);
+    private static string Local(string relative) => relative.Replace('/', Path.DirectorySeparatorChar);
     // Doorstop reads these; any other value would disable or redirect the loader and start the game without BepInEx.
     internal static readonly string[] Variables = ["DOORSTOP_ENABLED", "DOORSTOP_TARGET_ASSEMBLY", "DOORSTOP_DISABLE"];
     private const string ArgumentPrefix = "--doorstop-";
@@ -69,6 +74,35 @@ internal static class BepInExLoader
                 throw new ArgumentException($"Patchers are entry names directly in {Patchers}, not paths: \"{name}\".");
         if (named.Distinct(StringComparer.OrdinalIgnoreCase).Count() != named.Count) throw new ArgumentException("Name each patcher once.");
     }
+    /// <summary>
+    /// The files a BepInEx launch needs on a Windows or Linux host, relative with <c>/</c>: the preloader and core, and the
+    /// platform's Doorstop (the Windows proxy and its configuration, or the Linux <c>libdoorstop_x64.so</c>). The one list the
+    /// remote launches (<see cref="HostServerLaunch.RequiredFiles"/>, <see cref="HostClientLaunch"/>) and the checks of an
+    /// install on another host use; a macOS install needs either of its Doorstop libraries (<see cref="RequireLoaderFiles"/>).
+    /// </summary>
+    internal static string[] LoaderFiles(ClientPlatform platform) => platform switch
+    {
+        ClientPlatform.Windows => [CorePreloader, CoreLibrary, WindowsProxy, WindowsConfig],
+        ClientPlatform.Linux => [CorePreloader, CoreLibrary, LinuxDoorstop],
+        _ => throw new ArgumentException("A macOS install needs one of its Doorstop libraries, not a fixed list.", nameof(platform)),
+    };
+
+    /// <summary>
+    /// Refuses an install on another host whose <paramref name="present"/> files (its listing, or what an existence check found)
+    /// lack one of <see cref="LoaderFiles"/>, naming each missing one; a macOS install needs the preloader, the core and either
+    /// Doorstop library <see cref="ClientLaunch"/> accepts (the root <c>libdoorstop.dylib</c> or BepInExPack's
+    /// <c>doorstop_libs/libdoorstop_x64.dylib</c>).
+    /// </summary>
+    internal static void RequireLoaderFiles(ClientPlatform platform, Func<string, bool> present, string kind)
+    {
+        var missing = platform == ClientPlatform.MacOS
+            ? new[] { CorePreloader, CoreLibrary }.Where(file => !present(file))
+                .Concat(ClientLaunch.MacDoorstopFiles.Any(present) ? [] : [string.Join(" or ", ClientLaunch.MacDoorstopFiles)]).ToList()
+            : LoaderFiles(platform).Where(file => !present(file)).ToList();
+        if (missing.Count != 0)
+            throw new FileNotFoundException($"BepInEx's loader is incomplete in the {kind}: it lacks {string.Join(", ", missing)}. Install a coherent BepInExPack, or name a reviewed loaderPackage.");
+    }
+
     internal static void RequireFile(string root, string relative, string message)
     {
         if (!File.Exists(Path.Combine(root, relative))) throw new FileNotFoundException(message + ": " + relative, Path.Combine(root, relative));
@@ -106,8 +140,8 @@ internal static class BepInExLoader
     // Either section may enable the loader, none may disable it (a value other than true reads as false), and every stated
     // target must be BepInEx's preloader: with the proxy present but a disabled or redirected configuration, the game would
     // start without BepInEx. Windows paths compare case-insensitively, with either separator and relative or absolute.
-    // The proxy reads only its own version's section, so when winhttp.dll shows which version it is, the configuration
-    // must be written for that version (RequireMatchingProxy).
+    // The proxy reads only its own version's section, so the configuration must be written for the version winhttp.dll
+    // shows; a proxy that shows none is refused (RequireMatchingProxy).
     private static readonly (string Section, string Target)[] Sections = [("General", "target_assembly"), ("UnityDoorstop", "targetAssembly")];
     private static void RequireConfig(string root, string kind, IEnumerable<string> lines, byte[] proxy)
     {
@@ -148,10 +182,16 @@ internal static class BepInExLoader
     // its own proxy into the game folder) started the Windows client without BepInEx: no BepInEx log, the game at its menu.
     // Adding a [General] section to that file did not make it load. So a proxy that shows its version needs a file written
     // for that version: Doorstop 4 its [General] keys and no [UnityDoorstop] section, Doorstop 3 its [UnityDoorstop] keys.
+    // A proxy that shows no version cannot be paired with its file, so it fails too.
     private static void RequireMatchingProxy(byte[] proxy, string kind, HashSet<string> sections, List<(string Section, string Value)> enabled, List<(string Section, string Value)> targets)
     {
         int? major = ProxyDoorstopMajor(proxy);
-        if (major == null) return;
+        // Every Doorstop 3 and 4 proxy holds exactly one of the two keys; one holding neither or both cannot be paired with
+        // its configuration, so it is refused rather than passed unchecked.
+        if (major == null)
+            throw new InvalidOperationException($"The {kind}'s {WindowsProxy} is not a Doorstop proxy this check recognises: it holds " +
+                "neither or both of the keys Doorstop reads (targetAssembly for Doorstop 3, target_assembly for Doorstop 4), so its configuration cannot be matched to it. " +
+                $"Install {WindowsProxy} and {WindowsConfig} from one BepInExPack.");
         string own = major == 4 ? "General" : "UnityDoorstop", other = major == 4 ? "UnityDoorstop" : "General";
         bool configured = enabled.Any(entry => entry.Section == own) && targets.Any(entry => entry.Section == own);
         if (configured && (major == 3 || !sections.Contains(other))) return;
@@ -164,8 +204,8 @@ internal static class BepInExLoader
 
     /// <summary>
     /// The Doorstop major version of a <c>winhttp.dll</c> proxy, from the configuration key its code reads (it holds the key
-    /// as text): 4 for <c>target_assembly</c>, 3 for <c>targetAssembly</c>; null when it holds neither or both, which says
-    /// nothing. A proxy's file version alone is not used: <c>.doorstop_version</c> beside it outlives a replaced proxy.
+    /// as text): 4 for <c>target_assembly</c>, 3 for <c>targetAssembly</c>; null when it holds neither or both, which
+    /// <see cref="RequireMatchingProxy"/> refuses. A proxy's file version alone is not used: <c>.doorstop_version</c> beside it outlives a replaced proxy.
     /// </summary>
     internal static int? ProxyDoorstopMajor(byte[] proxy)
     {
@@ -184,7 +224,7 @@ internal static class BepInExLoader
         uint high = BinaryPrimitives.ReadUInt32LittleEndian(dll.AsSpan(at + 8)), low = BinaryPrimitives.ReadUInt32LittleEndian(dll.AsSpan(at + 12));
         return $"{high >> 16}.{high & 0xFFFF}.{low >> 16}";
     }
-    private const string WindowsPreloader = @"BepInEx\core\BepInEx.Preloader.dll";
+    private static readonly string WindowsPreloader = CorePreloader.Replace('/', '\\');
     private static string Normalize(string root, string target) =>
         Path.GetFullPath(Path.Combine(root, target.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)));
 }

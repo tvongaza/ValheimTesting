@@ -89,7 +89,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             string source = host.Local(@"C:\game\source");
             if (name == "server") FakeInstalls.Server(source); else FakeInstalls.Client(source);
             File.WriteAllText(Path.Combine(source, name == "server" ? ServerLaunch.WindowsExecutable : ClientLaunch.WindowsExecutable), "game");
-            File.WriteAllText(Path.Combine(source, "winhttp.dll"), "unknown proxy version");
+            File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
             File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
             if (name != "server")
             {
@@ -217,7 +217,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string sharedClientSource = sharedHost.Local(@"C:\game\client-source");
         FakeInstalls.Client(sharedClientSource);
         File.WriteAllText(Path.Combine(sharedClientSource, ClientLaunch.WindowsExecutable), "game");
-        File.WriteAllText(Path.Combine(sharedClientSource, "winhttp.dll"), "unknown proxy version");
+        File.WriteAllText(Path.Combine(sharedClientSource, "winhttp.dll"), "MZ target_assembly");
         File.WriteAllText(Path.Combine(sharedClientSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         Directory.CreateDirectory(sharedHost.Local(@"C:\save\characters_local"));
         Directory.CreateDirectory(sharedHost.Local(@"C:\Steam\userdata"));

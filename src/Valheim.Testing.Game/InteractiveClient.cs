@@ -143,7 +143,7 @@ public sealed class HostClientLaunch
         {
             executable = Join(ClientLaunch.WindowsExecutable);
             unset = [.. BepInExLoader.Variables];
-            required = [ClientLaunch.WindowsExecutable, @"BepInEx\core\BepInEx.Preloader.dll", @"BepInEx\core\BepInEx.dll", BepInExLoader.WindowsProxy, BepInExLoader.WindowsConfig];
+            required = [ClientLaunch.WindowsExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows).Select(file => file.Replace('/', '\\'))];
         }
         else
         {
@@ -153,7 +153,7 @@ public sealed class HostClientLaunch
             set["DOORSTOP_TARGET_ASSEMBLY"] = Join("BepInEx/core/BepInEx.Preloader.dll");
             prepended["LD_LIBRARY_PATH"] = Join("doorstop_libs");
             prepended["LD_PRELOAD"] = "libdoorstop_x64.so";
-            required = [ClientLaunch.LinuxExecutable, "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll", "doorstop_libs/libdoorstop_x64.so"];
+            required = [ClientLaunch.LinuxExecutable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux)];
         }
 
         var secrets = new List<string>();

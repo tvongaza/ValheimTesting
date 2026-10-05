@@ -9,12 +9,12 @@ internal static class HostClientPreflight
     internal static async Task CheckAsync(IGameHost host, string install, ClientPlatform platform, ClientRunPlan plan,
         TimeSpan timeout, CancellationToken cancellation)
     {
+        // A remote client is Windows or Linux (a macOS client runs locally). Every loader file in one existence check, so a
+        // refusal names all that are missing; then, on Windows, the proxy and configuration as one Doorstop version.
+        var present = await ExistingAsync(host, install, BepInExLoader.LoaderFiles(platform), timeout, cancellation).ConfigureAwait(false);
+        BepInExLoader.RequireLoaderFiles(platform, present.Contains, $"client install on {host.Name}");
         if (platform == ClientPlatform.Windows)
-        {
-            byte[] proxy = await Required(host, HostInstall.Join(install, BepInExLoader.WindowsProxy), timeout, cancellation).ConfigureAwait(false);
-            byte[] config = await Required(host, HostInstall.Join(install, BepInExLoader.WindowsConfig), timeout, cancellation).ConfigureAwait(false);
-            BepInExLoader.RequireWindowsLoader(proxy, Encoding.UTF8.GetString(config), install, $"client install on {host.Name}");
-        }
+            await RequireWindowsLoaderAsync(host, install, $"client install on {host.Name}", timeout, cancellation).ConfigureAwait(false);
 
         string cliConfig = HostInstall.Join(install, "BepInEx/config/" + OwnedClientPreflight.CliConfig);
         byte[]? configBytes = await Read(host, cliConfig, timeout, cancellation).ConfigureAwait(false);
@@ -38,9 +38,44 @@ internal static class HostClientPreflight
             strict, $"ValheimCLI's standing file on {host.Name}");
     }
 
-    private static async Task<byte[]> Required(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation) =>
-        await Read(host, path, timeout, cancellation).ConfigureAwait(false) ??
-        throw new FileNotFoundException($"The client on {host.Name} lacks {path}; install a coherent BepInExPack before launch.", path);
+    /// <summary>
+    /// Reads a Windows install's Doorstop proxy and configuration on its host and requires them to be one coherent Doorstop
+    /// version (<see cref="BepInExLoader.RequireWindowsLoader(byte[], string, string, string)"/>): the one remote Windows loader
+    /// check, for a campaign's source install, a remote client before launch and a copied server runtime.
+    /// </summary>
+    internal static async Task RequireWindowsLoaderAsync(IGameHost host, string root, string kind, TimeSpan timeout, CancellationToken cancellation)
+    {
+        string proxyPath = HostInstall.Join(root, BepInExLoader.WindowsProxy), configPath = HostInstall.Join(root, BepInExLoader.WindowsConfig);
+        byte[] proxy = await Read(host, proxyPath, timeout, cancellation).ConfigureAwait(false)
+            ?? throw new FileNotFoundException($"The {kind} has no {BepInExLoader.WindowsProxy}; install a coherent BepInExPack.", proxyPath);
+        byte[] config = await Read(host, configPath, timeout, cancellation).ConfigureAwait(false)
+            ?? throw new FileNotFoundException($"The {kind} has no {BepInExLoader.WindowsConfig}; install a coherent BepInExPack.", configPath);
+        BepInExLoader.RequireWindowsLoader(proxy, Encoding.UTF8.GetString(config), root, kind);
+    }
+
+    /// <summary>Which of <paramref name="relative"/> (paths with <c>/</c> under <paramref name="root"/>) exist as files on the host, in one round trip.</summary>
+    internal static async Task<HashSet<string>> ExistingAsync(IGameHost host, string root, IEnumerable<string> relative, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? PowerShellExists : BashExists,
+            new Dictionary<string, string> { ["root"] = root, ["paths"] = string.Join('\n', relative) }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Checking client files on {host.Name}");
+        var lines = result.Stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+        if (!lines.Contains("VT-EXISTS done")) throw new HostOperationException($"Unexpected file check reply from {host.Name}", result);
+        return lines.Where(line => line.StartsWith("VT-EXISTS file ", StringComparison.Ordinal)).Select(line => line["VT-EXISTS file ".Length..]).ToHashSet(StringComparer.Ordinal);
+    }
+
+    internal static readonly string BashExists = """
+        while IFS= read -r relative; do
+          [ -n "$relative" ] && [ -f "$root/$relative" ] && echo "VT-EXISTS file $relative"
+        done <<< "$paths"
+        echo 'VT-EXISTS done'
+        """.ReplaceLineEndings("\n");
+    internal static readonly string PowerShellExists = """
+        foreach ($relative in ($paths -split "`n")) {
+            if ($relative -and [IO.File]::Exists([IO.Path]::Combine($root, $relative))) { "VT-EXISTS file $relative" }
+        }
+        'VT-EXISTS done'
+        """.ReplaceLineEndings("\n");
 
     internal static async Task<byte[]?> Read(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation)
     {

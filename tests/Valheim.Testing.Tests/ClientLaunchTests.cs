@@ -140,11 +140,13 @@ public class ClientLaunchTests
         install.Add("doorstop_config.ini", "[General]\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n[UnityMono]\nenabled = true\ndebug_enabled = true\n");
         Assert.Throws<InvalidOperationException>(() => ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows));
     }
-    // The file BepInExPack_Valheim installs next to Doorstop 4.4's winhttp.dll still uses Doorstop 3's section and key names.
+    // The Doorstop 3 layout (a Doorstop 3.4 proxy holding targetAssembly beside a [UnityDoorstop] file, as in the reviewed
+    // loader package). BepInExPack_Valheim 5.4.2333 is the Doorstop 4 layout: a 4.4 proxy holding target_assembly beside [General].
     [Fact] public void WindowsDoorstop3ConfigIsAccepted()
     {
         using var install = Install.Windows();
         install.Add("doorstop_config.ini", "[UnityDoorstop]\n# Specifies whether assembly executing is enabled\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\nredirectOutputLog=false\nignoreDisableSwitch=false\n# dllSearchPathOverride=\n");
+        install.Add("winhttp.dll", "MZ targetAssembly"); // Doorstop 3's own proxy
         Assert.EndsWith("valheim.exe", ClientLaunch.CreateStartInfo(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows).FileName);
     }
     [Theory]
@@ -459,7 +461,7 @@ public class ClientLaunchTests
         {
             var install = new Install(name);
             install.Executable = install.Add("valheim.exe");
-            install.Add("winhttp.dll"); install.Add("doorstop_config.ini", DoorstopConfig("enabled = true", "target_assembly=BepInEx\\core\\BepInEx.Preloader.dll"));
+            install.Add("winhttp.dll", "MZ target_assembly"); install.Add("doorstop_config.ini", DoorstopConfig("enabled = true", "target_assembly=BepInEx\\core\\BepInEx.Preloader.dll"));
             install.AddCore();
             return install;
         }

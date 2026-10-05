@@ -148,6 +148,7 @@ public class ServerLaunchTests
     {
         using var runtime = Runtime.Windows();
         File.WriteAllText(Path.Combine(runtime.Root, "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        File.WriteAllText(Path.Combine(runtime.Root, "winhttp.dll"), "MZ targetAssembly"); // Doorstop 3's own proxy
         Assert.EndsWith("valheim_server.exe", ServerLaunch.CreateStartInfo(runtime.Root, [], null, ServerHost.Windows).FileName);
     }
     [Theory]
@@ -353,7 +354,7 @@ public class ServerLaunchTests
         public static Runtime Windows()
         {
             var runtime = new Runtime();
-            runtime.Add("valheim_server.exe"); runtime.Add("winhttp.dll"); runtime.Add("BepInEx/core/BepInEx.Preloader.dll"); runtime.Add("BepInEx/core/BepInEx.dll");
+            runtime.Add("valheim_server.exe"); File.WriteAllText(runtime.Add("winhttp.dll"), "MZ target_assembly"); runtime.Add("BepInEx/core/BepInEx.Preloader.dll"); runtime.Add("BepInEx/core/BepInEx.dll");
             File.WriteAllText(runtime.Add("doorstop_config.ini"), "[General]\nenabled = true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
             return runtime;
         }

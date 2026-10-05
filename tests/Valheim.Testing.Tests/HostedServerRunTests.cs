@@ -107,6 +107,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostedClientScripts.BashMoveAside) ? "move-aside" :
         ReferenceEquals(script, HostClientPreflight.BashRead) ? "preflight-read" :
         ReferenceEquals(script, HostClientPreflight.PowerShellRead) ? "preflight-read" :
+        ReferenceEquals(script, HostClientPreflight.BashExists) ? "preflight-exists" :
+        ReferenceEquals(script, HostClientPreflight.PowerShellExists) ? "preflight-exists" :
         ReferenceEquals(script, SteamSignedInUsers.PowerShell) ? "steam-user" :
         ReferenceEquals(script, SteamSignedInUsers.Bash) ? "steam-user" : "other";
 
@@ -122,6 +124,9 @@ internal sealed class FakeServerHost : IGameHost
             case "copy-space":
                 return Ok($"VT-STORAGE {DiskSpace.DirectoryBytes(Local(v["source"]))} {AvailableCopyBytes} " +
                     Convert.ToBase64String(Encoding.UTF8.GetBytes(Windows ? "C:\\" : "/")) + "\n");
+            case "preflight-exists":
+                return Ok(string.Concat(v["paths"].Split('\n').Where(relative => relative.Length != 0 && File.Exists(Local(HostInstall.Join(v["root"], relative))))
+                    .Select(relative => "VT-EXISTS file " + relative + "\n")) + "VT-EXISTS done\n");
             case "preflight-read":
             {
                 string file = Local(v["path"]);
@@ -419,7 +424,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     private FakeOwnedServer NewServer() => new("test.mod", saveRoot: RunDirectory + "/world");
     private static void StageLoader(string root)
     {
-        File.WriteAllText(Path.Combine(root, "winhttp.dll"), "unknown proxy version");
+        File.WriteAllText(Path.Combine(root, "winhttp.dll"), "MZ target_assembly");
         File.WriteAllText(Path.Combine(root, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
     }
 
@@ -527,6 +532,44 @@ public sealed partial class HostedServerRunTests : IDisposable
             @"C:\runs\server\runtime", @"C:\runs\server\staging", files, TimeSpan.FromSeconds(30)));
     }
 
+    // The source inspection every campaign preparation starts with: an unrecognised Windows proxy and a Linux install without
+    // its Doorstop library are refused before anything is copied, each naming what it found.
+    [Fact] public async Task SourceInspectionRefusesAnUnrecognisedProxyAndAnIncompleteLinuxLoader()
+    {
+        var windows = new FakeServerHost("windows-client", Path.Combine(_root, "windows-source"), windows: true);
+        string winSource = windows.Local(@"C:\game\source");
+        FakeInstalls.Client(winSource);
+        File.WriteAllText(Path.Combine(winSource, ClientLaunch.WindowsExecutable), "game");
+        File.WriteAllText(Path.Combine(winSource, "winhttp.dll"), "MZ fake");
+        File.WriteAllText(Path.Combine(winSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var unrecognised = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            HostedRuntimeStage.InspectSourceAsync(windows, HostedRuntimeKind.Client, @"C:\game\source", null, TimeSpan.FromSeconds(30)));
+        Assert.Contains("not a Doorstop proxy this check recognises", unrecognised.Message);
+
+        var linux = new FakeServerHost("linux-client", Path.Combine(_root, "linux-source"));
+        string linuxSource = linux.Local("/game/source");
+        FakeInstalls.Client(linuxSource);
+        File.WriteAllText(Path.Combine(linuxSource, ClientLaunch.LinuxExecutable), "game");
+        var incomplete = await Assert.ThrowsAsync<FileNotFoundException>(() =>
+            HostedRuntimeStage.InspectSourceAsync(linux, HostedRuntimeKind.Client, "/game/source", null, TimeSpan.FromSeconds(30)));
+        Assert.Contains("doorstop_libs/libdoorstop_x64.so", incomplete.Message);
+        FakeInstalls.LinuxLoader(linuxSource);
+        await HostedRuntimeStage.InspectSourceAsync(linux, HostedRuntimeKind.Client, "/game/source", null, TimeSpan.FromSeconds(30));
+        // A macOS install loads BepInEx through either Doorstop library: BepInExPack's own x64 one is enough.
+        var mac = new FakeServerHost("mac-client", Path.Combine(_root, "mac-source"), kind: GameHostKind.Local);
+        string macSource = mac.Local("/game/mac");
+        FakeInstalls.Client(macSource);
+        File.WriteAllText(Path.Combine(macSource, "valheim_Data", "Managed", InstallPins.GameAssemblyName), "game build 1");
+        Directory.CreateDirectory(Path.Combine(macSource, "Valheim.app", "Contents", "MacOS"));
+        File.WriteAllText(Path.Combine(macSource, "Valheim.app", "Contents", "MacOS", "Valheim"), "game");
+        Assert.Contains("doorstop_libs/libdoorstop_x64.dylib or libdoorstop.dylib", (await Assert.ThrowsAsync<FileNotFoundException>(() =>
+            HostedRuntimeStage.InspectSourceAsync(mac, HostedRuntimeKind.Client, "/game/mac", null, TimeSpan.FromSeconds(30)))).Message);
+        Directory.CreateDirectory(Path.Combine(macSource, "doorstop_libs"));
+        File.WriteAllText(Path.Combine(macSource, "doorstop_libs", "libdoorstop_x64.dylib"), "pack doorstop");
+        await HostedRuntimeStage.InspectSourceAsync(mac, HostedRuntimeKind.Client, "/game/mac", null, TimeSpan.FromSeconds(30));
+        Assert.All(new[] { windows, linux }, host => Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start"));
+    }
+
     [Fact] public async Task MacClientBundleCanBePreparedFromItsContainingInstall()
     {
         var host = new FakeServerHost("mac-client", Mirror);
@@ -541,6 +584,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         string core = Path.Combine(install, "BepInEx", "core", "BepInEx.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(core)!);
         File.WriteAllText(core, "core");
+        File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.Preloader.dll"), "preloader");
+        FakeInstalls.MacLoader(install);
         string chosen = Path.Combine(_root, "mac-cli.dll");
         File.WriteAllText(chosen, "selected CLI");
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
@@ -1106,6 +1151,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
         FakeInstalls.Client(clientInstall);
         File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        FakeInstalls.LinuxLoader(clientInstall);
         File.WriteAllText(Path.Combine(clientInstall, "BepInEx", "LogOutput.log"), "an earlier run's log\n");
         var (plan, profile) = Write(host, withClient: true);
         var clientTransport = new ScriptedTransport();
@@ -1139,12 +1185,40 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains(Result().GetProperty("Logs").EnumerateArray(), log => log.GetProperty("Role").GetString() == "client-1 BepInEx log");
     }
 
+    // #248's remaining half: a remote Linux client's loader is checked before launch, as a Windows client's is. Through the run:
+    // the client's host is never asked to start a game without its Doorstop library.
+    [Fact] public async Task ARemoteLinuxClientWithoutItsDoorstopLibraryIsRefusedBeforeLaunch()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        string clientInstall = clientHost.Local("/home/tester/valheim");
+        FakeInstalls.Client(clientInstall);
+        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        var (plan, profile) = Write(host, withClient: true);
+        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+        Exception? refused = null;
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
+        {
+            refused = Record.Exception(() => run.OpenClient(client));
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport()));
+        Assert.Contains("doorstop_libs/libdoorstop_x64.so", Assert.IsType<FileNotFoundException>(refused).Message);
+        Assert.DoesNotContain(clientHost.Runs, run => run.Script == "client-start");
+        Assert.Equal(0, code); // The scenario recorded the refusal; nothing else in the run failed.
+    }
+
     [Fact] public async Task ARemoteWindowsClientRefusesMixedLoaderAndInheritedStandingPinsBeforeLaunch()
     {
         var host = new FakeServerHost("windows-client", Path.Combine(_root, "remote-client"));
         const string install = "/client/valheim";
         string local = host.Local(install);
         Directory.CreateDirectory(Path.Combine(local, "BepInEx", "config"));
+        FakeInstalls.Client(local);
+        File.WriteAllText(Path.Combine(local, "winhttp.dll"), "MZ fake"); // a proxy that shows no Doorstop version
+        File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var unrecognised = await Assert.ThrowsAsync<InvalidOperationException>(() => HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows,
+            new ClientRunPlan { Mode = "owned", Pinning = "none" }, TimeSpan.FromSeconds(5), default));
+        Assert.Contains("not a Doorstop proxy this check recognises", unrecognised.Message);
         File.WriteAllText(Path.Combine(local, "winhttp.dll"), "MZ target_assembly"); // Doorstop 4 signature
         File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         var plan = new ClientRunPlan { Mode = "owned", Pinning = "none", Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) } };
@@ -1175,6 +1249,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         if (!OperatingSystem.IsWindows()) return;
         string install = Path.Combine(_root, "windows-client");
         Directory.CreateDirectory(install);
+        FakeInstalls.Client(install); // The preloader and core, found by the real existence script.
         File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
         string config = Path.Combine(install, "doorstop_config.ini");
         File.WriteAllText(config, "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
@@ -1187,6 +1262,20 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("Doorstop 4", error.Message);
     }
 
+    // The bash existence script for real: a Linux client's loader files are found, and a missing Doorstop library is named.
+    [Fact] public async Task BashChecksTheRemoteLoaderFilesForPreflight()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string install = Path.Combine(_root, "linux client"); // A space in the path, as a host install may have.
+        FakeInstalls.Client(install);
+        var host = new LocalGameHost("linux-client", HostShell.Bash);
+        var plan = new ClientRunPlan { Mode = "owned", Pinning = "none" };
+        Assert.Contains("doorstop_libs/libdoorstop_x64.so", (await Assert.ThrowsAsync<FileNotFoundException>(() =>
+            HostClientPreflight.CheckAsync(host, install, ClientPlatform.Linux, plan, TimeSpan.FromSeconds(30), default))).Message);
+        FakeInstalls.LinuxLoader(install);
+        await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Linux, plan, TimeSpan.FromSeconds(30), default);
+    }
+
     // A client that started but never reached its menu (here its pins do not hold) is stopped; its fetched logs are still scanned.
     [Fact] public async Task AProfileClientWhoseStartupFailsStillHasItsLogsScannedAndListed()
     {
@@ -1196,6 +1285,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
         FakeInstalls.Client(clientInstall);
         File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        FakeInstalls.LinuxLoader(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
         // Strict, so the menu pins are checked; the scripted client does not hold them.
         var client = new ClientRunPlan
@@ -1224,6 +1314,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
         FakeInstalls.Client(clientInstall);
         File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        FakeInstalls.LinuxLoader(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
         var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
         Exception? failure = null;

@@ -23,6 +23,7 @@ public sealed partial class HostedServerRunTests
         Directory.CreateDirectory(Path.Combine(install, "BepInEx", "core"));
         FakeInstalls.Client(install);
         File.WriteAllText(Path.Combine(install, ClientLaunch.LinuxExecutable), "client");
+        FakeInstalls.LinuxLoader(install);
         var (plan, profile) = Write(host, withClient: true, steamAccounts: steamAccounts);
         return (host, fixture, client, plan, profile);
     }

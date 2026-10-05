@@ -111,7 +111,13 @@ public class BepInExLoaderTests
             Path = System.IO.Path.Combine(_parent, "install"); Directory.CreateDirectory(Path);
             Add("winhttp.dll"); Add(@"BepInEx\core\BepInEx.Preloader.dll"); Add(@"BepInEx\core\BepInEx.dll"); Config(config);
         }
-        public void Config(string text) => File.WriteAllText(System.IO.Path.Combine(Path, "doorstop_config.ini"), text);
+        // The proxy is the version the configuration is written for (it holds the key that version reads), so these tests
+        // check the configuration alone; a proxy of another version is OwnedRunPreflightTests' case.
+        public void Config(string text)
+        {
+            File.WriteAllText(System.IO.Path.Combine(Path, "doorstop_config.ini"), text);
+            File.WriteAllText(System.IO.Path.Combine(Path, "winhttp.dll"), text.Contains("[UnityDoorstop]") && !text.Contains("[General]") ? "MZ targetAssembly" : "MZ target_assembly");
+        }
         public void Add(string relative)
         {
             string path = System.IO.Path.GetFullPath(System.IO.Path.Combine(Path, relative.Replace('\\', System.IO.Path.DirectorySeparatorChar)));
