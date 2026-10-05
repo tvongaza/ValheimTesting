@@ -14,9 +14,9 @@ internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, str
     public const string CopyIntended = "copy-intended", CopyDone = "copy-done", CopyRetired = "copy-retired", CopyKept = "copy-kept";
     public const string CharacterIntended = "character-intended", CharacterDone = "character-done", CharacterRetired = "character-retired";
     public const string LockHeld = "lock-held", LockReleased = "lock-released";
-    public const string ProcessIntended = "process-intended", ProcessStarted = "process-started";
+    public const string ProcessIntended = "process-intended", ProcessStarted = "process-started", ProcessStopped = "process-stopped";
     public const string LeaseHeld = "lease-held", LeaseReleased = "lease-released", LeaseKept = "lease-kept";
-    public const string RunEnded = "run-ended";
+    public const string RunEnded = "run-ended", RunRecovered = "run-recovered";
 
     public static JournalEntry Of(string kind, params (string Key, string Value)[] fields) =>
         new(kind, fields.ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal));

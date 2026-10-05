@@ -246,6 +246,10 @@ public sealed class SteamAccountLease : IAsyncDisposable
     /// <summary>This lease's own id, written in its claim file; only a holder with it can renew or release the claim.</summary>
     public string LeaseId { get; }
     public string LeaseHostName => _host.Name;
+    /// <summary>This claim's number in the account's directory, which a release names with <see cref="LeaseId"/>.</summary>
+    internal long Number => _number;
+    /// <summary>The pool's lease directory on the lease host.</summary>
+    internal string Directory => _pool.LeaseDirectory;
     /// <summary>When the lease expires by the lease host's clock unless renewed.</summary>
     public DateTimeOffset ExpiresUtc { get; private set; }
     public TimeSpan LeaseTime { get; }

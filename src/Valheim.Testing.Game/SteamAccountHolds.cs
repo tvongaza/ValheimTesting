@@ -60,6 +60,10 @@ public sealed class SteamAccountHold : IAsyncDisposable
     /// <summary>Who holds the lease, as other runs are told when they are refused.</summary>
     public string Owner => _lease.Owner;
     public string LeaseHostName => _lease.LeaseHostName;
+    // What a later recovery needs to release this lease by its own id (RunJournal's lease-held entry): never a credential.
+    internal string LeaseId => _lease.LeaseId;
+    internal long LeaseNumber => _lease.Number;
+    internal string LeaseDirectory => _lease.Directory;
     /// <summary>When the lease ends by the lease host's clock unless renewed again.</summary>
     public DateTimeOffset ExpiresUtc => _lease.ExpiresUtc;
     /// <summary>Whether the client's host must be signed in to this account before it starts (always, outside controlled tests).</summary>

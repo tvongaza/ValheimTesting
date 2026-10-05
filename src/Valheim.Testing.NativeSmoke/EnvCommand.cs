@@ -7,13 +7,14 @@ using Valheim.Testing.Game;
 /// </summary>
 internal static class EnvCommand
 {
-    internal const string Usage = "valheim-test env preflight [MANIFEST [--hosts] | --inventory FILE] [--json] | valheim-test env status [--inventory FILE] [--json]";
+    internal const string Usage = "valheim-test env preflight [MANIFEST [--hosts] | --inventory FILE] [--json] | valheim-test env status [--inventory FILE] [--json] | " +
+        "valheim-test env recover|teardown --run ID [--inventory FILE] [--json]";
 
     public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
-        if (args.Length != 0 && args[0] == "status") return await Status(args[1..], output, error).ConfigureAwait(false);
+        if (args.Length != 0 && args[0] is "status" or "recover" or "teardown") return await Journal(args[0], args[1..], output, error).ConfigureAwait(false);
         var rest = args.Skip(1).ToList();
         bool json = rest.Remove("--json"), hosts = rest.Remove("--hosts");
         string? inventoryFile = null;
@@ -95,21 +96,35 @@ internal static class EnvCommand
         return report.Ready ? 0 : 3;
     }
 
-    // What earlier runs left on every host of the inventory, from each host's run journal. Changes nothing. Exit 0 when every
-    // host was read and every run left nothing; 3 otherwise; 2 for a usage error.
-    private static async Task<int> Status(string[] args, TextWriter output, TextWriter error)
+    // From each host's run journal: status (what earlier runs left; changes nothing), recover (clear what one run provably
+    // left, except what it kept on purpose) or teardown (that too). Exit 0 when nothing is left (status: of any run; recover and
+    // teardown: of that run); 3 otherwise or when refused; 2 for a usage error.
+    private static async Task<int> Journal(string action, string[] args, TextWriter output, TextWriter error)
     {
         var rest = args.ToList();
         bool json = rest.Remove("--json");
-        string? file = null;
-        int at = rest.IndexOf("--inventory");
-        if (at >= 0 && at + 1 < rest.Count) { file = rest[at + 1]; rest.RemoveRange(at, 2); }
-        if (rest.Count != 0 || (at >= 0 && file == null))
+        string? Option(string name)
+        {
+            int at = rest.IndexOf(name);
+            if (at < 0) return null;
+            if (at + 1 >= rest.Count || rest[at + 1].StartsWith("--", StringComparison.Ordinal)) { rest.Add(name); return null; } // left over: a usage error
+            string value = rest[at + 1];
+            rest.RemoveRange(at, 2);
+            return value;
+        }
+        string? file = Option("--inventory"), run = action == "status" ? null : Option("--run");
+        if (rest.Count != 0 || (action != "status" && run == null))
         {
             error.WriteLine("Usage: " + Usage);
             return 2;
         }
-        try { return await EnvironmentInventory.WriteRunStatusAsync(file == null ? null : Path.GetFullPath(file), output, json).ConfigureAwait(false) ? 0 : 3; }
+        try
+        {
+            string? inventory = file == null ? null : Path.GetFullPath(file);
+            bool clean = action == "status" ? await EnvironmentInventory.WriteRunStatusAsync(inventory, output, json).ConfigureAwait(false)
+                : await EnvironmentInventory.RecoverRunAsync(inventory, run!, action == "teardown", output, json).ConfigureAwait(false);
+            return clean ? 0 : 3;
+        }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
         {
             error.WriteLine("REFUSED: " + failure.Message);
