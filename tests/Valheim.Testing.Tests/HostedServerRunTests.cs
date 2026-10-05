@@ -457,6 +457,22 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("fake boot", File.ReadAllText(Path.Combine(Output, "boot-1", "game-0.log")));
     }
 
+    // #295: the hosted server run's own loader step refuses a copied Windows runtime whose proxy (Doorstop 4) and
+    // doorstop_config.ini (Doorstop 3) are from different versions, before the server starts.
+    [Fact] public async Task AHostedWindowsServerRunRefusesAMixedDoorstopBeforeItStarts()
+    {
+        var server = new FakeOwnedServer("test.mod", saveRoot: @"C:\vt\runs\run-test\world");
+        var host = new FakeServerHost("windows-server", Mirror, server, windows: true);
+        var (plan, profile) = Write(host, hostPlatform: "windows", hostShell: "powershell", doorstopConfig: DoorstopMixPathsTests.Doorstop3Config);
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
+        Assert.DoesNotContain("start", host.Scripts);
+        var step = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "result.json"))).RootElement.GetProperty("Steps").EnumerateArray()
+            .Single(s => s.GetProperty("Name").GetString() == "copied Windows runtime has a coherent Doorstop loader");
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        DoorstopMixPathsTests.AssertRefusal(new InvalidOperationException(step.GetProperty("Error").GetString()), "server runtime",
+            "is Doorstop 4, which reads only [General] in doorstop_config.ini, but that file is written for Doorstop 3 ([UnityDoorstop])");
+    }
+
     [Fact] public async Task OneHostedPreparationCopiesOnlySelectedFilesWithoutChangingTheSource()
     {
         var host = new FakeServerHost("windows-server", Mirror, windows: true);
@@ -742,7 +758,8 @@ public sealed partial class HostedServerRunTests : IDisposable
 
     // The host's install (the runtime the plan pins) and a local world; returns the plan and the profile.
     private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false, bool unpinned = false,
-        bool crossplay = false, string portOption = "-port", string gamePort = "2456", object? steamAccounts = null, string? steamAccount = null)
+        bool crossplay = false, string portOption = "-port", string gamePort = "2456", object? steamAccounts = null, string? steamAccount = null,
+        string doorstopConfig = DoorstopMixPathsTests.Doorstop4Config)
     {
         bool windows = hostPlatform == "windows";
         string hostInstall = windows ? @"C:\valheim\server" : Install;
@@ -754,7 +771,7 @@ public sealed partial class HostedServerRunTests : IDisposable
             File.Delete(Path.Combine(install, ServerLaunch.LinuxExecutable));
             File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
             File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
-            File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+            File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), doorstopConfig);
         }
         else File.WriteAllText(Path.Combine(install, ServerLaunch.LinuxExecutable), "server");
         File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.Preloader.dll"), "preloader");
@@ -1256,7 +1273,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         var plan = new ClientRunPlan { Mode = "owned", Pinning = "none", Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) } };
         var mismatch = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default));
-        Assert.Contains("Doorstop 4", mismatch.Message);
+        DoorstopMixPathsTests.AssertRefusal(mismatch, "client install on windows-client",
+            "is Doorstop 4, which reads only [General] in doorstop_config.ini, but that file is written for Doorstop 3 ([UnityDoorstop])");
         Assert.DoesNotContain(host.Runs, run => run.Script == "client-start");
 
         File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
