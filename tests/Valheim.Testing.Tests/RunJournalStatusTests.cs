@@ -247,6 +247,9 @@ public sealed class RunJournalStatusTests : IDisposable
     {
         string data = Path.Combine(_root, "data dir");
         string file = Path.Combine(_root, "inventory.json");
+        // This machine's own journal is the inventory host's (its lock is in the data folder), so no other test's copies show.
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = data });
+        using var localJournal = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
         // Only the host: a journal needs no install or environment.
         File.WriteAllText(file, JsonSerializer.Serialize(new { hosts = new { local = new { kind = "local", @lock = Path.Combine(data, "lock") } } }));
         var local = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);

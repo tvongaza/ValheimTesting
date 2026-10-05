@@ -37,10 +37,15 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
 
     /// <summary>The machine every test detects unless it names its own: no Steam, so the test host's installs never decide a result.</summary>
     [ModuleInitializer]
-    internal static void NoSteamByDefault() => EnvironmentInventory.ThisMachine = new FakeMachine(HostProfile.CurrentPlatform)
+    internal static void NoSteamByDefault()
     {
-        Home = Path.Combine(Path.GetTempPath(), "vt-no-steam-home"), DataRoot = Path.Combine(Path.GetTempPath(), "vt-no-steam-data"),
-    };
+        EnvironmentInventory.ThisMachine = new FakeMachine(HostProfile.CurrentPlatform)
+        {
+            Home = Path.Combine(Path.GetTempPath(), "vt-no-steam-home"), DataRoot = Path.Combine(Path.GetTempPath(), "vt-no-steam-data"),
+        };
+        // Every copy a test makes is journalled here, never in the test machine's own ValheimTesting folder.
+        RunJournal.LocalDirectoryDefault = Path.Combine(Path.GetTempPath(), "vt-no-steam-data", "journal");
+    }
 }
 
 public sealed class ThisMachineTests : IDisposable

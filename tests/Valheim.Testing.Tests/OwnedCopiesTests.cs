@@ -70,51 +70,61 @@ public sealed class OwnedCopiesTests : IDisposable
         Assert.True(File.Exists(Path.Combine(Runs, "unrelated", "game", ServerLaunch.WindowsExecutable)));
     }
 
-    [Fact] public void TheCommandListsWithoutChangingAndRemovesOnlyWhatItIsGivenUnderItsRoot()
+    // valheim-test env status lists copies no journal names (made before runs journalled them) and changes nothing;
+    // env teardown --copy removes one by name, keeping what its run changed, and refuses a copy a run's journal names.
+    [Fact] public async Task EnvStatusListsUnjournalledCopiesAndTeardownRemovesOneByName()
     {
-        var (server, client, world, staged) = Layout();
-        OwnedCopies.ProcessesOverride = () => [];
-        var output = new StringWriter(); var error = new StringWriter();
-        Assert.Equal(0, CopiesCommand.Run([Runs], output, error));
-        string listing = output.ToString();
-        Assert.Contains("4 copies", listing); Assert.Contains("Nothing was changed.", listing);
-        Assert.Contains($"--remove \"{server}\"", listing); Assert.Contains($"--remove \"{staged}\"", listing);
-        Assert.DoesNotContain($"--remove \"{client}\"", listing); // no run result: a run still going, or a killed one
-        Assert.Contains("1 game copies have no run result", listing);
-        Assert.DoesNotContain($"--remove \"{world}\"", listing); // a world is never offered for removal
+        // Made by an older process: journalled on another machine's data folder, so this one has no record of them.
+        (string Server, string Client, string World, string Staged) layout;
+        using (RunJournal.UseLocalDirectory(Path.Combine(_root, "older", "journal"))) layout = Layout();
+        var (server, client, world, staged) = layout;
+        OwnedCopies.ProcessesOverride = () => [(42, Path.Combine(client, ClientLaunch.WindowsExecutable))];
+        string data = Path.Combine(_root, "data");
+        string inventory = Path.Combine(_root, "inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new { local = new { kind = "local", @lock = Path.Combine(data, "lock") } },
+            environments = new[] { new { name = "c", host = "local", roles = new[] { "client" }, install = Path.Combine(_root, "game"), runtime = Runs, cliPort = 5700 } },
+            leaseHost = "local", leaseDirectory = Path.Combine(data, "leases"),
+        }));
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = data });
+        using var localJournal = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+
+        var output = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["status", "--inventory", inventory], output, new StringWriter()));
+        foreach (string copy in new[] { server, client, world, staged })
+            Assert.Contains($"UNJOURNALLED copy {copy} (", output.ToString());
+        Assert.Contains($"valheim-test env teardown --copy \"{staged}\"", output.ToString());
+        Assert.Contains("used by process 42", output.ToString());
         Assert.All(new[] { server, client, world, staged }, path => Assert.True(Directory.Exists(path)));
 
         output = new StringWriter();
-        Assert.Equal(0, CopiesCommand.Run([Runs, "--json"], output, error));
-        Assert.Equal(4, JsonDocument.Parse(output.ToString()).RootElement.GetArrayLength());
-        Assert.Contains("\"ServerRuntime\"", output.ToString());
-
-        string outside = Copy(Source("other", ServerLaunch.WindowsExecutable), Path.Combine(_root, "other-runs"));
-        error = new StringWriter();
-        Assert.Equal(3, CopiesCommand.Run([Runs, "--remove", staged, "--remove", outside, "--remove", world], new StringWriter(), error));
+        Assert.Equal(0, await EnvCommand.RunAsync(["teardown", "--copy", staged, "--inventory", inventory], output, new StringWriter()));
+        Assert.StartsWith("REMOVED removed " + staged, output.ToString());
         Assert.False(Directory.Exists(staged));
-        Assert.True(Directory.Exists(outside)); Assert.Contains("not under", error.ToString());
-        Assert.True(Directory.Exists(world)); Assert.Contains("world copy", error.ToString());
+        Assert.True(Directory.Exists(staged + "-changes"));
+        output = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["teardown", "--copy", client, "--inventory", inventory], output, new StringWriter()));
+        Assert.Contains("Process 42", output.ToString());
+        Assert.True(Directory.Exists(client));
+        // A world named on purpose goes too (its save is kept beside it like any change).
+        Assert.Equal(0, await EnvCommand.RunAsync(["teardown", "--copy", world, "--inventory", inventory], new StringWriter(), new StringWriter()));
+        Assert.False(Directory.Exists(world));
 
-        Assert.Equal(2, CopiesCommand.Run([Runs, "--allow-world"], new StringWriter(), new StringWriter()));
-        Assert.Equal(2, CopiesCommand.Run([Runs, "--json", "--remove", server], new StringWriter(), new StringWriter()));
-        Assert.Equal(2, CopiesCommand.Run([], new StringWriter(), new StringWriter()));
-        Assert.Equal(3, CopiesCommand.Run([Path.Combine(_root, "missing")], new StringWriter(), new StringWriter()));
-    }
+        // A copy this process made is journalled: teardown --copy refuses it and names the run.
+        string source = Source("journalled", ServerLaunch.WindowsExecutable);
+        using var held = WorldFixture.Copy(source, Runs, WorldFixture.Manifest(source));
+        output = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["teardown", "--copy", held.DirectoryPath, "--inventory", inventory], output, new StringWriter()));
+        Assert.Contains($"run {RunJournal.ThisProcess.RunId} (LIVE) journalled it", output.ToString());
+        // Named through a link (on macOS the temp folder is /var, which is /private/var), it is still that run's.
+        output = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["teardown", "--copy", OwnedCopies.Resolved(held.DirectoryPath), "--inventory", inventory], output, new StringWriter()));
+        Assert.Contains("journalled it", output.ToString());
+        Assert.True(Directory.Exists(held.DirectoryPath));
 
-    [Fact] public void TheCommandDoesNotFollowALinkOutOfTheSelectedRootToRemoveACopy()
-    {
-        string outside = Copy(Source("external", ServerLaunch.WindowsExecutable), Path.Combine(_root, "outside"));
-        Directory.CreateDirectory(Runs);
-        string link = Path.Combine(Runs, "linked");
-        try { Directory.CreateSymbolicLink(link, Path.GetDirectoryName(outside)!); }
-        catch (Exception error) when (error is UnauthorizedAccessException or IOException) { return; } // Windows without link privilege
-
-        string throughLink = Path.Combine(link, Path.GetFileName(outside));
-        var message = new StringWriter();
-        Assert.Equal(3, CopiesCommand.Run([Runs, "--remove", throughLink], new StringWriter(), message));
-        Assert.Contains("traverses a link", message.ToString());
-        Assert.True(Directory.Exists(outside));
+        foreach (string[] args in new[] { new[] { "teardown" }, ["teardown", "--copy", staged, "--run", "x"], ["teardown", "--copy", staged, "--json"], ["recover", "--copy", staged] })
+            Assert.Equal(2, await EnvCommand.RunAsync(args, new StringWriter(), new StringWriter()));
     }
 
     [Fact] public void AnEmptyOrCorruptProvenanceCannotAuthorizeRemoval()
@@ -130,25 +140,42 @@ public sealed class OwnedCopiesTests : IDisposable
         Assert.True(Directory.Exists(copy));
     }
 
-    // A copy a live run holds is in use before any game runs from it; once the holder lets go, or has ended, it is not.
-    [Fact] public void TheRunThatMadeACopyHoldsItUntilItLetsGoOrEnds()
+    // A copy is journalled on this machine before it is made (#257): while its process runs it is that run's, LIVE; a copy
+    // handed over (preserved) or removed leaves nothing; one kept for a reason is KEPT. Owner records of older copies still count.
+    [Fact] public async Task TheRunThatMadeACopyJournalsItUntilItLetsGo()
     {
+        string data = Path.Combine(_root, "data");
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = data });
+        using var localJournal = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
         string source = Source("server", ServerLaunch.WindowsExecutable);
-        var held = WorldFixture.Copy(source, Runs, WorldFixture.Manifest(source));
-        Assert.True(File.Exists(held.DirectoryPath + ".owner.json"));
-        Assert.Equal(new[] { Environment.ProcessId }, OwnedCopies.Find(Runs).Single().InUseBy);
-        Assert.Contains($"Process {Environment.ProcessId}", Assert.Throws<InvalidOperationException>(() => OwnedCopies.Remove(held.DirectoryPath)).Message);
-        held.Preserve = true; held.Dispose();
-        Assert.False(File.Exists(held.DirectoryPath + ".owner.json"));
-        Assert.False(OwnedCopies.Find(Runs).Single().InUse);
+        var host = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);
+        var hosts = new Dictionary<string, HostProfile> { ["local"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
+        async Task<JournalRunStatus> Status() =>
+            Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(60))).Runs, run => run.Run == RunJournal.ThisProcess.RunId);
 
-        // A holder that ended without letting go: its id now names no process, or another process started later.
-        using var ended = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!, "--version") { RedirectStandardOutput = true, UseShellExecute = false })!;
-        ended.WaitForExit();
-        File.WriteAllText(held.DirectoryPath + ".owner.json", JsonSerializer.Serialize(new { Pid = ended.Id, StartedUtc = DateTime.UtcNow.AddHours(-1) }));
-        Assert.False(OwnedCopies.Find(Runs).Single().InUse);
+        var held = WorldFixture.Copy(source, Runs, WorldFixture.Manifest(source));
+        Assert.False(File.Exists(held.DirectoryPath + ".owner.json"));
+        // Held by this process, by its journal, before any game runs from it.
+        Assert.Equal(new[] { Environment.ProcessId }, OwnedCopies.Find(held.DirectoryPath).Single().InUseBy);
+        Assert.Contains($"Process {Environment.ProcessId}", Assert.Throws<InvalidOperationException>(() => OwnedCopies.Remove(held.DirectoryPath)).Message);
+        var live = await Status();
+        Assert.Equal(JournalRunState.Live, live.State);
+        Assert.Contains(live.Items, item => item.What == held.DirectoryPath && item.Status == "copied, not retired");
+        held.Preserve = true; held.Dispose();
+        Assert.DoesNotContain((await Status()).Items, item => item.What == held.DirectoryPath);
+
+        var kept = WorldFixture.Copy(source, Runs, WorldFixture.Manifest(source));
+        kept.Preserve = true; kept.KeepReason = "kept on request"; kept.Dispose();
+        Assert.Equal("kept: kept on request", Assert.Single((await Status()).Items, item => item.What == kept.DirectoryPath).Status);
+        using (var removed = WorldFixture.Copy(source, Runs, WorldFixture.Manifest(source))) { }
+        Assert.Single((await Status()).Items);
+
+        // An owner record an older process wrote still holds its copy while that process runs, by ID and start time.
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        File.WriteAllText(held.DirectoryPath + ".owner.json", JsonSerializer.Serialize(new { Pid = Environment.ProcessId, StartedUtc = self.StartTime.ToUniversalTime() }));
+        Assert.Contains(Environment.ProcessId, OwnedCopies.Find(held.DirectoryPath).Single().InUseBy);
         File.WriteAllText(held.DirectoryPath + ".owner.json", JsonSerializer.Serialize(new { Pid = Environment.ProcessId, StartedUtc = DateTime.UtcNow.AddDays(-3) }));
-        Assert.False(OwnedCopies.Find(Runs).Single().InUse); // this process's id, but not its start time
+        Assert.False(OwnedCopies.Find(held.DirectoryPath).Single().InUse); // this process's id, but not its start time
     }
 
     // A 1.0 world is a <name>/ directory of chunks with _main.N.fwl2, and is protected like any world.

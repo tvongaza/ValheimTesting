@@ -100,6 +100,100 @@ internal sealed class RunJournal
     /// <summary>Appends <paramref name="entry"/> for <paramref name="actor"/> on <paramref name="host"/>; throws unless the host confirms the write.</summary>
     public async Task AppendAsync(IGameHost host, string journal, string actor, JournalEntry entry, TimeSpan timeout, CancellationToken cancellation = default)
     {
+        // Base64 keeps the line one shell word whatever the paths hold; the host decodes it before appending.
+        string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(Line(actor, entry)));
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsAppend : BashAppend, new Dictionary<string, string>
+        {
+            ["journal"] = journal, ["run"] = RunId, ["actor"] = actor, ["line"] = encoded,
+        }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Journalling {entry.Kind} for {actor} on {host.Name}");
+        if (InteractiveClient.Line(result.Stdout, "VT-JOURNALED") == null)
+            throw new HostOperationException($"The run journal on {host.Name} did not confirm {entry.Kind} for {actor}", result);
+    }
+
+    /// <summary>
+    /// This machine's journal (<c>journal</c> beside its default lock, under ValheimTesting's data folder), where copies made
+    /// on this machine (<see cref="WorldFixture"/>) are journalled in process, without a shell.
+    /// </summary>
+    internal static string LocalDirectory => s_localFlow.Value ?? LocalDirectoryDefault ?? Path.Combine(new LocalSteamLocator().DataRoot, "journal");
+
+    // Test seams: this machine's journal is the real machine's, never a simulated machine's (EnvironmentInventory.ThisMachine
+    // may describe another platform's folders). Tests point it at a temporary folder, for all tests or for one test's flow.
+    internal static string? LocalDirectoryDefault { get; set; }
+    private static readonly AsyncLocal<string?> s_localFlow = new();
+    internal static IDisposable UseLocalDirectory(string directory)
+    {
+        string? previous = s_localFlow.Value;
+        s_localFlow.Value = directory;
+        return new LocalReset(previous);
+    }
+    private sealed class LocalReset(string? previous) : IDisposable { public void Dispose() => s_localFlow.Value = previous; }
+
+    private static readonly Lazy<RunJournal> s_process = new(() => new RunJournal(NewRunId()));
+    /// <summary>The run this process's local copies are journalled under.</summary>
+    internal static RunJournal ThisProcess => s_process.Value;
+
+    /// <summary>
+    /// Copies this machine's journal says a still-running process holds: made (or being made) by a runner on this machine that
+    /// still runs, and not yet retired or kept. Path (as journalled) to the holder's process ID. Reads only.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, int> LocalHolders()
+    {
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var open = new Dictionary<string, JournalRunner?>(comparer);
+        if (!Directory.Exists(LocalDirectory)) return new Dictionary<string, int>(comparer);
+        foreach (string file in Directory.EnumerateFiles(LocalDirectory, WorldFixture.Actor + ".jsonl", SearchOption.AllDirectories))
+        {
+            string[] lines;
+            try { lines = ReadShared(file).Split('\n'); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { continue; }
+            foreach (string line in lines.Where(line => line.Trim().Length != 0))
+            {
+                JournalRecord record;
+                try { record = ParseLine(line); }
+                catch (Exception error) when (error is JsonException or FormatException or KeyNotFoundException or InvalidOperationException) { continue; }
+                if (record.Entry.Fields.GetValueOrDefault("runtime") is not { } path) continue;
+                if (record.Entry.Kind is JournalEntry.CopyIntended or JournalEntry.CopyDone) open[path] = record.Runner;
+                else if (record.Entry.Kind is JournalEntry.CopyRetired or JournalEntry.CopyKept) open.Remove(path);
+            }
+        }
+        return open.Where(entry => entry.Value is { OnThisMachine: true } runner && runner.StillRuns())
+            .ToDictionary(entry => entry.Key, entry => entry.Value!.Pid, comparer);
+    }
+
+    // A journal is read while runs append to it: readers share it for writing, so an append never fails because of a read
+    // (Windows refuses a write to a file another handle opened read-only-shared).
+    private static string ReadShared(string file)
+    {
+        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
+    private static readonly object s_localWrite = new();
+    /// <summary>Appends <paramref name="entry"/> to this machine's journal (<see cref="LocalDirectory"/>) in this process; throws when it cannot.</summary>
+    internal void AppendLocal(string actor, JournalEntry entry)
+    {
+        string directory = Path.Combine(LocalDirectory, RunId);
+        string line = Line(actor, entry) + "\n";
+        lock (s_localWrite)
+        {
+            Directory.CreateDirectory(directory);
+            // Another process may hold the file for a moment (a reader from before readers shared it, an indexer): retry briefly.
+            for (int attempt = 1; ; attempt++)
+                try
+                {
+                    using var stream = new FileStream(Path.Combine(directory, actor + ".jsonl"), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+                    byte[] bytes = new UTF8Encoding(false).GetBytes(line);
+                    stream.Write(bytes);
+                    return;
+                }
+                catch (IOException) when (attempt < 20) { Thread.Sleep(50); }
+        }
+    }
+
+    // One journal line: when, which run and actor, what, and the runner that wrote it.
+    private string Line(string actor, JournalEntry entry)
+    {
         if (!SafeName(actor)) throw new ArgumentException("An actor name is letters, digits, '.', '_' and '-'.", nameof(actor));
         var line = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
@@ -109,14 +203,7 @@ internal sealed class RunJournal
                 ["machine"] = JournalRunner.Current.Machine, ["pid"] = JournalRunner.Current.Pid, ["startedUtc"] = JournalRunner.Current.StartedUtc.ToString("O"),
             },
         };
-        // Base64 keeps the line one shell word whatever the paths hold; the host decodes it before appending.
-        string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(line, Json)));
-        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsAppend : BashAppend, new Dictionary<string, string>
-        {
-            ["journal"] = journal, ["run"] = RunId, ["actor"] = actor, ["line"] = encoded,
-        }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Journalling {entry.Kind} for {actor} on {host.Name}");
-        if (InteractiveClient.Line(result.Stdout, "VT-JOURNALED") == null)
-            throw new HostOperationException($"The run journal on {host.Name} did not confirm {entry.Kind} for {actor}", result);
+        return JsonSerializer.Serialize(line, Json);
     }
 
     /// <summary>Every entry of run <paramref name="runId"/> on <paramref name="host"/>, in the order written per actor.</summary>
@@ -216,7 +303,11 @@ internal sealed class RunJournal
         $dir = Join-Path $journal $run
         if ([IO.Directory]::Exists($dir)) {
             foreach ($file in [IO.Directory]::GetFiles($dir, '*.jsonl')) {
-                foreach ($entry in [IO.File]::ReadAllLines($file, [Text.Encoding]::UTF8)) {
+                # Shared for writing, so a run appending at this moment is not refused.
+                $reader = New-Object IO.StreamReader([IO.File]::Open($file, 'Open', 'Read', 'ReadWrite, Delete'), [Text.Encoding]::UTF8)
+                try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+                foreach ($entry in ($text -split "`n")) {
+                    $entry = $entry.TrimEnd("`r")
                     if ($entry) { 'VT-JOURNAL ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($entry)) }
                 }
             }
@@ -236,7 +327,13 @@ internal sealed class RunJournal
     internal static readonly string WindowsReadAll = """
         if ([IO.Directory]::Exists($journal)) {
             foreach ($dir in [IO.Directory]::GetDirectories($journal)) {
-                foreach ($file in [IO.Directory]::GetFiles($dir, '*.jsonl')) { 'VT-JOURNAL-FILE ' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) }
+                foreach ($file in [IO.Directory]::GetFiles($dir, '*.jsonl')) {
+                    # Shared for writing, so a run appending at this moment is not refused.
+                    $stream = [IO.File]::Open($file, 'Open', 'Read', 'ReadWrite, Delete')
+                    try { $bytes = New-Object byte[] $stream.Length; $read = 0; while ($read -lt $bytes.Length) { $n = $stream.Read($bytes, $read, $bytes.Length - $read); if ($n -le 0) { break }; $read += $n } }
+                    finally { $stream.Dispose() }
+                    'VT-JOURNAL-FILE ' + [Convert]::ToBase64String($bytes, 0, $read)
+                }
             }
         }
         'VT-JOURNAL-END'

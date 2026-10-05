@@ -59,6 +59,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             string Keep(string why)
             {
                 _kept.Add(Key(null, runtime.DirectoryPath));
+                runtime.KeepReason = why; // journalled as kept when the run lets go of it, so env status lists it
                 string line = $"kept {runtime.DirectoryPath} ({DiskSpace.Format(DiskSpace.DirectoryBytes(runtime.DirectoryPath))}): {why}";
                 Provenance(line);
                 return line;
@@ -67,7 +68,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             if (!stopped)
             {
                 Console.Error.WriteLine("Warning: " + Keep("the owned server did not stop cleanly and may still use it; once no process does, remove it with " +
-                    $"OwnedCopies.Remove or: valheim-test copies \"{output}\" --remove \"{runtime.DirectoryPath}\""));
+                    $"valheim-test env teardown --run {RunJournal.ThisProcess.RunId}"));
                 return;
             }
             try

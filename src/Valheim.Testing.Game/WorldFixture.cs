@@ -49,11 +49,18 @@ public sealed class WorldFixture : IDisposable
             foreach (var item in actual) if (!string.Equals(item.Value, expectedHashes[item.Key], StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Fixture hash mismatch: " + item.Key);
         }
         else if (actual.Count == 0) throw new InvalidOperationException("Fixture source has no files: " + source);
-        string target = Path.Combine(outputParent, "valheim-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(target);
+        string target = Path.Combine(outputParent, "valheim-test-" + Guid.NewGuid().ToString("N"));
+        // Journalled on this machine before the copy (#257): an interrupted process leaves a record of every copy it may own.
+        try { Journal(JournalEntry.CopyIntended, target); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Could not journal the copy in {RunJournal.LocalDirectory}, so nothing was copied: ValheimTesting records every copy " +
+                $"it makes there first, so an interrupted run's copies can be found and removed (valheim-test env status). {error.Message}", error);
+        }
+        Directory.CreateDirectory(target);
         var fixture = new WorldFixture(target, actual);
         try
         {
-            WriteOwner(target);
             foreach (string directory in directories) Directory.CreateDirectory(Path.Combine(target, Path.GetRelativePath(source, directory)));
             foreach (var item in actual)
             {
@@ -62,6 +69,7 @@ public sealed class WorldFixture : IDisposable
                 if (FileHash.Sha256(destination) != item.Value) throw new IOException("Fixture changed while copying: " + item.Key);
             }
             File.WriteAllText(Path.Combine(target, ProvenanceFile), JsonSerializer.Serialize(actual));
+            Note(JournalEntry.CopyDone, target);
             return fixture;
         }
         catch { fixture.Dispose(); throw; }
@@ -162,27 +170,38 @@ public sealed class WorldFixture : IDisposable
             throw new IOException($"Kept the run's changes in {keepIn}, but could not remove the copy {DirectoryPath} ({error.Message}). Delete it once no process uses it.", error);
         }
         _disposed = true;
-        ReleaseOwner();
+        Note(JournalEntry.CopyRetired, DirectoryPath, ("keptIn", keepIn));
         return retired;
     }
     private const string ProvenanceFile = "fixture-provenance.json";
 
     /// <summary>
-    /// <c>&lt;copy&gt;.owner.json</c> beside a copy: the process holding this instance (its id and start time), so
-    /// <see cref="OwnedCopies"/> sees a copy a live run is still using even before any game runs from it. Removed when the
-    /// instance is disposed or retired; a process that ends without either leaves a record no live process matches.
+    /// <c>&lt;copy&gt;.owner.json</c>, which copies made before the run journal recorded their owner in (read by
+    /// <see cref="OwnedCopies"/> for those copies only; nothing writes it any more).
     /// </summary>
     internal static string OwnerFile(string copy) => copy + ".owner.json";
-    private static void WriteOwner(string copy)
+
+    /// <summary>
+    /// Why a preserved copy stays as left behind rather than handed over (a run's runtime kept on request, or one a server may
+    /// still use): journalled as <c>copy-kept</c>, so <c>env status</c> lists it and <c>env teardown</c> removes it. A preserved
+    /// copy without a reason (a run's world, its evidence) is handed over to the output it is in.
+    /// </summary>
+    internal string? KeepReason { get; set; }
+
+    // This machine's journal: before the copy a failed line stops it; after an effect a lost line is a warning.
+    private static void Journal(string kind, string copy, params (string Key, string Value)[] more) =>
+        RunJournal.ThisProcess.AppendLocal(Actor, JournalEntry.Of(kind, [("runtime", copy), ("local", "true"), .. more]));
+    private static void Note(string kind, string copy, params (string Key, string Value)[] more)
     {
-        using var self = System.Diagnostics.Process.GetCurrentProcess();
-        File.WriteAllText(OwnerFile(copy), JsonSerializer.Serialize(new CopyOwner(Environment.ProcessId, self.StartTime.ToUniversalTime())));
+        try { Journal(kind, copy, more); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Console.Error.WriteLine($"Warning: could not journal {kind} for {copy}: {error.Message}"); }
     }
-    private void ReleaseOwner() { try { File.Delete(OwnerFile(DirectoryPath)); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { } }
+    /// <summary>The actor this machine's copies are journalled as.</summary>
+    internal const string Actor = "fixture";
 
     // Windows refuses to delete a read-only file, and File.Copy keeps the source's read-only attribute: clear it and retry.
     // Links are removed, never followed.
-    private static void DeleteTree(string path)
+    internal static void DeleteTree(string path)
     {
         try { Directory.Delete(path, recursive: true); }
         catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
@@ -199,7 +218,9 @@ public sealed class WorldFixture : IDisposable
         if (_disposed) return;
         if (!Preserve && Directory.Exists(DirectoryPath)) DeleteTree(DirectoryPath);
         _disposed = true;
-        ReleaseOwner();
+        if (!Preserve) Note(JournalEntry.CopyRetired, DirectoryPath);
+        else if (KeepReason != null) Note(JournalEntry.CopyKept, DirectoryPath, ("why", KeepReason));
+        else Note(JournalEntry.CopyRetired, DirectoryPath, ("handedOver", "true"));
     }
 }
 

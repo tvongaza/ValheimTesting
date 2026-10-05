@@ -206,6 +206,50 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Empty(_host.Stops);
     }
 
+    // A process that made copies on this machine and died: recover removes its unfinished and runtime copies (keeping what
+    // changed) and hands its world, a run's save, over to its output.
+    [Fact] public async Task RecoverRemovesADeadProcesssLocalCopiesAndHandsOverItsSave()
+    {
+        string data = Path.Combine(_root, "data"), output = Path.Combine(_root, "output");
+        string server = Path.Combine(_root, "source-server"), world = Path.Combine(_root, "source-world");
+        Directory.CreateDirectory(server); File.WriteAllText(Path.Combine(server, ServerLaunch.WindowsExecutable), "game");
+        Directory.CreateDirectory(Path.Combine(world, "worlds_local")); File.WriteAllText(Path.Combine(world, "worlds_local", "W.db"), "save");
+        string runtime, save;
+        using (RunJournal.UseLocalDirectory(Path.Combine(_root, "elsewhere", "journal")))
+        {
+            var a = WorldFixture.Copy(server, output, WorldFixture.Manifest(server)); a.Preserve = true; a.Dispose(); runtime = a.DirectoryPath;
+            var b = WorldFixture.Copy(world, output, WorldFixture.Manifest(world)); b.Preserve = true; b.Dispose(); save = b.DirectoryPath;
+        }
+        File.WriteAllText(Path.Combine(runtime, "toolkit.log"), "written by the run");
+        string unfinished = Path.Combine(output, "valheim-test-" + new string('b', 32));
+        Directory.CreateDirectory(unfinished); File.WriteAllText(Path.Combine(unfinished, "half"), "x");
+        // The dead process's journal on this machine: three copies started, two finished, none let go.
+        string file = Path.Combine(data, "journal", "run-dead", WorldFixture.Actor + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        int minute = 0;
+        foreach (var (kind, path) in new[] { (JournalEntry.CopyIntended, runtime), (JournalEntry.CopyDone, runtime), (JournalEntry.CopyIntended, save),
+                     (JournalEntry.CopyDone, save), (JournalEntry.CopyIntended, unfinished) })
+            File.AppendAllText(file, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["utc"] = DateTime.UtcNow.AddHours(-1).AddMinutes(minute++).ToString("O"), ["run"] = "run-dead", ["actor"] = WorldFixture.Actor, ["kind"] = kind,
+                ["fields"] = new Dictionary<string, string> { ["runtime"] = path, ["local"] = "true" },
+                ["runner"] = new Dictionary<string, object> { ["machine"] = Gone.Machine, ["pid"] = Gone.Pid, ["startedUtc"] = Gone.StartedUtc.ToString("O") },
+            }) + "\n");
+        var hosts = new Dictionary<string, HostProfile> { ["this-machine"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
+        var local = OperatingSystem.IsWindows() ? new LocalGameHost("this-machine", HostShell.WindowsPowerShell) : new LocalGameHost("this-machine", HostShell.Bash);
+
+        var report = await RunRecovery.RecoverAsync(hosts, _ => local, "run-dead", false, TimeSpan.FromSeconds(60));
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.False(Directory.Exists(runtime));
+        Assert.Equal("written by the run", File.ReadAllText(Path.Combine(runtime + "-changes", "toolkit.log")));
+        Assert.False(Directory.Exists(unfinished));
+        Assert.True(File.Exists(Path.Combine(save, "worlds_local", "W.db")));
+        Assert.Equal("kept as the run's save (handed over to its output)", Assert.Single(report.Steps, step => step.What == "copy " + save).Outcome);
+        var after = Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => local, TimeSpan.FromSeconds(60))).Runs);
+        Assert.Equal(JournalRunState.Ended, after.State);
+    }
+
     [Fact] public async Task TheCommandLineRequiresARunAndSaysWhatItRefused()
     {
         foreach (string[] args in new[] { new[] { "recover" }, ["teardown", "--run"], ["recover", "--run", "x", "extra"], ["recover", "--hosts", "--run", "x"] })
