@@ -462,6 +462,8 @@ public static class PinnedServerRun
                             ("cleanupVerified", report.CleanupVerified ? "true" : "false")), prepared.Timeout).ConfigureAwait(false);
                     }
                     catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the run's end on {hostName}: {error.Message}"); }
+            else if (hosted != null)
+                await hosted.JournalEndAsync(report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed", report.CleanupVerified).ConfigureAwait(false);
             // The run ends here: it no longer holds the copies it keeps (their owner records go; see OwnedCopies).
             runtime?.Dispose(); world?.Dispose();
             if (ownOutput)
