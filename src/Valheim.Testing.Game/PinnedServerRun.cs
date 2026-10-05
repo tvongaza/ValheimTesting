@@ -122,8 +122,8 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// <item>Refuses an existing output directory (evidence is never overwritten) and one inside a pinned source.</item>
 /// <item>Reads the plan, detects the runtime's platform and checks the host before copying anything.</item>
 /// <item>Records provenance: plan, runner and toolkit hashes, mode, platform, <c>crossplay</c>, the copies and their input hashes.</item>
-/// <item>Copies and verifies the pinned runtime and world (kept for inspection), checks the copy's executable, its
-/// patcher names, and its game build, loader and patchers against <see cref="ServerRunPlan.RuntimePins"/> (recorded
+/// <item>Copies and verifies the pinned runtime and world (kept for inspection), checks the copy's executable and its
+/// game build, loader and patchers against <see cref="ServerRunPlan.RuntimePins"/> (recorded
 /// as provenance).</item>
 /// <item><c>validate</c> stops there. Otherwise: checks the CLI port is free, starts the owned session on the copies with
 /// per-boot logs (<c>boot-N.*</c>) and recorded commands (<c>connection-N.jsonl</c>), waits on the dedicated startup
@@ -310,7 +310,7 @@ public static class PinnedServerRun
         try
         {
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
-            var plan = readPlan(); plan.CheckPatchersAndLogScan(); plan.CheckCrossplay();
+            var plan = readPlan(); plan.CheckLogScan(); plan.CheckCrossplay();
             if (campaign == null) plan.CheckOutput(output); // A campaign's sources are its prepared copies, bound below.
             pinned = plan.Pinned;
             if (!pinned)
@@ -436,7 +436,6 @@ public static class PinnedServerRun
                     plan.CheckExecutable(ServerLaunch.Detect(runtime!.DirectoryPath));
                     if (mode != "validate") ServerLaunch.RequireExecutable(runtime.DirectoryPath);
                 });
-                report.Step(StepPhase.Setup, "copied runtime's BepInEx patchers are the plan's", () => plan.CheckRuntimePatchers(runtime!.DirectoryPath));
                 // What the game cannot report in game: its build and the loader, pinned on disk before anything launches.
                 report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers",
                     () => plan.CheckRuntimePins(runtime!.DirectoryPath).Record(report.Provenance, "runtime"));

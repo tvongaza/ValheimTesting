@@ -73,22 +73,28 @@ public sealed class BepInExLoaderPackage
             if (sha256.Length != 64 || !sha256.All(Uri.IsHexDigit) || !File.Exists(path) || !FileHash.Sha256(path).Equals(sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"BepInEx package file {path} is missing or changed; recapture the exact package.");
         }
-        foreach (string required in new[] { BepInExLoader.Preloader, BepInExLoader.Core })
-            if (!Files.ContainsKey(required.Replace('\\', '/'))) throw new InvalidDataException($"The BepInEx package does not pin {required}.");
+        // The launches' one list of loader files (BepInExLoader.LoaderFiles): a package is a complete loader for some platform.
+        var platforms = Enum.GetValues<ClientPlatform>()
+            .Select(platform => (Platform: platform, Missing: BepInExLoader.MissingLoaderFiles(platform, Files.ContainsKey))).ToList();
+        if (platforms.All(platform => platform.Missing.Count != 0))
+            throw new InvalidDataException("The BepInEx package is not a complete loader for any platform: " +
+                string.Join("; ", platforms.Select(platform => $"{platform.Platform} lacks {string.Join(", ", platform.Missing)}")) + ".");
         BepInExLoader.RequireCore(Root, "package");
         if (Files.ContainsKey(BepInExLoader.WindowsProxy))
         {
             if (!Files.ContainsKey(BepInExLoader.WindowsConfig)) throw new InvalidDataException("A Windows loader package needs both winhttp.dll and doorstop_config.ini.");
             BepInExLoader.RequireWindowsLoader(Root, "package");
         }
-        if (!Files.Keys.Any(key => key == BepInExLoader.WindowsProxy || ClientLaunch.MacDoorstopFiles.Contains(key) || key.StartsWith("doorstop_libs/", StringComparison.Ordinal)))
-            throw new InvalidDataException("The BepInEx package has no Doorstop library or Windows proxy.");
     }
+
+    /// <summary>Refuses this package unless it is a complete loader for <paramref name="platform"/>, the platform it is applied on.</summary>
+    internal void RequireFor(ClientPlatform platform, string kind) => BepInExLoader.RequireLoaderFiles(platform, Files.ContainsKey, kind);
 
     /// <summary>Replaces only the copied install's loader/core files with this pinned package. Caller must own the install.</summary>
     internal void Apply(string install)
     {
         Validate();
+        RequireFor(ClientLaunch.CurrentHost, "reviewed loader package for this machine");
         foreach (string file in InstallPins.LoaderRootFiles.Append(Settings))
             if (File.Exists(Path.Combine(install, file))) File.Delete(Path.Combine(install, file));
         foreach (string folder in InstallPins.LoaderFolders)

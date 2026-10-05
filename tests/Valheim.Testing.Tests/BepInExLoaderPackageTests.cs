@@ -137,6 +137,29 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         Assert.Equal(package.Loader, BepInExLoaderPackage.Read(manifest).Loader);
     }
 
+    // A package is a complete loader for some platform, by the launches' one list of loader files (BepInExLoader.LoaderFiles).
+    [Fact] public void APackageThatIsNoPlatformsCompleteLoaderIsRefused()
+    {
+        string root = Path.Combine(_rig.Root, "partial-loader");
+        void Write(string relative) { Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(root, relative))!); File.WriteAllText(Path.Combine(root, relative), relative); }
+        Write("BepInEx/core/BepInEx.dll"); Write("BepInEx/core/BepInEx.Preloader.dll"); Write("doorstop_libs/readme.txt");
+        var error = Assert.Throws<InvalidDataException>(() => BepInExLoaderPackage.Capture(root, "partial", "1"));
+        Assert.Contains("not a complete loader for any platform", error.Message);
+        Assert.Contains("Linux lacks doorstop_libs/libdoorstop_x64.so", error.Message);
+        Assert.Contains("Windows lacks winhttp.dll, doorstop_config.ini", error.Message);
+        Write("doorstop_libs/libdoorstop_x64.so");
+        BepInExLoaderPackage.Capture(root, "partial", "1"); // The control: with Linux's Doorstop library it is Linux's loader.
+        // A macOS-only package (a root libdoorstop.dylib) is complete too, on every OS that captures it.
+        string mac = Path.Combine(_rig.Root, "mac-loader");
+        foreach (string relative in new[] { "BepInEx/core/BepInEx.dll", "BepInEx/core/BepInEx.Preloader.dll", "libdoorstop.dylib" })
+        { Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(mac, relative))!); File.WriteAllText(Path.Combine(mac, relative), relative); }
+        var macPackage = BepInExLoaderPackage.Capture(mac, "mac", "1");
+        macPackage.RequireFor(ClientPlatform.MacOS, "package");
+        Assert.Contains("lacks doorstop_libs/libdoorstop_x64.so", Assert.Throws<FileNotFoundException>(() => macPackage.RequireFor(ClientPlatform.Linux, "package")).Message);
+        File.Delete(Path.Combine(root, "BepInEx", "core", "BepInEx.Preloader.dll"));
+        Assert.Contains("lacks BepInEx/core/BepInEx.Preloader.dll", Assert.Throws<InvalidDataException>(() => BepInExLoaderPackage.Capture(root, "partial", "1")).Message);
+    }
+
     private BepInExLoaderPackage Package()
     {
         var source = BepInExLoaderPackage.Capture(_rig.Game, "BepInExPack_Valheim", "5.4.2202");

@@ -62,11 +62,11 @@ public partial class ServerRunPlan
     /// once, without the game's shutdown. Default 120, at most 1800.
     /// </summary>
     public int QuitSeconds { get; set; } = 120;
-    /// <summary>
-    /// Every entry the runtime's <c>BepInEx/patchers</c> holds, by name. A clean runtime is BepInEx core and your plugins
-    /// with an empty patchers directory; the runner refuses one holding anything not named here.
-    /// </summary>
-    public string[] Patchers { get; set; } = [];
+    // Removed (#295): patcher names beside the patchers hash described one folder twice. A plan that still names them is
+    // refused with what to do instead of the generic unknown-field error.
+    [JsonInclude, JsonPropertyName("patchers"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private JsonElement? RemovedPatchers { get => null; set => throw new ArgumentException($"The plan's patchers was removed (ValheimTesting #295): {PatchersInstead}. Delete patchers from the plan."); }
+    internal const string PatchersInstead = "the patchers pin in runtimePins and installPins hashes everything BepInEx/patchers holds, so a patcher a removed mod left behind is refused by the pin, which names what the folder holds; an explicitly unpinned run checks no patchers, like the rest of its install";
     /// <summary>
     /// This run's severities for the teardown log scan's patterns (<see cref="LogScanner.Names"/>), each with a written
     /// reason, for example <c>"rpc-method-missing": { "severity": "Failure", "reason": "..." }</c>; under a new name, a pattern
@@ -83,7 +83,7 @@ public partial class ServerRunPlan
     /// no runner-owned session token or Doorstop variable in the environment, <c>-batchmode -nographics</c> and exactly
     /// one <c>-savedir {world}</c>, and strict pins with <c>worlduid</c>, an exact MD5 for each of
     /// <paramref name="requiredPlugins"/> and for every other listed plugin, no <c>worldfiles</c>, and
-    /// <see cref="RuntimePins"/>. Patcher names are single entries and each log scan classification names a known pattern
+    /// <see cref="RuntimePins"/>. Each log scan classification names a known pattern
     /// with a reason. <c>-crossplay</c> comes only from <see cref="Crossplay"/> (<see cref="CheckCrossplay"/>). An explicitly unpinned plan (<see cref="Pinning"/> <c>none</c>) follows the same rules without the
     /// pins, which it must leave out, and may leave out the fixture hashes.
     /// </summary>
@@ -91,7 +91,7 @@ public partial class ServerRunPlan
     {
         bool pinned = Pinned;
         Runtime.Validate(pinned); World.Validate(pinned);
-        CheckPatchersAndLogScan();
+        CheckLogScan();
         if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > 1800)
             throw new ArgumentException("Invalid port or time budget.");
         if (!string.IsNullOrEmpty(Executable) && Executable != ServerLaunch.WindowsExecutable && Executable != ServerLaunch.LinuxExecutable && Executable != ServerLaunch.MacExecutable)
@@ -150,14 +150,8 @@ public partial class ServerRunPlan
             throw new PlatformNotSupportedException($"A {platform} dedicated-server runtime must run on a {platform} host, not this {host} one; use validate here, " +
                 "or run on a matching host, the Linux server container, or a Linux host with --inventory.");
     }
-    /// <summary>The plan's patcher names and log scan classifications are well formed (the runner checks them for every plan).</summary>
-    public void CheckPatchersAndLogScan()
-    {
-        BepInExLoader.CheckPatcherNames(Patchers);
-        LogScanner.CheckClassifications(LogScan);
-    }
-    /// <summary>Refuses a runtime whose <c>BepInEx/patchers</c> holds an entry <see cref="Patchers"/> does not name, or lacks one it names.</summary>
-    public void CheckRuntimePatchers(string runtime) => BepInExLoader.RequirePatchers(runtime, Patchers, "runtime");
+    /// <summary>The plan's log scan classifications are well formed (the runner checks them for every plan).</summary>
+    public void CheckLogScan() => LogScanner.CheckClassifications(LogScan);
     /// <summary>
     /// Pinned: refuses a runtime whose game build, loader or patchers are not <see cref="RuntimePins"/>. Unpinned:
     /// checks nothing. Either way returns what the runtime holds, for the report.
