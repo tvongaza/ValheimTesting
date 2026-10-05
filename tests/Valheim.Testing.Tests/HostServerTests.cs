@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Valheim.Testing.Game;
 using Xunit;
@@ -132,6 +133,23 @@ public sealed class HostServerTests : IDisposable
         foreach (string script in new[] { InteractiveScripts.WindowsStart, HostServerScripts.WindowsStart, HostServerScripts.WindowsServerLogonCheck })
             Assert.Matches(@"(^|\n)\s*function Get-VtSessions", script);
         Assert.Matches(@"(^|\n)\s*function Get-VtServerLogon", HostServerScripts.WindowsStart);
+        // Both launchers take their directory from where they were written, so the task's command line is the quoted -File
+        // path alone: a user profile with spaces in it adds no second quoted argument to get wrong.
+        foreach (string script in new[] { HostServerScripts.WindowsStart, InteractiveScripts.WindowsStart })
+        {
+            Assert.Contains("-WindowStyle Hidden -File \"' + $launcherFile + '\"'\n", script);
+            // A task that ends between two looks is caught by its result, not left to the deadline.
+            Assert.Contains("(Test-VtTaskEnded $state $registered.LastTaskResult)", script);
+        }
+        foreach (string launcher in new[] { HostServerScripts.WindowsLauncher, InteractiveScripts.WindowsLauncher })
+        {
+            Assert.Contains("$dir = $PSScriptRoot", launcher);
+            Assert.DoesNotContain("param(", launcher);
+        }
+        // The server's start reads the task's state and result like the client's, so a task that ends without the launcher's
+        // file names the result code instead of waiting out the deadline in silence.
+        Assert.Contains("$registered.LastTaskResult", HostServerScripts.WindowsStart);
+        Assert.Contains("the task ended without the launcher starting the server (task result ", HostServerScripts.WindowsStart);
     }
 
     [Fact] public async Task WindowsServerRefusesAReplyLostDuringLaunchAsUnknown()
@@ -143,10 +161,20 @@ public sealed class HostServerTests : IDisposable
         Assert.Contains("may have started", error.Message);
     }
 
-    [Fact] public async Task WindowsHeadlessTaskKeepsItsChildAfterTheTaskEndsAndStopsByIdentity()
+    // The Windows server task for real, on the station (over SSH as an administrator: S4U) and on windows-latest (the runner's
+    // console session), from a runtime and boot directory with spaces in their paths, as a user's profile has. The task's own
+    // logon first (whatever this process's token allows); then the interactive-token path through the logon seams whenever
+    // this process is in a desktop session (a windows-latest runner is), which is the path a mod author's own desktop takes.
+    // A stand-in (ping named valheim_server.exe) stands for the server; stopping is by identity, so a live PID is never killed blind.
+    [Fact] public async Task WindowsServerTaskStartsTheLauncherFromAPathWithSpacesAndStopsByIdentity()
     {
-        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("VT_TEST_WINDOWS_HOST_SERVER") != "1") return;
-        string runtime = Path.Combine(_root, "runtime"), boot = Path.Combine(_root, "boot");
+        if (!OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("windows-task-check", HostShell.WindowsPowerShell);
+        // A non-elevated process outside a desktop session (SSH as an ordinary user) has no server task; the station (an
+        // administrator) and windows-latest (elevated, in a desktop session) always have one.
+        try { await HostServer.RequireTaskLogonAsync(host, TimeSpan.FromSeconds(30)); }
+        catch (InvalidOperationException) when (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") != "1") { return; }
+        string root = Path.Combine(_root, "Valheim Testing Server"), runtime = Path.Combine(root, "runtime copy");
         Directory.CreateDirectory(runtime);
         File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), Path.Combine(runtime, ServerLaunch.WindowsExecutable));
         foreach (string file in HostServerLaunch.CreateWindows(runtime, []).RequiredFiles.Skip(1))
@@ -155,16 +183,20 @@ public sealed class HostServerTests : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, "test-only placeholder");
         }
-        var host = new LocalGameHost("windows-task-check", HostShell.WindowsPowerShell);
         var launch = HostServerLaunch.CreateWindows(runtime, ["-n", "60", "127.0.0.1"]);
+
+        // 1. This process's own logon (S4U when elevated, else interactive), through StartAsync.
+        string boot = Path.Combine(root, "boot 1");
         var process = await HostServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(75));
         try
         {
+            Assert.Matches("^(s4u|interactive)$", process.TaskLogon);
             Assert.False(process.HasExited);
             using var child = System.Diagnostics.Process.GetProcessById(process.Id);
             Assert.False(child.HasExited);
+            Assert.True(File.Exists(Path.Combine(boot, "launcher.started")), "the launcher records that the task reached it");
             // A wrong start identity must not kill a live process with this PID.
-            string foreignBoot = Path.Combine(_root, "foreign");
+            string foreignBoot = Path.Combine(root, "foreign boot");
             Directory.CreateDirectory(foreignBoot);
             var foreign = new HostServerProcess(host, process.Id, "0", foreignBoot, runtime, [], null);
             Assert.Equal(HostServerStop.AlreadyGone, await foreign.StopAsync(TimeSpan.FromSeconds(1)));
@@ -172,6 +204,24 @@ public sealed class HostServerTests : IDisposable
         }
         finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
         Assert.DoesNotContain(System.Diagnostics.Process.GetProcesses(), other => other.Id == process.Id);
+
+        // 2. The interactive-token task, as a non-elevated desktop user gets it, forced through the logon seams. Only a process
+        // in a desktop session can register one that runs; windows-latest's runner is in one and must take this path.
+        int session = System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        if (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") == "1")
+            Assert.True(session != 0, $"This runner was expected to run in a desktop session (it runs in session {session}).");
+        if (session == 0) return;
+        string interactiveBoot = Path.Combine(root, "boot 2");
+        var interactive = await HostServer.StartAsync(host, launch, interactiveBoot, TimeSpan.FromSeconds(75), logs: null, evidence: null,
+            new Dictionary<string, string> { ["elevated"] = "false", ["session"] = session.ToString(CultureInfo.InvariantCulture), ["desktops"] = "1" }, default);
+        try
+        {
+            Assert.Equal("interactive", interactive.TaskLogon);
+            using var child = System.Diagnostics.Process.GetProcessById(interactive.Id);
+            Assert.Equal(session, child.SessionId); // the task started it in this desktop session
+            Assert.Contains("session " + session, File.ReadAllText(Path.Combine(interactiveBoot, "launcher.started")));
+        }
+        finally { Assert.Equal(HostServerStop.Stopped, await interactive.StopAsync(TimeSpan.FromSeconds(15))); }
     }
 
     [Fact] public async Task WindowsHostCopiesAndRetiresOnlyThisRunsRuntime()
