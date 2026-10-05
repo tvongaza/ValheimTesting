@@ -503,8 +503,12 @@ public sealed class TargetedRegression
         var configs = Directory.EnumerateFiles(config).Order(StringComparer.Ordinal)
             .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), FileHash.Sha256(path), FileHash.Md5(path), null, [])).ToList();
 
-        RequireDependencies(staged);
-        RequireReferences(install, staged);
+        // The one declared-dependency rule (DependencyRule, as the resolver applies it), over exactly what was staged.
+        string managed = Path.GetDirectoryName(InstallPins.GameAssembly(install))!;
+        var provided = new[] { managed, Path.Combine(install, InstallPins.CoreDirectory) }
+            .SelectMany(folder => Directory.EnumerateFiles(folder, "*.dll")).Select(Path.GetFileNameWithoutExtension).OfType<string>();
+        var unmet = DependencyRule.Check(staged.Select(entry => (entry.File.Path, entry.Metadata)).ToList(), provided, Inputs.OptionalReferences, "valheim");
+        if (unmet.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", unmet.Select(problem => problem.Message)) + ".");
         string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(install));
         string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
         if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
@@ -825,49 +829,4 @@ public sealed class TargetedRegression
 
     private static string Declared(PluginAssembly assembly) =>
         assembly.Plugins.Count == 0 ? "no plugin" : string.Join(", ", assembly.Plugins.Select(plugin => plugin.Guid));
-
-    private static void RequireDependencies(IReadOnlyList<(StagedFile File, PluginAssembly Metadata)> staged)
-    {
-        var problems = new List<string>();
-        var providers = new Dictionary<string, (StagedFile File, PluginDeclaration Plugin)>(StringComparer.Ordinal);
-        foreach (var (file, metadata) in staged)
-            foreach (var plugin in metadata.Plugins)
-                if (providers.TryGetValue(plugin.Guid, out var other)) problems.Add($"{plugin.Guid} is declared by both {other.File.Path} and {file.Path}; BepInEx loads one and skips the other. Keep one in the manifest");
-                else providers[plugin.Guid] = (file, plugin);
-        foreach (var (file, metadata) in staged)
-            foreach (var plugin in metadata.Plugins)
-            {
-                foreach (var dependency in plugin.Dependencies.Where(dependency => dependency.Hard))
-                {
-                    if (!providers.TryGetValue(dependency.Guid, out var provider))
-                        problems.Add($"{plugin.Guid} ({file.Path}) has a hard [BepInDependency(\"{dependency.Guid}\"{(dependency.MinimumVersion == null ? "" : $", \"{dependency.MinimumVersion}\"")})] that nothing staged declares, so BepInEx would skip it after the game starts. " +
-                            $"Add the DLL that declares [BepInPlugin(\"{dependency.Guid}\")] to plugins in the manifest, with its SHA256 (a file name alone does not count)");
-                    else if (dependency.MinimumVersion != null && !AtLeast(provider.Plugin.Version, dependency.MinimumVersion))
-                        problems.Add($"{plugin.Guid} ({file.Path}) needs {dependency.Guid} {dependency.MinimumVersion} or newer, and the staged {provider.File.Path} declares {provider.Plugin.Version}. Stage a newer {dependency.Guid}");
-                }
-                foreach (string incompatible in plugin.Incompatibilities)
-                    if (providers.TryGetValue(incompatible, out var provider))
-                        problems.Add($"{plugin.Guid} ({file.Path}) declares [BepInIncompatibility(\"{incompatible}\")] and {provider.File.Path} declares it, so BepInEx would skip {plugin.Guid}. Remove one of them from the manifest");
-                if (plugin.Processes.Count != 0 && !plugin.Processes.Any(process => Path.GetFileNameWithoutExtension(process).Equals("valheim", StringComparison.OrdinalIgnoreCase)))
-                    problems.Add($"{plugin.Guid} ({file.Path}) loads only in {string.Join(", ", plugin.Processes)} ([BepInProcess]), and the client is valheim, so it would never load. Stage the mod's client build, or remove it from the manifest");
-            }
-        if (problems.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", problems) + ".");
-    }
-
-    private static bool AtLeast(string version, string minimum) =>
-        Version.TryParse(version, out var have) && Version.TryParse(minimum, out var need) && have >= need;
-
-    private void RequireReferences(string install, IReadOnlyList<(StagedFile File, PluginAssembly Metadata)> staged)
-    {
-        string managed = Path.GetDirectoryName(InstallPins.GameAssembly(install))!;
-        var provided = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string folder in new[] { managed, Path.Combine(install, InstallPins.CoreDirectory) })
-            foreach (string dll in Directory.EnumerateFiles(folder, "*.dll")) provided.Add(Path.GetFileNameWithoutExtension(dll));
-        foreach (var (_, metadata) in staged) provided.Add(metadata.AssemblyName);
-        provided.UnionWith(Inputs.OptionalReferences);
-        var missing = staged.SelectMany(entry => entry.Metadata.References.Where(reference => !provided.Contains(reference)).Select(reference => $"{entry.File.Path} references assembly {reference}")).ToList();
-        if (missing.Count != 0)
-            throw new InvalidOperationException($"Assemblies the staged DLLs reference are not in the game's Managed folder, BepInEx/core or the allowlist: {string.Join("; ", missing)}. " +
-                "Add the DLL that provides each one to plugins in the manifest (a library whose assembly name it is), or list the name in optionalReferences if the mod only uses it when present.");
-    }
 }

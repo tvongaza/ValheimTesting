@@ -725,7 +725,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         request.Mods.Add(twin);
         var plan = NativeDependencyResolver.Resolve(request);
         Assert.Equal("duplicate-plugin", Assert.Single(plan.Gaps).Kind);
-        Assert.Contains("example.mod", plan.Gaps[0].Reason);
+        Assert.Contains("example.mod is declared by both", plan.Gaps[0].Reason); // the one rule's text, as TargetedRegression refuses with
     }
 
     [Fact] public void MissingHardDependencyIsRefusedBeforeAnInstallIsCreated()
@@ -748,7 +748,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var plan = NativeDependencyResolver.Resolve(request);
         var gap = Assert.Single(plan.Gaps);
         Assert.Equal("incompatible-plugin", gap.Kind);
-        Assert.Contains("example.mod", gap.Reason);
+        Assert.Contains("declares [BepInIncompatibility(\"example.mod\")]", gap.Reason); // the one rule's text, as TargetedRegression refuses with
         Assert.False(Directory.Exists(_rig.Install));
     }
 
