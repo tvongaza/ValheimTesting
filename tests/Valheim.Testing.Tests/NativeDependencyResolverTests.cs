@@ -466,6 +466,16 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal("Setup", steps["verify the prepared runtime on the server host"]);
         Assert.DoesNotContain("copy and verify pinned runtime on the server host", steps.Keys);
         Assert.Contains("vt-prep-", result.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
+        // The run journal (#257): one run id for the campaign; on the host, beside its lock, each copy was journalled before it
+        // was made (the first journal entry precedes the first copy script), then done, retired, and the run's end.
+        string runId = result.GetProperty("Provenance").GetProperty("runId").GetString()!;
+        var journal = await RunJournal.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
+            journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
+        Assert.Contains($"vt-prep-{runId}-server", journal.First(record => record.Entry.Kind == JournalEntry.CopyIntended).Entry.Fields["runtime"]);
+        var ended = Assert.Single(journal, record => record.Entry.Kind == JournalEntry.RunEnded);
+        Assert.Equal(("passed", "true"), (ended.Entry.Fields["state"], ended.Entry.Fields["cleanupVerified"]));
+        Assert.True(host.Scripts.ToList().IndexOf("journal") < host.Scripts.ToList().IndexOf("copy"));
 
         // A server that may still run (its start reply was lost) keeps the prepared install it may run from, named, and the
         // host's lock; the one retire owner removes nothing it cannot prove unused.
@@ -480,6 +490,11 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(kept, "runtime")));
         Assert.DoesNotContain(unknown.GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString()!.StartsWith("remove the prepared install ", StringComparison.Ordinal));
         Assert.Equal(host.Claims.Count, host.Releases.Count + 1);
+        string unknownRun = unknown.GetProperty("Provenance").GetProperty("runId").GetString()!;
+        var unknownJournal = await RunJournal.ReadAsync(host, @"C:\locks\journal", unknownRun, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyKept],
+            unknownJournal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
+        Assert.Equal("unknown", Assert.Single(unknownJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["state"]);
 
         // A host retire that fails keeps the install and what it kept beside it (not fetched yet): nothing else removes it.
         Directory.Delete(host.Local(@"C:\runs\run-test"), true);
@@ -492,6 +507,29 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.StartsWith("cleanup failed", failedRetire.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
         Assert.Equal(2, Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*").Count(directory => Directory.Exists(Path.Combine(directory, "runtime"))));
         Assert.DoesNotContain(failedRetire.GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString()!.StartsWith("remove the prepared install ", StringComparison.Ordinal));
+
+        // A journal entry that cannot be written stops the run before its effect: no copy is made that the journal does not name.
+        int copiesBefore = host.Scripts.Count(script => script == "copy");
+        host.Failures["journal"] = new HostResult(HostOutcome.Exited, 4, "", "No space left on device", TimeSpan.Zero, false);
+        string unjournalledOutput = Path.Combine(_rig.Root, "run-campaign-unjournalled");
+        Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, unjournalledOutput, options));
+        host.Failures.Remove("journal");
+        Assert.Equal(copiesBefore, host.Scripts.Count(script => script == "copy"));
+        var unjournalled = JsonDocument.Parse(File.ReadAllText(Path.Combine(unjournalledOutput, "result.json"))).RootElement;
+        var prepare = unjournalled.GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "check the hosts and prepare every actor's disposable install");
+        Assert.False(prepare.GetProperty("Passed").GetBoolean());
+        Assert.Contains("Journalling copy-intended", prepare.GetProperty("Error").GetString());
+
+        // A preparation that fails after its copy was journalled ends its run in the journal, cleanup proven.
+        host.Failures["apply-stage"] = new HostResult(HostOutcome.Exited, 3, "", "Access to the path is denied", TimeSpan.Zero, false);
+        string failedPrepOutput = Path.Combine(_rig.Root, "run-campaign-failed-prep");
+        Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, failedPrepOutput, options));
+        host.Failures.Remove("apply-stage");
+        string failedRun = JsonDocument.Parse(File.ReadAllText(Path.Combine(failedPrepOutput, "result.json"))).RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
+        var failedJournal = await RunJournal.ReadAsync(host, @"C:\locks\journal", failedRun, TimeSpan.FromSeconds(5));
+        Assert.Equal(JournalEntry.CopyIntended, failedJournal.Single(record => record.Actor == "server").Entry.Kind);
+        var failedEnd = Assert.Single(failedJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
+        Assert.Equal(("failed in preparation", "true"), (failedEnd["state"], failedEnd["cleanupVerified"]));
     }
 
     // A campaign that leaves out its inventory runs on this machine: its dedicated server is the one Steam installed, with

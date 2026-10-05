@@ -196,6 +196,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             var hostCharacters = characters.Where(item => item.Host.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
             var hostCopies = copies.Where(copy => copy.Host.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
             var retired = hostCopies.Where(copy => !Kept(copy.Host, copy.Runtime)).ToList();
+            var keptByRun = hostCopies.Where(copy => Kept(copy.Host, copy.Runtime)).ToList();
             if (KeepRequested && retired.Count != 0)
             {
                 foreach (var copy in retired)
@@ -204,7 +205,24 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                     Step($"keep {copy.Host}:{copy.Runtime}: {KeptOnRequest}", () => { });
                     Console.Error.WriteLine($"Kept {copy.Host}:{copy.Runtime}: {KeptOnRequest}");
                 }
+                keptByRun.AddRange(retired);
                 retired.Clear();
+            }
+            // The run's journal on this host says what went and what stayed, after each effect. A lost line only makes a later
+            // recovery repeat a retire that finds nothing, so it is a warning, never a failed cleanup.
+            string journal = prepared.JournalOf(name);
+            async Task Journal(IGameHost on, string actor, JournalEntry entry)
+            {
+                try { await prepared.Journal.AppendAsync(on, journal, actor, entry, prepared.Timeout).ConfigureAwait(false); }
+                catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal {entry.Kind} for {actor} on {name}: {error.Message}"); }
+            }
+            // A kept copy needs neither the lock nor a process check to be recorded as kept.
+            if (keptByRun.Count != 0)
+            {
+                var keptOn = prepared.HostFor(name);
+                foreach (var copy in keptByRun)
+                    await Journal(keptOn, copy.Actor, JournalEntry.Of(JournalEntry.CopyKept, ("runtime", copy.Runtime),
+                        ("why", KeepRequested ? KeptOnRequest : "its server may still run, or its retire failed"))).ConfigureAwait(false);
             }
             if (hostCharacters.Count == 0 && retired.Count == 0) continue;
             IGameHost host;
@@ -239,11 +257,13 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             try
             {
                 foreach (var character in hostCharacters)
-                    await Try($"retire the disposable character {character.Character.FileName} on {name}",
-                        () => HostedCharacterStage.RetireAsync(host, character.Character, prepared.Timeout), failures).ConfigureAwait(false);
+                    if (await Try($"retire the disposable character {character.Character.FileName} on {name}",
+                        () => HostedCharacterStage.RetireAsync(host, character.Character, prepared.Timeout), failures).ConfigureAwait(false))
+                        await Journal(host, character.Actor, JournalEntry.Of(JournalEntry.CharacterRetired, ("fileName", character.Character.FileName))).ConfigureAwait(false);
                 foreach (var copy in retired)
-                    await Try($"remove the prepared install {name}:{copy.Runtime}",
-                        () => HostedRuntimeStage.RetireAsync(host, copy.Runtime, copy.Stage, prepared.Timeout), failures).ConfigureAwait(false);
+                    if (await Try($"remove the prepared install {name}:{copy.Runtime}",
+                        () => HostedRuntimeStage.RetireAsync(host, copy.Runtime, copy.Stage, prepared.Timeout), failures).ConfigureAwait(false))
+                        await Journal(host, copy.Actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.Runtime))).ConfigureAwait(false);
             }
             finally
             {
@@ -256,10 +276,10 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
         return failures;
     }
 
-    private async Task Try(string name, Func<Task> action, List<Exception> failures)
+    private async Task<bool> Try(string name, Func<Task> action, List<Exception> failures)
     {
-        try { await StepAsync(name, action).ConfigureAwait(false); }
-        catch (Exception error) { failures.Add(new IOException($"Failed to {name}", error)); }
+        try { await StepAsync(name, action).ConfigureAwait(false); return true; }
+        catch (Exception error) { failures.Add(new IOException($"Failed to {name}", error)); return false; }
     }
 
     private void Fail(string name, Exception error)

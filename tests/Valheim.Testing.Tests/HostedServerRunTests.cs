@@ -117,7 +117,11 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostClientPreflight.BashExists) ? "preflight-exists" :
         ReferenceEquals(script, HostClientPreflight.PowerShellExists) ? "preflight-exists" :
         ReferenceEquals(script, SteamSignedInUsers.PowerShell) ? "steam-user" :
-        ReferenceEquals(script, SteamSignedInUsers.Bash) ? "steam-user" : "other";
+        ReferenceEquals(script, SteamSignedInUsers.Bash) ? "steam-user" :
+        ReferenceEquals(script, RunJournal.BashAppend) ? "journal" :
+        ReferenceEquals(script, RunJournal.WindowsAppend) ? "journal" :
+        ReferenceEquals(script, RunJournal.BashRead) ? "journal-read" :
+        ReferenceEquals(script, RunJournal.WindowsRead) ? "journal-read" : "other";
 
     public async Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default)
     {
@@ -221,6 +225,24 @@ internal sealed class FakeServerHost : IGameHost
             case "character-drop":
                 if (Directory.Exists(Local(v["stage"]))) Directory.Delete(Local(v["stage"]), recursive: true);
                 return Ok("VT-CHAR-STAGE-DROPPED\n");
+            // As RunJournal's scripts do (RunJournalShellTests runs the real bash pair): one decoded line appended per entry.
+            case "journal":
+            {
+                string file = Local(v["journal"] + "/" + v["run"] + "/" + v["actor"] + ".jsonl");
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.AppendAllText(file, Encoding.UTF8.GetString(Convert.FromBase64String(v["line"])) + "\n");
+                return Ok("VT-JOURNALED\n");
+            }
+            case "journal-read":
+            {
+                string directory = Local(v["journal"] + "/" + v["run"]);
+                var text = new StringBuilder();
+                if (Directory.Exists(directory))
+                    foreach (string file in Directory.GetFiles(directory, "*.jsonl"))
+                        foreach (string line in File.ReadAllLines(file).Where(line => line.Length != 0))
+                            text.Append("VT-JOURNAL ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(line))).Append('\n');
+                return Ok(text.Append("VT-JOURNAL-END\n").ToString());
+            }
             case "list":
             {
                 string root = Local(v["root"]);
