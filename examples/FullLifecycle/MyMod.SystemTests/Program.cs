@@ -5,10 +5,10 @@ using Valheim.Testing.Game;
 // lifecycle: plan checks, fixture copies, provenance, the owned server and its startup events, teardown, the report and
 // the result banner. The mod supplies the plan fields, the session capability its test adapter serves, and the scenario.
 // prepare-server creates a fresh world and writes a dry-site-server plan for it (see ServerFixture); it runs before any
-// plan exists, so it is outside the pinned runner. A hosted run has no dedicated server to pin, so validate-host and host
-// have their own entry point (HostedRun).
+// plan exists, so it is outside the pinned runner. A hosted run has no dedicated server to pin: validate-host and host are
+// the toolkit runner's hosted modes, where the session's host is a client that hosts the fixture world (HostedScenario).
 if (args.Length > 0 && args[0] == ServerFixture.Mode) return ServerFixture.Run(args);
-if (args.Length > 0 && args[0] is HostedRun.RunMode or HostedRun.ValidateMode) return HostedRun.Run(args);
+if (args.Length > 0 && args[0] is PinnedServerRun.HostMode or PinnedServerRun.ValidateHostMode) return await PinnedServerRun.MainAsync(args, HostedScenario.RunnerOptions());
 // The runner's options: MyMod's plan rules and declaration, and every scenario by name (ScenarioTable).
 var options = ScenarioTable.RunnerOptions();
 if (args.Length > 0 && args[0] == "campaign") return await Campaign(args, options);

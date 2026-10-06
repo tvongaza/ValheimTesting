@@ -47,6 +47,12 @@ public sealed class ClientRunPlan
     /// (<see cref="ClientRounds"/>). Leave out <see cref="Join"/>, <see cref="PasswordVariable"/> and <see cref="Crossplay"/>.
     /// </summary>
     public HostWorldPlan? HostWorld { get; set; }
+    /// <summary>
+    /// The client is a peer of the run's hosting client (<see cref="HostingClientActor"/>): it joins the host's world by the
+    /// host's multiplayer identity (<see cref="SessionControl.JoinHost"/>), since a listen server is reached through Steam, not
+    /// at an address. Leave out <see cref="Join"/>, <see cref="PasswordVariable"/>, <see cref="Crossplay"/> and <see cref="HostWorld"/>.
+    /// </summary>
+    public bool JoinsHost { get; set; }
     /// <summary>An existing, disposable local character (never a cloud character).</summary>
     public string Character { get; set; } = "";
     // Removed (#298): direct start and prepared-character start saved 0.07 s over the menu start. A plan that still names
@@ -167,9 +173,11 @@ public sealed class ClientRunPlan
             throw new ArgumentException("A hosting client (hostWorld) joins no server: leave out join, passwordVariable and crossplay; hostWorld.crossplay hosts a crossplay world.");
         if (HostWorld != null && Host is not ("127.0.0.1" or "localhost"))
             throw new ArgumentException("A hosting client runs on this machine, where the runner places the fixture world in its save directory; its ValheimCLI host is 127.0.0.1.");
+        if (JoinsHost && (Join.Length != 0 || PasswordVariable != null || Crossplay || HostWorld != null))
+            throw new ArgumentException("A host's peer (joinsHost) joins the hosting client by its multiplayer identity: leave out join, passwordVariable, crossplay and hostWorld (the hosted world has no password).");
         if (Crossplay && (Join.Length != 0 || PasswordVariable != null))
             throw new ArgumentException("A crossplay client joins the server's PlayFab lobby, not an address, and the crossplay join command would carry a password as text: leave out join and passwordVariable, and run the crossplay fixture server private without a password.");
-        foreach (string? token in new[] { HostWorld == null && !Crossplay ? Join : null, Character, PasswordVariable })
+        foreach (string? token in new[] { HostWorld == null && !Crossplay && !JoinsHost ? Join : null, Character, PasswordVariable })
             if (token != null && (token.Length == 0 || token.Any(char.IsWhiteSpace))) throw new ArgumentException("Join address, character and password variable must be single tokens.");
         if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600 || BepInExSeconds is < 5 or > 1800) throw new ArgumentException("Client timeouts are out of range.");
         HostWorld?.Validate(pinned);

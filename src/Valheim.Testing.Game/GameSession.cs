@@ -3,21 +3,25 @@ using System.Diagnostics;
 namespace Valheim.Testing.Game;
 
 /// <summary>
-/// One run's game processes in their roles (#258, decided on #289): an owned dedicated server (<see cref="Server"/>) and named
-/// clients (<see cref="Clients"/>), each with its in-game handle <c>.Game</c>. A scenario is a function of the session and its
+/// One run's game processes in their roles (#258, decided on #289): an owned dedicated server (<see cref="Server"/>) or a client
+/// that hosts its own world (<see cref="Host"/>, #258 step 8), and named clients (<see cref="Clients"/>), each with its in-game
+/// handle <c>.Game</c>. A scenario is a function of the session and its
 /// plan, <c>(GameSession session, TPlan plan) =&gt; Task</c>, and coordinates the actors only through the barriers, each one
 /// named Setup step with a bounded wait that names itself when it times out:
 /// <list type="bullet">
-/// <item><see cref="StartAsync"/>: the server boots and every client reaches its menu at the same time; one failure cancels the
-/// others, lets them settle, closes the clients and then the server, and is rethrown. Then, with the mod's
-/// <see cref="ModDeclaration"/>, its declared Harmony patches must be applied on the server when its pins load the mod.</item>
-/// <item><see cref="ServerJoinable"/>: the server accepts game connections.</item>
+/// <item><see cref="StartAsync"/>: the server boots (or the host, prepared before anything starts, opens to its menu and hosts its world) and every
+/// client reaches its menu at the same time; one failure cancels the others, lets them settle, closes the clients and then the
+/// server or host, and is rethrown. With the mod's <see cref="ModDeclaration"/>, its declared Harmony patches must be applied on
+/// the server or host when its pins load the mod.</item>
+/// <item><see cref="ServerJoinable"/>: the server (or the host's world) accepts game connections.</item>
 /// <item><see cref="Join"/>, <see cref="JoinAll"/>: a client (every client) in the server's world, by the one join
-/// (<see cref="SessionControl.JoinWorld"/>), optionally standing at an arrival point (<see cref="PlayerPlacement.Arrive"/>).</item>
+/// (<see cref="SessionControl.JoinWorld"/>), or in the host's world by the host's identity (<see cref="SessionControl.JoinHost"/>),
+/// optionally standing at an arrival point (<see cref="PlayerPlacement.Arrive"/>).</item>
 /// <item><see cref="Rejoin"/>: a client leaves to its menu and joins again.</item>
 /// <item><see cref="Barrier"/>: a scenario's own readiness, waited on within a bound.</item>
 /// </list>
-/// Disposing it closes the clients in reverse order, then stops the server, each a Cleanup step: clients before their host.
+/// Disposing it closes the clients in reverse order, then stops the server, each a Cleanup step: clients before their host. A
+/// hosting client is closed after its peers, then its placed world is moved into the evidence only once no client can still host it.
 /// </summary>
 public sealed class GameSession : IAsyncDisposable
 {
@@ -32,11 +36,13 @@ public sealed class GameSession : IAsyncDisposable
     /// <paramref name="cancellation"/> (the run's: Ctrl+C) and a failed <see cref="StartAsync"/> cancel.
     /// </summary>
     internal GameSession(ScenarioReport report, string output, string? worldUid, Func<CancellationToken, ServerActor>? server,
-        IEnumerable<(string Name, Func<CancellationToken, ClientActor> Build)> clients, CancellationToken cancellation)
+        IEnumerable<(string Name, Func<CancellationToken, ClientActor> Build)> clients, CancellationToken cancellation,
+        Func<CancellationToken, HostingClientActor>? host = null)
     {
+        if (server != null && host != null) throw new ArgumentException("A session has a dedicated server or a hosting client, not both.", nameof(host));
         Report = report ?? throw new ArgumentNullException(nameof(report));
         ArgumentException.ThrowIfNullOrEmpty(output);
-        Output = output; _worldUid = worldUid;
+        Output = output;
         _cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         _token = _cancellation.Token; // Still readable once the session is disposed.
         _clients = [];
@@ -44,6 +50,10 @@ public sealed class GameSession : IAsyncDisposable
         try
         {
             Server = server?.Invoke(_token);
+            Host = host?.Invoke(_token);
+            if (Host != null && worldUid != null && worldUid != Host.WorldUid)
+                throw new ArgumentException($"The session's world {worldUid} is not the hosted fixture's world {Host.WorldUid}.", nameof(worldUid));
+            _worldUid = worldUid ?? Host?.WorldUid;
             foreach (var (name, build) in clients)
             {
                 var actor = build(_token);
@@ -58,6 +68,8 @@ public sealed class GameSession : IAsyncDisposable
 
     /// <summary>The owned dedicated server, or null for a session without one.</summary>
     public ServerActor? Server { get; }
+    /// <summary>The client that hosts the session's world (a listen server), or null; a session has it or a <see cref="Server"/>.</summary>
+    public HostingClientActor? Host { get; }
     /// <summary>The session's clients by name, for example <c>client</c>, or a campaign's <c>client-a</c> and <c>client-b</c>.</summary>
     public IReadOnlyDictionary<string, ClientActor> Clients { get; }
     public ScenarioReport Report { get; }
@@ -65,14 +77,14 @@ public sealed class GameSession : IAsyncDisposable
     public string Output { get; }
     /// <summary>Cancelled by Ctrl+C or SIGTERM, and when <see cref="StartAsync"/> fails.</summary>
     public CancellationToken Cancellation => _token;
-    /// <summary>Every actor's kept logs, the server's first, for the teardown scan once the processes stopped.</summary>
+    /// <summary>Every actor's kept logs, the server's (or host's) first, for the teardown scan once the processes stopped.</summary>
     public IReadOnlyList<RunLog> Logs
     {
         get
         {
             List<ClientActor> opened; List<RunLog> added;
             lock (_opened) { opened = [.. _opened]; added = [.. _added]; }
-            return [.. Server?.Logs ?? [], .. _clients.SelectMany(client => client.Logs), .. opened.SelectMany(client => client.Logs), .. added];
+            return [.. Server?.Logs ?? [], .. Host?.Logs ?? [], .. _clients.SelectMany(client => client.Logs), .. opened.SelectMany(client => client.Logs), .. added];
         }
     }
 
@@ -190,6 +202,19 @@ public sealed class GameSession : IAsyncDisposable
         Cancellation.ThrowIfCancellationRequested();
         var starts = new List<Task>();
         Mod?.Validate(); // Before anything starts.
+        if (Host is { } prepared)
+            try
+            {
+                // The host's preflight, save directory and placed fixture world, before any actor starts: a wrong fixture or install
+                // stops the session before a client is launched.
+                await Task.Run(() => prepared.Prepare(Report), Cancellation).ConfigureAwait(false);
+            }
+            catch
+            {
+                await _cancellation.CancelAsync().ConfigureAwait(false);
+                if (DisposeOnFailedStart) await DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         if (Server is { } server)
             starts.Add(Task.Run(() =>
             {
@@ -197,6 +222,17 @@ public sealed class GameSession : IAsyncDisposable
                 // Runtime-ready: the mod is loaded and patched in, before any scenario step; a failure cancels the clients' starts.
                 if (Mod is { ChecksPatches: true } mod && ServerPinsMod)
                     Report.Step(StepPhase.Setup, "server: the mod's Harmony patches are applied", () => mod.RequirePatchesApplied(server.Game));
+            }));
+        if (Host is { } host)
+            starts.Add(Task.Run(() =>
+            {
+                // Prepared above: the client to its menu, then its world opens.
+                Report.Step(StepPhase.Setup, $"hosting client {host.Name} at its menu, plugins pinned", () => host.Start());
+                Report.Step(StepPhase.Setup, $"hosting client {host.Name}'s ValheimCLI offers the hosted-world session commands", () => CliCapabilities.Require(host.Game, CliCapabilities.HostedRounds));
+                if (Mod is { ChecksPatches: true } mod && ServerPinsMod)
+                    Report.Step(StepPhase.Setup, "host: the mod's Harmony patches are applied", () => mod.RequirePatchesApplied(host.Game));
+                Report.Step(StepPhase.Setup, "host the fixture world with the disposable character" + (host.ProtectPlayer ? ", protected" : ""), () => host.StartWorld(host.Game));
+                if (host.Plan.Owned) Report.Step(StepPhase.Setup, "establish test access on the owned host", () => HostedWorldLifecycle.EstablishTestAccess(host.Game));
             }));
         foreach (var client in _clients)
             starts.Add(Task.Run(() => Report.Step(StepPhase.Setup, $"client {client.Name} at its menu, plugins pinned", () => client.Start())));
@@ -220,20 +256,23 @@ public sealed class GameSession : IAsyncDisposable
         System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(first).Throw();
     }
 
-    /// <summary>The mod's declaration, whose Harmony check <see cref="StartAsync"/> runs on the server when <see cref="ServerPinsMod"/>.</summary>
+    /// <summary>The mod's declaration, whose Harmony check <see cref="StartAsync"/> runs on the server (or host) when <see cref="ServerPinsMod"/>.</summary>
     internal ModDeclaration? Mod { get; init; }
-    /// <summary>Whether the server loads the mod: its plugin pinned to a build, or an unpinned plan.</summary>
+    /// <summary>Whether the server (or host) loads the mod: its plugin pinned to a build, or an unpinned plan.</summary>
     internal bool ServerPinsMod { get; init; }
 
 
     /// <summary>Whether a failed <see cref="StartAsync"/> disposes the session before rethrowing; false where the caller's own cleanup does it.</summary>
     internal bool DisposeOnFailedStart { get; init; } = true;
 
-    /// <summary>The barrier "the server accepts game connections", within the server's startup deadline.</summary>
+    /// <summary>
+    /// The barrier "the server accepts game connections", within the server's startup deadline; with a hosting client, "the host's
+    /// world accepts game connections" (<see cref="HostingClientActor.WaitUntilJoinable"/>), within its plan's join time.
+    /// </summary>
     public async Task ServerJoinable()
     {
-        var server = RequireServer();
-        await Task.Run(() => Report.Step(StepPhase.Setup, "the server accepts game connections", () => server.WaitUntilJoinable(server.Game)), Cancellation).ConfigureAwait(false);
+        var (joinable, game, what) = RequireJoinable();
+        await Task.Run(() => Report.Step(StepPhase.Setup, what + " accepts game connections", () => joinable.WaitUntilJoinable(game())), Cancellation).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -246,23 +285,32 @@ public sealed class GameSession : IAsyncDisposable
     public async Task<PlayerPlacement.TeleportArrival?> Join(string client, HeightExpectation? arrival = null, bool protect = true, CrossplayLobby? lobby = null)
     {
         var actor = RequireClient(client);
-        var server = RequireServer();
+        var (joinable, game, what) = RequireJoinable();
         string world = _worldUid ?? throw new InvalidOperationException("The session's server pins no world UID, so a join has no world to verify.");
+        var host = Host;
+        // A host's peer joins it by its identity, a dedicated server's client by its address or lobby: each plan says which it is.
+        if (host != null && !actor.Plan.JoinsHost) throw new ArgumentException($"Client {client} joins a dedicated server; this session's world is hosted by {host.Name}: set joinsHost on its plan.", nameof(client));
+        if (host == null && actor.Plan.JoinsHost) throw new ArgumentException($"Client {client} is a host's peer (joinsHost), but this session has a dedicated server.", nameof(client));
+        if (host != null && lobby != null) throw new ArgumentException("A host's peer joins it by its identity, not a lobby.", nameof(lobby));
         if (actor.Plan.Crossplay && lobby == null) throw new ArgumentException($"Client {client} joins by crossplay: pass the server's lobby.", nameof(lobby));
         return await Task.Run(() =>
         {
-            Report.Step(StepPhase.Setup, $"the server accepts game connections for client {client}", () => server.WaitUntilJoinable(server.Game));
-            Report.Step(StepPhase.Setup, $"client {client} in world {world}" + (protect ? ", protected" : ""),
-                () => new SessionControl(actor.Game).JoinWorld(actor.Plan, world, lobby, protect, Cancellation));
+            Report.Step(StepPhase.Setup, $"{what} accepts game connections for client {client}", () => joinable.WaitUntilJoinable(game()));
+            if (host != null)
+                Report.Step(StepPhase.Setup, $"client {client} in host {host.Name}'s world {world}" + (protect ? ", protected" : ""),
+                    () => new SessionControl(actor.Game).JoinHost(actor.Plan, host.Game, world, protect, Cancellation));
+            else
+                Report.Step(StepPhase.Setup, $"client {client} in world {world}" + (protect ? ", protected" : ""),
+                    () => new SessionControl(actor.Game).JoinWorld(actor.Plan, world, lobby, protect, Cancellation));
             PlayerPlacement.TeleportArrival? arrived = null;
             if (arrival is { } point)
                 Report.Step(StepPhase.Setup, $"client {client} at the arrival point",
-                    () => arrived = PlayerPlacement.Arrive(server.Game, actor.Game, point, TimeSpan.FromSeconds(actor.Plan.ArrivalSeconds), Cancellation));
+                    () => arrived = PlayerPlacement.Arrive(game(), actor.Game, point, TimeSpan.FromSeconds(actor.Plan.ArrivalSeconds), Cancellation));
             return arrived;
         }, Cancellation).ConfigureAwait(false);
     }
 
-    /// <summary>Every client joins, one after another in name order (<see cref="Join"/>, protected, no arrival point; a crossplay server's <paramref name="lobby"/>).</summary>
+    /// <summary>Every client joins, one after another in name order (<see cref="Join"/>, protected, no arrival point; a crossplay server's <paramref name="lobby"/>; a host's peers by its identity).</summary>
     public async Task JoinAll(CrossplayLobby? lobby = null)
     {
         foreach (var name in Clients.Keys.Order(StringComparer.Ordinal)) await Join(name, lobby: lobby).ConfigureAwait(false);
@@ -270,7 +318,7 @@ public sealed class GameSession : IAsyncDisposable
 
     /// <summary>
     /// The barrier "client X back at its menu", then <see cref="Join"/> again: the client leaves the world (pins verified at the
-    /// menu again) and rejoins the server's current boot.
+    /// menu again) and rejoins the server's current boot, or the host's world.
     /// </summary>
     public async Task<PlayerPlacement.TeleportArrival?> Rejoin(string client, HeightExpectation? arrival = null, bool protect = true, CrossplayLobby? lobby = null)
     {
@@ -308,7 +356,10 @@ public sealed class GameSession : IAsyncDisposable
 
     /// <summary>
     /// Closes the clients in reverse order, then stops the server, each a Cleanup step; a failed close is recorded and the rest
-    /// still run. The session's token is cancelled first, so a barrier the scenario left running ends now.
+    /// still run. The session's token is cancelled first, so a barrier the scenario left running ends now. A hosting client is
+    /// closed after its peers: when everything so far passed, it first leaves its world to its menu (the game saves it); an owned
+    /// one is then stopped, an operator's detached. Its placed world is moved into the evidence only once no client can still host
+    /// it (it left, or its owned process stopped); otherwise it is left in place and named (<c>hostWorldLeftInPlace</c>).
     /// </summary>
     public async ValueTask DisposeAsync()
     {
@@ -325,6 +376,7 @@ public sealed class GameSession : IAsyncDisposable
                 try { Report.Step(StepPhase.Cleanup, open.Owned ? $"stop only the owned client {client.Name}" : $"detach from the operator's client {client.Name}", client.Dispose); }
                 catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
             else client.Dispose();
+        if (Host is { } host) CloseHost(host);
         if (Server is { } server)
             try { Report.Step(StepPhase.Cleanup, "stop only owned server", server.Dispose); }
             catch (Exception error) { ServerStopped = false; TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
@@ -338,10 +390,34 @@ public sealed class GameSession : IAsyncDisposable
     /// <summary>After disposing: each failed close or stop, for the runner to classify (an unknown host outcome is not a failure).</summary>
     internal List<Exception> TeardownFailures { get; } = [];
 
-    private ServerActor RequireServer()
+    // The hosting client's teardown, after its peers: leave (a passing run), close, then the world once no client can host it.
+    private void CloseHost(HostingClientActor host)
+    {
+        void Cleanup(string name, Action action)
+        {
+            try { Report.Step(StepPhase.Cleanup, name, action); }
+            catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+        }
+        if (host.Session is { } open)
+        {
+            // An operator's client after a failure is left as it is, its world in place for inspection.
+            if (host.Hosting && Report.Passed) Cleanup("the host leaves its world to its menu", () => host.LeaveWorld(host.Game));
+            Cleanup(open.Owned ? $"stop only the owned hosting client {host.Name}" : $"detach from the operator's hosting client {host.Name}", host.CloseClient);
+        }
+        else
+            try { host.CloseClient(); } // Closed while it opened, or never opened.
+            catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+        try { host.ReleaseWorld(Report); }
+        catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); } // Recorded as its failed step.
+    }
+
+    // The session's joinable: its dedicated server or its hosting client, with its current in-game handle and its name in steps.
+    private (IOwnedServer Joinable, Func<GameActor> Game, string What) RequireJoinable()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return Server ?? throw new InvalidOperationException("This session has no owned server.");
+        if (Host is { } host) return (host, () => host.Game, "the host's world");
+        var server = Server ?? throw new InvalidOperationException("This session has no owned server or hosting client.");
+        return (server, () => server.Game, "the server");
     }
     private ClientActor RequireClient(string name) => _disposed ? throw new ObjectDisposedException(nameof(GameSession)) : Clients.TryGetValue(name, out var actor) ? actor
         : throw new ArgumentException($"No client {name} in this session; it has {(Clients.Count == 0 ? "none" : string.Join(", ", Clients.Keys.Order(StringComparer.Ordinal)))}.", nameof(name));

@@ -212,10 +212,12 @@ public sealed class ClientRounds
         public void Release(bool released) { }
     }
 
-    // Hosts the plan's fixture world on the client itself; the next round's start is the hosted world's restart.
+    // Hosts the plan's fixture world on the client itself; the next round's start is the hosted world's restart. What a hosting
+    // client does with its world (preflight, placement, start, release) is HostedWorldLifecycle's, as for HostingClientActor; the
+    // rounds open and close the client themselves (openClient).
     private sealed class HostedWorldRounds(ClientRounds rounds, HostWorldPlan plan) : IRoundsWorld
     {
-        private HostedWorld? _world;
+        private readonly HostedWorldLifecycle _world = new(rounds.Client, rounds.Output, rounds.Cancellation);
         private ClientRunPlan Client => rounds.Client;
         private ScenarioReport Report => rounds.Report;
         public string LeaveStep => "the host leaves to its menu";
@@ -227,21 +229,7 @@ public sealed class ClientRounds
             Report.Provenance["hostCrossplay"] = plan.Crossplay ? "true" : "false";
             Report.Provenance["hostRounds"] = string.Join(",", rounds.Rounds);
         }
-        public void Prepare()
-        {
-            Report.Step(StepPhase.Preflight, Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
-                () => Client.Preflight(CliCapabilities.HostedRounds));
-            string? saveDirectory = null;
-            Report.Step(StepPhase.Preflight, "preflight the native client's hosted-world save directory", () =>
-            {
-                var platform = Client.Owned ? GameLaunch.DetectClient(Client.Install) : HostedWorld.CurrentPlatform;
-                string defaultSaveDirectory = HostedWorld.DefaultSaveDirectory(platform);
-                HostedWorld.RequireNativeSaveDirectory(platform, plan.SaveDirectory, Client.LaunchArguments, defaultSaveDirectory);
-                saveDirectory = plan.SaveDirectory ?? defaultSaveDirectory;
-            });
-            Report.Step(StepPhase.Setup, "place the disposable fixture world in the client's local worlds", () => _world = HostedWorld.Place(plan, saveDirectory!, rounds.Output, Client.Pinned));
-            Report.Provenance["hostWorld"] = _world!.Name;
-        }
+        public void Prepare() => _world.Prepare(Report);
         public void Opened(GameActor client) =>
             Report.Step(StepPhase.Setup, "the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(client, CliCapabilities.HostedRounds));
         public GameActor ServerFor(GameActor client) => client; // The host is both.
@@ -249,23 +237,14 @@ public sealed class ClientRounds
         {
             string protect = rounds.ProtectPlayer ? ", protected" : "";
             round.Step(StepPhase.Setup, round.Index == 0 ? "host the fixture world with the disposable character" + protect : "restart the hosted world" + protect,
-                () => HostWorlds.Start(round.Client, Client, _world!.Name, TimeSpan.FromSeconds(Client.JoinSeconds), rounds.Cancellation, rounds.ProtectPlayer));
+                () => _world.StartWorld(round.Client, rounds.ProtectPlayer));
             // The owned host's disposable character and fixture acknowledge cheats; an operator's client keeps devcommands only.
             if (Client.Owned)
-                round.Step(StepPhase.Setup, "establish test access on the owned host", () => TestAccess.Ensure(round.Client, TestActorRole.ClientInWorld));
+                round.Step(StepPhase.Setup, "establish test access on the owned host", () => HostedWorldLifecycle.EstablishTestAccess(round.Client));
         }
         public void Save(ClientRound round) => new SessionControl(round.Client).Save(plan.WorldUid, TimeSpan.FromSeconds(plan.SaveSeconds));
         public void Restart(int round) { } // The next round's start restarts the hosted world.
-        public void Release(bool released)
-        {
-            if (_world == null) return;
-            if (!released) Report.Provenance["hostWorldLeftInPlace"] = _world.WorldsDirectory + " (" + _world.Name + ")";
-            else
-            {
-                Report.Step(StepPhase.Cleanup, "move the hosted world from the client's local worlds into the evidence", _world.Collect);
-                Report.Provenance["hostWorldEvidence"] = _world.CollectedTo!;
-            }
-        }
+        public void Release(bool released) => _world.ReleaseWorld(Report, released);
     }
 
     private void Join(ClientRound round)

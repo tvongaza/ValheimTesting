@@ -31,6 +31,36 @@ public static class FakeGameSession
         };
     }
 
+    /// <summary>
+    /// A <see cref="GameSession"/> whose world a scripted hosting client hosts (<see cref="GameSession.Host"/>, named <c>host</c>),
+    /// with no dedicated server: <paramref name="openClient"/> opens the host from <paramref name="host"/> (a plan with its
+    /// <c>hostWorld</c> section; its fixture is placed in the client data directory a <see cref="FakeClientDataDirectory"/> scope
+    /// gives), each of <paramref name="peers"/> (named clients that start with the session and join the host,
+    /// <see cref="GameSession.Join"/>; their plans set <see cref="ClientRunPlan.JoinsHost"/>) and every client the scenario opens
+    /// (<see cref="GameSession.OpenClient"/>), each as <c>(plan, name, output)</c>.
+    /// <paramref name="mod"/>, when given, is checked on the host as the runner does. Start it before the scenario and dispose it
+    /// after, as the runner does.
+    /// </summary>
+    /// <param name="hostLog">The host's live log a scenario reads (<see cref="HostingClientActor.LiveLog"/>), or null.</param>
+    /// <param name="interval">How often the scenario's observation waits re-read (<see cref="GameSession.Interval"/>); a few milliseconds.</param>
+    public static GameSession Hosted(ScenarioReport report, string output, ClientRunPlan host, Func<ClientRunPlan, string, string, ClientSession> openClient,
+        IReadOnlyDictionary<string, ClientRunPlan>? peers = null, string? hostLog = null, ModDeclaration? mod = null, TimeSpan? interval = null,
+        CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(host); ArgumentNullException.ThrowIfNull(openClient);
+        var placement = new Placement(openClient);
+        var declared = (peers ?? new Dictionary<string, ClientRunPlan>()).Select(peer =>
+            (peer.Key, (Func<CancellationToken, ClientActor>)(token => new ClientActor(peer.Key, peer.Value, output, placement, token))));
+        return new GameSession(report, output, null, null, declared, cancellation,
+            token => new HostingClientActor("host", host, output, placement, token) { LiveLogSource = () => hostLog })
+        {
+            ResolveClient = (_, name) => (name ?? "client", placement),
+            LiveClientLog = _ => null,
+            Interval = interval ?? TimeSpan.FromMilliseconds(10),
+            Mod = mod, ServerPinsMod = mod != null && (!host.Pinned || mod.PinnedIn(host.Pins)),
+        };
+    }
+
     private sealed class Placement(Func<ClientRunPlan, string, string, ClientSession> open) : IClientPlacement
     {
         public ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation) => open(plan, name, output);
