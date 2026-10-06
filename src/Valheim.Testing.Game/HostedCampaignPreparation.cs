@@ -345,6 +345,15 @@ public static class HostedCampaignPreparation
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "game and loader", error.Message)); }
+                    // A run never makes macOS show a dialog: a copy of a bundle macOS would call damaged is refused here, read only.
+                    if (item.Name != "server" && sourceListings.TryGetValue(item.Name, out var listed) && MacAppBundle.IsMacClient(listed))
+                        try
+                        {
+                            var bundle = await MacAppBundle.InspectAsync(host, item.Role.Install, timeout, cancellation).ConfigureAwait(false);
+                            if (MacAppBundle.SourceRefusal(bundle) is { } refusal) failures.Add(new(item.Name, "macOS app bundle", refusal));
+                        }
+                        catch (Exception error) when (HostCheckRefusal(error))
+                        { failures.Add(new(item.Name, "macOS app bundle", error.Message)); }
                 }
                 if (item.Name == "server") return;
                 var folders = inputs.Characters.TryGetValue(item.Name, out var character) ? ResolveFoldersAsync(character) : Task.CompletedTask;

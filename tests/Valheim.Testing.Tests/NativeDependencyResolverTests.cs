@@ -258,6 +258,95 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(keptCampaign.Copies, copy => Assert.True(Directory.Exists(hosts[copy.Host].Local(copy.Runtime))));
     }
 
+    // Run A (#258): a run never makes macOS show a dialog. A macOS client's source bundle with a changed sealed file is refused
+    // in the preflight; one with files only added inside it is fine, and its copy is repaired; a copy macOS would still reject
+    // fails preparation, is retired, and nothing launches. The bundle check is a bash script (MacAppBundle.Bash), answered here
+    // by the fake host; the real script runs on CI's macOS leg (MacAppBundleTests).
+    [Fact] public async Task AMacClientsCopyMustBeOneMacOSLaunchesWithoutADialog()
+    {
+        string serverMod = _rig.Write("mac-campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
+        string clientMod = _rig.Write("mac-campaign/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
+        string serverLock = Lock(serverMod, "mac-server"), clientLock = Lock(clientMod, "mac-client");
+        string store = Store("macone", 404, "mac/");
+        string world = Path.Combine(_rig.Root, "mac-campaign-world");
+        FakeInstalls.World(world);
+        var server = new FakeServerHost("server", Path.Combine(_rig.Root, "mac-mirror-server"), windows: true);
+        string serverSource = server.Local(@"C:\game\source");
+        FakeInstalls.Server(serverSource);
+        File.WriteAllText(Path.Combine(serverSource, GameLaunch.ServerWindowsExecutable), "game");
+        File.WriteAllText(Path.Combine(serverSource, "winhttp.dll"), "MZ target_assembly");
+        File.WriteAllText(Path.Combine(serverSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var mac = new FakeServerHost("mac", Path.Combine(_rig.Root, "mac-mirror-client")) { SteamUserReply = "VT-STEAMUSER account 404\n" };
+        string macSource = mac.Local("/game/source");
+        foreach (var (relative, text) in new[] { ("Valheim.app/Contents/MacOS/Valheim", "game"), ("Valheim.app/Contents/Resources/Data/Managed/" + InstallPins.GameAssemblyName, "game build 1"),
+            ("BepInEx/core/BepInEx.dll", "bepinex"), ("BepInEx/core/BepInEx.Preloader.dll", "preloader"), ("libdoorstop.dylib", "doorstop") })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(macSource, relative))!);
+            File.WriteAllText(Path.Combine(macSource, relative), text);
+        }
+        Directory.CreateDirectory(mac.Local("/home/t/characters_local"));
+        Directory.CreateDirectory(mac.Local("/home/t/userdata"));
+        var hosts = new Dictionary<string, FakeServerHost> { ["server"] = server, ["mac"] = mac };
+        string inventoryFile = Path.Combine(_rig.Root, "mac-inventory.json");
+        File.WriteAllText(inventoryFile, JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object>
+            {
+                ["server"] = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\campaign.lock", destination = "test@server" },
+                ["mac"] = new { kind = "ssh", platform = "linux", shell = "bash", @lock = "/locks/campaign.lock", destination = "test@mac" },
+            },
+            environments = new object[]
+            {
+                new { name = "server", host = "server", roles = new[] { "server" }, install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
+                new { name = "mac-client", host = "mac", roles = new[] { "client" }, install = "/game/source", runtime = "/runs", cliPort = 5578, localCliPort = 6578 },
+            },
+            leaseHost = "server", leaseDirectory = @"C:\leases",
+        }));
+        string manifestFile = Path.Combine(_rig.Root, "mac-campaign.json");
+        File.WriteAllText(manifestFile, JsonSerializer.Serialize(new
+        {
+            inventory = inventoryFile, world, join = "test-server.example:2456",
+            server = new { dependencyLock = serverLock },
+            clients = new Dictionary<string, object> { ["player"] = new { dependencyLock = clientLock,
+                character = new { store, registeredName = "macone", fileName = "vt-mac", charactersLocalDirectory = "/home/t/characters_local", steamUserDataDirectory = "/home/t/userdata" } } },
+        }));
+
+        // A sealed file changed in the source: refused in the preflight, read only, naming the file.
+        mac.MacBundleInspect = "VT-BUNDLE broken 1 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("file modified: /game/source/Valheim.app/Contents/Info.plist"));
+        var broken = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var refusal = Assert.Single(broken.Problems, problem => problem.Actor == "player" && problem.Input == "macOS app bundle");
+        Assert.Contains("Info.plist", refusal.Message);
+        Assert.Contains("Verify the game's files in Steam", refusal.Message);
+        Assert.DoesNotContain(mac.Runs, run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
+
+        // Files only added inside it (BepInEx preloader logs): fixable; the preflight passes.
+        mac.MacBundleInspect = "VT-BUNDLE fixable 2 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("Contents/MacOS/preloader_1.log\nContents/MacOS/preloader_2.log"));
+        var fixable = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
+        Assert.True(fixable.Ready, string.Join("; ", fixable.Problems.Select(problem => problem.Message)));
+
+        // A copy macOS still rejects after repair: preparation fails, the copy is retired, nothing launches.
+        mac.MacBundleRepair = "VT-BUNDLE rejected 2 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("Valheim.app: rejected\nsource=no usable signature"));
+        var rejected = await Assert.ThrowsAnyAsync<Exception>(() => HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-rejected"),
+            TimeSpan.FromSeconds(30), name => hosts[name]));
+        Assert.Contains("macOS would refuse the disposable copy of Valheim.app at /runs/", rejected.ToString());
+        Assert.Single(mac.Runs, run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
+        Assert.DoesNotContain(mac.Scripts, script => script is "client-start" or "start");
+        Assert.False(Directory.Exists(mac.Local("/runs")) && Directory.EnumerateFiles(mac.Local("/runs"), "Valheim", SearchOption.AllDirectories).Any(),
+            "The rejected copy is retired.");
+
+        // Accepted after repair: prepared, the repair ran on the copy (never the source), and the source is unchanged.
+        mac.MacBundleRepair = "VT-BUNDLE accepted 2 -";
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), name => hosts[name]))
+        {
+            var repair = mac.Runs.Last(run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
+            Assert.StartsWith("/runs/", repair.Variables["app"]);
+            Assert.EndsWith("/Valheim.app", repair.Variables["app"]);
+            Assert.Contains("Valheim.app/Contents/MacOS/Valheim", campaign.Listings["player"].Files.Keys);
+        }
+        Assert.All(mac.Runs.Where(run => run.Script == "mac-bundle" && run.Variables["repair"] != "1"), run => Assert.Equal("/game/source/Valheim.app", run.Variables["app"]));
+        Assert.Equal("game", File.ReadAllText(Path.Combine(macSource, "Valheim.app/Contents/MacOS/Valheim")));
+    }
+
     // #256's acceptance in one preflight: six independent faults, each refused under its own actor and input, all in one
     // report, before any host is written to. A bad account (an unreadable signed-in Steam identity), a loader mix (a Doorstop 4
     // proxy beside a Doorstop 3 file), a missing pack (a lock whose ValheimCLI set lacks one), a wrong package (a client's

@@ -234,6 +234,17 @@ public static class HostedRuntimeStage
             if (sourceFiles.Count != copy.Files.Count || sourceFiles.Any(file =>
                 !copy.Files.TryGetValue(file.Key, out string? hash) || !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase)))
                 throw new IOException($"The disposable copy on {host.Name} differs from the pinned source install.");
+            // A macOS client copy must be one macOS launches without a dialog (#258 run A): the files added inside its bundle are
+            // removed and codesign and Gatekeeper must accept it, or preparation fails here and nothing launches it.
+            if (kind == HostedRuntimeKind.Client && MacAppBundle.IsMacClient(copy))
+            {
+                var bundle = await MacAppBundle.RepairAsync(host, destination, timeout, cancellation).ConfigureAwait(false);
+                if (bundle.State != MacBundleState.Accepted)
+                    throw new IOException($"macOS would refuse the disposable copy of {GameLaunch.ClientMacBundle} at {destination} on {host.Name} " +
+                        $"({MacAppBundle.Describe(bundle)}), so it is not launched: a launch would make macOS call it damaged and kill it.");
+                if (bundle.Count != 0)
+                    Console.WriteLine($"Removed {bundle.Count} file(s) added inside the copy's {GameLaunch.ClientMacBundle} on {host.Name}, so macOS accepts its signature (the source install is unchanged).");
+            }
             string names = string.Join('\n', selected.Keys.Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name))));
             var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsApply : BashApply,
                 new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["files"] = names,

@@ -80,6 +80,9 @@ internal sealed class FakeServerHost : IGameHost
     public static string CommandLineSha256(string pid) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("fake game " + pid)));
     /// <summary>The machine name the host reports (<c>[Environment]::MachineName</c>), as a runner on it journals it.</summary>
     public string MachineName { get; set; } = "FAKE-HOST";
+    /// <summary>What the macOS bundle check answers on a source install (read only) and on a copy it repairs (MacAppBundle).</summary>
+    public string MacBundleInspect { get; set; } = "VT-BUNDLE accepted 0 -";
+    public string MacBundleRepair { get; set; } = "VT-BUNDLE accepted 0 -";
     /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
     public void Running(int pid, string start)
     {
@@ -134,6 +137,7 @@ internal sealed class FakeServerHost : IGameHost
         ("journal-read-all", [RunJournal.BashReadAll, RunJournal.WindowsReadAll]),
         ("pid-file", [RunJournalStatus.BashPidFiles, RunJournalStatus.WindowsPidFiles]),
         ("process-probe", [HostProcessProbe.Bash, HostProcessProbe.Windows]),
+        ("mac-bundle", [MacAppBundle.Bash]),
         ("machine-name", [RunJournalStatus.WindowsMachineName]),
         ("lease", [LeaseScripts.Bash, LeaseScripts.PowerShell]));
     private static Dictionary<string, string> Names(params (string Name, string[] Scripts)[] table)
@@ -159,6 +163,7 @@ internal sealed class FakeServerHost : IGameHost
         switch (name)
         {
             case "machine-name": return Ok("VT-MACHINE " + MachineName + "\n");
+            case "mac-bundle": return Ok((v["repair"] == "1" ? MacBundleRepair : MacBundleInspect) + "\n");
             case "game-process": return Ok(GameActive ? $"VT-GAME busy {GameProcessIds}\n".Replace(" \n", "\n") : "VT-GAME idle\n");
             case "server-logon": return Ok("VT-LOGON " + ServerTaskLogon + "\n");
             case "copy-space":
