@@ -112,52 +112,146 @@ public sealed class CampaignPlanTests : IDisposable
     [InlineData(AcceptancePlan.AreaObjectsScenarioName)] [InlineData(AcceptancePlan.OwnershipHandoffScenario)] [InlineData(AcceptancePlan.ThreeActorScenario)]
     public void EachScenariosValidPlanIsRead(string scenario) => Assert.Equal(scenario, Read(Plan(scenario)).Scenario);
 
-    [Theory]
-    [InlineData(105)]
-    [InlineData(106)]
-    public void HandoffRefusesOverlappingLandingPoints(float secondX)
-    {
-        var plan = Plan(AcceptancePlan.OwnershipHandoffScenario);
-        plan["secondArrival"] = new JsonObject { ["x"] = secondX, ["z"] = -40, ["ground"] = 42.3 };
-        Refused(plan, "at least 3 m apart");
-    }
+    // Every refusal of the suite's plan rules: a valid plan of the scenario, one change, and words the refusal must contain.
+    // Each is refused when the plan is read, before anything is copied or launched.
+    private const string ControlMd5 = "55555555555555555555555555555555";
+    private static readonly Dictionary<string, (Func<CampaignPlanTests, JsonObject> Start, Action<JsonObject, CampaignPlanTests> Change, string Because)> Refusals = BuildRefusals();
+    public static TheoryData<string> RefusalNames => new(Refusals.Keys);
+    // A valid plan of the scenario (Plan), the start of a row.
+    private static Func<CampaignPlanTests, JsonObject> Valid(string scenario) => tests => tests.Plan(scenario);
 
-    [Fact] public void ObjectSnapshotPlanRefusesAnAmbiguousCentreBeforeLaunch()
+    private static Dictionary<string, (Func<CampaignPlanTests, JsonObject>, Action<JsonObject, CampaignPlanTests>, string)> BuildRefusals()
     {
-        var plan = Plan(AcceptancePlan.AreaObjectsScenarioName);
-        plan["arrival"]!["x"] = 105.5f;
-        Refused(plan, "whole-metre coordinates");
-    }
-
-    [Fact] public void OwnershipHandoffRejectsAmbiguousClients()
-    {
-        // Separate hosts, distinct signed-in Steam identities and CLI ports are the inventory's assignment (EnvironmentInventoryTests).
-        Read(Plan(AcceptancePlan.OwnershipHandoffScenario));
-        var duplicateCharacter = Plan(AcceptancePlan.OwnershipHandoffScenario);
-        duplicateCharacter["secondClient"]!["character"] = "ClientA";
-        Refused(duplicateCharacter, "distinct disposable character");
-        var missingCapability = Plan(AcceptancePlan.OwnershipHandoffScenario);
-        missingCapability["secondClient"]!["pins"]!.AsObject().Remove(AcceptancePlan.AdapterPlugin);
-        Refused(missingCapability, "Pin " + AcceptancePlan.AdapterPlugin);
-    }
-
-    [Fact] public void OwnershipHandoffRequiresTheArrivalSignalsBeforeGameplay()
-    {
-        // Every capability the toolkit's arrival needs, and the loaded-ground reading, is checked before launch.
+        // Add, never the indexer: a row name used twice throws instead of dropping a case.
+        var rows = new Dictionary<string, (Func<CampaignPlanTests, JsonObject>, Action<JsonObject, CampaignPlanTests>, string)>
+        {
+            // ownership-handoff: players that could stack at the landing points, ambiguous clients.
+            { "handoff: second arrival on the first (105)", (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["secondArrival"] = new JsonObject { ["x"] = 105, ["z"] = -40, ["ground"] = 42.3 }, "at least 3 m apart") },
+            { "handoff: second arrival 1 m from the first (106)", (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["secondArrival"] = new JsonObject { ["x"] = 106, ["z"] = -40, ["ground"] = 42.3 }, "at least 3 m apart") },
+            // Separate hosts, distinct signed-in Steam identities and CLI ports are the inventory's assignment (EnvironmentInventoryTests).
+            { "handoff: one character twice", (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["secondClient"]!["character"] = "ClientA", "distinct disposable character") },
+            { "handoff: second client without the adapter", (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["secondClient"]!["pins"]!.AsObject().Remove(AcceptancePlan.AdapterPlugin), "Pin " + AcceptancePlan.AdapterPlugin) },
+            // area-objects: an ambiguous centre.
+            { "area-objects: half-metre arrival", (Valid(AcceptancePlan.AreaObjectsScenarioName), (plan, _) => plan["arrival"]!["x"] = 105.5f, "whole-metre coordinates") },
+            // dry-site-server's patch reload (#30): what would make it prove nothing.
+            { "patch reload: ScriptEngine not pinned", (tests => tests.PatchReloadPlan(), (plan, _) => plan["pins"]!.AsObject().Remove(PatchReloadSettings.ScriptEngine), "pin " + PatchReloadSettings.ScriptEngine) },
+            { "patch reload: the probe pinned", (tests => tests.PatchReloadPlan(), (plan, _) => plan["pins"]![PatchReloadScenario.Probe] = new string('f', 32), "Do not pin " + PatchReloadScenario.Probe) },
+            { "patch reload: one build twice", (tests => tests.PatchReloadPlan(), (plan, _) => plan["patchReload"]!["revisionB"] = plan["patchReload"]!["revisionA"]!.GetValue<string>(), "the same build") },
+            { "patch reload: a relative probe path", (tests => tests.PatchReloadPlan(), (plan, _) => plan["patchReload"]!["revisionA"] = "probe-a.dll", "patchReload.revisionA is the full path") },
+            // Fields of another scenario.
+            { "synced-config: patchReload", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, tests) => plan["patchReload"] = tests.PatchReloadPlan()["patchReload"]!.DeepClone(), "patchReload are for the dry-site-server scenario") },
+            { "synced-config: globalKey", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan["globalKey"] = "defeated_eikthyr", "are for the lifecycle-world scenario") },
+            { "lifecycle-world: newGreeting", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["newGreeting"] = "goodbye", "newGreeting are for the synced-config scenario") },
+            { "vanilla-client: crossplay", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => plan["crossplay"] = true, "crossplay are for the crossplay scenario") },
+            { "synced-config: drySite", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 }, "marks nothing") },
+            // lifecycle-world: what would make it prove nothing.
+            { "lifecycle-world: no fixtures variable", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan.Remove("environment"), AcceptancePlan.FixturesVariable) },
+            { "lifecycle-world: away four zones off", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["away"] = new JsonObject { ["x"] = 356, ["z"] = -40, ["ground"] = 36 }, "at least 5 zones (320 m") }, // Four zones: still loaded.
+            { "lifecycle-world: client without MyMod", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent", "the check needs the server's MyMod on the client") },
+            { "lifecycle-world: a key with spaces", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["globalKey"] = "Defeated Eikthyr", "one lower-case key") },
+            { "lifecycle-world: a dungeon out of reach", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["dungeon"] = new JsonObject { ["x"] = 400, ["z"] = -40 }, "within two zones") },
+            { "lifecycle-world: a cloud characters folder", (Valid(AcceptancePlan.WorldScenario), (plan, tests) => plan["logout"] = new JsonObject { ["charactersDirectory"] = Path.Combine(tests._directory, "characters") }, "characters_local") },
+            { "lifecycle-world: no client", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan.Remove("client"), "add the client section") },
+            // vanilla-client: the client lacks MyMod and has the server's adapter.
+            { "vanilla-client: client with MyMod", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = Mod, "must pin example.mymod=absent") },
+            { "vanilla-client: another adapter build", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.AdapterPlugin] = new string('9', 32), "with the server's MD5") },
+            // synced-config: one new word.
+            { "synced-config: no newGreeting", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan.Remove("newGreeting"), "Set newGreeting") },
+            { "synced-config: two words", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan["newGreeting"] = "good bye", "Set newGreeting") },
+            // refused-join: the refused client runs another build than the server.
+            { "refused-join: the server's own build", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"] = Client(Mod, port: 5557), "pins the server's own MyMod build") },
+            { "refused-join: no MyMod", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"] = Client("absent", port: 5557), "runs another MyMod build") },
+            { "refused-join: one CLI port for both", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"] = Client(CampaignWorld.Md5Mismatched), "different ValheimCLI ports") },
+            { "refused-join: a status that is no refusal", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["expectedRefusal"] = "Connected", "one of the game's Error statuses") },
+            { "refused-join: an unknown status", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["expectedRefusal"] = "ErrorSomethingNew", "expectedRefusal: Unknown connection status") },
+            // crossplay: on both sides, and no password.
+            { "crossplay: client joins by address", (Valid(AcceptancePlan.CrossplayScenario), (plan, _) => plan["client"] = Client("absent"), "in its client section") },
+            { "crossplay: a password", (Valid(AcceptancePlan.CrossplayScenario), (plan, _) => { plan["arguments"]!.AsArray().Add("-password"); plan["arguments"]!.AsArray().Add("secret1"); }, "without -password") },
+            { "crossplay: no port argument", (Valid(AcceptancePlan.CrossplayScenario), (plan, _) => plan["arguments"] = new JsonArray("-batchmode", "-nographics", "-savedir", "{world}"), "names its game port") }, // The toolkit's rule.
+            // Controls: opt-in, one scenario and side each.
+            { "control: pinned without a control run", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["pins"]!["example.mymod.control.missingtarget"] = ControlMd5, "Name it in expectFailure (\"missing-harmony-target\")") },
+            { "control: named, not installed", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["expectFailure"] = ControlPlugins.FieldOnlyState, "pin example.mymod.control.fieldonlystate there") },
+            { "control: on the wrong side", (Valid(AcceptancePlan.WorldScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["pins"]!["example.mymod.control.fieldonlystate"] = ControlMd5; }, "on the client") },
+            { "control: in the wrong scenario", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = ControlMd5; }, "belongs to the lifecycle-world scenario") },
+            { "control: an unknown name", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["expectFailure"] = "some-control", "expectFailure names no control") },
+            { "control: two at once", (Valid(AcceptancePlan.WorldScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = ControlMd5; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = ControlMd5; }, "exactly the control it names") },
+            { "control: on a dry-site lifecycle", (tests => tests.DrySitePlan(), (plan, _) => plan["expectFailure"] = ControlPlugins.FieldOnlyState, "belongs to the lifecycle-world scenario") },
+            // content-census: the client's registries are its own, so a client without MyMod, or with another build, cannot stand in.
+            { "content-census: client without MyMod", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent", "the check needs the server's MyMod on the client") },
+            { "content-census: client with another build", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = CampaignWorld.Md5Mismatched, "the check needs the server's MyMod on the client") },
+            { "content-census: no client", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan.Remove("client"), "add the client section") },
+            { "content-census: drySite", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 }, "marks nothing") },
+            { "content-census: its build control in another scenario", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan["expectFailure"] = ControlPlugins.OmittedRecipe, "belongs to the content-census scenario") },
+            { "content-census: a control plugin beside its build control", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]!["example.mymod.control.missingtarget"] = new string('5', 32); }, "remove the control plugin example.mymod.control.missingtarget") },
+            // Every client section runs with strict pins, the suite's two extra ones included (LifecyclePlan's rule over AcceptancePlan's sections).
+            { "strict pins: second client unpinned", (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["secondClient"]!["pinning"] = "none", "strict pins only") },
+            { "strict pins: refused client unpinned", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"]!["pinning"] = "none", "strict pins only") },
+        };
+        // ownership-handoff: every capability the toolkit's arrival needs, and the loaded-ground reading, before launch.
         foreach (string capability in Valheim.Testing.Game.PlayerPlacement.ArrivalCapabilities.Append("valheim.world/terrain"))
-        {
-            var missing = Plan(AcceptancePlan.OwnershipHandoffScenario);
-            var capabilities = missing["secondClient"]!["capabilities"]!.AsArray();
-            capabilities.Remove(capabilities.Single(c => c!.GetValue<string>() == capability));
-            Refused(missing, capability);
-        }
-
+            rows.Add("handoff: second client without " + capability, (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) =>
+            {
+                var capabilities = plan["secondClient"]!["capabilities"]!.AsArray();
+                capabilities.Remove(capabilities.Single(c => c!.GetValue<string>() == capability));
+            }, capability));
         foreach (string removed in new[] { "eventDrivenArrival", "fastTestTeleports" })
-        {
-            var stale = Plan(AcceptancePlan.OwnershipHandoffScenario);
-            stale["client"]![removed] = true;
-            Refused(stale, removed + " was removed (ValheimTesting #299)");
-        }
+            rows.Add("handoff: removed client field " + removed, (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["client"]![removed] = true, removed + " was removed (ValheimTesting #299)"));
+        return rows;
+    }
+
+    [Theory, MemberData(nameof(RefusalNames))]
+    public void ARefusedPlanSaysWhy(string refusal)
+    {
+        var (start, change, because) = Refusals[refusal];
+        var plan = start(this);
+        Read(plan.DeepClone().AsObject()); // The row starts from a valid plan, so the refusal comes from its change.
+        change(plan, this);
+        Refused(plan, because);
+    }
+
+    [Fact] public void PlansThatPassTheirScenariosRules()
+    {
+        Assert.NotNull(Read(PatchReloadPlan()).PatchReload);
+        Assert.True(Read(PatchReloadPlan(control: true)).PatchReload!.ExpectOthersRemoved);
+        var plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["expectedRefusal"] = "ErrorDisconnected";
+        Assert.Equal(Valheim.Testing.Game.GameConnectionStatus.ErrorDisconnected, Read(plan).RefusalStatus);
+        // A client-side control run; an explicit absence is not an install.
+        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = ControlMd5;
+        Assert.Equal(ControlPlugins.SuppressedProfileSave, Read(plan).Control!.Name);
+        plan = Plan(AcceptancePlan.WorldScenario); plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = "absent";
+        Assert.Null(Read(plan).Control);
+        // The dry-site lifecycle is no campaign scenario.
+        Assert.False(Read(DrySitePlan()).IsCampaign);
+    }
+
+    // A server-side control run names its lines as expected: they fail the teardown scan by default.
+    [Fact] public void AServerControlRunNamesItsLogLinesAsExpected()
+    {
+        var plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["example.mymod.control.missingtarget"] = ControlMd5;
+        Refused(plan, "names the control's lines as expected");
+        plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["expected"] = new JsonArray("name OtherMethod"), ["reason"] = "the control plants it" } };
+        Refused(plan, "names the control's lines as expected");
+        plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["expected"] = new JsonArray(ControlPlugins.MissingMethodName), ["reason"] = "the control plants it" } };
+        Refused(plan, "names the control's lines as expected"); // PatchAll's error in Unity's log is not named yet
+        plan["logScan"]!["harmony-undefined-target"] = new JsonObject { ["expected"] = new JsonArray(ControlPlugins.MissingPatchClass), ["reason"] = "the control plants it" };
+        Assert.Equal(ControlPlugins.MissingHarmonyTarget, Read(plan).Control!.Name);
+        // Making every lookup a warning would hide the rest: refused.
+        plan["logScan"]!["accesstools-not-found"]!["severity"] = "Warning";
+        Refused(plan, "keeps accesstools-not-found a failure");
+    }
+
+    // The omitted-recipe control is MyMod's own build, pinned where MyMod is; it belongs to the content census alone and
+    // runs without any control plugin.
+    [Fact] public void TheContentCensusControlIsABuild()
+    {
+        var plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
+        var control = Read(plan).Control!;
+        Assert.True(control.Build);
+        Assert.Equal(ControlPlugins.OmittedRecipe, control.Name);
+        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]![AcceptancePlan.ModPlugin] = "any";
+        Assert.ThrowsAny<ArgumentException>(() => Read(plan));
+        // A normal content-census plan names no control, although MyMod is pinned.
+        Assert.Null(Read(Plan(AcceptancePlan.ContentCensusScenario)).Control);
     }
 
     [Fact] public void TheSamplePlansAreValidPlans()
@@ -219,6 +313,14 @@ public sealed class CampaignPlanTests : IDisposable
         return JsonSerializer.Serialize(value);
     });
 
+    // A dry-site-lifecycle plan: the crossplay plan's sites and arrival, joined by address with a client without MyMod.
+    private JsonObject DrySitePlan()
+    {
+        var plan = Plan(AcceptancePlan.CrossplayScenario);
+        plan["scenario"] = AcceptancePlan.LifecycleScenario; plan.Remove("crossplay"); plan["client"] = Client("absent");
+        return plan;
+    }
+
     // A dry-site-server plan with the patch reload (#30): ScriptEngine pinned, two probe builds on disk.
     private JsonObject PatchReloadPlan(bool control = false)
     {
@@ -231,180 +333,6 @@ public sealed class CampaignPlanTests : IDisposable
         File.WriteAllText(a, "A"); File.WriteAllText(b, "B");
         plan["patchReload"] = new JsonObject { ["revisionA"] = a, ["revisionB"] = b, ["expectOthersRemoved"] = control };
         return plan;
-    }
-
-    [Fact] public void APatchReloadPlanIsReadAndRefusesWhatWouldMakeItProveNothing()
-    {
-        Assert.NotNull(Read(PatchReloadPlan()).PatchReload);
-        Assert.True(Read(PatchReloadPlan(control: true)).PatchReload!.ExpectOthersRemoved);
-        var plan = PatchReloadPlan(); plan["pins"]!.AsObject().Remove(PatchReloadSettings.ScriptEngine);
-        Refused(plan, "pin " + PatchReloadSettings.ScriptEngine);
-        plan = PatchReloadPlan(); plan["pins"]![PatchReloadScenario.Probe] = new string('f', 32);
-        Refused(plan, "Do not pin " + PatchReloadScenario.Probe);
-        plan = PatchReloadPlan(); plan["patchReload"]!["revisionB"] = plan["patchReload"]!["revisionA"]!.GetValue<string>();
-        Refused(plan, "the same build");
-        plan = PatchReloadPlan(); plan["patchReload"]!["revisionA"] = "probe-a.dll";
-        Refused(plan, "patchReload.revisionA is the full path");
-        plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["patchReload"] = PatchReloadPlan()["patchReload"]!.DeepClone();
-        Refused(plan, "patchReload are for the dry-site-server scenario");
-    }
-
-    [Fact] public void FieldsOfAnotherScenarioAreRefused()
-    {
-        var plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["globalKey"] = "defeated_eikthyr";
-        Refused(plan, "are for the lifecycle-world scenario");
-        plan = Plan(AcceptancePlan.WorldScenario); plan["newGreeting"] = "goodbye";
-        Refused(plan, "newGreeting are for the synced-config scenario");
-        plan = Plan(AcceptancePlan.VanillaClientScenario); plan["crossplay"] = true;
-        Refused(plan, "crossplay are for the crossplay scenario");
-        plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
-        Refused(plan, "marks nothing");
-    }
-
-    [Fact] public void TheWorldScenarioRefusesWhatWouldMakeItProveNothing()
-    {
-        var plan = Plan(AcceptancePlan.WorldScenario); plan.Remove("environment");
-        Refused(plan, AcceptancePlan.FixturesVariable);
-        plan = Plan(AcceptancePlan.WorldScenario); plan["away"] = new JsonObject { ["x"] = 356, ["z"] = -40, ["ground"] = 36 }; // Four zones: still loaded.
-        Refused(plan, "at least 5 zones (320 m");
-        plan = Plan(AcceptancePlan.WorldScenario); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent";
-        Refused(plan, "the check needs the server's MyMod on the client");
-        plan = Plan(AcceptancePlan.WorldScenario); plan["globalKey"] = "Defeated Eikthyr";
-        Refused(plan, "one lower-case key");
-        plan = Plan(AcceptancePlan.WorldScenario); plan["dungeon"] = new JsonObject { ["x"] = 400, ["z"] = -40 };
-        Refused(plan, "within two zones");
-        plan = Plan(AcceptancePlan.WorldScenario); plan["logout"] = new JsonObject { ["charactersDirectory"] = Path.Combine(_directory, "characters") };
-        Refused(plan, "characters_local");
-        plan = Plan(AcceptancePlan.WorldScenario); plan.Remove("client");
-        Refused(plan, "add the client section");
-    }
-
-    [Fact] public void TheVanillaClientMustLackMyModAndHaveTheServersAdapter()
-    {
-        var plan = Plan(AcceptancePlan.VanillaClientScenario); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = Mod;
-        Refused(plan, "must pin example.mymod=absent");
-        plan = Plan(AcceptancePlan.VanillaClientScenario); plan["client"]!["pins"]![AcceptancePlan.AdapterPlugin] = new string('9', 32);
-        Refused(plan, "with the server's MD5");
-    }
-
-    [Fact] public void TheSyncedConfigScenarioNeedsOneNewWord()
-    {
-        var plan = Plan(AcceptancePlan.SyncedConfigScenario); plan.Remove("newGreeting");
-        Refused(plan, "Set newGreeting");
-        plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["newGreeting"] = "good bye";
-        Refused(plan, "Set newGreeting");
-    }
-
-    [Fact] public void TheRefusedClientMustRunAnotherBuildThanTheServer()
-    {
-        var plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["refusedClient"] = Client(Mod, port: 5557);
-        Refused(plan, "pins the server's own MyMod build");
-        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["refusedClient"] = Client("absent", port: 5557);
-        Refused(plan, "runs another MyMod build");
-        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["refusedClient"] = Client(CampaignWorld.Md5Mismatched);
-        Refused(plan, "different ValheimCLI ports");
-        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["expectedRefusal"] = "Connected";
-        Refused(plan, "one of the game's Error statuses");
-        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["expectedRefusal"] = "ErrorSomethingNew";
-        Refused(plan, "expectedRefusal: Unknown connection status");
-        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["expectedRefusal"] = "ErrorDisconnected";
-        Assert.Equal(Valheim.Testing.Game.GameConnectionStatus.ErrorDisconnected, Read(plan).RefusalStatus);
-    }
-
-    [Fact] public void TheCrossplayScenarioNeedsCrossplayOnBothSidesAndNoPassword()
-    {
-        var plan = Plan(AcceptancePlan.CrossplayScenario); plan["client"] = Client("absent");
-        Refused(plan, "in its client section");
-        plan = Plan(AcceptancePlan.CrossplayScenario); plan["arguments"]!.AsArray().Add("-password"); plan["arguments"]!.AsArray().Add("secret1");
-        Refused(plan, "without -password");
-        plan = Plan(AcceptancePlan.CrossplayScenario); plan["arguments"] = new JsonArray("-batchmode", "-nographics", "-savedir", "{world}");
-        Assert.Throws<ArgumentException>(() => Read(plan)); // The toolkit's rule: a crossplay server names its port.
-    }
-
-    [Fact] public void AControlPluginIsOptInAndBelongsToOneScenarioAndSide()
-    {
-        const string md5 = "55555555555555555555555555555555";
-        // Pinned without a control run: refused, naming what to write.
-        var plan = Plan(AcceptancePlan.WorldScenario); plan["pins"]!["example.mymod.control.missingtarget"] = md5;
-        Refused(plan, "Name it in expectFailure (\"missing-harmony-target\")");
-        // Named without being installed.
-        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState;
-        Refused(plan, "pin example.mymod.control.fieldonlystate there");
-        // The wrong side, the wrong scenario, an unknown name.
-        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["pins"]!["example.mymod.control.fieldonlystate"] = md5;
-        Refused(plan, "on the client");
-        plan = Plan(AcceptancePlan.VanillaClientScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = md5;
-        Refused(plan, "belongs to the lifecycle-world scenario");
-        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = "some-control";
-        Refused(plan, "expectFailure names no control");
-        // Two controls at once.
-        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState;
-        plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = md5; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
-        Refused(plan, "exactly the control it names");
-        // A server-side control run must name its line as expected: it fails the teardown scan by default.
-        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["example.mymod.control.missingtarget"] = md5;
-        Refused(plan, "names the control's lines as expected");
-        plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["expected"] = new JsonArray("name OtherMethod"), ["reason"] = "the control plants it" } };
-        Refused(plan, "names the control's lines as expected");
-        plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["expected"] = new JsonArray(ControlPlugins.MissingMethodName), ["reason"] = "the control plants it" } };
-        Refused(plan, "names the control's lines as expected"); // PatchAll's error in Unity's log is not named yet
-        plan["logScan"]!["harmony-undefined-target"] = new JsonObject { ["expected"] = new JsonArray(ControlPlugins.MissingPatchClass), ["reason"] = "the control plants it" };
-        Assert.Equal(ControlPlugins.MissingHarmonyTarget, Read(plan).Control!.Name);
-        // Making every lookup a warning would hide the rest: refused.
-        plan["logScan"]!["accesstools-not-found"]!["severity"] = "Warning";
-        Refused(plan, "keeps accesstools-not-found a failure");
-        // A valid client-side control run.
-        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
-        Assert.Equal(ControlPlugins.SuppressedProfileSave, Read(plan).Control!.Name);
-        // An explicit absence is not an install.
-        plan = Plan(AcceptancePlan.WorldScenario); plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = "absent";
-        Assert.Null(Read(plan).Control);
-    }
-
-    [Fact] public void TheContentCensusNeedsTheServersModOnTheClientAndItsControlIsABuild()
-    {
-        // The client's registries are its own: a client without MyMod, or with another build, cannot stand in.
-        var plan = Plan(AcceptancePlan.ContentCensusScenario); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent";
-        Refused(plan, "the check needs the server's MyMod on the client");
-        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = CampaignWorld.Md5Mismatched;
-        Refused(plan, "the check needs the server's MyMod on the client");
-        plan = Plan(AcceptancePlan.ContentCensusScenario); plan.Remove("client");
-        Refused(plan, "add the client section");
-        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
-        Refused(plan, "marks nothing");
-
-        // The omitted-recipe control is MyMod's own build, pinned where MyMod is; it belongs to this scenario alone and
-        // runs without any control plugin.
-        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
-        var control = Read(plan).Control!;
-        Assert.True(control.Build);
-        Assert.Equal(ControlPlugins.OmittedRecipe, control.Name);
-        plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
-        Refused(plan, "belongs to the content-census scenario");
-        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]!["example.mymod.control.missingtarget"] = new string('5', 32);
-        Refused(plan, "remove the control plugin example.mymod.control.missingtarget");
-        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]![AcceptancePlan.ModPlugin] = "any";
-        Assert.ThrowsAny<ArgumentException>(() => Read(plan));
-        // A normal content-census plan names no control, although MyMod is pinned.
-        Assert.Null(Read(Plan(AcceptancePlan.ContentCensusScenario)).Control);
-    }
-
-    // Every client section runs with strict pins, the suite's two extra ones included (LifecyclePlan's rule over AcceptancePlan's sections).
-    [Fact] public void EveryClientSectionRunsWithStrictPins()
-    {
-        var plan = Plan(AcceptancePlan.OwnershipHandoffScenario); plan["secondClient"]!["pinning"] = "none";
-        Refused(plan, "strict pins only");
-        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["refusedClient"]!["pinning"] = "none";
-        Refused(plan, "strict pins only");
-    }
-
-    [Fact] public void TheTwoDrySiteScenariosAreUnchanged()
-    {
-        var plan = Plan(AcceptancePlan.CrossplayScenario);
-        plan["scenario"] = AcceptancePlan.LifecycleScenario; plan.Remove("crossplay"); plan["client"] = Client("absent");
-        Assert.False(Read(plan).IsCampaign);
-        plan["expectFailure"] = ControlPlugins.FieldOnlyState;
-        Refused(plan, "belongs to the lifecycle-world scenario");
     }
 
     [Fact] public void AHostedPlanNeedsItsWorldTheModAndNoControl()
