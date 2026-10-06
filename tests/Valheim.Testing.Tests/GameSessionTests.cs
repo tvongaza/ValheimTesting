@@ -364,6 +364,31 @@ public sealed class GameSessionTests : IDisposable
         Assert.False(session.Cancellation.IsCancellationRequested); // The session itself goes on.
     }
 
+    // #448: the siblings a failed open cancels fail with OperationCanceledException; the caller still gets the failure that ended
+    // the opens, every time, whether the failing client is named first or last. Ten sessions with four waiting siblings each make
+    // the old outcome (the aggregate's first exception: sometimes a sibling's cancellation) likely.
+    [Fact] public async Task OpeningClientsAtOnceRethrowsTheFailureNotASiblingsCancellation()
+    {
+        string[] waiting = ["client-b", "client-c", "client-d", "client-e"];
+        for (int round = 0; round < 10; round++)
+        {
+            string failing = round % 2 == 0 ? "client-a" : "client-z";
+            using var allWaiting = new CountdownEvent(waiting.Length);
+            var placement = new Placement(this, (name, token) =>
+            {
+                if (name != failing) { allWaiting.Signal(); return Task.Delay(Timeout.Infinite, token); }
+                if (!allWaiting.Wait(TimeSpan.FromSeconds(60))) throw new TimeoutException("the siblings never waited");
+                throw new InvalidOperationException(failing + " refused");
+            });
+            await using var session = new GameSession(new ScenarioReport("session"), Path.Combine(_root, "round-" + round), WorldUid, Server, [], CancellationToken.None)
+            { ResolveClient = (_, name) => (name ?? "client", placement) };
+            await session.StartAsync();
+            var names = failing == "client-a" ? [failing, .. waiting] : waiting.Append(failing).ToArray();
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => session.OpenClientsAsync(names.ToDictionary(name => name, _ => Plan(600))));
+            Assert.Equal(failing + " refused", error.Message);
+        }
+    }
+
     [Fact] public async Task AScriptedWorldServesAsTheSessionsServer()
     {
         var report = new ScenarioReport("scripted");
