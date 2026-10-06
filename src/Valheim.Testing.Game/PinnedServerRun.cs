@@ -14,10 +14,11 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public required string Name { get; init; }
     /// <summary>Reads and validates the plan (for example <c>ServerRunPlan.Read&lt;MyPlan&gt;</c> then the plan's own rules).</summary>
     public required Func<string, TPlan> ReadPlan { get; init; }
-    /// <summary>The mod's read-only session capability, for example <c>my.mod.testing/session</c>.</summary>
-    public required string SessionCapability { get; init; }
-    /// <summary>The environment variable that passes the owned session token to the in-game adapter.</summary>
-    public required string SessionTokenVariable { get; init; }
+    /// <summary>
+    /// The mod's declaration: its session capability and token variable, and the Harmony patches the session checks at
+    /// runtime-ready on the server when its pins load the mod.
+    /// </summary>
+    public required ModDeclaration Mod { get; init; }
     /// <summary>
     /// The mod's own rules on the plan as it will run, for validate and run alike (throw <see cref="ArgumentException"/>): a read
     /// plan, or a campaign's plan once bound to its prepared actors (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>).
@@ -92,8 +93,7 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
 /// {
 ///     Name = "mymod-system-test",
 ///     ReadPlan = LifecyclePlan.ReadValidated,
-///     SessionCapability = "mymod.testing/session",
-///     SessionTokenVariable = LifecyclePlan.SessionTokenVariable,
+///     Mod = new ModDeclaration("mymod.testing/session", LifecyclePlan.SessionTokenVariable),
 ///     Scenario = (session, plan) =&gt;
 ///     {
 ///         DrySiteServerScenario.Run(plan, session.Server!.Game, session.Server.Restart, session.Report);
@@ -209,6 +209,7 @@ public static class PinnedServerRun
         void Classify(Exception error) { if (HostedServerRun.UnknownOutcome(error) is { } why) unknown ??= why; else definite = true; }
         try
         {
+            options.Mod.Validate(); // A declaration that cannot be checked is refused before anything is copied.
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
             var plan = readPlan(); plan.CheckLogScan(); plan.CheckCrossplay();
             if (campaign == null) plan.CheckOutput(output); // A campaign's sources are its prepared copies, bound below.
@@ -469,7 +470,7 @@ public static class PinnedServerRun
             game = new GameSession(report, output, plan.Pins.GetValueOrDefault("worlduid"),
                 token => options.SessionOverride is { } scripted ? new ServerActor(scripted(plan), runtimeDirectory, worldDirectory, hostedRun?.Host)
                     : new ServerActor(hostedRun ?? (IServerPlacement)new LocalServerPlacement(runtimeDirectory, worldDirectory, plan.Port),
-                        plan, output, options.SessionCapability, options.SessionTokenVariable, token),
+                        plan, output, options.Mod.SessionCapability, options.Mod.SessionTokenVariable, token),
                 [], cancellation.Token)
             {
                 CampaignClients = campaignClients,
@@ -480,6 +481,7 @@ public static class PinnedServerRun
                         hostedRun.ClientPlacement(report))
                     : GameSession.ThisMachine(client, name),
                 FindClientHost = hostedRun == null ? null : hostedRun.ClientHost,
+                Mod = options.Mod, ServerPinsMod = !plan.Pinned || options.Mod.PinnedIn(plan.Pins),
                 DisposeOnFailedStart = false, // The finally disposes it, on the cleanup's own bounded token.
             };
             await game.StartAsync().ConfigureAwait(false); // "start and verify owned dedicated fixture"

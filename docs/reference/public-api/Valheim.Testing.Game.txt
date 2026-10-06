@@ -1417,6 +1417,24 @@ sealed class Valheim.Testing.Game.LogoutCycle
   property Valheim.Testing.Game.ProfileFileState FileAfter { get; init; }
   property Valheim.Testing.Game.ProfileFileState FileBefore { get; init; }
   property Valheim.Testing.Game.ProfileFileState OldAfter { get; init; }
+sealed class Valheim.Testing.Game.ModDeclaration : System.IEquatable`1<Valheim.Testing.Game.ModDeclaration>
+  method System.Boolean Equals(Valheim.Testing.Game.ModDeclaration other)
+  method System.Void .ctor(System.String SessionCapability, System.String SessionTokenVariable)
+  method System.Void Deconstruct(out System.String& SessionCapability, out System.String& SessionTokenVariable)
+  method System.Void RequirePatchesApplied(Valheim.Testing.Game.GameActor actor)
+  method System.Void Validate()
+  method Valheim.Testing.Game.ModDeclaration <Clone>$()
+  method static System.Boolean op_Equality(Valheim.Testing.Game.ModDeclaration left, Valheim.Testing.Game.ModDeclaration right)
+  method static System.Boolean op_Inequality(Valheim.Testing.Game.ModDeclaration left, Valheim.Testing.Game.ModDeclaration right)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+  property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.DeclaredPatch> Patches { get; init; }
+  property System.String HarmonyCapability { get; init; }
+  property System.String Owner { get; init; }
+  property System.String Plugin { get; init; }
+  property System.String SessionCapability { get; init; }
+  property System.String SessionTokenVariable { get; init; }
 sealed class Valheim.Testing.Game.NativeCleanClientRuntime : System.IDisposable
   field const System.String PasswordVariable = "VT_NATIVE_SMOKE_JOIN_PASSWORD"
   method System.Void Dispose()
@@ -1712,8 +1730,7 @@ sealed class Valheim.Testing.Game.PinnedServerRunOptions`1
   property System.Func`2<System.String,TPlan> ReadPlan { get; init; }
   property System.Func`3<Valheim.Testing.Game.GameSession,TPlan,System.Threading.Tasks.Task> Scenario { get; init; }
   property System.String Name { get; init; }
-  property System.String SessionCapability { get; init; }
-  property System.String SessionTokenVariable { get; init; }
+  property Valheim.Testing.Game.ModDeclaration Mod { get; init; }
   property Valheim.Testing.Game.WorldFixture StagedRuntime { get; init; }
 sealed class Valheim.Testing.Game.PlacedObject : System.IEquatable`1<Valheim.Testing.Game.PlacedObject>
   method System.Boolean Equals(Valheim.Testing.Game.PlacedObject other)

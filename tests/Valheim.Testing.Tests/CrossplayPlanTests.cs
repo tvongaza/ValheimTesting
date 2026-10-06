@@ -81,7 +81,7 @@ public sealed class CrossplayPlanTests : IDisposable
             // A mod whose ReadPlan forgets ValidateServerPlan still cannot pass -crossplay around the option.
             var options = new PinnedServerRunOptions<ServerRunPlan>
             {
-                Name = "crossplay", SessionCapability = "test.mod/session", SessionTokenVariable = Token,
+                Name = "crossplay", Mod = new("test.mod/session", Token),
                 ReadPlan = ServerRunPlan.Read<ServerRunPlan>, Scenario = (_, _) => Task.CompletedTask,
             };
             string refused = Path.Combine(root, "out-refused");

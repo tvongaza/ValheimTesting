@@ -16,7 +16,6 @@ public static class VanillaClientScenario
     public static void Run(CampaignRun run)
     {
         var plan = run.Plan; var report = run.Report; var client = plan.Client!; var control = plan.Control;
-        CampaignSteps.ModPatchesApplied(run.Server, report);
         CampaignSteps.MarkSites(plan, run.Server, report);
         if (control != null)
             report.Step($"control {control.Name}: the server spawns its server-only object beside the dry site", () =>

@@ -11,6 +11,11 @@ namespace MyMod.SystemTests;
 public sealed partial class LifecyclePlan : ServerRunPlan
 {
     public const string SessionTokenVariable = "MYMOD_TEST_SESSION_TOKEN";
+    /// <summary>MyMod as the runner sees it: its adapter's session and Harmony capabilities and the patches it declares.</summary>
+    public static readonly ModDeclaration Mod = new("mymod.testing/session", SessionTokenVariable)
+    {
+        HarmonyCapability = Capabilities.Harmony, Owner = ModPlugin, Patches = DrySiteScenario.Patches,
+    };
     /// <summary>The full scenario (<see cref="DrySiteScenario"/>) and its server half alone (<see cref="DrySiteServerScenario"/>).</summary>
     public const string LifecycleScenario = "dry-site-lifecycle", ServerScenario = "dry-site-server";
     public const string ModPlugin = "example.mymod";

@@ -8,7 +8,7 @@ namespace MyMod.SystemTests;
 /// <c>lifecycle-world</c>: the dry-site rounds on an owned server with a client that runs MyMod and its adapter, plus the
 /// lifecycle events beyond a restart and the world state a mod depends on.
 /// <list type="number">
-/// <item>Server: MyMod's patches applied (#30); no marker, the mod marks the dry site and refuses the wet one.</item>
+/// <item>Server (MyMod's patches already checked by the runner's session, #30): no marker, the mod marks the dry site and refuses the wet one.</item>
 /// <item>First round, beside the marker: the client sees it with MyMod's saved label; a global key the fixture lacks is set
 /// on the server and the client lists the server's keys (#23); a vanilla dungeon's saved rooms lie in its location's zone
 /// (#24); the player leaves the area until the client unloads the site's zones and comes back, and the marker is there
@@ -28,7 +28,6 @@ public static class LifecycleWorldScenario
     public static void Run(CampaignRun run)
     {
         var plan = run.Plan; var report = run.Report; var client = plan.Client!; var control = plan.Control;
-        CampaignSteps.ModPatchesApplied(run.Server, report);
         if (control?.Name == ControlPlugins.MissingHarmonyTarget)
         {
             MissingTarget(run, control);

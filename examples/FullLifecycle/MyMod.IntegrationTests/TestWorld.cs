@@ -17,7 +17,7 @@ internal sealed class TestWorld : IOwnedServer
     public const string WorldUid = "4242";
     private readonly List<(float X, float Z)> _markers = [], _saved = [];
     public int Restarts, MarkCommands;
-    public bool LoseMarkReply, OmitServerSummary, ConfirmSaves = true, ClientSeesMarkers = true, ConfirmProtection = true, PatchMissing;
+    public bool LoseMarkReply, OmitServerSummary, ConfirmSaves = true, ClientSeesMarkers = true, ConfirmProtection = true;
     /// <summary>How many session readings report the socket closed before it opens (a first boot's late socket).</summary>
     public int ClosedReadings;
     public int SessionReadings;
@@ -125,16 +125,15 @@ internal sealed class TestWorld : IOwnedServer
             });
     }
 
-    // The adapter's census, filtered to the mod: its postfix on the terminal's command setup (unless its target went
-    // missing, when HarmonyX applies nothing there) and another mod's prefix on the same method, and its handshake and
-    // greeting patches on ZNet.
-    private object Census() => ModCensus(PatchMissing);
+    // The adapter's census, filtered to the mod: its postfix on the terminal's command setup and another mod's prefix on the
+    // same method, and its handshake and greeting patches on ZNet. (A missing patch is the runner session's check now.)
+    private object Census() => ModCensus();
 
-    /// <summary>The adapter's census of MyMod's patches as a server or client with MyMod reports it; none when <paramref name="missing"/>.</summary>
-    public static object ModCensus(bool missing = false) => new
+    /// <summary>The adapter's census of MyMod's patches as a server or client with MyMod reports it.</summary>
+    public static object ModCensus() => new
     {
         source = "harmony-patches", complete = true, owner = LifecyclePlan.ModPlugin,
-        methods = missing ? Array.Empty<object>() : new object[]
+        methods = new object[]
         {
             new
             {

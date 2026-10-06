@@ -8,7 +8,8 @@ namespace MyMod.SystemTests;
 /// <summary>
 /// The example mod's end-to-end scenario on an owned server, with the mod's own expectations and the toolkit's pieces:
 /// <list type="number">
-/// <item>The mod's Harmony patch is applied (the adapter's census), so a missing target fails here, by name.</item>
+/// <item>Before it runs, the runner's session checked the mod's declared Harmony patches on the server (the adapter's
+/// census, <c>LifecyclePlan.Mod</c>), so a missing target fails at runtime-ready, by name.</item>
 /// <item>Neither site has a marker yet (the fresh fixture copy), so any marker found later is the mod's.</item>
 /// <item>The mod marks the dry site and refuses the wet one, each asked exactly once.</item>
 /// <item>The server's saved objects show one marker at the dry site and none at the wet one.</item>
@@ -44,8 +45,7 @@ public static class DrySiteScenario
         Func<GameActor, CrossplayLobby>? lobby = null)
     {
         var client = plan.Client ?? throw new ArgumentException("The run mode needs the plan's client section.");
-        report.Step("server: the mod's Harmony patches are applied", () =>
-            HarmonyCensus.Read(server, "mymod.testing/harmony", LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, Patches).RequireApplied());
+        // The runner's session checked MyMod's declared Harmony patches on the server at runtime-ready (LifecyclePlan.Mod).
         report.Step("no marker at either site before the mod acts", () => { RequireServerMarkers(server, plan.DrySite, 0); RequireServerMarkers(server, plan.WetSite, 0); });
         report.Step("the mod marks the dry site", () => server.Execute(Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
         report.Step("the mod refuses the wet site", () => server.Execute(Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));

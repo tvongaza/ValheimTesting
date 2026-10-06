@@ -142,7 +142,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         Name = name,
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
-        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+        Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
         Scenario = TestRun.Scenario(scenario ?? (_ => Task.CompletedTask)),
         Hooks = new FakeRunHooks
         {
@@ -204,7 +204,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var options = Options(host, server);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
         {
-            Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
+            Name = options.Name, ReadPlan = options.ReadPlan, Mod = options.Mod,
             Scenario = options.Scenario, Hooks = options.Hooks, StagedRuntime = staged,
         }));
         Assert.DoesNotContain(host.Runs, run => run.Script == "copy");

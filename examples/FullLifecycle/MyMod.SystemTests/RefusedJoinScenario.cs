@@ -24,7 +24,6 @@ public static class RefusedJoinScenario
     {
         var plan = run.Plan; var report = run.Report; var refusedPlan = plan.RefusedClient!; var client = plan.Client!;
         var expected = plan.RefusalStatus;
-        CampaignSteps.ModPatchesApplied(run.Server, report);
 
         ClientSession? refused = null;
         bool passed = false;

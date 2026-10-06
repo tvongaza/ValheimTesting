@@ -77,13 +77,17 @@ public sealed class DrySiteScenarioTests : IDisposable
         Assert.Null(_world.ClientTransport); // Nothing after the failure ran, not even the client launch.
     }
 
-    [Fact] public void AMissingHarmonyPatchFailsFirstAndNamesIt()
+    // MyMod's declaration (what the runner's session checks at runtime-ready) is whole, pinned by the mod's plugin, and met
+    // by the census its adapter reports; with its patches gone the same check fails, naming the missing one.
+    [Fact] public void MyModsDeclarationIsMetByItsAdaptersCensusAndAMissingPatchFails()
     {
-        _world.PatchMissing = true;
-        var report = Run(_world.Plan());
-        Assert.Equal(new[] { "server: the mod's Harmony patches are applied" }, Failed(report));
-        Assert.Contains("RegisterCommands::Postfix on Terminal::InitTerminal", report.Steps.Single(s => !s.Passed).Error);
-        Assert.Equal(0, _world.MarkCommands);
+        var mod = LifecyclePlan.Mod;
+        mod.Validate();
+        Assert.Equal((Capabilities.Harmony, LifecyclePlan.ModPlugin), (mod.HarmonyCapability, mod.Owner));
+        var census = HarmonyCensus.Parse(JsonSerializer.SerializeToElement(TestWorld.ModCensus()));
+        census.Check(mod.Owner!, mod.Patches).RequireApplied();
+        var empty = HarmonyCensus.Parse(JsonSerializer.SerializeToElement(new { source = "harmony-patches", complete = true, owner = mod.Owner, methods = Array.Empty<object>() }));
+        Assert.Contains("RegisterCommands::Postfix on Terminal::InitTerminal", Assert.ThrowsAny<Exception>(() => empty.Check(mod.Owner!, mod.Patches).RequireApplied()).Message);
     }
 
     [Fact] public void AnIncompleteServerObservationIsAFailureNotAnEmptyResult()
