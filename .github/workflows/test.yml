@@ -68,6 +68,35 @@ jobs:
           path: artifacts/validate
           if-no-files-found: ignore
           retention-days: 14
+      # Runs the file-based scripts no other PR step runs, as a user runs them (#434: file-based apps default to PublishAot,
+      # which turns off reflection-based System.Text.Json unless the script sets PublishAot=false). The two dependency scripts
+      # read and write their JSON; the other two only start. Judged by exit codes, on Linux only: an SDK
+      # default reaches every OS alike. api-docs, pins, bootstrap-cli and validate run in this workflow, consumer in release.yml;
+      # tools/doubles-members needs the game's assemblies.
+      - name: File-based scripts run
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: |
+          t=$(mktemp -d)
+          root=$(jq -r .root loader-dependency.json)
+          unzip -q .packages/bepinexpack-valheim.zip -d "$t/pack" && mv "$t/pack/$root" "$t/loader"
+          unzip -q .packages/valheimcli-bundle.zip -d "$t/cli"
+          dotnet run scripts/bepinex-loader.cs -- capture "$t/loader" "$root" "$(jq -r .version loader-dependency.json)" "$t/loader.json"
+          dotnet run scripts/bepinex-loader.cs -- check "$t/loader.json"
+          # A real plugin from the pinned bundle. With no game assemblies here its references are confirmed optional, so the lock
+          # is ready. A bundle pin that adds a reference fails resolve with a gap line naming it: add that name to the list.
+          mkdir "$t/managed"
+          cat > "$t/request.json" <<'EOF'
+          {"mods": ["cli/Valheim.Cli.WorldTools.dll"], "searchRoots": [], "gameManaged": "managed",
+           "bepInExCore": "loader/BepInEx/core", "cliManifest": "cli/cli-manifest.json", "cliFiles": "cli",
+           "capabilities": [], "optionalReferences": ["System", "System.Core", "mscorlib", "UnityEngine.CoreModule",
+           "UnityEngine.PhysicsModule", "assembly_utils", "assembly_valheim"]}
+          EOF
+          dotnet run scripts/native-dependencies.cs -- resolve "$t/request.json" "$t/lock.json"
+          dotnet run scripts/native-dependencies.cs -- check "$t/lock.json"
+          dotnet run scripts/pwsh-startup-stress.cs -- --starts 8 --parallel 4 --guard
+          code=0; dotnet run --file tools/dev-loop/dev-loop.cs || code=$?
+          if [ "$code" != 4 ]; then echo "::error::dev-loop.cs with no arguments exited $code, not 4 (usage)"; exit 1; fi
       - name: Build candidate API reference
         if: runner.os == 'Linux'
         run: |

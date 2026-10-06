@@ -764,8 +764,10 @@ public static class HostedCampaignPreparation
     /// <c>&lt;runtime&gt;/vt-prep-&lt;runId&gt;-&lt;actor&gt;</c>, and every copy and character is journalled on its host before it is made
     /// (<see cref="RunJournal"/>).
     /// </summary>
+    /// <remarks>A failed preparation removes what it made before it throws; <paramref name="cleanupStep"/> (the runner's report, as a
+    /// Cleanup step) records that removal, so the result and the journal's <c>run-ended</c> judge the same cleanup (#424).</remarks>
     internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, string? runId = null)
+        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, string? runId = null, Func<string, Func<Task>, Task>? cleanupStep = null)
     {
         inspection.Report.RequireReady();
         var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation).ConfigureAwait(false);
@@ -820,11 +822,13 @@ public static class HostedCampaignPreparation
                     // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
                         ("runtime", runtime), ("stage", stage), ("parent", parent)), timeout, cancellation).ConfigureAwait(false);
+                    // Owned from here: a failed preparation retires a partial copy too (idempotent where nothing was made), so its
+                    // run-ended entry says cleanup was verified only when no copy of it remains, not when the copy's own cleanup failed.
+                    copies.Add((hostName, name, runtime, stage));
                     listings[name] = await HostedRuntimeStage.PrepareWithInspectedSourceAsync(host, name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
                         role.Install, runtime, stage, selections[name], timeout, cancellation,
                         item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage),
                         readiness.SourceListings[name]).ConfigureAwait(false);
-                    copies.Add((hostName, name, runtime, stage));
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyDone,
                         ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture))), timeout, cancellation).ConfigureAwait(false);
                     if (characters.TryGetValue(name, out var selected))
@@ -846,9 +850,11 @@ public static class HostedCampaignPreparation
         }
         catch (Exception original)
         {
+            Func<Task> remove = () => new PreparedHostedCampaign(manifest, profile, listings, selections, copies.ToArray(),
+                stagedCharacters.ToArray(), hostFactory, timeout, journal).DisposeAsync().AsTask();
             try
             {
-                await new PreparedHostedCampaign(manifest, profile, listings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout, journal).DisposeAsync().ConfigureAwait(false);
+                await (cleanupStep?.Invoke("remove the failed preparation's copies and characters", remove) ?? remove()).ConfigureAwait(false);
             }
             catch (Exception cleanup)
             {
