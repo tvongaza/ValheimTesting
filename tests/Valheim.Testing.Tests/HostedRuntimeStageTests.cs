@@ -47,7 +47,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [Fact] public async Task MacShellReplacesTheCopiedLoaderWithAReviewedPackage()
     {
         if (!OperatingSystem.IsMacOS()) return;
-        var host = new LocalGameHost("local-mac", HostShell.Bash);
+        // The fake bundle is unsigned, so the real macOS bundle check would refuse it (MacAppBundleTests covers that check).
+        var host = new BundleAcceptingHost(new LocalGameHost("local-mac", HostShell.Bash));
         string source = Path.Combine(_root, "source");
         foreach (var (relative, text) in new[] { ("Valheim.app/Contents/MacOS/Valheim", "game"),
             ("Valheim.app/Contents/Resources/Data/Managed/" + InstallPins.GameAssemblyName, "game"), ("BepInEx/core/BepInEx.dll", "old core"),
@@ -70,6 +71,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30), loaderPackage: package);
         Assert.Equal(package.Loader, HostInstall.Pins(listing).Loader);
         Assert.Equal(package.Loader, InstallPins.Of(Path.Combine(run, "runtime")).Loader);
+        Assert.Equal("1", Assert.Single(host.BundleChecks)["repair"]); // the stage asked about its copy, never the source
+        Assert.StartsWith(run, Assert.Single(host.BundleChecks)["app"]);
         Assert.False(listing.Files.ContainsKey("BepInEx/core/stale.dll"));
         Assert.False(listing.Files.ContainsKey("doorstop_libs/libdoorstop_x64.dylib"));
     }
@@ -113,7 +116,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [Fact] public async Task MacShellStagesASelectedClientWithoutRunningTheGame()
     {
         if (!OperatingSystem.IsMacOS()) return;
-        var host = new LocalGameHost("local-mac", HostShell.Bash);
+        // The fake bundle is unsigned, so the real macOS bundle check would refuse it (MacAppBundleTests covers that check).
+        var host = new BundleAcceptingHost(new LocalGameHost("local-mac", HostShell.Bash));
         string source = Path.Combine(_root, "source");
         string executable = Path.Combine(source, "Valheim.app", "Contents", "MacOS", "Valheim");
         string managed = Path.Combine(source, "Valheim.app", "Contents", "Resources", "Data", "Managed", InstallPins.GameAssemblyName);
@@ -136,6 +140,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
             Path.Combine(run, "runtime"), Path.Combine(run, "staging"),
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30));
         Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/selected.dll"]);
+        Assert.Equal("1", Assert.Single(host.BundleChecks)["repair"]);
+        Assert.StartsWith(run, Assert.Single(host.BundleChecks)["app"]);
         Assert.False(listing.Files.ContainsKey("BepInEx/plugins/old.dll"));
         Assert.True(File.Exists(old));
         Assert.False(Directory.Exists(Path.Combine(run, "staging")));
