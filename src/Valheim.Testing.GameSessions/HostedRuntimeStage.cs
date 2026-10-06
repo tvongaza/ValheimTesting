@@ -9,14 +9,14 @@ namespace Valheim.Testing.Game;
 public sealed record HostedRuntimeFile(string Source, string RelativePath);
 
 /// <summary>The game process whose executable must be present in the source install.</summary>
-public enum HostedRuntimeKind { Server, Client }
+internal enum HostedRuntimeKind { Server, Client }
 
 /// <summary>
 /// Builds a disposable modded runtime on a remote game host. The source install is read only: the host makes a fresh
 /// copy, then replaces only that copy's BepInEx plugin, script, config and patcher content with explicitly selected
 /// files. The caller owns the host lock and the resulting copy's cleanup.
 /// </summary>
-public static class HostedRuntimeStage
+internal static class HostedRuntimeStage
 {
     private static readonly StringComparer HostNames = StringComparer.OrdinalIgnoreCase;
     private static readonly Regex SafePath = new(@"^[A-Za-z0-9_. -]+(?:/[A-Za-z0-9_. -]+)*$", RegexOptions.CultureInvariant);

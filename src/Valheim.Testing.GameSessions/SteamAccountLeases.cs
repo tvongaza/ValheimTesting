@@ -12,7 +12,7 @@ namespace Valheim.Testing.Game;
 /// (<see cref="SteamPoolAccount.LeaseKey"/>); there is no account file. The runner never signs into Steam: each host's Steam
 /// client is signed in by a person ahead of time.
 /// </summary>
-public sealed class SteamAccountPool
+internal sealed class SteamAccountPool
 {
     internal static readonly Regex AccountName = new("^[A-Za-z0-9_]{3,64}$", RegexOptions.CultureInvariant);
     private static readonly Regex Name = new("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", RegexOptions.CultureInvariant);
@@ -150,7 +150,7 @@ public sealed class SteamAccountPool
 }
 
 /// <summary>One account of a pool: its Steam account name, never its password.</summary>
-public sealed class SteamPoolAccount
+internal sealed class SteamPoolAccount
 {
     /// <summary>The Steam account name (3 to 64 letters, digits or '_'). Recorded in reports; never a credential.</summary>
     public string Name { get; set; } = "";
@@ -212,7 +212,7 @@ public enum SteamAccountLeaseState
 }
 
 [ResultShape]
-public sealed record SteamAccountLeaseResult(SteamAccountLeaseState State, string Detail);
+internal sealed record SteamAccountLeaseResult(SteamAccountLeaseState State, string Detail);
 
 /// <summary>A lease could not be taken or released. <see cref="Accounts"/> lists the holders when none was free; never a credential.</summary>
 public sealed class SteamAccountLeaseException(SteamAccountLeaseState state, string pool, IReadOnlyList<SteamAccountStatus> accounts, string message)
@@ -228,7 +228,7 @@ public sealed class SteamAccountLeaseException(SteamAccountLeaseState state, str
 /// releases it, or a recovery does once its client is proven stopped. A release that cannot be proven throws, because a failed
 /// teardown is a failure to report. Its text is the account's name, never a credential.
 /// </summary>
-public sealed class SteamAccountLease : IAsyncDisposable
+internal sealed class SteamAccountLease : IAsyncDisposable
 {
     private readonly IGameHost _host;
     private readonly SteamAccountPool _pool;

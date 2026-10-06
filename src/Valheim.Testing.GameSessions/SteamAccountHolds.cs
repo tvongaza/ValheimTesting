@@ -91,8 +91,8 @@ public sealed class SteamAccountHold : IAsyncDisposable, ILeasedSteamAccount
     }
 
     /// <summary>
-    /// The optional signed-in check, on the client's own host: its Steam client must be signed in to this account (the pool's
-    /// <see cref="SteamPoolAccount.SteamId"/>). Windows reads the signed-in user from <c>HKCU\Software\Valve\Steam\ActiveProcess\ActiveUser</c>;
+    /// The optional signed-in check, on the client's own host: its Steam client must be signed in to this account (the SteamID
+    /// observed for it). Windows reads the signed-in user from <c>HKCU\Software\Valve\Steam\ActiveProcess\ActiveUser</c>;
     /// Linux and macOS read the account Steam last signed in from the host user's <c>loginusers.vdf</c> (its <c>MostRecent</c> user, or
     /// with current clients that write no <c>MostRecent</c>, the single newest <c>Timestamp</c>). Another account, none, or a state that
     /// cannot be read throws <see cref="SteamSignedInException"/>: unreadable is refused, never passed. The SteamID is kept in
@@ -152,7 +152,7 @@ public sealed class SteamAccountHold : IAsyncDisposable, ILeasedSteamAccount
     }
     void ILeasedSteamAccount.RequireReady(string? hostName) => RequireReady(hostName);
 
-    /// <summary>Records the account's name and pool in the report's provenance under the client's name (<see cref="SteamAccountLease.Record"/>). Never a credential or SteamID.</summary>
+    /// <summary>Records the account's name and pool in the report's provenance under the client's name. Never a credential or SteamID.</summary>
     public void Record(ScenarioReport report) => _lease.Record(report, Client);
 
     /// <summary>

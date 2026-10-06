@@ -305,12 +305,6 @@ sealed class Valheim.Testing.Game.HostedRunOptions`1
   method virtual System.String ToString()
   property System.String RelativePath { get; init; }
   property System.String Source { get; init; }
-enum Valheim.Testing.Game.HostedRuntimeKind
-  field const Valheim.Testing.Game.HostedRuntimeKind Client = 1
-  field const Valheim.Testing.Game.HostedRuntimeKind Server = 0
-static class Valheim.Testing.Game.HostedRuntimeStage
-  method static System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.HostedRuntimeFile> FromDependencies(System.String dependencyLockFile)
-  method static System.Threading.Tasks.Task`1<Valheim.Testing.Game.HostListing> PrepareAsync(Valheim.Testing.Game.IGameHost host, Valheim.Testing.Game.HostedRuntimeKind kind, System.String source, System.String destination, System.String staging, System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.HostedRuntimeFile> files, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null, Valheim.Testing.Game.BepInExLoaderPackage loaderPackage = null)
 sealed class Valheim.Testing.Game.HostingClientActor : System.IDisposable, Valheim.Testing.Game.IOwnedServer
   method System.Void Dispose()
   method System.Void Prepare()
@@ -608,49 +602,17 @@ sealed class Valheim.Testing.Game.SteamAccountHold : System.IAsyncDisposable, Va
   property System.String LeaseHostName { get; }
   property System.String Owner { get; }
   property System.String Pool { get; }
-sealed class Valheim.Testing.Game.SteamAccountLease : System.IAsyncDisposable
-  method System.Threading.Tasks.Task`1<Valheim.Testing.Game.SteamAccountLeaseResult> ReleaseAsync(System.Threading.CancellationToken cancellation = null)
-  method System.Threading.Tasks.ValueTask DisposeAsync()
-  method System.Void Record(Valheim.Testing.Game.ScenarioReport report, System.String role)
-  method virtual System.String ToString()
-  property System.String Account { get; }
-  property System.String AccountHost { get; }
-  property System.String LeaseHostName { get; }
-  property System.String LeaseId { get; }
-  property System.String Owner { get; }
-  property System.String Pool { get; }
-  property System.String Run { get; }
 sealed class Valheim.Testing.Game.SteamAccountLeaseException : System.InvalidOperationException
   method System.Void .ctor(Valheim.Testing.Game.SteamAccountLeaseState state, System.String pool, System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.SteamAccountStatus> accounts, System.String message)
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.SteamAccountStatus> Accounts { get; }
   property System.String Pool { get; }
   property Valheim.Testing.Game.SteamAccountLeaseState State { get; }
-[result shape] sealed class Valheim.Testing.Game.SteamAccountLeaseResult : System.IEquatable`1<Valheim.Testing.Game.SteamAccountLeaseResult>
-  method System.Boolean Equals(Valheim.Testing.Game.SteamAccountLeaseResult other)
-  method System.Void .ctor(Valheim.Testing.Game.SteamAccountLeaseState State, System.String Detail)
-  method System.Void Deconstruct(out Valheim.Testing.Game.SteamAccountLeaseState& State, out System.String& Detail)
-  method Valheim.Testing.Game.SteamAccountLeaseResult <Clone>$()
-  method static System.Boolean op_Equality(Valheim.Testing.Game.SteamAccountLeaseResult left, Valheim.Testing.Game.SteamAccountLeaseResult right)
-  method static System.Boolean op_Inequality(Valheim.Testing.Game.SteamAccountLeaseResult left, Valheim.Testing.Game.SteamAccountLeaseResult right)
-  method virtual System.Boolean Equals(System.Object obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-  property System.String Detail { get; init; }
-  property Valheim.Testing.Game.SteamAccountLeaseState State { get; init; }
 [result shape] enum Valheim.Testing.Game.SteamAccountLeaseState
   field const Valheim.Testing.Game.SteamAccountLeaseState Claimed = 0
   field const Valheim.Testing.Game.SteamAccountLeaseState Lost = 3
   field const Valheim.Testing.Game.SteamAccountLeaseState NoneFree = 2
   field const Valheim.Testing.Game.SteamAccountLeaseState Released = 1
   field const Valheim.Testing.Game.SteamAccountLeaseState Unknown = 4
-sealed class Valheim.Testing.Game.SteamAccountPool
-  method System.Threading.Tasks.Task`1<System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.SteamAccountStatus>> ListAsync(Valheim.Testing.Game.IGameHost leaseHost, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null)
-  method System.Threading.Tasks.Task`1<Valheim.Testing.Game.SteamAccountLease> AcquireAsync(Valheim.Testing.Game.IGameHost leaseHost, System.String owner, System.TimeSpan timeout, System.String clientHost = null, System.String run = null, System.Threading.CancellationToken cancellation = null)
-  method System.Void .ctor()
-  method System.Void Validate()
-  property System.Collections.Generic.List`1<Valheim.Testing.Game.SteamPoolAccount> Accounts { get; set; }
-  property System.String LeaseDirectory { get; set; }
-  property System.String Pool { get; set; }
 enum Valheim.Testing.Game.SteamAccountState
   field const Valheim.Testing.Game.SteamAccountState Contended = 2
   field const Valheim.Testing.Game.SteamAccountState Free = 0
@@ -671,11 +633,6 @@ sealed class Valheim.Testing.Game.SteamAccountStatus : System.IEquatable`1<Valhe
   property System.String Holder { get; init; }
   property System.String Run { get; init; }
   property Valheim.Testing.Game.SteamAccountState State { get; init; }
-sealed class Valheim.Testing.Game.SteamPoolAccount
-  method System.Void .ctor()
-  property System.String Host { get; set; }
-  property System.String Name { get; set; }
-  property System.String SteamId { get; set; }
 sealed class Valheim.Testing.Game.SteamSignedInException : System.InvalidOperationException
   method System.Void .ctor(Valheim.Testing.Game.SteamSignedInState state, System.String account, System.String hostName, System.String message)
   property System.String Account { get; }
