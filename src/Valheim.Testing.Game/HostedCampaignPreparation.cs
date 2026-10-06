@@ -312,9 +312,6 @@ public static class HostedCampaignPreparation
             }
             catch (Exception error) when (HostCheckRefusal(error))
             { failures.Add(new(group.Key, "session", error.Message)); }
-            // A Mac hosts clients only: a dedicated server needs Linux/bash or Windows/PowerShell (HostedServerRun.Refusal), refused here before anything is copied.
-            if (group.Any(role => role.Name == "server") && inputs.Profile.Hosts[group.Key].Platform == "macos")
-                failures.Add(new("server", "server host", $"{group.Key} is a macOS host; a campaign's dedicated server runs on a Linux (bash) or Windows (PowerShell) host."));
             if (group.Any(role => role.Name == "server"))
             {
                 try { await HostServer.RequireTaskLogonAsync(host, timeout, cancellation).ConfigureAwait(false); }
