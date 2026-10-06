@@ -198,6 +198,23 @@ internal static class RunRecovery
                     try
                     {
                         if (!copy.Fields.TryGetValue("stage", out string? stage)) throw new InvalidDataException("its journal names no staging directory");
+                        // A hosted run's world copy (HostedServerRun journals what each of its copies holds) has no game logs.
+                        if (copy.Fields.GetValueOrDefault("holds") == "world")
+                        {
+                            HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
+                            if (copy.Fields.GetValueOrDefault("verified") == "true")
+                            {
+                                // A hosted run's verified world copy is its save, evidence: handed over where it is, as a run that ends does.
+                                Step(group.Key, what, "kept as the run's save (handed over, in its run directory)");
+                                await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"))).ConfigureAwait(false);
+                                continue;
+                            }
+                            // A ship that never finished is nobody's save, and a world holds no game logs.
+                            await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout, runId: runId).ConfigureAwait(false);
+                            Step(group.Key, what, "removed (the ship never finished)");
+                            await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
+                            continue;
+                        }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
                         RecoveredLogs logs;
                         try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation).ConfigureAwait(false); }
@@ -205,7 +222,7 @@ internal static class RunRecovery
                         {
                             throw new IOException($"its game logs could not be kept, so it stays ({error.Message}); recover again once they can be, or remove it by hand", error);
                         }
-                        await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout).ConfigureAwait(false);
+                        await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout, runId: runId).ConfigureAwait(false);
                         Step(group.Key, what, logs.Describe());
                         await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired,
                             [("runtime", copy.What), .. logs.Kept.Count == 0 ? Array.Empty<(string, string)>() : [("logsKeptIn", logs.Folder)]])).ConfigureAwait(false);
@@ -292,7 +309,7 @@ internal static class RunRecovery
     internal static async Task<RecoveredLogs> KeepLogsAsync(IGameHost host, string runtime, string runId, string actor, DateTime copiedUtc,
         TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "")
     {
-        string parent = HostedRuntimeStage.RequirePrepared(host, runtime);
+        string parent = HostedRuntimeStage.RequirePrepared(host, runtime, runId);
         int at = parent.LastIndexOfAny(['/', '\\']);
         if (at <= 0) throw new ArgumentException("A prepared copy's folder has no parent to keep its logs in.", nameof(runtime));
         if (!RunJournal.SafeName(runId) || !RunJournal.SafeName(actor)) throw new ArgumentException("A run id and an actor are letters, digits, '.', '_' and '-'.");

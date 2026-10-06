@@ -517,11 +517,14 @@ internal sealed class FakeServerHost : IGameHost
         return new Shipment(hostDirectory, new string('a', 64), 1, null, null);
     }
     public Task<long> LogOffsetAsync(string logPath, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
-    public Task<HostLogResult> WaitForLogAsync(string logPath, long fromOffset, Regex success, IReadOnlyList<Regex>? failures, TimeSpan timeout, CancellationToken cancellation = default)
+    public async Task<HostLogResult> WaitForLogAsync(string logPath, long fromOffset, Regex success, IReadOnlyList<Regex>? failures, TimeSpan timeout, CancellationToken cancellation = default)
     {
         lock (_sync) Runs.Add(("follow", new Dictionary<string, string> { ["log"] = logPath, ["offset"] = fromOffset.ToString() }));
+        // As for a script: "follow" in BeforeScript and Hang (a log that never gets its line until the caller gives up).
+        BeforeScript?.Invoke("follow");
+        if (Hang.Contains("follow")) await Task.Delay(Timeout.Infinite, cancellation);
         string? line = File.Exists(Local(logPath)) ? File.ReadAllLines(Local(logPath)).FirstOrDefault(success.IsMatch) : null;
-        return Task.FromResult(new HostLogResult(line != null ? HostLogOutcome.Matched : HostLogOutcome.TimedOut, "listening", line, TimeSpan.Zero, line));
+        return new HostLogResult(line != null ? HostLogOutcome.Matched : HostLogOutcome.TimedOut, "listening", line, TimeSpan.Zero, line);
     }
     public Task<FetchedDirectory> FetchDirectoryAsync(string hostDirectory, string localDirectory, TimeSpan timeout, CancellationToken cancellation = default)
     {

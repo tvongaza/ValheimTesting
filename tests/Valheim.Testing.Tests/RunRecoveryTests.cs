@@ -352,6 +352,41 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
     }
 
+    // #257: a standalone hosted run's own copies, in its run directory: the runtime copy goes (its logs kept first), a world copy
+    // verified and journalled done is the run's save and is handed over where it is, and a world ship that never finished goes.
+    [Fact] public async Task RecoverRemovesAHostedRunsOwnRuntimeCopyAndPartialWorldAndHandsOverItsVerifiedWorld()
+    {
+        const string Run = "/srv/runs/run-hosted", Other = "/srv/runs/run-partial";
+        Directory.CreateDirectory(Path.Combine(_host.Local(Run + "/runtime"), "BepInEx"));
+        File.WriteAllText(Path.Combine(_host.Local(Run + "/runtime"), "BepInEx", "LogOutput.log"), "server log");
+        Directory.CreateDirectory(_host.Local(Run + "/world/worlds_local"));
+        Directory.CreateDirectory(_host.Local(Other + "/world/worlds_local"));
+        foreach (var (run, directory, holds, done) in new[] { ("run-hosted", Run + "/runtime", "runtime", true), ("run-hosted", Run + "/world", "world", true), ("run-partial", Other + "/world", "world", false) })
+        {
+            string parent = directory[..directory.LastIndexOf('/')];
+            Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", directory), ("stage", ""), ("parent", parent), ("holds", holds));
+            if (done) Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", directory), ("files", "1"), ("verified", "true"));
+        }
+
+        var hosted = await RecoverAsync("run-hosted");
+        var partial = await RecoverAsync("run-partial");
+
+        Assert.True(hosted.Recovered, string.Join("\n", hosted.Steps));
+        Assert.True(partial.Recovered, string.Join("\n", partial.Steps));
+        Assert.False(Directory.Exists(_host.Local(Run + "/runtime")));
+        Assert.Equal("server log", File.ReadAllText(Path.Combine(_host.Local(Run + "/recovered-server"), "BepInEx", "LogOutput.log")));
+        Assert.True(Directory.Exists(_host.Local(Run + "/world")));
+        Assert.Equal("kept as the run's save (handed over, in its run directory)", Assert.Single(hosted.Steps, step => step.What == "copy " + Run + "/world").Outcome);
+        Assert.False(Directory.Exists(_host.Local(Other)));
+        Assert.Equal("removed (the ship never finished)", Assert.Single(partial.Steps, step => step.What == "copy " + Other + "/world").Outcome);
+        Assert.All((await StatusAsync()).Runs, run => Assert.Equal(JournalRunState.Ended, run.State));
+        // The run directory guards the removal: a copy outside its own run's directory is refused, and stays.
+        Directory.CreateDirectory(_host.Local("/srv/runs/someone-else/runtime"));
+        Line(_host, "run-stray", "server", Gone, JournalEntry.CopyIntended, ("runtime", "/srv/runs/someone-else/runtime"), ("stage", ""), ("parent", "/srv/runs/someone-else"), ("holds", "runtime"));
+        Assert.False((await RecoverAsync("run-stray")).Recovered);
+        Assert.True(Directory.Exists(_host.Local("/srv/runs/someone-else/runtime")));
+    }
+
     // A copy whose logs could not be kept stays, for a later recovery; teardown keeps a kept copy's logs as recover does.
     [Fact] public async Task ACopyWhoseLogsCannotBeKeptStaysAndTeardownKeepsAKeptCopysLogs()
     {
