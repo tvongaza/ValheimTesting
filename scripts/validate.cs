@@ -40,12 +40,28 @@ Run("dotnet", "build", Solution("examples", new[] { "examples", "tools" }
 // The full-life-cycle example's external projects; its game-side mod and adapter need a game install and build elsewhere.
 Test("examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
-Run("dotnet", "pack", Solution("packages", new[] { "Valheim.Testing", "Valheim.Testing.Doubles", "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke" }
-    .Select(name => $"src/{name}/{name}.csproj")),
-    "-c", "Release", "-nodeReuse:false", "-o", Path.Combine(root, ".packages"));
-// A mod's view of what was just packed: outside this checkout, a new package cache, Valheim.Testing* only from .packages
-// and byte-identical to it (NuGet.org serves published packages of the same id and version).
-Run("dotnet", "run", "scripts/consumer.cs", "--", "--feed", "local");
+// Every package packs as <Version>-candidate.<hash of the package inputs> (pins.cs candidate, one owner of the identity):
+// different inputs never share a version in .packages. Packs of these packages under any other version are removed first; a
+// complete set already packed under this identity is kept rather than packed again, so one identity has one set of bytes.
+string[] packed = ["Valheim.Testing", "Valheim.Testing.Doubles", "Valheim.Testing.Game", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
+string candidate = Capture("dotnet", "run", "scripts/pins.cs", "--", "candidate").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
+if (!System.Text.RegularExpressions.Regex.IsMatch(candidate, "^candidate\\.h?[0-9a-f]{12}$")) throw new InvalidOperationException("pins.cs candidate printed no identity: " + candidate);
+Note("candidate identity: " + candidate);
+string feed = Path.Combine(root, ".packages");
+// A file of one of these packages: its ID, then a version (the Cli and the zips are not touched).
+var ours = Directory.GetFiles(feed, "*.nupkg").Where(file => packed.Contains(System.Text.RegularExpressions.Regex.Replace(Path.GetFileName(file), @"\.\d+\.\d+\.\d+(-[^/\\]*)?\.nupkg$", ""))).ToList();
+var current = ours.Where(file => Path.GetFileName(file).EndsWith("-" + candidate + ".nupkg", StringComparison.Ordinal)).ToList();
+foreach (string other in ours.Except(current)) File.Delete(other);
+if (current.Count == packed.Length) Note($"{candidate}: every package is already packed under this identity in .packages; kept");
+else
+{
+    foreach (string partial in current) File.Delete(partial);
+    Run("dotnet", "pack", Solution("packages", packed.Select(name => $"src/{name}/{name}.csproj")),
+        "-c", "Release", "-nodeReuse:false", "-o", feed, "-p:ValheimTestingCandidate=" + candidate);
+}
+// A mod's view of what was just packed: outside this checkout, the candidate packages only from .packages and byte-identical
+// to it, the Cli from .packages too (its pin may not be published yet), every other package from NuGet.org.
+Run("dotnet", "run", "scripts/consumer.cs", "--", "--feed", "local", "--candidate", candidate);
 Note("Local validation passed.");
 return 0;
 
@@ -109,6 +125,25 @@ void Run(string file, params string[] arguments)
     }
     Note($"done in {Elapsed(clock.Elapsed)}: {command}");
     DataRootUnchanged(command);
+}
+
+// Runs a command as Run does and returns its standard output (its errors still reach the console).
+string Capture(string file, params string[] arguments)
+{
+    string command = file + " " + string.Join(' ', arguments);
+    Note("start: " + command);
+    var info = new ProcessStartInfo(file) { UseShellExecute = false, WorkingDirectory = root, RedirectStandardOutput = true };
+    foreach (string argument in arguments) info.ArgumentList.Add(argument);
+    using Process process = Process.Start(info) ?? throw new InvalidOperationException("Could not start " + file);
+    string output = process.StandardOutput.ReadToEnd();
+    process.WaitForExit();
+    if (process.ExitCode != 0)
+    {
+        Note($"FAILED ({process.ExitCode}): {command}");
+        throw new InvalidOperationException("Validation command failed with exit code " + process.ExitCode);
+    }
+    DataRootUnchanged(command);
+    return output;
 }
 
 // ValheimTesting's own folder on this machine, as the toolkit places it (LocalSteamLocator.DataRoot).

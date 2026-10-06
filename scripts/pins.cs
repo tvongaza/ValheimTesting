@@ -5,6 +5,7 @@
 //   dotnet run scripts/pins.cs -- check      CI: the pins, toolkit-versions.json and NuGet.org agree
 //   dotnet run scripts/pins.cs -- versions   release.yml, before building
 //   dotnet run scripts/pins.cs -- docs       CI: the Markdown pages' headings and links (offline)
+//   dotnet run scripts/pins.cs -- candidate  validate.cs, before packing: this checkout's candidate identity (offline)
 //
 // toolkit-versions.json is the one record of what is released: the newest version NuGet.org lists of each package, and the
 // valheimCLI commit the released Valheim.Testing.Cli was built from. Documentation and examples pin exactly these versions
@@ -41,6 +42,13 @@
 // those of the projects it references must equal the commit that package was built from (its nuspec's repository commit);
 // otherwise the release skips it as published while the tool carries other bytes under the same version. This part reads
 // NuGet.org and needs the checkout's full history (release.yml fetches it).
+// candidate prints the identity a local pack of this checkout carries, `candidate.<12 hex>`: the start of the SHA-256 over the
+// package inputs (every file under src/, docs/packages/, licenses/ and tools/game-references/ but bin/, obj/ and dot-files,
+// the repository's root files, cli-dependency.json among them, and the ValheimCLI bundle and loader zip the tool embeds from
+// .packages), each by its path and SHA-256. validate.cs packs every package as `<Version>-candidate.<12 hex>`
+// (src/Directory.Build.targets), so different sources never share a version in .packages, and keeps a complete set already
+// packed under the identity, so one identity has one set of bytes there. It needs no git: the station validates a
+// `git archive` copy. A candidate is never released (versions refuses it).
 #:package NuGet.Versioning@7.9.0
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -73,12 +81,13 @@ return mode switch
     "check" => await Check(),
     "versions" => await Versions(),
     "docs" => Report(DocsProblems(), "Every heading names no version or date, and every link resolves."),
+    "candidate" => Candidate(),
     _ => Usage(mode == "" ? "no mode" : $"unknown mode '{mode}'"),
 };
 
 int Usage(string problem)
 {
-    Console.Error.WriteLine($"pins: {problem}. Usage: dotnet run scripts/pins.cs -- (write | check | versions | docs)");
+    Console.Error.WriteLine($"pins: {problem}. Usage: dotnet run scripts/pins.cs -- (write | check | versions | docs | candidate)");
     return 2;
 }
 
@@ -245,6 +254,44 @@ async Task<List<Problem>> ChangedUnderPublishedVersion(HttpClient http, List<Pin
     return [Refuse($"its source changed since it was built ({commit[..9]}): {string.Join(", ", changed.Take(5))}{(changed.Length > 5 ? $" and {changed.Length - 5} more" : "")}. " +
         $"The release would skip {id} while the {Tool} tool ships the changed DLL, and a consumer its `init` creates restores the published bytes " +
         "under the same version. Bump <Version>.")];
+}
+
+// The candidate identity of this checkout's package inputs (see the top of this file).
+int Candidate()
+{
+    var inputs = new List<string>();
+    void Tree(string dir, bool recursive)
+    {
+        string full = Path.Combine(root, dir);
+        if (!Directory.Exists(full)) return;
+        foreach (string file in Directory.EnumerateFiles(full))
+            if (!Path.GetFileName(file).StartsWith('.')) inputs.Add(file); // not .DS_Store and the like
+        if (recursive)
+            foreach (string sub in Directory.EnumerateDirectories(full))
+                if (Path.GetFileName(sub) is not ("bin" or "obj") && !Path.GetFileName(sub).StartsWith('.'))
+                    Tree(Path.GetRelativePath(root, sub), true);
+    }
+    Tree("src", true);
+    Tree(Path.Combine("docs", "packages"), true);
+    Tree(Path.Combine("tools", "game-references"), true);
+    Tree("licenses", true);
+    Tree("", false);
+    // Not the Cli package bootstrap-cli.cs packs: it is rebuilt in a new folder each time; cli-dependency.json pins it.
+    foreach (string name in new[] { "valheimcli-bundle.zip", "bepinexpack-valheim.zip" })
+        if (File.Exists(Path.Combine(root, ".packages", name))) inputs.Add(Path.Combine(root, ".packages", name));
+    var lines = new StringBuilder();
+    foreach (string file in inputs.Select(file => (Path: Path.GetRelativePath(root, file).Replace('\\', '/'), File: file)).OrderBy(input => input.Path, StringComparer.Ordinal).Select(input => input.Path + "\0" + Sha256(input.File)))
+        lines.Append(file).Append('\n');
+    string id = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(lines.ToString()))).ToLowerInvariant()[..12];
+    // A SemVer pre-release identifier of digits alone may not start with 0; one of letters and digits may.
+    Console.WriteLine("candidate." + (id.All(char.IsAsciiDigit) ? "h" + id : id));
+    return 0;
+
+    static string Sha256(string file)
+    {
+        using var stream = File.OpenRead(file);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
+    }
 }
 
 // The packages a project references, directly or through another, by their ProjectReference items.
