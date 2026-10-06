@@ -6,7 +6,7 @@ namespace MyMod.IntegrationTests;
 
 /// <summary>
 /// MyMod's native session for a test class (#258 Q7): <c>session.json</c> beside the test project is the campaign manifest
-/// <c>valheim-test env preflight</c> reads (read in place, so its relative paths resolve as they do for <c>campaign run</c>), and
+/// <c>valheim-test session check</c> reads (read in place, so its relative paths resolve as they do for <c>campaign run</c>), and
 /// <c>&lt;scenario&gt;.plan.json</c> beside it is the scenario's plan template. Without them the class's tests are skipped with
 /// that reason (<see cref="SessionFactAttribute"/>). The session classes share one collection, so two campaigns never run at
 /// once. Each run writes a new evidence directory under <c>session-runs/</c> in the test output.

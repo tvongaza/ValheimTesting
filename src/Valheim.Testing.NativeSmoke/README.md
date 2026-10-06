@@ -6,11 +6,11 @@ For a step-by-step single-mod and mod-conflict investigation, including how to r
 
 Install the preview command-line tool from NuGet.org, then run it against a prepared game install. `start` and `server-load` run from the tool's own assemblies, with no consumer project restored or built before the game starts: `start` needs no NuGet.org access, and `server-load` needs it only to build its adapter, which `--adapter` skips (below). `init` separately creates an editable project for your own assertions.
 
-With no arguments, `valheim-test env preflight` shows this machine's inventory: the Steam installs it detected, the ports and folders it assumed, and what it did not find with every path tried. `--inventory FILE` shows a file's inventory instead, with its local environments filled in. For a multi-actor campaign, the source-built candidate also has `valheim-test env preflight MANIFEST [--hosts] [--json]`. It checks
+With no arguments, `valheim-test env list` shows this machine's inventory: the Steam installs it detected, the ports and folders it assumed, each environment, and what it did not find with every path tried; `valheim-test env preflight` adds whether a one-off can run there. `--inventory FILE` shows a file's inventory instead, with its local environments filled in. A multi-actor session is checked with `valheim-test session check SESSION [--hosts] [--json]`. It checks
 the reviewed local inputs and reports all independent problems before contacting a host. It does not prove runtime
 readiness unless `--hosts` is specified; that read-only pass checks selected game installs, loader pairs, conflicting
-sessions and signed-in Steam identities. The campaign rechecks mutable Steam identity and process state before launch. The published tool may not
-have this command until its next release.
+sessions and signed-in Steam identities. The campaign rechecks mutable Steam identity and process state before launch. `env list`, the bare `env preflight` and `session check` are
+newer than the published 0.1.0-preview.3 tool; they ship in its next release.
 
 ```sh
 dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease

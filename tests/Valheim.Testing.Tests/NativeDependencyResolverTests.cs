@@ -444,7 +444,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "ship" or "copy" or "start" or "apply-stage" or "character-install"));
         // The static part through the CLI (no host): the missing pack and the stale UID together, exit 3.
         using var output = new StringWriter();
-        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", faulty], output, new StringWriter()));
+        Assert.Equal(3, await SessionCommand.RunAsync(["check", faulty], output, new StringWriter()));
         Assert.Contains("REFUSED client-b dependencies and CLI packs", output.ToString());
         Assert.Contains("REFUSED server world fixture", output.ToString());
 
