@@ -142,8 +142,12 @@ public sealed class ClientSession : IDisposable
         Action<IOwnedProcess>? processStarted)
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
+        // Never the user's install unless asked: an owned client runs from the disposable copy its copy owner made and bound.
+        if (plan.CopySource)
+            throw new InvalidOperationException($"An owned client runs from a disposable copy of {plan.Install}, so nothing in it changes; this plan was not bound to one. " +
+                "Open it through a GameSession or ClientActor, which make the copy, or set inPlace (--in-place) to run your install as it is.");
         account?.RequireReady(null);
-        var start = plan.CheckOwnedInstall(); // Install pins (patchers included), loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
+        var start = plan.CheckOwnedInstall()!; // Install pins (patchers included), loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
         try { reservation.Start(); }
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }

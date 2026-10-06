@@ -102,9 +102,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## BepInExPack_Valheim (shipped inside the valheim-test tool)
+## ValheimCLI plugin bundle (shipped inside Valheim.Testing.GameSessions)
 
-The `Valheim.Testing.NativeSmoke` tool (`valheim-test`) embeds one unmodified BepInExPack_Valheim zip, pinned by SHA-256 in [loader-dependency.json](loader-dependency.json) (version 5.4.2351, published on Thunderstore by denikson; built from [AzumattDev/BepInEx](https://github.com/AzumattDev/BepInEx)). It is extracted only into ValheimTesting's own folder and copied only into a disposable copy of a game install whose own Doorstop proxy and configuration do not match, or whose BepInEx is older than 5.4.23.5. It is not part of any ValheimTesting library. Its components keep their own licenses:
+The `Valheim.Testing.GameSessions` package embeds one unmodified ValheimCLI plugin bundle zip as a resource: the ValheimCLI core and packs, their capability manifest and ValheimCLI's own `LICENSE`, built from [tvongaza/valheimCLI](https://github.com/tvongaza/valheimCLI) at the commit pinned in [cli-dependency.json](cli-dependency.json) and pinned there by SHA-256; the `valheim-test` tool (`Valheim.Testing.NativeSmoke`) carries it through that package. It is extracted only into ValheimTesting's own folder and copied only into a disposable copy of a game install. Its license is ValheimCLI's, the `LICENSE` file inside the zip.
+
+## BepInExPack_Valheim (shipped inside Valheim.Testing.GameSessions)
+
+The `Valheim.Testing.GameSessions` package embeds one unmodified BepInExPack_Valheim zip as a resource, pinned by SHA-256 in [loader-dependency.json](loader-dependency.json) (version 5.4.2351, published on Thunderstore by denikson; built from [AzumattDev/BepInEx](https://github.com/AzumattDev/BepInEx)); the `valheim-test` tool (`Valheim.Testing.NativeSmoke`) carries it through that package. It is extracted only into ValheimTesting's own folder and copied only into a disposable copy of a game install whose own Doorstop proxy and configuration do not match, or whose BepInEx is older than 5.4.23.5. No ValheimTesting code links against it. Its components keep their own licenses:
 
 - [BepInEx](https://github.com/BepInEx/BepInEx) (`BepInEx/core/BepInEx*.dll`, `BepInEx.Preloader.dll`): GNU Lesser General Public License 2.1, text in [licenses/LGPL-2.1.txt](licenses/LGPL-2.1.txt).
 - [UnityDoorstop](https://github.com/NeighTools/UnityDoorstop) (`winhttp.dll`, `doorstop_libs/`): GNU Lesser General Public License 2.1, as above.

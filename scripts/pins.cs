@@ -247,7 +247,10 @@ async Task<List<Problem>> ChangedUnderPublishedVersion(HttpClient http, List<Pin
         return [Refuse("records no commit it was built from, so its source cannot be compared. Bump <Version>.")];
     if (Git("cat-file", "-e", commit + "^{commit}").Exit != 0)
         return [Refuse($"was built from {commit}, which this checkout does not have. Fetch the full history (actions/checkout fetch-depth: 0); if that commit is gone, bump <Version>.")];
-    string[] directories = [.. ProjectClosure(id).Prepend(id).Select(p => Path.GetDirectoryName(ProjectFile(p))!.Replace('\\', '/'))];
+    string[] projects = [.. ProjectClosure(id).Prepend(id)];
+    // Each project's directory, and the tracked files outside it that it embeds (the root pins of the ValheimCLI bundle and the
+    // BepInExPack GameSessions carries; their zips in .packages are untracked and pinned by those files' SHA-256).
+    string[] directories = [.. projects.Select(p => Path.GetDirectoryName(ProjectFile(p))!.Replace('\\', '/')).Concat(projects.SelectMany(EmbeddedOutside)).Distinct()];
     var diff = Git(["diff", "--name-only", commit, "--", .. directories]);
     var untracked = Git(["ls-files", "--others", "--exclude-standard", "--", .. directories]);
     if (diff.Exit != 0 || untracked.Exit != 0) return [Refuse($"comparing its source with {commit} failed: {diff.Error.Trim()} {untracked.Error.Trim()}")];
@@ -297,6 +300,19 @@ int Candidate()
 }
 
 // The packages a project references, directly or through another, by their ProjectReference items.
+// A project's embedded resources outside its own directory that git tracks (not the .packages zips), as repository paths.
+IEnumerable<string> EmbeddedOutside(string id)
+{
+    string project = ProjectFile(id), directory = Path.GetDirectoryName(Path.Combine(root, project))!;
+    foreach (string include in XDocument.Load(Path.Combine(root, project)).Descendants("EmbeddedResource").Select(e => (string?)e.Attribute("Include")).OfType<string>())
+    {
+        string full = Path.GetFullPath(Path.Combine(directory, include.Replace('\\', '/')));
+        string relative = Path.GetRelativePath(root, full).Replace('\\', '/');
+        if (!full.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !relative.StartsWith(".packages/", StringComparison.Ordinal)
+            && !relative.StartsWith("../", StringComparison.Ordinal) && !relative.Contains('*')) yield return relative;
+    }
+}
+
 List<string> ProjectClosure(string id)
 {
     var found = new List<string>();

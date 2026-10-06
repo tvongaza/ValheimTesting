@@ -41,7 +41,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Equal(_rig.Uid, parent.Plan.HostWorld!.WorldUid);
         Assert.Equal(CliCapabilities.HostedRounds, parent.Manifest.Capabilities);
         Assert.Equal(new[] { "example.probe/read" }, parent.Manifest.LiveOnlyCapabilities); // A probe's command: live only.
-        Assert.StartsWith("live only", parent.Manifest.CliManifest);
+        Assert.StartsWith("valheimCLI test build: BepInEx/plugins/valheimCLI.dll", parent.Manifest.CliManifest); // The static check always runs (#296).
         // Each arm under its own artifact name, with its commit and hash, for review.
         Assert.Equal(new[] { "parent-ExampleMod.dll", "candidate-ExampleMod.dll" }, parent.Manifest.Arms.Select(arm => arm.Artifact));
         Assert.Equal(new[] { "p1", "c1" }, parent.Manifest.Arms.Select(arm => arm.Commit));
@@ -482,7 +482,7 @@ internal sealed class RegressionRig : IDisposable
         Name = "example-regression",
         Client = new() { Character = "smoketest" },
         Fixture = new() { Root = fixture ?? Fixture, WorldUid = worldUid ?? Uid },
-        Cli = new() { Core = Pinned(_core), Packs = [Pinned(_pack)] },
+        Cli = new() { Core = Pinned(_core), Packs = [Pinned(_pack)], Manifest = CliManifest(save: true) },
         Plugins = [Pinned(_dependency)],
         Probe = Pinned(_probe),
         Mod = new()

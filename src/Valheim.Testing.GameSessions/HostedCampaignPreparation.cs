@@ -202,6 +202,8 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     private void Bind(string name, ClientRunPlan client, HostedCampaignManifest manifest, string outputDirectory)
     {
         var role = _profile.Clients[name];
+        if (client.InPlaceGiven) throw new ArgumentException($"Client {name} runs from the campaign's prepared copy on its host; leave out inPlace.");
+        client.InPlace = false;
         client.Mode = "owned";
         client.Install = role.Install;
         client.Port = role.CliPort;
@@ -212,6 +214,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         string path = Path.Combine(Path.GetFullPath(outputDirectory), name + "-cli-manifest.json");
         NativeDependencyLock.ReadReady(manifest.Clients[name].DependencyLock).CliManifest.Write(path);
         client.CliManifest = path;
+        client.Prepared = true;
     }
 
     // A plan's own world keys and absent plugins, then the role's selected plugins by their files' MD5.

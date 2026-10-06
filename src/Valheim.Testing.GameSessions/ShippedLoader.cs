@@ -1,11 +1,12 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Valheim.Testing.Game;
+
+namespace Valheim.Testing.Game;
 
 /// <summary>
-/// The BepInExPack this tool ships (loader-dependency.json and its zip, both embedded): a disposable copy takes it when its
-/// install's own Doorstop proxy and configuration do not match (a mod manager that swaps the proxy leaves them so), or when
+/// The pinned BepInExPack the toolkit ships (loader-dependency.json and its zip, both embedded in Valheim.Testing.GameSessions): a disposable
+/// copy takes it when its install's own Doorstop proxy and configuration do not match (a mod manager that swaps the proxy leaves them so), or when
 /// its BepInEx is older than <see cref="MinimumBepInEx"/>, and for no other loader fault. The install is never changed; the
 /// run prints one line and records which package it used.
 /// </summary>
@@ -16,7 +17,7 @@ internal static class ShippedLoader
 
     /// <summary>
     /// The shipped package for <paramref name="actor"/>'s <paramref name="install"/> when its Doorstop pair does not match,
-    /// printed; null when the pair matches, the install is not a Windows Doorstop install, or this tool carries no package
+    /// printed; null when the pair matches, the install is not a Windows Doorstop install, or this build carries no package
     /// (then the preflight's own refusal stands).
     /// </summary>
     internal static Choice? Instead(string actor, string install) => Instead(actor, install, Shipped, CliBundle.DataRoot);
@@ -56,7 +57,7 @@ internal static class ShippedLoader
             string manifest = Extract(pack.Zip, pack.Pin, dataRoot);
             string identity = BepInExLoaderPackage.Read(manifest).Identity;
             string why = string.Join("; and ", new[] { mismatch == null ? null : $"Doorstop proxy and configuration do not match ({mismatch})", outdated }.OfType<string>());
-            string reason = $"{install}'s {why}; its disposable copy takes valheim-test's {identity}, and the install is not changed";
+            string reason = $"{install}'s {why}; its disposable copy takes the toolkit's pinned {identity}, and the install is not changed";
             Console.WriteLine($"{actor} loader: {reason}");
             return new Choice(manifest, reason);
         }
@@ -66,13 +67,17 @@ internal static class ShippedLoader
 
     private static (Stream Zip, LoaderPin Pin)? Shipped()
     {
-        var tool = typeof(ShippedLoader).Assembly;
-        var zip = tool.GetManifestResourceStream("bepinexpack-valheim.zip");
-        using var pinStream = tool.GetManifestResourceStream("loader-dependency.json");
-        if (zip == null || pinStream == null) { zip?.Dispose(); return null; }
-        using var pin = JsonDocument.Parse(pinStream);
-        string Text(string name) => pin.RootElement.GetProperty(name).GetString() ?? throw new InvalidDataException("loader-dependency.json has no " + name + ".");
-        return (zip, new LoaderPin(Text("name"), Text("version"), Text("sha256"), Text("root")));
+        var assembly = typeof(ShippedLoader).Assembly; // Valheim.Testing.GameSessions embeds the pack and its pin.
+        LoaderPin found;
+        using (var pinStream = assembly.GetManifestResourceStream("loader-dependency.json"))
+        {
+            if (pinStream == null) return null;
+            using var pin = JsonDocument.Parse(pinStream);
+            string Text(string name) => pin.RootElement.GetProperty(name).GetString() ?? throw new InvalidDataException("loader-dependency.json has no " + name + ".");
+            found = new LoaderPin(Text("name"), Text("version"), Text("sha256"), Text("root"));
+        }
+        // The pin is read first, so a malformed one leaves no open stream behind.
+        return assembly.GetManifestResourceStream("bepinexpack-valheim.zip") is { } zip ? (zip, found) : null;
     }
 
     /// <summary>
@@ -92,8 +97,8 @@ internal static class ShippedLoader
         string folder = Path.Combine(dataRoot, "loader", $"{pin.Name}-{pin.Version}-{found[..12]}");
         string manifest = Path.Combine(folder, "loader.json");
         string prefix = pin.Root.TrimEnd('/') + "/";
-        // One extraction at a time for this folder, across processes (<folder>.lock beside it; ExtractOnce, the same file
-        // CliBundle uses, owns the swap): concurrent runs share one copy and a current copy is never replaced.
+        // One extraction at a time for this folder, across processes (<folder>.lock beside it; ExtractOnce, which CliBundle uses
+        // too, owns the swap): concurrent runs share one copy and a current copy is never replaced.
         ExtractOnce.Ensure(folder, copy => Current(Path.Combine(copy, "loader.json")), staging =>
         {
             buffer.Position = 0;

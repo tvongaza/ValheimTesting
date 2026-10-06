@@ -151,7 +151,7 @@ public sealed class ClientSessionTests : IDisposable
             Assert.Contains("neither x64 nor arm64", Assert.Throws<ArgumentException>(() => refused.Validate()).Message);
         }
         var attached = Plan("attach"); attached.Architecture = "x64";
-        Assert.Contains("leave out install, installPins, launch arguments and architecture", Assert.Throws<ArgumentException>(() => attached.Validate("my.mod")).Message);
+        Assert.Contains("leave out install, installPins, launch arguments, architecture and inPlace", Assert.Throws<ArgumentException>(() => attached.Validate("my.mod")).Message);
     }
 
     [Fact] public void TheLaunchedArchitectureIsRecordedAndAnAttachedClientHasNone()
@@ -236,7 +236,7 @@ public sealed class ClientSessionTests : IDisposable
         // The install pinned clean; a removed mod then left its patcher behind. The patchers pin refuses it, naming it.
         string install = Path.Combine(_output, "install");
         FakeInstalls.Client(install);
-        var plan = Plan(); plan.Install = install; plan.InstallPins = InstallPins.Of(install);
+        var plan = Plan(); plan.Install = install; plan.InstallPins = InstallPins.Of(install); plan.InPlace = true; // Launch runs only a bound copy or the install in place.
         Directory.CreateDirectory(Path.Combine(install, "BepInEx", "patchers"));
         File.WriteAllText(Path.Combine(install, "BepInEx", "patchers", "RemovedMod.Preloader.dll"), "patcher");
         var error = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _output));
@@ -279,7 +279,7 @@ public sealed class ClientSessionTests : IDisposable
             case "attach-with-install": plan.Mode = "attach"; break;
             case "owned-remote-host": plan.Host = "game-host"; break;
             case "world-pin": plan.Pins["worlduid"] = "1"; break;
-            case "no-cli-pin": plan.Pins.Remove("valheimCLI.valheimCLI"); break;
+            case "no-cli-pin": plan.InPlace = true; plan.Pins.Remove("valheimCLI.valheimCLI"); break; // A disposable copy's pin is its staged set's.
             case "mod-present": plan.Pins["my.mod"] = new string('b', 32); break;
             case "loose-pin": plan.Pins["other.mod"] = "any"; break;
             case "spaced-character": plan.Character = "Test Er"; break;

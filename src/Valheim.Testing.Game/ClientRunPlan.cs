@@ -14,8 +14,55 @@ namespace Valheim.Testing.Game;
 public sealed class ClientRunPlan
 {
     public string Mode { get; set; } = "";
-    /// <summary>Owned only: the client install to launch, with BepInEx and ValheimCLI.</summary>
+    /// <summary>
+    /// Owned only: the client install. By default the run never launches it: a <c>GameSession</c> or <c>ClientActor</c> copies it
+    /// into a disposable copy first, stages the pinned ValheimCLI set (the plan's <see cref="CliManifest"/>, or the toolkit's
+    /// pinned bundle) and the loader rule into that copy, and launches the copy, so nothing in the install changes. With
+    /// <see cref="InPlace"/> the run launches this install as it is, and it must already hold BepInEx and ValheimCLI.
+    /// </summary>
     public string Install { get; set; } = "";
+    /// <summary>
+    /// Owned only: run <see cref="Install"/> itself, as it is, instead of a disposable copy (the <c>--in-place</c> option of the
+    /// toolkit's runners sets it for every client of a run). Nothing is written into the install: no ValheimCLI set is staged and
+    /// no loader swapped. Preflight refuses an install without BepInEx or ValheimCLI, naming what is missing. The static
+    /// ValheimCLI check runs only when the plan names a <see cref="CliManifest"/>; otherwise the report says it was not run
+    /// (<see cref="CliPreflight"/>). Running Valheim, the run journal, leases and local-only test characters are checked as for a copy.
+    /// </summary>
+    public bool InPlace { get => _inPlace ?? (_inPlaceRun && Owned); set => _inPlace = value; }
+    private bool? _inPlace;
+    // --in-place, as it stood when this plan was made: it applies to owned clients only (an attached one is its operator's).
+    private readonly bool _inPlaceRun = s_inPlaceRun.Value;
+    private static readonly AsyncLocal<bool> s_inPlaceRun = new();
+    /// <summary>Whether the plan itself says <c>inPlace: true</c>, as opposed to the run's <c>--in-place</c>.</summary>
+    [JsonIgnore] internal bool InPlaceGiven => _inPlace == true;
+    /// <summary>
+    /// The runners' <c>--in-place</c>: every client plan read in this flow until disposed defaults to <see cref="InPlace"/>.
+    /// </summary>
+    internal static IDisposable InPlaceRun()
+    {
+        bool previous = s_inPlaceRun.Value;
+        s_inPlaceRun.Value = true;
+        return new InPlaceReset(previous);
+    }
+    private sealed class InPlaceReset(bool previous) : IDisposable { public void Dispose() => s_inPlaceRun.Value = previous; }
+    /// <summary>
+    /// Set by the copy owner that made <see cref="Install"/> a disposable copy and bound this plan to it (its install, install
+    /// pins, the staged ValheimCLI set's plugin pins and <see cref="CliManifest"/>): a local client copy, a session's prepared
+    /// client, a targeted regression's staged install. Never read from a plan file.
+    /// </summary>
+    [JsonIgnore] internal bool Prepared { get; set; }
+    /// <summary>The install a local disposable copy was made from, once <see cref="Prepared"/> by it; for the report.</summary>
+    [JsonIgnore] internal string? CopiedFrom { get; set; }
+    /// <summary>
+    /// An owned client whose <see cref="Install"/> is still the source of the disposable copy its run will make: the checks that
+    /// read the install's ValheimCLI files wait for the copy, and its ValheimCLI pins are the staged set's.
+    /// </summary>
+    [JsonIgnore] internal bool CopySource => Owned && !InPlace && !Prepared;
+    /// <summary>
+    /// ValheimCLI capabilities a runner needs beyond <see cref="Capabilities"/> (the arrival waits), recorded before the copy
+    /// exists so the copy's static check before its launch covers them too. Never read from a plan file.
+    /// </summary>
+    [JsonIgnore] internal HashSet<string> StaticCapabilities { get; } = new(StringComparer.Ordinal);
     /// <summary>Owned only: extra game arguments; <see cref="GameLaunch.ForClient"/> adds <c>-console</c>.</summary>
     public string[] LaunchArguments { get; set; } = [];
     /// <summary>
@@ -111,19 +158,21 @@ public sealed class ClientRunPlan
     /// </summary>
     public string[] Capabilities { get; set; } = [];
     /// <summary>
-    /// Owned only: the full path of the <see cref="CliCapabilityManifest"/> of the ValheimCLI core and packs staged in
-    /// <see cref="Install"/>. Set, the preflight refuses before launch an install whose ValheimCLI files are not exactly that
-    /// set by SHA256, or a set without a capability the run uses; a manifest that is missing or malformed is refused, never
-    /// skipped. Left out, no static capability check runs: the live check after the client answers is the only one, and the
-    /// report says so (<see cref="CliPreflight"/>). An attached client's files are its operator's, so it takes no manifest.
+    /// Owned only: the full path of the <see cref="CliCapabilityManifest"/> of a ValheimCLI core-and-pack set. For a disposable
+    /// copy (the default) it names the set the copy stages, its DLLs beside the manifest; left out, the copy stages the toolkit's
+    /// pinned bundle and checks against that bundle's manifest. With <see cref="InPlace"/> it names the set the install already
+    /// holds; left out there, no static check runs and the report says so. Before launch the install (the copy, or the install in
+    /// place) must hold exactly that set by SHA256 and offer every capability the run uses; a manifest that is missing or
+    /// malformed is refused, never skipped. An attached client's files are its operator's, so it takes no manifest.
     /// </summary>
     public string? CliManifest { get; set; }
     /// <summary>
-    /// Which capability checks apply, for the report's <c>cliPreflight</c>: <c>static and live</c> for an owned client with a
-    /// <see cref="CliManifest"/>, otherwise <c>live only</c> with the reason.
+    /// Which capability checks apply, for the report's <c>cliPreflight</c>. An owned client: <c>static and live</c> (its copy's
+    /// staged set, or the in-place install against its named <see cref="CliManifest"/>); an attached client: <c>live only</c>.
+    /// An owned client in place without a manifest: live only, and says the static check was not run.
     /// </summary>
     [JsonIgnore] public string CliPreflight => !Owned ? "live only: an attached client's files are its operator's"
-        : CliManifest == null ? "live only: the plan names no cliManifest" : "static (cliManifest) and live";
+        : InPlace && CliManifest == null ? "live only: static check not run: your install, run in place" : "static and live";
     /// <summary>Whether <see cref="Pinning"/> is <c>strict</c>; refuses any value but <c>strict</c> or <c>none</c>.</summary>
     [JsonIgnore] public bool Pinned => EnvironmentPinning.IsStrict(Pinning, "The client's");
 
@@ -155,8 +204,8 @@ public sealed class ClientRunPlan
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
         var architecture = LaunchArchitecture;
-        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || InstallPins != null || Architecture.Length != 0))
-            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments and architecture.");
+        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || InstallPins != null || Architecture.Length != 0 || InPlace))
+            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, architecture and inPlace.");
         var platform = Owned ? InstallPlatform() : null;
         if (architecture == ClientArchitecture.Arm64 && platform is { } other && other != ClientPlatform.MacOS)
             throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {other} client is x64 only. Leave architecture out.");
@@ -194,7 +243,9 @@ public sealed class ClientRunPlan
             return;
         }
         if (Pins.ContainsKey("worlduid") || Pins.ContainsKey("world")) throw new ArgumentException("Leave the world out of the client pins; the runner pins the server's world.");
-        if (!Pins.TryGetValue("valheimCLI.valheimCLI", out var cli) || cli.Length != 32 || !cli.All(Uri.IsHexDigit)) throw new ArgumentException("Pin the client's exact ValheimCLI MD5.");
+        // A disposable copy's ValheimCLI pins are its staged set's (bound when the copy is made); any other client pins its own.
+        if (!CopySource && (!Pins.TryGetValue("valheimCLI.valheimCLI", out var cli) || cli.Length != 32 || !cli.All(Uri.IsHexDigit)))
+            throw new ArgumentException("Pin the client's exact ValheimCLI MD5.");
         foreach (string plugin in absentPlugins)
             if (!Pins.TryGetValue(plugin, out var value) || value != "absent") throw new ArgumentException($"The client must pin {plugin}=absent: the check is what a client without it sees.");
         foreach (var pin in Pins)
@@ -248,10 +299,24 @@ public sealed class ClientRunPlan
         if (Owned) CheckOwnedInstall(identity?.Name, capabilities);
     }
 
-    /// <summary>The owned launch's checks on this machine's install, in order, returning the launch they allow.</summary>
-    internal System.Diagnostics.ProcessStartInfo CheckOwnedInstall(string? hostWorldName = null, IEnumerable<string>? capabilities = null)
+    /// <summary>
+    /// The owned launch's checks on this machine's install, in order, returning the launch they allow; null for the source of
+    /// a disposable copy (<see cref="CopySource"/>), which is never launched: it gets the checks that hold for the copy too (install
+    /// pins, its plugin builds but ValheimCLI's, standing pins, the staged set's capabilities), and the copy gets all of them.
+    /// </summary>
+    internal System.Diagnostics.ProcessStartInfo? CheckOwnedInstall(string? hostWorldName = null, IEnumerable<string>? capabilities = null)
     {
         CheckInstallPins();
+        if (CopySource)
+        {
+            // The copy's loader may be the shipped one (a mismatched Doorstop pair) and its ValheimCLI is the staged set: both are
+            // checked on the copy before its launch.
+            var kept = Pins.Where(pin => !CliAssembly.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+            OwnedClientPreflight.Check(Install, kept, Pinned, HostWorld, hostWorldName);
+            CheckCliManifest(capabilities);
+            return null;
+        }
+        if (InPlace) OwnedClientPreflight.RequireInPlace(Install);
         var start = ClientSession.StartInfo(this, GameLaunch.CurrentClientHost); // The install's loader and slices.
         var located = OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);
         var manifestCheck = CheckCliManifest(capabilities);
@@ -265,15 +330,26 @@ public sealed class ClientRunPlan
     /// (<see cref="CliCapabilityManifest.Check"/>), requiring only the ValheimCLI-owned entries in
     /// <see cref="Capabilities"/> and <paramref name="capabilities"/>. A mod's own extensions are
     /// checked from the live game after its plugin loads; the CLI pack manifest cannot declare them.
-    /// Null, with nothing read, for a plan without a manifest or an attached client, whose capabilities only the live check
-    /// sees. Refuses a missing manifest (<see cref="FileNotFoundException"/>), a malformed one (<see cref="InvalidDataException"/>)
-    /// and an install that is not its set or lacks a capability (<see cref="InvalidOperationException"/>).
+    /// Before a disposable copy exists (<see cref="CopySource"/>), <paramref name="capabilities"/> are recorded for the copy's
+    /// check before its launch, and a named <see cref="CliManifest"/> must offer them already; the result is then null. Null,
+    /// with nothing read, also for an attached client and an owned one run in place without a manifest, whose capabilities only
+    /// the live check sees (<see cref="CliPreflight"/> says so). Refuses a missing manifest (<see cref="FileNotFoundException"/>),
+    /// a malformed one (<see cref="InvalidDataException"/>) and an install that is not its set or lacks a capability
+    /// (<see cref="InvalidOperationException"/>).
     /// </summary>
     public CliManifestCheck? CheckCliManifest(IEnumerable<string>? capabilities = null)
     {
-        if (!Owned || CliManifest == null) return null;
-        var manifest = CliCapabilityManifest.Read(CliManifest);
-        return manifest.Check(Install, Capabilities.Concat(capabilities ?? []).Where(CliCapabilities.IsPackCapability));
+        if (!Owned) return null;
+        var wanted = Capabilities.Concat(StaticCapabilities).Concat(capabilities ?? []).Where(CliCapabilities.IsPackCapability).Distinct(StringComparer.Ordinal).ToList();
+        if (CopySource)
+        {
+            StaticCapabilities.UnionWith(wanted);
+            if (CliManifest != null) CliCapabilityManifest.Read(CliManifest).RequireCapabilities(wanted);
+            return null;
+        }
+        if (CliManifest == null)
+            return InPlace ? null : throw new InvalidOperationException("This owned client's disposable copy names no staged ValheimCLI manifest; its copy owner binds one.");
+        return CliCapabilityManifest.Read(CliManifest).Check(Install, wanted);
     }
 
     /// <summary>Owned and pinned: refuses an install whose game build, loader or patchers are not <see cref="InstallPins"/>.</summary>

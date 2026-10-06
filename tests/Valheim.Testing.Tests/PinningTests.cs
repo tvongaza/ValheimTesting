@@ -479,7 +479,7 @@ public sealed class PinningTests : IDisposable
     [Fact] public void AnOwnedClientWithAnotherGameBuildIsRefusedBeforeLaunch()
     {
         FakeInstalls.Client(Install);
-        var plan = Client("owned"); plan.Install = Install; plan.InstallPins = InstallPins.Of(Install);
+        var plan = Client("owned"); plan.Install = Install; plan.InstallPins = InstallPins.Of(Install); plan.InPlace = true; // Launch runs only a bound copy or the install in place.
         File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", "assembly_valheim.dll"), "game build 2 (default_old)");
         var output = Directory.CreateDirectory(Path.Combine(_root, "client-out")).FullName;
         Assert.Contains("the game build differs", Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, output)).Message);

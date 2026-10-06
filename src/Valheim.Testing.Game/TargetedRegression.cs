@@ -180,15 +180,17 @@ public sealed class RegressionCli
     public RegressionFile Core { get; set; } = new();
     public List<RegressionFile> Packs { get; set; } = [];
     /// <summary>
-    /// The <see cref="CliCapabilityManifest"/> of this ValheimCLI build. Set, the staged core and packs must be exactly its set
-    /// and provide every ValheimCLI capability the run uses before anything launches; left out, only the live check runs.
+    /// The <see cref="CliCapabilityManifest"/> of this ValheimCLI build, required: the staged core and packs must be exactly its
+    /// set and provide every ValheimCLI capability the run uses before anything launches (#296: the static check always runs).
+    /// <c>valheim-test start</c> writes the manifest of the set it stages; a hand-written file names its build's.
     /// </summary>
     public string? Manifest { get; set; }
     public void Validate()
     {
         Core.Validate("cli.core");
         foreach (var (file, field) in Packs.Select((file, i) => (file, $"cli.packs[{i}]"))) file.Validate(field);
-        if (Manifest != null && !Path.IsPathFullyQualified(Manifest)) throw new ArgumentException("cli.manifest: give the capability manifest's path.");
+        if (Manifest == null) throw new ArgumentException("cli.manifest: name the capability manifest of the staged ValheimCLI core and packs (valheim-test start writes it); the static check runs on every staged set.");
+        if (!Path.IsPathFullyQualified(Manifest)) throw new ArgumentException("cli.manifest: give the capability manifest's path.");
     }
 }
 
@@ -524,7 +526,8 @@ public sealed class TargetedRegression
             LaunchArguments = env.Client.LaunchArguments, StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
             Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),
             InstallPins = installPins,
-            CliManifest = env.Cli.Manifest,
+            CliManifest = env.Cli.Manifest, // Required (RegressionCli.Validate): the static check always runs on what was staged.
+            Prepared = true, // The disposable install staged above, with the regression's ValheimCLI set.
             Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // The hosted rounds add their own.
             HostWorld = new HostWorldPlan
             {

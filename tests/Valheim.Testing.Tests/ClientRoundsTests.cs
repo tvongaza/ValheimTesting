@@ -204,6 +204,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
         Assert.Equal(new[]
         {
+            "the owned client's ValheimCLI manifest offers the arrival waits, before launch",
             "launch the owned client to its menu, plugins pinned",
             "first: the server accepts game connections", "first: join the owned server with the disposable character, protected",
             "first: arrive at the measurement point", "first: measure",
@@ -348,7 +349,7 @@ public sealed class ClientRoundsTests : IDisposable
     {
         var report = new ScenarioReport("rounds");
         Assert.Throws<IOException>(() => Rounds(report, Plan()).Run(Server(), () => throw new IOException("port in use"), Measure()));
-        Assert.Equal(new[] { "launch the owned client to its menu, plugins pinned" }, report.Steps.Select(s => s.Name));
+        Assert.Equal(new[] { "the owned client's ValheimCLI manifest offers the arrival waits, before launch", "launch the owned client to its menu, plugins pinned" }, report.Steps.Select(s => s.Name));
         Assert.Empty(_client.Commands);
     }
 
@@ -359,7 +360,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.True(report.Passed);
         Assert.Equal(2, _restarts);
         Assert.Equal(new[] { "confirmed world save before two", "restart only the owned server before two", "confirmed world save before three", "restart only the owned server before three" },
-            report.Steps.Select(s => s.Name).Where(n => !n.Contains(": ", StringComparison.Ordinal) && n.Contains(" before ", StringComparison.Ordinal)));
+            report.Steps.Select(s => s.Name).Where(n => !n.Contains(": ", StringComparison.Ordinal) && n.Contains(" before ", StringComparison.Ordinal) && !n.EndsWith("before launch", StringComparison.Ordinal)));
         Assert.Equal(report.Steps.Count, report.Steps.Select(s => s.Name).Distinct().Count());
         Assert.Equal("one,two,three", report.Provenance["clientRoundsCompleted"]);
     }

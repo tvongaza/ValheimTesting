@@ -2,10 +2,10 @@ namespace Valheim.Testing.Game;
 
 /// <summary>
 /// The one owner of "a pinned zip extracted once into a folder under ValheimTesting's own folder on this machine": the
-/// ValheimCLI bundle (<see cref="CliBundle.Extract"/>) and valheim-test's shipped BepInExPack (<c>ShippedLoader.Extract</c>).
+/// ValheimCLI bundle (<see cref="CliBundle.Extract"/>) and the shipped BepInExPack (<c>ShippedLoader.Extract</c>, in Valheim.Testing.GameSessions).
 /// Concurrent runs share one copy: a run decides whether the copy is current, and replaces it, only while it holds an
 /// exclusive <c>&lt;folder&gt;.lock</c> beside it, so a copy another run just moved in is used, never set aside, and a current
-/// copy is never replaced. valheim-test compiles this same file in (its project links it), so it adds no public type.
+/// copy is never replaced.
 /// </summary>
 internal static class ExtractOnce
 {

@@ -155,6 +155,27 @@ public static class PinnedServerRun
     public const string InventoryOption = "--inventory";
 
     /// <summary>
+    /// The option, before the mode, that runs every owned client of the run from its install as it is instead of a disposable copy:
+    /// each client plan the run reads takes <see cref="ClientRunPlan.InPlace"/> (the plan field of the same name). Nothing is written
+    /// into the install; it must already hold BepInEx and ValheimCLI.
+    /// </summary>
+    public const string InPlaceOption = "--in-place";
+
+    // The leading options of a runner's command line: --in-place (either place) and, where taken, --inventory FILE.
+    internal static (bool InPlace, string? Inventory, string[] Remaining) LeadingOptions(string[] args, bool inventory)
+    {
+        bool inPlace = false;
+        string? inventoryPath = null;
+        while (args.Length != 0)
+        {
+            if (args[0] == InPlaceOption && !inPlace) { inPlace = true; args = args[1..]; }
+            else if (inventory && args.Length >= 2 && args[0] == InventoryOption && inventoryPath == null) { inventoryPath = args[1]; args = args[2..]; }
+            else break;
+        }
+        return (inPlace, inventoryPath, args);
+    }
+
+    /// <summary>
     /// Set to <c>1</c> to keep every actor's whole runtime copy after the run, for hands-on debugging in it, with any runner.
     /// By default a run that stopped its server keeps only what the run added or changed in the copy (<c>runtime-changes/</c>,
     /// see <see cref="WorldFixture.Retire"/>) and removes the rest, which is the pinned runtime's own files.
@@ -176,13 +197,13 @@ public static class PinnedServerRun
                 "(a private environment inventory), or run remote clients and several actors as a campaign (PinnedServerRun.RunCampaignAsync).");
             return 2;
         }
-        string? inventoryPath = null;
-        if (args.Length >= 2 && args[0] == InventoryOption) { inventoryPath = args[1]; args = args[2..]; }
+        (bool inPlace, string? inventoryPath, args) = LeadingOptions(args, inventory: true);
         if (args.Length != 3 || !modes.Contains(args[0]))
         {
-            Console.Error.WriteLine($"Usage: {options.Name} [{InventoryOption} <environments.json>] {string.Join("|", modes)} <plan.json> <new-output-directory>");
+            Console.Error.WriteLine($"Usage: {options.Name} [{InPlaceOption}] [{InventoryOption} <environments.json>] {string.Join("|", modes)} <plan.json> <new-output-directory>");
             return 2;
         }
+        using var inPlaceRun = inPlace ? ClientRunPlan.InPlaceRun() : null; // Every client plan read below runs its install in place.
         string planFile = args[1];
         var cancellation = options.Hooks.Cancellation(out bool owned);
         using var own = owned ? cancellation : null;
@@ -208,11 +229,13 @@ public static class PinnedServerRun
     public static async Task<int> MainAsync<TPlan>(string[] args, HostedRunOptions<TPlan> options) where TPlan : class
     {
         ArgumentNullException.ThrowIfNull(args); ArgumentNullException.ThrowIfNull(options);
+        (bool inPlace, _, args) = LeadingOptions(args, inventory: false);
         if (args.Length != 3 || args[0] is not (HostMode or ValidateHostMode))
         {
-            Console.Error.WriteLine($"Usage: {options.Name} {ValidateHostMode}|{HostMode} <hosted-plan.json> <new-output-directory>");
+            Console.Error.WriteLine($"Usage: {options.Name} [{InPlaceOption}] {ValidateHostMode}|{HostMode} <hosted-plan.json> <new-output-directory>");
             return 2;
         }
+        using var inPlaceRun = inPlace ? ClientRunPlan.InPlaceRun() : null; // The host's plan, read below, runs its install in place.
         var cancellation = options.Hooks.Cancellation(out bool owned);
         using var own = owned ? cancellation : null;
         string mode = args[0], planFile = args[1], output = Path.GetFullPath(args[2]);
@@ -237,7 +260,7 @@ public static class PinnedServerRun
             report.Provenance["cliPreflight"] = host.CliPreflight;
             Directory.CreateDirectory(output); ownOutput = true;
             var opener = options.OpenHost;
-            var placement = opener == null ? (IClientPlacement)LocalClientPlacement.Instance : new OpenedBy((plan, directory) => opener(plan, directory));
+            var placement = opener == null ? (IClientPlacement)new LocalClientPlacement() : new OpenedBy((plan, directory) => opener(plan, directory));
             HostingClientActor Actor(CancellationToken token) => new("host", host, output, placement, token) { LiveLogSource = options.HostLog };
             if (mode == ValidateHostMode)
             {
@@ -796,7 +819,7 @@ public static class PinnedServerRun
                     ? (name ?? (campaignClients.Count == 1 ? campaignClients[0]
                         : throw new ArgumentException($"The campaign declares clients {string.Join(", ", campaignClients)}; say which one opens.", nameof(name))),
                         hostedRun.ClientPlacement(report))
-                    : GameSession.ThisMachine(client, name),
+                    : game!.ThisMachine(client, name), // assigned before any client opens
                 FindClientHost = hostedRun == null ? null : hostedRun.ClientHost,
                 Mod = options.Mod, ServerPinsMod = !plan.Pinned || options.Mod.PinnedIn(plan.Pins),
                 DisposeOnFailedStart = false, // The finally disposes it, on the cleanup's own bounded token.

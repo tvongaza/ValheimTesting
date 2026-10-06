@@ -132,7 +132,15 @@ public sealed class GameSession : IAsyncDisposable
         Directory.CreateDirectory(output); // Once the open is accepted: an open refused at teardown leaves no empty folder.
         var session = actor.Start();
         Report.RecordPlugins(actorName, plan.Pins);
+        RecordInstall(actorName, plan);
         return session;
+    }
+
+    // Which install an owned client on this machine ran: a disposable copy (the default) or the install itself (inPlace).
+    private void RecordInstall(string actor, ClientRunPlan plan)
+    {
+        string? used = !plan.Owned ? null : plan.CopiedFrom != null ? $"disposable copy of {plan.CopiedFrom} ({plan.Install})" : plan.InPlace ? $"in place: {plan.Install}" : null;
+        if (used != null) lock (Report.Provenance) Report.Provenance[actor == "client" ? "clientInstall" : actor + "Install"] = used;
     }
     private readonly List<ClientActor> _opened = [];
     private readonly List<RunLog> _added = [];
@@ -228,9 +236,13 @@ public sealed class GameSession : IAsyncDisposable
     public IReadOnlyList<string> CampaignClients { get; internal init; } = [];
 
     /// <summary>Where <see cref="OpenClient"/> places a client: the runner's campaign placement, or this machine by default.</summary>
-    internal Func<ClientRunPlan, string?, (string Name, IClientPlacement Placement)> ResolveClient { get; init; } = ThisMachine;
-    internal static (string Name, IClientPlacement Placement) ThisMachine(ClientRunPlan plan, string? name) =>
-        name == null ? ("client", LocalClientPlacement.Instance)
+    internal Func<ClientRunPlan, string?, (string Name, IClientPlacement Placement)> ResolveClient { get => _resolveClient ?? ThisMachine; init => _resolveClient = value; }
+    private readonly Func<ClientRunPlan, string?, (string Name, IClientPlacement Placement)>? _resolveClient;
+    // This machine: one placement for the session, so a client that leaves and rejoins between rounds reruns its one disposable
+    // copy, which the session's teardown removes once the client is closed.
+    private readonly LocalClientPlacement _local = new();
+    internal (string Name, IClientPlacement Placement) ThisMachine(ClientRunPlan plan, string? name) =>
+        name == null ? ("client", _local)
         : throw new ArgumentException("A named client opens only in a campaign that declares clients (PinnedServerRun.RunCampaignAsync).", nameof(name));
 
     /// <summary>The host a campaign client runs on, for reading its files or capturing there.</summary>
@@ -281,6 +293,7 @@ public sealed class GameSession : IAsyncDisposable
                 // Prepared above: the client to its menu, then its world opens.
                 Report.Step(StepPhase.Setup, $"hosting client {host.Name} at its menu, plugins pinned", () => host.Start());
                 Report.RecordPlugins(host.Name, host.Plan.Pins);
+                RecordInstall(host.Name, host.Plan);
                 Report.Step(StepPhase.Setup, $"hosting client {host.Name}'s ValheimCLI offers the hosted-world session commands", () => CliCapabilities.Require(host.Game, CliCapabilities.HostedRounds));
                 if (Mod is { ChecksPatches: true } mod && ServerPinsMod)
                     Report.Step(StepPhase.Setup, "host: the mod's Harmony patches are applied", () => mod.RequirePatchesApplied(host.Game));
@@ -292,6 +305,7 @@ public sealed class GameSession : IAsyncDisposable
             {
                 Report.Step(StepPhase.Setup, $"client {client.Name} at its menu, plugins pinned", () => client.Start());
                 Report.RecordPlugins(client.Name, client.Plan.Pins);
+                RecordInstall(client.Name, client.Plan);
             }));
         // The first failure cancels the rest at once, rather than after every sibling has run out its own deadline.
         var pending = new List<Task>(starts);
@@ -449,6 +463,10 @@ public sealed class GameSession : IAsyncDisposable
                 catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
             else client.Dispose();
         if (Host is { } host) CloseHost(host);
+        // This machine's disposable client copies, once their clients are closed (a client that could not be stopped keeps its copy).
+        if (_local.HasCopies)
+            try { Report.Step(StepPhase.Cleanup, "remove the disposable client copy", () => _local.RetireAsync().GetAwaiter().GetResult()); }
+            catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         if (Server is { } server)
             try { Report.Step(StepPhase.Cleanup, "stop only owned server", server.Dispose); }
             catch (Exception error) { ServerStopped = false; TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }

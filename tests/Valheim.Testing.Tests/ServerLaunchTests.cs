@@ -314,7 +314,7 @@ public class ServerLaunchTests
     {
         // Deleted with no facade: a type under an old name, or another public method that returns a launch or a start info, in
         // any toolkit assembly would be a second way to build a launch.
-        var assemblies = new[] { typeof(GameLaunch).Assembly, typeof(PinnedServerRun).Assembly, typeof(ShippedLoader).Assembly };
+        var assemblies = new[] { typeof(GameLaunch).Assembly, typeof(PinnedServerRun).Assembly, typeof(SmokeInputs).Assembly };
         var types = assemblies.SelectMany(assembly => assembly.GetTypes()).ToList();
         foreach (string name in new[] { "ServerLaunch", "ClientLaunch", "HostServerLaunch", "HostClientLaunch" })
             Assert.DoesNotContain(types, type => type.Name == name);

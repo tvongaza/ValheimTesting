@@ -422,6 +422,7 @@ static class Valheim.Testing.Game.OwnedCopies
   field const Valheim.Testing.Game.OwnedCopyKind World = 2
 static class Valheim.Testing.Game.PinnedServerRun
   field const System.String HostMode = "host"
+  field const System.String InPlaceOption = "--in-place"
   field const System.String InventoryOption = "--inventory"
   field const System.String KeepRuntimeVariable = "VALHEIM_TESTING_KEEP_RUNTIME"
   field const System.String ValidateHostMode = "validate-host"

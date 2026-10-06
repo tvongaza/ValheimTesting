@@ -7,8 +7,19 @@
     <PackageProjectUrl>https://github.com/tvongaza/ValheimTesting</PackageProjectUrl><RepositoryUrl>https://github.com/tvongaza/ValheimTesting.git</RepositoryUrl><RepositoryType>git</RepositoryType><PackageTags>valheim;modding;testing;bepinex;valheimcli;multiplayer</PackageTags>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../Valheim.Testing.Game/Valheim.Testing.Game.csproj" /></ItemGroup>
-  <ItemGroup><InternalsVisibleTo Include="Valheim.Testing.Tests" /></ItemGroup>
-  <ItemGroup><None Include="../../LICENSE" Pack="true" PackagePath="" /><None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" /><None Include="../../docs/packages/Valheim.Testing.GameSessions.md" Pack="true" PackagePath="README.md" /></ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="Valheim.Testing.Tests" /><InternalsVisibleTo Include="Valheim.Testing.NativeSmoke" /></ItemGroup>
+  <ItemGroup>
+    <!-- The pinned ValheimCLI plugin bundle: cli-dependency.json's bundle, which bootstrap-cli.cs fetches into .packages and
+         checks. A build without it (bundle not yet published or not fetched) carries none and says so at run time.
+         This package makes disposable client copies, and valheim-test takes the set from here too (PinnedCliBundle). -->
+    <EmbeddedResource Include="../../cli-dependency.json" LogicalName="cli-dependency.json" />
+    <EmbeddedResource Include="../../.packages/valheimcli-bundle.zip" LogicalName="valheimcli-bundle.zip" Condition="Exists('../../.packages/valheimcli-bundle.zip')" />
+    <!-- The pinned BepInExPack (loader-dependency.json) a disposable copy takes when its install's own Doorstop pair does not
+         match; bootstrap-cli.cs fetches it into .packages and checks it. A build without it carries none and refuses as before. -->
+    <EmbeddedResource Include="../../loader-dependency.json" LogicalName="loader-dependency.json" />
+    <EmbeddedResource Include="../../.packages/bepinexpack-valheim.zip" LogicalName="bepinexpack-valheim.zip" Condition="Exists('../../.packages/bepinexpack-valheim.zip')" />
+  </ItemGroup>
+  <ItemGroup><None Include="../../LICENSE" Pack="true" PackagePath="" /><None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" /><None Include="../../licenses/LGPL-2.1.txt" Pack="true" PackagePath="licenses" /><None Include="../../docs/packages/Valheim.Testing.GameSessions.md" Pack="true" PackagePath="README.md" /></ItemGroup>
   <!-- This package uses Valheim.Testing.Game's internals (InternalsVisibleTo), so it depends on exactly the Game it was built
        with: [version], not NuGet's default minimum. -->
   <Target Name="ExactGameDependency" AfterTargets="_GetProjectReferenceVersions">
@@ -17,5 +28,31 @@
       <_ProjectReferencesWithVersions Remove="@(_ProjectReferencesWithVersions)" />
       <_ProjectReferencesWithVersions Include="@(_ExactProjectReferenceVersions)" />
     </ItemGroup>
+  </Target>
+  <!-- A stale zip beside a moved pin would make every run refuse on the user's machine: the build refuses instead. A CI
+       or release build with a pinned bundle must embed it (bootstrap-cli.cs fetches it). -->
+  <Target Name="CheckValheimCliBundle" BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <_CliPin>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../cli-dependency.json'))</_CliPin>
+      <_CliBundleSha256>$([System.Text.RegularExpressions.Regex]::Match($(_CliPin), '"bundle"\s*:\s*\{[^}]*"sha256"\s*:\s*"([0-9a-fA-F]{64})"').Groups[1].Value.ToLowerInvariant())</_CliBundleSha256>
+      <_CliBundleZip>$(MSBuildThisFileDirectory)../../.packages/valheimcli-bundle.zip</_CliBundleZip>
+    </PropertyGroup>
+    <GetFileHash Files="$(_CliBundleZip)" Algorithm="SHA256" Condition="Exists('$(_CliBundleZip)')">
+      <Output TaskParameter="Hash" PropertyName="_CliBundleFound" />
+    </GetFileHash>
+    <Error Condition="Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' == ''" Text=".packages/valheimcli-bundle.zip is present but cli-dependency.json pins no bundle; delete the zip or pin it." />
+    <Error Condition="Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' != '' And '$(_CliBundleFound.ToLowerInvariant())' != '$(_CliBundleSha256)'" Text=".packages/valheimcli-bundle.zip is sha256 $(_CliBundleFound.ToLowerInvariant()), not the pinned $(_CliBundleSha256): run dotnet run scripts/bootstrap-cli.cs." />
+    <Error Condition="!Exists('$(_CliBundleZip)') And '$(_CliBundleSha256)' != '' And '$(ContinuousIntegrationBuild)' == 'true'" Text="cli-dependency.json pins a ValheimCLI bundle, and this build has none to embed: run dotnet run scripts/bootstrap-cli.cs first." />
+    <PropertyGroup>
+      <_LoaderPin>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../loader-dependency.json'))</_LoaderPin>
+      <_LoaderSha256>$([System.Text.RegularExpressions.Regex]::Match($(_LoaderPin), '"sha256"\s*:\s*"([0-9a-fA-F]{64})"').Groups[1].Value.ToLowerInvariant())</_LoaderSha256>
+      <_LoaderZip>$(MSBuildThisFileDirectory)../../.packages/bepinexpack-valheim.zip</_LoaderZip>
+    </PropertyGroup>
+    <GetFileHash Files="$(_LoaderZip)" Algorithm="SHA256" Condition="Exists('$(_LoaderZip)')">
+      <Output TaskParameter="Hash" PropertyName="_LoaderFound" />
+    </GetFileHash>
+    <Error Condition="'$(_LoaderSha256)' == ''" Text="loader-dependency.json pins no sha256." />
+    <Error Condition="Exists('$(_LoaderZip)') And '$(_LoaderFound.ToLowerInvariant())' != '$(_LoaderSha256)'" Text=".packages/bepinexpack-valheim.zip is sha256 $(_LoaderFound.ToLowerInvariant()), not the pinned $(_LoaderSha256): run dotnet run scripts/bootstrap-cli.cs." />
+    <Error Condition="!Exists('$(_LoaderZip)') And '$(ContinuousIntegrationBuild)' == 'true'" Text="loader-dependency.json pins a BepInExPack, and this build has none to embed: run dotnet run scripts/bootstrap-cli.cs first." />
   </Target>
 </Project>

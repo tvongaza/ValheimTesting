@@ -7,8 +7,10 @@ namespace Valheim.Testing.Game;
 public sealed record CliBundleSource(string Manifest, string Files, string Origin);
 
 /// <summary>
-/// The pinned ValheimCLI plugin bundle a tool ships: one zip of the core, its packs, their capability manifest
+/// The pinned ValheimCLI plugin bundle the toolkit ships: one zip of the core, its packs, their capability manifest
 /// (<c>cli-manifest.json</c>) and ValheimCLI's license, built once from the pinned commit and identified by its SHA-256.
+/// Valheim.Testing.GameSessions embeds it with its pin (<c>cli-dependency.json</c>), so a disposable client copy and
+/// <c>valheim-test</c> stage the same set.
 /// <see cref="Extract"/> unpacks it once under ValheimTesting's own folder on this machine (<c>cli/&lt;commit&gt;</c>) and
 /// reuses that copy while every file still matches the manifest, so a run needs no network and no plugins in the game.
 /// </summary>
