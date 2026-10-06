@@ -218,7 +218,7 @@ changing preparation. Simultaneous clients need different signed-in Steam identi
 The server and every client prepare their runtime in parallel, with one claim per host. After the server's ready
 checkpoint, the session's `OpenClientsAsync` launches the named clients concurrently and waits for all of them at the
 menu checkpoint. The join and rejoin checkpoints are explicit so a test can pause one actor while the others stay in
-the world. A failed client start closes the other successful starts before teardown; it does not advance the test.
+the world. A failed client start closes the other successful starts before teardown; it does not advance the test. Each client's evidence (its process and command records and kept logs) is in its own folder, `client-a/` and `client-b/` in the run's output.
 
 The same two scenarios also run as xUnit tests on a native session: [GameSessionFixture](MyMod.IntegrationTests/GameSessionFixture.cs) is a copyable `IAsyncLifetime` adapter (one session per test class) that runs the toolkit's runner up to the scenario, hands the started `GameSession` and plan to the tests, and lets the run tear down and report when the class finishes; a run that never started, or ended with a failed step or cleanup, fails the class with its exit code. [MyModSession](MyMod.IntegrationTests/MyModSession.cs) finds its environment by convention: `session.json` (the campaign manifest below) and `<scenario>.plan.json` beside the integration test project, copied to its output and never committed. Without them the tests are skipped with that reason, so the suite stays offline by default; each run writes a new evidence directory under `session-runs/` in the test output.
 

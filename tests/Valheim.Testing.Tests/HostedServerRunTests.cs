@@ -651,7 +651,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(2, clientHost.Runs.Count(run => run.Script == "follow")); // fresh BepInEx line, then ValheimCLI listening
         Assert.All(clientHost.Runs.Where(run => run.Script == "follow"), run => Assert.Equal("0", run.Variables["offset"]));
         Assert.Equal(new[] { ("77", "555") }, clientHost.Stops);
-        Assert.Contains("listening on 127.0.0.1:5578", File.ReadAllText(Path.Combine(Output, "client-1", "game-0.log")));
+        Assert.Contains("listening on 127.0.0.1:5578", File.ReadAllText(Path.Combine(Output, "player", "client-1", "game-0.log")));
         Assert.True(Assert.Single(clientHost.Tunnels).Stopped);
         // The client's host was locked for the run and released at teardown; its logs were scanned with the server's.
         Assert.Equal(clientHost.Claims, clientHost.Releases); Assert.Single(clientHost.Claims);
@@ -815,7 +815,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         }, clientHost, new ScriptedTransport { PinsHold = false })));
         Assert.IsType<InvalidOperationException>(failed);
         Assert.Single(clientHost.Stops);
-        Assert.Contains("listening on 127.0.0.1:5578", File.ReadAllText(Path.Combine(Output, "client-1", "game-0.log")));
+        Assert.Contains("listening on 127.0.0.1:5578", File.ReadAllText(Path.Combine(Output, "player", "client-1", "game-0.log")));
         var roles = Result().GetProperty("Logs").EnumerateArray().Select(log => log.GetProperty("Role").GetString()).ToList();
         Assert.Contains("client-1 BepInEx log", roles);
         Assert.Contains("client-1 Player.log", roles);
