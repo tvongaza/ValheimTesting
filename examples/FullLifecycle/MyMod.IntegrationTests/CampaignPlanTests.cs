@@ -423,5 +423,18 @@ public sealed class CampaignPlanTests : IDisposable
         Assert.Contains("no control run", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
         plan = Hosted(); plan["scenario"] = LifecyclePlan.WorldScenario;
         Assert.Throws<ArgumentException>(() => ReadHosted(plan));
+        // A peer (#258 step 8b) joins from another machine: only as a campaign, as a joinsHost client with MyMod and its adapter.
+        JsonObject Peer() { var peer = Client(); peer.Remove("join"); peer["port"] = 5557; peer["joinsHost"] = true; return peer; }
+        plan = Hosted(); plan["peer"] = Peer();
+        Assert.Contains("run this plan as a campaign", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
+        File.WriteAllText(path, plan.ToJsonString());
+        var withPeer = HostedPlan.Validated(HostedPlan.Read(path));
+        Assert.Equal(new[] { HostedPlan.HostClient, HostedPlan.PeerClient }, HostedScenario.CampaignClients(withPeer).Keys.Order(StringComparer.Ordinal));
+        plan = Hosted(); var notJoining = Peer(); notJoining.Remove("joinsHost"); notJoining["join"] = "127.0.0.1:2456"; plan["peer"] = notJoining;
+        File.WriteAllText(path, plan.ToJsonString());
+        Assert.Contains("set its joinsHost", Assert.Throws<ArgumentException>(() => HostedPlan.Validated(HostedPlan.Read(path))).Message);
+        plan = Hosted(); var vanilla = Peer(); vanilla["pins"]![LifecyclePlan.AdapterPlugin] = "absent"; plan["peer"] = vanilla;
+        File.WriteAllText(path, plan.ToJsonString());
+        Assert.Contains("The peer runs MyMod", Assert.Throws<ArgumentException>(() => HostedPlan.Validated(HostedPlan.Read(path))).Message);
     }
 }

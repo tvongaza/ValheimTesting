@@ -59,6 +59,11 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
     public required Func<TPlan, ClientRunPlan> Host { get; init; }
     /// <summary>The mod's declaration: its Harmony patches are checked on the host, once it is at its menu, when its pins load the mod.</summary>
     public required ModDeclaration Mod { get; init; }
+    /// <summary>
+    /// The mod's own rules on the plan as it will run (throw <see cref="ArgumentException"/>): a read plan, or a campaign's plan once
+    /// bound to its prepared actors (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}(string, TPlan, Func{TPlan, IReadOnlyDictionary{string, ClientRunPlan}}, string, HostedRunOptions{TPlan})"/>).
+    /// </summary>
+    public Action<TPlan>? CheckPlan { get; init; }
     /// <summary>The plan's exact known log lines and reasons (<see cref="ScenarioReport.ScanLogs"/>); other errors still fail the run.</summary>
     public Func<TPlan, IReadOnlyDictionary<string, LogClassification>?>? LogScan { get; init; }
     /// <summary>Adds the mod's provenance (scenario details) to the report, before anything is copied.</summary>
@@ -223,6 +228,7 @@ public static class PinnedServerRun
             options.Mod.Validate();
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
             plan = options.ReadPlan(planFile);
+            options.CheckPlan?.Invoke(plan);
             var host = options.Host(plan) ?? throw new ArgumentException("The plan has no hosting client section.");
             if (host.HostWorld == null) throw new ArgumentException("Add the hosting client's hostWorld section: the fixture world it hosts.");
             host.Validate();
@@ -322,6 +328,191 @@ public static class PinnedServerRun
             Path.GetFileName(manifestFile), output, options, cancellation, inventoryPath: null, campaign: (manifestFile, clients)).ConfigureAwait(false);
     }
 
+    // A campaign's first Preflight step: its inputs and actor assignment, with the inventory's hash or "this machine" recorded.
+    private static HostedCampaignPreparation.Inspection InspectCampaign(ScenarioReport report, string manifestFile)
+    {
+        HostedCampaignPreparation.Inspection inspection = null!;
+        report.Step(StepPhase.Preflight, "campaign inputs and actor assignment", () =>
+        {
+            inspection = HostedCampaignPreparation.InspectInputs(manifestFile);
+            inspection.Report.RequireReady();
+            // With no inventory file the actors are on this machine; what was detected for it is recorded either way.
+            if (inspection.Inputs!.Manifest.Inventory.Length != 0)
+                report.Provenance["inventorySha256"] = FileHash.Sha256(inspection.Inputs.Manifest.Inventory);
+            else report.Provenance["inventory"] = "this machine";
+            if (inspection.Report.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inspection.Report.Detected);
+        });
+        return inspection;
+    }
+
+    // The journal's last word on each host the campaign prepared: how the run ended and whether its cleanup was proven, or that its
+    // cleanup was abandoned, which leaves the run for env recover (it never journals an end it did not reach).
+    private static async Task JournalCampaignEndAsync(PreparedHostedCampaign prepared, JournalEntry last, bool abandoned)
+    {
+        foreach (string hostName in prepared.Copies.Select(copy => copy.Host).Distinct(StringComparer.OrdinalIgnoreCase))
+            try { await prepared.Journal.AppendAsync(prepared.HostFor(hostName), prepared.JournalOf(hostName), "run", last,
+                abandoned ? TimeSpan.FromSeconds(15) : prepared.Timeout).ConfigureAwait(false); } // the user asked to get out
+            catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the run's end on {hostName}: {error.Message}"); }
+    }
+
+    /// <summary>
+    /// Runs a hosted plan on a campaign without a dedicated server (#258 step 8b): one of the named clients hosts the campaign's
+    /// fixture world (its plan section's <c>hostWorld</c>) and the others are its peers (<c>joinsHost</c>), each on the host the
+    /// inventory assigns it. As <see cref="RunCampaignAsync{TPlan}(string, TPlan, Func{TPlan, IReadOnlyDictionary{string, ClientRunPlan}}, string, PinnedServerRunOptions{TPlan})"/>:
+    /// the campaign's preflight and the plan's agreement with it (<see cref="HostedCampaignPreparation.CheckHostedPlan(string, IReadOnlyDictionary{string, ClientRunPlan})"/>)
+    /// are Preflight steps; preparing the disposable installs and characters and binding them to the plan are Setup steps. The
+    /// scenario runs on a <see cref="GameSession"/> whose <see cref="GameSession.Host"/> is the hosting client and whose
+    /// <see cref="GameSession.Clients"/> are its peers, each opened on its host on its leased Steam identity. Teardown: the session
+    /// (peers, then the host, then its world), the leases, the prepared installs and characters (one retire owner, under the locks
+    /// held), then the client hosts' locks. <paramref name="clients"/> names the plan's client sections by the campaign's client
+    /// names. Exit codes as <see cref="MainAsync{TPlan}(string[], PinnedServerRunOptions{TPlan})"/>.
+    /// </summary>
+    public static async Task<int> RunCampaignAsync<TPlan>(string manifestFile, TPlan plan, Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> clients,
+        string output, HostedRunOptions<TPlan> options) where TPlan : class
+    {
+        ArgumentNullException.ThrowIfNull(plan); ArgumentNullException.ThrowIfNull(clients); ArgumentNullException.ThrowIfNull(options);
+        var cancellation = options.Hooks.Cancellation(out bool owned);
+        using var own = owned ? cancellation : null;
+        var report = new ScenarioReport(options.Name);
+        report.Provenance["mode"] = "run";
+        string full = Path.GetFullPath(output), preparedDirectory = Path.Combine(full, "prepared");
+        bool ownOutput = false, definite = false;
+        string? unknown = null, abandoned = null;
+        void Classify(Exception error) { if (HostedServerRun.UnknownOutcome(error) is { } why) unknown ??= why; else definite = true; }
+        GameSession? game = null;
+        PreparedHostedCampaign? prepared = null;
+        CampaignClients? actors = null;
+        IDisposable? journalRun = null;
+        IReadOnlyDictionary<string, ClientRunPlan>? named = null;
+        var phase = StepPhase.Preflight;
+        try
+        {
+            options.Mod.Validate();
+            if (Path.Exists(full)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
+            Directory.CreateDirectory(full); ownOutput = true;
+            report.Provenance["campaignSha256"] = FileHash.Sha256(manifestFile);
+            // One run id for the whole campaign: its prepared installs, its journal, its clients' launch directories.
+            string runId = options.Hooks.RunId(RunJournal.NewRunId());
+            report.Provenance["runId"] = runId;
+            journalRun = RunJournal.UseRun(runId);
+            var inspection = InspectCampaign(report, manifestFile);
+            report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () =>
+            {
+                named = clients(plan);
+                HostedCampaignPreparation.CheckHostedPlan(inspection, named);
+                // Placing the fixture in a client's local worlds is this machine's only, until the world can be placed over its host.
+                var profile = inspection.Inputs!.Profile;
+                string host = HostedCampaignPreparation.HostOf(named);
+                var hostProfile = profile.Hosts[profile.Clients[host].Host];
+                if (hostProfile.Kind != "local" || hostProfile.Platform != HostProfile.CurrentPlatform)
+                    throw new ArgumentException($"Client {host} hosts the world on host {profile.Clients[host].Host}; a hosting client runs on this machine (a local host) until its world can be placed on another host.");
+            });
+            options.Provenance?.Invoke(plan, report.Provenance);
+            if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = FileHash.Sha256(runner);
+            report.Provenance["toolkitSha256"] = FileHash.Sha256(typeof(GameActor).Assembly.Location);
+            phase = StepPhase.Setup; // From here the hosts are written to.
+            await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
+                prepared = await HostedCampaignPreparation.PrepareAsync(inspection, preparedDirectory, CampaignTimeout,
+                    name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, runId).ConfigureAwait(false)).ConfigureAwait(false);
+            string hostName = null!;
+            report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
+            {
+                hostName = prepared!.ApplyToHosted(prepared.Manifest, named!, preparedDirectory);
+                foreach (var client in named!.Values) client.Validate();
+                options.CheckPlan?.Invoke(plan);
+                File.WriteAllText(Path.Combine(preparedDirectory, "plan.json"), JsonSerializer.Serialize(plan, plan.GetType(), BoundPlanJson) + "\n");
+            });
+            // The bound plan is kept as evidence (prepared/plan.json, never read back): its hash is the run's planSha256.
+            report.Provenance["planSha256"] = FileHash.Sha256(Path.Combine(preparedDirectory, "plan.json"));
+            var environment = prepared!.Environment;
+            var journal = prepared.Journal;
+            actors = new CampaignClients(environment, runId, options.Name + " " + runId, options.Hooks, serverHost: null,
+                (host, name, actor, entry, token) => journal.AppendAsync(host, prepared.JournalOf(name), actor, entry, TimeSpan.FromSeconds(60), token));
+            var hostPlan = named![hostName];
+            report.Provenance["role"] = "host";
+            report.Provenance["hostCrossplay"] = hostPlan.HostWorld!.Crossplay ? "true" : "false";
+            report.Provenance["cliPreflight"] = hostPlan.CliPreflight;
+            report.Provenance["clientMode"] = hostPlan.Mode;
+            if (!hostPlan.Pinned) report.MarkNotPinned("the hosting client's plan sets pinning \"none\"");
+            var placement = actors.Placement(report);
+            var peers = named.Where(client => client.Key != hostName).OrderBy(client => client.Key, StringComparer.Ordinal).ToList();
+            var campaignActors = actors;
+            game = new GameSession(report, full, null, server: null,
+                peers.Select(peer => (peer.Key, (Func<CancellationToken, ClientActor>)(token => new ClientActor(peer.Key, peer.Value, full, placement, token)))),
+                // The hosting client runs on this machine (Preflight), so its live log is this machine's file in its bound install.
+                cancellation.Token, token => new HostingClientActor(hostName, hostPlan, full, placement, token)
+                    { LiveLogSource = () => Path.Combine(hostPlan.Install, "BepInEx", "LogOutput.log") })
+            {
+                CampaignClients = named.Keys.Order(StringComparer.Ordinal).ToList(),
+                // A client a scenario opens itself is one of the campaign's, by name, on its host and lease.
+                ResolveClient = (_, name) => (name ?? throw new ArgumentException($"The campaign declares clients {string.Join(", ", named.Keys.Order(StringComparer.Ordinal))}; say which one opens.", nameof(name)), placement),
+                FindClientHost = campaignActors.ClientHost,
+                Mod = options.Mod, ServerPinsMod = !hostPlan.Pinned || options.Mod.PinnedIn(hostPlan.Pins),
+                DisposeOnFailedStart = false, // The finally disposes it.
+            };
+            await game.StartAsync().ConfigureAwait(false);
+            phase = StepPhase.Scenario;
+            await options.Scenario(game, plan).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            report.RecordFailure(phase, "runner failed", error);
+            Console.Error.WriteLine(error.Message);
+            Classify(error);
+        }
+        finally
+        {
+            var cleanup = cancellation.BeginCleanup();
+            async Task Try(string step, Func<Task> action)
+            {
+                // An abandoned cleanup attempts nothing more; the journal names what is left.
+                if (cleanup.IsCancellationRequested) action = () => throw new OperationCanceledException("Not attempted: the cleanup was abandoned.", cleanup);
+                try { await report.StepAsync(StepPhase.Cleanup, step, action).ConfigureAwait(false); }
+                catch (Exception error) { Classify(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+            }
+            if (game != null)
+            {
+                // Peers first, then the host (it leaves a passing run's world first), then its world once no client can host it.
+                await game.DisposeAsync().ConfigureAwait(false);
+                foreach (var failure in game.TeardownFailures) Classify(failure);
+            }
+            // The leases once their clients are gone, then the campaign's characters and installs under the locks held, then the locks.
+            if (actors != null) await actors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
+            if (prepared != null)
+                foreach (var failure in await new RunRetirement(report, full).CampaignAsync(prepared, actors?.LockedHosts ?? [], cleanup).ConfigureAwait(false))
+                { Console.Error.WriteLine("Teardown: " + failure.Message); Classify(failure); }
+            if (actors != null) await actors.ReleaseLocksAsync(Try).ConfigureAwait(false);
+            if (game != null && named != null)
+            {
+                var logs = game.Logs;
+                if (logs.Count != 0 && !report.ScanLogs(logs, options.LogScan?.Invoke(plan)) && unknown == null) definite = true;
+            }
+            bool unknownOutcome = !report.Passed && unknown != null && !definite;
+            if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
+            abandoned = cancellation.Abandoned;
+            var last = abandoned != null ? JournalEntry.Of(JournalEntry.CleanupAbandoned, ("reason", abandoned))
+                : JournalEntry.Of(JournalEntry.RunEnded, ("state", report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed"),
+                    ("cleanupVerified", report.CleanupVerified ? "true" : "false"));
+            if (prepared != null) await JournalCampaignEndAsync(prepared, last, abandoned != null).ConfigureAwait(false);
+            journalRun?.Dispose();
+            if (ownOutput)
+            {
+                long bytes = DiskSpace.DirectoryBytes(full);
+                report.Provenance["outputBytes"] = bytes.ToString(CultureInfo.InvariantCulture);
+                report.Write(full);
+                Console.WriteLine($"Output: {DiskSpace.Format(bytes)} in {full}");
+            }
+        }
+        if (abandoned != null)
+        {
+            Console.WriteLine($"ABANDONED cleanup ({abandoned}): what the run left is in its journal; see valheim-test env status, then valheim-test env recover --run {report.Provenance.GetValueOrDefault("runId") ?? "<run id>"}.");
+            return 3;
+        }
+        bool unknownResult = !report.Passed && unknown != null && !definite;
+        Console.WriteLine(unknownResult ? "UNKNOWN (a host operation's outcome could not be established; neither a pass nor a failure: " + unknown + ")" : report.Passed ? "PASS" : "FAIL");
+        return report.Passed ? 0 : unknownResult ? 3 : 1;
+    }
+
     private static async Task<int> RunAsync<TPlan>(string mode, Func<TPlan> readPlan, Func<string> planHash, string planName, string outputArgument,
         PinnedServerRunOptions<TPlan> options, RunCancellation cancellation, string? inventoryPath,
         (string Manifest, Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> Clients)? campaign, ResolvedEnvironment? given = null) where TPlan : ServerRunPlan
@@ -359,21 +550,11 @@ public static class PinnedServerRun
                 // Stages 1 and 2 never copy: every independent problem is reported before the first host write.
                 Directory.CreateDirectory(output); ownOutput = true;
                 report.Provenance["campaignSha256"] = FileHash.Sha256(manifestFile);
-                HostedCampaignPreparation.Inspection inspection = null!;
                 // One run id for the whole campaign: its prepared installs, its journal and the server run's directory.
                 string campaignRunId = RunJournal.NewRunId();
                 report.Provenance["runId"] = campaignRunId;
                 journalRun = RunJournal.UseRun(campaignRunId);
-                report.Step(StepPhase.Preflight, "campaign inputs and actor assignment", () =>
-                {
-                    inspection = HostedCampaignPreparation.InspectInputs(manifestFile);
-                    inspection.Report.RequireReady();
-                    // With no inventory file the actors are on this machine; what was detected for it is recorded either way.
-                    if (inspection.Inputs!.Manifest.Inventory.Length != 0)
-                        report.Provenance["inventorySha256"] = FileHash.Sha256(inspection.Inputs.Manifest.Inventory);
-                    else report.Provenance["inventory"] = "this machine";
-                    if (inspection.Report.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inspection.Report.Detected);
-                });
+                var inspection = InspectCampaign(report, manifestFile);
                 report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, bind(plan)));
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
@@ -554,11 +735,7 @@ public static class PinnedServerRun
             var last = abandoned != null ? JournalEntry.Of(JournalEntry.CleanupAbandoned, ("reason", abandoned))
                 : JournalEntry.Of(JournalEntry.RunEnded, ("state", report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed"),
                     ("cleanupVerified", report.CleanupVerified ? "true" : "false"));
-            if (prepared != null)
-                foreach (string hostName in prepared.Copies.Select(copy => copy.Host).Distinct(StringComparer.OrdinalIgnoreCase))
-                    try { await prepared.Journal.AppendAsync(prepared.HostFor(hostName), prepared.JournalOf(hostName), "run", last,
-                        abandoned != null ? TimeSpan.FromSeconds(15) : prepared.Timeout).ConfigureAwait(false); } // the user asked to get out
-                    catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the run's end on {hostName}: {error.Message}"); }
+            if (prepared != null) await JournalCampaignEndAsync(prepared, last, abandoned != null).ConfigureAwait(false);
             else if (hosted != null)
                 await hosted.JournalEndAsync(last).ConfigureAwait(false);
             journalRun?.Dispose();

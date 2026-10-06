@@ -456,6 +456,57 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var ready = await HostedCampaignPreparation.InspectAsync(clean, TimeSpan.FromSeconds(30), name => hosts[name]);
         Assert.True(ready.Ready, string.Join("; ", ready.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
         Assert.Equal(["pc", "pc", "laptop"], ready.Actors.Select(actor => actor.Host));
+
+        // #258 step 8b: the same actors without a dedicated server, one client to host the world and the other its peer. The
+        // preflight is the same, without a server role; join (a server's address) is refused without a server.
+        string Hosted(string file, object? join) => WriteJson(file, join == null
+            ? new
+            {
+                inventory, world, worldUid = "4242",
+                clients = new Dictionary<string, object>
+                {
+                    ["client-a"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "pc-client" }, character = Character(storeA, "one", "vt-one") },
+                    ["client-b"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "laptop-client" }, character = Character(storeB, "two", "vt-two") },
+                },
+            }
+            : (object)new { inventory, world, join, clients = new Dictionary<string, object> { ["client-a"] = new { dependencyLock = clientLock, character = Character(storeA, "one", "vt-one") } } });
+        string serverless = Hosted("six-hosted.json", null);
+        var hostedReady = await HostedCampaignPreparation.InspectAsync(serverless, TimeSpan.FromSeconds(30), name => hosts[name]);
+        Assert.True(hostedReady.Ready, string.Join("; ", hostedReady.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
+        Assert.Equal(["client-a", "client-b"], hostedReady.Actors.Select(actor => actor.Name));
+        Assert.Equal(["pc", "laptop"], hostedReady.Actors.Select(actor => actor.Host));
+        Assert.All(hostedReady.Actors, actor => Assert.Equal("client", actor.Kind));
+        Assert.Contains(HostedCampaignPreparation.Inspect(Hosted("six-hosted-join.json", "pc.example:2456")).Problems,
+            problem => problem.Message.Contains("join is the dedicated server's address", StringComparison.Ordinal));
+        // The hosted plan's agreement: one client hosts, the other is its peer; a dedicated-server plan is refused on this campaign.
+        ClientRunPlan HostSection() => new() { Mode = "owned", Install = @"C:\bound", Port = 5578, Character = "x", Pins = new() { ["example.mymod"] = "absent" },
+            HostWorld = new() { World = new() { Source = world }, WorldUid = "4242" } };
+        ClientRunPlan PeerSection() => new() { Mode = "owned", Install = @"C:\bound", Port = 5579, Character = "y", JoinsHost = true, Pins = new() { ["example.mymod"] = "absent" } };
+        HostedCampaignPreparation.CheckHostedPlan(serverless, new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() });
+        Assert.Contains("exactly one hosting client", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(serverless,
+            new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = HostSection() })).Message);
+        Assert.Contains("set joinsHost", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(serverless,
+            new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = new() { Mode = "owned", Port = 5579 } })).Message);
+        Assert.Contains("declares a dedicated server", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(clean,
+            new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() })).Message);
+        // A hosted plan's host on another host is refused in Preflight, before any host is written (its world is placed on this machine).
+        var hostScripts = hosts.ToDictionary(pair => pair.Key, pair => pair.Value.Scripts.Count);
+        string hostedOutput = Path.Combine(_rig.Root, "six-hosted-run");
+        bool ran = false;
+        var hostedOptions = new HostedRunOptions<Dictionary<string, ClientRunPlan>>
+        {
+            Name = "hosted-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."), Host = plan => plan["client-a"],
+            Mod = new("test.mod/session", "TEST_SESSION_TOKEN"), Scenario = (_, _) => { ran = true; return Task.CompletedTask; },
+            Hooks = new FakeRunHooks { Host = name => hosts[name], RunId = "run-hosted" },
+        };
+        var sections = new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() };
+        Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(serverless, sections, plan => plan, hostedOutput, hostedOptions));
+        var hostedResult = JsonDocument.Parse(File.ReadAllText(Path.Combine(hostedOutput, "result.json"))).RootElement;
+        var hostedAgreement = hostedResult.GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "the plan agrees with the campaign");
+        Assert.False(hostedAgreement.GetProperty("Passed").GetBoolean());
+        Assert.Contains("runs on this machine", hostedAgreement.GetProperty("Error").GetString());
+        Assert.False(ran);
+        Assert.All(hosts, pair => Assert.DoesNotContain(pair.Value.Scripts.Skip(hostScripts[pair.Key]), script => script is "copy" or "apply-stage" or "character-install" or "client-start"));
     }
 
     // RunCampaignAsync: one report from the campaign's preflight through the run to retiring the prepared install, with the
