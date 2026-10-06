@@ -884,6 +884,20 @@ sealed class Valheim.Testing.Game.GameReply
   property System.String Message { get; }
   property System.String Refusal { get; }
   property valheim_cli.Testing.CommandResult Result { get; }
+sealed class Valheim.Testing.Game.GameSession : System.IAsyncDisposable
+  method System.Threading.Tasks.Task Barrier(System.String name, System.Func`2<System.Threading.CancellationToken,System.Threading.Tasks.Task> wait, System.TimeSpan within)
+  method System.Threading.Tasks.Task JoinAll(Valheim.Testing.Game.CrossplayLobby lobby = null)
+  method System.Threading.Tasks.Task ServerJoinable()
+  method System.Threading.Tasks.Task StartAsync()
+  method System.Threading.Tasks.Task`1<Valheim.Testing.Game.PlayerPlacement/TeleportArrival> Join(System.String client, Valheim.Testing.Game.HeightExpectation arrival = null, System.Boolean protect = true, Valheim.Testing.Game.CrossplayLobby lobby = null)
+  method System.Threading.Tasks.Task`1<Valheim.Testing.Game.PlayerPlacement/TeleportArrival> Rejoin(System.String client, Valheim.Testing.Game.HeightExpectation arrival = null, System.Boolean protect = true, Valheim.Testing.Game.CrossplayLobby lobby = null)
+  method System.Threading.Tasks.ValueTask DisposeAsync()
+  property System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientActor> Clients { get; }
+  property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.RunLog> Logs { get; }
+  property System.String Output { get; }
+  property System.Threading.CancellationToken Cancellation { get; }
+  property Valheim.Testing.Game.ScenarioReport Report { get; }
+  property Valheim.Testing.Game.ServerActor Server { get; }
 [result shape] sealed class Valheim.Testing.Game.GlobalKeyDifference : System.IEquatable`1<Valheim.Testing.Game.GlobalKeyDifference>
   method System.Boolean Equals(Valheim.Testing.Game.GlobalKeyDifference other)
   method System.Void .ctor(System.Collections.Generic.IReadOnlyList`1<System.String> MissingOnClient, System.Collections.Generic.IReadOnlyList`1<System.String> ExtraOnClient)
