@@ -67,7 +67,7 @@ The plan is strict by itself: `game.expect` names a pins file next to the plan a
 
 ## Waiting for a log line
 
-There is no script for this; the libraries wait on events. In a test, `LogWait` follows a local log from its current end (or a byte offset), so earlier lines never match, and waits for a log that does not exist yet; give it every outcome, failures included, so a failure returns as fast as a success (see [Waiting](../../docs/packages/Valheim.Testing.Game.md#waiting)). For a game on another machine, a game host's `LogOffsetAsync` and `WaitForLogAsync` follow the log there (see [game hosts](../../docs/packages/Valheim.Testing.Game.md#game-hosts-and-the-environment-inventory)). To wait for a game state rather than a line, use `StateWait` or `valheim-cli wait --for`.
+There is no script for this; the libraries wait on events. In a test, `LogWait` follows a local log from its current end (or a byte offset), so earlier lines never match, and waits for a log that does not exist yet; give it every outcome, failures included, so a failure returns as fast as a success (see [Waiting](../../docs/packages/Valheim.Testing.Game.md#waiting)). For a game on another machine, a game host's `LogOffsetAsync` and `WaitForLogAsync` follow the log there (see [game hosts](../../docs/packages/Valheim.Testing.GameSessions.md#game-hosts-and-the-environment-inventory)). To wait for a game state rather than a line, use `StateWait` or `valheim-cli wait --for`.
 
 ## A game on another machine
 
@@ -79,7 +79,7 @@ valheim-cli --port 5556 --remote --status
 valheim-cli --port 5556 --expect-strict pins.txt
 ```
 
-The dev loop deploys to a local game folder, so it is for a local game only. A test drives remote games through a game host instead, whose `OpenCliTunnelAsync` opens the same loopback-only forward and refuses one that could listen beyond loopback (see [game hosts](../../docs/packages/Valheim.Testing.Game.md#game-hosts-and-the-environment-inventory)).
+The dev loop deploys to a local game folder, so it is for a local game only. A test drives remote games through a game host instead, whose `OpenCliTunnelAsync` opens the same loopback-only forward and refuses one that could listen beyond loopback (see [game hosts](../../docs/packages/Valheim.Testing.GameSessions.md#game-hosts-and-the-environment-inventory)).
 
 ## Tests
 

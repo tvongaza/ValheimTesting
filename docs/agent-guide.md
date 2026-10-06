@@ -34,7 +34,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 ## First actions in a new checkout
 
 1. Read the local repository's instructions and check branch/worktree status. Keep other agents' edits and active sessions intact.
-2. Check [package ownership and setup](getting-started.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`. ValheimCLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
+2. Check [package ownership and setup](getting-started.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`, and adds `Valheim.Testing.GameSessions` to run a session (`GameSession`, `PinnedServerRun`, other machines). ValheimCLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
    For a load check from otherwise unmodded game installs, [NativeSmoke](packages/Valheim.Testing.NativeSmoke.md#a-server-side-mod-server-load) accepts a reviewed loader package and a coherent ValheimCLI bundle. A server and clean client use separately pinned loader packages. These options are in this checkout's candidate tool until its next release; the currently published tool may not have them.
 3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
 

@@ -25,6 +25,8 @@ The toolkit packages are all on NuGet.org. The versions below are the **newest r
 | [Valheim.Testing.Bindings](https://www.nuget.org/packages/Valheim.Testing.Bindings) | `0.1.0-preview.2` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member ([page](packages/Valheim.Testing.Bindings.md)) |
 | [Valheim.Testing.Bindings.Tool](https://www.nuget.org/packages/Valheim.Testing.Bindings.Tool) | `0.1.0-preview.2` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
 
+[Valheim.Testing.GameSessions](packages/Valheim.Testing.GameSessions.md) (game sessions: `GameSession`, `PinnedServerRun`, hosts on other machines, Steam-account leases and recovery) is new and not yet on NuGet.org; it joins this table at its first release, depending on exactly the Game it was built with. Until then a project that runs a session references it from this checkout (`src/Valheim.Testing.GameSessions`) or from the local `.packages` feed below.
+
 Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies, and reference the exact version `validate.cs` packed: `<Version>-candidate.<id>`, as the file names in `.packages` show (the id is a hash of the package inputs, so a build of other sources never shares it). For example, from your mod checkout:
 
 ```sh
@@ -38,7 +40,7 @@ Pin only the package your test project needs:
 ```xml
 <!-- Pure test project; not the production mod project. -->
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.12]" />
-<!-- A separate external system-test project instead uses: -->
+<!-- A separate external system-test project instead uses (and, to run a session, Valheim.Testing.GameSessions; see above): -->
 <PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.41]" />
 <!-- A game-side test adapter plugin compiles the adapter source: -->
 <PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.5]" PrivateAssets="all" />
@@ -78,4 +80,4 @@ External runners are console programs. To run one from the IDE, set its command-
 
 ## Package pages
 
-Each package's contract, failure semantics and limits are on its page: [Valheim.Testing](packages/Valheim.Testing.md), [Valheim.Testing.Doubles](packages/Valheim.Testing.Doubles.md), [Valheim.Testing.Game](packages/Valheim.Testing.Game.md), [Valheim.Testing.Adapter](packages/Valheim.Testing.Adapter.md), [Valheim.Testing.Bindings](packages/Valheim.Testing.Bindings.md), [Valheim.Testing.Cli](packages/Valheim.Testing.Cli.md) and [Valheim.Testing.NativeSmoke](packages/Valheim.Testing.NativeSmoke.md). The [candidate API reference](https://tvongaza.github.io/ValheimTesting/) inventories the public declarations; the [compatibility-policy draft](reference/compatibility.md) records the decisions still needed before stable packages.
+Each package's contract, failure semantics and limits are on its page: [Valheim.Testing](packages/Valheim.Testing.md), [Valheim.Testing.Doubles](packages/Valheim.Testing.Doubles.md), [Valheim.Testing.Game](packages/Valheim.Testing.Game.md), [Valheim.Testing.GameSessions](packages/Valheim.Testing.GameSessions.md), [Valheim.Testing.Adapter](packages/Valheim.Testing.Adapter.md), [Valheim.Testing.Bindings](packages/Valheim.Testing.Bindings.md), [Valheim.Testing.Cli](packages/Valheim.Testing.Cli.md) and [Valheim.Testing.NativeSmoke](packages/Valheim.Testing.NativeSmoke.md). The [candidate API reference](https://tvongaza.github.io/ValheimTesting/) inventories the public declarations; the [compatibility-policy draft](reference/compatibility.md) records the decisions still needed before stable packages.
