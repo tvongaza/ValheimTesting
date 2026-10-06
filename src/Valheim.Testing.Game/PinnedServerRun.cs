@@ -34,7 +34,7 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// the caller's Dispose never removes one the run keeps. Not for a run on another host, whose runtime is copied there.
     /// </summary>
     public WorldFixture? StagedRuntime { get; init; }
-    /// <summary>Test seam: builds the owned session instead of launching the copied runtime.</summary>
+    /// <summary>Test seam: the owned server's session (scripted) instead of launching the copied runtime.</summary>
     internal Func<PinnedServerRunContext<TPlan>, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
     internal IHostedRunHooks Hooks { get; init; } = HostedRunHooks.Production;
@@ -61,10 +61,12 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
     /// <summary>The host the dedicated server runs on (<c>--inventory</c> or a campaign), or null when it runs on this machine.</summary>
     public IGameHost? ServerHost => Hosted?.Host;
     internal HostedServerRun? Hosted { get; init; }
-    public OwnedServerSession Session { get; internal set; } = null!;
+    /// <summary>The owned dedicated server: restart it, wait until it is joinable, or hand it to <see cref="ClientRounds.OwnedServer"/>.</summary>
+    public ServerActor Session { get; internal set; } = null!;
+    /// <summary>The owned server's first boot's in-game handle (a restart returns the next boot's).</summary>
     public GameActor Server { get; internal set; } = null!;
     /// <summary>
-    /// The logs the teardown scan reads: each owned server boot's are added as it launches; add an owned client's
+    /// The logs the teardown scan reads besides the owned server's own (<see cref="ServerActor.Logs"/>): add an owned client's
     /// <see cref="ClientSession.Logs"/> here. They are scanned after the scenario, once the processes have stopped.
     /// </summary>
     public List<RunLog> Logs { get; } = [];
@@ -251,7 +253,7 @@ public static class PinnedServerRun
         (string Manifest, Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> Clients)? campaign, ResolvedEnvironment? given = null) where TPlan : ServerRunPlan
     {
         var report = new ScenarioReport(options.Name);
-        OwnedServerSession? session = null;
+        ServerActor? session = null;
         WorldFixture? runtime = null, world = null;
         PinnedServerRunContext<TPlan>? launched = null;
         HostedServerRun? hosted = null;
@@ -426,18 +428,20 @@ public static class PinnedServerRun
             {
                 try { report.Step(StepPhase.Cleanup, "stop only owned server", session.Dispose); }
                 catch (Exception error) { stopped = false; Console.Error.WriteLine("Teardown: " + error.Message); Classify(error); }
+                // A boot that failed to start and could not be stopped may still run from the runtime: keep it, and the host's lock.
+                if (session.MayStillRun) stopped = false;
                 report.Provenance["ownedPids"] = string.Join(",", session.StartedProcesses);
                 // How each boot ended, restarts included: asked to quit, then killed only after the plan's quitSeconds.
                 report.Provenance["serverStops"] = string.Join("; ", session.Stops.Select((stop, i) => $"boot-{i + 1} {stop}"));
                 foreach (var (stop, i) in session.Stops.Select((stop, i) => (stop, i)).Where(entry => entry.stop.Outcome == StopOutcome.Killed))
                     Console.Error.WriteLine($"Warning: owned server boot-{i + 1} was {stop}; the game's shutdown (its world save at quit) did not run.");
-                if (stopped && launched is { Plan.Crossplay: true } crossplayRun)
+                if (stopped && launched is { Plan.Crossplay: true })
                     try
                     {
                         report.Step(StepPhase.Cleanup, "every boot quit cleanly and retired its crossplay lobby", () =>
                         {
                             // Each boot's kept logs: BepInEx's, Unity's (-logFile) and the process output, wherever the game wrote its lines.
-                            var logs = crossplayRun.Logs.Select(log => (Match: Regex.Match(log.Role, @"^boot-(\d+) "), log.Path)).Where(log => log.Match.Success)
+                            var logs = session.Logs.Select(log => (Match: Regex.Match(log.Role, @"^boot-(\d+) "), log.Path)).Where(log => log.Match.Success)
                                 .GroupBy(log => int.Parse(log.Match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).OrderBy(group => group.Key)
                                 .Select(group => (IReadOnlyList<string>)group.Select(log => log.Path).ToList()).ToList();
                             report.Provenance["crossplayLobbies"] = string.Join(" | ", CrossplayServer.RequireLobbiesRetired(session.Stops, logs));
@@ -455,7 +459,11 @@ public static class PinnedServerRun
                 { Console.Error.WriteLine("Teardown: " + failure.Message); Classify(failure); }
             // After the stop, which keeps each boot's logs; a client's were kept when the scenario closed it. Logs missing after
             // an unknown outcome are explained by it, so the scan then decides nothing on its own.
-            if (launched != null && launched.Logs.Count != 0 && !report.ScanLogs(launched.Logs, launched.Plan.LogScan) && unknown == null) definite = true;
+            if (launched != null)
+            {
+                List<RunLog> logs = [.. session?.Logs ?? [], .. launched.Logs];
+                if (logs.Count != 0 && !report.ScanLogs(logs, launched.Plan.LogScan) && unknown == null) definite = true;
+            }
             // A copy that could not be removed is a definite (local) failure, so it comes before the outcome is decided.
             if (runtime != null)
                 try { retirement.Local(runtime, stopped, launchedNothing: session == null); }
@@ -521,40 +529,13 @@ public static class PinnedServerRun
                 WorldDirectory = worldDirectory, Cancellation = cancellation.Token, Hosted = hosted,
             };
             launched = context;
-            session = context.Session = options.SessionOverride?.Invoke(context) ?? hosted?.Session(context, options) ?? OwnedSession(context, options);
-            // The session owns test access on every boot it starts, so a scenario's restart comes back with it too.
-            session.EnsureTestAccess = true;
+            // The actor owns test access on every boot it starts, so a scenario's restart comes back with it too.
+            session = context.Session = options.SessionOverride is { } scripted ? new ServerActor(scripted(context))
+                : new ServerActor(hosted ?? (IServerPlacement)new LocalServerPlacement(runtimeDirectory, worldDirectory, plan.Port),
+                    plan, output, options.SessionCapability, options.SessionTokenVariable, cancellation.Token);
             report.Step(StepPhase.Setup, "start and verify owned dedicated fixture", () => context.Server = session.Start());
             phase = StepPhase.Scenario;
             await options.Scenario(context).ConfigureAwait(false);
         }
-    }
-
-    private static OwnedServerSession OwnedSession<TPlan>(PinnedServerRunContext<TPlan> run, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
-    {
-        var plan = run.Plan;
-        int boot = 0, connection = 0;
-        return new OwnedServerSession(token =>
-        {
-            // The launch adds SteamAppId and, for Linux, the Doorstop loader variables BepInEx needs; the working directory is the copied runtime.
-            var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, run.RuntimeDirectory, run.WorldDirectory));
-            environment[options.SessionTokenVariable] = token;
-            var start = GameLaunch.ForServer(run.RuntimeDirectory, plan.LaunchArguments(run.RuntimeDirectory, run.WorldDirectory), environment).ToStartInfo();
-            string prefix = Path.Combine(run.Output, "boot-" + ++boot);
-            var process = new DirectServerProcess(start, prefix,
-                Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log"), Path.Combine(run.RuntimeDirectory, "toolkit-unity.log"));
-            // What Stop keeps: BepInEx's log, Unity's log when the plan passes -logFile {runtime}/toolkit-unity.log, and the
-            // process output (Unity's log on Linux without -logFile).
-            run.Logs.Add(new RunLog($"boot-{boot} BepInEx log", prefix + ".game-0.log", Required: true));
-            run.Logs.Add(new RunLog($"boot-{boot} Unity log", prefix + ".game-1.log"));
-            run.Logs.Add(new RunLog($"boot-{boot} stdout", prefix + ".stdout.log"));
-            try { File.WriteAllText(Path.Combine(run.Output, "boot-" + boot + ".process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["world"] = run.WorldDirectory }, plan.Pinned))); }
-            catch { process.Stop(TimeSpan.FromSeconds(15)); process.Dispose(); throw; }
-            return process;
-        }, () => new RecordingTransport(new CliTransport("127.0.0.1", plan.Port), Path.Combine(run.Output, "connection-" + ++connection + ".jsonl"), plan.Pinned ? null : EnvironmentPinning.NotPinned),
-            run.WorldDirectory, plan.ExpectCommand, options.SessionCapability,
-            TimeSpan.FromSeconds(plan.StartupSeconds), TimeSpan.FromSeconds(plan.CommandSeconds), cancellation: run.Cancellation)
-        {
-            QuitTimeout = TimeSpan.FromSeconds(plan.QuitSeconds), Events = plan.DedicatedStartupEvents(run.RuntimeDirectory) };
     }
 }

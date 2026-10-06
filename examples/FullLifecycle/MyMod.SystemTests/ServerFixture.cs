@@ -62,7 +62,7 @@ public static class ServerFixture
         report.Provenance["mode"] = Mode;
         string runtime = Path.GetFullPath(args[1]), output = Path.GetFullPath(args[2]);
         bool ownOutput = false;
-        OwnedServerSession? session = null;
+        ServerActor? session = null;
         WorldFixture? copy = null;
         // Stops only the process this preparation started. A copy whose server may still run is kept, never deleted.
         void StopOwned()
@@ -99,9 +99,14 @@ public static class ServerFixture
             string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
             string[] arguments = ["-batchmode", "-nographics", "-name", WorldName, "-port", "2456", "-world", WorldName, "-password", password,
                 "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"];
-            var plan = new LifecyclePlan { Scenario = LifecyclePlan.ServerScenario, Arguments = arguments, Port = CliPort };
-            var started = session = Session(plan, copy!.DirectoryPath, world, pins, output, cancellation.Token);
-            started.EnsureTestAccess = true; // The session's own test access, on this boot and any restart.
+            // Strict: every loaded plugin must be one of the five pinned builds. The world is the one the game is creating now.
+            var plan = new LifecyclePlan
+            {
+                Scenario = LifecyclePlan.ServerScenario, Arguments = arguments, Port = CliPort, StartupSeconds = StartupSeconds, CommandSeconds = CommandSeconds,
+                Pins = new Dictionary<string, string>(pins) { ["world"] = "any" },
+            };
+            // The actor establishes test access on this boot (and would on any restart).
+            var started = session = ServerActor.OnThisMachine(plan, copy!.DirectoryPath, world, output, "mymod.testing/session", LifecyclePlan.SessionTokenVariable, cancellation.Token);
             GameActor server = null!;
             report.Step(StepPhase.Setup, "start the owned server on a new world, plugins pinned, with test access", () => server = started.Start());
             WorldFacts facts = new();
@@ -189,22 +194,6 @@ public static class ServerFixture
         var wet = SiteSearch.Nearest(all, s => s.Height <= WetAtMost && s.Height >= -100 && (MathF.Abs(s.X - dry.X) >= 50 || MathF.Abs(s.Z - dry.Z) >= 50));
         if (wet == null) return null;
         return (ToSite(dry), ToSite(wet));
-    }
-
-    private static OwnedServerSession Session(LifecyclePlan plan, string runtime, string world, IReadOnlyDictionary<string, string> pins, string output, CancellationToken cancellation)
-    {
-        // Strict: every loaded plugin must be one of the five pinned builds. The world is the one the game is creating now.
-        string expectations = "cli_expect --strict world=any " + string.Join(" ", pins.Select(pin => pin.Key + "=" + pin.Value));
-        int boot = 0, connection = 0;
-        return new OwnedServerSession(token =>
-        {
-            var start = GameLaunch.ForServer(runtime, plan.Arguments.Select(argument => plan.Expand(argument, runtime, world)),
-                new Dictionary<string, string> { [LifecyclePlan.SessionTokenVariable] = token }).ToStartInfo();
-            return new DirectServerProcess(start, Path.Combine(output, "boot-" + ++boot),
-                Path.Combine(runtime, "BepInEx", "LogOutput.log"), Path.Combine(runtime, "toolkit-unity.log"));
-        }, () => new RecordingTransport(new CliTransport("127.0.0.1", plan.Port), Path.Combine(output, "connection-" + ++connection + ".jsonl")),
-            world, expectations, "mymod.testing/session", TimeSpan.FromSeconds(StartupSeconds), TimeSpan.FromSeconds(CommandSeconds), cancellation: cancellation)
-        { Events = plan.DedicatedStartupEvents(runtime) };
     }
 
     private static void WritePlan(string path, string runtime, IReadOnlyDictionary<string, string> runtimeHashes, string world, ServerPlatform platform,
