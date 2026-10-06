@@ -104,6 +104,7 @@ public sealed class SessionControl(GameActor actor)
         ArgumentNullException.ThrowIfNull(plan);
         ValidateWorldUid(worldUid);
         if (plan.HostWorld != null) throw new ArgumentException("This client hosts its own world (hostWorld); it joins no server.", nameof(plan));
+        if (plan.JoinsHost) throw new ArgumentException("This client is a host's peer (joinsHost): it joins the hosting client with JoinHost.", nameof(plan));
         if (plan.Crossplay != (lobby != null))
             throw new ArgumentException(plan.Crossplay ? "A crossplay client joins the server's lobby: pass it (CrossplayServer.WaitForLobby)." : "This client joins by address; a lobby is for a crossplay plan.", nameof(lobby));
         var timeout = TimeSpan.FromSeconds(plan.JoinSeconds);
@@ -111,13 +112,7 @@ public sealed class SessionControl(GameActor actor)
             JoinCrossplay(lobby.RemotePlayerId, plan.Character, worldUid, plan.MenuExpectations, timeout, cancellation: cancellation,
                 worldExpectations: plan.WorldExpectations(worldUid));
         else Join(plan.Join, plan.Character, plan.PasswordVariable); // Exactly once.
-        actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // A transition always needs fresh pins.
-        var state = WaitForWorld(worldUid, timeout, cancellation, protectPlayer: false); // A joined client's world is ready with its player.
-        // Protection is a mutating test command on a joined client: an owned client's access is established first and must
-        // allow it (AllowOnServerClients), so a client staged without it is named here rather than by a refused command.
-        if (plan.Owned) TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: protectPlayer);
-        if (protectPlayer) PlayerPlacement.Protect(actor);
-        return state;
+        return Joined(plan, worldUid, timeout, protectPlayer, cancellation);
     }
 
 
@@ -195,21 +190,73 @@ public sealed class SessionControl(GameActor actor)
     public SessionState JoinCrossplay(string remotePlayerId, string character, string worldUid, string menuExpectations, TimeSpan timeout,
         bool enableDevcommands = true, CancellationToken cancellation = default, string? worldExpectations = null)
     {
+        foreach (string token in new[] { remotePlayerId, character })
+            if (string.IsNullOrEmpty(token) || token.Any(char.IsWhiteSpace)) throw new ArgumentException("The remote player id and character must be single tokens.");
+        return JoinUser("cli_connect_playfab_user " + remotePlayerId, $"OK: PlayFab user join started for {remotePlayerId} using ", "crossplay join", character, worldUid,
+            menuExpectations, timeout, enableDevcommands, cancellation, worldExpectations);
+    }
+
+    /// <summary>
+    /// Joins a client plan's disposable character, a host's peer (<see cref="ClientRunPlan.JoinsHost"/>), to the world a hosting
+    /// client hosts (<see cref="HostingClientActor"/>), whose in-game handle is <paramref name="host"/> and world
+    /// <paramref name="worldUid"/>. A listen server on the game's Steam backend is reached through Steam rather than at an address,
+    /// so this reads the host's multiplayer identity (<c>cli_multiplayer_identity</c>, read-only: it must be an open server), then
+    /// joins the host's Steam user once (<c>cli_connect_steam_user &lt;steamId&gt;</c>, after <c>cli_select_character</c>, with
+    /// devcommands first), and waits as a crossplay join does until the client is connected in the host's world with its player.
+    /// Then, as <see cref="JoinWorld"/>: the world pins, the world awaited within the plan's join time, test access on an owned
+    /// client's character, and protection unless <paramref name="protectPlayer"/> is false. A crossplay (PlayFab) host is refused:
+    /// its peer join is not supported yet.
+    /// </summary>
+    public SessionState JoinHost(ClientRunPlan plan, GameActor host, string worldUid, bool protectPlayer = true, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan); ArgumentNullException.ThrowIfNull(host);
+        ValidateWorldUid(worldUid);
+        if (!plan.JoinsHost) throw new ArgumentException("This client joins a server by its address or lobby (JoinWorld); a host's peer sets joinsHost.", nameof(plan));
+        if (string.IsNullOrEmpty(plan.Character) || plan.Character.Any(char.IsWhiteSpace)) throw new ArgumentException("The character must be a single token.", nameof(plan));
+        var identity = MultiplayerIdentity.Read(host);
+        if (!identity.IsServer || !identity.IsOpenServer)
+            throw new InvalidOperationException($"The host is not an open server (isServer={identity.IsServer}, isOpenServer={identity.IsOpenServer}); host its world before a peer joins.");
+        if (identity.Backend != "Steamworks")
+            throw new InvalidOperationException($"The host runs on the {identity.Backend} backend; a peer joins only a Steam host (hostWorld.crossplay false) so far.");
+        // A signed-in Steam user's ID has 17 digits (as SteamAccountHolds reads it); 0 or "unavailable" is a host without Steam.
+        if (identity.SteamId.Length != 17 || !identity.SteamId.All(char.IsAsciiDigit))
+            throw new InvalidOperationException($"The host's Steam ID is {identity.SteamId}, not a signed-in Steam user's, so no peer can join it; sign the host's Steam in.");
+        var timeout = TimeSpan.FromSeconds(plan.JoinSeconds);
+        JoinUser("cli_connect_steam_user " + identity.SteamId, $"OK: Steam user join started for {identity.SteamId} using ", "host join", plan.Character, worldUid,
+            plan.MenuExpectations, timeout, enableDevcommands: true, cancellation, plan.WorldExpectations(worldUid));
+        return Joined(plan, worldUid, timeout, protectPlayer, cancellation);
+    }
+
+    // After the one join: the world pins, the world awaited, test access on an owned client's character, then protection.
+    private SessionState Joined(ClientRunPlan plan, string worldUid, TimeSpan timeout, bool protectPlayer, CancellationToken cancellation)
+    {
+        actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // A transition always needs fresh pins.
+        var state = WaitForWorld(worldUid, timeout, cancellation, protectPlayer: false); // A joined client's world is ready with its player.
+        // Protection is a mutating test command on a joined client: an owned client's access is established first and must
+        // allow it (AllowOnServerClients), so a client staged without it is named here rather than by a refused command.
+        if (plan.Owned) TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: protectPlayer);
+        if (protectPlayer) PlayerPlacement.Protect(actor);
+        return state;
+    }
+
+    // A join to another player's game: the character selected, the join command issued exactly once and its start confirmed, then
+    // the wait until the client is connected in worldUid with its player (crossplay lobby or Steam host alike).
+    private SessionState JoinUser(string command, string started, string what, string character, string worldUid, string menuExpectations, TimeSpan timeout,
+        bool enableDevcommands, CancellationToken cancellation, string? worldExpectations)
+    {
         ValidateWorldUid(worldUid);
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
         ArgumentException.ThrowIfNullOrEmpty(menuExpectations);
-        foreach (string token in new[] { remotePlayerId, character })
-            if (string.IsNullOrEmpty(token) || token.Any(char.IsWhiteSpace)) throw new ArgumentException("The remote player id and character must be single tokens.");
         var capability = actor.RequireCapability("valheim.session/state");
         var before = Read(capability);
-        if (before.Phase != "menu" || before.WorldPresent) throw new InvalidOperationException("A crossplay join starts from the client's idle main menu.");
+        if (before.Phase != "menu" || before.WorldPresent) throw new InvalidOperationException($"A {what} starts from the client's idle main menu.");
         if (enableDevcommands) EnableDevcommands();
         var selected = actor.Execute("cli_select_character " + character);
         selected.RequireLine("OK: Selected character '", "The character was not selected");
         try
         {
-            actor.Execute("cli_connect_playfab_user " + remotePlayerId) // Exactly once.
-                .RequireLine($"OK: PlayFab user join started for {remotePlayerId} using ", "The crossplay join did not start");
+            actor.Execute(command) // Exactly once.
+                .RequireLine(started, $"The {what} did not start");
         }
         finally { actor.InvalidateEnvironment(); } // A join that may have started can change the world.
         bool worldPinned = false;
@@ -226,7 +273,7 @@ public sealed class SessionControl(GameActor actor)
             capability = actor.RequireCapability("valheim.session/state");
         }
         bool left = false;
-        return ObservedWait.Until("the crossplay join", () =>
+        return ObservedWait.Until("the " + what, () =>
             {
                 SessionState state;
                 try { state = Read(capability); }
@@ -243,7 +290,7 @@ public sealed class SessionControl(GameActor actor)
             state => state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected", timeout, ReadInterval, cancellation,
             fails: state => state.LoadError ? "the game reports a world load error" : state.WorldPresent && state.WorldUid != worldUid ? "a different world is loaded"
                 : left && state.Phase == "menu" && state.ConnectionStatus.StartsWith("Error", StringComparison.Ordinal)
-                    ? $"the crossplay join failed: the client is back at its menu with {state.ConnectionStatus}. Nothing was retried" : null,
+                    ? $"the {what} failed: the client is back at its menu with {state.ConnectionStatus}. Nothing was retried" : null,
             describe: state => $"phase {state.Phase}, connection {state.ConnectionStatus}");
     }
 

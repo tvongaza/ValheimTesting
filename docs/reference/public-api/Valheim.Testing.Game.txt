@@ -323,6 +323,7 @@ sealed class Valheim.Testing.Game.ClientRunPlan
   method System.Void Validate(params System.String[] absentPlugins)
   method Valheim.Testing.Game.CliManifestCheck CheckCliManifest(System.Collections.Generic.IEnumerable`1<System.String> capabilities = null)
   property System.Boolean Crossplay { get; set; }
+  property System.Boolean JoinsHost { get; set; }
   property System.Boolean Owned { get; }
   property System.Boolean Pinned { get; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Pins { get; set; }
@@ -705,6 +706,7 @@ sealed class Valheim.Testing.Game.Fakes.FakeDataRoot : System.IDisposable
   property System.String Directory { get; }
 static class Valheim.Testing.Game.Fakes.FakeGameSession
   method static Valheim.Testing.Game.GameSession Create(Valheim.Testing.Game.ScenarioReport report, System.String output, System.String worldUid, Valheim.Testing.Game.IOwnedServer server, System.Func`1<Valheim.Testing.Game.GameActor> firstBoot, System.Func`4<Valheim.Testing.Game.ClientRunPlan,System.String,System.String,Valheim.Testing.Game.ClientSession> openClient, System.String serverLog = null, System.Func`2<Valheim.Testing.Game.ClientRunPlan,System.String> clientLog = null, System.Func`2<Valheim.Testing.Game.GameActor,Valheim.Testing.Game.CrossplayLobby> lobby = null, System.Nullable`1<System.TimeSpan> interval = null, System.Collections.Generic.IReadOnlyList`1<System.String> campaignClients = null, System.Threading.CancellationToken cancellation = null)
+  method static Valheim.Testing.Game.GameSession Hosted(Valheim.Testing.Game.ScenarioReport report, System.String output, Valheim.Testing.Game.ClientRunPlan host, System.Func`4<Valheim.Testing.Game.ClientRunPlan,System.String,System.String,Valheim.Testing.Game.ClientSession> openClient, System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientRunPlan> peers = null, System.String hostLog = null, Valheim.Testing.Game.ModDeclaration mod = null, System.Nullable`1<System.TimeSpan> interval = null, System.Threading.CancellationToken cancellation = null)
 sealed class Valheim.Testing.Game.Fakes.FakeOwnedProcess : System.IDisposable, Valheim.Testing.Game.IOwnedProcess
   method System.Threading.Tasks.Task`1<System.Int32> WaitForExitAsync(System.Threading.CancellationToken cancellation)
   method System.Void .ctor(System.Int32 id = 1)
@@ -906,6 +908,7 @@ sealed class Valheim.Testing.Game.GameSession : System.IAsyncDisposable
   property System.String Output { get; }
   property System.Threading.CancellationToken Cancellation { get; }
   property System.TimeSpan Interval { get; }
+  property Valheim.Testing.Game.HostingClientActor Host { get; }
   property Valheim.Testing.Game.ScenarioReport Report { get; }
   property Valheim.Testing.Game.ServerActor Server { get; }
 [result shape] sealed class Valheim.Testing.Game.GlobalKeyDifference : System.IEquatable`1<Valheim.Testing.Game.GlobalKeyDifference>
@@ -1167,6 +1170,15 @@ sealed class Valheim.Testing.Game.HostedCampaignRole
   property System.String DependencyLock { get; set; }
   property System.String LoaderPackage { get; set; }
   property Valheim.Testing.Game.HostedCampaignCharacter Character { get; set; }
+sealed class Valheim.Testing.Game.HostedRunOptions`1
+  method System.Void .ctor()
+  property System.Action`2<TPlan,System.Collections.Generic.IDictionary`2<System.String,System.String>> Provenance { get; init; }
+  property System.Func`2<System.String,TPlan> ReadPlan { get; init; }
+  property System.Func`2<TPlan,System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.LogClassification>> LogScan { get; init; }
+  property System.Func`2<TPlan,Valheim.Testing.Game.ClientRunPlan> Host { get; init; }
+  property System.Func`3<Valheim.Testing.Game.GameSession,TPlan,System.Threading.Tasks.Task> Scenario { get; init; }
+  property System.String Name { get; init; }
+  property Valheim.Testing.Game.ModDeclaration Mod { get; init; }
 [result shape] sealed class Valheim.Testing.Game.HostedRuntimeFile : System.IEquatable`1<Valheim.Testing.Game.HostedRuntimeFile>
   method System.Boolean Equals(Valheim.Testing.Game.HostedRuntimeFile other)
   method System.Void .ctor(System.String Source, System.String RelativePath)
@@ -1197,6 +1209,23 @@ sealed class Valheim.Testing.Game.HostedWorld : System.IDisposable
   property System.String WorldUid { get; }
   property System.String WorldsDirectory { get; }
   property static Valheim.Testing.Game.ClientPlatform CurrentPlatform { get; }
+sealed class Valheim.Testing.Game.HostingClientActor : System.IDisposable, Valheim.Testing.Game.IOwnedServer
+  method System.Void Dispose()
+  method System.Void Prepare()
+  method System.Void WaitUntilJoinable(Valheim.Testing.Game.GameActor host)
+  method Valheim.Testing.Game.ClientSession Start()
+  method Valheim.Testing.Game.GameActor Restart()
+  method Valheim.Testing.Game.SessionState Host()
+  method static Valheim.Testing.Game.HostingClientActor OnThisMachine(System.String name, Valheim.Testing.Game.ClientRunPlan plan, System.String output, System.Threading.CancellationToken cancellation = null)
+  property System.Boolean ProtectPlayer { get; init; }
+  property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.RunLog> Logs { get; }
+  property System.String LiveLog { get; }
+  property System.String Name { get; }
+  property System.String WorldUid { get; }
+  property Valheim.Testing.Game.ClientRunPlan Plan { get; }
+  property Valheim.Testing.Game.ClientSession Session { get; }
+  property Valheim.Testing.Game.GameActor Game { get; }
+  property Valheim.Testing.Game.HostedWorld World { get; }
 interface Valheim.Testing.Game.IEvidence
   property System.String Kind { get; }
   property System.String Site { get; }
@@ -1725,8 +1754,11 @@ sealed class Valheim.Testing.Game.PinnedFile
   property System.String Sha256 { get; set; }
   property System.String Source { get; set; }
 static class Valheim.Testing.Game.PinnedServerRun
+  field const System.String HostMode = "host"
   field const System.String InventoryOption = "--inventory"
   field const System.String KeepRuntimeVariable = "VALHEIM_TESTING_KEEP_RUNTIME"
+  field const System.String ValidateHostMode = "validate-host"
+  method static System.Threading.Tasks.Task`1<System.Int32> MainAsync<TPlan>(System.String[] args, Valheim.Testing.Game.HostedRunOptions`1<TPlan> options)
   method static System.Threading.Tasks.Task`1<System.Int32> MainAsync<TPlan>(System.String[] args, Valheim.Testing.Game.PinnedServerRunOptions`1<TPlan> options)
   method static System.Threading.Tasks.Task`1<System.Int32> RunCampaignAsync<TPlan>(System.String manifestFile, TPlan plan, System.Func`2<TPlan,System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientRunPlan>> clients, System.String output, Valheim.Testing.Game.PinnedServerRunOptions`1<TPlan> options)
 sealed class Valheim.Testing.Game.PinnedServerRunOptions`1
@@ -2219,6 +2251,7 @@ sealed class Valheim.Testing.Game.SessionControl
   method System.Void Leave()
   method Valheim.Testing.Game.JoinRefusal JoinExpectingRefusal(System.String address, System.String character, Valheim.Testing.Game.GameConnectionStatus expected, System.String menuExpectations, System.TimeSpan timeout, System.String passwordEnvironmentVariable = null, System.Boolean enableDevcommands = true, System.Threading.CancellationToken cancellation = null)
   method Valheim.Testing.Game.SessionState JoinCrossplay(System.String remotePlayerId, System.String character, System.String worldUid, System.String menuExpectations, System.TimeSpan timeout, System.Boolean enableDevcommands = true, System.Threading.CancellationToken cancellation = null, System.String worldExpectations = null)
+  method Valheim.Testing.Game.SessionState JoinHost(Valheim.Testing.Game.ClientRunPlan plan, Valheim.Testing.Game.GameActor host, System.String worldUid, System.Boolean protectPlayer = true, System.Threading.CancellationToken cancellation = null)
   method Valheim.Testing.Game.SessionState JoinWorld(Valheim.Testing.Game.ClientRunPlan plan, System.String worldUid, Valheim.Testing.Game.CrossplayLobby lobby = null, System.Boolean protectPlayer = true, System.Threading.CancellationToken cancellation = null)
   method Valheim.Testing.Game.SessionState Read()
   method Valheim.Testing.Game.SessionState WaitForWorld(System.String worldUid, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null, System.Boolean protectPlayer = true)

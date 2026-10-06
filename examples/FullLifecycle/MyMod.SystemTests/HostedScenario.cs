@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -49,40 +48,36 @@ public sealed class HostedPlan
 
 /// <summary>
 /// <c>hosted</c> (#31): the mod on a host, which is the server of its world and a client with a local player in one
-/// process. The toolkit's <see cref="ClientRounds"/>, given a client plan with a <c>hostWorld</c> section, places the
-/// fixture world, hosts it (protected), and between its two rounds saves with confirmation and restarts the hosted world.
+/// process. The runner's <see cref="GameSession"/> has the toolkit's <see cref="HostingClientActor"/> as its
+/// <see cref="GameSession.Host"/>: before the scenario it placed the fixture world, opened the client, checked MyMod's
+/// Harmony patches on it and hosts the world (protected).
 /// <list type="number">
-/// <item>First round, on the host: MyMod's patches are applied; no marker before, the mod marks the dry site and refuses the
-/// wet one; the host's saved objects show one marker at the dry site. The host's admin changes the greeting: MyMod
-/// broadcasts it to everybody, and on a host the broadcast's handler runs in the host's own process ("(host)" in its log,
-/// read live from an owned host); the greeting is then set back.</item>
-/// <item>After the restart: the host still has one marker at the dry site, none at the wet site.</item>
+/// <item>On the host: no marker before, the mod marks the dry site and refuses the wet one; the host's saved objects show one
+/// marker at the dry site. The host's admin changes the greeting: MyMod broadcasts it to everybody, and on a host the
+/// broadcast's handler runs in the host's own process ("(host)" in its log, read live from an owned host); the greeting is
+/// then set back.</item>
+/// <item>A confirmed save, then the host's restart (<see cref="HostingClientActor.Restart"/>: it leaves, which saves, and
+/// hosts the world again): the host still has one marker at the dry site, none at the wet site.</item>
 /// </list>
-/// A second client joining the host is not part of it: the toolkit does not provide one yet.
+/// The session's teardown has the host leave its world, closes it and moves the world into the evidence. A peer joining the
+/// host (<see cref="ClientRunPlan.JoinsHost"/>) is a campaign's second actor, not part of this standalone run.
 /// </summary>
 public static class HostedScenario
 {
-    public static void Run(HostedPlan plan, Func<ClientSession> openClient, ScenarioReport report, string output, string? hostLog, CancellationToken cancellation = default)
+    public static Task Run(GameSession session, HostedPlan plan)
     {
+        var owned = session.Host ?? throw new ArgumentException("The hosted scenario runs on a session with a hosting client.");
+        var report = session.Report;
         var timeout = TimeSpan.FromSeconds(plan.Client.JoinSeconds);
+        string? hostLog = owned.LiveLog;
         report.Provenance["hostBroadcast"] = hostLog == null ? "not observed: an attached host's log is its operator's" : "the owned host's live BepInEx log";
-        new ClientRounds { Client = plan.Client, Report = report, Output = output, Cancellation = cancellation }.Run(openClient, round =>
-        {
-            var host = round.Server; // The same actor as round.Client.
-            if (round.Index > 0)
-            {
-                round.Step("host: the marker is still at the dry site after the restart, none at the wet site", () => RequireMarkers(host, plan, dry: 1));
-                return;
-            }
-            // A clean character needs explicit acknowledgement before Terminal will run this mod's cheat commands.
-            round.Step("host: the mod's Harmony patches are applied", () =>
-                LifecyclePlan.Mod.RequirePatchesApplied(host)); // A hosted world is not a session yet (#258 step 8).
-            round.Step("no marker at either site before the mod acts", () => RequireMarkers(host, plan, dry: 0));
-            round.Step("the mod marks the dry site", () => host.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
-            round.Step("the mod refuses the wet site", () => host.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));
-            round.Step("host: one marker at the dry site, none at the wet site", () => RequireMarkers(host, plan, dry: 1));
-            if (hostLog == null) return;
-            round.Step("the mod's greeting broadcast runs its handler on the host, which is server and client at once", () =>
+        var host = owned.Game; // The server of its world and its client.
+        report.Step("no marker at either site before the mod acts", () => RequireMarkers(host, plan, dry: 0));
+        report.Step("the mod marks the dry site", () => host.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
+        report.Step("the mod refuses the wet site", () => host.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));
+        report.Step("host: one marker at the dry site, none at the wet site", () => RequireMarkers(host, plan, dry: 1));
+        if (hostLog != null)
+            report.Step("the mod's greeting broadcast runs its handler on the host, which is server and client at once", () =>
             {
                 string before = SyncedConfig.Read(host, Capabilities.Config, LifecyclePlan.ModPlugin, "Server", "Greeting").Value
                     ?? throw new InvalidOperationException("The host has no greeting entry.");
@@ -91,13 +86,32 @@ public static class HostedScenario
                 Greet(host, plan.NewGreeting);
                 try
                 {
-                    var line = log.WaitAsync(Received(plan.NewGreeting), timeout, cancellation: cancellation).GetAwaiter().GetResult();
+                    var line = log.WaitAsync(Received(plan.NewGreeting), timeout, cancellation: session.Cancellation).GetAwaiter().GetResult();
                     report.Provenance["hostBroadcastLine"] = line.Text;
                 }
                 finally { Greet(host, before); } // The host's config file is the operator's install's: leave it as it was.
             });
-        });
+        report.Step(StepPhase.Setup, "confirmed world save", () => new SessionControl(host).Save(plan.Client.HostWorld!.WorldUid, TimeSpan.FromSeconds(plan.Client.HostWorld.SaveSeconds)));
+        report.Step(StepPhase.Setup, "restart the hosted world" + (owned.ProtectPlayer ? ", protected" : ""), () => host = owned.Restart());
+        report.Step("host: the marker is still at the dry site after the restart, none at the wet site", () => RequireMarkers(host, plan, dry: 1));
+        return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// The runner's options for a hosted plan (<see cref="PinnedServerRun.MainAsync{TPlan}(string[], HostedRunOptions{TPlan})"/>,
+    /// modes <c>validate-host</c> and <c>host</c>): the plan's rules, its hosting client, MyMod's declaration, the log
+    /// classifications and the scenario.
+    /// </summary>
+    public static HostedRunOptions<HostedPlan> RunnerOptions(Func<GameSession, HostedPlan, Task>? scenario = null) => new()
+    {
+        Name = "mymod-hosted-test",
+        ReadPlan = HostedPlan.ReadValidated,
+        Host = plan => plan.Client,
+        Mod = LifecyclePlan.Mod,
+        LogScan = plan => plan.LogScan,
+        Provenance = (plan, provenance) => provenance["scenario"] = plan.Scenario,
+        Scenario = scenario ?? Run,
+    };
 
     private static void RequireMarkers(GameActor host, HostedPlan plan, int dry)
     {
@@ -113,72 +127,4 @@ public static class HostedScenario
 
     /// <summary>MyMod's log line when the greeting's broadcast reaches its handler on a host.</summary>
     public static Regex Received(string greeting) => new($"Greeting \"{Regex.Escape(greeting)}\" received from -?\\d+ \\(host\\)", RegexOptions.CultureInvariant);
-}
-
-/// <summary>
-/// The hosted run's own entry point, beside the pinned server runner (a host has no dedicated server to pin):
-/// <c>validate-host|host &lt;plan.json&gt; &lt;new-output-directory&gt;</c>. <c>validate-host</c> checks the plan and runs
-/// the same preflight the hosted <see cref="ClientRounds"/> start with (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/>: the
-/// fixture world's hashes and own world UID, and an owned client's install, with its ValheimCLI set against its
-/// <c>cliManifest</c> when the plan names one), and copies or launches nothing. <c>host</c> runs
-/// <see cref="HostedScenario"/>, then scans the owned client's logs, writes <c>result.json</c> and <c>junit.xml</c> and
-/// prints PASS or FAIL.
-/// </summary>
-public static class HostedRun
-{
-    public const string RunMode = "host", ValidateMode = "validate-host";
-
-    public static int Run(string[] args)
-    {
-        if (args.Length != 3 || (args[0] != RunMode && args[0] != ValidateMode))
-        {
-            Console.Error.WriteLine($"Usage: mymod-system-test {ValidateMode}|{RunMode} <hosted-plan.json> <new-output-directory>");
-            return 2;
-        }
-        using var cancellation = new CancellationTokenSource();
-        ConsoleCancelEventHandler onCancel = (_, e) => { e.Cancel = true; cancellation.Cancel(); };
-        Console.CancelKeyPress += onCancel;
-        using var sigterm = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => { context.Cancel = true; cancellation.Cancel(); });
-        var report = new ScenarioReport("mymod-hosted-test");
-        report.Provenance["mode"] = args[0];
-        string output = Path.GetFullPath(args[2]);
-        bool ownOutput = false;
-        var logs = new List<RunLog>();
-        HostedPlan? plan = null;
-        try
-        {
-            if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
-            plan = HostedPlan.ReadValidated(args[1]);
-            report.Provenance["planSha256"] = FileHash.Sha256(args[1]);
-            report.Provenance["scenario"] = plan.Scenario;
-            report.Provenance["clientMode"] = plan.Client.Mode;
-            Directory.CreateDirectory(output); ownOutput = true;
-            if (args[0] == ValidateMode)
-            {
-                // The run's first step, alone: a wrong fixture or install fails here as it would before the run copies anything.
-                report.Provenance["cliPreflight"] = plan.Client.CliPreflight;
-                report.Step(StepPhase.Preflight, plan.Client.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied",
-                    () => plan.Client.Preflight(CliCapabilities.HostedRounds));
-            }
-            else
-            {
-                string? hostLog = plan.Client.Owned ? Path.Combine(plan.Client.Install, "BepInEx", "LogOutput.log") : null;
-                // Kept when the rounds close the client, or when its startup fails; scanned below.
-                HostedScenario.Run(plan, () => ClientSession.Open(plan.Client, output, logs, cancellation.Token), report, output, hostLog, cancellation.Token);
-            }
-        }
-        catch (Exception error)
-        {
-            report.RecordFailure("runner failed", error);
-            Console.Error.WriteLine(error.Message);
-        }
-        finally
-        {
-            Console.CancelKeyPress -= onCancel;
-            if (logs.Count != 0) report.ScanLogs(logs, plan?.LogScan);
-            if (ownOutput) report.Write(output);
-        }
-        Console.WriteLine(!report.Passed ? "FAIL" : args[0] == RunMode ? "PASS" : "VALIDATED (plan and the run's preflight only; nothing was copied and no game was launched)");
-        return report.Passed ? 0 : 1;
-    }
 }

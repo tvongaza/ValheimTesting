@@ -21,8 +21,8 @@ public static class ThreeActorSmokeScenario
             RequireMenu(a.Actor, plan.Client!, "client A");
             RequireMenu(b.Actor, plan.SecondClient!, "client B");
         });
-        Join(a.Actor, plan.Client!, plan.WorldUid, session, "client A");
-        Join(b.Actor, plan.SecondClient!, plan.WorldUid, session, "client B");
+        Join(a.Actor, plan.Client!, plan.WorldUid, session, "client A joins");
+        Join(b.Actor, plan.SecondClient!, plan.WorldUid, session, "client B joins");
         session.Report.Step("both clients joined: server sees two peers", () => CampaignSteps.RequirePeers(session.Server!.Game, 2));
         session.Report.Step("client B leaves and returns to its pinned menu", () =>
         {
@@ -50,8 +50,9 @@ public static class ThreeActorSmokeScenario
             throw new InvalidOperationException(name + " did not enter the expected fixture world.");
     }
 
-    private static void Join(GameActor actor, ClientRunPlan client, string worldUid, GameSession session, string name) =>
-        session.Report.Step(name + " joins the pinned world with its mod and adapter", () =>
+    // The step names who and how: "client A joins", "client B rejoins".
+    private static void Join(GameActor actor, ClientRunPlan client, string worldUid, GameSession session, string who) =>
+        session.Report.Step(who + " the pinned world with its mod and adapter", () =>
         {
             new SessionControl(actor).JoinWorld(client, worldUid, cancellation: session.Cancellation); // The toolkit's one join: pins, world, protection, test access.
             _ = actor.RequireCapability(Capabilities.Markers);

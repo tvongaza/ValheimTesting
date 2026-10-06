@@ -46,6 +46,37 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
 }
 
 /// <summary>
+/// What a mod's runner supplies for a hosted run (<see cref="PinnedServerRun.MainAsync{TPlan}(string[], HostedRunOptions{TPlan})"/>):
+/// one client hosts a pinned fixture world from its menu, with no dedicated server (#258 step 8).
+/// </summary>
+public sealed class HostedRunOptions<TPlan> where TPlan : class
+{
+    /// <summary>The runner's name: the report's name and the usage line's program.</summary>
+    public required string Name { get; init; }
+    /// <summary>Reads and validates the plan, with the mod's own rules (throw <see cref="ArgumentException"/>).</summary>
+    public required Func<string, TPlan> ReadPlan { get; init; }
+    /// <summary>The plan's hosting client: a <see cref="ClientRunPlan"/> with its <see cref="ClientRunPlan.HostWorld"/> section.</summary>
+    public required Func<TPlan, ClientRunPlan> Host { get; init; }
+    /// <summary>The mod's declaration: its Harmony patches are checked on the host, once it is at its menu, when its pins load the mod.</summary>
+    public required ModDeclaration Mod { get; init; }
+    /// <summary>The plan's exact known log lines and reasons (<see cref="ScenarioReport.ScanLogs"/>); other errors still fail the run.</summary>
+    public Func<TPlan, IReadOnlyDictionary<string, LogClassification>?>? LogScan { get; init; }
+    /// <summary>Adds the mod's provenance (scenario details) to the report, before anything is copied.</summary>
+    public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
+    /// <summary>
+    /// The scenario for <c>host</c>: <c>(session, plan) =&gt; Task</c>, given the <see cref="GameSession"/> whose
+    /// <see cref="GameSession.Host"/> hosts the fixture world (<c>session.Host.Game</c>), with its report, output and cancellation.
+    /// </summary>
+    public required Func<GameSession, TPlan, Task> Scenario { get; init; }
+    /// <summary>Test seam: opens the hosting client (a scripted one) instead of launching or attaching on this machine.</summary>
+    internal Func<ClientRunPlan, string, ClientSession>? OpenHost { get; init; }
+    /// <summary>Test seam: the scripted host's live log.</summary>
+    internal Func<string?>? HostLog { get; init; }
+    /// <summary>The run's cancellation (Ctrl+C and SIGTERM); tests pass fakes.</summary>
+    internal IHostedRunHooks Hooks { get; init; } = HostedRunHooks.Production;
+}
+
+/// <summary>
 /// The lifecycle of a mod's owned dedicated-server test runner, so the mod supplies only its plan fields, modes and
 /// scenarios. Usage: <c>&lt;runner&gt; [--inventory &lt;environments.json&gt;] validate|run &lt;plan.json&gt; &lt;new-output-directory&gt;</c>.
 /// <list type="number">
@@ -153,6 +184,108 @@ public static class PinnedServerRun
         using var own = owned ? cancellation : null;
         return await RunAsync(args[0], () => options.ReadPlan(planFile), () => FileHash.Sha256(planFile), Path.GetFileName(planFile),
             args[2], options, cancellation, inventoryPath, campaign: null).ConfigureAwait(false);
+    }
+
+    /// <summary>The mode that runs a hosted plan's scenario; <see cref="ValidateHostMode"/> only checks it.</summary>
+    public const string HostMode = "host", ValidateHostMode = "validate-host";
+
+    /// <summary>
+    /// The lifecycle of a hosted run, where one client hosts a pinned fixture world from its menu and there is no dedicated server
+    /// to pin (#258 step 8). Usage: <c>&lt;runner&gt; validate-host|host &lt;plan.json&gt; &lt;new-output-directory&gt;</c>.
+    /// <c>validate-host</c> checks the plan and runs the run's own preflight (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/>
+    /// with <see cref="CliCapabilities.HostedRounds"/>: the fixture world's hashes and own world UID, and an owned client's
+    /// install), and copies or launches nothing. <c>host</c> runs the scenario on a <see cref="GameSession"/> whose
+    /// <see cref="GameSession.Host"/> (<see cref="HostingClientActor"/>, on this machine) was prepared, opened and hosts its
+    /// world; then disposes the session (the host leaves, is stopped or detached, and its world moves into the evidence once no
+    /// client can host it), scans the host's logs with the plan's <see cref="HostedRunOptions{TPlan}.LogScan"/>, writes
+    /// <c>result.json</c> and <c>junit.xml</c> and prints PASS, VALIDATED or FAIL. Ctrl+C and SIGTERM cancel the run.
+    /// Returns 0 when every step passed, 1 on failure, 2 on bad usage.
+    /// </summary>
+    public static async Task<int> MainAsync<TPlan>(string[] args, HostedRunOptions<TPlan> options) where TPlan : class
+    {
+        ArgumentNullException.ThrowIfNull(args); ArgumentNullException.ThrowIfNull(options);
+        if (args.Length != 3 || args[0] is not (HostMode or ValidateHostMode))
+        {
+            Console.Error.WriteLine($"Usage: {options.Name} {ValidateHostMode}|{HostMode} <hosted-plan.json> <new-output-directory>");
+            return 2;
+        }
+        var cancellation = options.Hooks.Cancellation(out bool owned);
+        using var own = owned ? cancellation : null;
+        string mode = args[0], planFile = args[1], output = Path.GetFullPath(args[2]);
+        var report = new ScenarioReport(options.Name);
+        report.Provenance["mode"] = mode;
+        bool ownOutput = false;
+        TPlan? plan = null;
+        GameSession? game = null;
+        var phase = StepPhase.Preflight;
+        try
+        {
+            options.Mod.Validate();
+            if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
+            plan = options.ReadPlan(planFile);
+            var host = options.Host(plan) ?? throw new ArgumentException("The plan has no hosting client section.");
+            if (host.HostWorld == null) throw new ArgumentException("Add the hosting client's hostWorld section: the fixture world it hosts.");
+            host.Validate();
+            report.Provenance["planSha256"] = FileHash.Sha256(planFile);
+            report.Provenance["clientMode"] = host.Mode;
+            options.Provenance?.Invoke(plan, report.Provenance);
+            if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = FileHash.Sha256(runner);
+            report.Provenance["toolkitSha256"] = FileHash.Sha256(typeof(GameActor).Assembly.Location);
+            report.Provenance["cliPreflight"] = host.CliPreflight;
+            Directory.CreateDirectory(output); ownOutput = true;
+            var opener = options.OpenHost;
+            var placement = opener == null ? (IClientPlacement)LocalClientPlacement.Instance : new OpenedBy((plan, directory) => opener(plan, directory));
+            HostingClientActor Actor(CancellationToken token) => new("host", host, output, placement, token) { LiveLogSource = options.HostLog };
+            if (mode == ValidateHostMode)
+            {
+                // The run's first step, alone: a wrong fixture or install fails here as it would before the run copies anything.
+                var actor = Actor(cancellation.Token);
+                report.Step(StepPhase.Preflight, actor.PreflightStep, actor.Preflight);
+            }
+            else
+            {
+                report.Provenance["role"] = "host";
+                report.Provenance["hostCrossplay"] = host.HostWorld.Crossplay ? "true" : "false";
+                // What an owned client is launched as (never another slice); an attached client's is its operator's.
+                report.Provenance["clientArchitecture"] = host.Owned ? GameLaunch.PlanName(host.LaunchArchitecture) : "attached";
+                phase = StepPhase.Setup;
+                // The host gets the session's token, which the session's teardown and a failed start cancel.
+                game = new GameSession(report, output, host.HostWorld.WorldUid, server: null, [], cancellation.Token, Actor)
+                {
+                    Mod = options.Mod, ServerPinsMod = !host.Pinned || options.Mod.PinnedIn(host.Pins),
+                    DisposeOnFailedStart = false, // The finally disposes it.
+                };
+                await game.StartAsync().ConfigureAwait(false);
+                phase = StepPhase.Scenario;
+                await options.Scenario(game, plan).ConfigureAwait(false);
+            }
+        }
+        catch (Exception error)
+        {
+            report.RecordFailure(phase, "runner failed", error);
+            Console.Error.WriteLine(error.Message);
+        }
+        finally
+        {
+            cancellation.BeginCleanup();
+            if (game != null)
+            {
+                // Peers first, then the host (it leaves a passing run's world, then is stopped or detached), then its world.
+                await game.DisposeAsync().ConfigureAwait(false);
+                var logs = game.Logs;
+                if (logs.Count != 0) report.ScanLogs(logs, plan == null ? null : options.LogScan?.Invoke(plan));
+            }
+            // A second Ctrl+C during the teardown, or its budget running out, is recorded: the host may still hold its world.
+            if (cancellation.Abandoned is { } abandoned) report.Provenance["cleanupAbandoned"] = abandoned;
+            if (ownOutput) report.Write(output);
+        }
+        Console.WriteLine(!report.Passed ? "FAIL" : mode == HostMode ? "PASS" : "VALIDATED (plan and the run's preflight only; nothing was copied and no game was launched)");
+        return report.Passed ? 0 : 1;
+    }
+
+    private sealed class OpenedBy(Func<ClientRunPlan, string, ClientSession> open) : IClientPlacement
+    {
+        public ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation) => open(plan, output);
     }
 
     /// <summary>Test seam: a run on an environment resolved in code, as a campaign hands it over (remote clients included).</summary>
