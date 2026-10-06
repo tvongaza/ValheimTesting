@@ -66,6 +66,8 @@ internal sealed class FakeServerHost : IGameHost
     public Action<string>? AfterApply { get; set; }
     /// <summary>Controlled delay for tests that prove independent actors prepare concurrently.</summary>
     public Func<Task>? BeforeShip { get; set; }
+    /// <summary>Runs after a lock release is recorded, with the releasing owner.</summary>
+    public Action<string>? AfterRelease { get; set; }
     /// <summary>Simulates a transport failure after the remote staging directory has been populated.</summary>
     public Action<string>? AfterShip { get; set; }
     public List<(string Game, string Start)> Stops { get; } = [];
@@ -504,6 +506,7 @@ internal sealed class FakeServerHost : IGameHost
     public Task<HostLockResult> ReleaseLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default)
     {
         lock (_sync) Releases.Add(owner);
+        AfterRelease?.Invoke(owner);
         return Task.FromResult(new HostLockResult(HostLockState.Released, null, "released"));
     }
     public Task<Shipment> ShipRevisionAsync(string repository, string revision, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => throw new NotSupportedException();
