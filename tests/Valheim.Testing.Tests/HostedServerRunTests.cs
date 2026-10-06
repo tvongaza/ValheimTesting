@@ -659,6 +659,46 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains(Result().GetProperty("Logs").EnumerateArray(), log => log.GetProperty("Role").GetString() == "client-1 BepInEx log");
     }
 
+    // #257, part 2: the client host's Steam logs "Logged In Elsewhere" as the client registers (steamdup2's lines): the start fails at
+    // once with the decided message, not as a later exit or timeout. The same evening's earlier sign-out (steamdup1), already in the
+    // log before the launch, is not this launch's: that client starts.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AClientSteamSignsOutAsItStartsFailsAtOnceNamingTheOtherComputer(bool signedOut)
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { SteamLog = "/home/tester/.local/share/Steam/logs/connection_log.txt" };
+        string clientInstall = clientHost.Local("/home/tester/valheim");
+        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
+        FakeInstalls.Client(clientInstall);
+        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
+        FakeInstalls.LinuxLoader(clientInstall);
+        string steamLog = clientHost.Local(clientHost.SteamLog);
+        Directory.CreateDirectory(Path.GetDirectoryName(steamLog)!);
+        File.WriteAllText(steamLog, SteamAccountInUseTests.Healthy + SteamAccountInUseTests.SteamDup1 + SteamAccountInUseTests.Healthy);
+        long before = new FileInfo(steamLog).Length;
+        clientHost.BeforeScript = name => { if (name == "client-start") File.AppendAllText(steamLog, signedOut ? SteamAccountInUseTests.SteamDup2 : SteamAccountInUseTests.Healthy); };
+        var (plan, profile) = Write(host, withClient: true);
+        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+        Exception? failed = null;
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
+        {
+            failed = Record.Exception(() => { using var session = run.OpenClient(client); });
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport()));
+        Assert.Equal(0, code);
+        // The log was marked before the start and followed from its length then.
+        var runs = clientHost.Runs.ToList();
+        Assert.True(runs.FindIndex(run => run.Script == "steam-log") is var mark and >= 0 && mark < runs.FindIndex(run => run.Script == "client-start"));
+        Assert.Contains(runs, run => run.Script == "follow" && run.Variables["log"] == clientHost.SteamLog && run.Variables["offset"] == before.ToString());
+        if (!signedOut) { Assert.Null(failed); return; }
+        var error = Assert.IsType<SteamLoggedInElsewhereException>(failed);
+        Assert.Equal(SteamSessionLog.Message(null, "linux-gpu"), error.Message);
+        Assert.DoesNotContain("12345678", error.Message);
+        Assert.Equal(new[] { ("77", "555") }, clientHost.Stops); // the started client was stopped
+    }
+
     // #248's remaining half: a remote Linux client's loader is checked before launch, as a Windows client's is. Through the run:
     // the client's host is never asked to start a game without its Doorstop library.
     [Fact] public async Task ARemoteLinuxClientWithoutItsDoorstopLibraryIsRefusedBeforeLaunch()

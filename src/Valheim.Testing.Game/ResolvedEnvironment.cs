@@ -211,10 +211,17 @@ internal sealed class SteamAccountsProfile
     public SteamAccountPool? Accounts { get; set; }
     // Set by inventory resolution, before the host preflight observed any identity; preparation replaces it with Accounts.
     public string? ObservedLeaseDirectory { get; set; }
+    /// <summary>
+    /// Every host an inventory client recipe names, set by inventory resolution: preflight asks each one the campaign does not
+    /// already check whether Valheim runs there on an account a client would use (#257), since a Steam account plays on one computer at a time.
+    /// </summary>
+    public List<string> InventoryClientHosts { get; set; } = [];
 
     internal void Validate(ResolvedEnvironment profile, List<string> errors)
     {
         if (!profile.Hosts.TryGetValue(LeaseHost ?? "", out var leaseHost)) errors.Add($"Steam leases: the lease host '{LeaseHost}' is not listed under hosts.");
+        foreach (string host in InventoryClientHosts.Where(host => !profile.Hosts.ContainsKey(host)))
+            errors.Add($"Steam leases: the inventory client host '{host}' is not listed under hosts.");
         if (ObservedLeaseDirectory != null)
         {
             if (!CheckSignedIn) errors.Add("Steam leases: observed identities require the signed-in check.");

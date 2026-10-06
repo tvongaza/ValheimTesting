@@ -153,19 +153,31 @@ public sealed class ClientSession : IDisposable
         var platform = GameLaunch.DetectClient(plan.Install);
         string playerLog = PlayerLog(platform);
         string prefix = Path.Combine(output, "client-boot");
-        LogWait? cliLog = null;
+        // #257: this machine's Steam connection_log from the launch on. "Logged In Elsewhere" in it means the account plays on another computer.
+        string? steamLogPath = SteamSessionLog.LocalPath();
+        if (steamLogPath == null) Console.Error.WriteLine("Warning: no Steam connection_log.txt found on this machine; a client signed out by another computer will show only as its exit.");
+        string machine = account?.ClientHost ?? Environment.MachineName; // the inventory's name for this host, when a campaign leased the account
+        string SteamMessage() => SteamSessionLog.Message(account?.Account, machine);
+        LogWait? cliLog = null, steamLog = null;
+        long steamOffset = 0;
+        bool SteamSeen() => steamLog != null && SteamSessionLog.SeenInFile(steamLogPath!, steamOffset);
         try
         {
             var session = Launch(plan, output,
                 () =>
                 {
                     cliLog = new LogWait(log); // Opened before the launch: an earlier run's lines never count.
+                    if (steamLogPath != null)
+                    {
+                        steamLog = new LogWait(steamLogPath);
+                        steamOffset = steamLog.Offset;
+                    }
                     var process = new DirectServerProcess(start, prefix, log, playerLog) { Quit = QuitRequest.CloseWindow };
                     processStarted?.Invoke(process);
                     return process;
                 },
                 () => new CliTransport(plan.Host, plan.Port),
-                async (left, token) =>
+                SteamSessionLog.Guard(async (left, token) =>
                 {
                     var clock = Stopwatch.StartNew();
                     var bepInEx = TimeSpan.FromSeconds(plan.BepInExSeconds);
@@ -173,16 +185,26 @@ public sealed class ClientSession : IDisposable
                     await cliLog!.WaitAsync(StartupEvents.CliListening, left - clock.Elapsed, StartupEvents.StartupFailures, token).ConfigureAwait(false);
                     using var states = StateWait.Connect(plan.Host, plan.Port);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
-                }, cancellation, () => cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog) : null,
+                }, (left, token) => WatchLocalAsync(steamLog, left, token), () => Task.FromResult(SteamSeen()), SteamMessage), cancellation,
+                () => SteamSeen() ? SteamSessionLog.ExitHint(SteamMessage())
+                    : cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog) : null,
                 [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")], account);
             return session;
         }
-        finally { cliLog?.Dispose(); }
+        finally { cliLog?.Dispose(); steamLog?.Dispose(); }
     }
 
     /// <summary>The owned launch of the plan's install as the plan's architecture, built for <paramref name="host"/> (injectable for tests).</summary>
     internal static ProcessStartInfo StartInfo(ClientRunPlan plan, ClientPlatform host) =>
         GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, null, plan.LaunchArchitecture, true, host).ToStartInfo();
+
+    // True once this machine's Steam logged "Logged In Elsewhere" after the launch; false at the deadline, on cancellation or when unreadable.
+    private static async Task<bool> WatchLocalAsync(LogWait? steamLog, TimeSpan left, CancellationToken token)
+    {
+        if (steamLog == null || left <= TimeSpan.Zero) return false;
+        try { await steamLog.WaitAsync(SteamSessionLog.LoggedInElsewhere, left, null, token).ConfigureAwait(false); return true; }
+        catch (Exception) { return false; }
+    }
 
     /// <summary>Where Unity writes the game client's Player.log on <paramref name="platform"/> (company IronGate, product Valheim).</summary>
     internal static string PlayerLog(ClientPlatform platform)

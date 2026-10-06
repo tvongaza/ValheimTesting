@@ -58,6 +58,10 @@ internal sealed class FakeServerHost : IGameHost
     public string PartyReply { get; set; } = "VT-LDD \tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 0\n";
     /// <summary>The signed-in Steam user check's reply.</summary>
     public string SteamUserReply { get; set; } = "VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories\n";
+    /// <summary>Whether Valheim runs on this host, as SteamAccountInUse's scripts answer (#257): none by default.</summary>
+    public string PlayingReply { get; set; } = "VT-PLAYING no\n";
+    /// <summary>The host path of Steam's connection_log, as SteamSessionLog's scripts find it (#257); none by default, so no watch runs.</summary>
+    public string? SteamLog { get; set; }
     private string? _runtime; // The host runtime of the last server start, whose log a clean stop appends to.
     public List<FakeForward> Tunnels { get; } = [];
     /// <summary>What the copy does to the runtime after copying, for example editing a file.</summary>
@@ -132,6 +136,8 @@ internal sealed class FakeServerHost : IGameHost
         ("preflight-read", [HostClientPreflight.BashRead, HostClientPreflight.PowerShellRead]),
         ("preflight-exists", [HostClientPreflight.BashExists, HostClientPreflight.PowerShellExists]),
         ("steam-user", [SteamSignedInUsers.PowerShell, SteamSignedInUsers.Bash]),
+        ("steam-playing", [SteamAccountInUse.PowerShell, SteamAccountInUse.Bash]),
+        ("steam-log", [SteamSessionLog.FindPowerShell, SteamSessionLog.FindBash]),
         ("journal", [RunJournal.BashAppend, RunJournal.WindowsAppend]),
         ("journal-read", [RunJournal.BashRead, RunJournal.WindowsRead]),
         ("journal-read-all", [RunJournal.BashReadAll, RunJournal.WindowsReadAll]),
@@ -375,6 +381,8 @@ internal sealed class FakeServerHost : IGameHost
             case "port": return Ok(PortReply ?? (PortBusy ? "VT-PORT busy\n" : "VT-PORT free\n"));
             case "party": return Ok(PartyReply);
             case "steam-user": return Ok(SteamUserReply);
+            case "steam-playing": return Ok(PlayingReply);
+            case "steam-log": return Ok("VT-STEAMLOG " + (SteamLog is { } steamLog ? (File.Exists(Local(steamLog)) ? new FileInfo(Local(steamLog)).Length : 0) + " " + steamLog : "none") + "\n");
             case "start":
             {
                 string token = Spec(v["spec"]).Single(line => line.Kind == "env" && line.Text.StartsWith("TEST_SESSION_TOKEN=", StringComparison.Ordinal)).Text["TEST_SESSION_TOKEN=".Length..];
@@ -535,7 +543,14 @@ internal sealed class FakeServerHost : IGameHost
         // As for a script: "follow" in BeforeScript and Hang (a log that never gets its line until the caller gives up).
         BeforeScript?.Invoke("follow");
         if (Hang.Contains("follow")) await Task.Delay(Timeout.Infinite, cancellation);
-        string? line = File.Exists(Local(logPath)) ? File.ReadAllLines(Local(logPath)).FirstOrDefault(success.IsMatch) : null;
+        // From the offset, as the real follower reads; a log shorter than it was replaced, so all of it counts.
+        string? line = null;
+        if (File.Exists(Local(logPath)))
+        {
+            byte[] bytes = File.ReadAllBytes(Local(logPath));
+            int from = fromOffset > bytes.Length ? 0 : (int)fromOffset;
+            line = Encoding.UTF8.GetString(bytes, from, bytes.Length - from).Split('\n').Select(text => text.TrimEnd('\r')).FirstOrDefault(success.IsMatch);
+        }
         return new HostLogResult(line != null ? HostLogOutcome.Matched : HostLogOutcome.TimedOut, "listening", line, TimeSpan.Zero, line);
     }
     public Task<FetchedDirectory> FetchDirectoryAsync(string hostDirectory, string localDirectory, TimeSpan timeout, CancellationToken cancellation = default)
