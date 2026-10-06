@@ -597,24 +597,35 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // What ran where, in one order across both hosts.
         var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var serverCopying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        bool serverWasCopying = false;
+        var serverReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var journalledAfterServerReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool serverWasCopying = false, serverDoneWhileSiblingCopied = false, journalledBeforeSiblingSettled = false;
         hosts["server"].Hang.Add("copy");
         // The fake host answers at once; a real ship takes time. Yielding here lets client-a's preparation run beside the server's
         // instead of inside the call that starts it, so nothing but the preparation itself makes the cleanup wait for it.
         hosts["client-a"].BeforeShip = async () => await Task.Yield();
-        hosts["server"].BeforeScript = name =>
+        // The server's preparation is done with its host once it releases its preparation claim (after its own cleanup).
+        hosts["server"].AfterRelease = owner => { if (owner.StartsWith("campaign-prepare ", StringComparison.Ordinal)) serverReleased.TrySetResult(); };
+        void Observe(string host, string name)
         {
-            events.Enqueue("server:" + name);
-            if (name == "copy") serverCopying.TrySetResult();
-        };
+            events.Enqueue(host + ":" + name);
+            if (name == "copy" && host == "server") serverCopying.TrySetResult();
+            if (name == "journal" && serverReleased.Task.IsCompleted) journalledAfterServerReleased.TrySetResult();
+        }
+        hosts["server"].BeforeScript = name => Observe("server", name);
         hosts["client-a"].BeforeScript = name =>
         {
-            events.Enqueue("client-a:" + name);
+            Observe("client-a", name);
             if (name != "copy") return;
             // The Ctrl+C comes while the server's copy runs; this copy goes on to its end, as a copy already under way does.
-            serverWasCopying = serverCopying.Task.Wait(TimeSpan.FromSeconds(30));
+            // Gates, not sleeps, order the steps (thread scheduling differs per runner): the cancelled server preparation removes
+            // its partial copy and releases its host while this copy still runs.
+            serverWasCopying = serverCopying.Task.Wait(TimeSpan.FromSeconds(20));
             interrupt.SignalCancel();
-            Thread.Sleep(300);
+            serverDoneWhileSiblingCopied = serverReleased.Task.Wait(TimeSpan.FromSeconds(20));
+            // A preparation that stopped waiting for its sibling would now journal the run's end. Nothing marks "it did not", so
+            // this one wait is bounded: a correct preparation journals nothing until this copy settles and the wait runs out.
+            journalledBeforeSiblingSettled = journalledAfterServerReleased.Task.Wait(TimeSpan.FromSeconds(1));
             events.Enqueue("client-a copy settled");
         };
         var options = new PinnedServerRunOptions<SitePlan>
@@ -638,7 +649,9 @@ public sealed class NativeDependencyResolverTests : IDisposable
         int settled = order.IndexOf("client-a copy settled");
         Assert.True(settled >= 0, string.Join(", ", order));
         Assert.True(serverWasCopying, "The Ctrl+C must come while the server's copy runs.");
-        Assert.True(order.IndexOf("server:copy") < settled && order.IndexOf("server:cleanup-stage") < settled, string.Join(", ", order));
+        Assert.True(serverDoneWhileSiblingCopied, "The cancelled server preparation must finish with its host while the sibling's copy runs: " + string.Join(", ", order));
+        Assert.True(order.IndexOf("server:cleanup-stage") is >= 0 and var cleaned && cleaned < settled, string.Join(", ", order));
+        Assert.False(journalledBeforeSiblingSettled, "The run's end was journalled while the sibling's copy still ran: " + string.Join(", ", order));
         // The sibling's copy ran to its end after the Ctrl+C; its own partial copy went after that.
         Assert.True(order.LastIndexOf("client-a:cleanup-stage") > settled, string.Join(", ", order));
         foreach (var (name, host) in hosts)
