@@ -90,11 +90,15 @@ public sealed class ClientSession : IDisposable
     /// <see cref="Attach(ClientRunPlan, string, IGameTransport)"/> once <paramref name="account"/>'s lease is live (and signed-in
     /// checked when the profile asks). Losing the lease detaches the session; the operator's client is never touched.
     /// </summary>
-    public static ClientSession Attach(ClientRunPlan plan, string output, SteamAccountHold? account, IGameTransport? transport = null)
+    public static ClientSession Attach(ClientRunPlan plan, string output, SteamAccountHold? account, IGameTransport? transport = null) =>
+        Attach(plan, output, account, () => transport ?? new CliTransport(plan.Host, plan.Port));
+
+    // connect runs only once the plan and the lease are checked: nothing connects to a client this session may not assume.
+    internal static ClientSession Attach(ClientRunPlan plan, string output, SteamAccountHold? account, Func<IGameTransport> connect)
     {
         if (plan.Owned) throw new ArgumentException("This plan's client is owned: launch it instead.");
         account?.RequireReady(null); // Before the session assumes the client.
-        transport ??= new CliTransport(plan.Host, plan.Port);
+        var transport = connect();
         GameActor actor;
         try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
         catch { transport.Dispose(); throw; }

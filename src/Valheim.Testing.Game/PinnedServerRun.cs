@@ -36,8 +36,8 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public WorldFixture? StagedRuntime { get; init; }
     /// <summary>Test seam: builds the owned session instead of launching the copied runtime.</summary>
     internal Func<PinnedServerRunContext<TPlan>, OwnedServerSession>? SessionOverride { get; init; }
-    /// <summary>Test seam for runs on other hosts: fake hosts and transports.</summary>
-    internal HostedSeams? HostSeams { get; init; }
+    /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
+    internal IHostedRunHooks Hooks { get; init; } = HostedRunHooks.Production;
 }
 
 /// <summary>A launching run's state, handed to the scenario.</summary>
@@ -206,8 +206,8 @@ public static class PinnedServerRun
             return 2;
         }
         string planFile = args[1];
-        using var own = options.HostSeams?.Cancellation == null ? new RunCancellation() : null;
-        var cancellation = options.HostSeams?.Cancellation ?? own!;
+        var cancellation = options.Hooks.Cancellation(out bool owned);
+        using var own = owned ? cancellation : null;
         return await RunAsync(args[0], () => options.ReadPlan(planFile), () => FileHash.Sha256(planFile), Path.GetFileName(planFile),
             args[2], options, cancellation, inventoryPath, campaign: null).ConfigureAwait(false);
     }
@@ -217,8 +217,8 @@ public static class PinnedServerRun
     {
         if (args.Length != 3) throw new ArgumentException("mode, plan and output.", nameof(args));
         string planFile = args[1];
-        using var own = options.HostSeams?.Cancellation == null ? new RunCancellation() : null;
-        var cancellation = options.HostSeams?.Cancellation ?? own!;
+        var cancellation = options.Hooks.Cancellation(out bool owned);
+        using var own = owned ? cancellation : null;
         return await RunAsync(args[0], () => options.ReadPlan(planFile), () => FileHash.Sha256(planFile), Path.GetFileName(planFile),
             args[2], options, cancellation, inventoryPath: null, campaign: null, environment).ConfigureAwait(false);
     }
@@ -238,7 +238,8 @@ public static class PinnedServerRun
         where TPlan : ServerRunPlan
     {
         ArgumentNullException.ThrowIfNull(plan); ArgumentNullException.ThrowIfNull(clients);
-        using var cancellation = new RunCancellation();
+        var cancellation = options.Hooks.Cancellation(out bool owned);
+        using var own = owned ? cancellation : null;
         // The bound plan is kept as evidence (prepared/plan.json, never read back): its hash is the run's planSha256.
         string full = Path.GetFullPath(output);
         return await RunAsync("run", () => plan, () => FileHash.Sha256(Path.Combine(full, "prepared", "plan.json")),
@@ -300,7 +301,7 @@ public static class PinnedServerRun
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
-                        options.HostSeams?.Host, cancellation.Token, campaignRunId).ConfigureAwait(false)).ConfigureAwait(false);
+                        name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignRunId).ConfigureAwait(false)).ConfigureAwait(false);
                 report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
                 {
                     prepared!.ApplyTo(plan, prepared.Manifest, bind(plan), Path.Combine(output, "prepared"));
@@ -323,7 +324,7 @@ public static class PinnedServerRun
             if (environment != null)
             {
                 // The runtime is the server host's install, copied and checked there; nothing local is read for it.
-                hosted = HostedServerRun.Create(environment, plan, options.Name, options.HostSeams, prepared: prepared != null, prepared?.Journal.RunId);
+                hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId);
                 if (RunJournal.ThisProcess.RunId != hosted.RunId) { journalRun?.Dispose(); journalRun = RunJournal.UseRun(hosted.RunId); }
                 // A client's lost Steam account lease stops that client, then the run, as Ctrl+C would.
                 hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };

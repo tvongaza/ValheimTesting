@@ -33,7 +33,7 @@ public sealed partial class HostedServerRunTests
         var (profile, server, client) = LocalMacProfile(serverHost);
         client.Architecture = "arm64";
         var process = new FakeOwnedProcess(91); bool launched = false;
-        var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
+        var hosted = HostedServerRun.Create(profile, server, "test", new FakeRunHooks
         {
             RunId = RunId, Host = name => name == "mac" ? macHost : serverHost,
             RequireMacGui = () => { },
@@ -63,7 +63,7 @@ public sealed partial class HostedServerRunTests
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost, local);
         bool launched = false;
-        var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
+        var hosted = HostedServerRun.Create(profile, server, "test", new FakeRunHooks
         {
             RunId = RunId, Host = name => name == "mac" ? macHost : serverHost,
             RequireMacGui = () => { if (locked) throw new InvalidOperationException("locked Mac"); },
@@ -87,7 +87,7 @@ public sealed partial class HostedServerRunTests
         if (mismatch == "port") client.Port++;
         if (mismatch == "host") client.Host = "remote.example";
         bool launched = false;
-        var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
+        var hosted = HostedServerRun.Create(profile, server, "test", new FakeRunHooks
         {
             RunId = RunId, Host = name => name == "mac" ? macHost : serverHost,
             RequireMacGui = () => { },
@@ -119,7 +119,7 @@ public sealed partial class HostedServerRunTests
         };
         profile.Validate();
         bool launched = false;
-        var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
+        var hosted = HostedServerRun.Create(profile, server, "test", new FakeRunHooks
         {
             RunId = RunId, Host = name => name switch { "mac" => macHost, "lease-box" => LeaseBox.Host(), _ => serverHost },
             RequireMacGui = () => { },
@@ -141,7 +141,7 @@ public sealed partial class HostedServerRunTests
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
         var process = new FakeOwnedProcess(91) { StopFailure = () => new IOException("stop could not be proven") };
-        var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
+        var hosted = HostedServerRun.Create(profile, server, "test", new FakeRunHooks
         {
             RunId = RunId, Host = name => name == "mac" ? macHost : serverHost,
             RequireMacGui = () => { },
@@ -169,7 +169,7 @@ public sealed partial class HostedServerRunTests
         var serverHost = NewHost(); var macHost = new FakeServerHost("mac", Path.Combine(_root, "mac-mirror"), kind: GameHostKind.Local);
         var (profile, server, client) = LocalMacProfile(serverHost);
         var process = new FakeOwnedProcess(91);
-        var hosted = HostedServerRun.Create(profile, server, "test", new HostedSeams
+        var hosted = HostedServerRun.Create(profile, server, "test", new FakeRunHooks
         {
             RunId = RunId, Host = name => name == "mac" ? macHost : serverHost,
             RequireMacGui = () => { },
