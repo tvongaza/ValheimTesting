@@ -1,4 +1,6 @@
-namespace Valheim.Testing.Game.Fakes;
+using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
+namespace Valheim.Testing.GameSessions.Fakes;
 
 /// <summary>
 /// A <see cref="GameSession"/> over a scripted world, for testing a mod's scenarios <c>(GameSession, TPlan) =&gt; Task</c>

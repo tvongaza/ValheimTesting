@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 // A real host whose macOS bundle check (MacAppBundle.Bash) answers "accepted": for tests that run the real BSD copy and
 // staging scripts on a fake, unsigned Valheim.app, which the real check rightly refuses (MacAppBundleTests covers that

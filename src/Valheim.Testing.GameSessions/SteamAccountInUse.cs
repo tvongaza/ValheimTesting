@@ -1,4 +1,5 @@
-namespace Valheim.Testing.Game;
+using Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// Whether Valheim runs on another of the inventory's client hosts (#257, part 1 of the lease decision). A Steam account plays on

@@ -1,8 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 internal enum ProcessEnd { Exited, TimedOut, Stopped, NotStarted }
 /// <summary>How a local process ended. <see cref="ExitCode"/> is meaningful only for <see cref="ProcessEnd.Exited"/>; for <see cref="ProcessEnd.NotStarted"/> <see cref="Stderr"/> says why.</summary>

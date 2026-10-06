@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // Each host kind with fake processes: what it starts, and how a transport failure, a timeout and a held lock are reported.
 // A timed-out or report-less run must come back as an unknown outcome, never as a pass or a script failure.

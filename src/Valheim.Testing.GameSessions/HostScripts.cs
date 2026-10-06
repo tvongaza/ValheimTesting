@@ -1,4 +1,5 @@
-namespace Valheim.Testing.Game;
+using Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 // The fixed text a game host runs. Values never appear here: each script reads them from the variables
 // ScriptedGameHost.Compose puts in front of it as literals. Every script answers with one verdict line on stdout (or, for a

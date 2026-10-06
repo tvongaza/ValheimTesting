@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The journal's real scripts (#257): bash on macOS and Linux, Windows PowerShell on Windows. A fake host cannot catch a
 // shell's quoting or a BSD-tool option mismatch.

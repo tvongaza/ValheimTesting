@@ -1,4 +1,5 @@
-namespace Valheim.Testing.Game;
+using Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// Everything a hosted run (<see cref="HostedServerRun"/>, and <see cref="PinnedServerRun"/> around it) reaches outside this

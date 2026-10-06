@@ -1,6 +1,7 @@
 using System.Globalization;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// Starts an owned dedicated server on a Linux/bash or Windows/PowerShell host and returns it identified by process ID

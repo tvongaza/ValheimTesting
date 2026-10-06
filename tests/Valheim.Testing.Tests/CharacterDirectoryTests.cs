@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // A campaign character's characters_local and Steam userdata folders, left out of the manifest, resolved on the client host from
 // its platform's standard paths: the real scripts through this machine's shells, against a temporary home.

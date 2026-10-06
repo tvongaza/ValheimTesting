@@ -2,6 +2,7 @@ using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // Plan rules for crossplay servers and clients and for hosting clients, the runner's handling of the crossplay option,
 // and ClientRounds joining a crossplay server's lobby. No game.

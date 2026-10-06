@@ -4,8 +4,9 @@ using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 [ResultShape]
 public enum GameHostKind { Local, Ssh, Container }

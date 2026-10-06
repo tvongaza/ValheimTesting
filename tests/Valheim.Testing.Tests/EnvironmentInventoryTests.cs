@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 public sealed class EnvironmentInventoryTests : IDisposable
 {

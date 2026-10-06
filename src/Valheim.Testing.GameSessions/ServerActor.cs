@@ -1,6 +1,7 @@
 using System.Text.Json;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// One owned dedicated server, from its plan, through every boot it starts, to its stop. It is the one place a run's

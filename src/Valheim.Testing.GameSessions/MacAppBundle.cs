@@ -1,6 +1,7 @@
 using System.Text;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// What macOS makes of a game client's <c>Valheim.app</c>, so a run never makes macOS show a dialog ("Valheim is damaged and

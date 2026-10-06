@@ -2,8 +2,9 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using valheimCLI;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>One process's reviewed dependency lock and optional, explicit config/script/asset files.</summary>
 public sealed class HostedCampaignRole

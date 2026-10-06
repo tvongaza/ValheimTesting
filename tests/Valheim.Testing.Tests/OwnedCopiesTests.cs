@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // #194: finding the copies runs left behind, and removing only the chosen ones, never one a process uses.
 public sealed class OwnedCopiesTests : IDisposable

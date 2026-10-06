@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // env status (#257 step 4): what each journalled run left on each host, judged against the host, changing nothing.
 public sealed class RunJournalStatusTests : IDisposable

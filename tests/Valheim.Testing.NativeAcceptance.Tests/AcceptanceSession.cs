@@ -1,6 +1,7 @@
 using MyMod.IntegrationTests;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance.Tests;
 

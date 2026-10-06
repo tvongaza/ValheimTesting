@@ -2,6 +2,8 @@ using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
+using Valheim.Testing.GameSessions.Fakes;
 
 // GameSession (#258 step 3): the server and every client start at once, one failure cancels and settles the rest, the
 // barriers are named and bounded Setup steps, and teardown closes clients before their server. No game: the server is an

@@ -1,6 +1,7 @@
 using Valheim.Testing;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The checked-in fixtures are real: two bounded dumps a Valheim 1.0.16 dedicated server wrote on 2 October 2026 for a
 // disposable world (see WorldDumpCaptureTests for their provenance), with the manifests the capture writes for them.

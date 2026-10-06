@@ -2,6 +2,7 @@ using Valheim.Testing;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 public class WorldDumpCaptureTests
 {

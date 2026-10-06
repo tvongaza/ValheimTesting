@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // GameLaunch.ForServer for a host, HostServer, HostServerProcess and HostInstall against fake hosts: what the scripts are sent and how their
 // replies are read. The scripts themselves run for real in HostServerChecks.

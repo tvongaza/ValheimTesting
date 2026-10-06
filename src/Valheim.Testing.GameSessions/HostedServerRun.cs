@@ -2,8 +2,9 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The parts of a <see cref="PinnedServerRun"/> that differ when its dedicated server runs on the environment's server

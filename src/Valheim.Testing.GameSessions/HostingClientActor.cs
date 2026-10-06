@@ -1,4 +1,5 @@
-namespace Valheim.Testing.Game;
+using Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The client of a run that hosts its own world (#258 step 8, Q2): one game process with both capabilities, a client with a

@@ -1,8 +1,9 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The pinned BepInExPack the toolkit ships (loader-dependency.json and its zip, both embedded in Valheim.Testing.GameSessions): a disposable

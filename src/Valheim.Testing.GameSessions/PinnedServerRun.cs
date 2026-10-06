@@ -3,8 +3,9 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>What a mod's system-test runner supplies to <see cref="PinnedServerRun"/>.</summary>
 public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan

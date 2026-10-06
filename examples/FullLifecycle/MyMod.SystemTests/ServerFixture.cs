@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Valheim.Testing;
 using Valheim.Testing.Game;
 using valheimCLI;
+using Valheim.Testing.GameSessions;
 
 namespace MyMod.SystemTests;
 

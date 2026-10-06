@@ -1,7 +1,8 @@
 using System.Globalization;
 using System.Text;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>A read-only estimate of one source install's copy size and the target volume's available space.</summary>
 internal sealed record HostCopyCapacity(long SourceBytes, long FreeBytes, string Volume);

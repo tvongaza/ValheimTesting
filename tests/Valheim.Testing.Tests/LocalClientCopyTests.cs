@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // #296 step 3: every owned client runs from a disposable copy of its install, made by the one copy owner (HostedRuntimeStage on
 // this machine), with the run's ValheimCLI set staged into the copy and the static check always run; inPlace (--in-place)

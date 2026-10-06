@@ -1,5 +1,6 @@
 using MyMod.SystemTests;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 // The toolkit's pinned dedicated-server runner (PinnedServerRun) with this mod's plan and scenario. The toolkit owns the
 // lifecycle: plan checks, fixture copies, provenance, the owned server and its startup events, teardown, the report and

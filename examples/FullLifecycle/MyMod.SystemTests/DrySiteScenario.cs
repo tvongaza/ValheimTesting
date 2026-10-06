@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 namespace MyMod.SystemTests;
 

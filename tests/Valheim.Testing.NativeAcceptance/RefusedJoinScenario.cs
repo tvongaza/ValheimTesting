@@ -1,6 +1,7 @@
 using MyMod.SystemTests;
 using System.Globalization;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance;
 

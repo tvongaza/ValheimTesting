@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// A session file (<c>session.json</c>: the actors, their locks, characters and the world, placed from the inventory): <c>check</c>

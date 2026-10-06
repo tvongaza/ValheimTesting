@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>A short, opt-in world-only motion sample. Output is a directory of hashed PNG frames for human inspection, never a verdict.</summary>
 public sealed record ReviewClipPlan(string Id, string ExtensionId, string HostDirectory, string EvidenceDirectory,

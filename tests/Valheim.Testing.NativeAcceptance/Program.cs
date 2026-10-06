@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Valheim.Testing.NativeAcceptance;
+using Valheim.Testing.GameSessions;
 
 // The native acceptance suite's console runner: the toolkit's pinned dedicated-server runner (PinnedServerRun) with the suite's
 // plan (AcceptancePlan) and every scenario by name (ScenarioTable), on the FullLifecycle example's MyMod. validate and run take

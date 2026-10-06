@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// A host that keeps its directories in a local mirror and answers the server, install and client scripts the way a Linux host

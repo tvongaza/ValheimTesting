@@ -3,6 +3,7 @@ using MyMod.SystemTests;
 using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance.Tests;
 

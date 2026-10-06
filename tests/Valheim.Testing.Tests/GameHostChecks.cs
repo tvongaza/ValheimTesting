@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The same end-to-end checks for every host kind, run through the host's real shell: locally on every CI OS, and over a real
 // ssh to localhost and into a real container in the game-hosts CI job. Every file they touch on the host is under one new

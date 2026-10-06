@@ -1,6 +1,7 @@
 using Valheim.Testing.Game;
 using System.Diagnostics;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 public sealed class HostedRuntimeStageTests : IDisposable
 {

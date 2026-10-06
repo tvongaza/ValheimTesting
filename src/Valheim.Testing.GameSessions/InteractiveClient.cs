@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>Why a host refused to start a client in its desktop session.</summary>
 [ResultShape]

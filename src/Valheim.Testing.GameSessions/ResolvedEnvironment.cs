@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// Where a run's game processes live once an <see cref="EnvironmentInventory"/> placed its actors: the hosts, which one runs

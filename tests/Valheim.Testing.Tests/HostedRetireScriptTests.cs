@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The retire script itself, in bash on this machine (Linux only: a hosted server's host runs Linux, with GNU stat and du).
 public sealed class HostedRetireScriptTests : IDisposable

@@ -1,7 +1,8 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>Proves this runner is in the unlocked console user's Aqua session before it launches a local GUI client.</summary>
 internal static class MacGuiSession

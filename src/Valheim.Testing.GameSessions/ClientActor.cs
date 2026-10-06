@@ -1,4 +1,5 @@
-namespace Valheim.Testing.Game;
+using Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// One named game client of a run, from its open to its close. It is the one client open path (#258): <see cref="Start"/>

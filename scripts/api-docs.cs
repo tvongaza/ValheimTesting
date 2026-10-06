@@ -105,7 +105,7 @@ foreach (var (page, excerpt) in new (string Page, string Excerpt)[]
     ("api/Valheim.Testing.Game.WorldFixture.html", "WorldFixture.Verify(fixtureSource, reviewedHashes)"),
     ("api/Valheim.Testing.Game.DisposableCharacterStore.html", "store.Register(\"tester\", localCharacterFile)"),
     ("api/Valheim.Testing.Game.GameActor.html", "actor.RequireCapability(\"mymod.testing/session\")"),
-    ("api/Valheim.Testing.Game.PinnedServerRun.html", "PinnedServerRun.MainAsync(args"),
+    ("api/Valheim.Testing.GameSessions.PinnedServerRun.html", "PinnedServerRun.MainAsync(args"),
 })
 {
     string file = Path.Combine(site, page);

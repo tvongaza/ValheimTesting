@@ -4,8 +4,9 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// This machine. Scripts run in a local shell process (bash, pwsh or Windows PowerShell), so the same lock, ship, log and fetch

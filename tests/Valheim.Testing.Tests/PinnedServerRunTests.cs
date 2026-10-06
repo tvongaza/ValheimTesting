@@ -4,6 +4,7 @@ using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The whole runner lifecycle on temporary fixtures: validate for real, launching modes through the internal session
 // seam with the fake owned server (no game).

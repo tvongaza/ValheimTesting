@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The pinned ValheimCLI plugin bundle Valheim.Testing.GameSessions ships (valheim-test carries it): extracted once under ValheimTesting's own folder, by its hash, and
 // the first choice only when neither --cli-* nor VALHEIMCLI_BUNDLE names one; an install's own plugins are never picked up.

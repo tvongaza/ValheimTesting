@@ -2,8 +2,9 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using valheimCLI;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The one owner of "a ValheimCLI world dump becomes a pinned offline input". <see cref="CaptureAsync"/> runs the dump

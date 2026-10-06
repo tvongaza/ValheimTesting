@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // #295 acceptance: a proxy and a doorstop_config.ini from different Doorstop versions (a mod manager's proxy left beside the
 // pack's configuration) are refused by every path that checks an install, with the same message: each path calls the one

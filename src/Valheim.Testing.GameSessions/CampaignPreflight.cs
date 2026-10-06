@@ -1,4 +1,5 @@
-namespace Valheim.Testing.Game;
+using Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>One independent setup problem found before a host is contacted or a fixture is copied.</summary>
 [ResultShape]

@@ -1,4 +1,5 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// A hosted run's hooks for no-game tests: fake hosts and transports, a fixed run id, a stand-in

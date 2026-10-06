@@ -2,6 +2,7 @@ using System.Globalization;
 using Valheim.Testing;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// Pinned dumps for tests, made by the real producer: a scripted transport stands in for the game and answers the dump

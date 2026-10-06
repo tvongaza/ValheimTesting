@@ -1,6 +1,8 @@
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
+using Valheim.Testing.GameSessions.Fakes;
 
 // HostingClientActor (#258 step 8): one client that hosts its own world is the session's IOwnedServer. Its world is joinable
 // before a peer joins it, a restart re-hosts it, teardown closes the peers first and then the host, and the placed world is

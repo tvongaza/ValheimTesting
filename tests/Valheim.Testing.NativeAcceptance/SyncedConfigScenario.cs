@@ -1,6 +1,7 @@
 using MyMod.SystemTests;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance;
 
