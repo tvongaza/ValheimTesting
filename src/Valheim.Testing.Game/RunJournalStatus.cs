@@ -6,9 +6,9 @@ namespace Valheim.Testing.Game;
 /// <summary>Where a journalled run stands, as <c>valheim-test env status</c> reports it.</summary>
 internal enum JournalRunState
 {
-    /// <summary>Its runner still runs on this machine: the run is going, nothing of it is touched.</summary>
+    /// <summary>Its runner still runs, on this machine or on a Windows host of the inventory that is its machine: the run is going, nothing of it is touched.</summary>
     Live,
-    /// <summary>It never journalled its end and its runner cannot be checked from here (another machine, or not journalled).</summary>
+    /// <summary>It never journalled its end and its runner cannot be checked from here (a machine that is not a reachable Windows host of the inventory, or not journalled).</summary>
     Unknown,
     /// <summary>Something it left cannot be proven gone or its own (a process that matches only in part, a host that cannot tell).</summary>
     Unrecoverable,
@@ -191,12 +191,18 @@ internal static class RunJournalStatus
             catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidOperationException) { probeFailed[group.Key] = error.Message; }
         }
 
+        // The run's own runner: a recovery journals as its own actor, and its process is not the run's.
+        var runnerOf = read.SelectMany(host => host.Records).GroupBy(record => record.Run, StringComparer.Ordinal).ToDictionary(run => run.Key,
+            run => run.OrderBy(record => record.Utc).LastOrDefault(record => record.Runner != null && record.Actor != RunRecovery.Actor)?.Runner, StringComparer.Ordinal);
+        var remoteRunners = await RemoteRunnersAsync(read.Select(host => (host.Host, host.Connection)).ToList(),
+            runnerOf.Where(run => !ended.ContainsKey(run.Key) && run.Value is { OnThisMachine: false })
+                .ToDictionary(run => run.Key, run => run.Value!, StringComparer.Ordinal), timeout, cancellation).ConfigureAwait(false);
+
         var runs = new List<JournalRunStatus>();
         foreach (var run in read.SelectMany(host => host.Records.Select(record => (host.Host, Record: record))).GroupBy(entry => entry.Record.Run, StringComparer.Ordinal))
         {
             var ordered = run.OrderBy(entry => entry.Record.Utc).ToList();
-            // The run's own runner: a recovery journals as its own actor, and its process is not the run's.
-            var runner = ordered.LastOrDefault(entry => entry.Record.Runner != null && entry.Record.Actor != RunRecovery.Actor).Record?.Runner;
+            var runner = runnerOf[run.Key];
             bool isEnded = ended.TryGetValue(run.Key, out var end);
             var items = new List<JournalItem>();
             var settled = new List<JournalItem>();
@@ -208,7 +214,8 @@ internal static class RunJournalStatus
                 else if (item.Kind == "launch" && !(isEnded && end.Cleaned))
                     settled.Add(new JournalItem(item.Kind, item.Host, item.Actor, item.What, "its pid file's process is gone", item.SinceUtc) { Fields = item.Fields });
             }
-            var (state, reason) = Verdict(isEnded ? end : null, runner, items);
+            // TryGetValue, not GetValueOrDefault: a default tuple would read as "asked, and gone".
+            var (state, reason) = Verdict(isEnded ? end : null, runner, items, remoteRunners.TryGetValue(run.Key, out var remote) ? remote : null);
             if (abandoned.TryGetValue(run.Key, out string? why)) reason += $"; its cleanup was abandoned ({why})";
             if (recovered.Contains(run.Key)) reason += "; recovered by env recover/teardown" + (items.Count == 0 ? "" : ", but not all of it");
             runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc,
@@ -423,21 +430,91 @@ internal static class RunJournalStatus
         'VT-PIDFILE-END'
         """.ReplaceLineEndings("\n");
 
-    private static (JournalRunState State, string Reason) Verdict((string State, bool Cleaned)? end, JournalRunner? runner, IReadOnlyList<JournalItem> items)
+    private static (JournalRunState State, string Reason) Verdict((string State, bool Cleaned)? end, JournalRunner? runner, IReadOnlyList<JournalItem> items,
+        (string Host, bool StillRuns)? remote = null)
     {
         string ending = end is { } e ? $"ended {e.State}" + (e.Cleaned ? "" : ", cleanup not verified") : "never journalled its end";
         if (end == null)
         {
             if (runner == null) return (JournalRunState.Unknown, ending + "; its runner was not journalled, so it cannot be proven over");
-            if (!runner.OnThisMachine) return (JournalRunState.Unknown, $"{ending}; its runner ran on {runner.Machine}: check it there");
-            if (runner.StillRuns()) return (JournalRunState.Live, "its runner still runs: " + runner);
-            ending += "; its runner is gone";
+            if (!runner.OnThisMachine)
+            {
+                if (remote is not { } asked) return (JournalRunState.Unknown, $"{ending}; its runner ran on {runner.Machine}: check it there");
+                if (asked.StillRuns) return (JournalRunState.Live, $"its runner still runs, as host {asked.Host} reports: " + runner);
+                ending += $"; its runner is gone, as host {asked.Host} reports";
+            }
+            else if (runner.StillRuns()) return (JournalRunState.Live, "its runner still runs: " + runner);
+            else ending += "; its runner is gone";
         }
         if (items.Any(item => item.Unrecoverable)) return (JournalRunState.Unrecoverable, ending + "; something it left cannot be proven its own or gone");
         if (items.Any(item => !item.Kept)) return (JournalRunState.Recoverable, ending + "; it left what is provably its own");
         if (items.Count != 0) return (JournalRunState.Kept, ending + "; it kept copies or leases on purpose");
         return (JournalRunState.Ended, ending);
     }
+
+    /// <summary>
+    /// For each run whose runner ran on another machine that is one of the inventory's readable Windows hosts (a run on the
+    /// station PC, its journal read from this Mac): whether that runner still runs, as that host reports by process ID and start
+    /// time (a UTC file time, within the same 2 s as on this machine). The host is the runner's machine when its machine name
+    /// (<c>[Environment]::MachineName</c>, which the runner journalled) is the runner's and no other host reports the same name;
+    /// a runner on a third machine, on a name two hosts share, on a bash host, or on a host that cannot be asked is left out, and
+    /// its run stays unknown. One machine-name read per Windows host and one process check per host asked, read only.
+    /// </summary>
+    private static async Task<Dictionary<string, (string Host, bool StillRuns)>> RemoteRunnersAsync(
+        IReadOnlyList<(string Host, IGameHost Connection)> hosts, Dictionary<string, JournalRunner> runners, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var verdicts = new Dictionary<string, (string Host, bool StillRuns)>(StringComparer.Ordinal);
+        runners = runners.Where(run => run.Value.Pid > 0).ToDictionary(run => run.Key, run => run.Value, StringComparer.Ordinal);
+        if (runners.Count == 0) return verdicts;
+        var windows = hosts.Where(host => host.Connection.Shell.Kind == HostShellKind.PowerShell).ToList();
+        var names = await Task.WhenAll(windows.Select(async host =>
+        {
+            try
+            {
+                var reply = (await host.Connection.RunAsync(WindowsMachineName, null, timeout, cancellation).ConfigureAwait(false))
+                    .EnsureSuccess($"Reading {host.Host}'s machine name");
+                return (host.Host, host.Connection, Machine: InteractiveClient.Line(reply.Stdout, "VT-MACHINE ")?.Trim());
+            }
+            catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidOperationException)
+            {
+                return (host.Host, host.Connection, Machine: (string?)null); // Cannot be asked: its runners stay unknown.
+            }
+        })).ConfigureAwait(false);
+        // A runner's machine is a host only when exactly one host reports that name.
+        var byMachine = names.Where(host => !string.IsNullOrEmpty(host.Machine)).GroupBy(host => host.Machine!, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() == 1).ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+        var asked = runners.Where(run => byMachine.ContainsKey(run.Value.Machine)).GroupBy(run => byMachine[run.Value.Machine].Host, StringComparer.Ordinal);
+        var answers = await Task.WhenAll(asked.Select(async group =>
+        {
+            var host = byMachine[group.First().Value.Machine];
+            try
+            {
+                var probed = await HostProcessProbe.ProbeAsync(host.Connection, group.Select(run => (run.Value.Pid, "")).Distinct().ToList(), timeout, cancellation).ConfigureAwait(false);
+                var judged = new List<(string Run, bool StillRuns)>();
+                foreach (var (run, runner) in group)
+                {
+                    var process = probed[(runner.Pid, "")];
+                    // Asked without a start, the probe says gone, or same with the start it read: another start is another process.
+                    if (process.State == ProbedState.Gone) judged.Add((run, false));
+                    else if (process.State == ProbedState.Same && long.TryParse(process.StartIdentity, NumberStyles.None, CultureInfo.InvariantCulture, out long fileTime))
+                        judged.Add((run, Math.Abs((DateTime.FromFileTimeUtc(fileTime) - runner.StartedUtc).TotalSeconds) <= 2));
+                }
+                return (host.Host, Runs: judged);
+            }
+            catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidOperationException)
+            {
+                return (host.Host, Runs: new List<(string Run, bool StillRuns)>());
+            }
+        })).ConfigureAwait(false);
+        foreach (var (host, judged) in answers)
+            foreach (var (run, stillRuns) in judged) verdicts[run] = (host, stillRuns);
+        return verdicts;
+    }
+
+    // Variables: none. VT-MACHINE <name>: the machine name .NET reports there, as a runner journals it (Environment.MachineName).
+    internal static readonly string WindowsMachineName = """
+        'VT-MACHINE ' + [Environment]::MachineName
+        """.ReplaceLineEndings("\n");
 
     /// <summary>
     /// Why <paramref name="run"/>, another process's, stops a new run from starting, as a preflight says it; null when it does
