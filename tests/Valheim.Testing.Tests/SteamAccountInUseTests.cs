@@ -109,13 +109,13 @@ public sealed class SteamAccountInUseTests : IDisposable
         Directory.CreateDirectory(Path.Combine(steam, "logs"));
         string log = Path.Combine(steam, "logs", "connection_log.txt");
         File.WriteAllText(log, Healthy + SteamDup1);
-        var mark = await SteamSessionLog.MarkAsync(host, TimeSpan.FromSeconds(60), default, steam);
+        var mark = await SteamSessionLogOnHost.MarkAsync(host, TimeSpan.FromSeconds(60), default, steam);
         Assert.NotNull(mark);
         Assert.Equal(Path.GetFullPath(log), Path.GetFullPath(mark.Value.Path));
         Assert.Equal(new FileInfo(log).Length, mark.Value.Offset);
-        Assert.False(await SteamSessionLog.SeenAsync(host, mark.Value, TimeSpan.FromSeconds(3), default));
+        Assert.False(await SteamSessionLogOnHost.SeenAsync(host, mark.Value, TimeSpan.FromSeconds(3), default));
         File.AppendAllText(log, Healthy + SteamDup2);
-        Assert.True(await SteamSessionLog.SeenAsync(host, mark.Value, TimeSpan.FromSeconds(60), default));
+        Assert.True(await SteamSessionLogOnHost.SeenAsync(host, mark.Value, TimeSpan.FromSeconds(60), default));
     }
 
     [Fact]

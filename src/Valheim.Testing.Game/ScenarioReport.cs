@@ -116,8 +116,8 @@ public sealed class ScenarioReport
         lock (_stepGate) _attached.Add((evidence, CurrentPhase));
     }
     /// <summary>
-    /// Link evidence already written elsewhere, such as <see cref="ReviewCaptureReceipt.Evidence"/> or
-    /// <see cref="ReviewClipReceipt.Evidence"/>. <see cref="Write"/> stores its path relative to the report directory when it
+    /// Link evidence already written elsewhere, such as <c>ReviewCaptureReceipt.Evidence</c> or
+    /// <c>ReviewClipReceipt.Evidence</c>. <see cref="Write"/> stores its path relative to the report directory when it
     /// lies inside it.
     /// </summary>
     public void Attach(EvidenceReference published)

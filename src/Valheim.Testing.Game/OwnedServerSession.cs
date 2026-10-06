@@ -7,8 +7,8 @@ namespace Valheim.Testing.Game;
 
 /// <summary>
 /// A process this run started and must stop: an owned dedicated server (<see cref="DirectServerProcess"/>,
-/// <see cref="HostServerProcess"/>), an owned client (<see cref="ClientSession"/>'s launch, <see cref="InteractiveClientProcess"/>)
-/// or a helper such as a <see cref="CliTunnel"/>'s ssh forward. The seam lets fast tests drive the real startup, restart and
+/// <c>HostServerProcess</c>), an owned client (<see cref="ClientSession"/>'s launch, <c>InteractiveClientProcess</c>)
+/// or a helper such as a <c>CliTunnel</c>'s ssh forward. The seam lets fast tests drive the real startup, restart and
 /// stop rules without Unity: use <see cref="Fakes.FakeOwnedProcess"/>.
 /// </summary>
 public interface IOwnedProcess : IDisposable
@@ -72,8 +72,8 @@ public sealed class StartupEvents
     public Regex Listening { get; init; } = CliListening;
     /// <summary>
     /// Waits for ValheimCLI's listening line somewhere <see cref="CliLog"/> cannot reach, such as a server host's log through
-    /// <see cref="IGameHost.WaitForLogAsync"/>; it gets the time left and a token cancelled when the process exits first, and
-    /// throws <see cref="WaitFailedException"/> or <see cref="WaitTimeoutException"/> as <see cref="HostLogResult.EnsureMatched"/>
+    /// <c>IGameHost.WaitForLogAsync</c>; it gets the time left and a token cancelled when the process exits first, and
+    /// throws <see cref="WaitFailedException"/> or <see cref="WaitTimeoutException"/> as <c>HostLogResult.EnsureMatched</c>
     /// does. Used only without <see cref="CliLog"/>; after it, as after the local line, a failed connection is a fault.
     /// </summary>
     public Func<TimeSpan, CancellationToken, Task>? CliListeningWait { get; init; }
@@ -161,7 +161,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     /// Establishes test access (<see cref="TestAccess.Ensure"/> as <see cref="TestActorRole.DedicatedServer"/>: devcommands, then
     /// <c>confirmcheats</c>, each verified through ValheimCLI's <c>cli_access</c>) on every boot this session starts, before
     /// <see cref="Start"/> returns: the first and each <see cref="Restart"/>, since a new server process has neither gate.
-    /// <see cref="PinnedServerRun"/> sets it for every owned server it starts; false only for a session a caller drives itself
+    /// <c>PinnedServerRun</c> sets it for every owned server it starts; false only for a session a caller drives itself
     /// that issues no test commands.
     /// </summary>
     public bool EnsureTestAccess { get; set; }

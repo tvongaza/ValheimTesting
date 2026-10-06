@@ -22,7 +22,11 @@ internal static class HostedWorldOnHost
     /// </summary>
     /// <param name="Hold">Before anything in the host's worlds is read or changed: the host's lock is this run's, and no game runs there.</param>
     internal sealed record Site(IGameHost Host, string HostName, string WorldsDirectory, string Stage, string KeepIn,
-        Func<JournalEntry, CancellationToken, Task> Journal, Func<CancellationToken, Task> Hold);
+        Func<JournalEntry, CancellationToken, Task> Journal, Func<CancellationToken, Task> Hold) : IHostedWorldSite
+    {
+        public HostedWorld Place(HostWorldPlan plan, string output, bool pinned, CancellationToken cancellation) =>
+            HostedWorldOnHost.Place(this, plan, output, pinned, cancellation);
+    }
 
     /// <summary>
     /// The client's <c>worlds_local</c> on its host, beside the <c>characters_local</c> the campaign staged its character in

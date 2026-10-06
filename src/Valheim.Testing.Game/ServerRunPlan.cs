@@ -24,7 +24,7 @@ public sealed class PinnedDirectory
 }
 
 /// <summary>
-/// A plan for owned dedicated-server runs on pinned fixtures (see <see cref="PinnedServerRun"/>). Derive a mod's plan
+/// A plan for owned dedicated-server runs on pinned fixtures (see <c>PinnedServerRun</c>). Derive a mod's plan
 /// from it and add the mod's scenario fields; <see cref="Read{T}"/> refuses unknown fields. <c>{runtime}</c>,
 /// <c>{world}</c> and <c>{port}</c> in arguments and environment values expand to the copies and the CLI port.
 /// </summary>

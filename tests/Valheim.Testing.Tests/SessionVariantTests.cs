@@ -347,14 +347,14 @@ public sealed class SessionVariantTests : IDisposable
         using var server = Server(Identity);
         string log = CrossplayServer.HostBepInExLog("/srv/runs/run-1/runtime/");
         Assert.Equal("/srv/runs/run-1/runtime/BepInEx/LogOutput.log", log);
-        Assert.Equal(new CrossplayLobby("ENTITY9", "LOBBY-9"), CrossplayServer.WaitForLobby(server, host, log, TimeSpan.FromSeconds(5)));
+        Assert.Equal(new CrossplayLobby("ENTITY9", "LOBBY-9"), ServerActor.WaitForLobby(server, host, log, TimeSpan.FromSeconds(5)));
         Assert.Equal((log, 0L), Assert.Single(host.Waits)); // This boot's log, from its start.
         // A failed login on the host, expiry, and a server without crossplay (refused before the host is asked).
-        Assert.Throws<WaitFailedException>(() => CrossplayServer.WaitForLobby(server, new LogHost(new HostLogResult(HostLogOutcome.FailureMatched, "log", "Failed to login server to PlayFab backend", TimeSpan.Zero, null)), log, TimeSpan.FromSeconds(5)));
-        Assert.Throws<WaitTimeoutException>(() => CrossplayServer.WaitForLobby(server, new LogHost(new HostLogResult(HostLogOutcome.TimedOut, "log", null, TimeSpan.FromSeconds(5), "Register PlayFab server")), log, TimeSpan.FromSeconds(5)));
+        Assert.Throws<WaitFailedException>(() => ServerActor.WaitForLobby(server, new LogHost(new HostLogResult(HostLogOutcome.FailureMatched, "log", "Failed to login server to PlayFab backend", TimeSpan.Zero, null)), log, TimeSpan.FromSeconds(5)));
+        Assert.Throws<WaitTimeoutException>(() => ServerActor.WaitForLobby(server, new LogHost(new HostLogResult(HostLogOutcome.TimedOut, "log", null, TimeSpan.FromSeconds(5), "Register PlayFab server")), log, TimeSpan.FromSeconds(5)));
         var untouched = new LogHost(new HostLogResult(HostLogOutcome.Matched, "log", line, TimeSpan.Zero, line));
         using var steam = Server(Identity.Replace("backend=PlayFab", "backend=Steamworks"));
-        Assert.Throws<InvalidOperationException>(() => CrossplayServer.WaitForLobby(steam, untouched, log, TimeSpan.FromSeconds(5)));
+        Assert.Throws<InvalidOperationException>(() => ServerActor.WaitForLobby(steam, untouched, log, TimeSpan.FromSeconds(5)));
         Assert.Empty(untouched.Waits);
     }
 

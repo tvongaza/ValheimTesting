@@ -157,13 +157,13 @@ public sealed class NativeServerRuntime : IDisposable
         catch { copy.Dispose(); throw; }
     }
 
-    /// <summary>The strict SHA256 manifest of the staged copy, for a following <see cref="PinnedServerRun"/>.</summary>
+    /// <summary>The strict SHA256 manifest of the staged copy, for a following <c>PinnedServerRun</c>.</summary>
     public IReadOnlyDictionary<string, string> Manifest() => WorldFixture.Manifest(RuntimeDirectory);
 
     /// <summary>
     /// Creates a fully pinned, private dedicated-server plan for the packaged smoke world. The server is unlisted,
     /// its password is generated for this run and its test-only session token is supplied only by
-    /// <see cref="PinnedServerRun"/>. The caller must keep the staged runtime alive through the run.
+    /// <c>PinnedServerRun</c>. The caller must keep the staged runtime alive through the run.
     /// </summary>
     public ServerRunPlan Plan(string worldRoot, int cliPort, int gamePort = 2456, string? password = null)
     {

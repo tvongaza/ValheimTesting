@@ -30,7 +30,7 @@ public sealed class WorldFixture : IDisposable
         DirectoryPath = path; SourceHashes = hashes; _journal = journal ?? RunJournal.ThisProcess; _journalDirectory = journalDirectory;
     }
     /// <summary>
-    /// A copy made earlier, from its own manifest: by an earlier process (<see cref="OwnedCopies.Remove"/>), or a staged copy a
+    /// A copy made earlier, from its own manifest: by an earlier process (<c>OwnedCopies.Remove</c>), or a staged copy a
     /// run takes over, which keeps journalling in the journal it was made in (<paramref name="madeIn"/>).
     /// </summary>
     internal static WorldFixture Existing(string path, Dictionary<string, string> hashes, WorldFixture? madeIn = null) =>
@@ -190,7 +190,7 @@ public sealed class WorldFixture : IDisposable
 
     /// <summary>
     /// <c>&lt;copy&gt;.owner.json</c>, which copies made before the run journal recorded their owner in (read by
-    /// <see cref="OwnedCopies"/> for those copies only; nothing writes it any more).
+    /// <c>OwnedCopies</c> for those copies only; nothing writes it any more).
     /// </summary>
     internal static string OwnerFile(string copy) => copy + ".owner.json";
 

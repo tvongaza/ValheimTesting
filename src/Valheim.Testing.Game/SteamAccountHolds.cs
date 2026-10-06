@@ -32,7 +32,7 @@ public sealed class SteamSignedInException(SteamSignedInState state, string acco
 /// releases it once its client is proven stopped. A release that finds the lease no longer this run's, or cannot be proven, fails.
 /// Its text names the account, never a credential or a SteamID.
 /// </summary>
-public sealed class SteamAccountHold : IAsyncDisposable
+public sealed class SteamAccountHold : IAsyncDisposable, ILeasedSteamAccount
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
     private readonly SteamAccountLease _lease;
@@ -150,6 +150,7 @@ public sealed class SteamAccountHold : IAsyncDisposable
         if (CheckSignedIn && !SignedInChecked)
             throw new InvalidOperationException($"The profile asks for the signed-in check: run CheckSignedInAsync on {ClientHost} before the client {Client} starts.");
     }
+    void ILeasedSteamAccount.RequireReady(string? hostName) => RequireReady(hostName);
 
     /// <summary>Records the account's name and pool in the report's provenance under the client's name (<see cref="SteamAccountLease.Record"/>). Never a credential or SteamID.</summary>
     public void Record(ScenarioReport report) => _lease.Record(report, Client);

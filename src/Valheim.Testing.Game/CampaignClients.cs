@@ -152,12 +152,12 @@ internal sealed class CampaignClients
         if (InteractiveClient.Line(moved.Stdout, "VT-MOVED") == null && InteractiveClient.Line(moved.Stdout, "VT-NONE") == null)
             throw new HostOperationException($"Unexpected reply while moving the client's previous log on {host.Name}", moved);
         // #257: Steam's connection_log from here on. "Logged In Elsewhere" in it means the account plays on another computer.
-        var steamLog = await SteamSessionLog.MarkAsync(host, Quick, cancellation).ConfigureAwait(false);
+        var steamLog = await SteamSessionLogOnHost.MarkAsync(host, Quick, cancellation).ConfigureAwait(false);
         string SteamMessage() => SteamSessionLog.Message(account?.Hold.Account, role.Host);
         // A failed start looks once: the readiness guard and the exit's reason share the answer.
         Task<bool>? looked = null;
         Task<bool> FinalLook() => LazyInitializer.EnsureInitialized(ref looked, () => steamLog is { } watched
-            ? SteamSessionLog.SeenAsync(host, watched, SteamSessionLog.FinalLook, CancellationToken.None) : Task.FromResult(false));
+            ? SteamSessionLogOnHost.SeenAsync(host, watched, SteamSessionLogOnHost.FinalLook, CancellationToken.None) : Task.FromResult(false));
         var tunnel = await host.OpenCliTunnelAsync(role.CliPort, Quick, role.LocalCliPort, cancellation).ConfigureAwait(false);
         try
         {
@@ -211,7 +211,7 @@ internal sealed class CampaignClients
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
                 },
-                (left, token) => steamLog is { } watched ? SteamSessionLog.SeenAsync(host, watched, left, token) : Task.FromResult(false),
+                (left, token) => steamLog is { } watched ? SteamSessionLogOnHost.SeenAsync(host, watched, left, token) : Task.FromResult(false),
                 FinalLook, SteamMessage), cancellation,
                 // A client that quit before its menu: Steam's log says whether another computer took the account.
                 () => FinalLook().GetAwaiter().GetResult() ? SteamSessionLog.ExitHint(SteamMessage()) : null,
