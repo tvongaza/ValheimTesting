@@ -397,6 +397,13 @@ public static class HostedCampaignPreparation
                 catch (Exception error) when (HostCheckRefusal(error))
                 { failures.Add(new(group.Key, "desktop session", error.Message)); }
             }
+            // A packaged runner's AppData writes land in its package, where this host's server task and game cannot see them (#406).
+            if (inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "windows" })
+            {
+                try { PackagedApp.Require(); }
+                catch (Exception error) when (HostCheckRefusal(error))
+                { failures.Add(new(group.Key, "packaged app", error.Message)); }
+            }
             try
             {
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation,

@@ -177,6 +177,36 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", local], new StringWriter(), new StringWriter()));
     }
 
+    // #406: valheim-test inside a Windows package (a packaged desktop app that starts it) has its AppData writes redirected into
+    // the package, where the server task and the game cannot see them. Preflight refuses with the cause and the fix; an
+    // unpackaged process passes. This test process is never packaged, on any OS.
+    [Fact]
+    public async Task EnvPreflightRefusesAProcessInsideAWindowsPackage()
+    {
+        Assert.Null(PackagedApp.Refusal());
+        Assert.Null(PackagedApp.RefusalFor(null));
+        // This test's own empty journal: the default one is shared with tests running beside it.
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "packaged-journal"));
+        string inventory = Inventory();
+        using var refused = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], refused, new StringWriter(),
+            () => PackagedApp.RefusalFor("Claude_1.0.0.0_x64__test")));
+        Assert.Contains("REFUSED this-machine packaged app: valheim-test is running inside the packaged app Claude_1.0.0.0_x64__test.", refused.ToString());
+        Assert.Contains("Run valheim-test from an ordinary terminal", refused.ToString());
+        Assert.EndsWith("REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal." + Environment.NewLine, refused.ToString());
+        using var json = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--json", "--inventory", inventory], json, new StringWriter(),
+            () => PackagedApp.RefusalFor("Claude_1.0.0.0_x64__test")));
+        var listing = System.Text.Json.JsonDocument.Parse(json.ToString()).RootElement;
+        Assert.False(listing.GetProperty("Ready").GetBoolean());
+        Assert.Contains(listing.GetProperty("Problems").EnumerateArray(), problem => problem.GetProperty("Input").GetString() == "packaged app");
+        // Not packaged: the same inventory is eligible.
+        using var eligible = new StringWriter();
+        Assert.True(await EnvCommand.RunAsync(["preflight", "--inventory", inventory], eligible, new StringWriter(), () => null) == 0, eligible.ToString());
+        Assert.Contains("ELIGIBLE:", eligible.ToString());
+        Assert.Equal(OperatingSystem.IsWindows(), eligible.ToString().Contains("This process is not inside a packaged app.", StringComparison.Ordinal));
+    }
+
     // #257: a bare preflight reads this machine's journal (through its own shell) and refuses while a run of another process
     // left something there unrecovered, in the session check's words; once that run is over, the inventory is eligible again.
     [Fact]
