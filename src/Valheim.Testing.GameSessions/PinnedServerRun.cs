@@ -139,7 +139,7 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// </code>
 /// <c>validate</c> checks the pinned inputs without launching the game; <c>run</c> executes the scenario on a disposable
 /// copy. For client rounds, restarts and failure-safe cleanup, see the compiling
-/// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/MyMod.SystemTests/Program.cs">full lifecycle runner</see>.
+/// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/ExampleMod.Tests/MarkerScenario.cs">full lifecycle example</see>.
 /// </example>
 public static class PinnedServerRun
 {

@@ -1,5 +1,3 @@
-using MyMod.IntegrationTests;
-using MyMod.SystemTests;
 using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Xunit;
@@ -18,7 +16,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     private ScenarioReport Run(AcceptancePlan plan, bool clientLog = false)
     {
-        var report = new ScenarioReport("mymod-system-test");
+        var report = new ScenarioReport("acceptancemod-system-test");
         try { _world.RunScenario(plan, report, clientLog); }
         catch (Exception) { Assert.False(report.Passed); }
         return report;
@@ -41,7 +39,7 @@ public sealed class CampaignScenarioTests : IDisposable
         var names = report.Steps.Select(s => s.Name).ToList();
         foreach (string step in new[]
         {
-            "first: the marker carries MyMod's saved label on the client",
+            "first: the marker carries AcceptanceMod's saved label on the client",
             "first: set defeated_eikthyr on the server; the client lists the server's keys", "first: the dungeon's saved rooms lie in its location's zone",
             "first: the client unloads the zones", "first: after the zone reload the client has the marker again, with its saved label",
             "after-restart: the server kept defeated_eikthyr through the save and restart, and the client lists it",
@@ -52,8 +50,8 @@ public sealed class CampaignScenarioTests : IDisposable
         foreach (string file in new[] { "first-global-keys.json", "first-dungeon-rooms.json", "first-zone-cycle.json", "after-restart-logout.json" }) Assert.True(Evidence(file), file);
         Assert.Contains(report.Provenance["logoutNote"], File.ReadAllText(_world.ProfileFile)); // This run's note is in the saved character.
         Assert.Equal("DG_SunkenCrypt (0, 5000, 0)", report.Provenance["dungeonInteriorOffset"]);
-        Assert.Equal(1, ServerCount("cli_extension mymod.testing/globalkey")); // The key is set once; only the lists are re-read.
-        Assert.Equal(0, ClientCount("cli_extension mymodcontrol.fieldstate/set")); // No control command without a control.
+        Assert.Equal(1, ServerCount("cli_extension acceptancemod.testing/globalkey")); // The key is set once; only the lists are re-read.
+        Assert.Equal(0, ClientCount("cli_extension acceptancemodcontrol.fieldstate/set")); // No control command without a control.
         Assert.False(report.Provenance.ContainsKey("control"));
     }
 
@@ -62,7 +60,7 @@ public sealed class CampaignScenarioTests : IDisposable
         _world.PresetKey("defeated_eikthyr");
         var report = Run(_world.Plan(AcceptancePlan.WorldScenario));
         Assert.Equal(new[] { "first: the fixture world does not have defeated_eikthyr yet" }, Failed(report).Take(1));
-        Assert.Equal(0, ServerCount("cli_extension mymod.testing/globalkey"));
+        Assert.Equal(0, ServerCount("cli_extension acceptancemod.testing/globalkey"));
     }
 
     [Fact] public void ARoomReachingPastItsZoneFailsNamingTheZone()
@@ -98,10 +96,10 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.True(report.Passed, Explain(report));
         Assert.True(Step(report, "control missing-harmony-target: the control's Harmony patch is applied fails for the named reason").Passed);
         Assert.True(Step(report, "control missing-harmony-target: the server's log scan passes fails for the named reason").Passed);
-        Assert.Contains("not applied: postfix (any method) on Player::MyModControlMethodThatDoesNotExist", report.Provenance["controlFailure"]);
+        Assert.Contains("not applied: postfix (any method) on Player::AcceptanceModControlMethodThatDoesNotExist", report.Provenance["controlFailure"]);
         // The scan's defaults fail on HarmonyX's warning: the missing target is a failure, not a counted warning.
         Assert.StartsWith("The log scan fails: accesstools-not-found x1, first at line 1: [Warning:  HarmonyX] AccessTools.DeclaredMethod", report.Provenance["controlScanFailure"]);
-        Assert.Contains("Could not find method for type Player and name MyModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
+        Assert.Contains("Could not find method for type Player and name AcceptanceModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
         Assert.Equal("true", report.Provenance["controlPatchAllReturned"]);
         Assert.StartsWith("missing-harmony-target: failed its check as expected", report.Provenance["control"]);
         Assert.True(Evidence("control-log-scan.json"));
@@ -116,7 +114,7 @@ public sealed class CampaignScenarioTests : IDisposable
         _world.ControlMissingTarget = true; _world.OtherPluginLookupWarning = true; _world.ControlPatchAllThrew = true;
         var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.True(report.Passed, Explain(report));
-        Assert.Contains("name MyModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
+        Assert.Contains("name AcceptanceModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
         Assert.Equal("false", report.Provenance["controlPatchAllReturned"]);
         Assert.Contains("accesstools-not-found x2", report.Provenance["controlScanFailure"]);
     }
@@ -155,7 +153,7 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.Equal(1, _world.FieldSets);
         Assert.True(Step(report, "first: control field-only-state: the field-only value survives the zone reload fails for the named reason").Passed);
         Assert.Contains(report.Provenance["fieldOnlyValue"], report.Provenance["controlFailure"]);
-        // MyMod's own saved label came back where the field did not; the run ends before the restart and the client is closed.
+        // AcceptanceMod's own saved label came back where the field did not; the run ends before the restart and the client is closed.
         Assert.True(Step(report, "first: after the zone reload the client has the marker again, with its saved label").Passed);
         Assert.Equal(0, _world.Restarts);
         Assert.True(Step(report, "detach from the operator's client").Passed);
@@ -328,13 +326,13 @@ public sealed class CampaignScenarioTests : IDisposable
             Assert.True(Evidence($"{round}-content-census.json"));
         }
         // Each side's census through its own actor, once per round; the report records which side said what.
-        Assert.Equal(2, ServerCount("cli_extension mymod.testing/content-census"));
-        Assert.Equal(2, ClientCount("cli_extension mymod.testing/content-census"));
+        Assert.Equal(2, ServerCount("cli_extension acceptancemod.testing/content-census"));
+        Assert.Equal(2, ClientCount("cli_extension acceptancemod.testing/content-census"));
         using var evidence = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(_world.Output, "first-content-census.json")));
         Assert.Equal("server", evidence.RootElement.GetProperty("server").GetProperty("Side").GetString());
         Assert.Equal("client", evidence.RootElement.GetProperty("client").GetProperty("Side").GetString());
         Assert.Equal(22, evidence.RootElement.GetProperty("report").GetProperty("Entries").GetArrayLength());
-        Assert.Contains("recipe Recipe_MyMod_SurveyStake (server+client)", report.Provenance["contentExpectations"]);
+        Assert.Contains("recipe Recipe_AcceptanceMod_SurveyStake (server+client)", report.Provenance["contentExpectations"]);
         Assert.Equal(1, _world.Restarts);
         Assert.Equal(0, _world.MarkCommands);
     }
@@ -345,22 +343,22 @@ public sealed class CampaignScenarioTests : IDisposable
         var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario));
         Assert.Equal(new[] { $"first: {CensusStep}" }, Failed(report));
         string error = Step(report, $"first: {CensusStep}").Error;
-        Assert.Contains("2 problem(s): server: missing recipe Recipe_MyMod_SurveyStake (not registered in ObjectDB); client: missing recipe Recipe_MyMod_SurveyStake", error);
+        Assert.Contains("2 problem(s): server: missing recipe Recipe_AcceptanceMod_SurveyStake (not registered in ObjectDB); client: missing recipe Recipe_AcceptanceMod_SurveyStake", error);
         Assert.True(Evidence("first-content-census.json")); // Written before the check.
         Assert.Equal(0, _world.Restarts);
     }
 
     [Fact] public void AClientWithoutTheModNeverBorrowsTheServersCensus()
     {
-        // The plan pins the server's MyMod on the client, but the client that joined does not run it.
+        // The plan pins the server's AcceptanceMod on the client, but the client that joined does not run it.
         _world.ClientHasMod = false;
         var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario));
         Assert.Equal(new[] { $"first: {CensusStep}" }, Failed(report));
-        Assert.Contains("client: example.mymod is not loaded on the client", Step(report, $"first: {CensusStep}").Error);
+        Assert.Contains("client: valheimtesting.acceptancemod is not loaded on the client", Step(report, $"first: {CensusStep}").Error);
 
         // A client whose census reports being the server is refused too.
         using var world = new CampaignWorld { ClientCensusSaysServer = true };
-        var swapped = new ScenarioReport("mymod-system-test");
+        var swapped = new ScenarioReport("acceptancemod-system-test");
         try { world.RunScenario(world.Plan(AcceptancePlan.ContentCensusScenario), swapped); } catch (Exception) { }
         Assert.Contains("reports being the server", swapped.Steps.Single(s => s.Name == $"first: {CensusStep}").Error);
     }
@@ -371,7 +369,7 @@ public sealed class CampaignScenarioTests : IDisposable
         var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe));
         Assert.True(report.Passed, Explain(report));
         Assert.True(Step(report, $"first: control omitted-recipe: {CensusStep} fails for the named reason").Passed);
-        Assert.StartsWith("the census fails only on the omitted recipe: server: missing recipe Recipe_MyMod_SurveyStake", report.Provenance["controlFailure"]);
+        Assert.StartsWith("the census fails only on the omitted recipe: server: missing recipe Recipe_AcceptanceMod_SurveyStake", report.Provenance["controlFailure"]);
         Assert.StartsWith("omitted-recipe: failed its check as expected", report.Provenance["control"]);
         Assert.True(Evidence("first-content-census.json"));
         Assert.Equal(0, _world.Restarts); // The run ends at the control's check.
@@ -383,8 +381,8 @@ public sealed class CampaignScenarioTests : IDisposable
         var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario, ControlPlugins.OmittedStatusEffect));
         Assert.True(report.Passed, Explain(report));
         Assert.Contains(ContentCensusScenario.OnlyTheOmittedStatusEffect, report.Provenance["controlFailure"]);
-        Assert.Contains("server: missing statusEffect MyMod_SurveyBlessing", report.Provenance["controlFailure"]);
-        Assert.Contains("client: missing statusEffect MyMod_SurveyBlessing", report.Provenance["controlFailure"]);
+        Assert.Contains("server: missing statusEffect AcceptanceMod_SurveyBlessing", report.Provenance["controlFailure"]);
+        Assert.Contains("client: missing statusEffect AcceptanceMod_SurveyBlessing", report.Provenance["controlFailure"]);
     }
 
     [Fact] public void AnOmittedStatusEffectControlFailsIfTheEffectIsPresent()
@@ -407,7 +405,7 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.Equal(new[] { $"first: control omitted-recipe: {CensusStep} fails for the named reason" }, Failed(report));
         string error = report.Steps.Single(s => !s.Passed).Error;
         Assert.Contains("not for its reason", error);
-        Assert.Contains("unexpected item MyMod_Extra", error);
+        Assert.Contains("unexpected item AcceptanceMod_Extra", error);
         Assert.False(report.Provenance.ContainsKey("controlFailure"));
     }
 

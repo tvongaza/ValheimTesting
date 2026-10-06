@@ -1,7 +1,7 @@
 using BepInEx;
 using HarmonyLib;
 
-namespace MyMod.Controls.MissingHarmonyTarget;
+namespace AcceptanceMod.Controls.MissingHarmonyTarget;
 
 /// <summary>
 /// Negative control for the Harmony census (#30) and the log scan (#26): a patch whose target method does not exist, as
@@ -13,10 +13,10 @@ namespace MyMod.Controls.MissingHarmonyTarget;
 /// <c>"expectFailure": "missing-harmony-target"</c> the scenario requires the census to name the missing patch and the scan
 /// of the server's BepInEx log to fail on the warning. Test runtimes only.
 /// </summary>
-[BepInPlugin(Guid, "MyMod control: missing Harmony target (ValheimTesting example)", "0.1.0")]
+[BepInPlugin(Guid, "AcceptanceMod control: missing Harmony target (ValheimTesting acceptance suite)", "0.1.0")]
 public sealed class Plugin : BaseUnityPlugin
 {
-    public const string Guid = "example.mymod.control.missingtarget";
+    public const string Guid = "valheimtesting.acceptancemod.control.missingtarget";
 
     private void Awake()
     {
@@ -25,7 +25,7 @@ public sealed class Plugin : BaseUnityPlugin
         Logger.LogInfo("MissingHarmonyTarget: PatchAll returned");
     }
 
-    [HarmonyPatch(typeof(Player), "MyModControlMethodThatDoesNotExist")]
+    [HarmonyPatch(typeof(Player), "AcceptanceModControlMethodThatDoesNotExist")]
     private static class PatchMissingMethod
     {
         private static void Postfix() { }

@@ -1,6 +1,6 @@
 using BepInEx;
 
-namespace MyMod.Probes.QuitLog;
+namespace AcceptanceMod.Probes.QuitLog;
 
 /// <summary>
 /// Logs one warning when Unity tells the plugin the game is quitting (<c>OnApplicationQuit</c>) and one when its object is
@@ -8,10 +8,10 @@ namespace MyMod.Probes.QuitLog;
 /// quits cleanly, the teardown log scan counts both as unknown warnings (the first is the scan's first line); after a kill
 /// neither is written. Test runtimes only.
 /// </summary>
-[BepInPlugin(Guid, "MyMod probe: quit log (ValheimTesting example)", "0.1.0")]
+[BepInPlugin(Guid, "AcceptanceMod probe: quit log (ValheimTesting acceptance suite)", "0.1.0")]
 public sealed class Plugin : BaseUnityPlugin
 {
-    public const string Guid = "example.mymod.probe.quitlog";
+    public const string Guid = "valheimtesting.acceptancemod.probe.quitlog";
 
     private void OnApplicationQuit() => Logger.LogWarning("QuitLog: OnApplicationQuit (" + World() + ")");
     private void OnDestroy() => Logger.LogWarning("QuitLog: OnDestroy (" + World() + ")");

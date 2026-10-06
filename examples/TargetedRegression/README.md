@@ -10,7 +10,7 @@ A copyable template for a small A/B regression in the real game: **one owned cli
 | [Scenario.cs](Scenario.cs) | The rounds and assertions: everything that is the same on every machine | Yes: your mod's steps |
 | [regression.sample.json](regression.sample.json) | The regression's inputs: which files are staged, the fixture and the character; nothing about the machine | Yes: copy it outside the repository and fill it in |
 
-The sample scenario tests FullLifecycle's MyMod with its test adapter as the probe: its Harmony patches are applied, and `mymod_mark` marks the ground where the host stands with exactly one pole in the host's saved objects. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
+The sample scenario tests FullLifecycle's ExampleMod with its test adapter as the probe: its Harmony patch is applied, and `examplemod_mark` marks the ground where the host stands with exactly one pole in the host's saved objects. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
 
 **The machine is not in the file.** The game install (only read), the folder the disposable install is made in and the client's ValheimCLI port come from the client environment: this machine's detected Valheim with no option, or the one `--client-env NAME` names in `--inventory environments.json` (see [the environment inventory](../../docs/packages/Valheim.Testing.Game.md#this-machines-environment-inventory)). Without `--inventory`, an `environments.json` beside `regression.json` is used when there is one. `valheim-test start` writes the same `regression.json`. An older manifest with `game`, `install`, `client.port`, `client.saveDirectory` or `client.steamUserDataDirectory` is refused, naming where each now comes from.
 
@@ -27,7 +27,7 @@ For a mod with several dependencies, use the [native dependency resolver](../../
 | ValheimCLI | The core `valheimCLI.dll` and only the packs the scenario uses (`Valheim.Cli.Standard.dll` for the hosted session; `Valheim.Cli.WorldTools.dll` for world observations), all from one build, and that build's [capability manifest](../../docs/packages/Valheim.Testing.Game.md#valheimcli-capability-manifest) | `cli.core`, `cli.packs`, `cli.manifest` |
 | The mod under test | Its parent and candidate builds, each with its source commit | `mod.arms` |
 | The mod's dependencies | Every DLL the mod needs to load: the plugin each hard `[BepInDependency]` names, and libraries it references (for example JsonDotNET's detector plugin and `Newtonsoft.Json.dll`) | `plugins` |
-| A test probe (optional) | A small plugin that serves the scenario's observations, such as MyMod.TestAdapter | `probe` |
+| A test probe (optional) | A small plugin that serves the scenario's observations, such as ExampleMod.TestAdapter | `probe` |
 | The fixture | A directory holding exactly one world, and that world's UID | `fixture` |
 | Your character | A disposable **local** character, either already staged or registered in a disposable character store | `client.character`; optional `client.characterStore` (checked against this machine's detected Steam `userdata`) |
 
@@ -67,7 +67,7 @@ dotnet run --project examples/TargetedRegression -c Release -- preflight /absolu
 For each arm in turn it stages the disposable install and checks, before anything launches:
 
 1. The fixture root holds one world with the file's UID. A world folder passed as the root, a `worlds_local` wrapper or several worlds are each named, with the tree above and the tree found.
-2. Every file is its pinned SHA256. Each arm is first copied under its own artifact name (`parent-MyMod.dll`, `candidate-MyMod.dll`), and only the chosen one is installed as `mod.installAs`.
+2. Every file is its pinned SHA256. Each arm is first copied under its own artifact name (`parent-ExampleMod.dll`, `candidate-ExampleMod.dll`), and only the chosen one is installed as `mod.installAs`.
 3. `BepInEx/plugins`, `patchers`, `config` and `scripts` are rebuilt from `regression.json` only: the ValheimCLI core and packs, `plugins`, the probe and one arm.
 4. What each DLL **declares** decides, never its file name: every hard `[BepInDependency]` of every staged plugin is met by a staged `[BepInPlugin]` of that GUID and at least its minimum version; no staged plugin is `[BepInIncompatibility]` with another; every plugin loads in the client (`[BepInProcess]`); every referenced assembly is in the game, `BepInEx/core` or `regression.json`.
 5. The disposable character is either present already or registered for run-time staging. The toolkit's own [owned-run preflight](../../docs/packages/Valheim.Testing.Game.md#owned-run-preflight) passes on the staged install: install pins, Doorstop loader, every pinned plugin installed exactly once, the fixture's pinned files.

@@ -6,7 +6,7 @@ Bringing an existing mod? Start with [ModWithTests](ModWithTests/README.md), the
 |---|---|---|---|
 | [ModWithTests](ModWithTests/README.md) | Unit-test the mod's real source with shared game doubles | Mod author | .NET 10 SDK; no game or ValheimCLI |
 | [SharedWorld](SharedWorld/README.md) | The pure terrain library: composed terrain, zone seams, snapshots, grid-dump parity | Mod author | .NET 10 SDK; no game |
-| [FullLifecycle](FullLifecycle/README.md) | One feature at every layer, from unit tests to an owned server and clients through save, restart and rejoin | Mod author | Integration tests: .NET 10 SDK. System tests: a game install, Steam and ValheimCLI; the runner owns the copies it starts |
+| [FullLifecycle](FullLifecycle/README.md) | One feature at every layer, from unit tests to an owned server and clients through save, restart and rejoin | Mod author | Scripted tests: .NET 10 SDK. The native session test: a game install, Steam and ValheimCLI; the run owns the copies it starts |
 | [TargetedRegression](TargetedRegression/README.md) | A/B regression: a parent and a candidate build of one mod in the real game | Mod author | `preflight`: none. `run`: a prepared game install, from which it copies a disposable one |
 | [ObserveCheck](ObserveCheck/README.md) | Attach to a prepared game, verify strict pins, run one probe (heights, client surface, paint, capture, walk, session), keep the report | Mod author | A running disposable game with ValheimCLI (World Tools for the terrain probes); it never launches one |
 

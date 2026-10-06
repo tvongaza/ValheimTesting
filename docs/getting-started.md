@@ -7,7 +7,7 @@ The unit tests need only the .NET 10 SDK, on any OS; no game. The usual setup fo
 1. **Install the .NET 10 SDK** (Visual Studio 2026 with the .NET desktop development workload brings it, and the .NET Framework 4.8 targeting pack for `net48` test legs).
 2. **Add a test project** beside your mod, reference one package from the table below, and link the mod's source files. [ModWithTests](../examples/ModWithTests/README.md) is a complete project to copy; [Bring your mod](adopting.md) helps choose the layer.
 3. **Run it** with `dotnet test` or the IDE's test runner. No game, Steam or ValheimCLI is needed for this layer, and the packages restore from NuGet.org.
-4. **For a native check**, follow [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc): Valheim and the Valheim Dedicated Server tool from Steam, test copies with BepInEx and ValheimCLI, and FullLifecycle's runner.
+4. **For a native check**, follow [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc): Valheim and the Valheim Dedicated Server tool from Steam, test copies with BepInEx and ValheimCLI, and FullLifecycle's native session test.
 
 Test packages belong in test projects, never in a production mod or a player's plugins folder. Existing xUnit tests stay where they are. To investigate a plugin that will not load, or a failure only two mods together show, use [Debug a mod load or mod conflict](debugging-mods.md). For the edit-build-test loop against your own game copy, see [tools/dev-loop](../tools/dev-loop/README.md). To develop this framework itself, follow [the contributor bootstrap](../CONTRIBUTING.md#set-up-and-validate-locally).
 

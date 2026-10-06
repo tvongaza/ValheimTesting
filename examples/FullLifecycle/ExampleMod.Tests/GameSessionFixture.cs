@@ -2,7 +2,7 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-namespace MyMod.IntegrationTests;
+namespace ExampleMod.Tests;
 
 /// <summary>
 /// The xUnit adapter for a <see cref="GameSession"/> (#258 Q6: copy this file into your test project; it may move into a

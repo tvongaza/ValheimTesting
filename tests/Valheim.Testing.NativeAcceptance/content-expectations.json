@@ -1,24 +1,24 @@
 {
-  "owner": "example.mymod",
-  "scope": ["MyMod_", "Recipe_MyMod_"],
+  "owner": "valheimtesting.acceptancemod",
+  "scope": ["AcceptanceMod_", "Recipe_AcceptanceMod_"],
   "items": [
-    { "name": "MyMod_SurveyStake", "sides": ["server", "client"] }
+    { "name": "AcceptanceMod_SurveyStake", "sides": ["server", "client"] }
   ],
   "prefabs": [
-    { "name": "MyMod_SurveyStake", "sides": ["server", "client"] },
-    { "name": "MyMod_SurveyPost", "sides": ["server", "client"] }
+    { "name": "AcceptanceMod_SurveyStake", "sides": ["server", "client"] },
+    { "name": "AcceptanceMod_SurveyPost", "sides": ["server", "client"] }
   ],
   "pieces": [
-    { "name": "MyMod_SurveyPost", "tool": "Hammer", "sides": ["server", "client"], "station": "none", "resources": ["Wood"] }
+    { "name": "AcceptanceMod_SurveyPost", "tool": "Hammer", "sides": ["server", "client"], "station": "none", "resources": ["Wood"] }
   ],
   "statusEffects": [
-    { "name": "MyMod_SurveyBlessing", "sides": ["server", "client"] }
+    { "name": "AcceptanceMod_SurveyBlessing", "sides": ["server", "client"] }
   ],
   "recipes": [
     {
-      "name": "Recipe_MyMod_SurveyStake",
+      "name": "Recipe_AcceptanceMod_SurveyStake",
       "sides": ["server", "client"],
-      "item": "MyMod_SurveyStake",
+      "item": "AcceptanceMod_SurveyStake",
       "station": "piece_workbench",
       "resources": ["Wood"]
     }

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The mod's tests that drive the game: the scenario against the toolkit's scripted fakes (no game, Steam or ValheimCLI), and
+    the same scenario on a native session (ExampleSession.cs), which runs only when a private session.json sits beside this
+    project. Outside this repository, pass -p:GameSessionsPackageVersion=<a published Valheim.Testing.GameSessions version>.
+  -->
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
+  <ItemGroup Condition="'$(GameSessionsPackageVersion)' == ''"><ProjectReference Include="../../../src/Valheim.Testing.GameSessions/Valheim.Testing.GameSessions.csproj" /></ItemGroup>
+  <ItemGroup Condition="'$(GameSessionsPackageVersion)' != ''"><PackageReference Include="Valheim.Testing.GameSessions" Version="[$(GameSessionsPackageVersion)]" /></ItemGroup>
+  <ItemGroup>
+    <!-- Where a native session's private environment sits (ExampleSession): read in place, never copied or committed. -->
+    <AssemblyMetadata Include="SessionDirectory" Value="$(MSBuildProjectDirectory)" />
+    <None Include="sample-plan.json" CopyToOutputDirectory="PreserveNewest" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

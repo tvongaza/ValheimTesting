@@ -1,12 +1,11 @@
 using System.Globalization;
 using System.Text.Json;
-using MyMod.SystemTests;
 using Valheim.Testing;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
 /// <summary>
 /// The server half alone (<c>dry-site-server</c>) and its unattended preparation: the scenario against scripted replies,
@@ -14,7 +13,7 @@ namespace MyMod.IntegrationTests;
 /// </summary>
 public sealed class ServerOnlyTests : IDisposable
 {
-    private readonly string _directory = Directory.CreateTempSubdirectory("mymod-server-only-").FullName;
+    private readonly string _directory = Directory.CreateTempSubdirectory("acceptancemod-server-only-").FullName;
     private readonly TestWorld _world = new();
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 
@@ -26,7 +25,7 @@ public sealed class ServerOnlyTests : IDisposable
     }
     private ScenarioReport Run(LifecyclePlan plan)
     {
-        var report = new ScenarioReport("mymod-system-test");
+        var report = new ScenarioReport("acceptancemod-system-test");
         try { DrySiteServerScenario.Run(plan, _world.Server(), _world.Restart, report); }
         catch (Exception) { Assert.False(report.Passed); }
         return report;
@@ -154,7 +153,7 @@ public sealed class ServerOnlyTests : IDisposable
         foreach (var (_, file) in ServerFixture.Plugins) File.WriteAllText(Path.Combine(file.StartsWith("Valheim.Cli.", StringComparison.Ordinal) ? Path.Combine(plugins, "packs") : plugins, file), file);
         var pins = ServerFixture.PluginPins(Path.Combine(_directory, "runtime"));
         Assert.Equal(ServerFixture.Plugins.Select(p => p.Guid).Order(), pins.Keys.Order());
-        Assert.Equal("7da90b1a4e66a95c85d282381d71330a", pins[LifecyclePlan.ModPlugin]); // MD5 of the file's bytes, "MyMod.dll".
+        Assert.Equal("2ec66bac798a42ebfcce13f6e7baa994", pins[LifecyclePlan.ModPlugin]); // MD5 of the file's bytes, "AcceptanceMod.dll".
         File.WriteAllText(Path.Combine(plugins, "Other.dll"), "other");
         Assert.Throws<InvalidOperationException>(() => ServerFixture.PluginPins(Path.Combine(_directory, "runtime")));
     }

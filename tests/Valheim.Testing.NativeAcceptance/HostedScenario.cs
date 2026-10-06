@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -8,9 +7,9 @@ using Valheim.Testing.GameSessions;
 namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// The plan of a hosted run: one game client, with MyMod and its adapter, hosts a pinned fixture world from its menu (a
+/// The plan of a hosted run: one game client, with AcceptanceMod and its adapter, hosts a pinned fixture world from its menu (a
 /// listen server). There is no dedicated server, so this is not a <see cref="ServerRunPlan"/>: the client section's
-/// <c>hostWorld</c> names the world. Strict pins only, as every plan of this example. As a campaign (<c>campaign run</c>, a
+/// <c>hostWorld</c> names the world. Strict pins only, as every plan of this suite. As a campaign (<c>campaign run</c>, a
 /// campaign without a dedicated server), its <see cref="Peer"/> joins the host from another machine.
 /// </summary>
 public sealed class HostedPlan
@@ -21,7 +20,7 @@ public sealed class HostedPlan
     public string Scenario { get; set; } = "";
     /// <summary>The hosting client, with its <c>hostWorld</c> section.</summary>
     public ClientRunPlan Client { get; set; } = new();
-    /// <summary>A campaign's second actor: a client that joins the host (<c>joinsHost</c>), with MyMod and its adapter. Only as a campaign.</summary>
+    /// <summary>A campaign's second actor: a client that joins the host (<c>joinsHost</c>), with AcceptanceMod and its adapter. Only as a campaign.</summary>
     public ClientRunPlan? Peer { get; set; }
     /// <summary>The campaign's client names: the hosting client and its peer.</summary>
     public const string HostClient = "host", PeerClient = "peer";
@@ -47,7 +46,7 @@ public sealed class HostedPlan
             ?? throw new ArgumentException("Empty plan.");
 
     /// <summary>
-    /// The example's rules that hold before a campaign binds anything (its scenario, the peer's kind, both clients' MyMod pins, no
+    /// The suite's rules that hold before a campaign binds anything (its scenario, the peer's kind, both clients' AcceptanceMod pins, no
     /// control, the sites, the greeting and the log classifications), for <c>campaign check</c> and before <c>campaign run</c> writes
     /// to any host. <see cref="Validated"/> applies them with the client sections' own rules.
     /// </summary>
@@ -58,16 +57,16 @@ public sealed class HostedPlan
         if (plan.Peer is { } peer)
         {
             if (!peer.JoinsHost) throw new ArgumentException("The peer joins the host: set its joinsHost.");
-            if (!peer.Pinned) throw new ArgumentException("This example runs with strict pins only: remove the peer's \"pinning\".");
+            if (!peer.Pinned) throw new ArgumentException("This suite runs with strict pins only: remove the peer's \"pinning\".");
             foreach (string plugin in new[] { AcceptancePlan.ModPlugin, AcceptancePlan.AdapterPlugin })
                 if (!peer.Pins.TryGetValue(plugin, out var md5) || md5 == "absent")
-                    throw new ArgumentException($"The peer runs MyMod and its adapter: pin {plugin} by its MD5.");
+                    throw new ArgumentException($"The peer runs AcceptanceMod and its adapter: pin {plugin} by its MD5.");
         }
-        if (!plan.Client.Pinned) throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
+        if (!plan.Client.Pinned) throw new ArgumentException("This suite runs with strict pins only: remove \"pinning\".");
         LogScanner.CheckClassifications(plan.LogScan);
         foreach (string plugin in new[] { AcceptancePlan.ModPlugin, AcceptancePlan.AdapterPlugin })
             if (!plan.Client.Pins.TryGetValue(plugin, out var md5) || md5 == "absent")
-                throw new ArgumentException($"The host runs MyMod and its adapter: pin {plugin} by its MD5.");
+                throw new ArgumentException($"The host runs AcceptanceMod and its adapter: pin {plugin} by its MD5.");
         if (ControlPlugins.All.FirstOrDefault(c => plan.Client.Pins.TryGetValue(c.Guid, out var value) && value != "absent") is { } control)
             throw new ArgumentException($"The hosted scenario has no control run: remove {control.Guid}.");
         AcceptancePlan.CheckSites(plan.DrySite, plan.WetSite);
@@ -75,7 +74,7 @@ public sealed class HostedPlan
         return plan;
     }
 
-    /// <summary>The example's rules on a read plan, or a campaign's plan once bound to its prepared actors.</summary>
+    /// <summary>The suite's rules on a read plan, or a campaign's plan once bound to its prepared actors.</summary>
     public static HostedPlan Validated(HostedPlan plan)
     {
         CheckTemplate(plan);
@@ -88,11 +87,11 @@ public sealed class HostedPlan
 /// <summary>
 /// <c>hosted</c> (#31): the mod on a host, which is the server of its world and a client with a local player in one
 /// process. The runner's <see cref="GameSession"/> has the toolkit's <see cref="HostingClientActor"/> as its
-/// <see cref="GameSession.Host"/>: before the scenario it placed the fixture world, opened the client, checked MyMod's
+/// <see cref="GameSession.Host"/>: before the scenario it placed the fixture world, opened the client, checked AcceptanceMod's
 /// Harmony patches on it and hosts the world (protected).
 /// <list type="number">
 /// <item>On the host: no marker before, the mod marks the dry site and refuses the wet one; the host's saved objects show one
-/// marker at the dry site. The host's admin changes the greeting: MyMod broadcasts it to everybody, and on a host the
+/// marker at the dry site. The host's admin changes the greeting: AcceptanceMod broadcasts it to everybody, and on a host the
 /// broadcast's handler runs in the host's own process ("(host)" in its log, read live from an owned host); the greeting is
 /// then set back.</item>
 /// <item>A confirmed save, then the host's restart (<see cref="HostingClientActor.Restart"/>: it leaves, which saves, and
@@ -114,8 +113,8 @@ public static class HostedScenario
         report.Provenance["hostBroadcast"] = hostLog == null ? "not observed: the host's log is not on this machine (an operator's client, or a campaign host on another machine)" : "the owned host's live BepInEx log";
         var host = owned.Game; // The server of its world and its client.
         report.Step("no marker at either site before the mod acts", () => RequireMarkers(host, plan, dry: 0));
-        report.Step("the mod marks the dry site", () => host.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
-        report.Step("the mod refuses the wet site", () => host.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));
+        report.Step("the mod marks the dry site", () => host.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "AcceptanceMod did not mark the dry site"));
+        report.Step("the mod refuses the wet site", () => host.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "AcceptanceMod did not refuse the wet site"));
         report.Step("host: one marker at the dry site, none at the wet site", () => RequireMarkers(host, plan, dry: 1));
         if (peer)
         {
@@ -148,12 +147,12 @@ public static class HostedScenario
 
     /// <summary>
     /// The runner's options for a hosted plan (<see cref="PinnedServerRun.MainAsync{TPlan}(string[], HostedRunOptions{TPlan})"/>,
-    /// modes <c>validate-host</c> and <c>host</c>): the plan's rules, its hosting client, MyMod's declaration, the log
+    /// modes <c>validate-host</c> and <c>host</c>): the plan's rules, its hosting client, AcceptanceMod's declaration, the log
     /// classifications and the scenario.
     /// </summary>
     public static HostedRunOptions<HostedPlan> RunnerOptions(Func<GameSession, HostedPlan, Task>? scenario = null) => new()
     {
-        Name = "mymod-hosted-test",
+        Name = "acceptancemod-hosted-test",
         ReadPlan = HostedPlan.ReadValidated,
         Host = plan => plan.Client,
         Mod = AcceptancePlan.Mod,
@@ -178,10 +177,10 @@ public static class HostedScenario
 
     private static void Greet(GameActor host, string greeting)
     {
-        var reply = host.Execute("mymod_greeting " + greeting);
-        if (!reply.Output.Contains("OK: greeting " + greeting)) throw new InvalidOperationException("MyMod did not confirm the greeting: " + string.Join(" | ", reply.Output));
+        var reply = host.Execute("acceptancemod_greeting " + greeting);
+        if (!reply.Output.Contains("OK: greeting " + greeting)) throw new InvalidOperationException("AcceptanceMod did not confirm the greeting: " + string.Join(" | ", reply.Output));
     }
 
-    /// <summary>MyMod's log line when the greeting's broadcast reaches its handler on a host.</summary>
+    /// <summary>AcceptanceMod's log line when the greeting's broadcast reaches its handler on a host.</summary>
     public static Regex Received(string greeting) => new($"Greeting \"{Regex.Escape(greeting)}\" received from -?\\d+ \\(host\\)", RegexOptions.CultureInvariant);
 }

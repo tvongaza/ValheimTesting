@@ -1,12 +1,11 @@
-using MyMod.SystemTests;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// <c>vanilla-client</c> (#33): MyMod claims clients do not need it. A client with BepInEx, ValheimCLI and MyMod's test
-/// adapter but not MyMod (pinned <c>absent</c>) joins after the mod has marked the dry site, arrives beside the marker and
+/// <c>vanilla-client</c> (#33): AcceptanceMod claims clients do not need it. A client with BepInEx, ValheimCLI and AcceptanceMod's test
+/// adapter but not AcceptanceMod (pinned <c>absent</c>) joins after the mod has marked the dry site, arrives beside the marker and
 /// must see nothing it cannot handle: <see cref="VanillaClientCheck"/> waits for a complete census of the objects within
 /// 64 m and fails on any prefab hash the client cannot resolve, then scans the owned client's live log for missing
 /// prefabs, missing RPC handlers and errors while objects unload. The same after a restart. With
@@ -22,7 +21,7 @@ public static class VanillaClientScenario
         if (control != null)
             report.Step($"control {control.Name}: the server spawns its server-only object beside the dry site", () =>
             {
-                session.Server!.Game.Execute($"mymodcontrol_spawn {CampaignSteps.Number(plan.DrySite.X + 3)} {CampaignSteps.Number(plan.DrySite.Z)}")
+                session.Server!.Game.Execute($"acceptancemodcontrol_spawn {CampaignSteps.Number(plan.DrySite.X + 3)} {CampaignSteps.Number(plan.DrySite.Z)}")
                     .RequireLine("OK: spawned " + ControlPlugins.ServerOnlyPrefabName, "The control did not spawn its object");
             });
 

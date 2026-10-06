@@ -7,15 +7,15 @@ using UnityEngine;
 using Valheim.Testing.Adapter;
 using valheimCLI.Extensions;
 
-namespace MyMod.TestAdapter;
+namespace AcceptanceMod.Adapter;
 
 /// <summary>
-/// Example-only ownership probe for the two-client scenario. A command takes one snapshot, or subscribes to
+/// The suite's ownership probe for the two-client scenario. A command takes one snapshot, or subscribes to
 /// ZDO owner changes and completes on the relevant change. The runner never repeatedly queries ValheimCLI.
 /// </summary>
 internal static class MarkerOwnership
 {
-    private const string Source = "mymod-marker-owner";
+    private const string Source = "acceptancemod-marker-owner";
     private static event Action<ZDOID>? Changed;
 
     internal static void Patch(Harmony harmony) => harmony.Patch(

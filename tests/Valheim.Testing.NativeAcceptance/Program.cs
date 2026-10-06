@@ -3,15 +3,16 @@ using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.GameSessions;
 
 // The native acceptance suite's console runner: the toolkit's pinned dedicated-server runner (PinnedServerRun) with the suite's
-// plan (AcceptancePlan) and every scenario by name (ScenarioTable), on the FullLifecycle example's MyMod. validate and run take
-// a plan whose actors are on this machine; campaign check and campaign run take a session manifest whose inventory places them.
+// plan (AcceptancePlan) and every scenario by name (ScenarioTable), on the suite's AcceptanceMod. validate and run take a plan
+// whose actors are on this machine; campaign check and campaign run take a session manifest whose inventory places them.
 // A hosted run has no dedicated server to pin: validate-host and host are the toolkit runner's hosted modes, where the
-// session's host is a client that hosts the fixture world (HostedScenario). A fresh world and its server plan come from the
-// example's prepare-server.
+// session's host is a client that hosts the fixture world (HostedScenario). prepare-server creates a fresh world and writes a
+// dry-site-server plan for it (ServerFixture); it runs before any plan exists, so it is outside the pinned runner.
 // --in-place (before the mode) runs each owned client from its install as it is instead of a disposable copy.
+if (args.Length > 0 && args[0] == ServerFixture.Mode) return ServerFixture.Run(args);
 string? mode = args.SkipWhile(arg => arg == PinnedServerRun.InPlaceOption).FirstOrDefault();
 if (mode is PinnedServerRun.HostMode or PinnedServerRun.ValidateHostMode) return await PinnedServerRun.MainAsync(args, HostedScenario.RunnerOptions());
-// The runner's options: the suite's plan rules, MyMod's declaration, and every scenario by name (ScenarioTable).
+// The runner's options: the suite's plan rules, AcceptanceMod's declaration, and every scenario by name (ScenarioTable).
 var options = ScenarioTable.RunnerOptions();
 if (args.Length > 0 && args[0] == "campaign") return await Campaign(args, options);
 return await PinnedServerRun.MainAsync(args, options);

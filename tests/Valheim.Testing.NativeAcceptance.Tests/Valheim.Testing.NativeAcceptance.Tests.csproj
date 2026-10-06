@@ -7,9 +7,8 @@
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Valheim.Testing.NativeAcceptance/Valheim.Testing.NativeAcceptance.csproj" />
-    <!-- One source each, owned by the example: its copyable session fixture and its scripted dry-site world. -->
-    <Compile Include="../../examples/FullLifecycle/MyMod.IntegrationTests/GameSessionFixture.cs" Link="Example/GameSessionFixture.cs" />
-    <Compile Include="../../examples/FullLifecycle/MyMod.IntegrationTests/TestWorld.cs" Link="Example/TestWorld.cs" />
+    <!-- One source, owned by the example: its copyable session fixture. -->
+    <Compile Include="../../examples/FullLifecycle/ExampleMod.Tests/GameSessionFixture.cs" Link="Example/GameSessionFixture.cs" />
     <!-- The sample plans, read by CampaignPlanTests with their placeholders filled in. -->
     <None Include="../Valheim.Testing.NativeAcceptance/sample-plan-*.json" LinkBase="samples" CopyToOutputDirectory="PreserveNewest" />
     <!-- Where a native session's private environment sits (AcceptanceSession): read in place, never copied or committed. -->

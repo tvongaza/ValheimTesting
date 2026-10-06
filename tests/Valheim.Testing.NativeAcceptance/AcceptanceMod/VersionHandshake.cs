@@ -4,24 +4,24 @@ using System.Linq;
 using System.Reflection;
 using HarmonyLib;
 
-namespace MyMod;
+namespace AcceptanceMod;
 
 /// <summary>
 /// A version handshake adapted from the Valheim-Modding wiki's RPC-Version-Handshaking concept
 /// (https://github.com/Valheim-Modding/Wiki/wiki/RPC-Version-Handshaking): on every new connection
 /// each side registers an RPC and sends its version, and the server refuses a peer whose version differs with the game's
-/// own "incompatible version" error (3), as the game refuses a client of another network version. One difference: MyMod
-/// is server-side, so a client without MyMod (which never sends a version) is let in, and only a client with another MyMod
+/// own "incompatible version" error (3), as the game refuses a client of another network version. One difference: AcceptanceMod
+/// is server-side, so a client without AcceptanceMod (which never sends a version) is let in, and only a client with another AcceptanceMod
 /// build is refused. The wiki's variant also refuses a client whose version has not arrived by the time its peer info
 /// does; refusing only on a received mismatch has no such ordering race.
 /// <para>
-/// The net version comes from the build (<c>-p:MyModNetVersion=N</c>, default 1), so a mismatched build for the
+/// The net version comes from the build (<c>-p:AcceptanceModNetVersion=N</c>, default 1), so a mismatched build for the
 /// <c>refused-join</c> scenario is one build command away.
 /// </para>
 /// </summary>
 internal static class VersionHandshake
 {
-    public const string Rpc = "MyMod_Version";
+    public const string Rpc = "AcceptanceMod_Version";
     /// <summary>The game's error code for an incompatible version (<c>ZNet.ConnectionStatus.ErrorVersion</c>).</summary>
     public const int IncompatibleVersion = 3;
     public static readonly int NetVersion = ReadNetVersion();
@@ -31,7 +31,7 @@ internal static class VersionHandshake
     private static int ReadNetVersion()
     {
         var attribute = typeof(VersionHandshake).Assembly.GetCustomAttributes(typeof(AssemblyMetadataAttribute), false)
-            .Cast<AssemblyMetadataAttribute>().FirstOrDefault(a => a.Key == "MyModNetVersion");
+            .Cast<AssemblyMetadataAttribute>().FirstOrDefault(a => a.Key == "AcceptanceModNetVersion");
         return attribute != null && int.TryParse(attribute.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int version) ? version : 0;
     }
 
@@ -54,10 +54,10 @@ internal static class VersionHandshake
         if (theirs == NetVersion) return;
         if (!net.IsServer())
         {
-            Plugin.Log.LogWarning($"The server runs MyMod net version {theirs} and this client {NetVersion}: the server refuses this client.");
+            Plugin.Log.LogWarning($"The server runs AcceptanceMod net version {theirs} and this client {NetVersion}: the server refuses this client.");
             return;
         }
-        Plugin.Log.LogWarning($"Refusing a client with MyMod net version {theirs}; this server runs {NetVersion}.");
+        Plugin.Log.LogWarning($"Refusing a client with AcceptanceMod net version {theirs}; this server runs {NetVersion}.");
         Refused.Add(rpc);
         rpc.Invoke("Error", IncompatibleVersion);
     }

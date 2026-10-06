@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
@@ -6,7 +5,7 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// The native acceptance suite's plan: the FullLifecycle example's plan (<see cref="LifecyclePlan"/>: MyMod's dry and wet
+/// The native acceptance suite's plan: the dry-site plan (<see cref="LifecyclePlan"/>: AcceptanceMod's dry and wet
 /// sites, the client, the review) plus the fields and rules of the suite's further scenarios on the owned dedicated server,
 /// each proving a few of the toolkit's native acceptance items, and the controls that must make their checks fail. Each field
 /// is refused in a plan whose scenario does not read it, so a plan never looks like it tests something it does not.
@@ -15,15 +14,15 @@ public sealed partial class AcceptancePlan : LifecyclePlan
 {
     /// <summary>The dry-site rounds with a zone cycle, global keys, a dungeon's rooms and a logout (<see cref="LifecycleWorldScenario"/>).</summary>
     public const string WorldScenario = "lifecycle-world";
-    /// <summary>A client without MyMod near its objects (<see cref="VanillaClientScenario"/>).</summary>
+    /// <summary>A client without AcceptanceMod near its objects (<see cref="VanillaClientScenario"/>).</summary>
     public const string VanillaClientScenario = "vanilla-client";
-    /// <summary>MyMod's synced config entry on a client that has MyMod (<see cref="SyncedConfigScenario"/>).</summary>
+    /// <summary>AcceptanceMod's synced config entry on a client that has AcceptanceMod (<see cref="SyncedConfigScenario"/>).</summary>
     public const string SyncedConfigScenario = "synced-config";
-    /// <summary>A mismatched MyMod build refused, then a matching client joins (<see cref="RefusedJoinScenario"/>).</summary>
+    /// <summary>A mismatched AcceptanceMod build refused, then a matching client joins (<see cref="RefusedJoinScenario"/>).</summary>
     public const string RefusedJoinScenario = "refused-join";
     /// <summary>The dry-site lifecycle on a crossplay (PlayFab) server, joined through its lobby.</summary>
     public const string CrossplayScenario = "crossplay";
-    /// <summary>MyMod's registered items, recipes and prefabs on the server and a joined client (<see cref="ContentCensusScenario"/>).</summary>
+    /// <summary>AcceptanceMod's registered items, recipes and prefabs on the server and a joined client (<see cref="ContentCensusScenario"/>).</summary>
     public const string ContentCensusScenario = "content-census";
     /// <summary>Two stills of one spot under the same conditions, for human comparison; neither image is an automated assertion.</summary>
     public const string ReviewCaptureScenarioName = "review-capture";
@@ -36,7 +35,7 @@ public sealed partial class AcceptancePlan : LifecyclePlan
     /// <summary>Every scenario this suite runs: <see cref="ScenarioTable"/>'s.</summary>
     [JsonIgnore] public override IReadOnlyList<string> Scenarios => ScenarioTable.Names;
     /// <summary>The adapter's fixture commands (the global-key change) run only when the server starts with this set to 1.</summary>
-    public const string FixturesVariable = "MYMOD_TEST_FIXTURES";
+    public const string FixturesVariable = "ACCEPTANCEMOD_TEST_FIXTURES";
     private static readonly Regex Word = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
     private static readonly Regex KeyName = new("^[a-z0-9_]{1,64}$", RegexOptions.CultureInvariant);
 
@@ -50,7 +49,7 @@ public sealed partial class AcceptancePlan : LifecyclePlan
     public LogoutSettings? Logout { get; set; }
     /// <summary>synced-config: the word the server's admin changes the greeting to; it must differ from the server's current one.</summary>
     public string? NewGreeting { get; set; }
-    /// <summary>refused-join: the client with a mismatched MyMod build, run before <see cref="Client"/>.</summary>
+    /// <summary>refused-join: the client with a mismatched AcceptanceMod build, run before <see cref="Client"/>.</summary>
     public ClientRunPlan? RefusedClient { get; set; }
     /// <summary>ownership-handoff: the other simultaneously connected client.</summary>
     public ClientRunPlan? SecondClient { get; set; }
@@ -108,11 +107,11 @@ public sealed partial class AcceptancePlan : LifecyclePlan
                 (Logout ?? throw new ArgumentException("Add logout with the client character's characters_local folder.")).Validate();
                 break;
             case VanillaClientScenario:
-                client.Validate(ModPlugin); // The claim is what a client without MyMod sees; it still needs the adapter.
+                client.Validate(ModPlugin); // The claim is what a client without AcceptanceMod sees; it still needs the adapter.
                 RequirePin(client, AdapterPlugin, Pins[AdapterPlugin], "client", "the vanilla client reads its census through the server's adapter build");
                 break;
             case ContentCensusScenario:
-                // The client's registries are its own: the census needs the server's MyMod build there too.
+                // The client's registries are its own: the census needs the server's AcceptanceMod build there too.
                 SameBuildsAs(client, "client");
                 break;
             case ReviewCaptureScenarioName:
@@ -188,11 +187,11 @@ public sealed partial class AcceptancePlan : LifecyclePlan
             throw new ArgumentException("Give the two clients one join address and distinct characters.");
     }
 
-    // The client runs the server's MyMod and adapter builds, pinned by the same MD5s.
+    // The client runs the server's AcceptanceMod and adapter builds, pinned by the same MD5s.
     private void SameBuildsAs(ClientRunPlan client, string what)
     {
         client.Validate();
-        RequirePin(client, ModPlugin, Pins[ModPlugin], what, "the check needs the server's MyMod on the client");
+        RequirePin(client, ModPlugin, Pins[ModPlugin], what, "the check needs the server's AcceptanceMod on the client");
         RequirePin(client, AdapterPlugin, Pins[AdapterPlugin], what, "the client's observations come from the adapter");
     }
 
@@ -217,16 +216,16 @@ public sealed partial class AcceptancePlan : LifecyclePlan
 
     private void CheckRefusedJoin(ClientRunPlan client)
     {
-        var refused = RefusedClient ?? throw new ArgumentException("Add refusedClient: the client with a mismatched MyMod build.");
+        var refused = RefusedClient ?? throw new ArgumentException("Add refusedClient: the client with a mismatched AcceptanceMod build.");
         SameBuildsAs(client, "client");
         refused.Validate();
         if (refused.HostWorld != null || refused.Crossplay || client.Crossplay) throw new ArgumentException("Both clients of the refused-join scenario join the server by address.");
         if (!refused.Pins.TryGetValue(ModPlugin, out var mismatched) || mismatched == "absent")
-            throw new ArgumentException($"The refused client runs another MyMod build: pin {ModPlugin} there by that build's MD5.");
+            throw new ArgumentException($"The refused client runs another AcceptanceMod build: pin {ModPlugin} there by that build's MD5.");
         if (string.Equals(mismatched, Pins[ModPlugin], StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException($"The refused client pins the server's own MyMod build; build it with another net version (-p:MyModNetVersion=2) and pin that build.");
+            throw new ArgumentException($"The refused client pins the server's own AcceptanceMod build; build it with another net version (-p:AcceptanceModNetVersion=2) and pin that build.");
         if (refused.Owned && client.Owned && string.Equals(Path.GetFullPath(refused.Install), Path.GetFullPath(client.Install), StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The two clients need their own installs: one install holds one MyMod build.");
+            throw new ArgumentException("The two clients need their own installs: one install holds one AcceptanceMod build.");
         if ((!refused.Owned || !client.Owned) && refused.Port == client.Port)
             throw new ArgumentException("An attached client runs while the other is used: give the two clients different ValheimCLI ports.");
         GameConnectionStatus expected;

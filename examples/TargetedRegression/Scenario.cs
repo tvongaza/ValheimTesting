@@ -6,28 +6,22 @@ using Valheim.Testing.Game;
 /// The scenario: the rounds and assertions that are the same in every environment, so this file can be shared as it was
 /// run. Paths, ports, the character and which files are staged live in the manifest, never here.
 /// <para>
-/// This one tests the <see href="../FullLifecycle/README.md">FullLifecycle</see> example mod, MyMod, hosted with its test
-/// adapter as the probe: its Harmony patches are applied, and its <c>mymod_mark</c> command marks the ground where the
+/// This one tests the <see href="../FullLifecycle/README.md">FullLifecycle</see> example mod, ExampleMod, hosted with its test
+/// adapter as the probe: its Harmony patch is applied, and its <c>examplemod_mark</c> command marks the ground where the
 /// host stands with exactly one pole in the host's saved objects. Replace <see cref="Measure"/> with your mod's steps.
 /// </para>
 /// </summary>
 public static class Scenario
 {
     /// <summary>The report's name.</summary>
-    public const string Name = "mymod-mark-where-the-host-stands";
+    public const string Name = "examplemod-mark-where-the-host-stands";
     /// <summary>The hosted rounds; between two, the world is saved with confirmation and hosted again in the same process.</summary>
     public static readonly string[] Rounds = ["first"];
     /// <summary>The ValheimCLI extension commands the steps use, beyond the hosted rounds' own: checked live once the client answers.</summary>
-    public static readonly string[] Capabilities = ["mymod.testing/harmony"];
+    public static readonly string[] Capabilities = ["examplemod.testing/harmony"];
 
-    private const string Mod = "example.mymod", Marker = "wood_pole2";
-    private static readonly DeclaredPatch[] Patches =
-    [
-        new("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix"),
-        new("ZNet::OnNewConnection", "prefix", "MyMod.VersionHandshake+SendVersion::Prefix"),
-        new("ZNet::RPC_PeerInfo", "prefix", "MyMod.VersionHandshake+RefuseMismatched::Prefix"),
-        new("ZNet::Awake", "postfix", "MyMod.SyncedGreeting+RegisterRpc::Postfix"),
-    ];
+    private const string Mod = "example.examplemod", Marker = "wood_pole2";
+    private static readonly DeclaredPatch[] Patches = [new("Terminal::InitTerminal", "postfix", "ExampleMod.Plugin+RegisterCommands::Postfix")];
     private static readonly Regex Position = new(@"position=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)", RegexOptions.CultureInvariant);
     private static readonly Regex ZdoLine = new(@"^ZDO (\S+) id=\S+ pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+) ", RegexOptions.CultureInvariant);
     private static readonly Regex ZdoSummary = new(@"^OK: ZDOS_AT .* objects=(\d+)$", RegexOptions.CultureInvariant);
@@ -38,7 +32,7 @@ public static class Scenario
         var host = round.Server; // A host is the server of its world and the client at once.
         double x = 0, z = 0;
         round.Step("the mod's Harmony patches are applied", () =>
-            HarmonyCensus.Read(host, "mymod.testing/harmony", Mod).Check(Mod, Patches).RequireApplied());
+            HarmonyCensus.Read(host, "examplemod.testing/harmony", Mod).Check(Mod, Patches).RequireApplied());
         round.Step("record where the host stands", () =>
         {
             var reply = host.Execute("cli_player_state");
@@ -51,10 +45,10 @@ public static class Scenario
         string At() => string.Create(CultureInfo.InvariantCulture, $"{x:F1} {z:F1}"); // Once the position is recorded.
         round.Step("the mod marks the ground where the host stands", () =>
         {
-            var reply = host.Execute("mymod_mark " + At());
+            var reply = host.Execute("examplemod_mark " + At());
             round.Write("mark", new { reply = reply.Output });
             if (reply.Output.Count(line => line.StartsWith("OK: marked ", StringComparison.Ordinal)) != 1)
-                throw new InvalidOperationException("MyMod did not confirm one marker: " + string.Join(" | ", reply.Output));
+                throw new InvalidOperationException("ExampleMod did not confirm one marker: " + string.Join(" | ", reply.Output));
         });
         round.Step("exactly one marker stands there in the host's saved objects", () =>
         {

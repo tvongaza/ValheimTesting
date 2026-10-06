@@ -164,8 +164,8 @@ Limits: `GameLaunch.ToStartInfo` and `ClientSession.Launch` launch processes on 
 `PinnedServerRun` takes the inventory before the mode, so the same runner and plan run the dedicated server on another machine, for example from macOS, which has no server of its own:
 
 ```sh
-dotnet run --project MyMod.SystemTests -- --inventory ../environments.json validate plan.json <new-output-directory>
-dotnet run --project MyMod.SystemTests -- --inventory ../environments.json run plan.json <new-output-directory>
+dotnet run --project tests/Valheim.Testing.NativeAcceptance -- --inventory ../environments.json validate plan.json <new-output-directory>
+dotnet run --project tests/Valheim.Testing.NativeAcceptance -- --inventory ../environments.json run plan.json <new-output-directory>
 ```
 
 A standalone run has one actor to place, its dedicated server: the first server environment in inventory order whose host and ports can run the plan (below). Its choice and the reason, including each environment it skipped and why, are recorded as `serverEnvironment` in `result.json`, beside `inventorySha256`. When none fits, the run is refused before anything is written. Clients open on this machine; remote clients and several actors are a campaign's ([below](#a-campaign-remote-clients-and-steam-identities)). The removed `--profile` option is refused as bad usage with a message naming `--inventory` and the campaign route. A Windows server environment uses the same plan and command:

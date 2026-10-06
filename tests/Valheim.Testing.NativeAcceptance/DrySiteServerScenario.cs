@@ -1,6 +1,6 @@
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// The server half of <see cref="DrySiteScenario"/> alone, for a plan whose scenario is <c>dry-site-server</c>: no client
@@ -20,8 +20,8 @@ public static class DrySiteServerScenario
     {
         if (!plan.ServerOnly) throw new ArgumentException($"This scenario runs {LifecyclePlan.ServerScenario} plans.");
         report.Step("no marker at either site before the mod acts", () => RequireMarkers(server, plan, dry: 0));
-        report.Step("the mod marks the dry site", () => server.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
-        report.Step("the mod refuses the wet site", () => server.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));
+        report.Step("the mod marks the dry site", () => server.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "AcceptanceMod did not mark the dry site"));
+        report.Step("the mod refuses the wet site", () => server.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "AcceptanceMod did not refuse the wet site"));
         report.Step("server: one marker at the dry site, none at the wet site", () => RequireMarkers(server, plan, dry: 1));
         report.Step("confirmed world save", () => server.SaveConfirmed());
         report.Step("restart only the owned server", () => server = restartOwnedServer());

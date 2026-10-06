@@ -1,8 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Runtime.CompilerServices;
-using MyMod.IntegrationTests;
-using MyMod.SystemTests;
 using Valheim.Testing.NativeAcceptance;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -16,7 +14,7 @@ namespace Valheim.Testing.NativeAcceptance.Tests;
 public sealed class CampaignPlanTests : IDisposable
 {
     private const string Mod = CampaignWorld.Md5Mod, Adapter = CampaignWorld.Md5Adapter, Cli = CampaignWorld.Md5Cli;
-    private readonly string _directory = Directory.CreateTempSubdirectory("mymod-campaign-plans-").FullName;
+    private readonly string _directory = Directory.CreateTempSubdirectory("acceptancemod-campaign-plans-").FullName;
     public void Dispose() => Directory.Delete(_directory, recursive: true);
 
     private static JsonObject Client(string mod = Mod, int port = 5556, bool crossplay = false)
@@ -148,20 +146,20 @@ public sealed class CampaignPlanTests : IDisposable
             // lifecycle-world: what would make it prove nothing.
             { "lifecycle-world: no fixtures variable", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan.Remove("environment"), AcceptancePlan.FixturesVariable) },
             { "lifecycle-world: away four zones off", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["away"] = new JsonObject { ["x"] = 356, ["z"] = -40, ["ground"] = 36 }, "at least 5 zones (320 m") }, // Four zones: still loaded.
-            { "lifecycle-world: client without MyMod", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent", "the check needs the server's MyMod on the client") },
+            { "lifecycle-world: client without AcceptanceMod", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent", "the check needs the server's AcceptanceMod on the client") },
             { "lifecycle-world: a key with spaces", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["globalKey"] = "Defeated Eikthyr", "one lower-case key") },
             { "lifecycle-world: a dungeon out of reach", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["dungeon"] = new JsonObject { ["x"] = 400, ["z"] = -40 }, "within two zones") },
             { "lifecycle-world: a cloud characters folder", (Valid(AcceptancePlan.WorldScenario), (plan, tests) => plan["logout"] = new JsonObject { ["charactersDirectory"] = Path.Combine(tests._directory, "characters") }, "characters_local") },
             { "lifecycle-world: no client", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan.Remove("client"), "add the client section") },
-            // vanilla-client: the client lacks MyMod and has the server's adapter.
-            { "vanilla-client: client with MyMod", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = Mod, "must pin example.mymod=absent") },
+            // vanilla-client: the client lacks AcceptanceMod and has the server's adapter.
+            { "vanilla-client: client with AcceptanceMod", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = Mod, "must pin valheimtesting.acceptancemod=absent") },
             { "vanilla-client: another adapter build", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.AdapterPlugin] = new string('9', 32), "with the server's MD5") },
             // synced-config: one new word.
             { "synced-config: no newGreeting", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan.Remove("newGreeting"), "Set newGreeting") },
             { "synced-config: two words", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan["newGreeting"] = "good bye", "Set newGreeting") },
             // refused-join: the refused client runs another build than the server.
-            { "refused-join: the server's own build", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"] = Client(Mod, port: 5557), "pins the server's own MyMod build") },
-            { "refused-join: no MyMod", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"] = Client("absent", port: 5557), "runs another MyMod build") },
+            { "refused-join: the server's own build", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"] = Client(Mod, port: 5557), "pins the server's own AcceptanceMod build") },
+            { "refused-join: no AcceptanceMod", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"] = Client("absent", port: 5557), "runs another AcceptanceMod build") },
             { "refused-join: one CLI port for both", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"] = Client(CampaignWorld.Md5Mismatched), "different ValheimCLI ports") },
             { "refused-join: a status that is no refusal", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["expectedRefusal"] = "Connected", "one of the game's Error statuses") },
             { "refused-join: an unknown status", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["expectedRefusal"] = "ErrorSomethingNew", "expectedRefusal: Unknown connection status") },
@@ -170,20 +168,20 @@ public sealed class CampaignPlanTests : IDisposable
             { "crossplay: a password", (Valid(AcceptancePlan.CrossplayScenario), (plan, _) => { plan["arguments"]!.AsArray().Add("-password"); plan["arguments"]!.AsArray().Add("secret1"); }, "without -password") },
             { "crossplay: no port argument", (Valid(AcceptancePlan.CrossplayScenario), (plan, _) => plan["arguments"] = new JsonArray("-batchmode", "-nographics", "-savedir", "{world}"), "names its game port") }, // The toolkit's rule.
             // Controls: opt-in, one scenario and side each.
-            { "control: pinned without a control run", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["pins"]!["example.mymod.control.missingtarget"] = ControlMd5, "Name it in expectFailure (\"missing-harmony-target\")") },
-            { "control: named, not installed", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["expectFailure"] = ControlPlugins.FieldOnlyState, "pin example.mymod.control.fieldonlystate there") },
-            { "control: on the wrong side", (Valid(AcceptancePlan.WorldScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["pins"]!["example.mymod.control.fieldonlystate"] = ControlMd5; }, "on the client") },
-            { "control: in the wrong scenario", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = ControlMd5; }, "belongs to the lifecycle-world scenario") },
+            { "control: pinned without a control run", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["pins"]!["valheimtesting.acceptancemod.control.missingtarget"] = ControlMd5, "Name it in expectFailure (\"missing-harmony-target\")") },
+            { "control: named, not installed", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["expectFailure"] = ControlPlugins.FieldOnlyState, "pin valheimtesting.acceptancemod.control.fieldonlystate there") },
+            { "control: on the wrong side", (Valid(AcceptancePlan.WorldScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["pins"]!["valheimtesting.acceptancemod.control.fieldonlystate"] = ControlMd5; }, "on the client") },
+            { "control: in the wrong scenario", (Valid(AcceptancePlan.VanillaClientScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["valheimtesting.acceptancemod.control.fieldonlystate"] = ControlMd5; }, "belongs to the lifecycle-world scenario") },
             { "control: an unknown name", (Valid(AcceptancePlan.WorldScenario), (plan, _) => plan["expectFailure"] = "some-control", "expectFailure names no control") },
-            { "control: two at once", (Valid(AcceptancePlan.WorldScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = ControlMd5; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = ControlMd5; }, "exactly the control it names") },
+            { "control: two at once", (Valid(AcceptancePlan.WorldScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["valheimtesting.acceptancemod.control.fieldonlystate"] = ControlMd5; plan["client"]!["pins"]!["valheimtesting.acceptancemod.control.suppressedsave"] = ControlMd5; }, "exactly the control it names") },
             { "control: on a dry-site lifecycle", (tests => tests.DrySitePlan(), (plan, _) => plan["expectFailure"] = ControlPlugins.FieldOnlyState, "belongs to the lifecycle-world scenario") },
-            // content-census: the client's registries are its own, so a client without MyMod, or with another build, cannot stand in.
-            { "content-census: client without MyMod", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent", "the check needs the server's MyMod on the client") },
-            { "content-census: client with another build", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = CampaignWorld.Md5Mismatched, "the check needs the server's MyMod on the client") },
+            // content-census: the client's registries are its own, so a client without AcceptanceMod, or with another build, cannot stand in.
+            { "content-census: client without AcceptanceMod", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent", "the check needs the server's AcceptanceMod on the client") },
+            { "content-census: client with another build", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = CampaignWorld.Md5Mismatched, "the check needs the server's AcceptanceMod on the client") },
             { "content-census: no client", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan.Remove("client"), "add the client section") },
             { "content-census: drySite", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 }, "marks nothing") },
             { "content-census: its build control in another scenario", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan["expectFailure"] = ControlPlugins.OmittedRecipe, "belongs to the content-census scenario") },
-            { "content-census: a control plugin beside its build control", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]!["example.mymod.control.missingtarget"] = new string('5', 32); }, "remove the control plugin example.mymod.control.missingtarget") },
+            { "content-census: a control plugin beside its build control", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]!["valheimtesting.acceptancemod.control.missingtarget"] = new string('5', 32); }, "remove the control plugin valheimtesting.acceptancemod.control.missingtarget") },
             // Every client section runs with strict pins, the suite's two extra ones included (LifecyclePlan's rule over AcceptancePlan's sections).
             { "strict pins: second client unpinned", (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["secondClient"]!["pinning"] = "none", "strict pins only") },
             { "strict pins: refused client unpinned", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"]!["pinning"] = "none", "strict pins only") },
@@ -217,9 +215,9 @@ public sealed class CampaignPlanTests : IDisposable
         var plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["expectedRefusal"] = "ErrorDisconnected";
         Assert.Equal(Valheim.Testing.Game.GameConnectionStatus.ErrorDisconnected, Read(plan).RefusalStatus);
         // A client-side control run; an explicit absence is not an install.
-        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = ControlMd5;
+        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["valheimtesting.acceptancemod.control.suppressedsave"] = ControlMd5;
         Assert.Equal(ControlPlugins.SuppressedProfileSave, Read(plan).Control!.Name);
-        plan = Plan(AcceptancePlan.WorldScenario); plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = "absent";
+        plan = Plan(AcceptancePlan.WorldScenario); plan["client"]!["pins"]!["valheimtesting.acceptancemod.control.suppressedsave"] = "absent";
         Assert.Null(Read(plan).Control);
         // The dry-site lifecycle is no campaign scenario.
         Assert.False(Read(DrySitePlan()).IsCampaign);
@@ -228,7 +226,7 @@ public sealed class CampaignPlanTests : IDisposable
     // A server-side control run names its lines as expected: they fail the teardown scan by default.
     [Fact] public void AServerControlRunNamesItsLogLinesAsExpected()
     {
-        var plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["example.mymod.control.missingtarget"] = ControlMd5;
+        var plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["valheimtesting.acceptancemod.control.missingtarget"] = ControlMd5;
         Refused(plan, "names the control's lines as expected");
         plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["expected"] = new JsonArray("name OtherMethod"), ["reason"] = "the control plants it" } };
         Refused(plan, "names the control's lines as expected");
@@ -241,7 +239,7 @@ public sealed class CampaignPlanTests : IDisposable
         Refused(plan, "keeps accesstools-not-found a failure");
     }
 
-    // The omitted-recipe control is MyMod's own build, pinned where MyMod is; it belongs to the content census alone and
+    // The omitted-recipe control is AcceptanceMod's own build, pinned where AcceptanceMod is; it belongs to the content census alone and
     // runs without any control plugin.
     [Fact] public void TheContentCensusControlIsABuild()
     {
@@ -251,7 +249,7 @@ public sealed class CampaignPlanTests : IDisposable
         Assert.Equal(ControlPlugins.OmittedRecipe, control.Name);
         plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]![AcceptancePlan.ModPlugin] = "any";
         Assert.ThrowsAny<ArgumentException>(() => Read(plan));
-        // A normal content-census plan names no control, although MyMod is pinned.
+        // A normal content-census plan names no control, although AcceptanceMod is pinned.
         Assert.Null(Read(Plan(AcceptancePlan.ContentCensusScenario)).Control);
     }
 
@@ -262,7 +260,7 @@ public sealed class CampaignPlanTests : IDisposable
         // Discover the source inventory, not arbitrary files left in bin/ from an older build.
         var names = Directory.GetFiles(SourceSamples(), "sample-plan-*.json")
             .Select(path => Path.GetFileName(path)!).Where(name => name != "sample-plan-hosted.json").ToArray();
-        Assert.Equal(10, names.Length);
+        Assert.Equal(11, names.Length);
         foreach (string name in names)
         {
             string file = Path.Combine(samples, name);
@@ -276,7 +274,7 @@ public sealed class CampaignPlanTests : IDisposable
 
     [Fact] public void AReviewCapturePlanIsRefusedByTheLibrarysCaptureRuleBeforeLaunch()
     {
-        // The example keeps no copy of the capture ranges: ReviewCapture.Validate refuses them when the plan is read.
+        // The suite keeps no copy of the capture ranges: ReviewCapture.Validate refuses them when the plan is read.
         JsonObject Sample() => JsonNode.Parse(Fill(File.ReadAllText(Path.Combine(SourceSamples(), "sample-plan-review-capture.json"))))!.AsObject();
         Assert.Equal(AcceptancePlan.ReviewCaptureScenarioName, Read(Sample()).Scenario);
         var plan = Sample(); plan["capture"]!["cameraAzimuthDegrees"] = 360;
@@ -305,8 +303,8 @@ public sealed class CampaignPlanTests : IDisposable
             : v.StartsWith("full path", StringComparison.Ordinal) ? Path.Combine(_directory, System.Text.RegularExpressions.Regex.Replace(v, "[^A-Za-z0-9]+", "-"))
             : v.Contains("sha256", StringComparison.OrdinalIgnoreCase) || v.Contains("InstallPins", StringComparison.Ordinal) ? new string('a', 64)
             : v.Contains("mismatched", StringComparison.Ordinal) ? CampaignWorld.Md5Mismatched
-            : v.Contains("md5 of MyMod.dll", StringComparison.Ordinal) ? Mod
-            : v.Contains("md5 of MyMod.TestAdapter.dll", StringComparison.Ordinal) ? Adapter
+            : v.Contains("md5 of AcceptanceMod.dll", StringComparison.Ordinal) ? Mod
+            : v.Contains("md5 of AcceptanceMod.Adapter.dll", StringComparison.Ordinal) ? Adapter
             : v.Contains("md5", StringComparison.Ordinal) ? Cli
             : v.Contains("UID", StringComparison.Ordinal) ? "4242"
             : v.Contains("password", StringComparison.Ordinal) ? "fixture-password"
@@ -314,7 +312,7 @@ public sealed class CampaignPlanTests : IDisposable
         return JsonSerializer.Serialize(value);
     });
 
-    // A dry-site-lifecycle plan: the crossplay plan's sites and arrival, joined by address with a client without MyMod.
+    // A dry-site-lifecycle plan: the crossplay plan's sites and arrival, joined by address with a client without AcceptanceMod.
     private JsonObject DrySitePlan()
     {
         var plan = Plan(AcceptancePlan.CrossplayScenario);
@@ -358,12 +356,12 @@ public sealed class CampaignPlanTests : IDisposable
         var plan = Hosted(); plan["client"]!.AsObject().Remove("hostWorld");
         Assert.Contains("hostWorld", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
         plan = Hosted(); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent";
-        Assert.Contains("The host runs MyMod", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
-        plan = Hosted(); plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = new string('5', 32);
+        Assert.Contains("The host runs AcceptanceMod", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
+        plan = Hosted(); plan["client"]!["pins"]!["valheimtesting.acceptancemod.control.suppressedsave"] = new string('5', 32);
         Assert.Contains("no control run", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
         plan = Hosted(); plan["scenario"] = AcceptancePlan.WorldScenario;
         Assert.Throws<ArgumentException>(() => ReadHosted(plan));
-        // A peer (#258 step 8b) joins from another machine: only as a campaign, as a joinsHost client with MyMod and its adapter.
+        // A peer (#258 step 8b) joins from another machine: only as a campaign, as a joinsHost client with AcceptanceMod and its adapter.
         JsonObject Peer() { var peer = Client(); peer.Remove("join"); peer["port"] = 5557; peer["joinsHost"] = true; return peer; }
         plan = Hosted(); plan["peer"] = Peer();
         Assert.Contains("run this plan as a campaign", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
@@ -375,6 +373,6 @@ public sealed class CampaignPlanTests : IDisposable
         Assert.Contains("set its joinsHost", Assert.Throws<ArgumentException>(() => HostedPlan.Validated(HostedPlan.Read(path))).Message);
         plan = Hosted(); var vanilla = Peer(); vanilla["pins"]![AcceptancePlan.AdapterPlugin] = "absent"; plan["peer"] = vanilla;
         File.WriteAllText(path, plan.ToJsonString());
-        Assert.Contains("The peer runs MyMod", Assert.Throws<ArgumentException>(() => HostedPlan.Validated(HostedPlan.Read(path))).Message);
+        Assert.Contains("The peer runs AcceptanceMod", Assert.Throws<ArgumentException>(() => HostedPlan.Validated(HostedPlan.Read(path))).Message);
     }
 }

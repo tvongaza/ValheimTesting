@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
 namespace Valheim.Testing.NativeAcceptance;
@@ -7,7 +6,7 @@ namespace Valheim.Testing.NativeAcceptance;
 /// A negative-control plugin (tests/Valheim.Testing.NativeAcceptance/Controls): installed only for a run whose plan names it in
 /// <c>expectFailure</c>, on the server or the client, in one scenario. <see cref="Check"/> names the check it must make
 /// fail and <see cref="Reason"/> the text that failure must contain; any other outcome fails the run. A
-/// <see cref="Build"/> control is not a plugin but a build of the plugin <see cref="Guid"/> names (MyMod built with a
+/// <see cref="Build"/> control is not a plugin but a build of the plugin <see cref="Guid"/> names (AcceptanceMod built with a
 /// defect), pinned by its MD5 where the normal build would be: the plan cannot tell the two builds apart, so only the
 /// check's named failure shows which one ran.
 /// </summary>
@@ -20,9 +19,9 @@ public static class ControlPlugins
         FieldOnlyState = "field-only-state", SuppressedProfileSave = "suppressed-profile-save", OmittedRecipe = "omitted-recipe",
         OmittedStatusEffect = "omitted-status-effect";
     /// <summary>The prefab only the server-only-prefab control registers.</summary>
-    public const string ServerOnlyPrefabName = "MyModControl_ServerOnly";
+    public const string ServerOnlyPrefabName = "AcceptanceModControl_ServerOnly";
     /// <summary>The missing-harmony-target control's patch, on a method the game does not have.</summary>
-    public const string MissingMethodName = "MyModControlMethodThatDoesNotExist";
+    public const string MissingMethodName = "AcceptanceModControlMethodThatDoesNotExist";
     public static readonly DeclaredPatch MissingPatch = new("Player::" + MissingMethodName, "postfix");
     /// <summary>The control's patch class, as HarmonyX's "Undefined target method" error names it in Unity's log.</summary>
     public const string MissingPatchClass = "MissingHarmonyTarget.Plugin+PatchMissingMethod";
@@ -36,18 +35,18 @@ public static class ControlPlugins
 
     public static readonly IReadOnlyList<ControlPlugin> All =
     [
-        new(MissingHarmonyTarget, "example.mymod.control.missingtarget", OnServer: true, AcceptancePlan.WorldScenario,
+        new(MissingHarmonyTarget, "valheimtesting.acceptancemod.control.missingtarget", OnServer: true, AcceptancePlan.WorldScenario,
             "the control's Harmony patch is applied", "not applied: " + MissingPatch),
-        new(ServerOnlyPrefab, "example.mymod.control.serveronlyprefab", OnServer: true, AcceptancePlan.VanillaClientScenario,
+        new(ServerOnlyPrefab, "valheimtesting.acceptancemod.control.serveronlyprefab", OnServer: true, AcceptancePlan.VanillaClientScenario,
             "the vanilla client resolves every prefab hash where the player stands", $"{StableHash.Of(ServerOnlyPrefabName)} ({ServerOnlyPrefabName})"),
-        new(FieldOnlyState, "example.mymod.control.fieldonlystate", OnServer: false, AcceptancePlan.WorldScenario,
+        new(FieldOnlyState, "valheimtesting.acceptancemod.control.fieldonlystate", OnServer: false, AcceptancePlan.WorldScenario,
             "the field-only value survives the zone reload", "did not survive the zone reload"),
-        new(SuppressedProfileSave, "example.mymod.control.suppressedsave", OnServer: false, AcceptancePlan.WorldScenario,
+        new(SuppressedProfileSave, "valheimtesting.acceptancemod.control.suppressedsave", OnServer: false, AcceptancePlan.WorldScenario,
             "the logout rewrites the character file", "to be rewritten by the logout"),
     ];
 
     /// <summary>
-    /// The build controls omit the recipe or status effect from MyMod on both sides; the content census must identify
+    /// The build controls omit the recipe or status effect from AcceptanceMod on both sides; the content census must identify
     /// exactly that omission (#91/#114).
     /// </summary>
     public static readonly IReadOnlyList<ControlPlugin> Builds =

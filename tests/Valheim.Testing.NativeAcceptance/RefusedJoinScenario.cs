@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using System.Globalization;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
@@ -6,14 +5,14 @@ using Valheim.Testing.GameSessions;
 namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// <c>refused-join</c> (#34): MyMod's version handshake refuses a client that runs another MyMod build, and the server
+/// <c>refused-join</c> (#34): AcceptanceMod's version handshake refuses a client that runs another AcceptanceMod build, and the server
 /// stays up for a matching one.
 /// <list type="number">
-/// <item>The server's MyMod patches, the handshake's among them, are applied.</item>
-/// <item>The refused client (<c>refusedClient</c>, a MyMod built with another net version) opens, in <c>refused-client/</c>;
+/// <item>The server's AcceptanceMod patches, the handshake's among them, are applied.</item>
+/// <item>The refused client (<c>refusedClient</c>, a AcceptanceMod built with another net version) opens, in <c>refused-client/</c>;
 /// once the server accepts connections it joins exactly once and must be refused with <c>expectedRefusal</c> (default
 /// <c>ErrorVersion</c>, 3), read back at its menu (<see cref="SessionControl.JoinExpectingRefusal"/>). It is then closed.</item>
-/// <item>The server still accepts connections, and the matching client (<c>client</c>, the server's MyMod build) joins in one
+/// <item>The server still accepts connections, and the matching client (<c>client</c>, the server's AcceptanceMod build) joins in one
 /// round, in <c>matching-client/</c>: the server keeps it connected as its one player.</item>
 /// </list>
 /// The two clients run one after the other, so one Steam account serves both; each owned one has its own install.

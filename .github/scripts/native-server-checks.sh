@@ -3,8 +3,8 @@
 # .github/workflows/native-server-checks.yml. /src is the read-only checkout; builds use a writable copy.
 #
 #   native-server-checks.sh smoke                  LinuxServerSmoke: the server boots with BepInEx and loads a new world.
-#   native-server-checks.sh example [plugin-pin]   The FullLifecycle example's server half (dry-site-server): ValheimCLI and
-#                                                  the example mod built against this server's own assemblies, a new world,
+#   native-server-checks.sh acceptance [plugin-pin] The native acceptance suite's server half (dry-site-server): ValheimCLI
+#                                                  and AcceptanceMod built against this server's own assemblies, a new world,
 #                                                  then the pinned run. plugin-pin is the negative control: the plan pins a
 #                                                  wrong MD5 for the mod, so the run must fail before the scenario.
 #
@@ -12,7 +12,7 @@
 # take: never the server, the runtime copies, the publicized assemblies, a world or the plan (it holds the password).
 set -euo pipefail
 
-check=${1:?usage: native-server-checks.sh smoke|example [plugin-pin]}
+check=${1:?usage: native-server-checks.sh smoke|acceptance [plugin-pin]}
 control=${2:-none}
 server=/opt/valheim/server
 out=$HOME/out/$check
@@ -40,7 +40,7 @@ case "$check" in
   smoke)
     dotnet run --project docker/linux-server/smoke -c Release -- "$server" "$out" 600
     ;;
-  example)
+  acceptance)
     mkdir -p "$out"
     # The game-side ValheimCLI from the commit cli-dependency.json pins, the same source as the transport package.
     repository=$(sed -n 's/.*"repository": *"\([^"]*\)".*/\1/p' cli-dependency.json)
@@ -76,17 +76,17 @@ case "$check" in
     worldtools_dll=$(only "$cli/Packs/WorldTools/bin/Release" -name Valheim.Cli.WorldTools.dll)
 
     game_build=(-c Release -p:ValheimManaged="$managed" -p:BepInExCore="$core")
-    dotnet build examples/FullLifecycle/MyMod/MyMod.csproj "${game_build[@]}"
-    dotnet build examples/FullLifecycle/MyMod.TestAdapter/MyMod.TestAdapter.csproj "${game_build[@]}" -p:CliDll="$cli_dll"
-    mod_dll=$(only examples/FullLifecycle/MyMod/bin/Release -name MyMod.dll)
-    adapter_dll=$(only examples/FullLifecycle/MyMod.TestAdapter/bin/Release -name MyMod.TestAdapter.dll)
+    dotnet build tests/Valheim.Testing.NativeAcceptance/AcceptanceMod/AcceptanceMod.csproj "${game_build[@]}"
+    dotnet build tests/Valheim.Testing.NativeAcceptance/AcceptanceMod.Adapter/AcceptanceMod.Adapter.csproj "${game_build[@]}" -p:CliDll="$cli_dll"
+    mod_dll=$(only tests/Valheim.Testing.NativeAcceptance/AcceptanceMod/bin/Release -name AcceptanceMod.dll)
+    adapter_dll=$(only tests/Valheim.Testing.NativeAcceptance/AcceptanceMod.Adapter/bin/Release -name AcceptanceMod.Adapter.dll)
 
     # The test runtime is this container's server directory: the runner and the preparation copy it before launching.
     mkdir -p "$server/BepInEx/plugins" "$server/BepInEx/config"
     cp "$cli_dll" "$standard_dll" "$worldtools_dll" "$mod_dll" "$adapter_dll" "$server/BepInEx/plugins/"
     printf '[Server]\n\nEnabled = true\nPort = 5577\n' > "$server/BepInEx/config/valheimCLI.valheimCLI.cfg"
 
-    runner=(dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release)
+    runner=(dotnet run --project tests/Valheim.Testing.NativeAcceptance -c Release)
     "${runner[@]}" -- prepare-server "$server" "$out/prepare"
     plan=$out/prepare/plan.json
     if [ "$control" = plugin-pin ]; then
@@ -94,7 +94,7 @@ case "$check" in
       mod_md5=$(md5sum "$mod_dll" | cut -d' ' -f1)
       grep -q "\"$mod_md5\"" "$plan"
       sed -i "s/\"$mod_md5\"/\"00000000000000000000000000000000\"/" "$plan"
-      echo "NEGATIVE CONTROL: the plan pins example.mymod=00000000000000000000000000000000 instead of $mod_md5"
+      echo "NEGATIVE CONTROL: the plan pins valheimtesting.acceptancemod=00000000000000000000000000000000 instead of $mod_md5"
     elif [ "$control" != none ]; then
       echo "Unknown negative control: $control" >&2
       exit 2

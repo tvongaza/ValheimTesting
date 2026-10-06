@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
@@ -40,13 +39,13 @@ public static class ScenarioTable
     /// <summary>Every scenario's name, in table order.</summary>
     public static IReadOnlyList<string> Names => [.. Entries.Select(entry => entry.Name)];
     /// <summary>
-    /// The runner's options for the suite: its plan rules, MyMod's declaration (<see cref="LifecyclePlan.Mod"/>) and provenance,
+    /// The runner's options for the suite: its plan rules, AcceptanceMod's declaration (<see cref="LifecyclePlan.Mod"/>) and provenance,
     /// with <paramref name="scenario"/> as the scenario (<see cref="Run"/> by default). The console runner and the xUnit session
     /// fixture (Valheim.Testing.NativeAcceptance.Tests' <c>AcceptanceSession</c>) use the same options.
     /// </summary>
     public static PinnedServerRunOptions<AcceptancePlan> RunnerOptions(Func<GameSession, AcceptancePlan, Task>? scenario = null) => new()
     {
-        Name = "mymod-system-test",
+        Name = "acceptancemod-system-test",
         ReadPlan = path =>
         {
             var plan = AcceptancePlan.ReadValidated(path);
@@ -55,7 +54,7 @@ public static class ScenarioTable
                 throw new ArgumentException($"The {plan.Scenario} scenario runs as a campaign: campaign run <campaign.json> <plan.json> <new-output-directory>.");
             return plan;
         },
-        // The session capability and token variable MyMod's test adapter serves, and its Harmony patches, which the session
+        // The session capability and token variable AcceptanceMod's test adapter serves, and its Harmony patches, which the session
         // checks on the server before any scenario step.
         Mod = AcceptancePlan.Mod,
         CheckPlan = plan =>

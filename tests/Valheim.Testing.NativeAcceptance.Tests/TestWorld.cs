@@ -1,11 +1,10 @@
 using System.Text.Json;
 using System.Globalization;
-using MyMod.SystemTests;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using valheim_cli.Testing;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
 /// <summary>
 /// A tiny scripted game for the scenario: a server whose saved objects hold the markers the mod places, a restart that
@@ -41,7 +40,7 @@ public sealed class TestWorld : IOwnedServer
     public GameActor Server()
     {
         var transport = new ScriptedTransport()
-            .OnPrefix("mymod_mark ", command =>
+            .OnPrefix("acceptancemod_mark ", command =>
             {
                 MarkCommands++;
                 if (LoseMarkReply) return new CommandResult { Ok = false, ErrorCode = "timeout", Message = "reply lost" };
@@ -64,14 +63,14 @@ public sealed class TestWorld : IOwnedServer
             })
             .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
             .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport"))
-            .Extension("mymod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = ++SessionReadings > ClosedReadings })
-            .Extension("mymod.testing", "harmony", _ => Census());
+            .Extension("acceptancemod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = ++SessionReadings > ClosedReadings })
+            .Extension("acceptancemod.testing", "harmony", _ => Census());
         Servers.Add(transport);
         return transport.Actor("server", "cli_expect worlduid=" + WorldUid);
     }
 
     /// <summary>As an owned server's session: the scripted server's adapter reports whether it accepts game connections.</summary>
-    public void WaitUntilJoinable(GameActor server) => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(5));
+    public void WaitUntilJoinable(GameActor server) => OwnedServerSession.WaitUntilJoinable(server, "acceptancemod.testing/session", TimeSpan.FromSeconds(5));
 
     /// <summary>What <c>OwnedServerSession.Restart</c> does to the world: only saved objects come back.</summary>
     public GameActor Restart()
@@ -129,7 +128,7 @@ public sealed class TestWorld : IOwnedServer
     // same method, and its handshake and greeting patches on ZNet. (A missing patch is the runner session's check now.)
     private object Census() => ModCensus();
 
-    /// <summary>The adapter's census of MyMod's patches as a server or client with MyMod reports it.</summary>
+    /// <summary>The adapter's census of AcceptanceMod's patches as a server or client with AcceptanceMod reports it.</summary>
     public static object ModCensus() => new
     {
         source = "harmony-patches", complete = true, owner = LifecyclePlan.ModPlugin,
@@ -141,12 +140,12 @@ public sealed class TestWorld : IOwnedServer
                 patches = new[]
                 {
                     new { owner = "other.mod", kind = "prefix", priority = 400, index = 0, before = Array.Empty<string>(), after = Array.Empty<string>(), patch = "Other.Hooks::Prefix()" },
-                    ModPatch("postfix", "MyMod.Plugin+RegisterCommands::Postfix()"),
+                    ModPatch("postfix", "AcceptanceMod.Plugin+RegisterCommands::Postfix()"),
                 },
             },
-            new { method = "ZNet::Awake()", patches = new[] { ModPatch("postfix", "MyMod.SyncedGreeting+RegisterRpc::Postfix(ZNet)") } },
-            new { method = "ZNet::OnNewConnection(ZNetPeer)", patches = new[] { ModPatch("prefix", "MyMod.VersionHandshake+SendVersion::Prefix(ZNet,ZNetPeer)") } },
-            new { method = "ZNet::RPC_PeerInfo(ZRpc,ZPackage)", patches = new[] { ModPatch("prefix", "MyMod.VersionHandshake+RefuseMismatched::Prefix(ZNet,ZRpc)") } },
+            new { method = "ZNet::Awake()", patches = new[] { ModPatch("postfix", "AcceptanceMod.SyncedGreeting+RegisterRpc::Postfix(ZNet)") } },
+            new { method = "ZNet::OnNewConnection(ZNetPeer)", patches = new[] { ModPatch("prefix", "AcceptanceMod.VersionHandshake+SendVersion::Prefix(ZNet,ZNetPeer)") } },
+            new { method = "ZNet::RPC_PeerInfo(ZRpc,ZPackage)", patches = new[] { ModPatch("prefix", "AcceptanceMod.VersionHandshake+RefuseMismatched::Prefix(ZNet,ZRpc)") } },
         },
     };
 

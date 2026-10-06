@@ -2,28 +2,28 @@ using System.Text.Json.Serialization;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// The example's plan: the toolkit's pinned server plan (runtime, world, launch, pins, port) plus what this mod's
-/// scenario needs. The expectations are declared here by whoever prepared the fixture, from the world's generator
-/// heights; the runner never derives them from the mod's own replies. This repository's own native acceptance suite
-/// (tests/Valheim.Testing.NativeAcceptance) extends it with more scenarios, so its rules have four extension points.
+/// The dry-site plan: the toolkit's pinned server plan (runtime, world, launch, pins, port) plus what AcceptanceMod's
+/// dry-site scenarios need. The expectations are declared here by whoever prepared the fixture, from the world's generator
+/// heights; the runner never derives them from the mod's own replies. <see cref="AcceptancePlan"/> extends it with the
+/// suite's further scenarios, so its rules have four extension points.
 /// </summary>
 public class LifecyclePlan : ServerRunPlan
 {
-    public const string SessionTokenVariable = "MYMOD_TEST_SESSION_TOKEN";
-    /// <summary>MyMod as the runner sees it: its adapter's session and Harmony capabilities and the patches it declares.</summary>
-    public static readonly ModDeclaration Mod = new("mymod.testing/session", SessionTokenVariable)
+    public const string SessionTokenVariable = "ACCEPTANCEMOD_TEST_SESSION_TOKEN";
+    /// <summary>AcceptanceMod as the runner sees it: its adapter's session and Harmony capabilities and the patches it declares.</summary>
+    public static readonly ModDeclaration Mod = new("acceptancemod.testing/session", SessionTokenVariable)
     {
         HarmonyCapability = HarmonyCapability, Owner = ModPlugin, Patches = DrySiteScenario.Patches,
     };
     /// <summary>The full scenario (<see cref="DrySiteScenario"/>) and its server half alone (<see cref="DrySiteServerScenario"/>).</summary>
     public const string LifecycleScenario = "dry-site-lifecycle", ServerScenario = "dry-site-server";
-    public const string ModPlugin = "example.mymod";
-    public const string AdapterPlugin = "example.mymod.testadapter";
-    /// <summary>The test adapter's census of applied Harmony patches (<c>HarmonyCensus.Command()</c> in MyMod.TestAdapter).</summary>
-    public const string HarmonyCapability = "mymod.testing/harmony";
+    public const string ModPlugin = "valheimtesting.acceptancemod";
+    public const string AdapterPlugin = "valheimtesting.acceptancemod.adapter";
+    /// <summary>The test adapter's census of applied Harmony patches (<c>HarmonyCensus.Command()</c> in AcceptanceMod.Adapter).</summary>
+    public const string HarmonyCapability = "acceptancemod.testing/harmony";
     // The mod's rule inputs (see ModWithTests' DrySiteRule): the sea at 30 m, 1.5 m of clearance.
     public const float WaterLevel = 30f, Clearance = 1.5f;
 
@@ -45,7 +45,7 @@ public class LifecyclePlan : ServerRunPlan
 
     /// <summary>The scenarios this plan runs.</summary>
     [JsonIgnore] public virtual IReadOnlyList<string> Scenarios => [LifecycleScenario, ServerScenario];
-    /// <summary>Whether the scenario marks the dry site and refuses the wet one (both of this example's do).</summary>
+    /// <summary>Whether the scenario marks the dry site and refuses the wet one (both dry-site scenarios do).</summary>
     [JsonIgnore] public virtual bool MarksSites => true;
     /// <summary>Every client section, each of which runs with strict pins.</summary>
     [JsonIgnore] protected virtual IEnumerable<ClientRunPlan?> ClientSections => [Client];
@@ -54,9 +54,9 @@ public class LifecyclePlan : ServerRunPlan
 
     private void Validate()
     {
-        // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
+        // The scenario joins and checks by the pinned world uid, so this suite has no unpinned mode.
         if (!Pinned || ClientSections.Any(client => client is { Pinned: false }))
-            throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
+            throw new ArgumentException("This suite runs with strict pins only: remove \"pinning\".");
         ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
         RequireScenario([.. Scenarios]);
         ValidateScenario();
