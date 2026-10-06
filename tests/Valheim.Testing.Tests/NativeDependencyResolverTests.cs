@@ -659,9 +659,35 @@ public sealed class NativeDependencyResolverTests : IDisposable
         host.Failures.Remove("apply-stage");
         string failedRun = JsonDocument.Parse(File.ReadAllText(Path.Combine(failedPrepOutput, "result.json"))).RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
         var failedJournal = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", failedRun, TimeSpan.FromSeconds(5));
-        Assert.Equal(JournalEntry.CopyIntended, failedJournal.Single(record => record.Actor == "server").Entry.Kind);
+        // The partial copy is the campaign's from its intent, so the preparation's cleanup retires it and journals that.
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyRetired], failedJournal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
         var failedEnd = Assert.Single(failedJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
         Assert.Equal(("failed in preparation", "true"), (failedEnd["state"], failedEnd["cleanupVerified"]));
+        // The result and its JUnit say what the journal says (#424): the preparation's own cleanup is a passing Cleanup step.
+        Assert.Equal((true, 1, 0), CleanupOf(failedPrepOutput));
+
+        // Negative control: the partial copy's cleanup fails too. The journal, the result and the JUnit all say not verified.
+        host.Failures["apply-stage"] = new HostResult(HostOutcome.Exited, 3, "", "Access to the path is denied", TimeSpan.Zero, false);
+        host.Failures["cleanup-stage"] = new HostResult(HostOutcome.Exited, 3, "", "Remove-Item: access denied", TimeSpan.Zero, false);
+        string uncleanedOutput = Path.Combine(_rig.Root, "run-campaign-failed-prep-uncleaned");
+        Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, uncleanedOutput, options));
+        host.Failures.Remove("apply-stage");
+        host.Failures.Remove("cleanup-stage");
+        string uncleanedRun = JsonDocument.Parse(File.ReadAllText(Path.Combine(uncleanedOutput, "result.json"))).RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
+        var uncleanedEnd = Assert.Single(await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", uncleanedRun, TimeSpan.FromSeconds(5)),
+            record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
+        Assert.Equal(("failed in preparation", "false"), (uncleanedEnd["state"], uncleanedEnd["cleanupVerified"]));
+        var (verified, cleanupSteps, cleanupFailures) = CleanupOf(uncleanedOutput);
+        Assert.Equal((false, true), (verified, cleanupSteps >= 1 && cleanupFailures >= 1));
+    }
+
+    // result.json's CleanupVerified, and the JUnit cleanup suite's test and failure counts.
+    private static (bool Verified, int Tests, int Failures) CleanupOf(string output)
+    {
+        var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
+        var suite = System.Xml.Linq.XDocument.Load(Path.Combine(output, "junit.xml")).Root!.Elements("testsuite")
+            .Single(element => element.Attribute("name")!.Value.EndsWith(" / cleanup", StringComparison.Ordinal));
+        return (result.GetProperty("CleanupVerified").GetBoolean(), (int)suite.Attribute("tests")!, (int)suite.Attribute("failures")!);
     }
 
     // #257: a Ctrl+C while one actor's copy script runs (the server's, which then hangs until cancelled) cancels the campaign's
@@ -795,6 +821,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.True(File.Exists(Path.Combine(host.Local(@"C:\game\source"), "BepInEx", "core", "BepInEx.dll")));
         }
         Assert.Empty(server.Events);
+        // The result and its JUnit agree with every host's journal (#424).
+        Assert.True(result.GetProperty("CleanupVerified").GetBoolean());
+        var (_, cleanupSteps, cleanupFailures) = CleanupOf(output);
+        Assert.Equal((true, 0), (cleanupSteps >= 1, cleanupFailures));
     }
 
     // A campaign that leaves out its inventory runs on this machine: its dedicated server is the one Steam installed, with
