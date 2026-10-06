@@ -28,12 +28,14 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
     private readonly CancellationToken _cancellation;
     private readonly bool _local;
 
-    internal HostingClientActor(string name, ClientRunPlan plan, string output, IClientPlacement placement, CancellationToken cancellation)
+    /// <param name="site">A campaign client's host, where its world is placed; null for this machine.</param>
+    internal HostingClientActor(string name, ClientRunPlan plan, string output, IClientPlacement placement, CancellationToken cancellation,
+        HostedWorldOnHost.Site? site = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (plan.HostWorld == null) throw new ArgumentException($"Client {name} hosts a world: give its plan a hostWorld section.", nameof(plan));
         _client = new ClientActor(name, plan, output, placement, cancellation);
-        _world = new HostedWorldLifecycle(plan, output, cancellation);
+        _world = new HostedWorldLifecycle(plan, output, cancellation, site);
         _cancellation = cancellation; _local = placement is LocalClientPlacement;
     }
 
@@ -158,7 +160,7 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
 /// directory, the placement, the start and leave, and the release once no client can still host it (#332). Shared by
 /// <see cref="HostingClientActor"/> and <see cref="ClientRounds"/>' hosted rounds, which open their client themselves.
 /// </summary>
-internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, CancellationToken cancellation)
+internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, CancellationToken cancellation, HostedWorldOnHost.Site? site = null)
 {
     private readonly object _state = new();
     private HostedWorld? _world;
@@ -176,11 +178,34 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
     public void Stopped() { lock (_state) _stopped = true; }
 
     public string PreflightStep => plan.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied";
-    /// <summary>The plan's static preflight: the fixture's pinned files and own world UID, and an owned client's install with the session commands hosting uses.</summary>
-    public void Preflight() => plan.Preflight(CliCapabilities.HostedRounds);
+    /// <summary>
+    /// The plan's static preflight: the fixture's pinned files and own world UID, and an owned client's install with the session
+    /// commands hosting uses. A client on a campaign host has its install checked on that host by its preparation and launch; here
+    /// only its staged ValheimCLI set is (its manifest).
+    /// </summary>
+    public void Preflight()
+    {
+        if (site == null) { plan.Preflight(CliCapabilities.HostedRounds); return; }
+        plan.HostWorld!.Preflight();
+        // The staged set's manifest (bound by the campaign) must offer the session commands hosting uses; its files are on the host.
+        if (plan.Owned && plan.CliManifest != null)
+        {
+            var offered = CliCapabilityManifest.Read(plan.CliManifest).Capabilities;
+            var missing = CliCapabilities.HostedRounds.Concat(plan.Capabilities.Where(CliCapabilities.IsPackCapability)).Distinct(StringComparer.Ordinal)
+                .Where(capability => !offered.ContainsKey(capability)).ToList();
+            if (missing.Count != 0) throw new InvalidOperationException($"The client's staged ValheimCLI set does not offer {string.Join(", ", missing)}, which hosting a world uses.");
+        }
+    }
     /// <summary>The native client's save directory, which holds <c>worlds_local</c>; a native macOS client must use its signed-in user's default.</summary>
     public void CheckSaveDirectory()
     {
+        if (site != null)
+        {
+            // The host user's own data directory, beside the characters_local the campaign staged the character in.
+            if (Section.SaveDirectory != null) throw new ArgumentException("hostWorld.saveDirectory: a campaign client's world goes to its host user's own worlds_local; leave it out.");
+            lock (_state) _saveDirectory = site.WorldsDirectory;
+            return;
+        }
         var platform = plan.Owned ? GameLaunch.DetectClient(plan.Install) : HostedWorld.CurrentPlatform;
         string defaultSaveDirectory = HostedWorld.DefaultSaveDirectory(platform);
         HostedWorld.RequireNativeSaveDirectory(platform, Section.SaveDirectory, plan.LaunchArguments, defaultSaveDirectory);
@@ -195,7 +220,7 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
             if (_world != null) throw new InvalidOperationException("The fixture world is placed already.");
             saveDirectory = _saveDirectory ?? throw new InvalidOperationException("Check the client's save directory before placing the fixture world.");
         }
-        var world = HostedWorld.Place(Section, saveDirectory, output, plan.Pinned);
+        var world = site != null ? HostedWorldOnHost.Place(site, Section, output, plan.Pinned, cancellation) : HostedWorld.Place(Section, saveDirectory, output, plan.Pinned);
         lock (_state) _world = world;
     }
     /// <summary>The three preparation steps in <paramref name="report"/>: preflight, save directory, placement; the placed world's name is recorded.</summary>
@@ -233,7 +258,7 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
     {
         var world = World;
         if (world == null) return;
-        if (!(released ?? WorldReleased)) { report.Provenance["hostWorldLeftInPlace"] = world.WorldsDirectory + " (" + world.Name + ")"; return; }
+        if (!(released ?? WorldReleased)) { report.Provenance["hostWorldLeftInPlace"] = (world.Host != null ? world.Host + ": " : "") + world.WorldsDirectory + " (" + world.Name + ")"; return; }
         report.Step(StepPhase.Cleanup, "move the hosted world from the client's local worlds into the evidence", world.Collect);
         report.Provenance["hostWorldEvidence"] = world.CollectedTo!;
     }

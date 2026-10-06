@@ -136,20 +136,7 @@ internal sealed class CampaignClients
         var host = ClientHost(role);
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
         // A dedicated server's lock covers its own host; another client host is locked for the rest of the run.
-        if (role.Host != _serverHost?.Name)
-        {
-            await _clientLockGate.WaitAsync(cancellation).ConfigureAwait(false);
-            try
-            {
-                if (!_clientLocks.Any(held => held.Host == role.Host))
-                {
-                    var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false);
-                    lock (_clientState) _clientLocks.Add((role.Host, taken));
-                    await NoteLockAsync(host, role.Host, taken, JournalEntry.LockHeld).ConfigureAwait(false);
-                }
-            }
-            finally { _clientLockGate.Release(); }
-        }
+        await LockHostAsync(role.Host, host, hostProfile, cancellation).ConfigureAwait(false);
         int n = Interlocked.Increment(ref _clients);
         string runDirectory = HostInstall.Join(role.Runtime, RunId), launchDirectory = HostInstall.Join(runDirectory, "client-" + n);
         string log = HostInstall.Join(role.Install, HostedServerRun.BepInExLog);
@@ -250,20 +237,7 @@ internal sealed class CampaignClients
         if (host.Kind != GameHostKind.Local)
             throw new PlatformNotSupportedException($"Profile client '{name}' must use a local host; a remote process cannot enter this runner's GUI session.");
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
-        if (role.Host != _serverHost?.Name)
-        {
-            await _clientLockGate.WaitAsync(cancellation).ConfigureAwait(false);
-            try
-            {
-                if (!_clientLocks.Any(held => held.Host == role.Host))
-                {
-                    var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false);
-                    lock (_clientState) _clientLocks.Add((role.Host, taken));
-                    await NoteLockAsync(host, role.Host, taken, JournalEntry.LockHeld).ConfigureAwait(false);
-                }
-            }
-            finally { _clientLockGate.Release(); }
-        }
+        await LockHostAsync(role.Host, host, hostProfile, cancellation).ConfigureAwait(false);
         // ClientSession owns the direct child process and its logs. No SSH-launched GUI process or remote task is involved.
         ClientSession session;
         Action<IOwnedProcess> processStarted = process =>
@@ -280,6 +254,34 @@ internal sealed class CampaignClients
         return session;
     }
 
+
+    // The client host's lock, once for the run (a dedicated server's own host is its run's).
+    private async Task LockHostAsync(string hostName, IGameHost host, HostProfile hostProfile, CancellationToken cancellation)
+    {
+        if (hostName == _serverHost?.Name) return;
+        await _clientLockGate.WaitAsync(cancellation).ConfigureAwait(false);
+        try
+        {
+            bool held; lock (_clientState) held = _clientLocks.Any(item => item.Host == hostName);
+            if (held) return;
+            var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false);
+            lock (_clientState) _clientLocks.Add((hostName, taken));
+            await NoteLockAsync(host, hostName, taken, JournalEntry.LockHeld).ConfigureAwait(false);
+        }
+        finally { _clientLockGate.Release(); }
+    }
+
+    /// <summary>
+    /// Before the run changes anything a client's host user owns (its hosted world in their worlds_local): the host's lock is this
+    /// run's for the rest of it, and no game runs in that host's desktop session.
+    /// </summary>
+    public async Task HoldHostAsync(string client, CancellationToken cancellation)
+    {
+        if (!Profile.Clients.TryGetValue(client, out var role)) throw new ArgumentException($"No client '{client}' in the environment.", nameof(client));
+        var host = ClientHost(role);
+        await LockHostAsync(role.Host, host, Profile.Hosts[role.Host], cancellation).ConfigureAwait(false);
+        await HostedRuntimeStage.RequireStoppedAsync(host, Quick, cancellation, clientSession: true).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Teardown, once the processes are stopped or named: each client a scenario left open is closed, then its account's lease is

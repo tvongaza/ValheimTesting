@@ -198,6 +198,16 @@ internal static class RunRecovery
                     try
                     {
                         if (!copy.Fields.TryGetValue("stage", out string? stage)) throw new InvalidDataException("its journal names no staging directory");
+                        // A hosted world in a campaign client's own worlds (#258 step 8b): moved out into the run's folder there, never deleted.
+                        if (copy.Fields.GetValueOrDefault("holds") == HostedWorldOnHost.Holds)
+                        {
+                            string world = HostedWorldOnHost.RequireJournalled(copy.Fields, copy.What, runId);
+                            string keepIn = copy.Fields["keepIn"];
+                            var moved = await HostedWorldOnHost.MoveOut(host, copy.Fields["parent"], world, keepIn, timeout, cancellation).ConfigureAwait(false);
+                            Step(group.Key, what, moved.Count == 0 ? "nothing left in the client's worlds" : $"moved out of the client's worlds into {keepIn} (the run's save, handed over): {string.Join(", ", moved)}");
+                            await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"), ("keptIn", keepIn))).ConfigureAwait(false);
+                            continue;
+                        }
                         // A hosted run's world copy (HostedServerRun journals what each of its copies holds) has no game logs.
                         if (copy.Fields.GetValueOrDefault("holds") == "world")
                         {

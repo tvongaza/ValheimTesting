@@ -489,24 +489,6 @@ public sealed class NativeDependencyResolverTests : IDisposable
             new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = new() { Mode = "owned", Port = 5579 } })).Message);
         Assert.Contains("declares a dedicated server", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(clean,
             new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() })).Message);
-        // A hosted plan's host on another host is refused in Preflight, before any host is written (its world is placed on this machine).
-        var hostScripts = hosts.ToDictionary(pair => pair.Key, pair => pair.Value.Scripts.Count);
-        string hostedOutput = Path.Combine(_rig.Root, "six-hosted-run");
-        bool ran = false;
-        var hostedOptions = new HostedRunOptions<Dictionary<string, ClientRunPlan>>
-        {
-            Name = "hosted-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."), Host = plan => plan["client-a"],
-            Mod = new("test.mod/session", "TEST_SESSION_TOKEN"), Scenario = (_, _) => { ran = true; return Task.CompletedTask; },
-            Hooks = new FakeRunHooks { Host = name => hosts[name], RunId = "run-hosted" },
-        };
-        var sections = new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() };
-        Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(serverless, sections, plan => plan, hostedOutput, hostedOptions));
-        var hostedResult = JsonDocument.Parse(File.ReadAllText(Path.Combine(hostedOutput, "result.json"))).RootElement;
-        var hostedAgreement = hostedResult.GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "the plan agrees with the campaign");
-        Assert.False(hostedAgreement.GetProperty("Passed").GetBoolean());
-        Assert.Contains("runs on this machine", hostedAgreement.GetProperty("Error").GetString());
-        Assert.False(ran);
-        Assert.All(hosts, pair => Assert.DoesNotContain(pair.Value.Scripts.Skip(hostScripts[pair.Key]), script => script is "copy" or "apply-stage" or "character-install" or "client-start"));
     }
 
     // RunCampaignAsync: one report from the campaign's preflight through the run to retiring the prepared install, with the
@@ -1194,6 +1176,166 @@ public sealed class NativeDependencyResolverTests : IDisposable
         after.CliFiles.RemoveAt(0);
         Assert.Contains("ValheimCLI files changed", Assert.Throws<InvalidDataException>(() =>
             before.RequireSameExceptRemovedMod(after, _rig.Parent)).Message);
+    }
+
+    // #258 step 8b, run B's shape with fakes: a campaign without a dedicated server, the hosting client on one Linux host and its
+    // peer on another. The fixture is placed in the host user's own worlds_local (beside the characters_local its character was
+    // staged in), journalled first; the peer joins the host by its Steam ID; teardown closes the peer, the host leaves and stops,
+    // and the world is moved out of the user's worlds into the run's folder on that host and fetched into the evidence. Nothing
+    // named for the world is left in the user's worlds, and their own world is untouched.
+    [Fact] public async Task AHostedCampaignPlacesTheWorldOnTheHostsMachineAndMovesItOutAfter()
+    {
+        string clientMod = _rig.Write("hosted-campaign/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
+        string clientLock = Lock(clientMod, "hosted-client");
+        string storeA = Store("hosta", 501, "hosted/"), storeB = Store("peerb", 502, "hosted/");
+        // A chunked fixture, as Valheim 1.0 writes worlds: one Campaign/ directory.
+        string world = Path.Combine(_rig.Root, "hosted-world");
+        string flat = FakeInstalls.World(Path.Combine(_rig.Root, "hosted-world-flat"));
+        Directory.CreateDirectory(Path.Combine(world, "Campaign"));
+        File.Copy(Path.Combine(flat, "Campaign.fwl"), Path.Combine(world, "Campaign", "_main.0.fwl2"));
+        File.WriteAllText(Path.Combine(world, "Campaign", "_main.0.db2"), "fixture");
+        var hosts = new Dictionary<string, FakeServerHost>(StringComparer.Ordinal);
+        foreach (var (name, port, account) in new[] { ("pc", 15578, 501), ("laptop", 15579, 502) })
+        {
+            var host = new FakeServerHost(name, Path.Combine(_rig.Root, "hosted-mirror-" + name), tunnelPort: port) { SteamUserReply = $"VT-STEAMUSER account {account}\n" };
+            hosts[name] = host;
+            string source = host.Local("/game/client");
+            FakeInstalls.Client(source);
+            File.WriteAllText(Path.Combine(source, GameLaunch.ClientLinuxExecutable), "game");
+            FakeInstalls.LinuxLoader(source);
+            Directory.CreateDirectory(Path.Combine(source, "BepInEx", "plugins"));
+            Directory.CreateDirectory(host.Local("/home/t/.config/unity3d/IronGate/Valheim/characters_local"));
+            Directory.CreateDirectory(host.Local("/home/t/userdata"));
+        }
+        // The host user's own world beside where the fixture goes: never touched.
+        Directory.CreateDirectory(hosts["pc"].Local("/home/t/.config/unity3d/IronGate/Valheim/worlds_local"));
+        File.WriteAllText(hosts["pc"].Local("/home/t/.config/unity3d/IronGate/Valheim/worlds_local/MyWorld.fwl"), "the user's world");
+        string inventory = Path.Combine(_rig.Root, "hosted-inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "linux", shell = "bash", @lock = "/locks/run.lock", destination = "test@" + name }),
+            environments = new[]
+            {
+                new { name = "pc-client", host = "pc", roles = new[] { "client" }, install = "/game/client", runtime = "/runs", cliPort = 5578, localCliPort = 6578 },
+                new { name = "laptop-client", host = "laptop", roles = new[] { "client" }, install = "/game/client", runtime = "/runs", cliPort = 5579, localCliPort = 6579 },
+            },
+            leaseHost = "pc", leaseDirectory = "/leases",
+        }));
+        object Character(string store, string registered, string file) => new
+        {
+            store, registeredName = registered, fileName = file,
+            charactersLocalDirectory = "/home/t/.config/unity3d/IronGate/Valheim/characters_local", steamUserDataDirectory = "/home/t/userdata",
+        };
+        string manifest = Path.Combine(_rig.Root, "hosted-campaign.json");
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new
+        {
+            inventory, world, worldUid = "4242",
+            clients = new Dictionary<string, object>
+            {
+                ["host"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "pc-client" }, character = Character(storeA, "hosta", "vt-host") },
+                ["peer"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "laptop-client" }, differentHostFrom = new[] { "host" }, character = Character(storeB, "peerb", "vt-peer") },
+            },
+        }));
+        var preflight = await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(30), name => hosts[name]);
+        Assert.True(preflight.Ready, string.Join("; ", preflight.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
+
+        // The host: at its menu until it hosts; an open Steam server while it does. The peer joins it by its Steam ID.
+        bool hosting = false, joined = false; int readings = 0;
+        string worlds = "/home/t/.config/unity3d/IronGate/Valheim/worlds_local";
+        bool placedWhileHosting = false;
+        var hostTransport = new ScriptedTransport()
+            .ClientAccess(() => hosting, () => hosting)
+            .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'vt-host' (vt-host, Local)"))
+            .OnPrefix("cli_start_host_world ", command =>
+            {
+                hosting = true; readings = 0;
+                placedWhileHosting = File.Exists(hosts["pc"].Local(worlds + "/Campaign/_main.0.fwl2"));
+                return ScriptedTransport.Ok($"OK: Starting hosted world '{command.Split(' ')[1]}' using character 'vt-host' (vt-host, Local); open=true, public=False, crossplay=False, backend=Steamworks, passwordSet=False");
+            })
+            .On("cli_multiplayer_identity", _ => ScriptedTransport.Ok($"OK: steamId=76561197960266229, playFabLoginState=LoggedIn, playFabId=AB, backend=Steamworks, gameState=InGame, connectionStatus=Connected, isServer={(hosting ? "True" : "False")}, isOpenServer={(hosting ? "True" : "False")}, server="))
+            .Extension("valheim.session", "state", _ =>
+            {
+                bool present = hosting && ++readings > 1;
+                return new
+                {
+                    source = "session-state", complete = true, phase = present ? "world-present" : hosting ? "loading" : "menu", worldUid = present ? "4242" : null,
+                    worldPresent = present, worldReady = present, server = present, dedicated = false, localPlayer = present, playerReady = present,
+                    saving = false, loadError = false, connectionStatus = present ? "Connected" : "None",
+                };
+            })
+            .Extension("valheim.session", "save", _ => new { source = "session-save", complete = true, worldUid = "4242", saved = true, before = 1, after = 2, milliseconds = 10 }, readOnly: false)
+            .Extension("valheim.session", "leave", _ =>
+            {
+                hosting = false; joined = false;
+                File.WriteAllText(hosts["pc"].Local(worlds + "/Campaign_backup_auto-20261006.db"), "backup"); // the game's backup beside it
+                return new { source = "session-leave", complete = true, action = "leave" };
+            }, readOnly: false)
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+        // Each client's leased identity, which its launch confirms: SteamID64 of account 501 (the host) and 502 (the peer).
+        var peerTransport = new ScriptedTransport()
+            .ClientAccess(() => joined)
+            .On("cli_multiplayer_identity", _ => ScriptedTransport.Ok("OK: steamId=76561197960266230, playFabLoginState=LoggedIn, playFabId=CD, backend=Steamworks, gameState=Menu, connectionStatus=None, isServer=False, isOpenServer=False, server="))
+            .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'vt-peer' (vt-peer, Local)"))
+            .OnPrefix("cli_connect_steam_user ", command => { joined = hosting && command.EndsWith(" 76561197960266229", StringComparison.Ordinal);
+                return ScriptedTransport.Ok("OK: Steam user join started for 76561197960266229 using character 'vt-peer' (vt-peer, Local)"); })
+            .Extension("valheim.session", "state", _ => new
+            {
+                source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? "4242" : null, worldPresent = joined,
+                worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined, saving = false, loadError = false,
+                connectionStatus = joined ? "Connected" : "None",
+            })
+            .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+        ClientRunPlan Section(bool host) => new()
+        {
+            Mode = "owned", Install = "/bound", Port = 5578, Character = "bound", StartSeconds = 30, JoinSeconds = 10,
+            Pins = new() { ["example.client"] = "<md5>" },
+            JoinsHost = !host, HostWorld = host ? new() { World = new() { Source = world }, WorldUid = "4242" } : null,
+        };
+        var sections = new Dictionary<string, ClientRunPlan> { ["host"] = Section(host: true), ["peer"] = Section(host: false) };
+        bool scenarioRan = false;
+        var options = new HostedRunOptions<Dictionary<string, ClientRunPlan>>
+        {
+            Name = "hosted-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."), Host = plan => plan["host"],
+            Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
+            Scenario = async (session, _) =>
+            {
+                Assert.Equal("host", session.Host!.Name);
+                await session.Join("peer");
+                Assert.True(joined);
+                scenarioRan = true;
+            },
+            Hooks = new FakeRunHooks { Host = name => hosts[name], Connect = port => port == 15578 ? hostTransport : peerTransport, StateWaits = false, RunId = "run-hosted" },
+        };
+        string output = Path.Combine(_rig.Root, "hosted-run");
+        int code = await PinnedServerRun.RunCampaignAsync(manifest, sections, plan => plan, output, options);
+        var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
+        var steps = result.GetProperty("Steps").EnumerateArray().Select(step => (Name: step.GetProperty("Name").GetString()!, Passed: step.GetProperty("Passed").GetBoolean(),
+            Error: step.GetProperty("Error").GetString())).ToList();
+        Assert.True(code == 0, string.Join(" | ", steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
+        Assert.True(scenarioRan); Assert.True(placedWhileHosting);
+        var pc = hosts["pc"];
+        // Placed in the host user's worlds_local, journalled first; then moved out into the run's folder there and fetched.
+        var placed = pc.Runs.ToList();
+        int listed = placed.FindIndex(run => run.Script == "world-entries");
+        Assert.True(listed >= 0);
+        Assert.Equal(worlds, placed[listed].Variables["worlds"]);
+        Assert.Contains(placed, run => run.Script == "world-move" && run.Variables["to"] == "/runs/run-hosted/host-world");
+        Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(pc.Local(worlds)).Select(Path.GetFileName));
+        Assert.Equal("the user's world", File.ReadAllText(pc.Local(worlds + "/MyWorld.fwl")));
+        Assert.True(File.Exists(pc.Local("/runs/run-hosted/host-world/Campaign/_main.0.fwl2")));
+        string evidence = result.GetProperty("Provenance").GetProperty("hostWorldEvidence").GetString()!;
+        Assert.True(File.Exists(Path.Combine(evidence, "Campaign", "_main.0.fwl2")));
+        Assert.True(File.Exists(Path.Combine(evidence, "Campaign_backup_auto-20261006.db")));
+        var journal = await RunJournal.ReadAsync(pc, RunJournal.DirectoryFor(EnvironmentInventory.Read(inventory).Hosts["pc"]), "run-hosted", TimeSpan.FromSeconds(5));
+        var worldEntries = journal.Where(record => record.Entry.Fields.GetValueOrDefault("runtime") == worlds + "/Campaign").Select(record => record.Entry.Kind).ToList();
+        Assert.Equal(new[] { JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired }, worldEntries);
+        // Teardown: the peer first, then the host leaves and stops, then its world; both peer and host were stopped on their hosts.
+        var cleanup = steps.Select(step => step.Name).SkipWhile(name => !name.StartsWith("stop only the owned client peer", StringComparison.Ordinal)).ToList();
+        Assert.Equal(new[] { "stop only the owned client peer", "the host leaves its world to its menu", "stop only the owned hosting client host",
+            "move the hosted world from the client's local worlds into the evidence" }, cleanup.Take(4));
+        Assert.Single(hosts["laptop"].Stops); Assert.Single(pc.Stops);
+        Assert.Equal(pc.Claims.Count, pc.Releases.Count); Assert.Equal(hosts["laptop"].Claims.Count, hosts["laptop"].Releases.Count);
     }
 
     // A campaign's inputs as the tests write them: a ready lock for a mod, a registered character store, and the campaign's

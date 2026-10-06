@@ -186,7 +186,7 @@ public sealed class WorldFixture : IDisposable
         Note(_journal, _journalDirectory, JournalEntry.CopyRetired, DirectoryPath, ("keptIn", keepIn));
         return retired;
     }
-    private const string ProvenanceFile = "fixture-provenance.json";
+    internal const string ProvenanceFile = "fixture-provenance.json";
 
     /// <summary>
     /// <c>&lt;copy&gt;.owner.json</c>, which copies made before the run journal recorded their owner in (read by

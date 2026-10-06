@@ -400,12 +400,12 @@ public static class PinnedServerRun
             {
                 named = clients(plan);
                 HostedCampaignPreparation.CheckHostedPlan(inspection, named);
-                // Placing the fixture in a client's local worlds is this machine's only, until the world can be placed over its host.
+                // A local host's world goes to this machine's client data directory, which must be that host's.
                 var profile = inspection.Inputs!.Profile;
                 string host = HostedCampaignPreparation.HostOf(named);
                 var hostProfile = profile.Hosts[profile.Clients[host].Host];
-                if (hostProfile.Kind != "local" || hostProfile.Platform != HostProfile.CurrentPlatform)
-                    throw new ArgumentException($"Client {host} hosts the world on host {profile.Clients[host].Host}; a hosting client runs on this machine (a local host) until its world can be placed on another host.");
+                if (hostProfile.Kind == "local" && hostProfile.Platform != HostProfile.CurrentPlatform)
+                    throw new ArgumentException($"Client {host} hosts the world on the local {hostProfile.Platform} host {profile.Clients[host].Host}, but this machine is {HostProfile.CurrentPlatform}.");
             });
             options.Provenance?.Invoke(plan, report.Provenance);
             if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = FileHash.Sha256(runner);
@@ -435,13 +435,31 @@ public static class PinnedServerRun
             report.Provenance["clientMode"] = hostPlan.Mode;
             if (!hostPlan.Pinned) report.MarkNotPinned("the hosting client's plan sets pinning \"none\"");
             var placement = actors.Placement(report);
+            // The hosting client's world: in this machine's client data directory for a local host, else in its host user's own
+            // worlds_local (beside the characters_local its character was staged in), moved out into the run's folder there after.
+            var hostRole = environment.Clients[hostName];
+            bool localHost = environment.Hosts[hostRole.Host].Kind == "local";
+            HostedWorldOnHost.Site? site = null;
+            if (!localHost)
+            {
+                var character = prepared.Characters.FirstOrDefault(staged => staged.Actor == hostName).Character
+                    ?? throw new InvalidOperationException($"The hosting client {hostName} has no staged character, so its host user's worlds_local is unknown.");
+                var clientHost = actors.ClientHost(hostName);
+                site = new HostedWorldOnHost.Site(clientHost, hostRole.Host, HostedWorldOnHost.WorldsBeside(character.CharactersLocalDirectory),
+                    HostInstall.Join(hostRole.Runtime, runId, "host-world-stage"), HostInstall.Join(hostRole.Runtime, runId, "host-world"),
+                    (entry, token) => journal.AppendAsync(clientHost, prepared.JournalOf(hostRole.Host), hostName, entry, TimeSpan.FromSeconds(60), token),
+                    token => actors.HoldHostAsync(hostName, token));
+                report.Provenance["hostWorldOn"] = hostRole.Host + ": " + site.WorldsDirectory;
+            }
             var peers = named.Where(client => client.Key != hostName).OrderBy(client => client.Key, StringComparer.Ordinal).ToList();
             var campaignActors = actors;
+            // Each actor's evidence in its own folder: they start at once, and each launch writes its own records.
+            string Evidence(string actor) => Directory.CreateDirectory(Path.Combine(full, actor)).FullName;
             game = new GameSession(report, full, null, server: null,
-                peers.Select(peer => (peer.Key, (Func<CancellationToken, ClientActor>)(token => new ClientActor(peer.Key, peer.Value, full, placement, token)))),
-                // The hosting client runs on this machine (Preflight), so its live log is this machine's file in its bound install.
-                cancellation.Token, token => new HostingClientActor(hostName, hostPlan, full, placement, token)
-                    { LiveLogSource = () => Path.Combine(hostPlan.Install, "BepInEx", "LogOutput.log") })
+                peers.Select(peer => (peer.Key, (Func<CancellationToken, ClientActor>)(token => new ClientActor(peer.Key, peer.Value, Evidence(peer.Key), placement, token)))),
+                // A local host's live log is this machine's file in its bound install; a remote host's is on its host.
+                cancellation.Token, token => new HostingClientActor(hostName, hostPlan, Evidence(hostName), placement, token, site)
+                    { LiveLogSource = () => localHost ? Path.Combine(hostPlan.Install, "BepInEx", "LogOutput.log") : null })
             {
                 CampaignClients = named.Keys.Order(StringComparer.Ordinal).ToList(),
                 // A client a scenario opens itself is one of the campaign's, by name, on its host and lease.

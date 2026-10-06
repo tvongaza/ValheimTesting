@@ -1207,6 +1207,7 @@ sealed class Valheim.Testing.Game.HostedWorld : System.IDisposable
   method static Valheim.Testing.Game.HostedWorld Place(Valheim.Testing.Game.HostWorldPlan plan, System.String saveDirectory, System.String output, System.Boolean pinned)
   property System.String CollectedTo { get; }
   property System.String FixtureCopy { get; }
+  property System.String Host { get; }
   property System.String Name { get; }
   property System.String WorldUid { get; }
   property System.String WorldsDirectory { get; }

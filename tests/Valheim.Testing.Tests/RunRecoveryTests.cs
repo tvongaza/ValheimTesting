@@ -387,6 +387,40 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.True(Directory.Exists(_host.Local("/srv/runs/someone-else/runtime")));
     }
 
+    // #258 step 8b: a hosted world a killed run left in a campaign client's own worlds_local is moved out into that run's
+    // host-world folder (never deleted), with the game's backup beside it; the user's own world stays. A journal line that does
+    // not name a worlds_local, or a keep folder outside this run's directory, is refused and nothing moves.
+    [Fact] public async Task RecoverMovesAHostedWorldOutOfTheClientsWorldsIntoTheRunsFolder()
+    {
+        const string Worlds = "/home/p/.config/unity3d/IronGate/Valheim/worlds_local", KeepIn = "/srv/runs/run-host/host-world";
+        Directory.CreateDirectory(_host.Local(Worlds + "/Campaign"));
+        File.WriteAllText(_host.Local(Worlds + "/Campaign/_main.0.fwl2"), "world");
+        File.WriteAllText(_host.Local(Worlds + "/Campaign_backup_auto-1.db"), "backup");
+        File.WriteAllText(_host.Local(Worlds + "/MyWorld.fwl"), "the user's world");
+        Line(_host, "run-host", "host", Gone, JournalEntry.CopyIntended, ("runtime", Worlds + "/Campaign"), ("stage", ""), ("parent", Worlds),
+            ("holds", "hosted-world"), ("world", "Campaign"), ("keepIn", KeepIn));
+        Line(_host, "run-host", "host", Gone, JournalEntry.CopyDone, ("runtime", Worlds + "/Campaign"), ("files", "1"), ("verified", "true"));
+
+        var recovered = await RecoverAsync("run-host");
+
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.StartsWith("moved out of the client's worlds into " + KeepIn, Assert.Single(recovered.Steps, step => step.What == "copy " + Worlds + "/Campaign").Outcome);
+        Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(_host.Local(Worlds)).Select(Path.GetFileName));
+        Assert.Equal("world", File.ReadAllText(_host.Local(KeepIn + "/Campaign/_main.0.fwl2")));
+        Assert.Equal("backup", File.ReadAllText(_host.Local(KeepIn + "/Campaign_backup_auto-1.db")));
+        Assert.All((await StatusAsync()).Runs, run => Assert.Equal(JournalRunState.Ended, run.State));
+
+        // Refused: a folder that is not a worlds_local, and a keep folder outside the run's directory. Nothing moves.
+        foreach (var (run, parent, keepIn) in new[] { ("run-odd", "/home/p/Documents", "/srv/runs/run-odd/host-world"), ("run-far", Worlds, "/srv/elsewhere/host-world") })
+        {
+            Directory.CreateDirectory(_host.Local(parent + "/Other"));
+            Line(_host, run, "host", Gone, JournalEntry.CopyIntended, ("runtime", parent + "/Other"), ("stage", ""), ("parent", parent),
+                ("holds", "hosted-world"), ("world", "Other"), ("keepIn", keepIn));
+            Assert.False((await RecoverAsync(run)).Recovered);
+            Assert.True(Directory.Exists(_host.Local(parent + "/Other")));
+        }
+    }
+
     // A copy whose logs could not be kept stays, for a later recovery; teardown keeps a kept copy's logs as recover does.
     [Fact] public async Task ACopyWhoseLogsCannotBeKeptStaysAndTeardownKeepsAKeptCopysLogs()
     {
