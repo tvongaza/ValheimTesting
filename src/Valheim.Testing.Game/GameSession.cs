@@ -171,26 +171,38 @@ public sealed class GameSession : IAsyncDisposable
     /// <summary>
     /// Opens the named campaign clients at once (<see cref="OpenClient"/> for each), each on its own host, Steam lease, install and
     /// character; all have opened before this returns. If one fails, every client that opened is closed and the first failure is
-    /// rethrown.
+    /// rethrown (not the cancellation it caused in the others).
     /// </summary>
     public async Task<IReadOnlyDictionary<string, ClientSession>> OpenClientsAsync(IReadOnlyDictionary<string, ClientRunPlan> clients)
     {
         ArgumentNullException.ThrowIfNull(clients);
         if (clients.Count == 0) throw new ArgumentException("Name at least one client.", nameof(clients));
         var opened = new System.Collections.Concurrent.ConcurrentDictionary<string, ClientSession>(StringComparer.Ordinal);
-        // The first failure ends the other opens' waits at once, rather than after their whole start deadlines.
+        // The first failure ends the other opens' waits at once, rather than after their whole start deadlines. It is the one
+        // rethrown: the siblings it cancelled fail with OperationCanceledException, and the aggregate Task.WhenAll throws from
+        // did not reliably name the failure first (#448). Only a cancellation of the session itself is rethrown as one.
         using var siblings = CancellationTokenSource.CreateLinkedTokenSource(Cancellation);
+        Exception? first = null;
         var opens = clients.Select(pair => Task.Run(() =>
         {
             siblings.Token.ThrowIfCancellationRequested();
             try { opened[pair.Key] = OpenClient(pair.Value, pair.Key, null, siblings.Token); }
-            catch { siblings.Cancel(); throw; }
+            catch (Exception error)
+            {
+                if (error is not OperationCanceledException) Interlocked.CompareExchange(ref first, error, null);
+                siblings.Cancel();
+                throw;
+            }
         })).ToArray();
         try { await Task.WhenAll(opens).ConfigureAwait(false); }
         catch
         {
             foreach (var session in opened.Values) try { session.Dispose(); } catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
-            throw;
+            if (Volatile.Read(ref first) is not { } cause) throw;
+            // Another open that failed on its own, not by the cancellation, is named too: it would be the next run's refusal.
+            foreach (var other in opens.Select(open => open.Exception?.InnerException).OfType<Exception>())
+                if (other != cause && other is not OperationCanceledException) Console.Error.WriteLine("Another client's open failed too: " + other.Message);
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(cause);
         }
         return new Dictionary<string, ClientSession>(opened, StringComparer.Ordinal);
     }
