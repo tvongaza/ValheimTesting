@@ -28,7 +28,7 @@
     <!-- The tool embeds an unmodified BepInExPack (LGPL-2.1 and MIT components): its notices and the LGPL text ship with it. -->
     <None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" />
     <None Include="../../licenses/LGPL-2.1.txt" Pack="true" PackagePath="licenses" />
-    <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="../../docs/packages/Valheim.Testing.NativeSmoke.md" Pack="true" PackagePath="README.md" />
     <EmbeddedResource Include="SessionAdapter/Plugin.cs" LogicalName="NativeSmoke.Adapter.Plugin.cs" />
     <EmbeddedResource Include="../Valheim.Testing.Adapter/Adapter/TestExtension.cs" LogicalName="NativeSmoke.Adapter.TestExtension.cs" />
     <EmbeddedResource Include="../Valheim.Testing.Adapter/Adapter/Members.cs" LogicalName="NativeSmoke.Adapter.Members.cs" />

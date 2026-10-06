@@ -1,6 +1,6 @@
 # Debug a mod load or mod conflict
 
-Use the smallest run that can answer the question. A load smoke checks setup and entry into a disposable world; it does not assert that a mod's gameplay feature works. For that, add a focused scenario in the mod's own tests after the load is reproducible. The commands below use the [`valheim-test` tool](../src/Valheim.Testing.NativeSmoke/README.md).
+Use the smallest run that can answer the question. A load smoke checks setup and entry into a disposable world; it does not assert that a mod's gameplay feature works. For that, add a focused scenario in the mod's own tests after the load is reproducible. The commands below use the [`valheim-test` tool](packages/Valheim.Testing.NativeSmoke.md).
 
 ## Prepare once
 
@@ -11,7 +11,7 @@ Use the smallest run that can answer the question. A load smoke checks setup and
 
 Install the published preview tool with `dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease`. The commands below work from any directory; no ValheimTesting checkout is needed. Replace the example paths with prepared installs and built artifacts. `--output` **must name a directory that does not exist yet**. To use a ValheimCLI build other than the pinned one, add `--cli-manifest FILE --cli-files DIR` from one build. `server-load` takes its server and client from this machine's Steam installs unless `--server`/`--client` name prepared ones; it prints what it chose.
 
-The loader-package options are part of this checkout's candidate tool until its next release. To try them before publication, bootstrap this checkout and run `dotnet run --project src/Valheim.Testing.NativeSmoke -- server-load ...` in place of `valheim-test server-load ...`; the [tool's README](../src/Valheim.Testing.NativeSmoke/README.md#disposable-native-mod-load-smoke) shows the complete option set. Check the installed tool's help after release rather than assuming an older preview supports these options.
+The loader-package options are part of this checkout's candidate tool until its next release. To try them before publication, bootstrap this checkout and run `dotnet run --project src/Valheim.Testing.NativeSmoke -- server-load ...` in place of `valheim-test server-load ...`; the [tool's page](packages/Valheim.Testing.NativeSmoke.md#a-server-side-mod-server-load) shows the complete option set. Check the installed tool's help after release rather than assuming an older preview supports these options.
 
 ## First, prove each server mod loads alone
 
