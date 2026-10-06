@@ -32,7 +32,7 @@ public sealed record ToolkitProvenance(IReadOnlyList<PackageProvenance> Packages
 
     // The assemblies of the toolkit's packages (Doubles and Adapter are source-only), the transport's, and the metadata the
     // release workflow builds with (-p:ValheimTestingRelease=true, src/Directory.Build.props).
-    internal static readonly string[] PackageAssemblies = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
+    internal static readonly string[] PackageAssemblies = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.GameSessions", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
     internal const string CliAssembly = "Valheim.Cli.Testing", CliPackage = "Valheim.Testing.Cli", ReleaseMetadata = "ValheimTesting.Release";
 
     /// <summary>

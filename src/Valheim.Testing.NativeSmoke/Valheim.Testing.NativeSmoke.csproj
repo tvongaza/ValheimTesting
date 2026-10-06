@@ -20,7 +20,7 @@
   <ItemGroup><InternalsVisibleTo Include="Valheim.Testing.Tests" /></ItemGroup>
   <ItemGroup>
     <Compile Remove="SessionAdapter/**/*.cs" />
-    <ProjectReference Include="../Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
+    <ProjectReference Include="../Valheim.Testing.GameSessions/Valheim.Testing.GameSessions.csproj" />
     <!-- One owner for extracting a pinned zip once under the data root (CliBundle and ShippedLoader): the same source file,
          compiled in as an internal type, so valheim-test shares it without Game exposing it. -->
     <Compile Include="../Valheim.Testing.Game/ExtractOnce.cs" Link="Shared/ExtractOnce.cs" />

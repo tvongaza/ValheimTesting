@@ -13,10 +13,12 @@ public sealed class FileHashTests : IDisposable
     // The game's own save integrity check (CharacterSaveReader verifies the SHA512 the game wrote) is not the toolkit's hashing.
     private static bool GameSaveCheck(string path, string line) => Path.GetFileName(path) == "CharacterSaveReader.cs" && line.Contains("SHA512.HashData(payload)");
 
-    [Fact] public void OnlyFileHashComputesHashesInTheGamePackage()
+    // Game and the sessions package built on it (#289) share one hashing owner.
+    [Fact] public void OnlyFileHashComputesHashesInTheGamePackages()
     {
-        string source = Path.Combine(FixtureProjects.RepositoryRoot(), "src", "Valheim.Testing.Game");
-        var others = Directory.EnumerateFiles(source, "*.cs", SearchOption.AllDirectories)
+        string source = Path.Combine(FixtureProjects.RepositoryRoot(), "src");
+        var others = new[] { "Valheim.Testing.Game", "Valheim.Testing.GameSessions" }
+            .SelectMany(package => Directory.EnumerateFiles(Path.Combine(source, package), "*.cs", SearchOption.AllDirectories))
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") && Path.GetFileName(path) != "FileHash.cs")
             .SelectMany(path => File.ReadLines(path).Select((line, index) => (path, line, index)))
             .Where(item => Computes.IsMatch(item.line) && !item.line.TrimStart().StartsWith("//", StringComparison.Ordinal) && !GameSaveCheck(item.path, item.line))

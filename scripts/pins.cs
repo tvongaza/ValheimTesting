@@ -37,8 +37,8 @@
 // <Version> and Valheim.Testing* PackageReferences, and the Cli packageVersion in cli-dependency.json. It also refuses a
 // source version older than the release recorded in toolkit-versions.json. A candidate may sit on main between releases.
 // And it refuses a change under a published version in a package the valheim-test tool embeds (#363): the tool ships the
-// DLLs of the projects it references (Game, and Valheim.Testing through it), and the consumer its `init` creates restores
-// that Game version from NuGet.org. So when NuGet.org already serves such a package's source <Version>, its directory and
+// DLLs of the projects it references (GameSessions, and Game and Valheim.Testing through it), and the consumer its `init`
+// creates restores those versions from NuGet.org. So when NuGet.org already serves such a package's source <Version>, its directory and
 // those of the projects it references must equal the commit that package was built from (its nuspec's repository commit);
 // otherwise the release skips it as published while the tool carries other bytes under the same version. This part reads
 // NuGet.org and needs the checkout's full history (release.yml fetches it).
@@ -68,7 +68,7 @@ const string Tool = "Valheim.Testing.NativeSmoke";
 // The pin a valheimCLI fork link at a full commit names: releasedCliCommit, the commit the released Cli was built from.
 const string CliCommit = "releasedCliCommit";
 Regex ForkLink = new(@"https://github\.com/tvongaza/valheimCLI/blob/(?<version>[0-9a-f]{40})/(?<path>[^#?)\s]+)(?:#(?<anchor>[^)\s]*))?", RegexOptions.IgnoreCase);
-string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
+string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.GameSessions", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
 string root = FindRoot();
 bool actions = Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true";
@@ -122,8 +122,10 @@ async Task<int> Check()
     var problems = new List<Problem>();
     using var http = new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All }) { Timeout = TimeSpan.FromSeconds(30) };
 
+    // A package NuGet.org has never served (a new one, #289) has no release to record or to pin yet; its first release adds it.
     foreach (string id in packed.Append(Cli).Where(id => !released.ContainsKey(id)))
-        problems.Add(new(VersionsFile, 1, $"{id} has no released version."));
+        if (await Get(http, $"{FlatContainer}/{id.ToLowerInvariant()}/index.json") != null) problems.Add(new(VersionsFile, 1, $"{id} has no released version."));
+        else Console.WriteLine($"new  {id}: NuGet.org serves no version yet; {VersionsFile} records its first release");
     // One package's requests do not wait for another's.
     foreach (var found in await Task.WhenAll(released.Select(p => CheckReleased(http, released, p.Key, p.Value))))
         problems.AddRange(found);

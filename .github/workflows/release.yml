@@ -1,5 +1,5 @@
 name: Publish packages
-# Builds Valheim.Testing, Valheim.Testing.Cli, Valheim.Testing.Game, Valheim.Testing.Doubles, Valheim.Testing.Adapter, Valheim.Testing.Bindings
+# Builds Valheim.Testing, Valheim.Testing.Cli, Valheim.Testing.Game, Valheim.Testing.GameSessions, Valheim.Testing.Doubles, Valheim.Testing.Adapter, Valheim.Testing.Bindings
 # Valheim.Testing.Bindings.Tool and Valheim.Testing.NativeSmoke from this commit and publishes
 # them to NuGet.org with Trusted Publishing: no stored API key. GitHub issues a short-lived OIDC token,
 # NuGet.org exchanges it for a one-hour key, and only the `release` environment (which requires a
@@ -50,7 +50,7 @@ jobs:
       - name: Pack release packages
         run: |
           mkdir -p release
-          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.Doubles Valheim.Testing.Adapter Valheim.Testing.Bindings Valheim.Testing.Bindings.Tool Valheim.Testing.NativeSmoke; do
+          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.GameSessions Valheim.Testing.Doubles Valheim.Testing.Adapter Valheim.Testing.Bindings Valheim.Testing.Bindings.Tool Valheim.Testing.NativeSmoke; do
             dotnet pack "src/$p/$p.csproj" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true -p:ValheimTestingRelease=true
           done
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
@@ -100,7 +100,7 @@ jobs:
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.Doubles.*.nupkg release/Valheim.Testing.Adapter.*.nupkg release/Valheim.Testing.Bindings.[0-9]*.nupkg release/Valheim.Testing.Bindings.Tool.*.nupkg release/Valheim.Testing.NativeSmoke.*.nupkg; do
+          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.GameSessions.*.nupkg release/Valheim.Testing.Doubles.*.nupkg release/Valheim.Testing.Adapter.*.nupkg release/Valheim.Testing.Bindings.[0-9]*.nupkg release/Valheim.Testing.Bindings.Tool.*.nupkg release/Valheim.Testing.NativeSmoke.*.nupkg; do
             dotnet nuget push "$f" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
   consumer:
