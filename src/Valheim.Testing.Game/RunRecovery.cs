@@ -6,6 +6,14 @@ namespace Valheim.Testing.Game;
 /// <summary>One thing a recovery did or could not do, on one host.</summary>
 internal sealed record RecoveryStep(string Host, string What, string Outcome, bool Failed);
 
+/// <summary>The game logs a recovery kept from one copy (in <see cref="Folder"/>), and those it left out as older than the copy.</summary>
+internal sealed record RecoveredLogs(string Folder, IReadOnlyList<string> Kept, IReadOnlyList<string> Older)
+{
+    /// <summary>The copy's step outcome once it is removed.</summary>
+    public string Describe() => (Kept.Count == 0 ? "removed (it held no game logs of the run)" : $"removed; its game logs are in {Folder} ({string.Join(", ", Kept)})") +
+        (Older.Count == 0 ? "" : $"; left out as older than the copy: {string.Join(", ", Older)}");
+}
+
 /// <summary>A recovery of one run: refused before anything changed (with why), or its steps.</summary>
 internal sealed record RecoveryReport(string Run, JournalRunState Before, string? Refused, IReadOnlyList<RecoveryStep> Steps)
 {
@@ -190,9 +198,17 @@ internal static class RunRecovery
                     try
                     {
                         if (!copy.Fields.TryGetValue("stage", out string? stage)) throw new InvalidDataException("its journal names no staging directory");
+                        // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
+                        RecoveredLogs logs;
+                        try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation).ConfigureAwait(false); }
+                        catch (Exception error) when (error is not OperationCanceledException)
+                        {
+                            throw new IOException($"its game logs could not be kept, so it stays ({error.Message}); recover again once they can be, or remove it by hand", error);
+                        }
                         await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout).ConfigureAwait(false);
-                        Step(group.Key, what, "removed");
-                        await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
+                        Step(group.Key, what, logs.Describe());
+                        await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired,
+                            [("runtime", copy.What), .. logs.Kept.Count == 0 ? Array.Empty<(string, string)>() : [("logsKeptIn", logs.Folder)]])).ConfigureAwait(false);
                     }
                     catch (Exception error) when (error is not OperationCanceledException) { Step(group.Key, what, "not removed: " + error.Message, failed: true); }
                 }
@@ -264,6 +280,78 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + JournalEntry.RunRecovered, "could not be journalled: " + error.Message); }
         return new(runId, run.State, null, steps);
     }
+
+    /// <summary>
+    /// Keeps the game's own logs from a host copy of <paramref name="actor"/> in the run's evidence folder on that host,
+    /// <c>&lt;runs&gt;/&lt;run&gt;/recovered-&lt;actor&gt;</c> beside its <c>boot-N</c> and client launch folders: BepInEx's
+    /// <c>BepInEx/LogOutput.log</c>, Unity's <c>toolkit-unity.log</c> (a server's <c>-logFile</c>) and BepInEx's
+    /// <c>preloader_*.log</c> beside the game, and for a client the host user's <c>Player.log</c>. Only a log written since the
+    /// copy was made (<paramref name="copiedUtc"/>, its journalled start) is the run's: an older one came with the install and is
+    /// only named. Throws when a log could not be kept.
+    /// </summary>
+    internal static async Task<RecoveredLogs> KeepLogsAsync(IGameHost host, string runtime, string runId, string actor, DateTime copiedUtc,
+        TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "")
+    {
+        string parent = HostedRuntimeStage.RequirePrepared(host, runtime);
+        int at = parent.LastIndexOfAny(['/', '\\']);
+        if (at <= 0) throw new ArgumentException("A prepared copy's folder has no parent to keep its logs in.", nameof(runtime));
+        if (!RunJournal.SafeName(runId) || !RunJournal.SafeName(actor)) throw new ArgumentException("A run id and an actor are letters, digits, '.', '_' and '-'.");
+        string folder = HostInstall.Join(parent[..at], runId, "recovered-" + actor);
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsKeepLogs : BashKeepLogs, new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true", ["playerlog"] = playerLog,
+            ["since"] = new DateTimeOffset(copiedUtc.ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
+        }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the game logs of {runtime} on {host.Name}");
+        if (InteractiveClient.Line(result.Stdout, "VT-LOGS-DONE") == null) throw new HostOperationException($"Unexpected reply while keeping the game logs of {runtime} on {host.Name}", result);
+        List<string> Named(string verdict) => result.Stdout.Split('\n').Select(line => line.Trim())
+            .Where(line => line.StartsWith(verdict + " ", StringComparison.Ordinal)).Select(line => line[(verdict.Length + 1)..]).ToList();
+        return new(folder, Named("VT-LOG-KEPT"), Named("VT-LOG-OLDER"));
+    }
+
+    // Variables: runtime, keep, since (Unix seconds: when the copy was made), client (true: the host user's Player.log too),
+    // playerlog (empty: that user's own). Each log written since the copy was made is copied into keep with its time, and named;
+    // an older one is only named; links are never followed, and the folder is made only for a log. Then the verdict.
+    internal static readonly string BashKeepLogs = """
+        set -u
+        save() {
+          if [ -f "$1" ] && [ ! -L "$1" ]; then
+            written=$(date -r "$1" +%s) || exit 3
+            if [ "$written" -lt "$since" ]; then echo "VT-LOG-OLDER $2"; return 0; fi
+            mkdir -p -- "$(dirname -- "$keep/$2")" && cp -p -- "$1" "$keep/$2" || exit 3
+            echo "VT-LOG-KEPT $2"
+          fi
+        }
+        if [ -d "$runtime" ]; then
+          save "$runtime/BepInEx/LogOutput.log" "BepInEx/LogOutput.log"
+          save "$runtime/toolkit-unity.log" "toolkit-unity.log"
+          for f in "$runtime"/preloader_*.log; do save "$f" "$(basename -- "$f")"; done
+        fi
+        if [ "$client" = "true" ]; then save "${playerlog:-${HOME:-/nonexistent}/.config/unity3d/IronGate/Valheim/Player.log}" "Player.log"; fi
+        echo "VT-LOGS-DONE"
+        """.ReplaceLineEndings("\n");
+
+    internal static readonly string WindowsKeepLogs = """
+        $copied = [DateTimeOffset]::FromUnixTimeSeconds([long]$since).UtcDateTime
+        function Save-VtRecovered([string]$from, [string]$name) {
+            if (-not [IO.File]::Exists($from)) { return }
+            if (([IO.File]::GetAttributes($from) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return }
+            if ([IO.File]::GetLastWriteTimeUtc($from) -lt $copied) { 'VT-LOG-OLDER ' + $name; return }
+            $to = Join-Path $keep $name
+            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to))
+            [IO.File]::Copy($from, $to, $true)
+            'VT-LOG-KEPT ' + $name
+        }
+        if ([IO.Directory]::Exists($runtime)) {
+            Save-VtRecovered (Join-Path $runtime 'BepInEx\LogOutput.log') 'BepInEx/LogOutput.log'
+            Save-VtRecovered (Join-Path $runtime 'toolkit-unity.log') 'toolkit-unity.log'
+            foreach ($f in @([IO.Directory]::GetFiles($runtime, 'preloader_*.log'))) { Save-VtRecovered $f ([IO.Path]::GetFileName($f)) }
+        }
+        if ($client -eq 'true') {
+            $log = if ($playerlog) { $playerlog } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) 'AppData\LocalLow\IronGate\Valheim\Player.log' }
+            Save-VtRecovered $log 'Player.log'
+        }
+        'VT-LOGS-DONE'
+        """.ReplaceLineEndings("\n");
 
     private static JournalEntry Settled(string actor, string directory) =>
         JournalEntry.Of(JournalEntry.LaunchSettled, ("actor", actor), ("directory", directory));

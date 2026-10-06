@@ -112,6 +112,8 @@ internal sealed class FakeServerHost : IGameHost
         ReferenceEquals(script, HostedRunScripts.WindowsDropKept) ? "drop-kept" :
         ReferenceEquals(script, HostedRuntimeStage.WindowsApply) ? "apply-stage" :
         ReferenceEquals(script, HostedRuntimeStage.BashApply) ? "apply-stage" :
+        ReferenceEquals(script, RunRecovery.BashKeepLogs) ? "keep-logs" :
+        ReferenceEquals(script, RunRecovery.WindowsKeepLogs) ? "keep-logs" :
         ReferenceEquals(script, HostedRuntimeStage.WindowsCleanup) ? "cleanup-stage" :
         ReferenceEquals(script, HostedRuntimeStage.BashCleanup) ? "cleanup-stage" :
         ReferenceEquals(script, HostedCharacterStage.WindowsInstall) ? "character-install" :
@@ -216,6 +218,30 @@ internal sealed class FakeServerHost : IGameHost
                 Directory.Delete(stage, recursive: true);
                 AfterApply?.Invoke(runtime);
                 return Ok("VT-STAGED selected files only\n");
+            }
+            // As RunRecovery's real scripts do (RunRecoveryTests runs them on this machine): each log in the copy written since the
+            // copy was made (since, Unix seconds), and a client's Player.log (playerlog, a mirrored path here); older ones are named.
+            case "keep-logs":
+            {
+                var reply = new StringBuilder();
+                var copied = DateTimeOffset.FromUnixTimeSeconds(long.Parse(v["since"], System.Globalization.CultureInfo.InvariantCulture)).UtcDateTime;
+                void Save(string from, string name)
+                {
+                    if (!File.Exists(from)) return;
+                    if (File.GetLastWriteTimeUtc(from) < copied) { reply.Append("VT-LOG-OLDER " + name + "\n"); return; }
+                    string to = Path.Combine(Local(v["keep"]), name);
+                    Directory.CreateDirectory(Path.GetDirectoryName(to)!); File.Copy(from, to, overwrite: true);
+                    reply.Append("VT-LOG-KEPT " + name + "\n");
+                }
+                string runtime = Local(v["runtime"]);
+                if (Directory.Exists(runtime))
+                {
+                    Save(Path.Combine(runtime, "BepInEx", "LogOutput.log"), "BepInEx/LogOutput.log");
+                    Save(Path.Combine(runtime, "toolkit-unity.log"), "toolkit-unity.log");
+                    foreach (string file in Directory.GetFiles(runtime, "preloader_*.log")) Save(file, Path.GetFileName(file));
+                }
+                if (v["client"] == "true" && v["playerlog"].Length != 0) Save(Local(v["playerlog"]), "Player.log");
+                return Ok(reply + "VT-LOGS-DONE\n");
             }
             case "cleanup-stage":
                 foreach (string path in new[] { v["runtime"], v["stage"] }.Where(path => path.Length != 0))
