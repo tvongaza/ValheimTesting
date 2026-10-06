@@ -277,6 +277,56 @@ public static class HostedCampaignPreparation
         return owners;
     }
 
+    // #257, part 1: a Steam account plays on one computer at a time. Every other client host of the inventory (a host this campaign
+    // runs no client on: its own client hosts already refuse any running Valheim) is asked whether Valheim runs there as its user,
+    // alongside the campaign's own host checks; where it does, the account that user is signed in to must be none a client here
+    // would use, which is known once those checks observed the clients' identities (hostChecks). A host that cannot be asked, a
+    // game whose user or account cannot be read, or one with no signed-in account is refused too: unknown is never a pass. A local
+    // host of another platform is another runner's machine, which this one cannot reach; the launch watch (SteamSessionLog) still
+    // names a collision with it.
+    private static Task InspectAccountsInUseAsync(Inputs inputs, IReadOnlyDictionary<string, string> observedSteamIds, Task hostChecks,
+        ConcurrentBag<CampaignPreflightProblem> failures, TimeSpan timeout, Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
+    {
+        if (inputs.Profile.SteamAccounts is not { } section) return Task.CompletedTask;
+        var clientHosts = inputs.Roles.Where(role => role.Name != "server").Select(role => role.Role.Host).ToHashSet(StringComparer.Ordinal);
+        var others = section.InventoryClientHosts.Where(name => !clientHosts.Contains(name) && inputs.Profile.Hosts.TryGetValue(name, out var profile) &&
+            !(profile.Kind == "local" && profile.Platform != HostProfile.CurrentPlatform)).Distinct(StringComparer.Ordinal).ToList();
+        return Task.WhenAll(others.Select(async name =>
+        {
+            const string input = "Steam account in use";
+            try
+            {
+                var host = hostFactory?.Invoke(name) ?? inputs.Profile.CreateHost(name);
+                var (playing, processes) = await SteamAccountInUse.ReadAsync(host, timeout, cancellation).ConfigureAwait(false);
+                if (playing == SteamAccountInUse.Playing.No) return;
+                if (playing == SteamAccountInUse.Playing.OwnerUnknown)
+                {
+                    failures.Add(new(name, input, $"Valheim (process {processes}) is running on {name} as a user this check cannot identify, so its Steam account " +
+                        "is unknown; it may be one a client here would use. Refused before launch: retry once that game has ended."));
+                    return;
+                }
+                var (state, id, detail) = await SteamSignedInUsers.ReadAsync(host, timeout, cancellation).ConfigureAwait(false);
+                if (state != SteamSignedInState.Matches || id is not { } account)
+                {
+                    failures.Add(new(name, input, $"Valheim (process {processes}) is running on {name}, and which Steam account it uses cannot be read " +
+                        $"({(state == SteamSignedInState.NotSignedIn ? "no account is signed in there" : detail)}); it may be one a client here would use. " +
+                        "Refused before launch: retry once that game has ended."));
+                    return;
+                }
+                await hostChecks.ConfigureAwait(false); // the clients' identities, observed by the campaign's own host checks
+                string steamId = SteamPoolAccount.SteamId64(account);
+                foreach (string client in observedSteamIds.Where(pair => pair.Value == steamId).Select(pair => pair.Key).Order(StringComparer.Ordinal))
+                    failures.Add(new(client, input, $"Valheim (process {processes}) is running on {name}, signed in to the Steam account client {client} would use; " +
+                        $"starting {client} would sign Steam out on one of the two machines. Refused before launch: retry once that game on {name} has ended."));
+            }
+            catch (Exception error) when (HostCheckRefusal(error))
+            {
+                failures.Add(new(name, input, $"Could not ask {name}, a client host in the inventory, whether Valheim runs there on a Steam account a client here " +
+                    $"would use ({error.Message}). Refused before launch: make {name} reachable, or take its client recipes out of the inventory."));
+            }
+        }));
+    }
+
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
     {
@@ -385,7 +435,10 @@ public static class HostedCampaignPreparation
             try { HostCopyCapacityProbe.RequireCombined(group.Key, capacities); }
             catch (Exception error) when (HostCheckRefusal(error)) { failures.Add(new(group.Key, "copy space", error.Message)); }
         });
-        await Task.WhenAll(hostChecks).ConfigureAwait(false);
+        var hostsChecked = Task.WhenAll(hostChecks);
+        var inUse = InspectAccountsInUseAsync(inputs, observedSteamIds, hostsChecked, failures, timeout, hostFactory, cancellation);
+        await hostsChecked.ConfigureAwait(false);
+        await inUse.ConfigureAwait(false);
         cancellation.ThrowIfCancellationRequested();
         foreach (var shared in observedSteamIds.GroupBy(account => account.Value, StringComparer.Ordinal).Where(group => group.Count() > 1))
             failures.Add(new("clients", "Steam identities", "Clients " + string.Join(", ", shared.Select(account => account.Key).Order(StringComparer.Ordinal)) +

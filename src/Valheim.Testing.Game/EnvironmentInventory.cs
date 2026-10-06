@@ -548,6 +548,8 @@ public sealed class EnvironmentInventory
             profile.SteamAccounts = new SteamAccountsProfile
             {
                 LeaseHost = LeaseHost, CheckSignedIn = true, ObservedLeaseDirectory = LeaseDirectory,
+                InventoryClientHosts = Environments.Where(recipe => recipe.Roles.Contains("client")).Select(recipe => recipe.Host)
+                    .Distinct(StringComparer.Ordinal).ToList(),
             };
         }
         profile.Validate();
