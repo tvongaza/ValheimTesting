@@ -66,42 +66,50 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
     /// <summary>The owned server's first boot's in-game handle (a restart returns the next boot's).</summary>
     public GameActor Server { get; internal set; } = null!;
     /// <summary>
-    /// The logs the teardown scan reads besides the owned server's own (<see cref="ServerActor.Logs"/>): add an owned client's
-    /// <see cref="ClientSession.Logs"/> here. They are scanned after the scenario, once the processes have stopped.
+    /// The logs the teardown scan reads besides the owned server's and the client actors' own (<see cref="ServerActor.Logs"/>,
+    /// <see cref="ClientActor.Logs"/>): add the logs of a client opened another way here. They are scanned after the scenario, once
+    /// the processes have stopped.
     /// </summary>
     public List<RunLog> Logs { get; } = [];
 
     /// <summary>
-    /// Opens the plan's game client and adds its logs to <see cref="Logs"/>, also when its startup fails after the process
-    /// started (a client that never reached its menu is still scanned and listed in the result). In a campaign
-    /// (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), an owned client starts on the host its environment was assigned,
+    /// Opens the plan's game client through its <see cref="ClientActor"/>, whose logs the teardown scan reads, also when its
+    /// startup fails after the process started (a client that never reached its menu is still scanned and listed in the result).
+    /// In a campaign (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), an owned client starts on the host its environment was assigned,
     /// inside that host's desktop session (<see cref="InteractiveClient"/>), or in this runner's GUI session for a local macOS
     /// host: the install and CLI port are its prepared ones, the install's patchers and pins are checked on the host, the host's
     /// lock is held for the rest of the run, and ValheimCLI is reached through the host's loopback tunnel.
     /// <paramref name="campaignClient"/> names the campaign's client when it declares several. That client's observed Steam
     /// identity is leased first, owned or attached (<see cref="SteamAccountHold"/>), and its host must still be signed in to it: a
     /// held account refuses the client, a lost lease stops it and cancels the run, and the lease is released at teardown.
-    /// Otherwise this is <see cref="ClientSession.Open(ClientRunPlan, string, CancellationToken)"/> on this machine. Disposing the
-    /// session stops only the client it started.
+    /// Otherwise this is <see cref="ClientActor.OnThisMachine"/>. Disposing the session stops only the client it started.
     /// </summary>
-    public ClientSession OpenClient(ClientRunPlan client, string? campaignClient = null)
+    public ClientSession OpenClient(ClientRunPlan client, string? campaignClient = null) => Client(client, campaignClient).Start();
+
+    /// <summary>
+    /// The actor for the plan's client: a campaign's named client on its assigned host (see <see cref="OpenClient"/>), or this
+    /// machine's. Each call is a new actor (each <see cref="OpenClient"/> a new open, as before); its logs join the teardown scan,
+    /// and one the scenario left open is closed at teardown before the server stops.
+    /// </summary>
+    internal ClientActor Client(ClientRunPlan client, string? campaignClient = null)
     {
         ArgumentNullException.ThrowIfNull(client);
-        ClientSession session;
+        ClientActor actor;
         if (Hosted != null && Hosted.Profile.Clients.Count != 0 && (client.Owned || Hosted.Profile.SteamAccounts != null))
         {
             var clients = Hosted.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList();
             string name = campaignClient ?? (clients.Count == 1 ? clients[0]
                 : throw new ArgumentException($"The campaign declares clients {string.Join(", ", clients)}; say which one opens.", nameof(campaignClient)));
-            // A startup that fails after the client started still kept its logs: they are scanned and listed like an opened client's.
-            try { session = client.Owned ? Hosted.OpenClient(Report, Output, client, name, Cancellation) : Hosted.AttachClient(Report, Output, client, name, Cancellation); }
-            catch (Exception error) { lock (Logs) Logs.AddRange(ClientSession.KeptLogs(error)); throw; }
-            lock (Logs) Logs.AddRange(session.Logs); // Scanned at teardown, after all parallel client opens settle.
-            return session;
+            actor = new ClientActor(name, client, Output, Hosted.ClientPlacement(Report), Cancellation);
         }
-        if (campaignClient != null) throw new ArgumentException("A named client opens only in a campaign that declares clients (PinnedServerRun.RunCampaignAsync).", nameof(campaignClient));
-        return ClientSession.Open(client, Output, Logs, Cancellation);
+        else if (campaignClient != null) throw new ArgumentException("A named client opens only in a campaign that declares clients (PinnedServerRun.RunCampaignAsync).", nameof(campaignClient));
+        else actor = ClientActor.OnThisMachine("client", client, Output, Cancellation);
+        lock (_clients) _clients.Add(actor);
+        return actor;
     }
+    private readonly List<ClientActor> _clients = [];
+    /// <summary>Every client actor this run made, in the order made.</summary>
+    internal IReadOnlyList<ClientActor> Clients { get { lock (_clients) return _clients.ToArray(); } }
 }
 
 /// <summary>
@@ -424,6 +432,11 @@ public static class PinnedServerRun
             // Ctrl+C from here abandons what it can still give up (the stop itself is bounded by the plan's own quit and kill).
             var cleanup = cancellation.BeginCleanup();
             bool stopped = true;
+            // Clients before their server: one the scenario left open (a failure inside it) is closed, its logs kept for the scan.
+            foreach (var client in launched?.Clients ?? [])
+                if (client.Session is { } open)
+                    try { report.Step(StepPhase.Cleanup, open.Owned ? $"stop only the owned client {client.Name}" : $"detach from the operator's client {client.Name}", client.Dispose); }
+                    catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); Classify(error); }
             if (session != null)
             {
                 try { report.Step(StepPhase.Cleanup, "stop only owned server", session.Dispose); }
@@ -461,7 +474,7 @@ public static class PinnedServerRun
             // an unknown outcome are explained by it, so the scan then decides nothing on its own.
             if (launched != null)
             {
-                List<RunLog> logs = [.. session?.Logs ?? [], .. launched.Logs];
+                List<RunLog> logs = [.. session?.Logs ?? [], .. launched.Logs, .. launched.Clients.SelectMany(client => client.Logs)];
                 if (logs.Count != 0 && !report.ScanLogs(logs, launched.Plan.LogScan) && unknown == null) definite = true;
             }
             // A copy that could not be removed is a definite (local) failure, so it comes before the outcome is decided.
