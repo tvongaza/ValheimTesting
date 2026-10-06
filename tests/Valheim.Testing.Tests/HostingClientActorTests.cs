@@ -18,7 +18,7 @@ public sealed class HostingClientActorTests : IDisposable
     private string Worlds => Path.Combine(Save, "worlds_local");
     private bool _hosting, _openServer = true, _peerJoined;
     private string _hostSteamId = HostSteamId;
-    private int _readings, _peerOpens;
+    private int _readings, _peerOpens, _peerLeaves;
 
     public HostingClientActorTests()
     {
@@ -81,8 +81,12 @@ public sealed class HostingClientActorTests : IDisposable
         return transport;
     }
 
-    // A peer at its menu that joins a Steam host by its Steam ID.
+    // A peer at its menu that joins a Steam host by its Steam ID. Its pins are strict, as ValheimCLI's: world pins fail once no
+    // world is loaded ("no world loaded"), and menu pins refuse a loaded world ("loaded but not listed").
     private ScriptedTransport PeerTransport(int open = 0) => new ScriptedTransport()
+        .OnPrefix("cli_expect", command => command.Contains("worlduid=", StringComparison.Ordinal)
+            ? _peerJoined ? ScriptedTransport.Ok("OK: EXPECT") : PinFailure("MISMATCH worlduid: no world loaded, expected " + WorldUid)
+            : _peerJoined ? PinFailure($"world: {WorldUid} is loaded but not listed (strict)") : ScriptedTransport.Ok("OK: EXPECT"))
         .ClientAccess(() => _peerJoined)
         .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Peer' (peer, Local)"))
         .OnPrefix("cli_connect_steam_user ", command =>
@@ -98,8 +102,10 @@ public sealed class HostingClientActorTests : IDisposable
             worldReady = _peerJoined, server = false, dedicated = false, localPlayer = _peerJoined, playerReady = _peerJoined, saving = false, loadError = false,
             connectionStatus = _peerJoined ? "Connected" : "None",
         })
-        .Extension("valheim.session", "leave", _ => { _peerJoined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
+        .Extension("valheim.session", "leave", _ => { Interlocked.Increment(ref _peerLeaves); _peerJoined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
         .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+
+    private static valheim_cli.Testing.CommandResult PinFailure(string message) => new() { Ok = false, ErrorCode = "command_failed", Message = message };
 
     private GameSession Session(ScenarioReport report, ClientRunPlan host, bool withPeer = true) =>
         FakeGameSession.Hosted(report, Output, host, (plan, name, output) =>
@@ -169,6 +175,30 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Equal(new[] { "preflight the fixture world, before it is copied" }, report.Steps.Where(s => !s.Passed).Select(s => s.Name));
         Assert.Equal(0, Volatile.Read(ref _peerOpens));
         Assert.Empty(OurWorldFiles());
+    }
+
+    // Native run B (6 Oct): the host's restart drops its peer to the menu, so the peer's rejoin must not issue a leave from there
+    // (the strict pins refused it: "no world loaded"). A peer still in the world leaves first, as before.
+    [Fact] public async Task APeerTheHostsRestartDroppedRejoinsWithoutALeave()
+    {
+        var report = new ScenarioReport("hosted");
+        using var data = new FakeClientDataDirectory(Save);
+        await using var session = Session(report, HostPlan());
+        await session.StartAsync();
+        await session.Join("peer");
+        session.Host!.Restart(); // disconnects the peer, whose actor is still pinned to the world
+        Assert.False(_peerJoined);
+        // Negative control in the test: under its stale world pins the peer's leave is refused, as natively.
+        var stale = Record.Exception(() => new SessionControl(session.Clients["peer"].Game).Leave());
+        Assert.Contains("no world loaded", stale?.ToString());
+        await session.Rejoin("peer");
+        Assert.True(_peerJoined);
+        Assert.Equal(0, Volatile.Read(ref _peerLeaves));
+        Assert.Equal("peer", report.Provenance["rejoinedFromMenu"]);
+        // In the world: the rejoin leaves first.
+        await session.Rejoin("peer");
+        Assert.Equal(1, Volatile.Read(ref _peerLeaves));
+        Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
     }
 
     [Fact] public async Task ARestartReHostsTheSameWorldInTheSameProcess()

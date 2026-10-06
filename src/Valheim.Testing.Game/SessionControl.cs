@@ -298,6 +298,35 @@ public sealed class SessionControl(GameActor actor)
     internal static bool LoadedButNotListed(Exception error) => error.Message.Contains("is loaded but not listed (strict)", StringComparison.Ordinal);
 
     public void Leave() => Transition("leave", []);
+
+    /// <summary>
+    /// Where a client is once it settles, read under pins that hold there: idle at its main menu (false), or in world
+    /// <paramref name="worldUid"/> with its player (true), within <paramref name="timeout"/>. For a client whose server or host may
+    /// have dropped it (a restart): it can still be leaving the world for a moment, and its earlier world pins no longer hold, so
+    /// each reading first pins it at its menu and, when a world is still loaded there (strict pins: "loaded but not listed"), at
+    /// that world. A world with another UID fails. Read-only; afterwards the client is pinned where it is.
+    /// </summary>
+    internal bool SettleAtMenuOrInWorld(ClientRunPlan plan, string? worldUid, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        SessionState ReadPinned()
+        {
+            try { actor.VerifyEnvironment(plan.MenuExpectations); }
+            catch (Exception error) when (LoadedButNotListed(error))
+            {
+                if (worldUid == null) throw new InvalidOperationException("The client is in a world, but the session pins no world UID to check it against.", error);
+                actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // Throws for another world.
+            }
+            return Read();
+        }
+        var state = ObservedWait.Until("the client settled at its menu or in its world", ReadPinned,
+            reading => (reading.Phase == "menu" && !reading.WorldPresent) || (reading.WorldPresent && reading.WorldReady && reading.PlayerReady),
+            timeout, ReadInterval, cancellation,
+            fails: reading => reading.WorldPresent && worldUid != null && reading.WorldUid != null && reading.WorldUid != worldUid ? "a different world is loaded" : null,
+            describe: reading => $"phase {reading.Phase}, world {(reading.WorldPresent ? reading.WorldUid : "none")}, connection {reading.ConnectionStatus}");
+        return state.WorldPresent;
+    }
     private void Transition(string action, string[] arguments)
     {
         var capability = actor.RequireCapability("valheim.session/" + action);
