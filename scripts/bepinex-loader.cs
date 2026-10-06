@@ -2,6 +2,7 @@
 //
 //   dotnet run scripts/bepinex-loader.cs -- capture /path/to/extracted-pack BepInExPack_Valheim 5.4.2202 /private/loader.json
 //   dotnet run scripts/bepinex-loader.cs -- check /private/loader.json
+#:property PublishAot=false
 #:project ../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
 using Valheim.Testing.Game;
 
