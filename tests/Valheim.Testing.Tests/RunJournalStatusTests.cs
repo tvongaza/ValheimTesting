@@ -472,7 +472,7 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Equal(SteamAccountState.Free, Assert.Single(await Pool("steam_gone").ListAsync(local, TimeSpan.FromSeconds(30))).State);
         Assert.Equal((SteamAccountState.Held, "run-other"), Assert.Single(await Pool("steam_other").ListAsync(local, TimeSpan.FromSeconds(30))) is var other ? (other.State, other.Run) : default);
         Assert.Equal(SteamAccountLeaseState.Released, (await gone.ReleaseAsync()).State); // Its own release, were it ever to come, finds it released.
-        var (records, _) = await RunJournal.ReadAllAsync(local, Path.Combine(data, "journal"), TimeSpan.FromSeconds(30));
+        var (records, _) = await RunJournalOnHost.ReadAllAsync(local, Path.Combine(data, "journal"), TimeSpan.FromSeconds(30));
         var released = Assert.Single(records, record => record.Run == "run-gone" && record.Entry.Kind == JournalEntry.LeaseReleased);
         Assert.Equal(("recovery", "true", "steam_gone"), (released.Actor, released.Entry.Fields["machineGone"], released.Entry.Fields["account"]));
         // Its end is journalled for it: env status shows it ended, not a run that may still be going.

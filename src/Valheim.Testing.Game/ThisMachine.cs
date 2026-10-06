@@ -101,14 +101,14 @@ internal sealed record SteamDetection(string? Root, string? RootRule, IReadOnlyL
         {
             if (machine.RegistrySteamPath() is { Length: > 0 } registered)
                 candidates.Add((registered.Replace('/', '\\'), @"registry HKCU\Software\Valve\Steam SteamPath"));
-            if (machine.ProgramFilesX86 is { Length: > 0 } x86) candidates.Add((HostInstall.Join(x86, "Steam"), "Program Files (x86)"));
+            if (machine.ProgramFilesX86 is { Length: > 0 } x86) candidates.Add((HostPath.Join(x86, "Steam"), "Program Files (x86)"));
         }
-        else if (machine.Platform == "macos") candidates.Add((HostInstall.Join(machine.Home, "Library", "Application Support", "Steam"), "standard path"));
+        else if (machine.Platform == "macos") candidates.Add((HostPath.Join(machine.Home, "Library", "Application Support", "Steam"), "standard path"));
         else
         {
-            candidates.Add((HostInstall.Join(machine.Home, ".local", "share", "Steam"), "standard path"));
-            candidates.Add((HostInstall.Join(machine.Home, ".steam", "steam"), "standard path"));
-            candidates.Add((HostInstall.Join(machine.Home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"), "Flatpak path"));
+            candidates.Add((HostPath.Join(machine.Home, ".local", "share", "Steam"), "standard path"));
+            candidates.Add((HostPath.Join(machine.Home, ".steam", "steam"), "standard path"));
+            candidates.Add((HostPath.Join(machine.Home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"), "Flatpak path"));
         }
         var tried = candidates.Select(candidate => candidate.Path).ToList();
         var (root, rule) = candidates.FirstOrDefault(candidate => machine.DirectoryExists(candidate.Path));
@@ -118,7 +118,7 @@ internal sealed record SteamDetection(string? Root, string? RootRule, IReadOnlyL
         if (root != null)
         {
             libraries.Add(root);
-            string? folders = machine.ReadText(HostInstall.Join(root, "steamapps", "libraryfolders.vdf"));
+            string? folders = machine.ReadText(HostPath.Join(root, "steamapps", "libraryfolders.vdf"));
             if (folders != null)
                 foreach (Match match in PathEntry.Matches(folders))
                 {
@@ -134,10 +134,10 @@ internal sealed record SteamDetection(string? Root, string? RootRule, IReadOnlyL
             string? install = null;
             foreach (string library in libraries)
             {
-                string manifest = HostInstall.Join(library, "steamapps", "appmanifest_" + app + ".acf");
+                string manifest = HostPath.Join(library, "steamapps", "appmanifest_" + app + ".acf");
                 manifests.Add(manifest);
                 if (machine.ReadText(manifest) is not { } text || InstallDir.Match(text) is not { Success: true } found) continue;
-                string candidate = HostInstall.Join(library, "steamapps", "common", Unescape(found.Groups[1].Value));
+                string candidate = HostPath.Join(library, "steamapps", "common", Unescape(found.Groups[1].Value));
                 if (machine.DirectoryExists(candidate)) { install = machine.OnDiskPath(candidate); break; }
                 manifests[^1] += $" (names {candidate}, which does not exist)";
             }

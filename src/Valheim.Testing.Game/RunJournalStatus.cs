@@ -72,7 +72,7 @@ internal static class RunJournalStatus
             {
                 journal = RunJournal.DirectoryFor(profile);
                 var host = hostFactory(name);
-                var (records, unreadable) = await RunJournal.ReadAllAsync(host, journal, timeout, cancellation).ConfigureAwait(false);
+                var (records, unreadable) = await RunJournalOnHost.ReadAllAsync(host, journal, timeout, cancellation).ConfigureAwait(false);
                 var status = new JournalHostStatus(name, journal, records.Select(record => record.Run).Distinct(StringComparer.Ordinal).Count(),
                     unreadable == 0 ? null : $"{unreadable} journal line{(unreadable == 1 ? "" : "s")} could not be read, so what they record is unknown.");
                 return (Status: status, Read: ((string Host, IGameHost Connection, IReadOnlyList<JournalRecord> Records)?)(name, host, records));

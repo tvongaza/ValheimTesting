@@ -59,7 +59,7 @@ internal static class MacAppBundle
     {
         if (host.Shell.Kind != HostShellKind.Bash) return new(MacBundleState.None, 0, "");
         var result = (await host.RunAsync(Bash, new Dictionary<string, string>
-            { ["app"] = HostInstall.Join(root, GameLaunch.ClientMacBundle), ["repair"] = repair ? "1" : "" }, timeout, cancellation).ConfigureAwait(false))
+            { ["app"] = HostPath.Join(root, GameLaunch.ClientMacBundle), ["repair"] = repair ? "1" : "" }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Checking {GameLaunch.ClientMacBundle}'s signature on {host.Name}");
         string? line = InteractiveClient.Line(result.Stdout, "VT-BUNDLE ");
         var words = (line ?? "").Trim().Split(' ', 3);

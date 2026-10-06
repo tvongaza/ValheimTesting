@@ -16,7 +16,7 @@ internal static class HostClientPreflight
         if (platform == ClientPlatform.Windows)
             await RequireWindowsLoaderAsync(host, install, $"client install on {host.Name}", timeout, cancellation).ConfigureAwait(false);
 
-        string cliConfig = HostInstall.Join(install, "BepInEx/config/" + OwnedClientPreflight.CliConfig);
+        string cliConfig = HostPath.Join(install, "BepInEx/config/" + OwnedClientPreflight.CliConfig);
         byte[]? configBytes = await Read(host, cliConfig, timeout, cancellation).ConfigureAwait(false);
         if (configBytes == null) return;
         string configText = Encoding.UTF8.GetString(configBytes);
@@ -26,7 +26,7 @@ internal static class HostClientPreflight
             configured.Split('/', '\\').Any(part => part is ".." or "." or ""))
             throw new InvalidOperationException($"ValheimCLI on {host.Name} points at '{configured}' outside its disposable client config. " +
                 "Use a per-run standing file under BepInEx/config derived from the staged plugins and world UID; do not inherit a host-global standing file.");
-        string standingPath = HostInstall.Join(install, "BepInEx/config/" + configured.Replace('\\', '/'));
+        string standingPath = HostPath.Join(install, "BepInEx/config/" + configured.Replace('\\', '/'));
         byte[]? standingBytes = await Read(host, standingPath, timeout, cancellation).ConfigureAwait(false);
         if (standingBytes == null)
             throw new InvalidOperationException($"ValheimCLI's standing file {standingPath} does not exist on {host.Name}; it would refuse every command after launch.");
@@ -45,7 +45,7 @@ internal static class HostClientPreflight
     /// </summary>
     internal static async Task RequireWindowsLoaderAsync(IGameHost host, string root, string kind, TimeSpan timeout, CancellationToken cancellation)
     {
-        string proxyPath = HostInstall.Join(root, BepInExLoader.WindowsProxy), configPath = HostInstall.Join(root, BepInExLoader.WindowsConfig);
+        string proxyPath = HostPath.Join(root, BepInExLoader.WindowsProxy), configPath = HostPath.Join(root, BepInExLoader.WindowsConfig);
         byte[] proxy = await Read(host, proxyPath, timeout, cancellation).ConfigureAwait(false)
             ?? throw new FileNotFoundException($"The {kind} has no {BepInExLoader.WindowsProxy}; install a coherent BepInExPack.", proxyPath);
         byte[] config = await Read(host, configPath, timeout, cancellation).ConfigureAwait(false)

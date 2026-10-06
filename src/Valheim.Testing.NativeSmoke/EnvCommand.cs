@@ -98,10 +98,10 @@ internal static class EnvCommand
         try
         {
             string? inventory = file == null ? null : Path.GetFullPath(file);
-            bool clean = action == "status" ? await EnvironmentInventory.WriteRunStatusAsync(inventory, output, json).ConfigureAwait(false)
-                : copy != null ? await EnvironmentInventory.TeardownCopyAsync(inventory, copy, output).ConfigureAwait(false)
-                : machineGone ? await EnvironmentInventory.ReleaseLeasesOfGoneRunAsync(inventory, run!, output).ConfigureAwait(false)
-                : await EnvironmentInventory.RecoverRunAsync(inventory, run!, action == "teardown", output, json).ConfigureAwait(false);
+            bool clean = action == "status" ? await EnvironmentRuns.WriteRunStatusAsync(inventory, output, json).ConfigureAwait(false)
+                : copy != null ? await EnvironmentRuns.TeardownCopyAsync(inventory, copy, output).ConfigureAwait(false)
+                : machineGone ? await EnvironmentRuns.ReleaseLeasesOfGoneRunAsync(inventory, run!, output).ConfigureAwait(false)
+                : await EnvironmentRuns.RecoverRunAsync(inventory, run!, action == "teardown", output, json).ConfigureAwait(false);
             return clean ? 0 : 3;
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException or HostOperationException)

@@ -604,9 +604,9 @@ public sealed class HostServerTests : IDisposable
 
     [Fact] public void HostPathsJoinInTheHostsOwnStyle()
     {
-        Assert.Equal("/srv/runs/run-1/world", HostInstall.Join("/srv/runs/", "run-1", "world"));
-        Assert.Equal(@"C:\vt\runs\run-1\client-1", HostInstall.Join(@"C:\vt\runs", "run-1", "client-1"));
-        Assert.Equal(@"C:\Games\Valheim\BepInEx\LogOutput.log", HostInstall.Join(@"C:\Games\Valheim", "BepInEx/LogOutput.log"));
-        Assert.Equal("/x", HostInstall.Join("/", "x"));
+        Assert.Equal("/srv/runs/run-1/world", HostPath.Join("/srv/runs/", "run-1", "world"));
+        Assert.Equal(@"C:\vt\runs\run-1\client-1", HostPath.Join(@"C:\vt\runs", "run-1", "client-1"));
+        Assert.Equal(@"C:\Games\Valheim\BepInEx\LogOutput.log", HostPath.Join(@"C:\Games\Valheim", "BepInEx/LogOutput.log"));
+        Assert.Equal("/x", HostPath.Join("/", "x"));
     }
 }

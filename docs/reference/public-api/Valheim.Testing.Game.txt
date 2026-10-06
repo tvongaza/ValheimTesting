@@ -613,13 +613,8 @@ static class Valheim.Testing.Game.DungeonRooms
   method static System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.SavedDungeon> Read(Valheim.Testing.Game.GameActor actor, System.String capabilityPath, System.Single x, System.Single z, System.Single radius = 64)
   method static System.Void RequireWithinZone(Valheim.Testing.Game.SavedDungeon dungeon, System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.RoomSize> sizes = null, System.Single tolerance = 0.01)
 sealed class Valheim.Testing.Game.EnvironmentInventory
-  method System.Threading.Tasks.Task`1<System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.CampaignPreflightProblem>> LocalJournalProblemsAsync(System.Threading.CancellationToken cancellation = null)
   method System.Void .ctor()
   method System.Void Validate(System.String directory)
-  method static System.Threading.Tasks.Task`1<System.Boolean> RecoverRunAsync(System.String inventoryPath, System.String runId, System.Boolean teardown, System.IO.TextWriter output, System.Boolean json = false, System.Threading.CancellationToken cancellation = null)
-  method static System.Threading.Tasks.Task`1<System.Boolean> ReleaseLeasesOfGoneRunAsync(System.String inventoryPath, System.String runId, System.IO.TextWriter output, System.Threading.CancellationToken cancellation = null)
-  method static System.Threading.Tasks.Task`1<System.Boolean> TeardownCopyAsync(System.String inventoryPath, System.String copyPath, System.IO.TextWriter output, System.Threading.CancellationToken cancellation = null)
-  method static System.Threading.Tasks.Task`1<System.Boolean> WriteRunStatusAsync(System.String inventoryPath, System.IO.TextWriter output, System.Boolean json = false, System.Threading.CancellationToken cancellation = null)
   method static Valheim.Testing.Game.EnvironmentInventory Read(System.String path)
   property System.Collections.Generic.Dictionary`2<System.String,Valheim.Testing.Game.HostProfile> Hosts { get; set; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> Detected { get; }
@@ -645,6 +640,12 @@ sealed class Valheim.Testing.Game.EnvironmentRecipe
   property System.String LoaderPackage { get; set; }
   property System.String Name { get; set; }
   property System.String Runtime { get; set; }
+static class Valheim.Testing.Game.EnvironmentRuns
+  method static System.Threading.Tasks.Task`1<System.Boolean> RecoverRunAsync(System.String inventoryPath, System.String runId, System.Boolean teardown, System.IO.TextWriter output, System.Boolean json = false, System.Threading.CancellationToken cancellation = null)
+  method static System.Threading.Tasks.Task`1<System.Boolean> ReleaseLeasesOfGoneRunAsync(System.String inventoryPath, System.String runId, System.IO.TextWriter output, System.Threading.CancellationToken cancellation = null)
+  method static System.Threading.Tasks.Task`1<System.Boolean> TeardownCopyAsync(System.String inventoryPath, System.String copyPath, System.IO.TextWriter output, System.Threading.CancellationToken cancellation = null)
+  method static System.Threading.Tasks.Task`1<System.Boolean> WriteRunStatusAsync(System.String inventoryPath, System.IO.TextWriter output, System.Boolean json = false, System.Threading.CancellationToken cancellation = null)
+  method static System.Threading.Tasks.Task`1<System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.CampaignPreflightProblem>> LocalJournalProblemsAsync(Valheim.Testing.Game.EnvironmentInventory inventory, System.Threading.CancellationToken cancellation = null)
 [result shape] sealed class Valheim.Testing.Game.EvidenceReference : System.IEquatable`1<Valheim.Testing.Game.EvidenceReference>
   method System.Boolean Equals(Valheim.Testing.Game.EvidenceReference other)
   method System.Void .ctor(System.String Kind, System.String Site, System.String WorldUid, System.String File, System.String Sha256)

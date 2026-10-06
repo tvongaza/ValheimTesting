@@ -34,7 +34,7 @@ internal static class HostedWorldOnHost
         int at = path.LastIndexOfAny(['/', '\\']);
         if (at <= 0 || !path[(at + 1)..].Equals("characters_local", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"The client's characters folder {charactersLocal} is not a Valheim characters_local, so its worlds_local is unknown.", nameof(charactersLocal));
-        return HostInstall.Join(path[..at], "worlds_local");
+        return HostPath.Join(path[..at], "worlds_local");
     }
 
     /// <summary>
@@ -51,7 +51,7 @@ internal static class HostedWorldOnHost
         try
         {
             string name = HostedWorld.NameOf(copy.SourceHashes.Keys);
-            string world = HostInstall.Join(site.WorldsDirectory, name);
+            string world = HostPath.Join(site.WorldsDirectory, name);
             site.Hold(cancellation).GetAwaiter().GetResult();
             var existing = Entries(site, name, cancellation);
             if (existing.Count != 0)
@@ -92,7 +92,7 @@ internal static class HostedWorldOnHost
     // over there), then fetches that into the evidence. Returns where the evidence is.
     private static string Collect(Site site, string name, string target)
     {
-        string world = HostInstall.Join(site.WorldsDirectory, name);
+        string world = HostPath.Join(site.WorldsDirectory, name);
         MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, Long, CancellationToken.None).GetAwaiter().GetResult();
         site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true"), ("keptIn", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
         site.Host.FetchDirectoryAsync(site.KeepIn, target, Long).GetAwaiter().GetResult();

@@ -138,8 +138,8 @@ internal sealed class CampaignClients
         // A dedicated server's lock covers its own host; another client host is locked for the rest of the run.
         await LockHostAsync(role.Host, host, hostProfile, cancellation).ConfigureAwait(false);
         int n = Interlocked.Increment(ref _clients);
-        string runDirectory = HostInstall.Join(role.Runtime, RunId), launchDirectory = HostInstall.Join(runDirectory, "client-" + n);
-        string log = HostInstall.Join(role.Install, HostedServerRun.BepInExLog);
+        string runDirectory = HostPath.Join(role.Runtime, RunId), launchDirectory = HostPath.Join(runDirectory, "client-" + n);
+        string log = HostPath.Join(role.Install, HostedServerRun.BepInExLog);
         var listing = await HostInstall.ListAsync(host, role.Install, Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
         if (plan.Pinned)
             HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, "client install");
@@ -147,7 +147,7 @@ internal sealed class CampaignClients
         await HostInstall.RequirePortFreeAsync(host, role.CliPort, Quick, cancellation).ConfigureAwait(false);
         // BepInEx rewrites its log at each start; an earlier one moves aside so the wait from offset 0 sees this start's lines only.
         var moved = (await host.RunAsync(HostedClientScripts.MoveAside(host.Shell.Kind), new Dictionary<string, string>
-            { ["log"] = log, ["to"] = HostInstall.Join(runDirectory, $"client-{n}.previous-LogOutput.log") }, Quick, cancellation).ConfigureAwait(false))
+            { ["log"] = log, ["to"] = HostPath.Join(runDirectory, $"client-{n}.previous-LogOutput.log") }, Quick, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Moving the client's previous BepInEx log aside on {host.Name}");
         if (InteractiveClient.Line(moved.Stdout, "VT-MOVED") == null && InteractiveClient.Line(moved.Stdout, "VT-NONE") == null)
             throw new HostOperationException($"Unexpected reply while moving the client's previous log on {host.Name}", moved);

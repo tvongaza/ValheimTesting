@@ -138,9 +138,9 @@ internal sealed class FakeServerHost : IGameHost
         ("steam-user", [SteamSignedInUsers.PowerShell, SteamSignedInUsers.Bash]),
         ("steam-playing", [SteamAccountInUse.PowerShell, SteamAccountInUse.Bash]),
         ("steam-log", [SteamSessionLog.FindPowerShell, SteamSessionLog.FindBash]),
-        ("journal", [RunJournal.BashAppend, RunJournal.WindowsAppend]),
-        ("journal-read", [RunJournal.BashRead, RunJournal.WindowsRead]),
-        ("journal-read-all", [RunJournal.BashReadAll, RunJournal.WindowsReadAll]),
+        ("journal", [RunJournalOnHost.BashAppend, RunJournalOnHost.WindowsAppend]),
+        ("journal-read", [RunJournalOnHost.BashRead, RunJournalOnHost.WindowsRead]),
+        ("journal-read-all", [RunJournalOnHost.BashReadAll, RunJournalOnHost.WindowsReadAll]),
         ("pid-file", [RunJournalStatus.BashPidFiles, RunJournalStatus.WindowsPidFiles]),
         ("process-probe", [HostProcessProbe.Bash, HostProcessProbe.Windows]),
         ("mac-bundle", [MacAppBundle.Bash]),
@@ -178,7 +178,7 @@ internal sealed class FakeServerHost : IGameHost
                 return Ok($"VT-STORAGE {DiskSpace.DirectoryBytes(Local(v["source"]))} {AvailableCopyBytes} " +
                     Convert.ToBase64String(Encoding.UTF8.GetBytes(Windows ? "C:\\" : "/")) + "\n");
             case "preflight-exists":
-                return Ok(string.Concat(v["paths"].Split('\n').Where(relative => relative.Length != 0 && File.Exists(Local(HostInstall.Join(v["root"], relative))))
+                return Ok(string.Concat(v["paths"].Split('\n').Where(relative => relative.Length != 0 && File.Exists(Local(HostPath.Join(v["root"], relative))))
                     .Select(relative => "VT-EXISTS file " + relative + "\n")) + "VT-EXISTS done\n");
             case "preflight-read":
             {

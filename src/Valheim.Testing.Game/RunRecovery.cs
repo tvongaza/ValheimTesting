@@ -323,7 +323,7 @@ internal static class RunRecovery
         int at = parent.LastIndexOfAny(['/', '\\']);
         if (at <= 0) throw new ArgumentException("A prepared copy's folder has no parent to keep its logs in.", nameof(runtime));
         if (!RunJournal.SafeName(runId) || !RunJournal.SafeName(actor)) throw new ArgumentException("A run id and an actor are letters, digits, '.', '_' and '-'.");
-        string folder = HostInstall.Join(parent[..at], runId, "recovered-" + actor);
+        string folder = HostPath.Join(parent[..at], runId, "recovered-" + actor);
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsKeepLogs : BashKeepLogs, new Dictionary<string, string>
         {
             ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true", ["playerlog"] = playerLog,

@@ -19,7 +19,7 @@ public class SshOptionTests
     [InlineData("proxycommand=ssh -W %h:%p \"jump host\"")]
     [InlineData("KnownHostsCommand=/usr/local/bin/hosts %H")]
     [InlineData("LocalCommand=echo connected to %n")]
-    public void AValueSshReadsAsGivenIsPassedUnchanged(string option) => Assert.Equal(option, SshGameHost.OptionArgument(SshGameHost.CheckOption(option)));
+    public void AValueSshReadsAsGivenIsPassedUnchanged(string option) => Assert.Equal(option, SshGameHost.OptionArgument(SshChecks.CheckOption(option)));
 
     [Theory]
     [InlineData("User=Some Name", "User=\"Some Name\"")]
@@ -35,7 +35,7 @@ public class SshOptionTests
     [InlineData(@"IdentityFile=C:\keys with space\", @"IdentityFile=""C:\keys with space\\""")]
     [InlineData(@"User=a\""b", @"User=""a\\\""b""")]
     [InlineData(@"User=a\'b c", @"User=""a\\'b c""")]
-    public void AValueSshWouldSplitOrUnescapeIsQuoted(string option, string argument) => Assert.Equal(argument, SshGameHost.OptionArgument(SshGameHost.CheckOption(option)));
+    public void AValueSshWouldSplitOrUnescapeIsQuoted(string option, string argument) => Assert.Equal(argument, SshGameHost.OptionArgument(SshChecks.CheckOption(option)));
 
     [Fact] public async Task TheHostPassesTheQuotedFormAndNeverTheBareOne()
     {

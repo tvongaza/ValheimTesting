@@ -132,7 +132,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             // The failure limits: the run's own result is not final yet (its log scan comes after this teardown, which first keeps
             // the logs of any client still open), so keep as much as a failed run would.
             var (perFile, total) = PinnedServerRun.RetainLimits(passed: false);
-            string keepDirectory = HostInstall.Join(copyDirectory, "runtime-changes");
+            string keepDirectory = HostPath.Join(copyDirectory, "runtime-changes");
             var result = (await host.RunAsync(windows ? HostedRunScripts.WindowsRetire : HostedRunScripts.Retire, new Dictionary<string, string>
             {
                 ["runtime"] = runtime, ["keep"] = keepDirectory, ["run"] = copyName,

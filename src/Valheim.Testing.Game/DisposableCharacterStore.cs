@@ -297,7 +297,7 @@ public sealed class DisposableCharacterStore
         string local = charactersLocal.TrimEnd('/', '\\');
         int cut = local.LastIndexOfAny(['/', '\\']);
         if (cut < 0) throw new ArgumentException($"characters_local must be a full path; '{charactersLocal}' is not.", nameof(charactersLocal));
-        return HostInstall.Join(cut == 0 ? local[..1] : local[..cut], CloudFolder);
+        return HostPath.Join(cut == 0 ? local[..1] : local[..cut], CloudFolder);
     }
 
     private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
