@@ -277,20 +277,19 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task");
     }
 
-    // A Mac hosts clients only. A remote one is refused as a server by the inventory; this machine's own, whose port check
-    // works now (netstat), is refused by name in the preflight, before anything is copied, rather than at its start. Only a
-    // Mac can name itself as a local macOS host, so this runs on the macOS CI leg.
+    // A Mac hosts clients only: the inventory refuses a macOS server environment, local or remote, before any host check,
+    // so the macOS port check (netstat) never clears one (#435's preflight check for it was unreachable and is gone).
     [Fact]
-    public async Task ADedicatedServerOnThisMacIsRefusedInThePreflight()
+    public async Task ADedicatedServerOnAMacIsRefusedByTheInventory()
     {
-        if (!OperatingSystem.IsMacOS()) return;
         string inventory = Write("mac-inventory.json", new
         {
-            hosts = new { mac = new { kind = "local", platform = "macos", shell = "bash", @lock = Path.Combine(_root, "lock") } },
+            hosts = new { mac = new { kind = "ssh", platform = "macos", shell = "bash", @lock = "/vt/lock", destination = "test@mac" } },
             environments = new object[]
             {
-                new { name = "mac-server", host = "mac", roles = new[] { "server" }, install = Path.Combine(_root, "server"), runtime = Path.Combine(_root, "runs"), cliPort = 5577, gamePort = 2456 },
+                new { name = "mac-server", host = "mac", roles = new[] { "server" }, install = "/opt/server", runtime = "/vt/runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
             },
+            leaseHost = "mac", leaseDirectory = "/vt/leases",
         });
         string file = Write("campaign.json", new
         {
@@ -299,8 +298,8 @@ public sealed class CampaignPreflightTests : IDisposable
         var host = new FakeServerHost("mac", Path.Combine(_root, "mirror"));
         var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
         Assert.False(report.Ready);
-        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "server host" && problem.Message.Contains("macOS host"));
-        Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start" or "apply-stage");
+        Assert.Contains(report.Problems, problem => problem.Input == "inventory" && problem.Message.Contains("macOS dedicated servers are not supported"));
+        Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start" or "apply-stage" or "port");
     }
 
     // A probe's refusal of a kind no check listed (a bash host that cannot tell which ports are in use) fills its own line
