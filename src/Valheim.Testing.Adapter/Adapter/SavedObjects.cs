@@ -9,7 +9,7 @@ namespace Valheim.Testing.Adapter
 {
     /// <summary>
     /// A capped census of a zone's saved objects (ZDOs), loaded or not. Throws instead of returning a truncated list or the
-    /// objects of another zone. Run in game by FullLifecycle's marker observation.
+    /// objects of another zone. Run in game by the native acceptance suite's marker observation.
     /// </summary>
     public static class SavedObjects
     {

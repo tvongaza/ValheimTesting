@@ -18,7 +18,7 @@
     "-batchmode",
     "-nographics",
     "-name",
-    "MyModTest",
+    "AcceptanceTest",
     "-port",
     "2456",
     "-world",
@@ -38,8 +38,8 @@
     "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",
     "valheimCLI.standard": "<md5 of the runtime's Valheim.Cli.Standard.dll>",
     "valheimCLI.worldtools": "<md5 of the runtime's Valheim.Cli.WorldTools.dll>",
-    "example.mymod": "<md5 of MyMod.dll>",
-    "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+    "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+    "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
   },
   "runtimePins": {
     "game": "<InstallPins.Of(runtime).Game>",
@@ -64,7 +64,7 @@
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
       "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
-      "example.mymod": "<md5 of the mismatched MyMod.dll, built with -p:MyModNetVersion=2>"
+      "valheimtesting.acceptancemod": "<md5 of the mismatched AcceptanceMod.dll, built with -p:AcceptanceModNetVersion=2>"
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
@@ -72,8 +72,8 @@
       "patchers": "<InstallPins.Of(install).Patchers>"
     },
     "join": "127.0.0.1:2456",
-    "character": "mymodtester",
-    "passwordVariable": "MYMOD_TEST_PASSWORD"
+    "character": "accepttester",
+    "passwordVariable": "ACCEPTANCEMOD_TEST_PASSWORD"
   },
   "client": {
     "mode": "owned",
@@ -91,8 +91,8 @@
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
       "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
-      "example.mymod": "<md5 of MyMod.dll>",
-      "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+      "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+      "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
@@ -100,7 +100,7 @@
       "patchers": "<InstallPins.Of(install).Patchers>"
     },
     "join": "127.0.0.1:2456",
-    "character": "mymodtester",
-    "passwordVariable": "MYMOD_TEST_PASSWORD"
+    "character": "accepttester",
+    "passwordVariable": "ACCEPTANCEMOD_TEST_PASSWORD"
   }
 }

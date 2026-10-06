@@ -1,16 +1,15 @@
-using MyMod.SystemTests;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// <c>content-census</c> (#91/#114): MyMod registers one item, its network prefabs, a recipe, a build piece and a status effect
-/// (MyMod's <c>Content.cs</c>),
-/// and <see cref="ExpectationsResource"/> declares them for the server and the client. A client running the server's MyMod
+/// <c>content-census</c> (#91/#114): AcceptanceMod registers one item, its network prefabs, a recipe, a build piece and a status effect
+/// (AcceptanceMod's <c>Content.cs</c>),
+/// and <see cref="ExpectationsResource"/> declares them for the server and the client. A client running the server's AcceptanceMod
 /// and adapter builds joins; in each round (<c>first</c>, and <c>after-restart</c>, when both processes have loaded a world
 /// again) the adapter's content census is read on the server and on the client, each through its own pinned actor, and
-/// reconciled: each side must report being that side, run the pinned MyMod build and hold every declared entry once, with
+/// reconciled: each side must report being that side, run the pinned AcceptanceMod build and hold every declared entry once, with
 /// the recipe's item, workbench and wood resolved by the game's own lookups, and nothing undeclared in scope. The census and
 /// its report are written to <c>{round}-content-census.json</c> before the check.
 /// <para>
@@ -19,18 +18,18 @@ namespace Valheim.Testing.NativeAcceptance;
 /// </summary>
 public static class ContentCensusScenario
 {
-    /// <summary>MyMod's declared content, embedded from <c>content-expectations.json</c>.</summary>
+    /// <summary>AcceptanceMod's declared content, embedded from <c>content-expectations.json</c>.</summary>
     public const string ExpectationsResource = "Valheim.Testing.NativeAcceptance.content-expectations.json";
-    /// <summary>The names MyMod's <c>Content.cs</c> registers.</summary>
-    public const string ItemName = "MyMod_SurveyStake", RecipeName = "Recipe_MyMod_SurveyStake",
-        PieceName = "MyMod_SurveyPost", StatusName = "MyMod_SurveyBlessing";
+    /// <summary>The names AcceptanceMod's <c>Content.cs</c> registers.</summary>
+    public const string ItemName = "AcceptanceMod_SurveyStake", RecipeName = "Recipe_AcceptanceMod_SurveyStake",
+        PieceName = "AcceptanceMod_SurveyPost", StatusName = "AcceptanceMod_SurveyBlessing";
     /// <summary>The check's step within a round.</summary>
     public const string Check = "the declared content is registered on the server and the client";
     /// <summary>What the omitted-recipe control's failure must say: nothing but the recipe is missing, on each side.</summary>
     public const string OnlyTheOmittedRecipe = "the census fails only on the omitted recipe";
     public const string OnlyTheOmittedStatusEffect = "the census fails only on the omitted status effect";
 
-    /// <summary>MyMod's content expectations, as the file declares them.</summary>
+    /// <summary>AcceptanceMod's content expectations, as the file declares them.</summary>
     public static ContentExpectations Expectations()
     {
         using var stream = typeof(ContentCensusScenario).Assembly.GetManifestResourceStream(ExpectationsResource)

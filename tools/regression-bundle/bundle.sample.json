@@ -3,10 +3,10 @@
   "issue": "https://github.com/<owner>/<mod>/issues/<n>",
   "summary": "<two sentences: what the scenario does and what the fix changes>",
   "environment": "<the run's regression.json>",
-  "runner": "MyModMarkRegression",
+  "runner": "ExampleModMarkRegression",
   "sources": ["<your copy of TargetedRegression>/Program.cs", "<your copy of TargetedRegression>/Scenario.cs"],
   "toolkit": { "package": "<the published Valheim.Testing.Game version the run used, or newer>" },
-  "plugins": ["example.mymod", "example.mymod.testadapter"],
+  "plugins": ["example.examplemod", "example.examplemod.testadapter"],
   "arms": {
     "parent": { "evidence": "<new-evidence-parent>", "expect": "fail", "failingStep": "<the step the fix changes>" },
     "candidate": { "evidence": "<new-evidence-candidate>", "expect": "pass" }

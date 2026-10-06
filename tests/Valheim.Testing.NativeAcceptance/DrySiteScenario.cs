@@ -4,10 +4,10 @@ using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// The example mod's end-to-end scenario on an owned server, with the mod's own expectations and the toolkit's pieces:
+/// AcceptanceMod's end-to-end scenario on an owned server, with the mod's own expectations and the toolkit's pieces:
 /// <list type="number">
 /// <item>Before it runs, the runner's session checked the mod's declared Harmony patches on the server (the adapter's
 /// census, <c>LifecyclePlan.Mod</c>), so a missing target fails at runtime-ready, by name.</item>
@@ -31,10 +31,10 @@ public static class DrySiteScenario
     /// <summary>The Harmony patches the mod declares (its <c>[HarmonyPatch]</c> classes); each must be applied.</summary>
     public static readonly DeclaredPatch[] Patches =
     [
-        new("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix"),
-        new("ZNet::OnNewConnection", "prefix", "MyMod.VersionHandshake+SendVersion::Prefix"),
-        new("ZNet::RPC_PeerInfo", "prefix", "MyMod.VersionHandshake+RefuseMismatched::Prefix"),
-        new("ZNet::Awake", "postfix", "MyMod.SyncedGreeting+RegisterRpc::Postfix"),
+        new("Terminal::InitTerminal", "postfix", "AcceptanceMod.Plugin+RegisterCommands::Postfix"),
+        new("ZNet::OnNewConnection", "prefix", "AcceptanceMod.VersionHandshake+SendVersion::Prefix"),
+        new("ZNet::RPC_PeerInfo", "prefix", "AcceptanceMod.VersionHandshake+RefuseMismatched::Prefix"),
+        new("ZNet::Awake", "postfix", "AcceptanceMod.SyncedGreeting+RegisterRpc::Postfix"),
     ];
 
     /// <summary>
@@ -46,10 +46,10 @@ public static class DrySiteScenario
         Func<GameActor, CrossplayLobby>? lobby = null)
     {
         var client = plan.Client ?? throw new ArgumentException("The run mode needs the plan's client section.");
-        // The runner's session checked MyMod's declared Harmony patches on the server at runtime-ready (LifecyclePlan.Mod).
+        // The runner's session checked AcceptanceMod's declared Harmony patches on the server at runtime-ready (LifecyclePlan.Mod).
         report.Step("no marker at either site before the mod acts", () => { RequireServerMarkers(server, plan.DrySite, 0); RequireServerMarkers(server, plan.WetSite, 0); });
-        report.Step("the mod marks the dry site", () => server.Execute(Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
-        report.Step("the mod refuses the wet site", () => server.Execute(Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));
+        report.Step("the mod marks the dry site", () => server.Execute(Mark(plan.DrySite)).RequireLine("OK: marked ", "AcceptanceMod did not mark the dry site"));
+        report.Step("the mod refuses the wet site", () => server.Execute(Mark(plan.WetSite)).RequireLine("REFUSED: ", "AcceptanceMod did not refuse the wet site"));
         report.Step("server: one marker at the dry site, none at the wet site", () => { RequireServerMarkers(server, plan.DrySite, 1); RequireServerMarkers(server, plan.WetSite, 0); });
 
         // The client rounds are the toolkit's (ClientRounds): join, protect, arrive, then this mod's measurement; between
@@ -69,44 +69,7 @@ public static class DrySiteScenario
                 () => { RequireServerMarkers(round.Server, plan.DrySite, 1); RequireServerMarkers(round.Server, plan.WetSite, 0); }));
     }
 
-    /// <summary>
-    /// The toolkit runner's options for MyMod: the plan's rules, MyMod's declaration (<see cref="LifecyclePlan.Mod"/>) and
-    /// provenance, with <paramref name="scenario"/> as the scenario (<see cref="Run(GameSession, LifecyclePlan)"/> by default).
-    /// The console runner (Program.cs) and the xUnit session fixture (MyMod.IntegrationTests' <c>MyModSession</c>) use the same options.
-    /// </summary>
-    public static PinnedServerRunOptions<LifecyclePlan> RunnerOptions(Func<GameSession, LifecyclePlan, Task>? scenario = null) => new()
-    {
-        Name = "mymod-system-test",
-        ReadPlan = LifecyclePlan.ReadValidated,
-        // The session capability and token variable MyMod's test adapter serves, and its Harmony patches, which the session
-        // checks on the server before any scenario step.
-        Mod = LifecyclePlan.Mod,
-        CheckPlan = plan =>
-        {
-            if (plan.Client == null && !plan.ServerOnly)
-                throw new ArgumentException($"A run looks from a client: add the client section, or use the {LifecyclePlan.ServerScenario} scenario for the server half alone.");
-            // A session's plan is bound to its prepared actors in memory; the plan's rules apply to the bound plan.
-            LifecyclePlan.Validated(plan);
-        },
-        Provenance = (plan, provenance) =>
-        {
-            provenance["clientMode"] = plan.Client?.Mode ?? "none";
-            provenance["humanReview"] = plan.Review.Enabled ? "requested" : "not requested";
-        },
-        Scenario = scenario ?? Run,
-    };
-
-    /// <summary>The runner's scenario: the server half alone (<see cref="DrySiteServerScenario"/>), or the whole scenario with its client.</summary>
-    public static Task Run(GameSession session, LifecyclePlan plan)
-    {
-        var server = session.Server!;
-        // The client's logs are scanned with the server's at teardown, after the scenario stops the client, and also after a failed startup.
-        if (plan.ServerOnly) DrySiteServerScenario.Run(plan, server.Game, server.Restart, session.Report);
-        else Run(plan, server.Game, server, () => session.OpenClient(plan.Client!), session.Report, session.Output, session.Cancellation);
-        return Task.CompletedTask;
-    }
-
-    public static string Mark(Site site) => string.Create(CultureInfo.InvariantCulture, $"mymod_mark {site.X} {site.Z}");
+    public static string Mark(Site site) => string.Create(CultureInfo.InvariantCulture, $"acceptancemod_mark {site.X} {site.Z}");
 
     private static readonly Regex ZdoLine = new(@"^ZDO (\S+) id=\S+ pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+) ", RegexOptions.CultureInvariant);
     private static readonly Regex ZdoSummary = new(@"^OK: ZDOS_AT .* objects=(\d+)$", RegexOptions.CultureInvariant);

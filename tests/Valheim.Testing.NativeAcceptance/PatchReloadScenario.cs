@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
 namespace Valheim.Testing.NativeAcceptance;
@@ -22,8 +21,8 @@ public sealed class PatchReloadSettings
     /// <summary>The probe built with <c>-p:ProbeRevision=B</c>.</summary>
     public string RevisionB { get; set; } = "";
     /// <summary>
-    /// A control run: <see cref="RevisionA"/> is the <c>-p:ProbeUnpatch=Other</c> build, whose unload also removes MyMod's
-    /// patches. The check that other owners' patches are unchanged after the reload must then fail, naming MyMod's patch.
+    /// A control run: <see cref="RevisionA"/> is the <c>-p:ProbeUnpatch=Other</c> build, whose unload also removes AcceptanceMod's
+    /// patches. The check that other owners' patches are unchanged after the reload must then fail, naming AcceptanceMod's patch.
     /// </summary>
     public bool ExpectOthersRemoved { get; set; }
     /// <summary>How long ScriptEngine may take to load, replace or unload the script.</summary>
@@ -45,23 +44,23 @@ public sealed class PatchReloadSettings
 
 /// <summary>
 /// An adapter's unload leaves other owners' Harmony patches in place (#30), shown with ScriptEngine, the reload path the toolkit
-/// documents for a test adapter. The PatchReload probe patches <c>Terminal::InitTerminal</c>, the method MyMod patches, under its
+/// documents for a test adapter. The PatchReload probe patches <c>Terminal::InitTerminal</c>, the method AcceptanceMod patches, under its
 /// own Harmony ID, and removes only its own patches when unloaded.
 /// <list type="number">
-/// <item>The scripts folder is empty, MyMod's declared patch is applied and the probe has none.</item>
-/// <item>Revision A is copied in; once the pins show it loaded, the census shows exactly its postfix beside MyMod's.</item>
+/// <item>The scripts folder is empty, AcceptanceMod's declared patch is applied and the probe has none.</item>
+/// <item>Revision A is copied in; once the pins show it loaded, the census shows exactly its postfix beside AcceptanceMod's.</item>
 /// <item>Revision B replaces it (ScriptEngine unloads A, then loads B); the census shows exactly B's postfix.</item>
 /// <item>The file is removed; once the pins show the probe gone, the census shows no probe patch.</item>
 /// </list>
 /// After each change, every other owner's patches on those methods are exactly as before (<see cref="HarmonyCensus.OthersChanged"/>)
-/// and MyMod's declared patch is applied. In a control run (<see cref="PatchReloadSettings.ExpectOthersRemoved"/>) A's unload also
-/// removes MyMod's patches, and the check after the reload must fail naming them; the run ends there.
+/// and AcceptanceMod's declared patch is applied. In a control run (<see cref="PatchReloadSettings.ExpectOthersRemoved"/>) A's unload also
+/// removes AcceptanceMod's patches, and the check after the reload must fail naming them; the run ends there.
 /// Each census is written to <c>patch-reload-{stage}.txt</c>. A run on this machine only: the scenario writes into the runtime copy.
 /// </summary>
 public static class PatchReloadScenario
 {
-    public const string Probe = "example.mymod.probe.patchreload";
-    private const string ProbeFile = "MyMod.Probe.PatchReload.dll";
+    public const string Probe = "valheimtesting.acceptancemod.probe.patchreload";
+    private const string ProbeFile = "AcceptanceMod.Probe.PatchReload.dll";
 
     public static void Run(AcceptancePlan plan, GameActor server, string runtimeDirectory, string output, ScenarioReport report, CancellationToken cancellation)
     {
@@ -72,7 +71,7 @@ public static class PatchReloadScenario
         string Pins(string md5OrAbsent) => StrictExpectations.WithPlugin(plan.ExpectCommand, Probe, md5OrAbsent);
         report.Provenance["patchReloadA"] = FileHash.Md5(settings.RevisionA);
         report.Provenance["patchReloadB"] = FileHash.Md5(settings.RevisionB);
-        // The whole census, not one owner's methods: once a control removes MyMod's patches, a census filtered to MyMod lists no
+        // The whole census, not one owner's methods: once a control removes AcceptanceMod's patches, a census filtered to AcceptanceMod lists no
         // method at all, and the probe's own patch on the same method would vanish from it too (run-prc2, 30 Sep).
         HarmonyCensus Census(string stage)
         {
@@ -119,7 +118,7 @@ public static class PatchReloadScenario
                     var own = census.Patches.Where(p => p.Owner == Probe).ToArray();
                     bool done = revision == null ? own.Length == 0
                         : own.Length == 1 && own[0].Kind == "postfix" && own[0].Method.StartsWith("Terminal::InitTerminal", StringComparison.Ordinal) &&
-                          (own[0].Patch ?? "").StartsWith($"MyMod.Probes.PatchReload.{revision}::Postfix", StringComparison.Ordinal);
+                          (own[0].Patch ?? "").StartsWith($"AcceptanceMod.Probes.PatchReload.{revision}::Postfix", StringComparison.Ordinal);
                     if (done) return census;
                     last = $"the probe's patches are [{string.Join("; ", own.Select(p => p.ToString()))}], " + (revision == null ? "not none" : $"not one postfix of {revision} on Terminal::InitTerminal");
                 }
@@ -136,7 +135,7 @@ public static class PatchReloadScenario
         }
 
         HarmonyCensus before = null!;
-        report.Step("patch reload: the scripts folder is empty, MyMod's patch is applied and the probe has none", () =>
+        report.Step("patch reload: the scripts folder is empty, AcceptanceMod's patch is applied and the probe has none", () =>
         {
             if (!Directory.Exists(scripts) || Directory.EnumerateFileSystemEntries(scripts).Any())
                 throw new InvalidOperationException("ScriptEngine's folder must exist and be empty: a reload affects every script. " + scripts);
@@ -145,7 +144,7 @@ public static class PatchReloadScenario
             before.Check(AcceptancePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied();
             if (before.Patches.Any(p => p.Owner == Probe)) throw new InvalidOperationException("The probe is patched before it was installed.");
         });
-        report.Step("patch reload: revision A loads and patches Terminal::InitTerminal beside MyMod",
+        report.Step("patch reload: revision A loads and patches Terminal::InitTerminal beside AcceptanceMod",
             () => Change(() => ExtensionReload.Install(settings.RevisionA, deployed), report.Provenance["patchReloadA"], "a-loaded", "RevisionA"));
         report.Step("patch reload: other owners' patches unchanged after A loaded", () => RequireOthersUnchanged(before, "a-others"));
         report.Step("patch reload: revision B replaces A (A unloaded, B patched once)",
@@ -155,7 +154,7 @@ public static class PatchReloadScenario
         {
             var control = new ControlPlugin("unpatch-other-reload", Probe, OnServer: true, AcceptancePlan.ServerScenario, afterReload, "removed: " + AcceptancePlan.ModPlugin + " ");
             ControlPlugins.ExpectFailure(report, control, () => RequireOthersUnchanged(before, "b-others"));
-            return; // MyMod's patch is gone: the rest would only repeat it.
+            return; // AcceptanceMod's patch is gone: the rest would only repeat it.
         }
         report.Step(afterReload, () => RequireOthersUnchanged(before, "b-others"));
         report.Step("patch reload: removing the script unloads B", () => Change(() => File.Delete(deployed), "absent", "removed", null));

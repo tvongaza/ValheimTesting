@@ -1,5 +1,4 @@
-using MyMod.IntegrationTests;
-using MyMod.SystemTests;
+using ExampleMod.Tests;
 using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Xunit;

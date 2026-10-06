@@ -2,18 +2,18 @@ using System.IO;
 using BepInEx.Configuration;
 using HarmonyLib;
 
-namespace MyMod;
+namespace AcceptanceMod;
 
 /// <summary>
 /// One config entry the server decides for every client, synced with the game's routed RPCs and no library. The server
-/// sends its value to each client that joins and to everyone when it changes (<c>mymod_greeting &lt;word&gt;</c> on the
+/// sends its value to each client that joins and to everyone when it changes (<c>acceptancemod_greeting &lt;word&gt;</c> on the
 /// server, as an admin would); a client uses the server's value while joined without writing it to its own config file,
-/// and starts its next session from its file again. A client without MyMod ignores the RPC: the game drops a routed RPC
-/// that nobody registered. MyMod only logs the value; a real mod would use it.
+/// and starts its next session from its file again. A client without AcceptanceMod ignores the RPC: the game drops a routed RPC
+/// that nobody registered. AcceptanceMod only logs the value; a real mod would use it.
 /// </summary>
 internal static class SyncedGreeting
 {
-    public const string Rpc = "MyMod_Greeting";
+    public const string Rpc = "AcceptanceMod_Greeting";
     public const string Section = "Server", Key = "Greeting";
     private static ConfigFile _file = null!;
     private static ConfigEntry<string> _entry = null!;

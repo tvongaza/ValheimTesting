@@ -43,10 +43,10 @@ Run("dotnet", "build", Solution("examples", new[] { "examples", "tools" }
 foreach (string script in Directory.GetFiles(Path.Combine(root, "scripts"), "*.cs").Order(StringComparer.Ordinal)
     .Where(script => Path.GetFileName(script) != "validate.cs"))
     Run("dotnet", "build", script);
-// The full-life-cycle example's external projects; its game-side mod and adapter need a game install and build elsewhere.
-// The native session tests (trait Category=Native) launch the game when a private session.json sits beside their project
-// (the example's skip without one, the native acceptance suite's fail), so validation leaves them out.
-Test("examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj", "--filter", "Category!=Native");
+// The full-life-cycle example's test project; its game-side mod and adapter (and the suite's) need a game install and build
+// elsewhere. The native session tests (trait Category=Native) launch the game when a private session.json sits beside their
+// project (the example's skip without one, the native acceptance suite's fail), so validation leaves them out.
+Test("examples/FullLifecycle/ExampleMod.Tests/ExampleMod.Tests.csproj", "--filter", "Category!=Native");
 // The native acceptance suite's tests against scripted fakes.
 Test("tests/Valheim.Testing.NativeAcceptance.Tests/Valheim.Testing.NativeAcceptance.Tests.csproj", "--filter", "Category!=Native");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");

@@ -1,6 +1,4 @@
 using System.Text.Json;
-using MyMod.IntegrationTests;
-using MyMod.SystemTests;
 using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
@@ -38,7 +36,7 @@ public sealed class OwnershipHandoffTests
 
     [Fact] public void ACompleteReadingNamesOneExpectedOwnerAndOneLocalVerdict()
     {
-        var reading = Data("""{"source":"mymod-marker-owner","complete":true,"owner":"101","self":"202","ownedHere":false,"instance":true}""");
+        var reading = Data("""{"source":"acceptancemod-marker-owner","complete":true,"owner":"101","self":"202","ownedHere":false,"instance":true}""");
         OwnershipHandoffScenario.RequireOwnerReading(reading, "101", ownedHere: false);
         Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.RequireOwnerReading(reading, "202", ownedHere: false));
         Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.RequireOwnerReading(reading, "101", ownedHere: true));
@@ -46,10 +44,10 @@ public sealed class OwnershipHandoffTests
 
     [Theory]
     [InlineData("{}")]
-    [InlineData("{\"source\":\"mymod-marker-owner\",\"complete\":false,\"owner\":\"101\",\"ownedHere\":false,\"instance\":true}")]
-    [InlineData("{\"source\":\"mymod-marker-owner\",\"complete\":true,\"ownedHere\":false,\"instance\":true}")]
-    [InlineData("{\"source\":\"mymod-marker-owner\",\"complete\":true,\"owner\":\"101\",\"instance\":true}")]
-    [InlineData("{\"source\":\"mymod-marker-owner\",\"complete\":true,\"owner\":\"101\",\"ownedHere\":false,\"instance\":false}")]
+    [InlineData("{\"source\":\"acceptancemod-marker-owner\",\"complete\":false,\"owner\":\"101\",\"ownedHere\":false,\"instance\":true}")]
+    [InlineData("{\"source\":\"acceptancemod-marker-owner\",\"complete\":true,\"ownedHere\":false,\"instance\":true}")]
+    [InlineData("{\"source\":\"acceptancemod-marker-owner\",\"complete\":true,\"owner\":\"101\",\"instance\":true}")]
+    [InlineData("{\"source\":\"acceptancemod-marker-owner\",\"complete\":true,\"owner\":\"101\",\"ownedHere\":false,\"instance\":false}")]
     public void IncompleteOwnershipCannotPass(string json) =>
         Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.RequireOwnerReading(Data(json), "101", ownedHere: false));
 
@@ -122,8 +120,8 @@ public sealed class OwnershipHandoffTests
             })));
         else
         {
-            // The loaded ground is 0.5 m above the water but inside MyMod's 1.5 m clearance: the player stands on it, so the
-            // arrival succeeds, and the example's dry rule refuses it. (Deeper ground leaves the player swimming, which the
+            // The loaded ground is 0.5 m above the water but inside AcceptanceMod's 1.5 m clearance: the player stands on it, so the
+            // arrival succeeds, and the mod's dry rule refuses it. (Deeper ground leaves the player swimming, which the
             // arrival's support wait already fails as not settled.)
             first.OnPrefix("cli_extension valheim.world/terrain ", _ => ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.world", new
             {
@@ -191,7 +189,7 @@ public sealed class OwnershipHandoffTests
         Assert.True(second.Disposed);
         Assert.Equal(1, first.Count("cli_extension valheim.session/join"));
         Assert.Equal(1, second.Count("cli_extension valheim.session/join"));
-        Assert.Equal(wrongOwner ? 0 : 1, second.Count("cli_extension mymod.testing/marker-owner-claim"));
+        Assert.Equal(wrongOwner ? 0 : 1, second.Count("cli_extension acceptancemod.testing/marker-owner-claim"));
     }
 
     // CampaignWorld's client answers the arrival waits (ScriptedTransport.ArrivalSignals); this one also teleports itself.
@@ -201,9 +199,9 @@ public sealed class OwnershipHandoffTests
             {
                 source = "loaded-ground", complete = true, units = "metres", x = plan.Arrival.X, z = plan.Arrival.Z, height = plan.Arrival.Ground,
             })
-            .Extension("mymod.testing", "marker-owner-claim", _ => new
+            .Extension("acceptancemod.testing", "marker-owner-claim", _ => new
             {
-                source = "mymod-marker-owner", complete = true, id = "1:2", owner = "101", self = "101", ownedHere = true, instance = true,
+                source = "acceptancemod-marker-owner", complete = true, id = "1:2", owner = "101", self = "101", ownedHere = true, instance = true,
             }, readOnly: false);
 
     private static ScriptedTransport ReadySecond(AcceptancePlan plan, bool wrongOwner, float loadedOffset = 0)
@@ -238,23 +236,23 @@ public sealed class OwnershipHandoffTests
             {
                 source = "loaded-ground", complete = true, units = "metres", x = plan.SecondArrival!.X, z = plan.SecondArrival.Z, height = plan.SecondArrival.Ground + loadedOffset,
             })
-            .Extension("mymod.testing", "markers", _ => new
+            .Extension("acceptancemod.testing", "markers", _ => new
             {
-                source = "mymod-markers", complete = true,
+                source = "acceptancemod-markers", complete = true,
                 markers = new[] { new { x = plan.DrySite.X, z = plan.DrySite.Z, label = CampaignSteps.DryLabel, instance = true } },
             })
-            .Extension("mymod.testing", "marker-owner-wait", _ => new
+            .Extension("acceptancemod.testing", "marker-owner-wait", _ => new
             {
-                source = "mymod-marker-owner", complete = true, owner = wrongOwner ? "102" : "101", self = "202", ownedHere = false, instance = true,
+                source = "acceptancemod-marker-owner", complete = true, owner = wrongOwner ? "102" : "101", self = "202", ownedHere = false, instance = true,
             })
-            .Extension("mymod.testing", "marker-owner-claim", _ =>
+            .Extension("acceptancemod.testing", "marker-owner-claim", _ =>
             {
                 claimed = true;
-                return new { source = "mymod-marker-owner", complete = true, owner = "202", self = "202", ownedHere = true, instance = true };
+                return new { source = "acceptancemod-marker-owner", complete = true, owner = "202", self = "202", ownedHere = true, instance = true };
             }, readOnly: false)
-            .Extension("mymod.testing", "marker-owner", _ => new
+            .Extension("acceptancemod.testing", "marker-owner", _ => new
             {
-                source = "mymod-marker-owner", complete = true, owner = claimed ? "202" : "101", self = "202", ownedHere = claimed, instance = true,
+                source = "acceptancemod-marker-owner", complete = true, owner = claimed ? "202" : "101", self = "202", ownedHere = claimed, instance = true,
             });
     }
 
@@ -265,13 +263,13 @@ public sealed class OwnershipHandoffTests
         .On("cli_peers", _ => world.Leaves == 0
             ? ScriptedTransport.Ok("OK: 2 peer(s)", "PEER 1 character A", "PEER 2 character B")
             : ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character B"))
-        .Extension("mymod.testing", "marker-owner-wait", _ => new
+        .Extension("acceptancemod.testing", "marker-owner-wait", _ => new
         {
-            source = "mymod-marker-owner", complete = true, id = "1:2", owner = Owner(), self = "99", ownedHere = false, instance = false,
+            source = "acceptancemod-marker-owner", complete = true, id = "1:2", owner = Owner(), self = "99", ownedHere = false, instance = false,
         })
-        .Extension("mymod.testing", "marker-owner", _ => new
+        .Extension("acceptancemod.testing", "marker-owner", _ => new
         {
-            source = "mymod-marker-owner", complete = true, id = "1:2", owner = Owner(), self = "99", ownedHere = false, instance = false,
+            source = "acceptancemod-marker-owner", complete = true, id = "1:2", owner = Owner(), self = "99", ownedHere = false, instance = false,
         });
     }
 

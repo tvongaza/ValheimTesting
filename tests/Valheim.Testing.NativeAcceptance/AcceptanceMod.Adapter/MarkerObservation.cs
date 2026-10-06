@@ -5,17 +5,17 @@ using UnityEngine;
 using Valheim.Testing.Adapter;
 using valheimCLI.Extensions;
 
-namespace MyMod.TestAdapter;
+namespace AcceptanceMod.Adapter;
 
 /// <summary>
 /// The mod's own observation, <c>markers &lt;x&gt; &lt;z&gt; [radius]</c>: the markers (<c>wood_pole2</c> saved objects)
-/// this process knows within <c>radius</c> metres (default 1.5, at most 64) of a point, each with the label MyMod saves on
-/// it (<c>mymod_label</c>) and whether it has an instance here. It reads saved data only, through the adapter's
-/// <see cref="SavedObjects.InZone"/>, never MyMod's types, so it also runs where MyMod is absent. Read-only.
+/// this process knows within <c>radius</c> metres (default 1.5, at most 64) of a point, each with the label AcceptanceMod saves on
+/// it (<c>acceptancemod_label</c>) and whether it has an instance here. It reads saved data only, through the adapter's
+/// <see cref="SavedObjects.InZone"/>, never AcceptanceMod's types, so it also runs where AcceptanceMod is absent. Read-only.
 /// </summary>
 internal static class MarkerObservation
 {
-    public const string Source = "mymod-markers", Marker = "wood_pole2", LabelKey = "mymod_label";
+    public const string Source = "acceptancemod-markers", Marker = "wood_pole2", LabelKey = "acceptancemod_label";
     public const float MaxRadius = 64f;
 
     public static ExtensionCommand Command() =>

@@ -7,23 +7,23 @@ using UnityEngine;
 using valheimCLI;
 using valheimCLI.Extensions;
 
-namespace MyMod.Controls.FieldOnlyState;
+namespace AcceptanceMod.Controls.FieldOnlyState;
 
 /// <summary>
-/// Negative control for the zone cycle (#35): a value kept only in a component field on MyMod's marker, the mistake the
+/// Negative control for the zone cycle (#35): a value kept only in a component field on AcceptanceMod's marker, the mistake the
 /// zone cycle exists to catch. When the player leaves the area the game destroys the marker's instance, and on return it
-/// creates a new one from the saved data, so the field starts empty again (MyMod's own label is saved with the object and
-/// comes back). Two client extension commands under <c>mymodcontrol.fieldstate</c>: <c>set &lt;x&gt; &lt;z&gt;
+/// creates a new one from the saved data, so the field starts empty again (AcceptanceMod's own label is saved with the object and
+/// comes back). Two client extension commands under <c>acceptancemodcontrol.fieldstate</c>: <c>set &lt;x&gt; &lt;z&gt;
 /// &lt;value&gt;</c> puts the value on the markers near a point, <c>read &lt;x&gt; &lt;z&gt;</c> reads it back. The
 /// lifecycle-world scenario, with <c>"expectFailure": "field-only-state"</c>, sets it before the zone cycle and requires it
 /// to be gone after. Install it on the client only.
 /// </summary>
-[BepInPlugin(Guid, "MyMod control: field-only state (ValheimTesting example)", "0.1.0")]
+[BepInPlugin(Guid, "AcceptanceMod control: field-only state (ValheimTesting acceptance suite)", "0.1.0")]
 [BepInDependency("valheimCLI.valheimCLI")]
 public sealed class Plugin : BaseUnityPlugin
 {
-    public const string Guid = "example.mymod.control.fieldonlystate";
-    public const string Extension = "mymodcontrol.fieldstate", Source = "field-only-state";
+    public const string Guid = "valheimtesting.acceptancemod.control.fieldonlystate";
+    public const string Extension = "acceptancemodcontrol.fieldstate", Source = "field-only-state";
     private const float Radius = 1.5f;
     private ExtensionRegistration? _registration;
 
@@ -80,7 +80,7 @@ public sealed class Plugin : BaseUnityPlugin
     {
         int hash = "wood_pole2".GetStableHashCode();
         var found = new List<GameObject>();
-        foreach (ZNetView view in UnityEngine.Object.FindObjectsOfType<ZNetView>())
+        foreach (ZNetView view in UnityEngine.Object.FindObjectsByType<ZNetView>(FindObjectsSortMode.None))
         {
             if (!view.IsValid() || view.GetZDO().GetPrefab() != hash) continue;
             Vector3 at = view.transform.position;

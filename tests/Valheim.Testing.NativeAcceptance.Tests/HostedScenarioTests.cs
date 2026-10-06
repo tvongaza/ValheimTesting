@@ -1,7 +1,5 @@
 using System.Text.Json;
 using System.Globalization;
-using MyMod.IntegrationTests;
-using MyMod.SystemTests;
 using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
@@ -13,13 +11,13 @@ namespace Valheim.Testing.NativeAcceptance.Tests;
 
 /// <summary>
 /// The hosted scenario on a session whose host is scripted (<see cref="FakeGameSession.Hosted"/>): one client that hosts the
-/// fixture world (placed in a temporary data directory), is its server and its client, runs MyMod's feature, and logs MyMod's
+/// fixture world (placed in a temporary data directory), is its server and its client, runs AcceptanceMod's feature, and logs AcceptanceMod's
 /// greeting handler as a host would. Nothing here starts Valheim.
 /// </summary>
 public sealed class HostedScenarioTests : IDisposable
 {
     private const string WorldUid = "4242", Name = "HostFixture";
-    private readonly string _root = Directory.CreateTempSubdirectory("mymod-hosted-").FullName;
+    private readonly string _root = Directory.CreateTempSubdirectory("acceptancemod-hosted-").FullName;
     private string Fixture => Path.Combine(_root, "fixture");
     private string Save => Path.Combine(_root, "client-data");
     private string Output => Path.Combine(_root, "out");
@@ -100,25 +98,25 @@ public sealed class HostedScenarioTests : IDisposable
                 return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
-            .Extension("mymod.testing", "harmony", _ => TestWorld.ModCensus())
-            .Extension("mymod.testing", "config", args => new
+            .Extension("acceptancemod.testing", "harmony", _ => TestWorld.ModCensus())
+            .Extension("acceptancemod.testing", "config", args => new
             {
                 source = "bepinex-config", complete = true, guid = Uri.UnescapeDataString(args[0]), section = "Server", key = "Greeting", server = true,
                 installed = true, found = true, type = "System.String", value = _greeting, defaultValue = "hello",
             })
-            .OnPrefix("mymod_mark ", command =>
+            .OnPrefix("acceptancemod_mark ", command =>
             {
                 var w = command.Split(' ');
                 float x = float.Parse(w[1], CultureInfo.InvariantCulture), z = float.Parse(w[2], CultureInfo.InvariantCulture);
                 if (x < 200) { _markers.Add((x, z)); return ScriptedTransport.Ok($"OK: marked {x} {z} ground=42.5"); }
                 return ScriptedTransport.Ok($"REFUSED: {x} {z} ground=22.0 below 31.5");
             })
-            .OnPrefix("mymod_greeting ", command =>
+            .OnPrefix("acceptancemod_greeting ", command =>
             {
                 _greetings++;
                 _greeting = command.Split(' ')[1];
                 // A broadcast runs its handler on the host itself, which logs it as the host.
-                if (_handlerLogs) File.AppendAllText(HostLog, $"[Info   :MyMod (ValheimTesting example)] Greeting \"{_greeting}\" received from 77 (host)\n");
+                if (_handlerLogs) File.AppendAllText(HostLog, $"[Info   :AcceptanceMod (ValheimTesting acceptance suite)] Greeting \"{_greeting}\" received from 77 (host)\n");
                 return ScriptedTransport.Ok("OK: greeting " + _greeting);
             })
             .OnPrefix("cli_zdos_at ", command =>
@@ -134,14 +132,14 @@ public sealed class HostedScenarioTests : IDisposable
 
     private async Task<ScenarioReport> Run(HostedPlan plan, string? hostLog)
     {
-        var report = new ScenarioReport("mymod-hosted-test");
+        var report = new ScenarioReport("acceptancemod-hosted-test");
         var host = Host();
         // The scripted host keeps its data in the temporary folder, as a real client keeps it in its user's own directory.
         using var data = new FakeClientDataDirectory(Save);
         // The run journals its copies of the fixture here, never in this machine's own ValheimTesting folder, which
         // valheim-test env status reads and a killed test would leave a run in.
         using var machine = new FakeDataRoot(Path.Combine(_root, "valheim-testing"));
-        // As the runner's host mode builds it: MyMod's declaration, so its Harmony patches are checked on the host.
+        // As the runner's host mode builds it: AcceptanceMod's declaration, so its Harmony patches are checked on the host.
         await using var session = FakeGameSession.Hosted(report, Output, plan.Client, (client, _, output) => ClientSession.Attach(client, output, host),
             hostLog: hostLog, mod: AcceptancePlan.Mod);
         try

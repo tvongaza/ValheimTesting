@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Valheim.Testing.Game;
@@ -7,14 +6,14 @@ using Valheim.Testing.GameSessions;
 namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// Two owned clients on different account hosts remain connected together. The example explicitly claims its marker
+/// Two owned clients on different account hosts remain connected together. The suite explicitly claims its marker
 /// on A, observes that B sees the same owner, closes A, then explicitly claims on B. This tests orchestration,
 /// identity and teardown; it does not assert that all vanilla ZDOs transfer automatically when a player walks away.
 /// Each transition is requested once. The adapter waits for owner-change notifications inside the game.
 /// </summary>
 public static class OwnershipHandoffScenario
 {
-    private const string OwnerSource = "mymod-marker-owner";
+    private const string OwnerSource = "acceptancemod-marker-owner";
 
     public static void Run(GameSession session, AcceptancePlan plan)
     {
@@ -39,7 +38,7 @@ public static class OwnershipHandoffScenario
             JoinAndArrive(session, plan.WorldUid, a!.Actor, first, plan.Arrival, "A");
             report.Step("A sees one labelled marker", () => CampaignSteps.RequireLabelledMarker(a.Actor, plan.DrySite));
             string aId = "";
-            report.Step("A explicitly claims the example marker once", () => aId = Claim(a.Actor, plan.DrySite));
+            report.Step("A explicitly claims the marker once", () => aId = Claim(a.Actor, plan.DrySite));
             report.Step("server observes A's owner-change notification", () => WaitForOwner(session.Server!.Game, plan.DrySite, aId, report, "server-owner-a"));
 
             report.Step("open pinned client B on its separate leased account", () => b = session.OpenClient(second, "client-b"));
@@ -59,7 +58,7 @@ public static class OwnershipHandoffScenario
                 if (a.Owned && a.Stopped == null) throw new InvalidOperationException("A's process stop was not established.");
             });
             string bId = "";
-            report.Step("B explicitly claims the example marker once", () => bId = Claim(b.Actor, plan.DrySite));
+            report.Step("B explicitly claims the marker once", () => bId = Claim(b.Actor, plan.DrySite));
             if (bId == aId) throw new InvalidOperationException("The two clients reported the same ZDO session ID.");
             report.Step("server observes B's owner-change notification", () => WaitForOwner(session.Server!.Game, plan.DrySite, bId, report, "server-owner-b"));
             report.Step("B still sees the marker and is its only owner", () =>

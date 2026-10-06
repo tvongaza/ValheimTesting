@@ -16,15 +16,15 @@
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
       "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
-      "example.mymod": "<md5 of MyMod.dll>",
-      "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+      "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+      "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
       "loader": "<InstallPins.Of(install).Loader>",
       "patchers": "<InstallPins.Of(install).Patchers>"
     },
-    "character": "mymodtester",
+    "character": "accepttester",
     "hostWorld": {
       "world": {
         "source": "<full path of the host fixture world folder>",

@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
     A negative control for the native campaign, never part of a normal runtime: a Harmony patch on a method the game does not have (issues #26, #30). Install it on the server of a lifecycle-world run whose plan says "expectFailure": "missing-harmony-target".
-    It compiles against your game install like MyMod (-p:ValheimPath=), never in this repository or its CI.
+    It compiles against your game install like AcceptanceMod (-p:ValheimPath=), never in this repository or its CI.
   -->
   <Import Project="../../../../tools/game-references/Valheim.GameReferences.props" />
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
     <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
-    <AssemblyName>MyMod.Control.MissingHarmonyTarget</AssemblyName><Version>0.1.0</Version>
+    <AssemblyName>AcceptanceMod.Control.MissingHarmonyTarget</AssemblyName><Version>0.1.0</Version>
   </PropertyGroup>
   <Import Project="../../../../tools/game-references/Valheim.GameReferences.targets" />
 </Project>

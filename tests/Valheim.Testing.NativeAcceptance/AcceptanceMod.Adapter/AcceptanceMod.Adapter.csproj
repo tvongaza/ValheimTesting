@@ -8,7 +8,7 @@
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
     <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
-    <AssemblyName>MyMod.TestAdapter</AssemblyName><Version>0.1.0</Version>
+    <AssemblyName>AcceptanceMod.Adapter</AssemblyName><Version>0.1.0</Version>
     <UseValheimCli>true</UseValheimCli>
   </PropertyGroup>
   <ItemGroup>

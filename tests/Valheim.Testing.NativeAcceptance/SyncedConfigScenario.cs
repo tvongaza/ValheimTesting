@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
@@ -6,11 +5,11 @@ using Valheim.Testing.GameSessions;
 namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// <c>synced-config</c> (#20): MyMod's one server-synced entry, <c>[Server] Greeting</c>, on a client that runs MyMod. The
-/// adapter reads the live entry on each side (<see cref="SyncedConfig"/>); how MyMod syncs it is MyMod's business.
+/// <c>synced-config</c> (#20): AcceptanceMod's one server-synced entry, <c>[Server] Greeting</c>, on a client that runs AcceptanceMod. The
+/// adapter reads the live entry on each side (<see cref="SyncedConfig"/>); how AcceptanceMod syncs it is AcceptanceMod's business.
 /// <list type="number">
 /// <item>First round: server and client hold the same greeting after the join; the server's admin changes it once
-/// (<c>mymod_greeting</c>); the client reads the new value within the wait, woken by MyMod's "received" line in the owned
+/// (<c>acceptancemod_greeting</c>); the client reads the new value within the wait, woken by AcceptanceMod's "received" line in the owned
 /// client's live log (an attached client is re-read at the interval).</item>
 /// <item>Confirmed save, restart of only the owned server; after the rejoin both sides hold the new greeting: the server
 /// kept it in its config file, and the client, which starts each session from its own file, got it from the server.</item>
@@ -41,8 +40,8 @@ public static class SyncedConfigScenario
                 using var log = session.ClientLog(client) is string path ? new LogWait(path) : null;
                 round.Step($"the server's admin changes the greeting to {greeting}, once", () =>
                 {
-                    var reply = round.Server.Execute("mymod_greeting " + greeting);
-                    if (!reply.Output.Contains("OK: greeting " + greeting)) throw new InvalidOperationException("MyMod did not confirm the change: " + string.Join(" | ", reply.Output));
+                    var reply = round.Server.Execute("acceptancemod_greeting " + greeting);
+                    if (!reply.Output.Contains("OK: greeting " + greeting)) throw new InvalidOperationException("AcceptanceMod did not confirm the change: " + string.Join(" | ", reply.Output));
                 });
                 round.Step("the client reads the server's new greeting within the wait", () => round.Write("greeting-changed", Wait(session, plan, round.Client, greeting, timeout, log)));
             }
@@ -66,6 +65,6 @@ public static class SyncedConfigScenario
             received, session.Cancellation).GetAwaiter().GetResult();
     }
 
-    /// <summary>MyMod's log line when a client receives the server's greeting.</summary>
+    /// <summary>AcceptanceMod's log line when a client receives the server's greeting.</summary>
     public static Regex Received(string greeting) => new($"Greeting \"{Regex.Escape(greeting)}\" received from -?\\d+ \\(client\\)", RegexOptions.CultureInvariant);
 }

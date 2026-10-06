@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
@@ -26,7 +25,7 @@ public sealed class CaptureSettings
 public static class ReviewCaptureScenario
 {
     private static readonly string[] Ids = ["first", "second"];
-    /// <summary>The runner's own machine runs the client in this example, so its shell decides the host path rules.</summary>
+    /// <summary>The runner's own machine runs the client in this scenario, so its shell decides the host path rules.</summary>
     private static HostShell LocalShell => OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash;
 
     /// <summary>The two stills a run under <paramref name="output"/> captures, as the library validates and takes them.</summary>
@@ -37,7 +36,7 @@ public static class ReviewCaptureScenario
         return new ReviewCapturePlan(id,
             new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
             capture.Weather, capture.TimeOfDay, capture.CameraDistance, capture.CameraHeight,
-            "mymod.testing", Path.Combine(output, "capture-host-" + id),
+            "acceptancemod.testing", Path.Combine(output, "capture-host-" + id),
             Path.Combine(output, "review-" + id), plan.WorldUid, capture.GameBuild,
             client.Pins, capture.MistOff, capture.ClutterOff, capture.Supersize, capture.CameraAzimuthDegrees);
     });
@@ -55,7 +54,7 @@ public static class ReviewCaptureScenario
     public static void Run(GameSession session, AcceptancePlan plan)
     {
         if ((session.CampaignClients.Count != 0))
-            throw new NotSupportedException("This example captures on the runner's local client. A campaign client needs its host (session.ClientHost) passed to ReviewCapture.");
+            throw new NotSupportedException("This scenario captures on the runner's local client. A campaign client needs its host (session.ClientHost) passed to ReviewCapture.");
         var client = plan.Client!;
         // The run's own directories, before the client launches: an output path with a space is refused here, not mid-round.
         foreach (var shot in Shots(plan, session.Output)) ReviewCapture.Validate(shot, LocalShell.Kind);

@@ -407,7 +407,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var error = Assert.Throws<ArgumentException>(() => RegressionInputs.Read(sample));
         Assert.DoesNotContain("retired environment manifest", error.Message);
         var inputs = ClientPlanFile.Read<RegressionInputs>(sample);
-        Assert.Equal("mymod-mark", inputs.Name);
+        Assert.Equal("examplemod-mark", inputs.Name);
         Assert.Equal(["parent", "candidate"], inputs.Mod.Arms.Keys);
         Assert.NotNull(inputs.Cli.Manifest); // a regression.json must name cli.manifest (#296)
     }

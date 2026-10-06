@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The native acceptance suite's mod: a BepInEx plugin. Its decision is ModWithTests' DrySiteRule, compiled from that same file.
+    It compiles against YOUR game install, never in this repository or its CI: pass -p:ValheimPath=<the game folder>
+    or set VALHEIM_PATH. The references come from tools/game-references; a mod keeps its own copy of those two files.
+  -->
+  <Import Project="../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>AcceptanceMod</AssemblyName><Version>0.1.0</Version>
+    <!-- The version handshake's net version (VersionHandshake). Build a mismatched AcceptanceMod for the refused-join scenario
+         with -p:AcceptanceModNetVersion=2 (into another output folder); both sides of a join must agree on it. -->
+    <AcceptanceModNetVersion Condition="'$(AcceptanceModNetVersion)' == ''">1</AcceptanceModNetVersion>
+    <!-- Content-census controls omit either the recipe or the status effect in a separate build. -->
+    <DefineConstants Condition="'$(AcceptanceModOmit)' == 'recipe'">$(DefineConstants);ACCEPTANCEMOD_OMIT_RECIPE</DefineConstants>
+    <DefineConstants Condition="'$(AcceptanceModOmit)' == 'status-effect'">$(DefineConstants);ACCEPTANCEMOD_OMIT_STATUS_EFFECT</DefineConstants>
+  </PropertyGroup>
+  <Target Name="CheckAcceptanceModOmit" BeforeTargets="BeforeBuild" Condition="'$(AcceptanceModOmit)' != '' And '$(AcceptanceModOmit)' != 'recipe' And '$(AcceptanceModOmit)' != 'status-effect'">
+    <Error Text="AcceptanceModOmit is 'recipe', 'status-effect' or unset, not '$(AcceptanceModOmit)'." />
+  </Target>
+  <ItemGroup><Compile Include="../../../examples/ModWithTests/MyMod/DrySiteRule.cs" Link="DrySiteRule.cs" /></ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"><_Parameter1>AcceptanceModNetVersion</_Parameter1><_Parameter2>$(AcceptanceModNetVersion)</_Parameter2></AssemblyAttribute>
+  </ItemGroup>
+  <Import Project="../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>

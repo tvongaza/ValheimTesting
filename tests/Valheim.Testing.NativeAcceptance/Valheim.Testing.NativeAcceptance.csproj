@@ -1,13 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    This repository's own native acceptance suite: the toolkit's scenarios, controls and probes, run on the FullLifecycle
-    example's MyMod (its plan, scenario code and mod; see README.md). Not packed. A console runner like the example's: no game
-    assemblies, it drives the game through ValheimCLI. The control and probe plugins (Controls/, Probes/) build separately,
-    against a game install.
+    This repository's own native acceptance suite: the toolkit's scenarios, controls and probes, run on the suite's own mod,
+    AcceptanceMod, and its adapter (see README.md). Not packed. A console runner: no game assemblies, it drives the game through
+    ValheimCLI. The mod, its adapter and the control and probe plugins (AcceptanceMod/, AcceptanceMod.Adapter/, Controls/,
+    Probes/) build separately, against a game install.
   -->
   <PropertyGroup><OutputType>Exe</OutputType><RollForward>Major</RollForward><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable></PropertyGroup>
-  <PropertyGroup><DefaultItemExcludes>$(DefaultItemExcludes);Controls/**;Probes/**</DefaultItemExcludes></PropertyGroup>
-  <ItemGroup><ProjectReference Include="../../examples/FullLifecycle/MyMod.SystemTests/MyMod.SystemTests.csproj" /></ItemGroup>
-  <!-- MyMod's declared content for the content-census scenario, shipped inside the runner. -->
+  <PropertyGroup><DefaultItemExcludes>$(DefaultItemExcludes);AcceptanceMod/**;AcceptanceMod.Adapter/**;Controls/**;Probes/**</DefaultItemExcludes></PropertyGroup>
+  <!-- Sessions (GameSession, ServerActor, PinnedServerRun) are Valheim.Testing.GameSessions'; it brings Valheim.Testing.Game. -->
+  <ItemGroup><ProjectReference Include="../../src/Valheim.Testing.GameSessions/Valheim.Testing.GameSessions.csproj" /></ItemGroup>
+  <!-- AcceptanceMod's declared content for the content-census scenario, shipped inside the runner. -->
   <ItemGroup><EmbeddedResource Include="content-expectations.json" LogicalName="Valheim.Testing.NativeAcceptance.content-expectations.json" /></ItemGroup>
 </Project>

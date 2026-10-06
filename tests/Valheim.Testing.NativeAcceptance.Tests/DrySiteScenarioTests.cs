@@ -1,10 +1,9 @@
 using System.Text.Json;
-using MyMod.SystemTests;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
 /// <summary>
 /// The scenario's own logic against scripted game replies: what passes, what must fail, and that the client is always
@@ -12,7 +11,7 @@ namespace MyMod.IntegrationTests;
 /// </summary>
 public sealed class DrySiteScenarioTests : IDisposable
 {
-    private readonly string _output = Directory.CreateTempSubdirectory("mymod-integration-").FullName;
+    private readonly string _output = Directory.CreateTempSubdirectory("acceptancemod-integration-").FullName;
     private readonly TestWorld _world = new();
     private FakeOwnedProcess? _process;
     public void Dispose() => Directory.Delete(_output, recursive: true);
@@ -20,7 +19,7 @@ public sealed class DrySiteScenarioTests : IDisposable
     private ScenarioReport Run(LifecyclePlan plan, FakeOwnedProcess? process = null)
     {
         _process = process ?? new FakeOwnedProcess(7331);
-        var report = new ScenarioReport("mymod-system-test");
+        var report = new ScenarioReport("acceptancemod-system-test");
         var server = _world.Server();
         Func<ClientSession> open = plan.Client!.Owned
             ? () => ClientSession.Launch(plan.Client, _output, () => _process, () => _world.Client(plan), (_, _) => Task.CompletedTask)
@@ -77,9 +76,9 @@ public sealed class DrySiteScenarioTests : IDisposable
         Assert.Null(_world.ClientTransport); // Nothing after the failure ran, not even the client launch.
     }
 
-    // MyMod's declaration (what the runner's session checks at runtime-ready) is whole, pinned by the mod's plugin, and met
+    // AcceptanceMod's declaration (what the runner's session checks at runtime-ready) is whole, pinned by the mod's plugin, and met
     // by the census its adapter reports; with its patches gone the same check fails, naming the missing one.
-    [Fact] public void MyModsDeclarationIsMetByItsAdaptersCensusAndAMissingPatchFails()
+    [Fact] public void AcceptanceModsDeclarationIsMetByItsAdaptersCensusAndAMissingPatchFails()
     {
         var mod = LifecyclePlan.Mod;
         mod.Validate();
@@ -131,7 +130,7 @@ public sealed class DrySiteScenarioTests : IDisposable
     {
         var plan = _world.Plan(); plan.Client!.StartSeconds = 10;
         var process = new FakeOwnedProcess(7331);
-        var report = new ScenarioReport("mymod-system-test");
+        var report = new ScenarioReport("acceptancemod-system-test");
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
         var clock = System.Diagnostics.Stopwatch.StartNew();
         Assert.ThrowsAny<OperationCanceledException>(() => DrySiteScenario.Run(plan, _world.Server(), _world,
@@ -172,19 +171,8 @@ public sealed class DrySiteScenarioTests : IDisposable
         Assert.DoesNotContain(report.Steps, s => s.Name.Contains("review", StringComparison.OrdinalIgnoreCase));
     }
 
-    // The native session (MyModSession) has one client, the plan's client section, and is skipped here without session.json.
-    [Fact] public void TheNativeSessionsOneClientIsThePlansClientSection()
-    {
-        var plan = _world.Plan();
-        Assert.Same(plan.Client, Assert.Single(MyModSession.Clients(plan)).Value);
-        Assert.Equal("client", MyModSession.Clients(plan).Keys.Single());
-        plan.Client = null;
-        Assert.Contains("needs its client section", Assert.Throws<ArgumentException>(() => MyModSession.Clients(plan)).Message);
-        if (!File.Exists(MyModSession.Manifest)) Assert.Contains("No session.json", MyModSession.Missing);
-    }
-
-    // The example's plan runs its two scenarios; the toolkit's acceptance scenarios and their fields are the NativeAcceptance suite's.
-    [Fact] public void ThePlanRunsOnlyTheExamplesTwoScenarios()
+    // The base plan runs the two dry-site scenarios; the further scenarios and their fields are AcceptancePlan's.
+    [Fact] public void TheBasePlanRunsOnlyTheTwoDrySiteScenarios()
     {
         var plan = _world.Plan();
         Assert.Equal(new[] { LifecyclePlan.LifecycleScenario, LifecyclePlan.ServerScenario }, plan.Scenarios);

@@ -1,7 +1,5 @@
 using System.Globalization;
 using System.Text.Json;
-using MyMod.IntegrationTests;
-using MyMod.SystemTests;
 using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
@@ -15,7 +13,7 @@ namespace Valheim.Testing.NativeAcceptance.Tests;
 /// A scripted game for the native campaign's scenarios: an owned server whose saved objects, global keys and config
 /// survive only what a confirmed save kept (the config file is written at once), and clients that join it, move where the
 /// server teleports them, load and unload zones by distance, keep a character file in a temporary characters_local folder
-/// and run MyMod (or not). Switches plant each failure and each control. It models the contracts the scenarios rely on
+/// and run AcceptanceMod (or not). Switches plant each failure and each control. It models the contracts the scenarios rely on
 /// (replies, observations, their completeness), not Valheim. No game, Steam or network connection.
 /// </summary>
 internal sealed class CampaignWorld : IOwnedServer, IDisposable
@@ -24,7 +22,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         Md5Cli = "33333333333333333333333333333333", Md5Mismatched = "44444444444444444444444444444444", PlayFabId = "ENTITY42";
     public static readonly Site Dry = new() { X = 100, Z = -40, Ground = 42.5f }, Wet = new() { X = 400, Z = 300, Ground = 22f },
         Arrival = new() { X = 105, Z = -40, Ground = 42.3f }, Away = new() { X = 420, Z = -40, Ground = 36f };
-    public readonly string Root = Directory.CreateTempSubdirectory("mymod-campaign-").FullName;
+    public readonly string Root = Directory.CreateTempSubdirectory("acceptancemod-campaign-").FullName;
     public void MoveClient(float x, float y, float z) { _x = x; _y = y; _z = z; }
     public string Output => Path.Combine(Root, "out");
     public string Characters => Path.Combine(Root, "characters_local");
@@ -37,8 +35,8 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
     // The server's installed control and fixture state.
     public bool ControlMissingTarget, ControlPatchApplied, ControlPatchAllThrew, ControlWarningMissing, OtherPluginLookupWarning, ControlServerOnlyPrefab, OversizedRoom, NoDungeon, Crossplay, RefusalSucceeds;
     public string RefusalStatus = "ErrorVersion";
-    // The content census: MyMod built without its recipe (on both sides, as the control's build), an undeclared item of
-    // MyMod's, and a client that reports being the server.
+    // The content census: AcceptanceMod built without its recipe (on both sides, as the control's build), an undeclared item of
+    // AcceptanceMod's, and a client that reports being the server.
     public bool OmitRecipe, OmitStatusEffect, ExtraItem, ClientCensusSaysServer;
 
     private readonly List<(float X, float Z, string Label)> _markers = [], _savedMarkers = [];
@@ -76,9 +74,9 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         if (OtherPluginLookupWarning) lines.Add("[Warning:  HarmonyX] AccessTools.Field: Could not find field for type Terminal and name m_someOptionalField");
         if (ControlMissingTarget && !ControlPatchApplied && !ControlWarningMissing)
             // As the 1.0.16 dedicated server logged it (BepInEx 5.4.23.5, HarmonyX 2.9.0): one warning, no error line.
-            lines.Add("[Warning:  HarmonyX] AccessTools.DeclaredMethod: Could not find method for type Player and name MyModControlMethodThatDoesNotExist and parameters ");
+            lines.Add("[Warning:  HarmonyX] AccessTools.DeclaredMethod: Could not find method for type Player and name AcceptanceModControlMethodThatDoesNotExist and parameters ");
         // The control's line after PatchAll, there only if PatchAll returned.
-        if (ControlMissingTarget && !ControlPatchAllThrew) lines.Add("[Info   :MyMod control: missing Harmony target (ValheimTesting example)] MissingHarmonyTarget: PatchAll returned");
+        if (ControlMissingTarget && !ControlPatchAllThrew) lines.Add("[Info   :AcceptanceMod control: missing Harmony target (ValheimTesting acceptance suite)] MissingHarmonyTarget: PatchAll returned");
         lines.Add("[Info   :   BepInEx] Chainloader startup complete");
         if (Crossplay) lines.Add($"[Info   : Unity Log] Created PlayFab lobby with ID \"L1\", ConnectionString \"c\" and owned by \"{PlayFabId}\"");
         File.WriteAllLines(ServerLog, lines);
@@ -129,7 +127,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         return session;
     }
 
-    /// <summary>Runs <paramref name="plan"/>'s scenario from the example's table on a started session over this world.</summary>
+    /// <summary>Runs <paramref name="plan"/>'s scenario from the suite's table on a started session over this world.</summary>
     public void RunScenario(AcceptancePlan plan, ScenarioReport report, bool clientLog = false)
     {
         var session = Run(plan, report, clientLog);
@@ -148,22 +146,22 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
                 height = args[0] == "105" ? 42.3f : 42.4f,
             })
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
-            .OnPrefix("mymod_mark ", command =>
+            .OnPrefix("acceptancemod_mark ", command =>
             {
                 MarkCommands++;
                 var (x, z) = Coordinates(command, 1);
                 if (x < 200) { _markers.Add((x, z, CampaignSteps.DryLabel)); return ScriptedTransport.Ok($"OK: marked {x} {z} ground=42.5"); }
                 return ScriptedTransport.Ok($"REFUSED: {x} {z} ground=22.0 below 31.5");
             })
-            .OnPrefix("mymodcontrol_spawn ", command =>
+            .OnPrefix("acceptancemodcontrol_spawn ", command =>
             {
                 SpawnCommands++;
-                if (!ControlServerOnlyPrefab) return ScriptedTransport.Ok("Unknown command mymodcontrol_spawn");
+                if (!ControlServerOnlyPrefab) return ScriptedTransport.Ok("Unknown command acceptancemodcontrol_spawn");
                 var (x, z) = Coordinates(command, 1);
                 _controlObjects.Add((x, z));
                 return ScriptedTransport.Ok($"OK: spawned {ControlPlugins.ServerOnlyPrefabName} at {x} {z}");
             })
-            .OnPrefix("mymod_greeting ", command =>
+            .OnPrefix("acceptancemod_greeting ", command =>
             {
                 GreetingCommands++;
                 _serverGreeting = command.Split(' ')[1]; // Saved to the server's config file at once, as BepInEx does.
@@ -188,23 +186,23 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
             })
             .On("cli_multiplayer_identity", _ => ScriptedTransport.Ok(
                 $"OK: steamId=0, playFabLoginState=LoggedIn, playFabId={PlayFabId}, backend={(Crossplay ? "PlayFab" : "Steamworks")}, gameState=World, connectionStatus=Connected, isServer=True, isOpenServer=True, server=fake"))
-            .Extension("mymod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = true })
-            .Extension("mymod.testing", "harmony", args => args.Count == 1 && args[0] != AcceptancePlan.ModPlugin ? ControlCensus(args[0]) : TestWorld.ModCensus())
-            .Extension("mymod.testing", "globalkeys", _ => new { source = "global-keys", complete = true, server = true, keys = _keys.Order(StringComparer.Ordinal).ToArray() })
-            .Extension("mymod.testing", "globalkey", args =>
+            .Extension("acceptancemod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = true })
+            .Extension("acceptancemod.testing", "harmony", args => args.Count == 1 && args[0] != AcceptancePlan.ModPlugin ? ControlCensus(args[0]) : TestWorld.ModCensus())
+            .Extension("acceptancemod.testing", "globalkeys", _ => new { source = "global-keys", complete = true, server = true, keys = _keys.Order(StringComparer.Ordinal).ToArray() })
+            .Extension("acceptancemod.testing", "globalkey", args =>
             {
                 if (args[0] == "set") _keys.Add(args[1]); else _keys.RemoveAll(k => k == args[1] || k.StartsWith(args[1] + " ", StringComparison.Ordinal));
                 return new { source = "global-key-change", complete = true, action = args[0], name = args[1], value = (string?)null, keys = _keys.ToArray() };
             }, readOnly: false)
-            .Extension("mymod.testing", "config", args => Config(args, server: true, installed: true, _serverGreeting))
-            .Extension("mymod.testing", "dungeon-rooms", _ => Dungeons())
-            .Extension("mymod.testing", "content-census", args => ContentCensusReply(args, server: true));
+            .Extension("acceptancemod.testing", "config", args => Config(args, server: true, installed: true, _serverGreeting))
+            .Extension("acceptancemod.testing", "dungeon-rooms", _ => Dungeons())
+            .Extension("acceptancemod.testing", "content-census", args => ContentCensusReply(args, server: true));
         Servers.Add(transport);
         return transport.Actor("server", "cli_expect worlduid=" + WorldUid);
     }
 
     /// <summary>As an owned server's session: the scripted server's adapter reports whether it accepts game connections.</summary>
-    public void WaitUntilJoinable(GameActor server) => OwnedServerSession.WaitUntilJoinable(server, "mymod.testing/session", TimeSpan.FromSeconds(5));
+    public void WaitUntilJoinable(GameActor server) => OwnedServerSession.WaitUntilJoinable(server, "acceptancemod.testing/session", TimeSpan.FromSeconds(5));
 
     /// <summary>What <c>OwnedServerSession.Restart</c> does to the world: only saved objects and keys come back.</summary>
     public GameActor Restart()
@@ -222,7 +220,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
     };
 
-    /// <summary>A client; a refused one runs another MyMod build, so the server refuses its join.</summary>
+    /// <summary>A client; a refused one runs another AcceptanceMod build, so the server refuses its join.</summary>
     public ScriptedTransport Client(bool refused = false)
     {
         bool acknowledged = false;
@@ -275,42 +273,42 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
                 lines.Add($"OK: NEARBY_PREFABS radius=8.0 count={lines.Count}");
                 return ScriptedTransport.Ok([.. lines]);
             })
-            .Extension("mymod.testing", "zones", Zones)
-            .Extension("mymod.testing", "markers", args =>
+            .Extension("acceptancemod.testing", "zones", Zones)
+            .Extension("acceptancemod.testing", "markers", args =>
             {
                 float x = F(args[0]), z = F(args[1]), radius = F(args[2]);
                 var markers = _markers.Where(m => Near(m.X, m.Z, x, z, radius)).Select(m => new { x = m.X, y = 42.25f, z = m.Z, label = m.Label, instance = Loaded(m.X, m.Z) }).ToArray();
-                return new { source = "mymod-markers", complete = true, x, z, radius, markers };
+                return new { source = "acceptancemod-markers", complete = true, x, z, radius, markers };
             })
-            .Extension("mymodcontrol.fieldstate", "set", args =>
+            .Extension("acceptancemodcontrol.fieldstate", "set", args =>
             {
                 FieldSets++;
                 var markers = _markers.Where(m => Near(m.X, m.Z, F(args[0]), F(args[1]), 1.5f) && Loaded(m.X, m.Z)).ToArray();
                 if (markers.Length > 0) _field = args[2];
                 return new { source = "field-only-state", complete = true, markers = markers.Length, values = markers.Select(_ => _field).ToArray() };
             }, readOnly: false)
-            .Extension("mymodcontrol.fieldstate", "read", args =>
+            .Extension("acceptancemodcontrol.fieldstate", "read", args =>
             {
                 var markers = _markers.Where(m => Near(m.X, m.Z, F(args[0]), F(args[1]), 1.5f) && Loaded(m.X, m.Z)).ToArray();
                 return new { source = "field-only-state", complete = true, markers = markers.Length, values = markers.Select(_ => _field).ToArray() };
             })
-            .Extension("mymod.testing", "custom-data", args => !_joined ? new { source = "local-player-custom-data", complete = false } : (object)new
+            .Extension("acceptancemod.testing", "custom-data", args => !_joined ? new { source = "local-player-custom-data", complete = false } : (object)new
             {
                 source = "local-player-custom-data", complete = true, prefix = args.Count == 1 ? args[0] : null, character = "Tester", profileFile = "tester",
                 fileSource = CloudCharacter ? "Cloud" : "Local", profilePath = ProfileFile,
                 entries = _live.Where(e => args.Count == 0 || e.Key.StartsWith(args[0], StringComparison.Ordinal)).OrderBy(e => e.Key, StringComparer.Ordinal)
                     .Select(e => new { key = e.Key, value = e.Value }).ToArray(),
             })
-            .OnPrefix("mymod_note ", command =>
+            .OnPrefix("acceptancemod_note ", command =>
             {
-                if (!ClientHasMod) return ScriptedTransport.Ok("Unknown command mymod_note");
+                if (!ClientHasMod) return ScriptedTransport.Ok("Unknown command acceptancemod_note");
                 _live[LifecycleWorldScenario.NoteKey] = command.Split(' ')[1];
                 return ScriptedTransport.Ok("OK: note " + command.Split(' ')[1]);
             })
-            .Extension("mymod.testing", "globalkeys", _ => new { source = "global-keys", complete = true, server = false, keys = (_joined ? _keys : new List<string>()).Order(StringComparer.Ordinal).ToArray() })
-            .Extension("mymod.testing", "config", args => Config(args, server: false, installed: ClientHasMod, _clientGreeting))
-            .Extension("mymod.testing", "content-census", args => ContentCensusReply(args, server: false))
-            .Extension("mymod.testing", "unresolved-prefabs", args =>
+            .Extension("acceptancemod.testing", "globalkeys", _ => new { source = "global-keys", complete = true, server = false, keys = (_joined ? _keys : new List<string>()).Order(StringComparer.Ordinal).ToArray() })
+            .Extension("acceptancemod.testing", "config", args => Config(args, server: false, installed: ClientHasMod, _clientGreeting))
+            .Extension("acceptancemod.testing", "content-census", args => ContentCensusReply(args, server: false))
+            .Extension("acceptancemod.testing", "unresolved-prefabs", args =>
             {
                 float radius = F(args[0]);
                 var near = _controlObjects.Where(o => Near(o.X, o.Z, _x, _z, radius) && Loaded(o.X, o.Z)).ToArray();
@@ -326,7 +324,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
     {
         _joined = true;
         _live = new(_saved); // The character's custom data as its file holds it.
-        // A client starts from its own file; MyMod's sync then sends the server's value.
+        // A client starts from its own file; AcceptanceMod's sync then sends the server's value.
         _clientGreeting = "hello";
         if (ClientHasMod && !SyncBroken) Receive(_serverGreeting);
     }
@@ -348,7 +346,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
     private void Receive(string greeting)
     {
         _clientGreeting = greeting;
-        File.AppendAllText(ClientLog, $"[Info   :MyMod (ValheimTesting example)] Greeting \"{greeting}\" received from 1 (client)\n");
+        File.AppendAllText(ClientLog, $"[Info   :AcceptanceMod (ValheimTesting acceptance suite)] Greeting \"{greeting}\" received from 1 (client)\n");
     }
 
     // The client holds a zone within two rings of its player's zone (near 2, far 2), and nothing of it beyond four rings.
@@ -368,7 +366,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         return new { source = "zone-presence", complete = _joined, reference = new { x = PlayerZone.X, z = PlayerZone.Z }, simulation = new { near = 2, far = 2, classic = true }, zones };
     }
 
-    // The adapter's content census of a process with MyMod (or, on a client without it, of the game's content only).
+    // The adapter's content census of a process with AcceptanceMod (or, on a client without it, of the game's content only).
     private object ContentCensusReply(IReadOnlyList<string> args, bool server)
     {
         bool installed = server || ClientHasMod;
@@ -376,7 +374,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         object Reference(string name, int amount = 0) => new { name, lookup = "resolved", amount };
         var items = new List<object>();
         if (installed) items.Add(Entry(ContentCensusScenario.ItemName));
-        if (installed && ExtraItem) items.Add(Entry("MyMod_Extra"));
+        if (installed && ExtraItem) items.Add(Entry("AcceptanceMod_Extra"));
         object[] recipes = !installed || OmitRecipe ? [] :
         [
             new
@@ -418,8 +416,8 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         {
             new
             {
-                method = "Player::MyModControlMethodThatDoesNotExist()",
-                patches = new[] { new { owner, kind = "postfix", priority = 400, index = 0, before = Array.Empty<string>(), after = Array.Empty<string>(), patch = "MyMod.Controls.MissingHarmonyTarget.Plugin+PatchMissingMethod::Postfix()" } },
+                method = "Player::AcceptanceModControlMethodThatDoesNotExist()",
+                patches = new[] { new { owner, kind = "postfix", priority = 400, index = 0, before = Array.Empty<string>(), after = Array.Empty<string>(), patch = "AcceptanceMod.Controls.MissingHarmonyTarget.Plugin+PatchMissingMethod::Postfix()" } },
             },
         },
     };

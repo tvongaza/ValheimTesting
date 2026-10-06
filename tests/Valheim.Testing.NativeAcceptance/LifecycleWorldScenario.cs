@@ -1,4 +1,3 @@
-using MyMod.SystemTests;
 using System.Globalization;
 using System.Text.Json;
 using Valheim.Testing.Game;
@@ -7,16 +6,16 @@ using Valheim.Testing.GameSessions;
 namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// <c>lifecycle-world</c>: the dry-site rounds on an owned server with a client that runs MyMod and its adapter, plus the
+/// <c>lifecycle-world</c>: the dry-site rounds on an owned server with a client that runs AcceptanceMod and its adapter, plus the
 /// lifecycle events beyond a restart and the world state a mod depends on.
 /// <list type="number">
-/// <item>Server (MyMod's patches already checked by the runner's session, #30): no marker, the mod marks the dry site and refuses the wet one.</item>
-/// <item>First round, beside the marker: the client sees it with MyMod's saved label; a global key the fixture lacks is set
+/// <item>Server (AcceptanceMod's patches already checked by the runner's session, #30): no marker, the mod marks the dry site and refuses the wet one.</item>
+/// <item>First round, beside the marker: the client sees it with AcceptanceMod's saved label; a global key the fixture lacks is set
 /// on the server and the client lists the server's keys (#23); a vanilla dungeon's saved rooms lie in its location's zone
 /// (#24); the player leaves the area until the client unloads the site's zones and comes back, and the marker is there
 /// again with its label (#35 zone cycle).</item>
 /// <item>Confirmed save, restart of only the owned server: the server still has the marker.</item>
-/// <item>After the restart: the client sees the marker and still lists the key; MyMod writes this run's note on the
+/// <item>After the restart: the client sees the marker and still lists the key; AcceptanceMod writes this run's note on the
 /// player, the client logs out (the character file must be rewritten) and in again, and the note comes back (#35 logout).</item>
 /// </list>
 /// A control run (<c>expectFailure</c>) replaces one check by that check's expected failure and ends there:
@@ -25,7 +24,7 @@ namespace Valheim.Testing.NativeAcceptance;
 /// </summary>
 public static class LifecycleWorldScenario
 {
-    public const string NoteKey = "mymod.note";
+    public const string NoteKey = "acceptancemod.note";
 
     public static void Run(GameSession session, AcceptancePlan plan)
     {
@@ -45,7 +44,7 @@ public static class LifecycleWorldScenario
         };
         var logout = new LogoutCycle
         {
-            Capability = Capabilities.CustomData, KeyPrefix = "mymod.", Keys = [NoteKey], CharactersDirectory = plan.Logout!.CharactersDirectory,
+            Capability = Capabilities.CustomData, KeyPrefix = "acceptancemod.", Keys = [NoteKey], CharactersDirectory = plan.Logout!.CharactersDirectory,
             WriteTimeout = TimeSpan.FromSeconds(plan.Logout.WriteSeconds), RereadInterval = session.Interval,
         };
         string key = plan.GlobalKey!;
@@ -67,7 +66,7 @@ public static class LifecycleWorldScenario
     private static void First(GameSession session, AcceptancePlan plan, ClientRound round, ZoneCycle zoneCycle, string key, TimeSpan timeout)
     {
         var control = plan.Control;
-        round.Step("the marker carries MyMod's saved label on the client", () => CampaignSteps.RequireLabelledMarker(round.Client, plan.DrySite));
+        round.Step("the marker carries AcceptanceMod's saved label on the client", () => CampaignSteps.RequireLabelledMarker(round.Client, plan.DrySite));
 
         // #23: a known progression state, set once on the server and seen on the client.
         round.Step($"the fixture world does not have {key} yet", () =>
@@ -125,10 +124,10 @@ public static class LifecycleWorldScenario
         // #35: a value this run writes, so what comes back cannot be left from an earlier session.
         string note = CampaignSteps.RunWord("note");
         session.Report.Provenance["logoutNote"] = note;
-        round.Step("MyMod writes this run's note on the player's custom data", () =>
+        round.Step("AcceptanceMod writes this run's note on the player's custom data", () =>
         {
-            var reply = round.Client.Execute("mymod_note " + note);
-            if (!reply.Output.Contains("OK: note " + note)) throw new InvalidOperationException("MyMod did not confirm the note: " + string.Join(" | ", reply.Output));
+            var reply = round.Client.Execute("acceptancemod_note " + note);
+            if (!reply.Output.Contains("OK: note " + note)) throw new InvalidOperationException("AcceptanceMod did not confirm the note: " + string.Join(" | ", reply.Output));
         });
         if (control?.Name == ControlPlugins.SuppressedProfileSave)
         {

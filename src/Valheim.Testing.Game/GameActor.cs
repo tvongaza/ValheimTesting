@@ -43,7 +43,7 @@ public sealed record Capability(string Path, string Instance, bool ReadOnly, int
 /// The pin file comes from the test plan, not from the running game. After a world or plugin transition, verify the new
 /// expected pins and rediscover capabilities before another action. See the compiling
 /// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/ObserveCheck/ObserveCheck.cs">pinning example</see>
-/// and <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/MyMod.SystemTests/ServerFixture.cs">adapter observation</see>.
+/// and <see href="https://github.com/tvongaza/ValheimTesting/blob/main/tests/Valheim.Testing.NativeAcceptance/ServerFixture.cs">adapter observation</see>.
 /// </example>
 public sealed class GameActor : IDisposable
 {

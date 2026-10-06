@@ -18,7 +18,7 @@
     "-batchmode",
     "-nographics",
     "-name",
-    "MyModTest",
+    "AcceptanceTest",
     "-port",
     "2456",
     "-world",
@@ -38,8 +38,8 @@
     "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",
     "valheimCLI.standard": "<md5 of the runtime's Valheim.Cli.Standard.dll>",
     "valheimCLI.worldtools": "<md5 of the runtime's Valheim.Cli.WorldTools.dll>",
-    "example.mymod": "<md5 of MyMod.dll>",
-    "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+    "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+    "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
   },
   "runtimePins": {
     "game": "<InstallPins.Of(runtime).Game>",
@@ -78,8 +78,8 @@
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
       "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
-      "example.mymod": "<md5 of MyMod.dll>",
-      "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+      "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+      "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
@@ -88,12 +88,12 @@
     },
     "join": "192.0.2.1:2456",
     "character": "handoffA",
-    "passwordVariable": "MYMOD_TEST_PASSWORD",
+    "passwordVariable": "ACCEPTANCEMOD_TEST_PASSWORD",
     "capabilities": [
-      "mymod.testing/markers",
-      "mymod.testing/marker-owner",
-      "mymod.testing/marker-owner-wait",
-      "mymod.testing/marker-owner-claim",
+      "acceptancemod.testing/markers",
+      "acceptancemod.testing/marker-owner",
+      "acceptancemod.testing/marker-owner-wait",
+      "acceptancemod.testing/marker-owner-claim",
       "valheim.world/terrain",
       "valheim.world/player-support-wait",
       "valheim.world/player-support",
@@ -116,8 +116,8 @@
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
       "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
       "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
-      "example.mymod": "<md5 of MyMod.dll>",
-      "example.mymod.testadapter": "<md5 of MyMod.TestAdapter.dll>"
+      "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+      "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
     },
     "installPins": {
       "game": "<InstallPins.Of(install).Game>",
@@ -126,12 +126,12 @@
     },
     "join": "192.0.2.1:2456",
     "character": "handoffB",
-    "passwordVariable": "MYMOD_TEST_PASSWORD",
+    "passwordVariable": "ACCEPTANCEMOD_TEST_PASSWORD",
     "capabilities": [
-      "mymod.testing/markers",
-      "mymod.testing/marker-owner",
-      "mymod.testing/marker-owner-wait",
-      "mymod.testing/marker-owner-claim",
+      "acceptancemod.testing/markers",
+      "acceptancemod.testing/marker-owner",
+      "acceptancemod.testing/marker-owner-wait",
+      "acceptancemod.testing/marker-owner-claim",
       "valheim.world/terrain",
       "valheim.world/player-support-wait",
       "valheim.world/player-support",

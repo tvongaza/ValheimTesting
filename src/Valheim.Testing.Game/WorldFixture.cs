@@ -12,7 +12,7 @@ namespace Valheim.Testing.Game;
 /// string disposableWorld = fixture.DirectoryPath;
 /// // Stop the owned game before the fixture is disposed.
 /// </code>
-/// See the <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/MyMod.SystemTests/ServerFixture.cs">runnable server example</see>
+/// See the <see href="https://github.com/tvongaza/ValheimTesting/blob/main/tests/Valheim.Testing.NativeAcceptance/ServerFixture.cs">runnable server preparation</see>
 /// for the full preparation and cleanup sequence.
 /// </example>
 public sealed class WorldFixture : IDisposable

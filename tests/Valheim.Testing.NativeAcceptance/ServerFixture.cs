@@ -8,7 +8,7 @@ using Valheim.Testing.Game;
 using valheimCLI;
 using Valheim.Testing.GameSessions;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// Prepares a <c>dry-site-server</c> plan on a world the game creates now, so the server scenario can run where nobody
@@ -31,7 +31,7 @@ namespace MyMod.SystemTests;
 public static class ServerFixture
 {
     public const string Mode = "prepare-server";
-    public const string WorldName = "MyModServerCheck";
+    public const string WorldName = "AcceptanceCheck";
     public const int CliPort = 5577, StartupSeconds = 600, CommandSeconds = 60;
     /// <summary>How far above or below the rule's threshold a site's generator ground must be, so rounding never decides.</summary>
     public const float Margin = 3f;
@@ -41,7 +41,7 @@ public static class ServerFixture
     public static readonly IReadOnlyList<(string Guid, string File)> Plugins =
     [
         ("valheimCLI.valheimCLI", "valheimCLI.dll"), ("valheimCLI.standard", "Valheim.Cli.Standard.dll"), ("valheimCLI.worldtools", "Valheim.Cli.WorldTools.dll"),
-        (LifecyclePlan.ModPlugin, "MyMod.dll"), (LifecyclePlan.AdapterPlugin, "MyMod.TestAdapter.dll"),
+        (LifecyclePlan.ModPlugin, "AcceptanceMod.dll"), (LifecyclePlan.AdapterPlugin, "AcceptanceMod.Adapter.dll"),
     ];
     /// <summary>Generator grids of 16 by 16 samples (centre and spacing in metres), read in order until both sites are found.</summary>
     public static readonly IReadOnlyList<TerrainGridRequest> SearchGrids =
@@ -52,14 +52,14 @@ public static class ServerFixture
     {
         if (args.Length != 3 || args[0] != Mode)
         {
-            Console.Error.WriteLine($"Usage: mymod-system-test {Mode} <server-runtime> <new-output-directory>");
+            Console.Error.WriteLine($"Usage: Valheim.Testing.NativeAcceptance {Mode} <server-runtime> <new-output-directory>");
             return 2;
         }
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler onCancel = (_, e) => { e.Cancel = true; cancellation.Cancel(); };
         Console.CancelKeyPress += onCancel;
         using var sigterm = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => { context.Cancel = true; cancellation.Cancel(); });
-        var report = new ScenarioReport("mymod-server-fixture");
+        var report = new ScenarioReport("acceptancemod-server-fixture");
         report.Provenance["mode"] = Mode;
         string runtime = Path.GetFullPath(args[1]), output = Path.GetFullPath(args[2]);
         bool ownOutput = false;
@@ -107,7 +107,7 @@ public static class ServerFixture
                 Pins = new Dictionary<string, string>(pins) { ["world"] = "any" },
             };
             // The actor establishes test access on this boot (and would on any restart).
-            var started = session = ServerActor.OnThisMachine(plan, copy!.DirectoryPath, world, output, "mymod.testing/session", LifecyclePlan.SessionTokenVariable, cancellation.Token);
+            var started = session = ServerActor.OnThisMachine(plan, copy!.DirectoryPath, world, output, "acceptancemod.testing/session", LifecyclePlan.SessionTokenVariable, cancellation.Token);
             GameActor server = null!;
             report.Step(StepPhase.Setup, "start the owned server on a new world, plugins pinned, with test access", () => server = started.Start());
             WorldFacts facts = new();
@@ -183,7 +183,7 @@ public static class ServerFixture
     }
 
     /// <summary>
-    /// MyMod's rule for the two sites, on the samples closest to the world's centre (<see cref="SiteSearch.Nearest"/>). The dry
+    /// AcceptanceMod's rule for the two sites, on the samples closest to the world's centre (<see cref="SiteSearch.Nearest"/>). The dry
     /// site: ground at least <see cref="DryAtLeast"/>. The wet site: ground at most <see cref="WetAtMost"/> and not within 50 m
     /// of the dry site on both axes (the plan's own rule). Null until both exist.
     /// </summary>

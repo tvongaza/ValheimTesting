@@ -1,8 +1,8 @@
 name: Scheduled native server checks
 # Nightly, and within about four hours of a new public dedicated-server build: builds the private image in
 # docker/linux-server on the runner (anonymous SteamCMD, pinned BepInExPack), then in fresh containers of it runs
-# LinuxServerSmoke and the FullLifecycle example's server half (the dry-site-server scenario: ValheimCLI and the example
-# mod built against this server's assemblies, a new world, mark, refuse, confirmed save, restart). It reports the
+# LinuxServerSmoke and the native acceptance suite's server half (the dry-site-server scenario: ValheimCLI and the suite's
+# AcceptanceMod built against this server's assemblies, a new world, mark, refuse, confirmed save, restart). It reports the
 # server's Steam build id and uploads logs and reports only. On a failed scheduled run it opens or updates one tracking
 # issue. What it cannot cover: no game client and no Steam login, so nothing about joining, what a client sees, crossplay
 # or the Windows server.
@@ -161,13 +161,13 @@ jobs:
         continue-on-error: true
         timeout-minutes: 20
         run: docker run --init --name smoke -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh smoke
-      - name: Example mod, server half (dry-site-server)
-        id: example
+      - name: AcceptanceMod, server half (dry-site-server)
+        id: acceptance
         continue-on-error: true
         timeout-minutes: 40
         env:
           CONTROL: ${{ (inputs.negative_control == 'plugin-pin') && 'plugin-pin' || 'none' }}
-        run: docker run --init --name example -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh example "$CONTROL"
+        run: docker run --init --name acceptance -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh acceptance "$CONTROL"
       - name: Collect logs and reports only
         id: collect
         if: always()
@@ -175,11 +175,11 @@ jobs:
           BOOTSTRAP: ${{ steps.bootstrap.outcome }}
           BUILD: ${{ steps.build.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
-          EXAMPLE: ${{ steps.example.outcome }}
+          ACCEPTANCE: ${{ steps.acceptance.outcome }}
           BUILD_ID: ${{ steps.image.outputs.build-id }}
         run: |
           mkdir -p evidence
-          for check in smoke example; do
+          for check in smoke acceptance; do
             docker cp "$check:/home/valheim/evidence/$check" "evidence/$check" 2> /dev/null || echo "No evidence from the $check container."
           done
           # Only reports and logs may leave the runner: refuse any other file, and anything large.
@@ -199,11 +199,11 @@ jobs:
             fi
           }
           {
-            echo "Dedicated server build: ${BUILD_ID:-unknown}. Steps: CLI transport package $BOOTSTRAP, image build $BUILD, smoke $SMOKE, example $EXAMPLE; negative control: $NEGATIVE_CONTROL."
+            echo "Dedicated server build: ${BUILD_ID:-unknown}. Steps: CLI transport package $BOOTSTRAP, image build $BUILD, smoke $SMOKE, acceptance $ACCEPTANCE; negative control: $NEGATIVE_CONTROL."
             echo
             report "LinuxServerSmoke" evidence/smoke/result.json
-            report "Example preparation (new world, sites from the generator)" evidence/example/prepare/result.json
-            report "Example run (dry-site-server)" evidence/example/run/result.json
+            report "Acceptance preparation (new world, sites from the generator)" evidence/acceptance/prepare/result.json
+            report "Acceptance run (dry-site-server)" evidence/acceptance/run/result.json
           } > summary.md
           cat summary.md >> "$GITHUB_STEP_SUMMARY"
           {
@@ -229,7 +229,7 @@ jobs:
       # checks the same build again, until it passes or a new build appears. A negative control is never remembered.
       - name: Remember the checked build id
         if: >-
-          always() && steps.build.outcome == 'success' && steps.smoke.outcome == 'success' && steps.example.outcome == 'success' &&
+          always() && steps.build.outcome == 'success' && steps.smoke.outcome == 'success' && steps.acceptance.outcome == 'success' &&
           steps.collect.outcome == 'success' && steps.upload.outcome == 'success' &&
           steps.image.outputs.build-id != '' && env.NEGATIVE_CONTROL == 'none'
         env:
@@ -237,7 +237,7 @@ jobs:
         run: mkdir -p "$RUNNER_TEMP/server-build-checked" && echo "$BUILD_ID" > "$RUNNER_TEMP/server-build-checked/build-id.txt"
       - uses: actions/cache/save@v6
         if: >-
-          always() && steps.build.outcome == 'success' && steps.smoke.outcome == 'success' && steps.example.outcome == 'success' &&
+          always() && steps.build.outcome == 'success' && steps.smoke.outcome == 'success' && steps.acceptance.outcome == 'success' &&
           steps.collect.outcome == 'success' && steps.upload.outcome == 'success' &&
           steps.image.outputs.build-id != '' && env.NEGATIVE_CONTROL == 'none'
         with:
@@ -248,15 +248,15 @@ jobs:
         env:
           BOOTSTRAP: ${{ steps.bootstrap.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
-          EXAMPLE: ${{ steps.example.outcome }}
+          ACCEPTANCE: ${{ steps.acceptance.outcome }}
         run: |
-          if [ "$SMOKE" != success ] || [ "$EXAMPLE" != success ]; then
-            echo "::error::Server checks failed: CLI transport package $BOOTSTRAP, smoke $SMOKE, example $EXAMPLE (negative control: $NEGATIVE_CONTROL)."
+          if [ "$SMOKE" != success ] || [ "$ACCEPTANCE" != success ]; then
+            echo "::error::Server checks failed: CLI transport package $BOOTSTRAP, smoke $SMOKE, acceptance $ACCEPTANCE (negative control: $NEGATIVE_CONTROL)."
             exit 1
           fi
       - name: Remove the containers
         if: always()
-        run: docker rm -f smoke example > /dev/null 2>&1 || true
+        run: docker rm -f smoke acceptance > /dev/null 2>&1 || true
 
   tracking-issue:
     name: tracking issue
