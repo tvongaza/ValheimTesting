@@ -106,24 +106,32 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
         return plan;
     }
 
-    /// <summary>A campaign run over this world: attached clients, the refused plan's client refused, evidence in <see cref="Output"/>.</summary>
-    public CampaignRun Run(LifecyclePlan plan, ScenarioReport report, bool clientLog = false,
+    /// <summary>
+    /// A started session over this world (<see cref="FakeGameSession"/>): its owned server is this world, clients attach (the
+    /// refused plan's client refused), a campaign's named clients open through <paramref name="campaignClient"/>, evidence in
+    /// <see cref="Output"/>.
+    /// </summary>
+    public GameSession Run(LifecyclePlan plan, ScenarioReport report, bool clientLog = false,
         Func<ClientRunPlan, string, ClientSession>? campaignClient = null)
     {
         WriteServerLog();
-        return new()
-        {
-            Plan = plan, Server = Server(), OwnedServer = this, Report = report, Output = Output, Interval = TimeSpan.FromMilliseconds(10),
-            OpenClient = (client, directory) =>
-            {
-                string output = directory == null ? Output : Directory.CreateDirectory(Path.Combine(Output, directory)).FullName;
-                return ClientSession.Attach(client, output, Client(refused: client == plan.RefusedClient));
-            },
-            OpenCampaignClient = campaignClient ?? ((_, _) => throw new InvalidOperationException("No campaign client was supplied.")),
-            ServerLog = () => ServerLog,
-            ClientLog = _ => clientLog ? ClientLog : null,
-            Lobby = server => CrossplayServer.WaitForLobby(server, ServerLog, TimeSpan.FromSeconds(5)),
-        };
+        var session = FakeGameSession.Create(report, Output, WorldUid, this, Server,
+            (client, name, output) => name is "client-a" or "client-b"
+                ? (campaignClient ?? throw new InvalidOperationException("No campaign client was supplied."))(client, name)
+                : ClientSession.Attach(client, output, Client(refused: client == plan.RefusedClient)),
+            serverLog: ServerLog, clientLog: _ => clientLog ? ClientLog : null,
+            lobby: server => CrossplayServer.WaitForLobby(server, ServerLog, TimeSpan.FromSeconds(5)));
+        session.StartAsync().GetAwaiter().GetResult();
+        return session;
+    }
+
+    /// <summary>Runs <paramref name="plan"/>'s scenario from the example's table on a started session over this world.</summary>
+    public void RunScenario(LifecyclePlan plan, ScenarioReport report, bool clientLog = false)
+    {
+        var session = Run(plan, report, clientLog);
+        // Disposed as the runner does, also after a failure: clients left open close before the server stops.
+        try { ScenarioTable.Run(session, plan).GetAwaiter().GetResult(); }
+        finally { session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     }
 
     public GameActor Server()

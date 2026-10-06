@@ -5,33 +5,33 @@ namespace MyMod.SystemTests;
 /// <summary>One server and two clients, all owned by the pinned runner. Setup smoke with explicit join and rejoin checkpoints.</summary>
 public static class ThreeActorSmokeScenario
 {
-    public static void Run(CampaignRun run)
+    public static void Run(GameSession session, LifecyclePlan plan)
     {
-        run.Report.Step("server accepts game connections", () => run.OwnedServer.WaitUntilJoinable(run.Server));
+        session.Report.Step("server accepts game connections", () => session.Server!.WaitUntilJoinable(session.Server!.Game));
         IReadOnlyDictionary<string, ClientSession>? sessions = null;
-        run.Report.Step("both clients start in parallel on their owned hosts", () =>
-            sessions = run.OpenCampaignClientsParallel(new Dictionary<string, ClientRunPlan>
+        session.Report.Step("both clients start in parallel on their owned hosts", () =>
+            sessions = session.OpenClientsAsync(new Dictionary<string, ClientRunPlan>
             {
-                ["client-a"] = run.Plan.Client!, ["client-b"] = run.Plan.SecondClient!,
-            }));
+                ["client-a"] = plan.Client!, ["client-b"] = plan.SecondClient!,
+            }).GetAwaiter().GetResult());
         using var a = sessions!["client-a"];
         using var b = sessions["client-b"];
-        run.Report.Step("both owned clients are at their pinned menus", () =>
+        session.Report.Step("both owned clients are at their pinned menus", () =>
         {
-            RequireMenu(a.Actor, run.Plan.Client!, "client A");
-            RequireMenu(b.Actor, run.Plan.SecondClient!, "client B");
+            RequireMenu(a.Actor, plan.Client!, "client A");
+            RequireMenu(b.Actor, plan.SecondClient!, "client B");
         });
-        Join(a.Actor, run.Plan.Client!, run.Plan.WorldUid, run, "client A");
-        Join(b.Actor, run.Plan.SecondClient!, run.Plan.WorldUid, run, "client B");
-        run.Report.Step("both clients joined: server sees two peers", () => CampaignSteps.RequirePeers(run.Server, 2));
-        run.Report.Step("client B leaves and returns to its pinned menu", () =>
+        Join(a.Actor, plan.Client!, plan.WorldUid, session, "client A");
+        Join(b.Actor, plan.SecondClient!, plan.WorldUid, session, "client B");
+        session.Report.Step("both clients joined: server sees two peers", () => CampaignSteps.RequirePeers(session.Server!.Game, 2));
+        session.Report.Step("client B leaves and returns to its pinned menu", () =>
         {
             new SessionControl(b.Actor).Leave();
-            RequireMenu(b.Actor, run.Plan.SecondClient!, "client B");
+            RequireMenu(b.Actor, plan.SecondClient!, "client B");
         });
-        run.Report.Step("client A remains joined while B is away", () => RequireWorld(a.Actor, run.Plan.Client!, run.Plan.WorldUid, "client A"));
-        Join(b.Actor, run.Plan.SecondClient!, run.Plan.WorldUid, run, "client B rejoins");
-        run.Report.Step("both clients rejoined: server sees two peers", () => CampaignSteps.RequirePeers(run.Server, 2));
+        session.Report.Step("client A remains joined while B is away", () => RequireWorld(a.Actor, plan.Client!, plan.WorldUid, "client A"));
+        Join(b.Actor, plan.SecondClient!, plan.WorldUid, session, "client B rejoins");
+        session.Report.Step("both clients rejoined: server sees two peers", () => CampaignSteps.RequirePeers(session.Server!.Game, 2));
     }
 
     private static void RequireMenu(GameActor actor, ClientRunPlan plan, string name)
@@ -50,10 +50,10 @@ public static class ThreeActorSmokeScenario
             throw new InvalidOperationException(name + " did not enter the expected fixture world.");
     }
 
-    private static void Join(GameActor actor, ClientRunPlan plan, string worldUid, CampaignRun run, string name) =>
-        run.Report.Step(name + " joins the pinned world with its mod and adapter", () =>
+    private static void Join(GameActor actor, ClientRunPlan client, string worldUid, GameSession session, string name) =>
+        session.Report.Step(name + " joins the pinned world with its mod and adapter", () =>
         {
-            new SessionControl(actor).JoinWorld(plan, worldUid, cancellation: run.Cancellation); // The toolkit's one join: pins, world, protection, test access.
+            new SessionControl(actor).JoinWorld(client, worldUid, cancellation: session.Cancellation); // The toolkit's one join: pins, world, protection, test access.
             _ = actor.RequireCapability(Capabilities.Markers);
         });
 }

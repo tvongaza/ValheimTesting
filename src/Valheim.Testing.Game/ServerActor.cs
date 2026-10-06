@@ -15,7 +15,11 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public sealed class ServerActor : IOwnedServer, IDisposable
 {
-    private readonly OwnedServerSession _session;
+    private readonly OwnedServerSession? _session;
+    // A scripted server instead (Fakes.FakeGameSession): a no-game world that answers as an owned server.
+    private readonly (IOwnedServer Server, Func<GameActor> FirstBoot, string? LiveLog, Func<GameActor, CrossplayLobby>? Lobby)? _scripted;
+    private readonly ServerRunPlan? _plan;
+    private readonly CancellationToken _cancellation;
     private readonly List<RunLog> _logs = [];
     private GameActor? _game;
 
@@ -25,7 +29,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         ArgumentNullException.ThrowIfNull(placement); ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrEmpty(output); ArgumentException.ThrowIfNullOrEmpty(sessionTokenVariable);
         string runtime = RuntimeDirectory = placement.RuntimeDirectory, world = WorldDirectory = placement.WorldDirectory;
-        Host = placement.Host;
+        Host = placement.Host; _plan = plan; _cancellation = cancellation;
         int boot = 0, connection = 0;
         _session = new OwnedServerSession(token =>
         {
@@ -66,11 +70,20 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     }
 
     // Test seam: an actor over a scripted session (Fakes.FakeOwnedServer), whose boots log nothing.
-    internal ServerActor(OwnedServerSession session, string runtimeDirectory = "", string worldDirectory = "", IGameHost? host = null)
+    internal ServerActor(OwnedServerSession session, string runtimeDirectory = "", string worldDirectory = "", IGameHost? host = null, ServerRunPlan? plan = null,
+        CancellationToken cancellation = default)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
-        RuntimeDirectory = runtimeDirectory; WorldDirectory = worldDirectory; Host = host;
+        RuntimeDirectory = runtimeDirectory; WorldDirectory = worldDirectory; Host = host; _plan = plan; _cancellation = cancellation;
         _session.EnsureTestAccess = true;
+    }
+
+    // Test seam: a scripted world as the owned server (its restarts and joinable wait its own), for scenario tests without a game.
+    internal ServerActor(IOwnedServer server, Func<GameActor> firstBoot, string? liveLog, Func<GameActor, CrossplayLobby>? lobby)
+    {
+        ArgumentNullException.ThrowIfNull(server); ArgumentNullException.ThrowIfNull(firstBoot);
+        _scripted = (server, firstBoot, liveLog, lobby);
+        RuntimeDirectory = ""; WorldDirectory = "";
     }
 
     /// <summary>
@@ -95,27 +108,53 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     /// <summary>Each boot's kept logs, in boot order, for the teardown scan (<see cref="ScenarioReport.ScanLogs"/>) once the server stopped.</summary>
     public IReadOnlyList<RunLog> Logs { get { lock (_logs) return _logs.ToArray(); } }
     /// <summary>The process ID of every boot this actor started.</summary>
-    public IReadOnlyList<int> StartedProcesses => _session.StartedProcesses;
+    public IReadOnlyList<int> StartedProcesses => _session?.StartedProcesses ?? [];
     /// <summary>How each boot ended, in boot order, restarts included.</summary>
-    public IReadOnlyList<ProcessStop> Stops => _session.Stops;
+    public IReadOnlyList<ProcessStop> Stops => _session?.Stops ?? [];
+    /// <summary>
+    /// The current boot's live BepInEx log, for a scenario's in-run log reads: on this machine only (null when the server runs
+    /// on a host, where <see cref="Lobby"/> reads its log there).
+    /// </summary>
+    public string? LiveLog => _scripted is { } scripted ? scripted.LiveLog
+        : Host == null && RuntimeDirectory.Length != 0 ? Path.Combine(RuntimeDirectory, "BepInEx", "LogOutput.log") : null;
+
+    /// <summary>
+    /// The crossplay server's lobby for its current boot <paramref name="server"/>, read from the log the game writes to (the plan's
+    /// <c>-logFile</c> file, otherwise BepInEx's), on this machine or on the server's host, within the plan's startup time
+    /// (<see cref="CrossplayServer.WaitForLobby(GameActor, string, TimeSpan, CancellationToken)"/>). A restarted server opens a new one.
+    /// </summary>
+    public CrossplayLobby Lobby(GameActor server)
+    {
+        ArgumentNullException.ThrowIfNull(server);
+        if (_scripted is { Lobby: { } scripted }) return scripted(server);
+        var plan = _plan ?? throw new InvalidOperationException("This server has no plan to read its lobby's log from.");
+        var within = TimeSpan.FromSeconds(plan.StartupSeconds);
+        return Host == null
+            ? CrossplayServer.WaitForLobby(server, plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.BepInExLog(RuntimeDirectory), within, _cancellation)
+            : CrossplayServer.WaitForLobby(server, Host, plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.HostBepInExLog(RuntimeDirectory), within, _cancellation);
+    }
     /// <summary>A boot whose start failed after its process started could not be stopped: the server may still run, so its runtime is kept.</summary>
     internal bool MayStillRun { get; private set; }
 
     /// <summary>Starts the first boot and returns its strictly pinned, test-access-ready actor (<see cref="OwnedServerSession.StartAsync"/>).</summary>
-    public GameActor Start() => _game = _session.Start();
+    public GameActor Start() => _game = _scripted is { } scripted ? scripted.FirstBoot() : _session!.Start();
     /// <summary>Stops only this server, then starts it again with test access; returns the new boot's actor.</summary>
     public GameActor Restart()
     {
         _game = null; // A failed stop never leaves the stopped boot's handle current.
-        return _game = _session.Restart();
+        return _game = _scripted is { } scripted ? scripted.Server.Restart() : _session!.Restart();
     }
     /// <summary>Waits until <paramref name="server"/>, this server's current actor, accepts game connections, within the plan's startup deadline.</summary>
-    public void WaitUntilJoinable(GameActor server) => _session.WaitUntilJoinable(server);
+    public void WaitUntilJoinable(GameActor server)
+    {
+        if (_scripted is { } scripted) scripted.Server.WaitUntilJoinable(server);
+        else _session!.WaitUntilJoinable(server);
+    }
     /// <summary>Stops only the server this actor started (asked to quit first, killed after the plan's quit time).</summary>
     public void Dispose()
     {
         _game = null;
-        _session.Dispose();
+        _session?.Dispose(); // A scripted world is its test's to dispose.
     }
 }
 

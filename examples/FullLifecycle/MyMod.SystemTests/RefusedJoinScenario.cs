@@ -20,9 +20,9 @@ public static class RefusedJoinScenario
 {
     public const string RefusedDirectory = "refused-client", MatchingDirectory = "matching-client";
 
-    public static void Run(CampaignRun run)
+    public static void Run(GameSession session, LifecyclePlan plan)
     {
-        var plan = run.Plan; var report = run.Report; var refusedPlan = plan.RefusedClient!; var client = plan.Client!;
+        var report = session.Report; var refusedPlan = plan.RefusedClient!; var client = plan.Client!;
         var expected = plan.RefusalStatus;
 
         ClientSession? refused = null;
@@ -30,12 +30,12 @@ public static class RefusedJoinScenario
         try
         {
             report.Step(refusedPlan.Owned ? "launch the mismatched owned client to its menu, plugins pinned" : "attach to the operator's mismatched client at its menu, plugins pinned",
-                () => refused = run.OpenClient(refusedPlan, RefusedDirectory));
-            report.Step("the server accepts game connections", () => run.OwnedServer.WaitUntilJoinable(run.Server));
+                () => refused = session.OpenClient(refusedPlan, directory: RefusedDirectory));
+            report.Step("the server accepts game connections", () => session.Server!.WaitUntilJoinable(session.Server!.Game));
             report.Step($"the mismatched client is refused with {expected} ({(int)expected})", () =>
             {
                 var refusal = new SessionControl(refused!.Actor).JoinExpectingRefusal(refusedPlan.Join, refusedPlan.Character, expected, refusedPlan.MenuExpectations,
-                    TimeSpan.FromSeconds(refusedPlan.JoinSeconds), refusedPlan.PasswordVariable, cancellation: run.Cancellation);
+                    TimeSpan.FromSeconds(refusedPlan.JoinSeconds), refusedPlan.PasswordVariable, cancellation: session.Cancellation);
                 report.Provenance["refusal"] = string.Create(CultureInfo.InvariantCulture, $"{refusal.Status} ({refusal.Code}) after {refusal.Elapsed.TotalSeconds:0.#} s");
             });
             passed = true;
@@ -49,9 +49,9 @@ public static class RefusedJoinScenario
 
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Rounds = ["matching"], Cancellation = run.Cancellation,
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = session.Output, OwnedServer = session.Server!, Rounds = ["matching"], Cancellation = session.Cancellation,
             OpenStep = client.Owned ? "launch the matching owned client to its menu, plugins pinned" : "attach to the operator's matching client at its menu, plugins pinned",
-        }.Run(run.Server, () => run.OpenClient(client, MatchingDirectory),
+        }.Run(session.Server!.Game, () => session.OpenClient(client, directory: MatchingDirectory),
             round => round.Step("the server keeps the matching client connected as its one player", () => PlayerPlacement.OnlyPeer(round.Server)));
     }
 }

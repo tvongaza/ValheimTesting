@@ -37,16 +37,16 @@ public static class ContentCensusScenario
         return ContentExpectations.Parse(reader.ReadToEnd());
     }
 
-    public static void Run(CampaignRun run)
+    public static void Run(GameSession session, LifecyclePlan plan)
     {
-        var plan = run.Plan; var report = run.Report; var client = plan.Client!; var control = plan.Control;
+        var report = session.Report; var client = plan.Client!; var control = plan.Control;
         var expectations = Expectations();
         report.Provenance["contentExpectations"] = $"{expectations.Owner} [{string.Join(", ", expectations.Scope)}]: " +
             string.Join(", ", expectations.Entries.Select(e => $"{e.Kind} {e.Name} ({string.Join("+", e.Sides).ToLowerInvariant()})"));
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Cancellation = run.Cancellation,
-        }.Run(run.Server, () => run.OpenClient(client, null), round =>
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = session.Output, OwnedServer = session.Server!, Cancellation = session.Cancellation,
+        }.Run(session.Server!.Game, () => session.OpenClient(client), round =>
         {
             ContentObservation? server = null, joined = null;
             round.Step("read the server's content census", () => server = ContentCensus.Read(round.Server, Capabilities.ContentCensus, expectations));

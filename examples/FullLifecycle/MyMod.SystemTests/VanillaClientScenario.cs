@@ -13,38 +13,38 @@ namespace MyMod.SystemTests;
 /// </summary>
 public static class VanillaClientScenario
 {
-    public static void Run(CampaignRun run)
+    public static void Run(GameSession session, LifecyclePlan plan)
     {
-        var plan = run.Plan; var report = run.Report; var client = plan.Client!; var control = plan.Control;
-        CampaignSteps.MarkSites(plan, run.Server, report);
+        var report = session.Report; var client = plan.Client!; var control = plan.Control;
+        CampaignSteps.MarkSites(plan, session.Server!.Game, report);
         if (control != null)
             report.Step($"control {control.Name}: the server spawns its server-only object beside the dry site", () =>
             {
-                run.Server.Execute($"mymodcontrol_spawn {CampaignSteps.Number(plan.DrySite.X + 3)} {CampaignSteps.Number(plan.DrySite.Z)}")
+                session.Server!.Game.Execute($"mymodcontrol_spawn {CampaignSteps.Number(plan.DrySite.X + 3)} {CampaignSteps.Number(plan.DrySite.Z)}")
                     .RequireLine("OK: spawned " + ControlPlugins.ServerOnlyPrefabName, "The control did not spawn its object");
             });
 
-        string? log = run.ClientLog(client);
+        string? log = session.ClientLog(client);
         report.Provenance["vanillaClientLogScan"] = log == null ? "not run: an attached client's logs are its operator's" : "the owned client's live BepInEx log";
         var check = new VanillaClientCheck
         {
             Capability = Capabilities.UnresolvedPrefabs, Radius = 64, KnownPrefabs = [ControlPlugins.ServerOnlyPrefabName],
             ClientLogs = log == null ? null : () => new[] { new RunLog("client BepInEx log (live)", log, Required: true) },
             ArrivalTimeout = TimeSpan.FromSeconds(client.ArrivalSeconds), CensusTimeout = TimeSpan.FromSeconds(client.ArrivalSeconds),
-            CensusInterval = run.Interval, Cancellation = run.Cancellation,
+            CensusInterval = session.Interval, Cancellation = session.Cancellation,
         };
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Arrival = CampaignSteps.At(plan.Arrival), ArriveStep = "arrive beside the marker",
-            Cancellation = run.Cancellation,
-        }.Run(run.Server, () => run.OpenClient(client, null),
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = session.Output, OwnedServer = session.Server!, Arrival = CampaignSteps.At(plan.Arrival), ArriveStep = "arrive beside the marker",
+            Cancellation = session.Cancellation,
+        }.Run(session.Server!.Game, () => session.OpenClient(client),
             measure: round =>
             {
                 round.Step("the client sees the marker at the dry site", () => DrySiteScenario.RequireClientMarkers(round.Client, plan.DrySite, 1));
                 if (control == null) { check.Measure(round); return; }
                 ControlPlugins.ExpectFailure(report, control, () =>
                 {
-                    var scan = UnresolvedPrefabs.WaitForComplete(round.Client, Capabilities.UnresolvedPrefabs, check.Radius, check.CensusTimeout, check.CensusInterval, run.Cancellation)
+                    var scan = UnresolvedPrefabs.WaitForComplete(round.Client, Capabilities.UnresolvedPrefabs, check.Radius, check.CensusTimeout, check.CensusInterval, session.Cancellation)
                         .GetAwaiter().GetResult();
                     round.Write("vanilla-client-1", scan);
                     scan.RequireNone(check.KnownPrefabs);

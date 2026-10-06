@@ -89,9 +89,13 @@ public sealed class GameSessionTests : IDisposable
             FakeOwnedProcess process;
             lock (test._clientProcesses) { process = test._clientProcesses[name] = new FakeOwnedProcess(700 + test._clientProcesses.Count); test._clientTransports[name] = transport; }
             string own = Directory.CreateDirectory(Path.Combine(output, name)).FullName;
-            return ClientSession.Launch(plan, own, () => process, () => transport, (_, token) => ready(name, token), cancellation);
+            var session = ClientSession.Launch(plan, own, () => process, () => transport, (_, token) => ready(name, token), cancellation);
+            lock (test._clientProcesses) test._openedClients.Add(name);
+            return session;
         }
     }
+    private readonly HashSet<string> _openedClients = [];
+    private bool OpenedClients(string name) { lock (_clientProcesses) return _openedClients.Contains(name); }
 
     private GameSession Session(ScenarioReport report, Func<string, CancellationToken, Task>? ready = null, int startSeconds = 30, params string[] clients)
     {
@@ -269,6 +273,56 @@ public sealed class GameSessionTests : IDisposable
         Assert.True(Declared.PinnedIn(new Dictionary<string, string> { ["test.mod"] = new string('a', 32) }));
         Assert.False(Declared.PinnedIn(new Dictionary<string, string> { ["test.mod"] = "absent" }));
         Assert.False(Declared.PinnedIn(new Dictionary<string, string>()));
+    }
+
+    [Fact] public async Task OpeningClientsAtOnceCancelsTheOthersWhenOneFailsAndClosesTheOpened()
+    {
+        var report = new ScenarioReport("session");
+        using var bWaits = new ManualResetEventSlim();
+        var placement = new Placement(this, (name, token) =>
+        {
+            if (name == "client-b") { bWaits.Set(); return Task.Delay(Timeout.Infinite, token); }
+            if (name == "client-c") return Task.CompletedTask;
+            // a fails only once b is waiting and c has opened.
+            Assert.True(bWaits.Wait(TimeSpan.FromSeconds(20)) && SpinWait.SpinUntil(() => OpenedClients("client-c"), TimeSpan.FromSeconds(20)));
+            throw new InvalidOperationException("client-a refused");
+        });
+        await using var session = new GameSession(report, _root, WorldUid, Server, [], CancellationToken.None) { ResolveClient = (_, name) => (name ?? "client", placement) };
+        await session.StartAsync();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => session.OpenClientsAsync(new Dictionary<string, ClientRunPlan>
+        {
+            ["client-a"] = Plan(600), ["client-b"] = Plan(600), ["client-c"] = Plan(600),
+        }));
+        Assert.Equal("client-a refused", error.Message);
+        Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(60)); // b's wait ended with a's failure, not its 600 s.
+        Assert.Equal(3, _clientProcesses.Count);
+        Assert.All(_clientProcesses.Values, process => Assert.Equal(1, process.Stops)); // c opened and was closed; a and b stopped their own.
+        Assert.False(session.Cancellation.IsCancellationRequested); // The session itself goes on.
+    }
+
+    [Fact] public async Task AScriptedWorldServesAsTheSessionsServer()
+    {
+        var report = new ScenarioReport("scripted");
+        var world = new ScriptedTransport();
+        var server = new FakeWorld(() => world.Actor("server", "cli_expect worlduid=" + WorldUid));
+        await using var session = FakeGameSession.Create(report, _root, WorldUid, server, server.Boot,
+            (plan, name, output) => throw new InvalidOperationException("no clients here"), serverLog: Path.Combine(_root, "server.log"),
+            lobby: _ => new CrossplayLobby("ENTITY42", "lobby-1"));
+        await session.StartAsync();
+        Assert.Equal(Path.Combine(_root, "server.log"), session.Server!.LiveLog);
+        Assert.Equal("lobby-1", session.Server.Lobby(session.Server.Game).LobbyId);
+        var first = session.Server.Game;
+        Assert.NotSame(first, session.Server.Restart());
+        Assert.Equal(TimeSpan.FromMilliseconds(10), session.Interval);
+        Assert.Null(session.ClientLog(Plan()));
+    }
+
+    private sealed class FakeWorld(Func<GameActor> boot) : IOwnedServer
+    {
+        public GameActor Boot() => boot();
+        public void WaitUntilJoinable(GameActor server) { }
+        public GameActor Restart() => boot();
     }
 
     [Fact] public async Task TeardownClosesTheClientsInReverseThenStopsTheServer()

@@ -29,7 +29,8 @@ public sealed partial class LifecyclePlan
     public const string OwnershipHandoffScenario = "ownership-handoff";
     /// <summary>A small three-actor setup smoke: server and two clients join one world with strict pins.</summary>
     public const string ThreeActorScenario = "three-actor-smoke";
-    public static readonly string[] Scenarios = [LifecycleScenario, ServerScenario, WorldScenario, VanillaClientScenario, SyncedConfigScenario, RefusedJoinScenario, CrossplayScenario, ContentCensusScenario, ReviewCaptureScenarioName, AreaObjectsScenarioName, OwnershipHandoffScenario, ThreeActorScenario];
+    /// <summary>Every scenario this example runs: <see cref="ScenarioTable"/>'s.</summary>
+    public static string[] Scenarios => [.. ScenarioTable.Names];
     /// <summary>The adapter's fixture commands (the global-key change) run only when the server starts with this set to 1.</summary>
     public const string FixturesVariable = "MYMOD_TEST_FIXTURES";
     private static readonly Regex Word = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
@@ -61,8 +62,9 @@ public sealed partial class LifecyclePlan
     /// <summary>Declared capture conditions for the review-capture scenario.</summary>
     public CaptureSettings? Capture { get; set; }
 
-    [JsonIgnore] public bool MarksSites => Scenario is LifecycleScenario or ServerScenario or WorldScenario or VanillaClientScenario or CrossplayScenario or OwnershipHandoffScenario;
-    [JsonIgnore] public bool IsCampaign => Scenario is WorldScenario or VanillaClientScenario or SyncedConfigScenario or RefusedJoinScenario or CrossplayScenario or ContentCensusScenario or ReviewCaptureScenarioName or AreaObjectsScenarioName or OwnershipHandoffScenario or ThreeActorScenario;
+    [JsonIgnore] public bool MarksSites => ScenarioTable.Find(Scenario)?.MarksSites == true;
+    /// <summary>One of the native campaign's scenarios: every table entry but the dry-site lifecycle and the server half.</summary>
+    [JsonIgnore] public bool IsCampaign => Scenario is not (LifecycleScenario or ServerScenario) && ScenarioTable.Find(Scenario) != null;
     [JsonIgnore] public ControlPlugin? Control => ControlPlugins.Named(ExpectFailure);
     [JsonIgnore] public GameConnectionStatus RefusalStatus => ExpectedRefusal == null ? GameConnectionStatus.ErrorVersion : ConnectionStatusReading.ParseStatus(ExpectedRefusal);
 

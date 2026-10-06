@@ -16,39 +16,39 @@ namespace MyMod.SystemTests;
 /// </summary>
 public static class SyncedConfigScenario
 {
-    public static void Run(CampaignRun run)
+    public static void Run(GameSession session, LifecyclePlan plan)
     {
-        var plan = run.Plan; var report = run.Report; var client = plan.Client!; string greeting = plan.NewGreeting!;
+        var report = session.Report; var client = plan.Client!; string greeting = plan.NewGreeting!;
         var timeout = TimeSpan.FromSeconds(client.JoinSeconds);
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Cancellation = run.Cancellation,
-        }.Run(run.Server, () => run.OpenClient(client, null), round =>
+            Client = client, WorldUid = plan.WorldUid, Report = report, Output = session.Output, OwnedServer = session.Server!, Cancellation = session.Cancellation,
+        }.Run(session.Server!.Game, () => session.OpenClient(client), round =>
         {
             if (round.Index == 0)
             {
                 round.Step("server and client hold the same greeting after the join", () =>
                 {
                     var server = Read(round.Server);
-                    var joined = Wait(run, round.Client, server.Value ?? throw new InvalidOperationException("The server has no greeting: " + server), timeout, null);
+                    var joined = Wait(session, plan, round.Client, server.Value ?? throw new InvalidOperationException("The server has no greeting: " + server), timeout, null);
                     round.Write("greeting-joined", new { server, client = joined });
                     SyncedConfig.RequireSame(server, joined);
                     if (server.Value == greeting) throw new InvalidOperationException($"The server already holds \"{greeting}\": the change would prove nothing. Choose another newGreeting.");
                 });
                 // Opened before the change, so the client's "received" line cannot be missed.
-                using var log = run.ClientLog(client) is string path ? new LogWait(path) : null;
+                using var log = session.ClientLog(client) is string path ? new LogWait(path) : null;
                 round.Step($"the server's admin changes the greeting to {greeting}, once", () =>
                 {
                     var reply = round.Server.Execute("mymod_greeting " + greeting);
                     if (!reply.Output.Contains("OK: greeting " + greeting)) throw new InvalidOperationException("MyMod did not confirm the change: " + string.Join(" | ", reply.Output));
                 });
-                round.Step("the client reads the server's new greeting within the wait", () => round.Write("greeting-changed", Wait(run, round.Client, greeting, timeout, log)));
+                round.Step("the client reads the server's new greeting within the wait", () => round.Write("greeting-changed", Wait(session, plan, round.Client, greeting, timeout, log)));
             }
             else round.Step("after the restart both sides hold the server's new greeting", () =>
             {
                 var server = Read(round.Server);
                 if (server.Value != greeting) throw new InvalidOperationException($"The server lost the admin's change across the save and restart: {server}.");
-                var joined = Wait(run, round.Client, greeting, timeout, null);
+                var joined = Wait(session, plan, round.Client, greeting, timeout, null);
                 round.Write("greeting-after-restart", new { server, client = joined });
                 SyncedConfig.RequireSame(server, joined);
             });
@@ -57,11 +57,11 @@ public static class SyncedConfigScenario
 
     private static ConfigValue Read(GameActor actor) => SyncedConfig.Read(actor, Capabilities.Config, LifecyclePlan.ModPlugin, "Server", "Greeting");
 
-    private static ConfigValue Wait(CampaignRun run, GameActor client, string expected, TimeSpan timeout, LogWait? log)
+    private static ConfigValue Wait(GameSession session, LifecyclePlan plan, GameActor client, string expected, TimeSpan timeout, LogWait? log)
     {
         Func<TimeSpan, CancellationToken, Task>? received = log == null ? null : (left, token) => log.WaitAsync(Received(expected), left, cancellation: token);
-        return SyncedConfig.WaitForValue(client, Capabilities.Config, LifecyclePlan.ModPlugin, "Server", "Greeting", expected, timeout, run.Interval,
-            received, run.Cancellation).GetAwaiter().GetResult();
+        return SyncedConfig.WaitForValue(client, Capabilities.Config, LifecyclePlan.ModPlugin, "Server", "Greeting", expected, timeout, session.Interval,
+            received, session.Cancellation).GetAwaiter().GetResult();
     }
 
     /// <summary>MyMod's log line when a client receives the server's greeting.</summary>
