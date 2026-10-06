@@ -193,7 +193,7 @@ public sealed class OwnershipHandoffTests
     }
 
     // CampaignWorld's client answers the arrival waits (ScriptedTransport.ArrivalSignals); this one also teleports itself.
-    private static ScriptedTransport ReadyClient(CampaignWorld world, AcceptancePlan plan) => world.Client()
+    internal static ScriptedTransport ReadyClient(CampaignWorld world, AcceptancePlan plan) => world.Client()
             .OnPrefix("cli_teleport ", _ => { world.MoveClient(plan.Arrival.X, plan.Arrival.Ground, plan.Arrival.Z); return ScriptedTransport.Ok("OK: Teleported to test point"); })
             .Extension("valheim.world", "terrain", _ => new
             {
@@ -204,7 +204,7 @@ public sealed class OwnershipHandoffTests
                 source = "acceptancemod-marker-owner", complete = true, id = "1:2", owner = "101", self = "101", ownedHere = true, instance = true,
             }, readOnly: false);
 
-    private static ScriptedTransport ReadySecond(AcceptancePlan plan, bool wrongOwner, float loadedOffset = 0)
+    internal static ScriptedTransport ReadySecond(AcceptancePlan plan, bool wrongOwner, float loadedOffset = 0)
     {
         bool joined = false, devcommands = false, claimed = false, acknowledged = false;
         return new ScriptedTransport()
@@ -216,7 +216,7 @@ public sealed class OwnershipHandoffTests
                 worldPresent = joined, worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined,
                 saving = false, loadError = false, connectionStatus = joined ? "Connected" : "None",
             })
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"))
             .On("cli_acknowledge_local_cheats", _ => { acknowledged = true; return ScriptedTransport.Ok("OK: localCharacterCheated=True"); })
             .On("cli_access", _ => ScriptedTransport.Ok("ACCESS " + JsonSerializer.Serialize(new { schemaVersion = 1, complete = true, devcommands, cheatsAcknowledged = acknowledged, allowOnServerClients = true, server = false, dedicated = false, joinedClient = joined, localPlayer = joined, profileAvailable = joined })))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))

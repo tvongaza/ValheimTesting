@@ -10,7 +10,7 @@ using Valheim.Testing.GameSessions;
 public sealed class SessionVariantTests : IDisposable
 {
     private const string Menu = "cli_expect my.mod=absent";
-    private const string Protected = "OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True";
+    private const string Protected = "OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True";
     private readonly string _root = Directory.CreateTempSubdirectory("session-variants-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
 

@@ -90,7 +90,7 @@ public class SessionControlTests
     }
     // A client at its menu that joins world 7: not ready for the first readings, then ready with its player. Protection
     // is answered only when a reply is given, so an unexpected protection command fails the test.
-    private const string Protected = "OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True";
+    private const string Protected = "OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True";
     private static ScriptedTransport JoiningClient(string? safetyReply, int notReadyReadings = 0)
     {
         bool joined = false; int readings = 0;
@@ -223,13 +223,24 @@ public class SessionControlTests
                 worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined, saving = false, loadError = false,
                 connectionStatus = joined ? "Connected" : "None",
             })
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
     }
     private static ClientRunPlan JoinPlan(string mode) => new()
     {
         Mode = mode, Install = mode == "owned" ? Path.GetFullPath("client-install") : "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
         Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) },
     };
+
+    // A plan's deliberate opt-out (Targetable, #261): the join protects without ghost mode, once.
+    [Fact] public void ATargetableClientIsProtectedWithoutGhostMode()
+    {
+        var client = JoiningClient().On("cli_set_player_safety true targetable", _ =>
+            ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=False debugMode=True cheats=True ghostReplicated=True targetable=True"));
+        using var actor = client.Actor();
+        var plan = JoinPlan("owned"); plan.Targetable = true;
+        new SessionControl(actor).JoinWorld(plan, "4242");
+        Assert.Equal(["cli_set_player_safety true targetable"], client.Commands.Where(c => c.StartsWith("cli_set_player_safety", StringComparison.Ordinal)));
+    }
 
     [Theory] [InlineData("owned")] [InlineData("attached")]
     public void JoinWorldJoinsOncePinsProtectsAndGivesOnlyAnOwnedClientTestAccess(string mode)

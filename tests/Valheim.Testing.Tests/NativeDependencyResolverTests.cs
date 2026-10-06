@@ -1271,7 +1271,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
                 File.WriteAllText(hosts["pc"].Local(worlds + "/Campaign_backup_auto-20261006.db"), "backup"); // the game's backup beside it
                 return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
         // Each client's leased identity, which its launch confirms: SteamID64 of account 501 (the host) and 502 (the peer).
         var peerTransport = new ScriptedTransport()
             .ClientAccess(() => joined)
@@ -1286,7 +1286,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
                 connectionStatus = joined ? "Connected" : "None",
             })
             .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
         ClientRunPlan Section(bool host) => new()
         {
             Mode = "owned", Install = "/bound", Port = 5578, Character = "bound", StartSeconds = 30, JoinSeconds = 10,

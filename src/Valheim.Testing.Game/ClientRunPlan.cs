@@ -102,6 +102,12 @@ public sealed class ClientRunPlan
     public bool JoinsHost { get; set; }
     /// <summary>An existing, disposable local character (never a cloud character).</summary>
     public string Character { get; set; } = "";
+    /// <summary>
+    /// Protects the joined player without ghost mode (<see cref="PlayerPlacement.Protect(GameActor, bool)"/>): it cannot die,
+    /// but creatures see, hear and hunt it. Only for a test of AI, aggro or targeting that needs a player creatures notice;
+    /// by default every joined player is protected with ghost mode, which holds on every peer that runs ValheimCLI.
+    /// </summary>
+    public bool Targetable { get; set; }
     // Removed (#298): direct start and prepared-character start saved 0.07 s over the menu start. A plan that still names
     // one is refused with what to do instead of the generic unknown-field error.
     [JsonInclude, JsonPropertyName("directStart"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

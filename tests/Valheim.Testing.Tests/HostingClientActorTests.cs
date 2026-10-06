@@ -79,7 +79,7 @@ public sealed class HostingClientActorTests : IDisposable
                 File.WriteAllText(Path.Combine(Worlds, Name + ".db.old"), "backup");
                 return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
         return transport;
     }
 
@@ -105,7 +105,7 @@ public sealed class HostingClientActorTests : IDisposable
             connectionStatus = _peerJoined ? "Connected" : "None",
         })
         .Extension("valheim.session", "leave", _ => { Interlocked.Increment(ref _peerLeaves); _peerJoined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
-        .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+        .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
 
     private static valheim_cli.Testing.CommandResult PinFailure(string message) => new() { Ok = false, ErrorCode = "command_failed", Message = message };
 

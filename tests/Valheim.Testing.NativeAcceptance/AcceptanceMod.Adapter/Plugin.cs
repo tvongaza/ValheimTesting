@@ -56,7 +56,8 @@ public sealed class Plugin : BaseUnityPlugin
         ReviewState.BeginCommand(), ReviewState.MistOffCommand(), ReviewState.ClutterOffCommand(), ReviewState.RestoreCommand(), // owned visual-state lease (#78)
         ReviewClipFrames.Command(),                                  // bounded, scene-only motion evidence (#212)
         MarkerObservation.Command(),                                // markers <x> <z> [radius]: the mod's own
-        MarkerOwnership.SnapshotCommand(), MarkerOwnership.WaitCommand(), MarkerOwnership.ClaimCommand());
+        MarkerOwnership.SnapshotCommand(), MarkerOwnership.WaitCommand(), MarkerOwnership.ClaimCommand(),
+        AiWatch.WatchCommand(), AiWatch.SpawnCommand(), AiWatch.RemoveCommand(), AiWatch.GhostCommand()); // ghost-protection (#261)
     private void OnApplicationQuit() => QuitLogFlush.Quitting("AcceptanceMod.Adapter OnApplicationQuit");
     private void OnDestroy() { ReviewClipFrames.AbortOnUnload(); ReviewState.RestoreOnUnload(); _registration?.Dispose(); _ownershipPatch?.UnpatchSelf(); QuitLogFlush.Disable(); }
 }

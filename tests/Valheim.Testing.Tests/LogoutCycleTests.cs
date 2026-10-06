@@ -49,7 +49,7 @@ public sealed class LogoutCycleTests : IDisposable
                     worldReady = Joined, server = false, dedicated = false, localPlayer = Joined, playerReady = Joined, saving = false, loadError = false,
                     connectionStatus = Joined ? "Connected" : "None",
                 })
-                .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
+                .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"))
                 .Extension("mymod.testing", "custom-data", args => !Joined ? new { source = "local-player-custom-data", complete = false } : (object)new
                 {
                     source = "local-player-custom-data", complete = true, prefix = args.Count == 1 ? args[0] : null, character = Character, profileFile = Character.ToLowerInvariant(),

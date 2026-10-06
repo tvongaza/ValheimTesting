@@ -88,7 +88,7 @@ public static class OwnershipHandoffScenario
         if (failure != null) ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
-    private static void JoinAndArrive(GameSession session, string worldUid, GameActor actor, ClientRunPlan client, Site site, string name)
+    internal static void JoinAndArrive(GameSession session, string worldUid, GameActor actor, ClientRunPlan client, Site site, string name)
     {
         // The toolkit's one join: the join once, world pins, the world awaited and the player protected, test access.
         session.Report.Step(StepPhase.Setup, $"{name} joins the pinned world once and is protected",

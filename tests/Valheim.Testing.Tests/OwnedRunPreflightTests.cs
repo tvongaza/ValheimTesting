@@ -390,7 +390,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
                 worldPresent = hosting(), worldReady = hosting(), server = hosting(), dedicated = false, localPlayer = hosting(), playerReady = hosting(),
                 saving = false, loadError = false, connectionStatus = hosting() ? "Connected" : "None",
             })
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
     }
 
     // ---- helpers ----

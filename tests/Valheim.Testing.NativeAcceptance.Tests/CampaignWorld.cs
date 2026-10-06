@@ -97,6 +97,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
             Client = ClientPlan(scenario is AcceptancePlan.VanillaClientScenario or AcceptancePlan.CrossplayScenario ? "absent" : Md5Mod, crossplay: scenario == AcceptancePlan.CrossplayScenario),
         };
         if (plan.MarksSites) { plan.DrySite = Dry; plan.WetSite = Wet; plan.Arrival = Arrival; }
+        if (scenario == AcceptancePlan.GhostProtectionScenarioName) plan.Arrival = Arrival; // A arrives there; it marks nothing.
         if (scenario == AcceptancePlan.WorldScenario)
         {
             plan.Away = Away; plan.GlobalKey = "defeated_eikthyr"; plan.Dungeon = new() { X = 150, Z = -40 };
@@ -261,7 +262,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
                 Join();
                 return ScriptedTransport.Ok($"OK: PlayFab user join started for {command.Split(' ')[1]} using character 'Tester' (tester, Local)");
             })
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => Support())
             .ArrivalSignals(Support)

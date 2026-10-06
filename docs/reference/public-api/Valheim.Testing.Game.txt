@@ -264,6 +264,7 @@ sealed class Valheim.Testing.Game.ClientRunPlan
   property System.Boolean JoinsHost { get; set; }
   property System.Boolean Owned { get; }
   property System.Boolean Pinned { get; }
+  property System.Boolean Targetable { get; set; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Pins { get; set; }
   property System.Int32 ArrivalSeconds { get; set; }
   property System.Int32 BepInExSeconds { get; set; }
@@ -1361,6 +1362,7 @@ static class Valheim.Testing.Game.PlayerPlacement
   method static System.Int32 OnlyPeer(Valheim.Testing.Game.GameActor server)
   method static System.Int32 PeerCount(Valheim.Testing.Game.GameActor server)
   method static System.Void Protect(Valheim.Testing.Game.GameActor client)
+  method static System.Void Protect(Valheim.Testing.Game.GameActor client, System.Boolean targetable)
   method static System.Void SetFly(Valheim.Testing.Game.GameActor client, System.Boolean on)
   method static Valheim.Testing.Game.PlayerPlacement/TeleportArrival Arrive(Valheim.Testing.Game.GameActor server, Valheim.Testing.Game.GameActor client, Valheim.Testing.Game.HeightExpectation point, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null, System.Boolean skipIntro = true, System.Boolean loadedGround = false)
 [result shape] sealed class Valheim.Testing.Game.PlayerPlacement/TeleportArrival : System.IEquatable`1<Valheim.Testing.Game.PlayerPlacement/TeleportArrival>
