@@ -224,9 +224,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         // The run journal on the server host (#257): the lock once held, each boot journalled before its start and its process after,
         // the lock's release and the run's end. Each boot's intent precedes its start script.
         var journal = await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
-        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted, JournalEntry.ProcessIntended, JournalEntry.ProcessStarted],
-            journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
-        Assert.Equal(RunDirectory + "/boot-2", journal.Where(record => record.Actor == "server").Last().Entry.Fields["bootDirectory"]);
+        var processes = journal.Where(record => record.Actor == "server" && record.Entry.Kind.StartsWith("process-", StringComparison.Ordinal)).ToList();
+        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted, JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], processes.Select(record => record.Entry.Kind));
+        Assert.Equal(RunDirectory + "/boot-2", processes.Last().Entry.Fields["bootDirectory"]);
         // Each started process carries its command line's hash, read on the host right after the start (#257 Q2's third fact).
         Assert.All(journal.Where(record => record.Entry.Kind == JournalEntry.ProcessStarted), record =>
             Assert.Equal(FakeServerHost.CommandLineSha256(record.Entry.Fields["pid"]), record.Entry.Fields["commandLineSha256"]));

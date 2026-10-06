@@ -472,6 +472,12 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var journal = await RunJournal.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
             journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
+        // The server run's world copy on the host is journalled too, before its ship, and handed over as the run's evidence (under
+        // the hooks' fixed run id here; a real campaign's server run has the campaign's).
+        var serverRun = await RunJournal.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
+            serverRun.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)).Select(record => record.Entry.Kind));
+        Assert.All(serverRun.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)), record => Assert.Equal(@"C:\runs\run-test\world", record.Entry.Fields["runtime"]));
         Assert.Contains($"vt-prep-{runId}-server", journal.First(record => record.Entry.Kind == JournalEntry.CopyIntended).Entry.Fields["runtime"]);
         var ended = Assert.Single(journal, record => record.Entry.Kind == JournalEntry.RunEnded);
         Assert.Equal(("passed", "true"), (ended.Entry.Fields["state"], ended.Entry.Fields["cleanupVerified"]));
@@ -494,6 +500,9 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var unknownJournal = await RunJournal.ReadAsync(host, @"C:\locks\journal", unknownRun, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyKept],
             unknownJournal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
+        // The world copy too: its server may still run.
+        Assert.Equal(JournalEntry.CopyKept, (await RunJournal.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5)))
+            .Last(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)).Entry.Kind);
         Assert.Equal("unknown", Assert.Single(unknownJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["state"]);
 
         // A host retire that fails keeps the install and what it kept beside it (not fetched yet): nothing else removes it.
@@ -530,6 +539,126 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(JournalEntry.CopyIntended, failedJournal.Single(record => record.Actor == "server").Entry.Kind);
         var failedEnd = Assert.Single(failedJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
         Assert.Equal(("failed in preparation", "true"), (failedEnd["state"], failedEnd["cleanupVerified"]));
+    }
+
+    // #257: a Ctrl+C while one actor's copy script runs (the server's, which then hangs until cancelled) cancels the campaign's
+    // preparation, but the sibling actor's copy, already under way and not interruptible, settles first: only then are the
+    // preparation's copies cleaned up and its end journalled. Every journalled vt-prep copy and staging folder is gone, each host
+    // journals the run's end with its cleanup verified, and the run fails.
+    [Fact] public async Task ACtrlCWhileOneActorsCopyRunsLetsTheSiblingSettleThenRemovesEveryPreparedCopy()
+    {
+        string serverDll = _rig.Write("cut-campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
+        string clientDll = _rig.Write("cut-campaign/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
+        string serverLock = Lock(serverDll, "cut-server"), clientLock = Lock(clientDll, "cut-client");
+        string store = Store("cut-one", 101);
+        string world = Path.Combine(_rig.Root, "cut-campaign-world");
+        FakeInstalls.World(world);
+        var server = new FakeOwnedServer("test.mod");
+        var hosts = new Dictionary<string, FakeServerHost>(StringComparer.Ordinal);
+        foreach (string name in new[] { "server", "client-a" })
+        {
+            var host = new FakeServerHost(name, Path.Combine(_rig.Root, "cut-" + name), name == "server" ? server : null, windows: true);
+            hosts[name] = host;
+            host.SteamUserReply = "VT-STEAMUSER account 101\n";
+            string source = host.Local(@"C:\game\source");
+            if (name == "server") FakeInstalls.Server(source); else FakeInstalls.Client(source);
+            File.WriteAllText(Path.Combine(source, name == "server" ? GameLaunch.ServerWindowsExecutable : GameLaunch.ClientWindowsExecutable), "game");
+            File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
+            File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+            if (name != "server")
+            {
+                Directory.CreateDirectory(host.Local(@"C:\save\characters_local"));
+                Directory.CreateDirectory(host.Local(@"C:\Steam\userdata"));
+            }
+        }
+        object Environment(string name, string role, int port) => new
+        {
+            name, host = name, roles = new[] { role }, install = @"C:\game\source", runtime = @"C:\runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
+        };
+        string inventory = Path.Combine(_rig.Root, "cut-campaign-inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\campaign.lock", destination = "test@" + name }),
+            environments = new[] { Environment("server", "server", 5577), Environment("client-a", "client", 5578) }, leaseHost = "server", leaseDirectory = @"C:\leases",
+        }));
+        string manifest = Path.Combine(_rig.Root, "cut-campaign.json");
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new
+        {
+            inventory, world, join = "test-server.example:2456", server = new { dependencyLock = serverLock },
+            clients = new Dictionary<string, object> { ["client-a"] = new { dependencyLock = clientLock, character = Character(store, "cut-one", "vt-cut") } },
+        }));
+        var plan = new SitePlan
+        {
+            Scenario = "smoke", Port = 5577,
+            Arguments = ["-batchmode", "-nographics", "-savedir", "{world}", "-port", "2456", "-password", "secret", "-logFile", "{runtime}/toolkit-unity.log"],
+            Pins = new() { ["example.server"] = "<md5 of the server's plugin>" },
+        };
+        using var interrupt = new RunCancellation();
+        // What ran where, in one order across both hosts.
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var serverCopying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool serverWasCopying = false;
+        hosts["server"].Hang.Add("copy");
+        // The fake host answers at once; a real ship takes time. Yielding here lets client-a's preparation run beside the server's
+        // instead of inside the call that starts it, so nothing but the preparation itself makes the cleanup wait for it.
+        hosts["client-a"].BeforeShip = async () => await Task.Yield();
+        hosts["server"].BeforeScript = name =>
+        {
+            events.Enqueue("server:" + name);
+            if (name == "copy") serverCopying.TrySetResult();
+        };
+        hosts["client-a"].BeforeScript = name =>
+        {
+            events.Enqueue("client-a:" + name);
+            if (name != "copy") return;
+            // The Ctrl+C comes while the server's copy runs; this copy goes on to its end, as a copy already under way does.
+            serverWasCopying = serverCopying.Task.Wait(TimeSpan.FromSeconds(30));
+            interrupt.SignalCancel();
+            Thread.Sleep(300);
+            events.Enqueue("client-a copy settled");
+        };
+        var options = new PinnedServerRunOptions<SitePlan>
+        {
+            Name = "cut-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
+            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+            Scenario = _ => throw new InvalidOperationException("The scenario must not run after a cancelled preparation."),
+            Hooks = new FakeRunHooks { Host = name => hosts[name], Connect = _ => server.Connect(), StateWaits = false, Cancellation = interrupt },
+        };
+        string output = Path.Combine(_rig.Root, "cut-campaign-out");
+        // Off the test framework's synchronization context, so no continuation waits for the sibling's thread by accident.
+        Assert.Equal(1, await Task.Run(() => PinnedServerRun.RunCampaignAsync(manifest, plan, _ => new Dictionary<string, ClientRunPlan> { ["client-a"] = new() }, output, options))
+            .WaitAsync(TimeSpan.FromSeconds(60)));
+        Assert.True(interrupt.Token.IsCancellationRequested);
+        Assert.Null(interrupt.Abandoned);
+        var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
+        var prepare = result.GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "check the hosts and prepare every actor's disposable install");
+        Assert.False(prepare.GetProperty("Passed").GetBoolean());
+        string runId = result.GetProperty("Provenance").GetProperty("runId").GetString()!;
+        var order = events.ToList();
+        int settled = order.IndexOf("client-a copy settled");
+        Assert.True(settled >= 0, string.Join(", ", order));
+        Assert.True(serverWasCopying, "The Ctrl+C must come while the server's copy runs.");
+        Assert.True(order.IndexOf("server:copy") < settled && order.IndexOf("server:cleanup-stage") < settled, string.Join(", ", order));
+        // The sibling's copy ran to its end after the Ctrl+C; its own partial copy went after that.
+        Assert.True(order.LastIndexOf("client-a:cleanup-stage") > settled, string.Join(", ", order));
+        foreach (var (name, host) in hosts)
+        {
+            // The run's end is each host's last journal line, written only once the sibling had settled.
+            Assert.True(order.LastIndexOf(name + ":journal") > settled, $"{name}: " + string.Join(", ", order));
+            var journal = await RunJournal.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
+            var intended = Assert.Single(journal, record => record.Entry.Kind == JournalEntry.CopyIntended);
+            Assert.Equal(name, intended.Actor);
+            Assert.Contains($"vt-prep-{runId}-{name}", intended.Entry.Fields["runtime"]);
+            var ended = Assert.Single(journal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
+            Assert.Equal(("failed in preparation", "true"), (ended["state"], ended["cleanupVerified"]));
+            Assert.Equal(JournalEntry.RunEnded, journal.OrderBy(record => record.Utc).Last().Entry.Kind);
+            // Every prepared copy and its staging folder are gone; the host's lock was released.
+            string runs = host.Local(@"C:\runs");
+            Assert.True(!Directory.Exists(runs) || Directory.GetDirectories(runs, "vt-prep-*").Length == 0, name);
+            Assert.Equal(host.Claims.Count, host.Releases.Count);
+            Assert.True(File.Exists(Path.Combine(host.Local(@"C:\game\source"), "BepInEx", "core", "BepInEx.dll")));
+        }
+        Assert.Empty(server.Events);
     }
 
     // A campaign that leaves out its inventory runs on this machine: its dedicated server is the one Steam installed, with

@@ -286,9 +286,9 @@ public static class HostedRuntimeStage
 
     // Only HostedCampaignPreparation calls this for a unique directory it created and retained in memory. Its caller
     // must hold the host lock and must have stopped all game processes before retiring the prepared install.
-    internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default)
+    internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default, string? runId = null)
     {
-        string parent = RequirePrepared(host, destination);
+        string parent = RequirePrepared(host, destination, runId);
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
             new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false);
         result.EnsureSuccess($"Retiring prepared runtime on {host.Name}");
@@ -296,15 +296,22 @@ public static class HostedRuntimeStage
             throw new HostOperationException($"Unexpected cleanup reply from {host.Name}", result);
     }
 
-    /// <summary>Refuses anything but a toolkit-created <c>&lt;runs&gt;/vt-prep-*/runtime</c>; returns its <c>vt-prep-*</c> parent.</summary>
-    internal static string RequirePrepared(IGameHost host, string destination)
+    /// <summary>
+    /// Refuses anything but a toolkit-created <c>&lt;runs&gt;/vt-prep-*/runtime</c>, or, with <paramref name="runId"/>, that
+    /// standalone hosted run's own <c>&lt;runs&gt;/&lt;runId&gt;/runtime</c> or <c>&lt;runs&gt;/&lt;runId&gt;/world</c>
+    /// (<see cref="HostedServerRun"/>); returns the copy's parent.
+    /// </summary>
+    internal static string RequirePrepared(IGameHost host, string destination, string? runId = null)
     {
         int at = destination.LastIndexOfAny(['/', '\\']);
         string parent = at > 0 ? destination[..at] : "";
-        if (!destination.EndsWith(host.Shell.Kind == HostShellKind.PowerShell ? @"\runtime" : "/runtime", StringComparison.OrdinalIgnoreCase) ||
-            !parent.Replace('\\', '/').Split('/').Last().StartsWith("vt-prep-", StringComparison.Ordinal))
-            throw new ArgumentException("Only a toolkit-created vt-prep runtime can be retired.", nameof(destination));
-        return parent;
+        string separator = host.Shell.Kind == HostShellKind.PowerShell ? @"\" : "/", parentName = parent.Replace('\\', '/').Split('/').Last();
+        if (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) && parentName.StartsWith("vt-prep-", StringComparison.Ordinal))
+            return parent;
+        if (runId != null && RunJournal.SafeName(runId) && parentName == runId &&
+            (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world", StringComparison.OrdinalIgnoreCase)))
+            return parent;
+        throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a hosted run's own runtime or world copy, can be retired.", nameof(destination));
     }
 
     internal static readonly string WindowsApply = """

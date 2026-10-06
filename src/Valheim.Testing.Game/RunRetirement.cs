@@ -24,7 +24,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
     /// <summary>Test seam: the variable is process-wide, so a test asks for the keep in its own async flow instead.</summary>
     internal static AsyncLocal<bool?> KeepOverride { get; } = new();
 
-    private static string KeptOnRequest => $"kept on request ({PinnedServerRun.KeepRuntimeVariable}=1)";
+    internal static string KeptOnRequest => $"kept on request ({PinnedServerRun.KeepRuntimeVariable}=1)";
 
     /// <summary>Whether <paramref name="path"/> on <paramref name="host"/> (an inventory host name; null for this machine) stayed: kept on request or because its server may still run.</summary>
     public bool Kept(string? host, string path) => _kept.Contains(Key(host, path));

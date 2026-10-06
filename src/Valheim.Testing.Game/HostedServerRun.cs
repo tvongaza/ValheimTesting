@@ -28,7 +28,12 @@ internal sealed class HostedServerRun
     private HostLock? _lock;
     private CliTunnel? _tunnel;
     private HostListing? _runtime;
-    private bool _worldShipped, _serverMayRun;
+    private bool _serverMayRun;
+    // A standalone run's own copies on the server host, journalled before their scripts run (#257): from then on teardown
+    // removes them, even a partial one, or leaves them open in the journal for env recover.
+    private bool _runtimeIntended;
+    private WorldCopy _world;
+    private enum WorldCopy { None, Intended, Shipped, Verified }
     private int _clients;
 
     private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, IHostedRunHooks hooks,
@@ -162,10 +167,15 @@ internal sealed class HostedServerRun
         }
         await report.StepAsync(StepPhase.Setup, verified ? "copy and verify pinned runtime on the server host" : "copy unpinned runtime on the server host as found", async () =>
         {
+            // Journalled before the copy, as a campaign's preparation does: a copy the journal cannot name is never made, and an
+            // interrupted or partial one is env status's and env recover's to find.
+            await JournalAsync(Host, Role.Host, "server", CopyIntended(RuntimeDirectory, "runtime"), cancellation).ConfigureAwait(false);
+            _runtimeIntended = true;
             // Steam's own runtime output in the install (logs/) is not the runtime's: the copy leaves it out, and the pins never count it.
             await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, Long, HostInstall.ServerRuntimeSkips, cancellation).ConfigureAwait(false);
             _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, Long, null, cancellation).ConfigureAwait(false);
             if (verified) HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostInstall.ServerRuntimeSkips, _runtime.Names), _runtime, "runtime copy");
+            await JournalAsync(Host, Role.Host, "server", CopyDone(RuntimeDirectory, _runtime), cancellation).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }
 
@@ -193,11 +203,24 @@ internal sealed class HostedServerRun
         report.StepAsync(StepPhase.Setup, "ship and verify the world copy on the server host", async () =>
         {
             var manifest = WorldFixture.Manifest(localWorld);
+            // Journalled before the ship, like the runtime copy: no journal line, no world copy on the host.
+            await JournalAsync(Host, Role.Host, "server", CopyIntended(WorldDirectory, "world"), cancellation).ConfigureAwait(false);
+            _world = WorldCopy.Intended;
             await Host.ShipFilesAsync(localWorld, WorldDirectory, Long, cancellation).ConfigureAwait(false);
-            _worldShipped = true;
+            _world = WorldCopy.Shipped;
             var listing = await HostInstall.ListAsync(Host, WorldDirectory, Long, null, cancellation).ConfigureAwait(false);
             HostInstall.RequireSame(manifest, listing, "world copy", ["SOURCE.txt"]);
+            // Only a verified copy is journalled done: env recover hands a done world over as the run's save, and removes any other.
+            await JournalAsync(Host, Role.Host, "server", CopyDone(WorldDirectory, listing), cancellation).ConfigureAwait(false);
+            _world = WorldCopy.Verified;
         });
+
+    // A copy in this run's own directory, journalled with what it holds: env recover removes it by these fields (no staging; its
+    // parent is the run directory). Done only once verified, so a done copy is a whole one.
+    private JournalEntry CopyIntended(string directory, string holds) =>
+        JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", directory), ("stage", ""), ("parent", RunDirectory), ("holds", holds));
+    private static JournalEntry CopyDone(string directory, HostListing listing) =>
+        JournalEntry.Of(JournalEntry.CopyDone, ("runtime", directory), ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("verified", "true"));
 
     /// <summary>The checks a local runtime copy gets, on the host copy's listing.</summary>
     public void CheckRuntime(ScenarioReport report, ServerRunPlan plan, bool pinned)
@@ -525,11 +548,46 @@ internal sealed class HostedServerRun
             try { await report.StepAsync(StepPhase.Cleanup, step, action).ConfigureAwait(false); }
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         }
-        if (launched && _worldShipped && serverStopped)
+        bool worldFetched = false;
+        if (launched && _world >= WorldCopy.Shipped && serverStopped)
+        {
+            int before = failures.Count;
             await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long, cleanup)).ConfigureAwait(false);
-        if (_runtime != null)
-            try { await retirement.HostAsync(Role.Host, Host, _runtime, RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false); }
+            worldFetched = failures.Count == before;
+        }
+        // A copy whose copy began is retired even when it never finished (its reply was lost): nothing ran from it, so all of it goes.
+        if (_runtime != null || _runtimeIntended)
+            try
+            {
+                await retirement.HostAsync(Role.Host, Host, _runtime ?? new HostListing(Host.Name, Host.Shell.Kind, RuntimeDirectory, new Dictionary<string, string>(), []),
+                    RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false);
+                // A campaign's prepared install is journalled by its preparation; a standalone run's own copy here. A failed retire
+                // journals nothing more: the copy stays open in the journal, for env recover.
+                if (!Prepared)
+                    await NoteAsync(Host, Role.Host, "server", retirement.Kept(Role.Host, RuntimeDirectory)
+                        ? JournalEntry.Of(JournalEntry.CopyKept, ("runtime", RuntimeDirectory), ("why", RunRetirement.KeepRequested ? RunRetirement.KeptOnRequest : "its server may still run"))
+                        : JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", RuntimeDirectory))).ConfigureAwait(false);
+            }
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+        // An abandoned cleanup journals nothing more about the world: it stays open for env recover.
+        if (_world != WorldCopy.None && !cleanup.IsCancellationRequested)
+        {
+            if (_world == WorldCopy.Intended)
+                // A ship that failed or was interrupted left a partial world copy, which is nobody's evidence: it goes.
+                await Try("remove the partial world copy on the server host", async () =>
+                {
+                    await HostedRuntimeStage.RetireAsync(Host, WorldDirectory, "", Quick, cleanup, RunId).ConfigureAwait(false);
+                    await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", WorldDirectory))).ConfigureAwait(false);
+                }).ConfigureAwait(false);
+            else if (!serverStopped)
+                await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyKept, ("runtime", WorldDirectory), ("why", "its server may still run"))).ConfigureAwait(false);
+            else if (launched && !worldFetched)
+                await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyKept, ("runtime", WorldDirectory), ("why", "its fetch failed, so it is the run's only copy of the world"))).ConfigureAwait(false);
+            else
+                // The world copy stays on the host beside the boot logs, as the run's evidence (fetched too when its server ran; one that
+                // differs from the fixture shows how): handed over, no longer the run's to remove.
+                await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", WorldDirectory), ("handedOver", "true"))).ConfigureAwait(false);
+        }
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         foreach (var account in _accounts)
         {
