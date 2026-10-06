@@ -1,0 +1,9 @@
+<Project>
+  <!-- validate.cs packs with -p:ValheimTestingCandidate=candidate.<12 hex> (scripts/pins.cs candidate, a hash of the package
+       inputs): every package's version gets that suffix, so a local pack never puts other bytes under a version NuGet.org or an
+       earlier pack used. Imported after each project, where its <Version> is set. -->
+  <PropertyGroup Condition="'$(ValheimTestingCandidate)' != ''">
+    <Version>$(Version)-$(ValheimTestingCandidate)</Version>
+    <PackageVersion>$(Version)</PackageVersion>
+  </PropertyGroup>
+</Project>

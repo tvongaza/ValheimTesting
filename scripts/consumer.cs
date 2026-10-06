@@ -1,15 +1,17 @@
 // A consumer of this checkout's packages, built as a mod author meets them: outside the checkout, with a new package
 // cache, every Valheim.Testing* package from one feed at exactly this checkout's version. Never launches Valheim.
 //
-//   dotnet run scripts/consumer.cs -- --feed local                       validate.cs, after packing into .packages
-//   dotnet run scripts/consumer.cs -- --feed nuget [--wait-minutes N]    release.yml, on the release tag
+//   dotnet run scripts/consumer.cs -- --feed local --candidate ID          validate.cs, after packing into .packages
+//   dotnet run scripts/consumer.cs -- --feed nuget [--wait-minutes N]     release.yml, on the release tag
 //
-// The manifest is this checkout's package versions: the <Version> of each packed project and the Cli packageVersion in
-// cli-dependency.json.
+// The manifest is this checkout's package versions: the <Version> of each packed project (local: with the -ID suffix the
+// pack gave it, ID being pins.cs candidate's identity) and the Cli packageVersion in cli-dependency.json.
 //
-// local: Valheim.Testing* restore only from .packages (NuGet's package source mapping), everything else from NuGet.org.
-// NuGet.org may serve another build under the same id and version, so each restored package, tools included, must be
-// byte-identical to the one in .packages. nuget: NuGet.org is the only source. The script waits up to --wait-minutes for
+// local: the packed candidates and the Cli bootstrap-cli.cs packed (whose pin may not be published yet) restore only from
+// .packages (NuGet's package source mapping, by exact ID), everything else from NuGet.org. Each of them, tools included,
+// must be byte-identical to the one in .packages. The package cache (artifacts/consumer-cache) is kept between runs for
+// NuGet.org's packages only: every package from .packages is removed from it first, so it is always extracted again from
+// the bytes just packed. nuget: NuGet.org is the only source, in a new cache. The script waits up to --wait-minutes for
 // it to serve each version (a package still missing then is reported as pending, and the run fails); tools wait for
 // registration as well as the package file, since dotnet tool install consults registration, which can lag behind.
 //
@@ -35,27 +37,32 @@ string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.D
 string[] tools = ["Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
 string root = FindRoot();
-string? feed = null;
+string? feed = null, candidate = null;
 int waitMinutes = 0;
 for (int i = 0; i < args.Length; i++)
 {
     if (args[i] == "--feed" && i + 1 < args.Length && args[i + 1] is "local" or "nuget") feed = args[++i];
+    else if (args[i] == "--candidate" && i + 1 < args.Length && args[i + 1].StartsWith("candidate.", StringComparison.Ordinal)) candidate = args[++i];
     else if (args[i] == "--wait-minutes" && i + 1 < args.Length && int.TryParse(args[++i], out waitMinutes) && waitMinutes >= 0) { }
     else return Usage($"unknown or invalid argument '{args[i]}'");
 }
 if (feed == null) return Usage("no --feed");
 bool local = feed == "local";
 if (local && waitMinutes != 0) return Usage("--wait-minutes is for --feed nuget");
+if (local != (candidate != null)) return Usage(local ? "--feed local needs --candidate ID (pins.cs candidate)" : "--candidate is for --feed local");
 string localFeed = Path.Combine(root, ".packages");
 
-var manifest = packed.ToDictionary(id => id, SourceVersion, StringComparer.OrdinalIgnoreCase);
+var manifest = packed.ToDictionary(id => id, id => local ? SourceVersion(id) + "-" + candidate : SourceVersion(id), StringComparer.OrdinalIgnoreCase);
 manifest["Valheim.Testing.Cli"] = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "cli-dependency.json"))).RootElement.GetProperty("packageVersion").GetString()
     ?? throw new InvalidOperationException("cli-dependency.json has no packageVersion.");
-foreach (var (id, version) in manifest.OrderBy(p => p.Key, StringComparer.Ordinal)) Console.WriteLine($"manifest: {id} {version}");
+// What restores from .packages: everything this checkout packed (the candidates and the bootstrapped Cli).
+var fromLocal = local ? manifest.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+foreach (var (id, version) in manifest.OrderBy(p => p.Key, StringComparer.Ordinal))
+    Console.WriteLine($"manifest: {id} {version}{(local ? (fromLocal.Contains(id) ? " (.packages)" : " (NuGet.org)") : "")}");
 
 if (local)
 {
-    var missing = manifest.Where(p => !File.Exists(LocalPackage(p.Key, p.Value))).Select(p => $"{p.Key} {p.Value}").ToList();
+    var missing = manifest.Where(p => fromLocal.Contains(p.Key) && !File.Exists(LocalPackage(p.Key, p.Value))).Select(p => $"{p.Key} {p.Value}").ToList();
     if (missing.Count > 0)
     {
         Console.Error.WriteLine($"Not in {localFeed}: {string.Join(", ", missing)}. Run bootstrap-cli.cs and pack first (validate.cs does).");
@@ -65,9 +72,9 @@ if (local)
 else
 {
     // A candidate is a local build identity that NuGet.org never serves; say so now rather than after the wait.
-    if (manifest.FirstOrDefault(p => p.Value.Contains("-candidate", StringComparison.OrdinalIgnoreCase)) is { Key: not null } candidate)
+    if (manifest.FirstOrDefault(p => p.Value.Contains("-candidate", StringComparison.OrdinalIgnoreCase)) is { Key: not null } unpublished)
     {
-        Console.Error.WriteLine($"{candidate.Key} {candidate.Value} is a candidate version, never published; see pins.cs versions.");
+        Console.Error.WriteLine($"{unpublished.Key} {unpublished.Value} is a candidate version, never published; see pins.cs versions.");
         return 1;
     }
     if (!await WaitUntilServed()) return 1;
@@ -77,7 +84,8 @@ string work = Path.Combine(Path.GetTempPath(), "valheim-consumer-" + Guid.NewGui
 try
 {
     Directory.CreateDirectory(work);
-    string cache = Path.Combine(work, "packages");
+    string cache = local ? Path.Combine(root, "artifacts", "consumer-cache") : Path.Combine(work, "packages");
+    if (local) ForgetLocalPackages(cache);
     // The nearest NuGet.Config, above every project below. A new global package folder: nothing restored earlier on this
     // machine can stand in. With nuget, a new HTTP cache too, so no earlier listing can; a folder feed bypasses that cache,
     // so local keeps the machine's and NuGet.org's other packages are not downloaded again.
@@ -87,7 +95,7 @@ try
         <configuration>
           <packageSources><clear/><add key="local-preview" value="{SecurityElement.Escape(localFeed)}"/><add key="nuget.org" value="{NuGetOrg}"/></packageSources>
           <packageSourceMapping>
-            <packageSource key="local-preview"><package pattern="Valheim.Testing*"/></packageSource>
+            <packageSource key="local-preview">{string.Concat(fromLocal.Order(StringComparer.Ordinal).Select(id => $"<package pattern=\"{id}\"/>"))}</packageSource>
             <packageSource key="nuget.org"><package pattern="*"/></packageSource>
           </packageSourceMapping>
         </configuration>
@@ -201,12 +209,12 @@ try
             : found.Any(r => !r.Version.Equals(version, StringComparison.OrdinalIgnoreCase)) ? "restored at " + string.Join(", ", found.Select(r => r.Version))
             // A folder feed is not always recorded as the source (tool installs leave it out), so the local packages are
             // matched by content: the .nupkg NuGet keeps beside what it extracted.
-            : local ? (found.Any(r => !SameBytes(r.Dir, id, version)) ? "restored bytes differ from " + LocalPackage(id, version) : null)
+            : fromLocal.Contains(id) ? (found.Any(r => !SameBytes(r.Dir, id, version)) ? "restored bytes differ from " + LocalPackage(id, version) : null)
             // A tool install records no source; its config lists NuGet.org alone, so only another recorded source is wrong.
             : found.FirstOrDefault(r => Metadata(r.Dir, "source") is var source && source != NuGetOrg && !(r.Tool && source == null)) is { Dir: not null } stray
                 ? "restored from " + (Metadata(stray.Dir, "source") ?? "an unknown source")
             : null;
-        Console.WriteLine($"{(problem == null ? "ok  " : "FAIL")} restored {id} {version}{(problem == null ? $" from {feed}" : ": " + problem)}");
+        Console.WriteLine($"{(problem == null ? "ok  " : "FAIL")} restored {id} {version}{(problem == null ? $" from {(fromLocal.Contains(id) ? "the local feed" : "NuGet.org")}" : ": " + problem)}");
         if (problem != null) wrong++;
     }
     if (wrong > 0) return 1;
@@ -222,7 +230,7 @@ finally
 
 int Usage(string problem)
 {
-    Console.Error.WriteLine($"consumer: {problem}. Usage: dotnet run scripts/consumer.cs -- --feed local | --feed nuget [--wait-minutes N]");
+    Console.Error.WriteLine($"consumer: {problem}. Usage: dotnet run scripts/consumer.cs -- --feed local --candidate ID | --feed nuget [--wait-minutes N]");
     return 2;
 }
 
@@ -319,6 +327,16 @@ static Dictionary<string, string> ConsumerEnvironment(string packages, string? h
 }
 
 string LocalPackage(string id, string version) => Path.Combine(localFeed, $"{id}.{version}.nupkg");
+
+// The kept cache holds NuGet.org's packages for the next run; every package this checkout packed is removed from it (all its
+// versions), so the restore extracts it again from .packages and the byte check below compares what was just packed.
+void ForgetLocalPackages(string cache)
+{
+    int removed = 0;
+    foreach (string id in fromLocal)
+        if (Directory.Exists(Path.Combine(cache, id.ToLowerInvariant()))) { Directory.Delete(Path.Combine(cache, id.ToLowerInvariant()), recursive: true); removed++; }
+    Console.WriteLine($"cache: {cache} ({(removed == 0 ? "nothing of this checkout's in it" : $"removed {removed} package(s) of this checkout's; NuGet.org's kept")})");
+}
 
 bool SameBytes(string packageDir, string id, string version)
 {
