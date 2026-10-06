@@ -145,7 +145,9 @@ internal sealed class FakeServerHost : IGameHost
         ("process-probe", [HostProcessProbe.Bash, HostProcessProbe.Windows]),
         ("mac-bundle", [MacAppBundle.Bash]),
         ("machine-name", [RunJournalStatus.WindowsMachineName]),
-        ("lease", [LeaseScripts.Bash, LeaseScripts.PowerShell]));
+        ("lease", [LeaseScripts.Bash, LeaseScripts.PowerShell]),
+        ("world-entries", [HostedWorldOnHost.WindowsEntries, HostedWorldOnHost.BashEntries]),
+        ("world-move", [HostedWorldOnHost.WindowsMoveOut, HostedWorldOnHost.BashMoveOut]));
     private static Dictionary<string, string> Names(params (string Name, string[] Scripts)[] table)
     {
         var names = new Dictionary<string, string>(ReferenceEqualityComparer.Instance);
@@ -352,6 +354,12 @@ internal sealed class FakeServerHost : IGameHost
             case "lease":
                 switch (v["action"])
                 {
+                    case "claim":
+                        // The first free account, as the real claim takes it (one claim number per account here).
+                        lock (_sync)
+                            foreach (string account in v["accounts"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                                if (!Leases.ContainsKey(account)) { Leases[account] = (v["owner"], v["lease"]); return Ok($"VT-LEASE claimed {account} 1\n"); }
+                        return Ok("VT-LEASE none\n");
                     case "list":
                     {
                         var text = new StringBuilder();
@@ -484,6 +492,28 @@ internal sealed class FakeServerHost : IGameHost
                 if (Directory.Exists(Local(v["keep"]))) Directory.Delete(Local(v["keep"]), recursive: true);
                 return Ok("VT-DROPPED\n");
             case "preloader": return Ok(PreloaderReply);
+            case "world-entries":
+            case "world-move":
+            {
+                // Entries named for the world (<name>, <name>.*, <name>_*, any case), as the host scripts select them.
+                // As the host scripts select them: any case for the refusal; for a move, the name's own case (any on Windows), its
+                // <name>.* files and the game's <name>_backup* entries, never over an existing destination.
+                string worlds = Local(v["worlds"]), world = v["name"], lower = world.ToLowerInvariant();
+                if (name == "world-entries") Directory.CreateDirectory(worlds);
+                var comparison = Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                bool Named(string leaf) => name == "world-entries"
+                    ? leaf.ToLowerInvariant() is var l && (l == lower || l.StartsWith(lower + ".", StringComparison.Ordinal) || l.StartsWith(lower + "_", StringComparison.Ordinal))
+                    : leaf.Equals(world, comparison) || leaf.StartsWith(world + ".", comparison) || leaf.StartsWith(world + "_backup", comparison);
+                var entries = Directory.Exists(worlds) ? Directory.EnumerateFileSystemEntries(worlds).Where(entry => Named(Path.GetFileName(entry))).ToList() : [];
+                if (name == "world-entries") return Ok(string.Concat(entries.Select(entry => "VT-WORLD-ENTRY " + Path.GetFileName(entry) + "\n")) + "VT-WORLD-ENTRIES done\n");
+                string to = Local(v["to"]);
+                Directory.CreateDirectory(to);
+                if (entries.FirstOrDefault(entry => Path.Exists(Path.Combine(to, Path.GetFileName(entry)))) is { } clash)
+                    return new HostResult(HostOutcome.Exited, 4, "VT-WORLD-EXISTS " + Path.GetFileName(clash) + "\n", "", TimeSpan.FromMilliseconds(3), false);
+                foreach (string entry in entries)
+                    if (Directory.Exists(entry)) Directory.Move(entry, Path.Combine(to, Path.GetFileName(entry))); else File.Move(entry, Path.Combine(to, Path.GetFileName(entry)));
+                return Ok(string.Concat(entries.Select(entry => "VT-WORLD-MOVED " + Path.GetFileName(entry) + "\n")) + "VT-WORLD-MOVE done\n");
+            }
             case "client-keep":
             {
                 string dir = Local(v["dir"]);

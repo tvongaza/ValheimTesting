@@ -92,15 +92,23 @@ public sealed class HostedWorld : IDisposable
     /// <summary>The world's name, the stem of the fixture's <c>.fwl</c>: what <c>cli_start_host_world</c> starts.</summary>
     public string Name { get; }
     public string WorldUid { get; }
-    /// <summary>The client's <c>worlds_local</c> directory.</summary>
+    /// <summary>The client's <c>worlds_local</c> directory: a path on the client's host when it is placed there (<see cref="Host"/>).</summary>
     public string WorldsDirectory { get; }
+    /// <summary>The host the world is placed on (a campaign client's), or null for this machine.</summary>
+    public string? Host { get; }
+    // A world on a campaign client's host: moved out there and fetched into the given evidence folder (HostedWorldOnHost).
+    private readonly Func<string, string>? _collectOnHost;
     /// <summary>The verified copy of the fixture in the output directory.</summary>
     public string FixtureCopy { get; }
     /// <summary>Where <see cref="Collect"/> moved the world, or null before it has.</summary>
     public string? CollectedTo { get; private set; }
 
-    private HostedWorld(string name, string worldUid, string worlds, string copy, string output)
-    { Name = name; WorldUid = worldUid; WorldsDirectory = worlds; FixtureCopy = copy; _output = output; }
+    private HostedWorld(string name, string worldUid, string worlds, string copy, string output, string? host = null, Func<string, string>? collectOnHost = null)
+    { Name = name; WorldUid = worldUid; WorldsDirectory = worlds; FixtureCopy = copy; _output = output; Host = host; _collectOnHost = collectOnHost; }
+
+    /// <summary>A world placed in a campaign client's worlds on its host (<see cref="HostedWorldOnHost.Place"/>).</summary>
+    internal static HostedWorld OnHost(string name, string worldUid, string worlds, string copy, string output, string host, Func<string, string> collect) =>
+        new(name, worldUid, worlds, copy, output, host, collect);
 
     /// <summary>
     /// Copies <paramref name="plan"/>'s fixture into <paramref name="output"/> (verified against its hashes, or recorded as
@@ -206,7 +214,9 @@ public sealed class HostedWorld : IDisposable
 
     /// <summary>
     /// Moves every entry named for the world out of the client's worlds into <c>host-world</c> (then <c>host-world-2</c>
-    /// and so on) in the output directory. Runs once; a failure leaves the rest in place and is rethrown.
+    /// and so on) in the output directory. Runs once; a failure leaves the rest in place and is rethrown. A world on a campaign
+    /// client's host is moved out into the run's folder there (handed over, as a server's world copy is) and fetched into
+    /// <c>host-world</c>.
     /// </summary>
     public void Collect()
     {
@@ -217,6 +227,7 @@ public sealed class HostedWorld : IDisposable
             for (int n = 2; Path.Exists(target); n++) target = Path.Combine(_output, $"host-world-{n}");
             _target = target;
         }
+        if (_collectOnHost != null) { CollectedTo = _collectOnHost(_target); return; }
         Directory.CreateDirectory(_target);
         foreach (string entry in Entries(WorldsDirectory, Name).ToArray()) Move(entry, Path.Combine(_target, Path.GetFileName(entry)));
         CollectedTo = _target;
