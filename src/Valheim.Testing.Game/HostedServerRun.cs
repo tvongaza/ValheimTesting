@@ -5,27 +5,6 @@ using System.Text.Json;
 
 namespace Valheim.Testing.Game;
 
-/// <summary>Test seams for a <see cref="PinnedServerRun"/> on an environment's hosts: fake hosts and transports instead of ssh and sockets.</summary>
-internal sealed class HostedSeams
-{
-    /// <summary>Builds the host of that name instead of <see cref="ResolvedEnvironment.CreateHost"/>.</summary>
-    public Func<string, IGameHost>? Host { get; init; }
-    /// <summary>Connects to ValheimCLI at a tunnel's local port instead of a <c>CliTransport</c>.</summary>
-    public Func<int, IGameTransport>? Connect { get; init; }
-    /// <summary>False skips the state pushes (a fake transport has none).</summary>
-    public bool StateWaits { get; init; } = true;
-    public string? RunId { get; init; }
-    /// <summary>Shorter Steam account leases and renewals than the pool's, so a test sees them lapse.</summary>
-    public TimeSpan? SteamLeaseTime { get; init; }
-    public TimeSpan? SteamRenewEvery { get; init; }
-    /// <summary>Overrides the local macOS GUI-session probe in controlled tests.</summary>
-    public Action? RequireMacGui { get; init; }
-    /// <summary>Starts a local macOS client without opening the real game in controlled tests.</summary>
-    public Func<ClientRunPlan, string, SteamAccountHold?, CancellationToken, Action<IOwnedProcess>?, ClientSession>? LocalMacLaunch { get; init; }
-    /// <summary>The run's Ctrl+C owner instead of one the runner makes, so a test can signal it.</summary>
-    public RunCancellation? Cancellation { get; init; }
-}
-
 /// <summary>
 /// The parts of a <see cref="PinnedServerRun"/> that differ when its dedicated server runs on the environment's server
 /// host (<c>--inventory</c> or a campaign): the host lock, the runtime copied from the host's install and verified there, the world copy
@@ -38,7 +17,7 @@ internal sealed class HostedServerRun
 {
     internal const string BepInExLog = "BepInEx/LogOutput.log", UnityLog = "toolkit-unity.log";
     private static readonly TimeSpan Quick = TimeSpan.FromSeconds(60), Long = TimeSpan.FromMinutes(15);
-    private readonly HostedSeams _seams;
+    private readonly IHostedRunHooks _hooks;
     private readonly object _clientState = new();
     private readonly SemaphoreSlim _clientLockGate = new(1, 1);
     private readonly string _owner;
@@ -52,10 +31,10 @@ internal sealed class HostedServerRun
     private bool _worldShipped, _serverMayRun;
     private int _clients;
 
-    private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, HostedSeams seams,
+    private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, IHostedRunHooks hooks,
         string? preparedRuntime)
     {
-        Profile = profile; Role = role; HostProfile = hostProfile; Host = host; RunId = runId; _seams = seams; _owner = runner + " " + runId;
+        Profile = profile; Role = role; HostProfile = hostProfile; Host = host; RunId = runId; _hooks = hooks; _owner = runner + " " + runId;
         _journal = new RunJournal(runId);
         // A campaign prepared the server's disposable install already (<runtime>/vt-prep-<id>-server/runtime): that is the one
         // copy the server runs from. A standalone run makes its own under <runtime>/<runId>.
@@ -117,19 +96,18 @@ internal sealed class HostedServerRun
     public Action? AccountLost { get; set; }
 
     /// <summary>Refuses an environment and plan that cannot run a server on the environment's server host, before anything is touched.</summary>
-    public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams) =>
-        Create(profile, plan, runner, seams, prepared: false);
+    public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, IHostedRunHooks? hooks = null) =>
+        Create(profile, plan, runner, hooks, prepared: false);
 
     /// <summary>With <paramref name="prepared"/>, the server role's install is a campaign's prepared disposable install: the run uses it as its runtime, under the campaign's run id.</summary>
-    internal static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, HostedSeams? seams, bool prepared, string? campaignRunId = null)
+    internal static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, IHostedRunHooks? hooks, bool prepared, string? campaignRunId = null)
     {
         var role = profile.Server ?? throw new ArgumentException("The environment places no dedicated server.");
         var hostProfile = profile.Hosts[role.Host];
         if (Refusal(hostProfile, role, plan) is { } refusal) throw new ArgumentException($"The server environment on host '{role.Host}': {refusal}");
-        seams ??= new HostedSeams();
-        string runId = seams.RunId ?? campaignRunId ?? RunJournal.NewRunId();
-        var host = seams.Host?.Invoke(role.Host) ?? profile.CreateHost(role.Host);
-        return new HostedServerRun(profile, role, hostProfile, host, runId, runner, seams, prepared ? role.Install : null);
+        hooks ??= HostedRunHooks.Production;
+        var host = hooks.CreateHost(profile, role.Host);
+        return new HostedServerRun(profile, role, hostProfile, host, hooks.RunId(campaignRunId), runner, hooks, prepared ? role.Install : null);
     }
 
     /// <summary>Why a server environment cannot run <paramref name="plan"/>, or null: its host's platform and shell, and the plan's ports.</summary>
@@ -316,13 +294,13 @@ internal sealed class HostedServerRun
             {
                 CliListeningWait = async (left, token) =>
                     (await Host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left, token).ConfigureAwait(false)).EnsureMatched(),
-                States = _seams.StateWaits ? () => StateWait.Connect(tunnel.Address, tunnel.LocalPort) : null,
+                States = _hooks.StateWaits ? () => StateWait.Connect(tunnel.Address, tunnel.LocalPort) : null,
                 ReadyStates = [StateWait.InWorldNoPlayer],
             },
         };
     }
 
-    private IGameTransport Connect(CliTunnel tunnel) => _seams.Connect?.Invoke(tunnel.LocalPort) ?? new CliTransport(tunnel.Address, tunnel.LocalPort);
+    private IGameTransport Connect(CliTunnel tunnel) => _hooks.Connect(tunnel.Address, tunnel.LocalPort);
 
     /// <summary>
     /// An owned client on its environment's client host, started in its desktop session (<see cref="InteractiveClient"/>) with the
@@ -344,10 +322,10 @@ internal sealed class HostedServerRun
         if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
         var account = await HoldAccountAsync(report, name, () => ClientHost(role), cancellation).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The environment has no Steam leases; attach with ClientSession.Attach.");
-        return account.Session = ClientSession.Attach(plan, output, account.Hold, _seams.Connect?.Invoke(plan.Port));
+        return account.Session = ClientSession.Attach(plan, output, account.Hold, () => _hooks.Connect(plan.Host, plan.Port));
     }
 
-    private IGameHost ClientHost(GameRole role) => role.Host == Role.Host ? Host : _seams.Host?.Invoke(role.Host) ?? Profile.CreateHost(role.Host);
+    private IGameHost ClientHost(GameRole role) => role.Host == Role.Host ? Host : _hooks.CreateHost(Profile, role.Host);
     /// <summary>The named client's host, as its client is reached.</summary>
     public IGameHost ClientHost(string name) => Profile.Clients.TryGetValue(name, out var role) ? ClientHost(role)
         : throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
@@ -363,9 +341,8 @@ internal sealed class HostedServerRun
         {
             IGameHost leaseHost;
             lock (_clientState)
-                leaseHost = _leaseHost ??= section.LeaseHost == Role.Host ? Host : _seams.Host?.Invoke(section.LeaseHost) ?? Profile.CreateHost(section.LeaseHost);
-            var hold = await SteamAccountHold.AcquireAsync(Profile, name, _owner + " client " + name, leaseHost, Quick, _seams.SteamLeaseTime, _seams.SteamRenewEvery,
-                cancellation).ConfigureAwait(false);
+                leaseHost = _leaseHost ??= section.LeaseHost == Role.Host ? Host : _hooks.CreateHost(Profile, section.LeaseHost);
+            var hold = await _hooks.LeaseAsync(Profile, name, _owner + " client " + name, leaseHost, Quick, cancellation).ConfigureAwait(false);
             lock (_clientState)
             {
                 _accounts.Add(held = new ClientAccount(name, hold, leaseHost, section.LeaseHost));
@@ -473,7 +450,7 @@ internal sealed class HostedServerRun
                             $"The client's Player.log and boot output are kept in {local}.", error);
                     }
                     (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
-                    if (!_seams.StateWaits) return;
+                    if (!_hooks.StateWaits) return;
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
                 }, cancellation, null,
@@ -488,13 +465,13 @@ internal sealed class HostedServerRun
     private async Task<ClientSession> OpenLocalMacClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name,
         GameRole role, HostProfile hostProfile, CancellationToken cancellation)
     {
-        if (hostProfile.Kind != "local" || (!OperatingSystem.IsMacOS() && _seams.LocalMacLaunch == null))
+        if (hostProfile.Kind != "local" || !_hooks.LocalMacClients)
             throw new PlatformNotSupportedException($"Profile client '{name}' needs a local macOS host in this runner's logged-in GUI session; SSH cannot launch it there.");
         if (!plan.Owned) throw new ArgumentException($"Profile client '{name}' must be an owned client for local macOS launch.");
         if (Path.GetFullPath(plan.Install) != Path.GetFullPath(role.Install) || plan.Port != role.CliPort ||
             plan.Host is not ("127.0.0.1" or "localhost" or "::1"))
             throw new ArgumentException($"Profile client '{name}' must pin the local role's exact install and CLI port on loopback.");
-        (_seams.RequireMacGui ?? MacGuiSession.Require)();
+        _hooks.RequireMacGui();
         var host = ClientHost(role);
         if (host.Kind != GameHostKind.Local)
             throw new PlatformNotSupportedException($"Profile client '{name}' must use a local host; a remote process cannot enter this runner's GUI session.");
@@ -520,8 +497,7 @@ internal sealed class HostedServerRun
             lock (_clientState) _localMacProcesses.Add((role.Host, process));
             if (account != null) account.Process = process;
         };
-        session = _seams.LocalMacLaunch?.Invoke(plan, output, account?.Hold, cancellation, processStarted)
-            ?? ClientSession.Launch(plan, output, account?.Hold, cancellation, processStarted);
+        session = _hooks.LaunchLocalMac(plan, output, account?.Hold, cancellation, processStarted);
         if (session.OwnedProcess is { } owned)
             lock (_clientState)
                 if (!_localMacProcesses.Any(item => ReferenceEquals(item.Process, owned)))
