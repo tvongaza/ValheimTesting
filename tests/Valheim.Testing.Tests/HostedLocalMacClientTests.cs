@@ -4,6 +4,10 @@ using Xunit;
 
 public sealed partial class HostedServerRunTests
 {
+    // The Mac GUI client is one placement of the one client open path: ClientActor.Start through the campaign's placement.
+    private ClientSession Open(HostedServerRun hosted, ClientRunPlan client) =>
+        new ClientActor("mac", client, Output, hosted.ClientPlacement(new ScenarioReport("mac")), CancellationToken.None).Start();
+
     private (ResolvedEnvironment Profile, ServerRunPlan Server, ClientRunPlan Client) LocalMacProfile(FakeServerHost serverHost, bool local = true)
     {
         var (planPath, profilePath) = Write(serverHost);
@@ -46,7 +50,7 @@ public sealed partial class HostedServerRunTests
             },
         });
         Directory.CreateDirectory(Output);
-        var session = hosted.OpenClient(new ScenarioReport("mac"), Output, client, "mac", CancellationToken.None);
+        var session = Open(hosted, client);
         Assert.True(launched); Assert.Equal(91, session.ProcessId);
         session.Dispose();
         Assert.Equal(1, process.Stops);
@@ -70,7 +74,7 @@ public sealed partial class HostedServerRunTests
             LocalMacLaunch = (_, _, _, _, _) => { launched = true; throw new InvalidOperationException("must not start"); },
         });
         Directory.CreateDirectory(Output);
-        Assert.ThrowsAny<Exception>(() => hosted.OpenClient(new ScenarioReport("mac"), Output, client, "mac", CancellationToken.None));
+        Assert.ThrowsAny<Exception>(() => Open(hosted, client));
         Assert.False(launched); Assert.Empty(macHost.Claims); Assert.Empty(macHost.Runs);
     }
 
@@ -94,7 +98,7 @@ public sealed partial class HostedServerRunTests
             LocalMacLaunch = (_, _, _, _, _) => { launched = true; throw new InvalidOperationException("must not start"); },
         });
         Directory.CreateDirectory(Output);
-        Assert.Throws<ArgumentException>(() => hosted.OpenClient(new ScenarioReport("mac"), Output, client, "mac", CancellationToken.None));
+        Assert.Throws<ArgumentException>(() => Open(hosted, client));
         Assert.False(launched); Assert.Empty(macHost.Claims);
     }
 
@@ -126,7 +130,7 @@ public sealed partial class HostedServerRunTests
             LocalMacLaunch = (_, _, _, _, _) => { launched = true; throw new InvalidOperationException("must not start"); },
         });
         Directory.CreateDirectory(Output);
-        var error = Assert.Throws<SteamSignedInException>(() => hosted.OpenClient(new ScenarioReport("mac"), Output, client, "mac", CancellationToken.None));
+        var error = Assert.Throws<SteamSignedInException>(() => Open(hosted, client));
         Assert.Equal(SteamSignedInState.Unknown, error.State);
         Assert.False(launched); Assert.Empty(macHost.Claims);
         Assert.Empty(await hosted.TeardownAsync(new ScenarioReport("teardown"), Output, launched: false, serverStopped: true));
@@ -153,7 +157,7 @@ public sealed partial class HostedServerRunTests
             },
         });
         Directory.CreateDirectory(Output);
-        var session = hosted.OpenClient(new ScenarioReport("mac"), Output, client, "mac", CancellationToken.None);
+        var session = Open(hosted, client);
         session.QuitTimeout = TimeSpan.Zero;
         Assert.Throws<IOException>(session.Dispose);
         var failures = await hosted.TeardownAsync(new ScenarioReport("teardown"), Output, launched: false, serverStopped: true);
@@ -181,7 +185,7 @@ public sealed partial class HostedServerRunTests
             },
         });
         Directory.CreateDirectory(Output);
-        Assert.Throws<InvalidOperationException>(() => hosted.OpenClient(new ScenarioReport("mac"), Output, client, "mac", CancellationToken.None));
+        Assert.Throws<InvalidOperationException>(() => Open(hosted, client));
         Assert.True(process.HasExited);
         Assert.Empty(await hosted.TeardownAsync(new ScenarioReport("teardown"), Output, launched: false, serverStopped: true));
         Assert.Equal(macHost.Claims, macHost.Releases);

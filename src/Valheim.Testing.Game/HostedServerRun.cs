@@ -326,12 +326,24 @@ internal sealed class HostedServerRun : IServerPlacement
     /// Steam leases, the client's observed identity is leased (and its host's signed-in user checked, when asked) before anything
     /// else on its host is touched, and released at teardown once the client is gone.
     /// </summary>
-    public ClientSession OpenClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
+    private ClientSession OpenClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
         OpenClientAsync(report, output, plan, name, cancellation).GetAwaiter().GetResult();
 
     /// <summary>An attached campaign client: its account is leased (and checked) before the session assumes the client.</summary>
-    public ClientSession AttachClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
+    private ClientSession AttachClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
         AttachClientAsync(report, output, plan, name, cancellation).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// A named campaign client's placement: owned, on its assigned host (its desktop session, or this runner's GUI session for a
+    /// local macOS host); attached, on its leased account. The leases and host locks stay this run's, released at its teardown.
+    /// </summary>
+    internal IClientPlacement ClientPlacement(ScenarioReport report) => new CampaignClientPlacement(this, report);
+
+    private sealed class CampaignClientPlacement(HostedServerRun run, ScenarioReport report) : IClientPlacement
+    {
+        public ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation) =>
+            plan.Owned ? run.OpenClient(report, output, plan, name, cancellation) : run.AttachClient(report, output, plan, name, cancellation);
+    }
 
     private async Task<ClientSession> AttachClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation)
     {

@@ -270,6 +270,15 @@ sealed class Valheim.Testing.Game.CliTunnel : System.IDisposable
   property System.Int32 LocalPort { get; }
   property System.String Address { get; }
   property System.String StandardError { get; }
+sealed class Valheim.Testing.Game.ClientActor : System.IDisposable
+  method System.Void Dispose()
+  method Valheim.Testing.Game.ClientSession Start()
+  method static Valheim.Testing.Game.ClientActor OnThisMachine(System.String name, Valheim.Testing.Game.ClientRunPlan plan, System.String output, System.Threading.CancellationToken cancellation = null)
+  property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.RunLog> Logs { get; }
+  property System.String Name { get; }
+  property Valheim.Testing.Game.ClientRunPlan Plan { get; }
+  property Valheim.Testing.Game.ClientSession Session { get; }
+  property Valheim.Testing.Game.GameActor Game { get; }
 [result shape] enum Valheim.Testing.Game.ClientArchitecture
   field const Valheim.Testing.Game.ClientArchitecture Arm64 = 1
   field const Valheim.Testing.Game.ClientArchitecture X64 = 0
