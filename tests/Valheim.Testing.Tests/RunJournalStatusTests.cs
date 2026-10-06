@@ -132,6 +132,56 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Contains("its runner was not journalled", Run(report, "run-unrecorded").Reason);
     }
 
+    // Run A (#258): a run whose runner ran on the host itself (the station PC, its journal read from this Mac) is judged through
+    // that host: ended when its runner is gone, live while it runs. A runner on a third machine, or on a host that cannot be
+    // asked, stays unknown; so does one on a bash host, whose start times do not compare with the journalled one.
+    [Fact] public async Task ARunnerOnTheHostItselfIsJudgedThroughThatHost()
+    {
+        var pc = new FakeServerHost("pc", Path.Combine(_root, "winpc"), windows: true) { MachineName = Elsewhere.Machine.ToUpperInvariant() };
+        var gone = Elsewhere with { Pid = 5001 };
+        var alive = Elsewhere with { Pid = 5002 };
+        var third = new JournalRunner("a-third-machine", 5003, T0.AddHours(-1));
+        pc.Running(5002, alive.StartedUtc.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture));
+        pc.Running(5004, DateTime.UtcNow.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture)); // ID 5004 reused since
+        var reused = Elsewhere with { Pid = 5004 };
+        foreach (var (run, runner) in new[] { ("run-gone", gone), ("run-alive", alive), ("run-third", third), ("run-reused", reused) })
+            Line(pc, run, "server", runner, JournalEntry.CopyIntended, ("runtime", "/srv/" + run));
+        Line(pc, "run-gone", "server", gone, JournalEntry.CopyRetired, ("runtime", "/srv/run-gone"));
+        Line(pc, "run-reused", "server", reused, JournalEntry.CopyRetired, ("runtime", "/srv/run-reused"));
+
+        var report = await InspectAsync(("pc", pc));
+
+        Assert.Equal(JournalRunState.Ended, Run(report, "run-gone").State);
+        Assert.Contains("its runner is gone, as host pc reports", Run(report, "run-gone").Reason);
+        Assert.Equal(JournalRunState.Ended, Run(report, "run-reused").State); // Same ID, another start time: not the runner.
+        // Negative control: the runner still runs there, so the run is live, not ended.
+        Assert.Equal(JournalRunState.Live, Run(report, "run-alive").State);
+        Assert.Contains("as host pc reports", Run(report, "run-alive").Reason);
+        Assert.Equal(JournalRunState.Unknown, Run(report, "run-third").State);
+        Assert.Contains("its runner ran on a-third-machine: check it there", Run(report, "run-third").Reason);
+        Assert.Single(pc.Runs, script => script.Script == "machine-name");
+        Assert.Equal("5001: 5002: 5004:", string.Join(' ', pc.Runs.Single(script => script.Script == "process-probe").Variables["processes"].Split(' ').Order()));
+
+        // A host that cannot say its name leaves its runs unknown.
+        var mute = new FakeServerHost("pc", Path.Combine(_root, "mute"), windows: true);
+        mute.Failures["machine-name"] = new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(5), true);
+        Line(mute, "run-gone", "server", gone, JournalEntry.CopyIntended, ("runtime", "/srv/run-gone"));
+        Assert.Equal(JournalRunState.Unknown, Run(await InspectAsync(("pc", mute)), "run-gone").State);
+        // Two hosts reporting the runner's machine name: neither is taken for it, so the run stays unknown.
+        var twin = new FakeServerHost("twin", Path.Combine(_root, "twin"), windows: true) { MachineName = pc.MachineName };
+        var twins = await RunJournalStatus.InspectAsync(Hosts("pc", "twin"), name => name == "pc" ? pc : twin, TimeSpan.FromSeconds(5));
+        Assert.Equal(JournalRunState.Unknown, Run(twins, "run-gone").State);
+        // The runner's machine is asked even when the run journalled only on another host.
+        var other = new FakeServerHost("nas", Path.Combine(_root, "nas"));
+        Line(other, "run-on-nas", "server", gone, JournalEntry.CopyIntended, ("runtime", "/srv/run-on-nas"));
+        var viaPc = await RunJournalStatus.InspectAsync(Hosts("pc", "nas"), name => name == "pc" ? pc : other, TimeSpan.FromSeconds(5));
+        Assert.Contains("its runner is gone, as host pc reports", Run(viaPc, "run-on-nas").Reason);
+        // A bash host is not asked: its runs stay unknown.
+        Line(_host, "run-bash", "server", gone, JournalEntry.CopyIntended, ("runtime", "/srv/run-bash"));
+        Assert.Equal(JournalRunState.Unknown, Run(await InspectAsync(), "run-bash").State);
+        Assert.DoesNotContain(_host.Runs, script => script.Script == "machine-name");
+    }
+
     // #257 review: two runs that journalled the same process ID with different start times get their own verdicts.
     [Fact] public async Task AProcessIdReusedByALaterRunIsJudgedPerStartIdentity()
     {
