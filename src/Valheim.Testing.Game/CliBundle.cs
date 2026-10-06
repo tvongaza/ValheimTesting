@@ -23,7 +23,8 @@ public static class CliBundle
     /// The bundle in <paramref name="zip"/>, which must be <paramref name="sha256"/>, as a verified folder under
     /// <paramref name="dataRoot"/> (default <see cref="DataRoot"/>)<c>/cli/&lt;commit&gt;</c>. An existing folder is reused only when
     /// it was extracted from this zip and every file its manifest names still has its hash; otherwise it is extracted again
-    /// beside it and swapped in. A zip of another hash, or a manifest that does not match the files in the zip, is refused.
+    /// beside it and swapped in, one run at a time (<c>&lt;commit&gt;.lock</c> beside the folder), so concurrent runs share one copy
+    /// and never replace a current one. A zip of another hash, or a manifest that does not match the files in the zip, is refused.
     /// </summary>
     public static CliBundleSource Extract(Stream zip, string sha256, string commit, string origin, string? dataRoot = null)
     {
@@ -48,48 +49,89 @@ public static class CliBundle
                 using var content = entry.Open();
                 expected[entry.FullName] = FileHash.Sha256(content);
             }
-        if (Current(target, stamp, found, expected))
+        // Read without the lock: a copy another run is swapping in or out reads as not current here, never as an error.
+        if (Settled(() => Current(target, stamp, found, expected)))
             return new CliBundleSource(Path.Combine(target, ManifestFile), target, origin + $" (sha256 {found}), at {target}");
 
-        string staging = target + ".extract-" + Guid.NewGuid().ToString("N");
-        try
+        // One extraction at a time for this folder, across processes (<commit>.lock beside it): a run decides whether the copy
+        // is current and replaces it only while it holds the lock, so a copy another run just moved in is used, never set aside.
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        string? old = null;
+        using (SwapLock(target + ".lock"))
         {
-            buffer.Position = 0;
-            using (var archive = new ZipArchive(buffer, ZipArchiveMode.Read, leaveOpen: true))
-            {
-                foreach (var entry in archive.Entries)
-                {
-                    // Flat files only (checked above): the DLLs, the manifest and the license, never a path.
-                    Directory.CreateDirectory(staging);
-                    entry.ExtractToFile(Path.Combine(staging, entry.FullName));
-                }
-            }
-            if (!Intact(staging, expected)) throw new InvalidDataException("The ValheimCLI bundle's files do not match its own manifest.");
-            File.WriteAllText(Path.Combine(staging, ".bundle-sha256"), found + "\n");
-            // Another run may have extracted the same bundle meanwhile: use its copy rather than replace it under it.
             if (Current(target, stamp, found, expected))
                 return new CliBundleSource(Path.Combine(target, ManifestFile), target, origin + $" (sha256 {found}), at {target}");
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            // A damaged copy goes aside first (a rename, which another run's open file does not block on the folder level
-            // as a delete of its files would), then the new one moves in; a run that wins the race is used as it is.
-            string? old = null;
-            if (Directory.Exists(target))
+            string staging = target + ".extract-" + Guid.NewGuid().ToString("N");
+            try
             {
-                old = target + ".old-" + Guid.NewGuid().ToString("N");
-                try { Directory.Move(target, old); } catch (IOException) when (Current(target, stamp, found, expected)) { old = null; }
+                buffer.Position = 0;
+                using (var archive = new ZipArchive(buffer, ZipArchiveMode.Read, leaveOpen: true))
+                {
+                    foreach (var entry in archive.Entries)
+                    {
+                        // Flat files only (checked above): the DLLs, the manifest and the license, never a path.
+                        Directory.CreateDirectory(staging);
+                        entry.ExtractToFile(Path.Combine(staging, entry.FullName));
+                    }
+                }
+                if (!Intact(staging, expected)) throw new InvalidDataException("The ValheimCLI bundle's files do not match its own manifest.");
+                File.WriteAllText(Path.Combine(staging, ".bundle-sha256"), found + "\n");
+                // A damaged copy goes aside first (a rename; on Windows it waits while a run outside the lock still reads a
+                // file of it), then the new one moves in. If the new one cannot, the damaged one goes back: never no copy.
+                if (Directory.Exists(target))
+                {
+                    old = target + ".old-" + Guid.NewGuid().ToString("N");
+                    Retry(() => Directory.Move(target, old), $"set the damaged ValheimCLI bundle at {target} aside");
+                }
+                try { Retry(() => Directory.Move(staging, target), $"move the extracted ValheimCLI bundle into {target}"); }
+                catch when (old != null)
+                {
+                    try { Directory.Move(old, target); old = null; } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+                    throw;
+                }
             }
-            try { Directory.Move(staging, target); }
-            catch (IOException) when (Current(target, stamp, found, expected))
+            finally
             {
-                return new CliBundleSource(Path.Combine(target, ManifestFile), target, origin + $" (sha256 {found}), at {target}");
+                if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
             }
-            if (old != null) try { Directory.Delete(old, recursive: true); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         }
-        finally
-        {
-            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
-        }
+        // The damaged copy is out of the way: removed after the lock, best effort.
+        if (old != null) try { Directory.Delete(old, recursive: true); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         return new CliBundleSource(Path.Combine(target, ManifestFile), target, origin + $" (sha256 {found}), extracted to {target}");
+    }
+
+    private static readonly TimeSpan SwapWait = TimeSpan.FromMinutes(2);
+
+    // An exclusive handle on the lock file (FileShare.None: a sharing lock on Windows, flock on Linux and macOS), retried
+    // until another run's extraction ends. The file stays; only the handle is the lock.
+    private static FileStream SwapLock(string path)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) when (clock.Elapsed < SwapWait) { Thread.Sleep(20); }
+            catch (IOException error) { throw new IOException($"Another run has held {path} for {SwapWait.TotalMinutes:0} minutes while extracting the ValheimCLI bundle; the lock ends with that process.", error); }
+        }
+    }
+
+    // A folder rename that a reader outside the lock briefly blocks on Windows (a file of it open for hashing), for up to ~10 s.
+    private static void Retry(Action action, string what)
+    {
+        for (int attempt = 1; ; attempt++)
+            try { action(); return; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= 50) throw new IOException($"Could not {what}: {error.Message}", error);
+                Thread.Sleep(20 * Math.Min(attempt, 10));
+            }
+    }
+
+    // A check outside the lock: files that vanish or are locked mid-swap mean "not current yet", not a failure.
+    private static bool Settled(Func<bool> check)
+    {
+        try { return check(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
 
     // A complete extraction of this very zip.
