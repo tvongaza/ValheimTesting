@@ -170,7 +170,7 @@ Run `ownership-handoff` as a campaign ([Prepare the campaign](#prepare-the-campa
 }
 ```
 
-Run `campaign check` first: two clients on one host, a CLI port conflict, two clients with one registered character, or a plugin the plan pins but a role's lock does not select is refused before any host is contacted; a shared signed-in Steam account is refused by `env preflight --hosts` and again before the first copy. The example's own plan rules (a missing capability, one character name twice) are checked on the bound plan before any game starts. Then `campaign run` with the same manifest and plan; the ordinary `run` refuses these two scenarios. The inventory stays private; the [sample plan](MyMod.SystemTests/sample-plan-ownership-handoff.json) uses placeholder file hashes and a documentation-only server address. Each client joins with the toolkit's one join (`SessionControl.JoinWorld`: world pins, the world awaited, the player protected, test access on its disposable character), and arrives with the toolkit's one arrival, `PlayerPlacement.Arrive` without a server, so the client teleports itself: with two players the server cannot name one.
+Run `campaign check` first: two clients on one host, a CLI port conflict, two clients with one registered character, or a plugin the plan pins but a role's lock does not select is refused before any host is contacted; a shared signed-in Steam account is refused by `session check --hosts` and again before the first copy. The example's own plan rules (a missing capability, one character name twice) are checked on the bound plan before any game starts. Then `campaign run` with the same manifest and plan; the ordinary `run` refuses these two scenarios. The inventory stays private; the [sample plan](MyMod.SystemTests/sample-plan-ownership-handoff.json) uses placeholder file hashes and a documentation-only server address. Each client joins with the toolkit's one join (`SessionControl.JoinWorld`: world pins, the world awaited, the player protected, test access on its disposable character), and arrives with the toolkit's one arrival, `PlayerPlacement.Arrive` without a server, so the client teleports itself: with two players the server cannot name one.
 
 Give the clients separate landing points at least 3 m apart, each beside the marker rather than on it. Before either client launches, the server checks the declared heights against the fixture's generator and refuses wet targets. After each teleport's floor-ready signal, the client measures loaded terrain at its target (`Arrive`'s `loadedGround`), which may include location levelling absent from the raw generator, and the scenario refuses it when it is not dry. That measured height is a placement input, not a terrain-correctness assertion; a separate player-support observation must still confirm proximity, grounding and low speed. Failed arrival keeps a bounded read-only support/ground diagnostic before teardown.
 
@@ -243,7 +243,7 @@ may list `environmentCandidates` in preference order, or omit it to consider all
 order. `differentHostFrom` names actors that must run on another host; for example, client B may require a host
 different from client A while the dedicated server shares client A's machine. Resolution backs up to another recipe
 if an earlier choice leaves a later actor without a compatible host. A recipe's `roles` is `["server"]` or `["client"]`.
-Run `valheim-test env preflight` first to see each chosen recipe and its reason. `--hosts` adds read-only checks of
+Run `valheim-test session check` first to see each chosen recipe and its reason. `--hosts` adds read-only checks of
 the selected installs, ValheimCLI ports and signed-in Steam accounts. Preparation writes
 `environment-assignments.json` to the output's `prepared/` so the choice is reviewable afterwards; the observed Steam IDs
 are never written. The source installs remain untouched and all actor runtime copies are made after the full preflight passes.
@@ -256,23 +256,23 @@ own identity. Unix's remembered Steam login alone is not proof of the running ga
 from the recorded identity reply. The FullLifecycle runner opts into `TestAccess.Ensure`: dedicated servers acknowledge
 cheats locally, and clients acknowledge their disposable character after joining. `AllowOnServerClients` must already be
 set in the staged configuration for client mutations; the helper never grants it at runtime. Register two clean, distinct
-test characters with `DisposableCharacterStore`; one seed copied twice is still one player. Each is staged into its client host's own `characters_local`, resolved on that host with its Steam `userdata` (see [the campaign docs](../../docs/packages/Valheim.Testing.Game.md#a-campaign-remote-clients-and-steam-identities)); `env preflight --hosts` prints both folders. Set the server password and
+test characters with `DisposableCharacterStore`; one seed copied twice is still one player. Each is staged into its client host's own `characters_local`, resolved on that host with its Steam `userdata` (see [the campaign docs](../../docs/packages/Valheim.Testing.Game.md#a-campaign-remote-clients-and-steam-identities)); `session check --hosts` prints both folders. Set the server password and
 client password variable in the private plan/environment as for any owned-server run. The sample paths and password are
 placeholders, never defaults that the runner guesses.
 
 From the repository root, these are the preparation check and the complete run:
 
 ```sh
-dotnet run --project src/Valheim.Testing.NativeSmoke -c Release -- env preflight /private/test/campaign.json
+dotnet run --project src/Valheim.Testing.NativeSmoke -c Release -- session check /private/test/campaign.json --hosts
 dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign check /private/test/campaign.json /private/test/three-actor-plan.json
 dotnet run --project examples/FullLifecycle/MyMod.SystemTests -c Release -- campaign run /private/test/campaign.json /private/test/three-actor-plan.json /private/test/runs/first
 ```
 
-The first line is the candidate `valheim-test env preflight MANIFEST` command, run from the NativeSmoke project until
-#259's `valheim-test env` owns it; the same lines work in any shell (a sandbox with a blocked NuGet cache: see the recipe in [AGENTS.md](../../AGENTS.md)). Use `--json` for a machine-readable report. It
+The first line is `valheim-test session check SESSION --hosts`, run from the NativeSmoke project (a tool released after
+NativeSmoke 0.1.0-preview.3 runs it as `valheim-test`); the same lines work in any shell (a sandbox with a blocked NuGet cache: see the recipe in [AGENTS.md](../../AGENTS.md)). Use `--json` for a machine-readable report. It
 reports all independent local lock, loader, character, fixture and inventory problems it can find in one pass, plus the
-selected actors and hosts. Add `--hosts` to read the selected source installs and Steam sessions on their hosts,
-and to check the combined copy size of actors sharing a target volume against its free space;
+selected actors and hosts. `--hosts` reads the selected source installs and Steam sessions on their hosts,
+and checks the combined copy size of actors sharing a target volume against its free space;
 it does not copy or launch anything. Without that flag it does not contact hosts or assert their current readiness.
 `campaign check` adds the plan's agreement with the campaign (world and join set, pinned plugins selected, no placeholder argument) without touching a host; the example's own plan rules run once the plan is bound to its prepared actors; `campaign run` starts with the same two checks as its Preflight steps. A ready host result is still checked
 again under leases before launch. The run

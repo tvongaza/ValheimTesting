@@ -2,12 +2,13 @@ using System.Text.Json;
 using Valheim.Testing.Game;
 
 /// <summary>
-/// Read-only local campaign eligibility (runtime readiness is checked again under the host leases), and what earlier runs left
-/// on each host, from their journals (<c>status</c>).
+/// The environments: what the inventory holds (<c>list</c>), whether a one-off can run on it (<c>preflight</c>, read only), and
+/// what earlier runs left on each host, from their journals (<c>status</c>, <c>recover</c>, <c>teardown</c>). A session's own
+/// check is <see cref="SessionCommand"/>.
 /// </summary>
 internal static class EnvCommand
 {
-    internal const string Usage = "valheim-test env preflight [MANIFEST [--hosts] | --inventory FILE] [--json] | valheim-test env status [--inventory FILE] [--json] | " +
+    internal const string Usage = "valheim-test env list|preflight [--inventory FILE] [--json] | valheim-test env status [--inventory FILE] [--json] | " +
         "valheim-test env recover|teardown --run ID [--inventory FILE] [--json] | valheim-test env teardown --copy PATH [--inventory FILE] | " +
         "valheim-test env teardown --run ID --machine-gone [--inventory FILE]";
 
@@ -17,23 +18,33 @@ internal static class EnvCommand
         error ??= Console.Error;
         if (args.Length != 0 && args[0] is "status" or "recover" or "teardown") return await Journal(args[0], args[1..], output, error).ConfigureAwait(false);
         var rest = args.Skip(1).ToList();
-        bool json = rest.Remove("--json"), hosts = rest.Remove("--hosts");
-        string? inventoryFile = null;
-        int at = rest.IndexOf("--inventory");
-        if (at >= 0 && at + 1 < rest.Count) { inventoryFile = rest[at + 1]; rest.RemoveRange(at, 2); }
-        string? manifest = rest.Count == 1 && !rest[0].StartsWith("--", StringComparison.Ordinal) ? rest[0] : null;
-        if (args.Length == 0 || args[0] != "preflight" || rest.Count > (manifest == null ? 0 : 1) || (at >= 0 && inventoryFile == null) ||
-            rest.Contains("--json") || rest.Contains("--hosts") || (manifest != null && inventoryFile != null) || (hosts && manifest == null))
+        bool json = rest.Remove("--json");
+        string? inventoryFile = Option(rest, "--inventory");
+        if (args.Length == 0 || args[0] is not ("list" or "preflight") || rest.Count != 0)
         {
-            error.WriteLine("Usage: " + Usage);
+            // The old form, env preflight SESSION [--hosts], names the command that checks a session now.
+            bool session = args.Length != 0 && args[0] == "preflight" && rest.Any(arg => !arg.StartsWith("--", StringComparison.Ordinal));
+            error.WriteLine("Usage: " + Usage + (session ? ". A session's check is valheim-test session check SESSION [--hosts] [--json]." : ""));
             return 2;
         }
-        return manifest == null ? await Inventory(inventoryFile, json, output, error).ConfigureAwait(false) : await Campaign(manifest, hosts, json, output, error).ConfigureAwait(false);
+        return await Inventory(inventoryFile, args[0] == "preflight", json, output, error).ConfigureAwait(false);
     }
 
-    // No campaign: what the inventory holds (this machine, or the file with its local environments filled in). A one-off needs a
-    // server and a client, and no run of another process going on this machine or left unrecovered by its journal (#257).
-    private static async Task<int> Inventory(string? file, bool json, TextWriter output, TextWriter error)
+    // The value after a single option, removed from rest; a missing value (or another option in its place) leaves the option
+    // in rest, which the caller refuses as a usage error.
+    private static string? Option(List<string> rest, string name)
+    {
+        int at = rest.IndexOf(name);
+        if (at < 0 || at + 1 >= rest.Count || rest[at + 1].StartsWith("--", StringComparison.Ordinal)) return null;
+        string value = rest[at + 1];
+        rest.RemoveRange(at, 2);
+        return value;
+    }
+
+    // No session: what the inventory holds (this machine, or the file with its local environments filled in). list shows it and
+    // gives no verdict; preflight shows the same and says whether a one-off can run on it: a server and a client, and no run of
+    // another process going on this machine or left unrecovered by its journal (#257).
+    private static async Task<int> Inventory(string? file, bool preflight, bool json, TextWriter output, TextWriter error)
     {
         EnvironmentInventory inventory;
         try { inventory = EnvironmentInventory.Read(file == null ? null : Path.GetFullPath(file)); }
@@ -43,63 +54,31 @@ internal static class EnvCommand
             return 3;
         }
         var missingRoles = new[] { "server", "client" }.Where(role => !inventory.Environments.Any(recipe => recipe.Roles.Contains(role))).ToArray();
-        var problems = await inventory.LocalJournalProblemsAsync().ConfigureAwait(false);
+        var problems = preflight ? await inventory.LocalJournalProblemsAsync().ConfigureAwait(false) : [];
         bool ready = missingRoles.Length == 0 && problems.Count == 0;
         if (json)
-            output.WriteLine(JsonSerializer.Serialize(new
-            {
-                inventory.Detected, inventory.Missing,
-                Environments = inventory.Environments.Select(recipe => new { recipe.Name, recipe.Host, recipe.Roles, recipe.Install, recipe.Runtime, recipe.CliPort, recipe.GamePort }),
-                Problems = problems, Ready = ready,
-            }, new JsonSerializerOptions { WriteIndented = true }));
-        else
         {
-            Detected(inventory.Detected, output);
-            foreach (string line in inventory.Missing) output.WriteLine("NOT FOUND: " + line);
-            foreach (var problem in problems) output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
-            output.WriteLine(missingRoles.Length != 0 ? "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment."
-                : problems.Count != 0 ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
-                : "ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered. " +
-                  "Campaign inputs and host readiness are checked when a campaign is given.");
+            var listing = new Dictionary<string, object?>
+            {
+                ["Detected"] = inventory.Detected, ["Missing"] = inventory.Missing,
+                ["Environments"] = inventory.Environments.Select(recipe => new { recipe.Name, recipe.Host, recipe.Roles, recipe.Install, recipe.Runtime, recipe.CliPort, recipe.GamePort }),
+            };
+            if (preflight) { listing["Problems"] = problems; listing["Ready"] = ready; }
+            output.WriteLine(JsonSerializer.Serialize(listing, new JsonSerializerOptions { WriteIndented = true }));
+            return preflight && !ready ? 3 : 0;
         }
+        foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
+        foreach (string line in inventory.Missing) output.WriteLine("NOT FOUND: " + line);
+        foreach (var recipe in inventory.Environments)
+            output.WriteLine($"{recipe.Name}: {string.Join(" and ", recipe.Roles)} on {recipe.Host}; install {recipe.Install}; runtime {recipe.Runtime}; " +
+                $"ValheimCLI port {recipe.CliPort}" + (recipe.Roles.Contains("server") ? $", game port {recipe.GamePort}" : ""));
+        if (!preflight) return 0;
+        foreach (var problem in problems) output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
+        output.WriteLine(missingRoles.Length != 0 ? "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment."
+            : problems.Count != 0 ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
+            : "ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered. " +
+              "A session's inputs and host readiness are checked by valheim-test session check SESSION [--hosts].");
         return ready ? 0 : 3;
-    }
-
-    private static async Task<int> Campaign(string manifest, bool hosts, bool json, TextWriter output, TextWriter error)
-    {
-        CampaignPreflightReport report;
-        try
-        {
-            report = hosts
-                ? await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(60)).ConfigureAwait(false)
-                : HostedCampaignPreparation.Inspect(manifest);
-        }
-        catch (Exception failure) when (failure is ArgumentException or IOException or UnauthorizedAccessException or HostOperationException)
-        {
-            error.WriteLine("REFUSED: " + failure.Message);
-            return 3;
-        }
-        if (json)
-        {
-            output.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        else
-        {
-            Detected(report.Detected, output);
-            foreach (var actor in report.Actors)
-            {
-                output.WriteLine($"{actor.Name}: {actor.Kind} on {actor.Host} ({actor.Platform})" +
-                    (actor.Environment == null ? "" : $" via {actor.Environment}: {actor.SelectionReason}"));
-                if (actor.CharactersDirectory != null)
-                    output.WriteLine($"  characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
-            }
-            if (report.Ready) output.WriteLine(hosts
-                ? "READY: read-only host checks passed. Mutable state is rechecked under lease before launch."
-                : "ELIGIBLE: local files, fixture and actor assignments passed. Host readiness is checked under lease before launch.");
-            else foreach (var problem in report.Problems)
-                output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
-        }
-        return report.Ready ? 0 : 3;
     }
 
     // From each host's run journal: status (what earlier runs left; changes nothing), recover (clear what one run provably
@@ -110,16 +89,7 @@ internal static class EnvCommand
     {
         var rest = args.ToList();
         bool json = rest.Remove("--json"), machineGone = action == "teardown" && rest.Remove("--machine-gone");
-        string? Option(string name)
-        {
-            int at = rest.IndexOf(name);
-            if (at < 0) return null;
-            if (at + 1 >= rest.Count || rest[at + 1].StartsWith("--", StringComparison.Ordinal)) { rest.Add(name); return null; } // left over: a usage error
-            string value = rest[at + 1];
-            rest.RemoveRange(at, 2);
-            return value;
-        }
-        string? file = Option("--inventory"), run = action == "status" ? null : Option("--run"), copy = action == "teardown" ? Option("--copy") : null;
+        string? file = Option(rest, "--inventory"), run = action == "status" ? null : Option(rest, "--run"), copy = action == "teardown" ? Option(rest, "--copy") : null;
         if (rest.Count != 0 || (action != "status" && (run == null) == (copy == null)) || (copy != null && json) || (machineGone && (run == null || json)))
         {
             error.WriteLine("Usage: " + Usage);
@@ -139,10 +109,5 @@ internal static class EnvCommand
             error.WriteLine("REFUSED: " + failure.Message);
             return 3;
         }
-    }
-
-    private static void Detected(IReadOnlyList<string> lines, TextWriter output)
-    {
-        foreach (string line in lines) output.WriteLine("detected: " + line);
     }
 }

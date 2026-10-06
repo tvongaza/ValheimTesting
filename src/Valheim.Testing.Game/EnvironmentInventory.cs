@@ -262,7 +262,7 @@ public sealed class EnvironmentInventory
 
     /// <summary>
     /// What a bare <c>valheim-test env preflight</c> refuses from this machine's journals (its own and the inventory's local
-    /// hosts'; another host's is read by a campaign's <c>--hosts</c> preflight): a run of another process still going here, one
+    /// hosts'; another host's is read by <c>valheim-test session check --hosts</c>): a run of another process still going here, one
     /// that left something (recoverable or not) and was not recovered, one that may still be going, and a journal that cannot be
     /// read. The same wording as the campaign's journal check. Changes nothing.
     /// </summary>

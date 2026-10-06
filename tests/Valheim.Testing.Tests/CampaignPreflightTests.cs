@@ -48,7 +48,7 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "world fixture");
         Assert.True(report.Problems.Count >= 6);
         using var output = new StringWriter();
-        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", file], output, new StringWriter()));
+        Assert.Equal(3, await SessionCommand.RunAsync(["check", file], output, new StringWriter()));
         Assert.Empty(report.Actors); // An invalid inventory selects no actor, even when other inputs can be checked.
         Assert.Contains("REFUSED server loader", output.ToString());
         Assert.Contains("REFUSED client-a character", output.ToString());
@@ -73,7 +73,7 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "world fixture" && problem.Message.Contains("world UID"));
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
         using var output = new StringWriter();
-        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", file, "--json"], output, new StringWriter()));
+        Assert.Equal(3, await SessionCommand.RunAsync(["check", file, "--json"], output, new StringWriter()));
         using var json = JsonDocument.Parse(output.ToString());
         Assert.False(json.RootElement.GetProperty("Ready").GetBoolean());
         Assert.Contains(json.RootElement.GetProperty("Problems").EnumerateArray(),
@@ -81,14 +81,67 @@ public sealed class CampaignPreflightTests : IDisposable
     }
 
     [Fact]
-    public async Task EnvCommandRefusesInvalidArgumentsWithoutReadingAHost()
+    public async Task EnvAndSessionCommandsRefuseInvalidArgumentsWithoutReadingAHost()
     {
-        foreach (string[] args in new string[][] { [], ["preflight", "--hosts"], ["preflight", "a.json", "--inventory", "b.json"], ["preflight", "--inventory"], ["preflight", "a", "b"] })
+        foreach (string[] args in new string[][] { [], ["preflight", "--hosts"], ["preflight", "a.json", "--inventory", "b.json"], ["preflight", "--inventory"],
+            ["preflight", "a", "b"], ["list", "--hosts"], ["list", "a.json"], ["list", "--inventory"], ["list", "--inventory", "--json"], ["setup"] })
         {
             var error = new StringWriter();
             Assert.Equal(2, await EnvCommand.RunAsync(args, new StringWriter(), error));
             Assert.Contains("Usage: valheim-test env", error.ToString());
         }
+        // A session file given to env preflight (its old form) names the command that checks a session.
+        foreach (string[] args in new string[][] { ["preflight", "session.json", "--hosts"], ["preflight", "--hosts", "session.json"], ["preflight", "--json", "session.json"] })
+        {
+            var moved = new StringWriter();
+            Assert.Equal(2, await EnvCommand.RunAsync(args, new StringWriter(), moved));
+            Assert.Contains("A session's check is valheim-test session check SESSION [--hosts] [--json].", moved.ToString());
+        }
+        var plain = new StringWriter();
+        Assert.Equal(2, await EnvCommand.RunAsync(["preflight", "--hosts"], new StringWriter(), plain));
+        Assert.DoesNotContain("session check", plain.ToString());
+        foreach (string[] args in new string[][] { [], ["check"], ["check", "--hosts"], ["check", "a.json", "b.json"], ["run", "a.json"], ["check", "a.json", "--inventory", "b.json"] })
+        {
+            var error = new StringWriter();
+            Assert.Equal(2, await SessionCommand.RunAsync(args, new StringWriter(), error));
+            Assert.Contains("Usage: valheim-test session check SESSION", error.ToString());
+        }
+    }
+
+    // env list shows the inventory as preflight reads it, and judges nothing: no verdict, and no refusal for a missing role or
+    // a run this machine's journal holds.
+    [Fact]
+    public async Task EnvListShowsTheInventoryWithoutAVerdict()
+    {
+        var mirror = new FakeServerHost("mirror", Path.Combine(_root, "machine"));
+        using var journal = RunJournal.UseLocalDirectory(mirror.Local(RunJournalStatusTests.Journal));
+        RunJournalStatusTests.Line(mirror, "run-left", "server", RunJournalStatusTests.Gone, JournalEntry.CopyIntended, ("runtime", "/srv/runs/left/runtime"));
+        string serverOnly = Write("server-only.json", new
+        {
+            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\test.lock", destination = "test@pc" } },
+            environments = new object[] { new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\server", runtime = @"C:\runs", cliPort = 5577, gamePort = 2456 } },
+        });
+        using var listed = new StringWriter();
+        Assert.Equal(0, await EnvCommand.RunAsync(["list", "--inventory", serverOnly], listed, new StringWriter()));
+        Assert.Contains(@"pc-server: server on pc; install C:\server; runtime C:\runs; ValheimCLI port 5577, game port 2456", listed.ToString());
+        Assert.DoesNotContain("REFUSED", listed.ToString());
+        Assert.DoesNotContain("ELIGIBLE", listed.ToString());
+        using var json = new StringWriter();
+        Assert.Equal(0, await EnvCommand.RunAsync(["list", "--json", "--inventory", serverOnly], json, new StringWriter()));
+        using (var document = JsonDocument.Parse(json.ToString()))
+        {
+            Assert.Equal("pc-server", Assert.Single(document.RootElement.GetProperty("Environments").EnumerateArray()).GetProperty("Name").GetString());
+            Assert.False(document.RootElement.TryGetProperty("Ready", out _));
+        }
+        // The same inventory is refused by preflight: no client environment, and the run this machine's journal holds.
+        using var refused = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", serverOnly], refused, new StringWriter()));
+        Assert.Contains("REFUSED: the inventory has no client environment.", refused.ToString());
+        Assert.Contains(@"pc-server: server on pc; install C:\server", refused.ToString()); // the same listing, then the verdict
+        Assert.Contains("REFUSED this-machine run journal: run run-left", refused.ToString());
+        // An unreadable inventory is refused by list too.
+        File.WriteAllText(serverOnly, "null");
+        Assert.Equal(3, await EnvCommand.RunAsync(["list", "--inventory", serverOnly], new StringWriter(), new StringWriter()));
     }
 
     // With no campaign, preflight shows the inventory: this machine (here a test machine without Steam) plus the file's
@@ -124,7 +177,7 @@ public sealed class CampaignPreflightTests : IDisposable
     }
 
     // #257: a bare preflight reads this machine's journal (through its own shell) and refuses while a run of another process
-    // left something there unrecovered, in the campaign check's words; once that run is over, the inventory is eligible again.
+    // left something there unrecovered, in the session check's words; once that run is over, the inventory is eligible again.
     [Fact]
     public async Task EnvPreflightWithoutACampaignRefusesWhileThisMachinesJournalHoldsAnUnrecoveredRun()
     {
