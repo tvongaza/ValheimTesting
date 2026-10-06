@@ -214,10 +214,26 @@ public class LocalHostServerTests
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public Task AListingMatchesTheLocalManifestAndPins(string shell) => HostServerChecks.AListingMatchesTheLocalManifestAndPins(new LocalGameHost("local-" + shell, HostShell.Parse(shell)));
 
+    // A macOS client host (a campaign's local Mac client) has no /proc: bash reads netstat's listeners there instead (run A, #258),
+    // for a loopback, a wildcard and a dual-stack IPv6 listener alike. Runs on the macOS CI leg; elsewhere it has nothing to check.
+    [Fact] public async Task AMacBashHostTellsABusyPortFromAFreeOne()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var host = new LocalGameHost("local-bash", HostShell.Bash);
+        foreach (var address in new[] { IPAddress.Loopback, IPAddress.Any, IPAddress.IPv6Any })
+        {
+            var listener = new TcpListener(address, 0); listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            try { await Assert.ThrowsAsync<InvalidOperationException>(() => HostInstall.RequirePortFreeAsync(host, port, GameHostChecks.Generous)); }
+            finally { listener.Stop(); }
+            await HostInstall.RequirePortFreeAsync(host, port, GameHostChecks.Generous);
+        }
+    }
+
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public async Task APowerShellHostTellsABusyPortFromAFreeOne(string shell)
     {
-        // Bash reads /proc/net/tcp, checked on Linux above; a PowerShell host is a Windows client's.
+        // Bash reads /proc/net/tcp on Linux and netstat on macOS (both above); a PowerShell host is a Windows host's.
         if (shell == "bash" || !OperatingSystem.IsWindows()) return;
         var host = new LocalGameHost("local-" + shell, HostShell.Parse(shell));
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
