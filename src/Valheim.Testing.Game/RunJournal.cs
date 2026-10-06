@@ -289,7 +289,7 @@ internal sealed class RunJournal
         { Run = root.GetProperty("run").GetString()!, Runner = runner };
     }
 
-    private static bool SafeName(string name) =>
+    internal static bool SafeName(string name) =>
         name.Length is > 0 and <= 128 && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-') && name.Trim('.').Length != 0;
 
     // Variables: journal, run, actor, line (base64 of one JSON object). Appends the decoded line and a newline in one write.

@@ -306,6 +306,116 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(JournalRunState.Ended, after.State);
     }
 
+    // #412: the game's logs inside a copy are what explains why the run was interrupted. Recover keeps them in the run's
+    // evidence folder on the host (beside its boot-N and client launch folders) before the copy goes, and names them. A log
+    // older than the copy came with the install: it is named, not kept.
+    [Fact] public async Task RecoverKeepsACopysGameLogsInTheRunsEvidenceFolderBeforeRemovingIt()
+    {
+        InterruptedRun();
+        string runtime = _host.Local(Prep + "/runtime");
+        File.WriteAllText(Path.Combine(runtime, "BepInEx", "LogOutput.log"), "[Info   :   BepInEx] Chainloader startup complete\n");
+        File.WriteAllText(Path.Combine(runtime, "toolkit-unity.log"), "unity says why");
+        File.WriteAllText(Path.Combine(runtime, "preloader_20261005_221500.log"), "[Error  : Preloader] it broke");
+        File.WriteAllText(Path.Combine(runtime, "preloader_20260901_101500.log"), "an old crash of the install");
+        File.SetLastWriteTimeUtc(Path.Combine(runtime, "preloader_20260901_101500.log"), DateTime.UtcNow.AddDays(-30));
+        // A client's copy: its logs too, the host user's Player.log among them.
+        const string ClientPrep = "/srv/runs/server/vt-prep-cut-client";
+        Directory.CreateDirectory(Path.Combine(_host.Local(ClientPrep + "/runtime"), "BepInEx"));
+        File.WriteAllText(Path.Combine(_host.Local(ClientPrep + "/runtime"), "BepInEx", "LogOutput.log"), "client log");
+        Line(_host, "run-cut", "client", Gone, JournalEntry.CopyIntended, ("runtime", ClientPrep + "/runtime"), ("stage", ClientPrep + "/staging"), ("parent", ClientPrep));
+        Line(_host, "run-cut", "client", Gone, JournalEntry.CopyDone, ("runtime", ClientPrep + "/runtime"));
+
+        var report = await RecoverAsync("run-cut");
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.False(Directory.Exists(_host.Local(Prep)));
+        Assert.False(Directory.Exists(_host.Local(ClientPrep)));
+        string server = _host.Local("/srv/runs/server/run-cut/recovered-server"), client = _host.Local("/srv/runs/server/run-cut/recovered-client");
+        Assert.Equal("[Info   :   BepInEx] Chainloader startup complete\n", File.ReadAllText(Path.Combine(server, "BepInEx", "LogOutput.log")));
+        Assert.Equal("unity says why", File.ReadAllText(Path.Combine(server, "toolkit-unity.log")));
+        Assert.True(File.Exists(Path.Combine(server, "preloader_20261005_221500.log")));
+        Assert.False(File.Exists(Path.Combine(server, "preloader_20260901_101500.log")));
+        Assert.Equal("client log", File.ReadAllText(Path.Combine(client, "BepInEx", "LogOutput.log")));
+        Assert.Equal("removed; its game logs are in /srv/runs/server/run-cut/recovered-server (BepInEx/LogOutput.log, toolkit-unity.log, preloader_20261005_221500.log)" +
+            "; left out as older than the copy: preloader_20260901_101500.log", Assert.Single(report.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
+        Assert.Equal("removed; its game logs are in /srv/runs/server/run-cut/recovered-client (BepInEx/LogOutput.log)",
+            Assert.Single(report.Steps, step => step.What == "copy " + ClientPrep + "/runtime").Outcome);
+        // Since the copy was made (its journalled start); the host user's Player.log only for a client.
+        var keeps = _host.Runs.Where(run => run.Script == "keep-logs").ToList();
+        Assert.Equal("false", Assert.Single(keeps, run => run.Variables["runtime"] == Prep + "/runtime").Variables["client"]);
+        Assert.Equal("true", Assert.Single(keeps, run => run.Variables["runtime"] == ClientPrep + "/runtime").Variables["client"]);
+        var copiedAt = DateTimeOffset.FromUnixTimeSeconds(long.Parse(keeps[0].Variables["since"], System.Globalization.CultureInfo.InvariantCulture));
+        Assert.InRange(copiedAt, DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddHours(-12)); // T0, the journal's time, not now.
+        // Each log is kept before its copy is removed.
+        var scripts = _host.Scripts.ToList();
+        Assert.True(scripts.IndexOf("keep-logs") < scripts.IndexOf("cleanup-stage"));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    // A copy whose logs could not be kept stays, for a later recovery; teardown keeps a kept copy's logs as recover does.
+    [Fact] public async Task ACopyWhoseLogsCannotBeKeptStaysAndTeardownKeepsAKeptCopysLogs()
+    {
+        InterruptedRun();
+        File.WriteAllText(Path.Combine(_host.Local(Prep + "/runtime"), "BepInEx", "LogOutput.log"), "why");
+        _host.Failures["keep-logs"] = FakeServerHost.TransportFailure;
+        var failed = await RecoverAsync("run-cut");
+        Assert.False(failed.Recovered);
+        Assert.StartsWith("not removed: its game logs could not be kept, so it stays", Assert.Single(failed.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
+        Assert.True(File.Exists(Path.Combine(_host.Local(Prep + "/runtime"), "BepInEx", "LogOutput.log")));
+        Assert.DoesNotContain("cleanup-stage", _host.Scripts);
+        _host.Failures.Remove("keep-logs");
+        Assert.True((await RecoverAsync("run-cut")).Recovered);
+        Assert.Equal("why", File.ReadAllText(_host.Local("/srv/runs/server/run-cut/recovered-server/BepInEx/LogOutput.log")));
+
+        const string KeptPrep = "/srv/runs/server/vt-prep-kept-server";
+        Directory.CreateDirectory(_host.Local(KeptPrep + "/runtime/BepInEx"));
+        File.WriteAllText(_host.Local(KeptPrep + "/runtime/BepInEx/LogOutput.log"), "kept run");
+        Line(_host, "run-kept", "server", Gone, JournalEntry.CopyIntended, ("runtime", KeptPrep + "/runtime"), ("stage", KeptPrep + "/staging"), ("parent", KeptPrep));
+        Line(_host, "run-kept", "server", Gone, JournalEntry.CopyKept, ("runtime", KeptPrep + "/runtime"), ("why", "kept on request"));
+        Line(_host, "run-kept", "run", Gone, JournalEntry.RunEnded, ("state", "passed"), ("cleanupVerified", "true"));
+        Assert.NotNull((await RecoverAsync("run-kept")).Refused);
+        Assert.False(Directory.Exists(_host.Local("/srv/runs/server/run-kept"))); // Recover left the kept copy alone.
+        Assert.True((await RecoverAsync("run-kept", teardown: true)).Recovered);
+        Assert.Equal("kept run", File.ReadAllText(_host.Local("/srv/runs/server/run-kept/recovered-server/BepInEx/LogOutput.log")));
+    }
+
+    // The real scripts on this machine (PowerShell on Windows, bash elsewhere): a copy's logs written since it was made are kept
+    // in the run's folder with their names, older ones are only named, a client's Player.log is kept the same way, and a copy
+    // that holds no log of the run makes no folder. Only a prepared copy's logs are kept.
+    [Fact] public async Task TheRealKeepScriptKeepsOnlyLogsWrittenSinceTheCopyWasMade()
+    {
+        var local = OperatingSystem.IsWindows() ? new LocalGameHost("pc", HostShell.WindowsPowerShell) : new LocalGameHost("pc", HostShell.Bash);
+        string runs = Path.Combine(_root, "runs", "env"), runtime = Path.Combine(runs, "vt-prep-run-real-client", "runtime");
+        Directory.CreateDirectory(Path.Combine(runtime, "BepInEx"));
+        File.WriteAllText(Path.Combine(runtime, "BepInEx", "LogOutput.log"), "bepinex");
+        File.WriteAllText(Path.Combine(runtime, "preloader_1.log"), "old preloader");
+        string player = Path.Combine(_root, "profile", "Player.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(player)!); File.WriteAllText(player, "player");
+        var copied = DateTime.UtcNow.AddMinutes(-10);
+        File.SetLastWriteTimeUtc(Path.Combine(runtime, "preloader_1.log"), copied.AddDays(-3)); // Came with the install.
+
+        var logs = await RunRecovery.KeepLogsAsync(local, runtime, "run-real", "client", copied, TimeSpan.FromSeconds(60), playerLog: player);
+        Assert.Equal(Path.Combine(runs, "run-real", "recovered-client"), logs.Folder);
+        Assert.Equal(["BepInEx/LogOutput.log", "Player.log"], logs.Kept);
+        Assert.Equal(["preloader_1.log"], logs.Older);
+        Assert.Equal("bepinex", File.ReadAllText(Path.Combine(logs.Folder, "BepInEx", "LogOutput.log")));
+        Assert.Equal("player", File.ReadAllText(Path.Combine(logs.Folder, "Player.log")));
+        Assert.False(File.Exists(Path.Combine(logs.Folder, "preloader_1.log")));
+
+        File.SetLastWriteTimeUtc(player, copied.AddHours(-1)); // An earlier client's.
+        string server = Path.Combine(runs, "vt-prep-run-real2-server", "runtime");
+        Directory.CreateDirectory(server); File.WriteAllText(Path.Combine(server, "toolkit-unity.log"), "unity");
+        logs = await RunRecovery.KeepLogsAsync(local, server, "run-real2", "client", copied, TimeSpan.FromSeconds(60), playerLog: player);
+        Assert.Equal(["toolkit-unity.log"], logs.Kept);
+        Assert.Equal(["Player.log"], logs.Older);
+
+        string empty = Directory.CreateDirectory(Path.Combine(runs, "vt-prep-run-empty-server", "runtime")).FullName;
+        logs = await RunRecovery.KeepLogsAsync(local, empty, "run-empty", "server", copied, TimeSpan.FromSeconds(60));
+        Assert.Empty(logs.Kept);
+        Assert.False(Directory.Exists(logs.Folder));
+        await Assert.ThrowsAsync<ArgumentException>(() => RunRecovery.KeepLogsAsync(local, Path.Combine(runs, "elsewhere", "runtime"), "run-x", "server", copied, TimeSpan.FromSeconds(60)));
+    }
+
     [Fact] public async Task TheCommandLineRequiresARunAndSaysWhatItRefused()
     {
         foreach (string[] args in new[] { new[] { "recover" }, ["teardown", "--run"], ["recover", "--run", "x", "extra"], ["recover", "--hosts", "--run", "x"] })

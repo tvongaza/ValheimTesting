@@ -288,15 +288,23 @@ public static class HostedRuntimeStage
     // must hold the host lock and must have stopped all game processes before retiring the prepared install.
     internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default)
     {
-        string parent = destination[..destination.LastIndexOfAny(['/', '\\'])];
-        if (!destination.EndsWith(host.Shell.Kind == HostShellKind.PowerShell ? @"\runtime" : "/runtime", StringComparison.OrdinalIgnoreCase) ||
-            !parent.Replace('\\', '/').Split('/').Last().StartsWith("vt-prep-", StringComparison.Ordinal))
-            throw new ArgumentException("Only a toolkit-created vt-prep runtime can be retired.", nameof(destination));
+        string parent = RequirePrepared(host, destination);
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
             new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false);
         result.EnsureSuccess($"Retiring prepared runtime on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-STAGE-CLEANED") == null)
             throw new HostOperationException($"Unexpected cleanup reply from {host.Name}", result);
+    }
+
+    /// <summary>Refuses anything but a toolkit-created <c>&lt;runs&gt;/vt-prep-*/runtime</c>; returns its <c>vt-prep-*</c> parent.</summary>
+    internal static string RequirePrepared(IGameHost host, string destination)
+    {
+        int at = destination.LastIndexOfAny(['/', '\\']);
+        string parent = at > 0 ? destination[..at] : "";
+        if (!destination.EndsWith(host.Shell.Kind == HostShellKind.PowerShell ? @"\runtime" : "/runtime", StringComparison.OrdinalIgnoreCase) ||
+            !parent.Replace('\\', '/').Split('/').Last().StartsWith("vt-prep-", StringComparison.Ordinal))
+            throw new ArgumentException("Only a toolkit-created vt-prep runtime can be retired.", nameof(destination));
+        return parent;
     }
 
     internal static readonly string WindowsApply = """
