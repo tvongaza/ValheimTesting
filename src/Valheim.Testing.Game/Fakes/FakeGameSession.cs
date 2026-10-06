@@ -37,7 +37,8 @@ public static class FakeGameSession
     /// <c>hostWorld</c> section; its fixture is placed in the client data directory a <see cref="FakeClientDataDirectory"/> scope
     /// gives), each of <paramref name="peers"/> (named clients that start with the session and join the host,
     /// <see cref="GameSession.Join"/>; their plans set <see cref="ClientRunPlan.JoinsHost"/>) and every client the scenario opens
-    /// (<see cref="GameSession.OpenClient"/>), each as <c>(plan, name, output)</c>.
+    /// (<see cref="GameSession.OpenClient"/>), each as <c>(plan, name, output)</c>. With peers, each actor's <c>output</c> is its own
+    /// folder <c>&lt;output&gt;/&lt;name&gt;</c> (the host's is <c>host</c>), as in a campaign; a host alone gets the output itself.
     /// <paramref name="mod"/>, when given, is checked on the host as the runner does. Start it before the scenario and dispose it
     /// after, as the runner does.
     /// </summary>
@@ -49,10 +50,14 @@ public static class FakeGameSession
     {
         ArgumentNullException.ThrowIfNull(host); ArgumentNullException.ThrowIfNull(openClient);
         var placement = new Placement(openClient);
+        // With peers, every actor writes into its own folder (GameSession.ActorOutput), as a hosted campaign's do; a host alone
+        // writes into the output, as the runner's host mode does. The session refuses any other layout when it starts.
+        bool campaign = peers is { Count: > 0 };
+        string Evidence(string actor) => campaign ? GameSession.ActorOutput(output, actor) : output;
         var declared = (peers ?? new Dictionary<string, ClientRunPlan>()).Select(peer =>
-            (peer.Key, (Func<CancellationToken, ClientActor>)(token => new ClientActor(peer.Key, peer.Value, output, placement, token))));
+            (peer.Key, (Func<CancellationToken, ClientActor>)(token => new ClientActor(peer.Key, peer.Value, Evidence(peer.Key), placement, token))));
         return new GameSession(report, output, null, null, declared, cancellation,
-            token => new HostingClientActor("host", host, output, placement, token) { LiveLogSource = () => hostLog })
+            token => new HostingClientActor("host", host, Evidence("host"), placement, token) { LiveLogSource = () => hostLog })
         {
             ResolveClient = (_, name) => (name ?? "client", placement),
             LiveClientLog = _ => null,

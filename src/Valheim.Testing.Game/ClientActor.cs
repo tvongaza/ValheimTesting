@@ -36,6 +36,8 @@ public sealed class ClientActor : IDisposable
 
     /// <summary>The client's name in the run, for example <c>client</c> or a campaign's <c>client-a</c>.</summary>
     public string Name { get; }
+    /// <summary>The folder its evidence goes to (<see cref="GameSession.ActorOutput"/>).</summary>
+    internal string Output => _output;
     public ClientRunPlan Plan { get; }
     /// <summary>The open client's session, or null before <see cref="Start"/> and once it is closed.</summary>
     public ClientSession? Session { get { lock (_state) return _session is { Closed: false } open ? open : null; } }

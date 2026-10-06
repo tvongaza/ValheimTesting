@@ -99,10 +99,11 @@ public sealed class GameSession : IAsyncDisposable
     /// Opens a client of <paramref name="plan"/> through a new <see cref="ClientActor"/> and returns its session; its logs join
     /// <see cref="Logs"/>, and one the scenario leaves open is closed at teardown before the server stops. In a campaign,
     /// <paramref name="name"/> names the campaign's client (left out when it declares one), which starts on its assigned host on
-    /// its leased Steam identity; otherwise the client opens on this machine. With <paramref name="directory"/>, its evidence goes
-    /// to that subdirectory of <see cref="Output"/>, so a second client never overwrites the first one's. Until the scenarios
-    /// declare their clients, this is how a scenario opens one. A client opened into its own <paramref name="directory"/> and no
-    /// name is named by its directory in the report.
+    /// its leased Steam identity; otherwise the client opens on this machine. A campaign's client, and any client opened by name,
+    /// writes its evidence into its own folder (<see cref="ActorOutput"/>). With <paramref name="directory"/>, its evidence goes
+    /// to that subdirectory of <see cref="Output"/> instead, so a second client never overwrites the first one's. Until the
+    /// scenarios declare their clients, this is how a scenario opens one. A client opened into its own
+    /// <paramref name="directory"/> and no name is named by its directory in the report.
     /// </summary>
     public ClientSession OpenClient(ClientRunPlan plan, string? name = null, string? directory = null) => OpenClient(plan, name, directory, Cancellation);
 
@@ -118,8 +119,9 @@ public sealed class GameSession : IAsyncDisposable
             output = Path.GetFullPath(Path.Combine(Output, directory));
             if (!output.StartsWith(Path.GetFullPath(Output) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                 throw new ArgumentException("Name a subdirectory of the session's output.", nameof(directory));
-            Directory.CreateDirectory(output);
         }
+        // A campaign's client (by name, or the one it declares) and any client opened by name: its own folder.
+        else if (name != null || CampaignClients.Contains(actorName)) output = ActorFolder(Output, actorName);
         var actor = new ClientActor(actorName, plan, output, placement, cancellation);
         lock (_opened)
         {
@@ -127,10 +129,44 @@ public sealed class GameSession : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             _opened.Add(actor);
         }
+        Directory.CreateDirectory(output); // Once the open is accepted: an open refused at teardown leaves no empty folder.
         return actor.Start();
     }
     private readonly List<ClientActor> _opened = [];
     private readonly List<RunLog> _added = [];
+
+    /// <summary>
+    /// The one evidence-folder rule (#445, #446): a named actor of a session (each client of a campaign, with or without a dedicated
+    /// server, its hosting client, and any client opened by name) writes its evidence (command and process records, kept logs) into
+    /// its own folder <c>&lt;output&gt;/&lt;actor&gt;</c>, created here. Actors start at once, and each launch writes files of the
+    /// same names, so no two may share a folder. A run's one unnamed client on this machine, and a host run's one host, write into
+    /// the output itself. <see cref="OpenClient"/> applies it to the clients it opens; a session with declared clients or a
+    /// campaign's refuses, before anything starts, a declared actor built into another folder.
+    /// </summary>
+    internal static string ActorOutput(string output, string actor) => Directory.CreateDirectory(ActorFolder(output, actor)).FullName;
+
+    // The folder's path. Its name is the actor's, as the run journal names it (RunJournal.SafeName): one folder name on any host.
+    private static string ActorFolder(string output, string actor)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(output);
+        if (!RunJournal.SafeName(actor ?? ""))
+            throw new ArgumentException($"Actor name '{actor}' is not letters, digits, '.', '_' and '-', so it cannot name the actor's evidence folder.", nameof(actor));
+        return Path.GetFullPath(Path.Combine(output, actor!));
+    }
+
+    // The rule, checked before anything starts: in a session with declared clients or a campaign's, every declared actor (the
+    // hosting client included) writes into its own folder, so a session built without it fails loudly rather than racing.
+    private void RequireOwnFolders()
+    {
+        if (_clients.Count == 0 && CampaignClients.Count == 0) return;
+        var actors = _clients.Select(client => (client.Name, client.Output)).Concat(Host is { } host ? new[] { (host.Name, host.Output) } : []).ToList();
+        foreach (var (name, output) in actors)
+            if (!string.Equals(Path.GetFullPath(output), ActorFolder(Output, name), StringComparison.Ordinal))
+                throw new InvalidOperationException($"Actor {name} writes its evidence to {output}; in this session each actor writes into its own folder {ActorFolder(Output, name)} (GameSession.ActorOutput).");
+        // Names that differ only in case are one folder on Windows and macOS.
+        if (actors.GroupBy(actor => actor.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(same => same.Count() > 1) is { } shared)
+            throw new InvalidOperationException($"Actors {string.Join(" and ", shared.Select(actor => actor.Name))} would share one evidence folder; name them apart.");
+    }
 
     /// <summary>
     /// Opens the named campaign clients at once (<see cref="OpenClient"/> for each), each on its own host, Steam lease, install and
@@ -198,6 +234,7 @@ public sealed class GameSession : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_started) throw new InvalidOperationException("The session has started already; it starts once.");
+        RequireOwnFolders();
         _started = true;
         Cancellation.ThrowIfCancellationRequested();
         var starts = new List<Task>();

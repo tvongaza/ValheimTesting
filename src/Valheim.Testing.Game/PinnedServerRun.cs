@@ -453,12 +453,10 @@ public static class PinnedServerRun
             }
             var peers = named.Where(client => client.Key != hostName).OrderBy(client => client.Key, StringComparer.Ordinal).ToList();
             var campaignActors = actors;
-            // Each actor's evidence in its own folder: they start at once, and each launch writes its own records.
-            string Evidence(string actor) => Directory.CreateDirectory(Path.Combine(full, actor)).FullName;
             game = new GameSession(report, full, null, server: null,
-                peers.Select(peer => (peer.Key, (Func<CancellationToken, ClientActor>)(token => new ClientActor(peer.Key, peer.Value, Evidence(peer.Key), placement, token)))),
+                peers.Select(peer => (peer.Key, (Func<CancellationToken, ClientActor>)(token => new ClientActor(peer.Key, peer.Value, GameSession.ActorOutput(full, peer.Key), placement, token)))),
                 // A local host's live log is this machine's file in its bound install; a remote host's is on its host.
-                cancellation.Token, token => new HostingClientActor(hostName, hostPlan, Evidence(hostName), placement, token, site)
+                cancellation.Token, token => new HostingClientActor(hostName, hostPlan, GameSession.ActorOutput(full, hostName), placement, token, site)
                     { LiveLogSource = () => localHost ? Path.Combine(hostPlan.Install, "BepInEx", "LogOutput.log") : null })
             {
                 CampaignClients = named.Keys.Order(StringComparer.Ordinal).ToList(),

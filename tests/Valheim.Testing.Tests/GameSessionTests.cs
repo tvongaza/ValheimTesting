@@ -88,8 +88,7 @@ public sealed class GameSessionTests : IDisposable
             var transport = test.ClientTransport();
             FakeOwnedProcess process;
             lock (test._clientProcesses) { process = test._clientProcesses[name] = new FakeOwnedProcess(700 + test._clientProcesses.Count); test._clientTransports[name] = transport; }
-            string own = Directory.CreateDirectory(Path.Combine(output, name)).FullName;
-            var session = ClientSession.Launch(plan, own, () => process, () => transport, (_, token) => ready(name, token), cancellation);
+            var session = ClientSession.Launch(plan, output, () => process, () => transport, (_, token) => ready(name, token), cancellation);
             lock (test._clientProcesses) test._openedClients.Add(name);
             return session;
         }
@@ -101,7 +100,7 @@ public sealed class GameSessionTests : IDisposable
     {
         var placement = new Placement(this, ready ?? ((_, _) => Task.CompletedTask));
         return new GameSession(report, _root, WorldUid, Server,
-            clients.Select(name => (name, (Func<CancellationToken, ClientActor>)(token => new ClientActor(name, Plan(startSeconds), _root, placement, token)))), CancellationToken.None);
+            clients.Select(name => (name, (Func<CancellationToken, ClientActor>)(token => new ClientActor(name, Plan(startSeconds), GameSession.ActorOutput(_root, name), placement, token)))), CancellationToken.None);
     }
 
     private static List<string> Steps(ScenarioReport report, StepPhase phase) => report.Steps.Where(step => step.Phase == phase).Select(step => step.Name).ToList();
@@ -202,6 +201,70 @@ public sealed class GameSessionTests : IDisposable
         Assert.True(report.Steps[^1].Passed);
     }
 
+    // #446: a dedicated server's campaign opens its clients at once (OpenClientsAsync); each writes its process and command
+    // records into its own folder, so neither overwrites the other's (on Windows, a sharing violation) and each record is its own.
+    [Fact] public async Task CampaignClientsOpenedAtOnceWriteTheirEvidenceIntoTheirOwnFolders()
+    {
+        var report = new ScenarioReport("session");
+        int started = 0;
+        var both = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Each client's menu waits until the other's launch has begun too: opened one after another, this would time out.
+        var placement = new Placement(this, async (_, token) =>
+        {
+            if (Interlocked.Increment(ref started) == 2) both.TrySetResult();
+            await both.Task.WaitAsync(TimeSpan.FromSeconds(20), token);
+        });
+        await using var session = new GameSession(report, _root, WorldUid, Server, [], CancellationToken.None)
+        {
+            CampaignClients = ["client-a", "client-b"], ResolveClient = (_, name) => (name!, placement),
+        };
+        await session.StartAsync();
+        var opened = await session.OpenClientsAsync(new Dictionary<string, ClientRunPlan> { ["client-a"] = Plan(), ["client-b"] = Plan() });
+        foreach (string name in new[] { "client-a", "client-b" })
+        {
+            using var record = JsonDocument.Parse(File.ReadAllText(Path.Combine(_root, name, "client-process.json")));
+            int pid; lock (_clientProcesses) pid = _clientProcesses[name].Id;
+            Assert.Equal(pid, record.RootElement.GetProperty("pid").GetInt32()); // Its own launch's record, not the other's.
+            Assert.Equal(opened[name].ProcessId, pid);
+            Assert.True(File.Exists(Path.Combine(_root, name, "client-commands.jsonl")), name);
+        }
+        Assert.NotEqual(_clientProcesses["client-a"].Id, _clientProcesses["client-b"].Id);
+        Assert.False(File.Exists(Path.Combine(_root, "client-process.json")));
+        Assert.Empty(Directory.EnumerateFiles(_root, "client-commands*.jsonl", SearchOption.TopDirectoryOnly));
+    }
+
+    // A session whose declared clients would share a folder is refused before anything starts.
+    [Fact] public async Task DeclaredClientsSharingAFolderAreRefusedBeforeAnythingStarts()
+    {
+        var placement = new Placement(this, (_, _) => Task.CompletedTask);
+        await using var session = new GameSession(new ScenarioReport("session"), _root, WorldUid, Server,
+            new[] { "client-a", "client-b" }.Select(name => (name, (Func<CancellationToken, ClientActor>)(token => new ClientActor(name, Plan(), _root, placement, token)))),
+            CancellationToken.None);
+        Assert.Contains("its own folder", (await Assert.ThrowsAsync<InvalidOperationException>(session.StartAsync)).Message);
+        Assert.Empty(_serverProcesses); Assert.Empty(_clientProcesses);
+    }
+
+    // Names that differ only in case would share a folder on Windows and macOS.
+    [Fact] public async Task DeclaredClientsWhoseNamesDifferOnlyInCaseAreRefused()
+    {
+        var placement = new Placement(this, (_, _) => Task.CompletedTask);
+        await using var session = new GameSession(new ScenarioReport("session"), _root, WorldUid, Server,
+            new[] { "client-a", "Client-A" }.Select(name => (name, (Func<CancellationToken, ClientActor>)(token => new ClientActor(name, Plan(), GameSession.ActorOutput(_root, name), placement, token)))),
+            CancellationToken.None);
+        Assert.Contains("share one evidence folder", (await Assert.ThrowsAsync<InvalidOperationException>(session.StartAsync)).Message);
+        Assert.Empty(_serverProcesses); Assert.Empty(_clientProcesses);
+    }
+
+    [Theory] [InlineData("..")] [InlineData(".")] [InlineData("a/b")] [InlineData("a\\b")] [InlineData("")] [InlineData("a:b")] [InlineData("a b")]
+    public void AnActorsEvidenceFolderIsOneFolderNameOnEveryHost(string actor) =>
+        Assert.ThrowsAny<ArgumentException>(() => GameSession.ActorOutput(_root, actor));
+
+    [Fact] public void AnActorsEvidenceFolderIsCreatedInTheOutput()
+    {
+        Assert.Equal(Path.Combine(_root, "client-a"), GameSession.ActorOutput(_root, "client-a"));
+        Assert.True(Directory.Exists(Path.Combine(_root, "client-a")));
+    }
+
     [Fact] public async Task AClientTheScenarioOpensIsTheSessionsToCloseAtTeardown()
     {
         var report = new ScenarioReport("session");
@@ -220,7 +283,7 @@ public sealed class GameSessionTests : IDisposable
     {
         var report = new ScenarioReport("session");
         var placement = new Placement(this, (_, _) => throw new InvalidOperationException("refused"));
-        var session = new GameSession(report, _root, WorldUid, Server, [("client-a", token => new ClientActor("client-a", Plan(), _root, placement, token))], CancellationToken.None)
+        var session = new GameSession(report, _root, WorldUid, Server, [("client-a", token => new ClientActor("client-a", Plan(), GameSession.ActorOutput(_root, "client-a"), placement, token))], CancellationToken.None)
         { DisposeOnFailedStart = false };
         await Assert.ThrowsAsync<InvalidOperationException>(session.StartAsync);
         Assert.Empty(Steps(report, StepPhase.Cleanup)); // Left to the runner's bounded cleanup.

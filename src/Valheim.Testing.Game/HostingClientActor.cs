@@ -49,6 +49,7 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
 
     /// <summary>The hosting client's name in the run, for example <c>host</c>.</summary>
     public string Name => _client.Name;
+    internal string Output => _client.Output;
     public ClientRunPlan Plan => _client.Plan;
     /// <summary>The hosted fixture's world UID (<see cref="HostWorldPlan.WorldUid"/>), which every peer's join verifies.</summary>
     public string WorldUid => Plan.HostWorld!.WorldUid;

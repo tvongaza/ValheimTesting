@@ -105,7 +105,7 @@ public sealed class HostingClientActorTests : IDisposable
         FakeGameSession.Hosted(report, Output, host, (plan, name, output) =>
             plan.HostWorld != null
                 ? plan.Owned ? ClientSession.Launch(plan, output, () => _hostProcess, HostTransport, (_, _) => Task.CompletedTask) : ClientSession.Attach(plan, output, HostTransport())
-                : ClientSession.Attach(plan, Directory.CreateDirectory(Path.Combine(output, name)).FullName, PeerTransport(Interlocked.Increment(ref _peerOpens))),
+                : ClientSession.Attach(plan, output, PeerTransport(Interlocked.Increment(ref _peerOpens))),
             peers: withPeer ? new Dictionary<string, ClientRunPlan> { ["peer"] = PeerPlan() } : null);
 
     private static List<string> Steps(ScenarioReport report, StepPhase phase) => report.Steps.Where(step => step.Phase == phase).Select(step => step.Name).ToList();
@@ -230,8 +230,7 @@ public sealed class HostingClientActorTests : IDisposable
         using var data = new FakeClientDataDirectory(Save);
         var notAPeer = PeerPlan(); notAPeer.JoinsHost = false; notAPeer.Join = "127.0.0.1:2456";
         await using var session = FakeGameSession.Hosted(report, Output, HostPlan(), (plan, name, output) =>
-            // Each client's evidence in its own folder: they open at once.
-            plan.HostWorld != null ? ClientSession.Attach(plan, output, HostTransport()) : ClientSession.Attach(plan, Directory.CreateDirectory(Path.Combine(output, name)).FullName, PeerTransport()),
+            plan.HostWorld != null ? ClientSession.Attach(plan, output, HostTransport()) : ClientSession.Attach(plan, output, PeerTransport()),
             peers: new Dictionary<string, ClientRunPlan> { ["other"] = notAPeer });
         await session.StartAsync();
         var error = await Assert.ThrowsAsync<ArgumentException>(() => session.Join("other"));
