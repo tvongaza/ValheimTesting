@@ -4,7 +4,7 @@
 
 ## Capture: one call
 
-On a disposable world, with a pinned actor that has test access (the dump command is cheat-gated; see `TestAccess`), capture each layer with `WorldDump.CaptureAsync` from `Valheim.Testing.Game`:
+On a disposable world, with a pinned actor that has test access (the dump command is cheat-gated; see `TestAccess`), capture each layer with `WorldDump.CaptureAsync` from `Valheim.Testing.GameSessions`:
 
 ```csharp
 var coarse = await WorldDump.CaptureAsync(server, serverHost, hostDirectory: "C:/run/dumps-128", name: "world-128", step: 128,
