@@ -59,6 +59,8 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         string project = File.ReadAllText(Path.Combine(_root, "SmokeCheck.csproj"));
         Assert.Contains("Valheim.Testing.Game", project);
         Assert.Contains(SmokeProject.GameVersion, project);
+        // A server consumer runs a session (PinnedServerRun), which is Valheim.Testing.GameSessions'.
+        Assert.Equal(server, project.Contains($"Include=\"Valheim.Testing.GameSessions\" Version=\"[{SmokeProject.GameSessionsVersion}]\"", StringComparison.Ordinal));
         Assert.DoesNotContain("ProjectReference", project);
         string config = File.ReadAllText(Path.Combine(_root, "NuGet.Config"));
         Assert.Contains("<clear/>", config);
@@ -101,6 +103,8 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         string built = System.Text.RegularExpressions.Regex.Match(project, "<Version>([^<]+)</Version>").Groups[1].Value;
         Assert.NotEmpty(built);
         Assert.Equal(built, SmokeProject.GameVersion);
+        string sessions = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "src", "Valheim.Testing.GameSessions", "Valheim.Testing.GameSessions.csproj"));
+        Assert.Equal(System.Text.RegularExpressions.Regex.Match(sessions, "<Version>([^<]+)</Version>").Groups[1].Value, SmokeProject.GameSessionsVersion);
         // The run's provenance names the same version.
         Assert.Equal(built, ToolkitProvenance.Capture().Packages.Single(package => package.Id == "Valheim.Testing.Game").Version);
         Assert.Null(typeof(SmokeProject).Assembly.GetManifestResourceStream("toolkit-versions.json"));

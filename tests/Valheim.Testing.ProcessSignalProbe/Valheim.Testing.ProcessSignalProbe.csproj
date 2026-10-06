@@ -6,6 +6,6 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
+    <ProjectReference Include="../../src/Valheim.Testing.GameSessions/Valheim.Testing.GameSessions.csproj" />
   </ItemGroup>
 </Project>

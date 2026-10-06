@@ -29,6 +29,7 @@ string root = FindRoot();
     ("Valheim.Testing", "src/Valheim.Testing/bin/Release/netstandard2.0/Valheim.Testing.dll", null, false),
     ("Valheim.Testing.Doubles", "src/Valheim.Testing.Doubles/bin/Release/netstandard2.0/Valheim.Testing.Doubles.dll", null, false),
     ("Valheim.Testing.Game", "src/Valheim.Testing.Game/bin/Release/net10.0/Valheim.Testing.Game.dll", null, true),
+    ("Valheim.Testing.GameSessions", "src/Valheim.Testing.GameSessions/bin/Release/net10.0/Valheim.Testing.GameSessions.dll", null, true),
     ("Valheim.Testing.Bindings", "src/Valheim.Testing.Bindings/bin/Release/netstandard2.0/Valheim.Testing.Bindings.dll", null, false),
     ("Valheim.Testing.Bindings.Tool", "src/Valheim.Testing.Bindings.Tool/bin/Release/net10.0/Valheim.Testing.Bindings.Tool.dll", null, false),
     ("Valheim.Testing.Adapter", "tests/Valheim.Testing.Adapter.CompileCheck/bin/Release/net48/Valheim.Testing.Adapter.CompileCheck.dll", "Valheim.Testing.Adapter", false),

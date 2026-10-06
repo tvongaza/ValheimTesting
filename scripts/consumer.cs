@@ -33,7 +33,7 @@ using System.Text.RegularExpressions;
 
 const string NuGetOrg = "https://api.nuget.org/v3/index.json";
 const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
-string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
+string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.GameSessions", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 string[] tools = ["Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
 string root = FindRoot();
@@ -107,7 +107,8 @@ try
         : NuGetOnly());
     var env = ConsumerEnvironment(cache, local ? null : Path.Combine(work, "http-cache"));
 
-    // Libraries: the pure package, the external game package (with its Cli dependency) and the binding-check library.
+    // Libraries: the pure package, the external game package (with its Cli dependency), the game sessions package (on exactly
+    // that Game) and the binding-check library.
     string app = Path.Combine(work, "app");
     Directory.CreateDirectory(app);
     File.WriteAllText(Path.Combine(app, "Consumer.csproj"), $"""
@@ -116,6 +117,7 @@ try
           <ItemGroup>
             <PackageReference Include="Valheim.Testing" Version="[{manifest["Valheim.Testing"]}]" />
             <PackageReference Include="Valheim.Testing.Game" Version="[{manifest["Valheim.Testing.Game"]}]" />
+            <PackageReference Include="Valheim.Testing.GameSessions" Version="[{manifest["Valheim.Testing.GameSessions"]}]" />
             <PackageReference Include="Valheim.Testing.Bindings" Version="[{manifest["Valheim.Testing.Bindings"]}]" />
           </ItemGroup>
         </Project>
@@ -128,7 +130,7 @@ try
         // 40 m at the origin, rising 0.5 m per metre in x: 41 m at x = 2.
         var plane = new PlaneTerrain(40, 0.5f, 0);
         if (plane.GetHeight(2, 0) != 41f) { Console.Error.WriteLine("PlaneTerrain returned " + plane.GetHeight(2, 0)); return 1; }
-        foreach (Type type in new[] { typeof(PlaneTerrain), typeof(GameActor), typeof(BindingCheck) })
+        foreach (Type type in new[] { typeof(PlaneTerrain), typeof(GameActor), typeof(GameSession), typeof(BindingCheck) })
             Console.WriteLine($"{type.FullName}: {type.Assembly.GetName().Name} {type.Assembly.GetName().Version}");
         return 0;
         """);
@@ -189,6 +191,11 @@ try
         Run(env, work, smoke, "init", "--output", smokeOutput);
         if (!File.Exists(Path.Combine(smokeOutput, "consumer", "SmokeCheck.csproj")))
             throw new InvalidOperationException("The installed native-smoke tool wrote no editable consumer.");
+        // The server consumer runs a session: it also restores Valheim.Testing.GameSessions, on exactly that Game.
+        string serverOutput = Path.Combine(work, "smoke-server-consumer");
+        Run(env, work, smoke, "init", "server", "--output", serverOutput);
+        if (!File.ReadAllText(Path.Combine(serverOutput, "consumer", "SmokeCheck.csproj")).Contains("Valheim.Testing.GameSessions", StringComparison.Ordinal))
+            throw new InvalidOperationException("The installed native-smoke tool's server consumer does not reference Valheim.Testing.GameSessions.");
     }
 
     // Every Valheim.Testing* package restored came from the feed at the manifest version, and nothing else.

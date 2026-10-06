@@ -46,7 +46,7 @@ Adapted from the ProceduralRoads test projects, as proposed in [jneb802/Procedur
 
 - `src/Valheim.Testing.Doubles/Doubles/`: from `ProceduralRoads.Tests/Shims/` (`UnityShims.cs`, `ValheimShims.cs`, `BepInExShims.cs`, `ManualNetworkShims.cs`); Roads' own terrain logic was moved out behind the `Heightmap` hooks. `TerrainWorld` and `ValheimWorldScope` are new, replacing per-test world setup there.
 - `src/Valheim.Testing.Game/Fakes/`: from the scripted transports and fake servers in the ProceduralRoads system-test tests.
-- `src/Valheim.Testing.Game/PinnedServerRun.cs` and `ServerRunPlan.cs`: from `ProceduralRoads.SystemTests/Program.cs` and `RunPlan.cs`.
+- `src/Valheim.Testing.GameSessions/PinnedServerRun.cs` and `src/Valheim.Testing.Game/ServerRunPlan.cs`: from `ProceduralRoads.SystemTests/Program.cs` and `RunPlan.cs`.
 - `TransformMatch` in `src/Valheim.Testing.Game/Matching.cs`: from the system tests' `PieceComparison`.
 
 ## Mono.Cecil

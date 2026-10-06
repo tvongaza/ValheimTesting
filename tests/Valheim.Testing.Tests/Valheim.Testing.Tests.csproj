@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
+    <ProjectReference Include="../../src/Valheim.Testing.GameSessions/Valheim.Testing.GameSessions.csproj" />
     <ProjectReference Include="../../src/Valheim.Testing.NativeSmoke/Valheim.Testing.NativeSmoke.csproj" />
     <ProjectReference Include="../../tools/regression-bundle/RegressionBundle.csproj" />
     <ProjectReference Include="../Valheim.Testing.ProcessSignalProbe/Valheim.Testing.ProcessSignalProbe.csproj" />
