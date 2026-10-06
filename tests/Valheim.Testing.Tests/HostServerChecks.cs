@@ -272,8 +272,8 @@ public class WindowsSshServerIntegrationTests
         string[] options = (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_OPTIONS") ?? "")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var host = new SshGameHost("windows-server", destination, HostShell.WindowsPowerShell, sshOptions: options);
-        string root = HostInstall.Join(parent, "windows-host-check-" + Guid.NewGuid().ToString("N"));
-        string install = HostInstall.Join(root, "install"), runtime = HostInstall.Join(root, "run", "runtime");
+        string root = HostPath.Join(parent, "windows-host-check-" + Guid.NewGuid().ToString("N"));
+        string install = HostPath.Join(root, "install"), runtime = HostPath.Join(root, "run", "runtime");
         bool stopped = false;
         try
         {
@@ -292,7 +292,7 @@ public class WindowsSshServerIntegrationTests
             var listing = await HostInstall.ListAsync(host, runtime, TimeSpan.FromSeconds(45));
             Assert.Equal(ServerPlatform.Windows, HostInstall.DetectServer(listing));
             var launch = GameLaunch.ForServer(runtime, ["-n", "60", "127.0.0.1"], hostPlatform: ServerPlatform.Windows);
-            var process = await HostServer.StartAsync(host, launch, HostInstall.Join(root, "run", "boot-1"), TimeSpan.FromSeconds(90));
+            var process = await HostServer.StartAsync(host, launch, HostPath.Join(root, "run", "boot-1"), TimeSpan.FromSeconds(90));
             try
             {
                 var status = await host.RunAsync("""
@@ -329,8 +329,8 @@ public class WindowsSshServerIntegrationTests
         string[] options = (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_OPTIONS") ?? "")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var host = new SshGameHost("windows-server", destination, HostShell.WindowsPowerShell, sshOptions: options);
-        string root = HostInstall.Join(parent, "windows-game-check-" + Guid.NewGuid().ToString("N"));
-        string runtime = HostInstall.Join(root, "runtime"), boot = HostInstall.Join(root, "boot-1");
+        string root = HostPath.Join(parent, "windows-game-check-" + Guid.NewGuid().ToString("N"));
+        string runtime = HostPath.Join(root, "runtime"), boot = HostPath.Join(root, "boot-1");
         bool stopped = false;
         try
         {
@@ -355,11 +355,11 @@ public class WindowsSshServerIntegrationTests
             Assert.True(prune.Succeeded, prune.Describe() + " " + prune.Stderr);
             var launch = GameLaunch.ForServer(runtime,
                 ["-batchmode", "-nographics", "-name", "VT Windows host check", "-port", "2486", "-world", "VT249" + Guid.NewGuid().ToString("N")[..8],
-                 "-password", "throwaway249", "-public", "0", "-savedir", HostInstall.Join(root, "world"), "-logFile", HostInstall.Join(runtime, "toolkit-unity.log")], hostPlatform: ServerPlatform.Windows);
+                 "-password", "throwaway249", "-public", "0", "-savedir", HostPath.Join(root, "world"), "-logFile", HostPath.Join(runtime, "toolkit-unity.log")], hostPlatform: ServerPlatform.Windows);
             var process = await HostServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(90), ["BepInEx/LogOutput.log", "toolkit-unity.log"]);
             try
             {
-                string bepinex = HostInstall.Join(runtime, "BepInEx", "LogOutput.log");
+                string bepinex = HostPath.Join(runtime, "BepInEx", "LogOutput.log");
                 (await host.WaitForLogAsync(bepinex, 0, new System.Text.RegularExpressions.Regex("Chainloader startup complete", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
                     StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
                 // The same run must reach a live CLI listener through an SSH loopback tunnel.
@@ -368,7 +368,7 @@ public class WindowsSshServerIntegrationTests
                 using var tcp = new TcpClient();
                 await tcp.ConnectAsync(tunnel.Address, tunnel.LocalPort);
                 Assert.True(tcp.Connected);
-                (await host.WaitForLogAsync(HostInstall.Join(runtime, "toolkit-unity.log"), 0,
+                (await host.WaitForLogAsync(HostPath.Join(runtime, "toolkit-unity.log"), 0,
                     new System.Text.RegularExpressions.Regex("Opened Steam server", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
                     StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
                 Assert.Equal(HostServerStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(15)));

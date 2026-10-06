@@ -74,7 +74,7 @@ public sealed partial class HostedServerRunTests
         Assert.Equal(plain.Client.Runs.Select(run => run.Script), leased.Client.Runs.Select(run => run.Script));
         Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(PoolFile)).State);
         // The lease host's journal (#257): the account held for the client, then released, with its holder.
-        var journal = (await RunJournal.ReadAsync(LeaseBox.Host(), LeaseBox.Journal, RunId, TimeSpan.FromSeconds(30))).Where(record => record.Actor == "player").ToList();
+        var journal = (await RunJournalOnHost.ReadAsync(LeaseBox.Host(), LeaseBox.Journal, RunId, TimeSpan.FromSeconds(30))).Where(record => record.Actor == "player").ToList();
         Assert.Equal([JournalEntry.LeaseHeld, JournalEntry.LeaseReleased], journal.Select(record => record.Entry.Kind));
         Assert.Equal(LeaseBox.Account, journal[0].Entry.Fields["account"]);
         Assert.Contains("client player", journal[0].Entry.Fields["owner"]);
@@ -158,7 +158,7 @@ public sealed partial class HostedServerRunTests
         var status = await LeaseBox.StatusAsync(PoolFile);
         Assert.Equal((SteamAccountState.Held, "toolkit-smoke run-test client player"), (status.State, status.Holder));
         // The lease host's journal says it was kept, and why: never released while its client may run.
-        var journal = (await RunJournal.ReadAsync(LeaseBox.Host(), LeaseBox.Journal, RunId, TimeSpan.FromSeconds(30))).Where(record => record.Actor == "player").ToList();
+        var journal = (await RunJournalOnHost.ReadAsync(LeaseBox.Host(), LeaseBox.Journal, RunId, TimeSpan.FromSeconds(30))).Where(record => record.Actor == "player").ToList();
         Assert.Equal([JournalEntry.LeaseHeld, JournalEntry.LeaseKept], journal.Select(record => record.Entry.Kind));
         Assert.Equal("its client may still run", journal[1].Entry.Fields["why"]);
     }

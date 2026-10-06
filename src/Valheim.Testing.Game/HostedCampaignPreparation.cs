@@ -804,8 +804,8 @@ public static class HostedCampaignPreparation
                 await Task.WhenAll(group.Select(async item =>
                 {
                     var (name, role, _) = item;
-                    string parent = HostInstall.Join(role.Runtime, "vt-prep-" + id + "-" + name);
-                    string runtime = HostInstall.Join(parent, "runtime"), stage = HostInstall.Join(parent, "staging");
+                    string parent = HostPath.Join(role.Runtime, "vt-prep-" + id + "-" + name);
+                    string runtime = HostPath.Join(parent, "runtime"), stage = HostPath.Join(parent, "staging");
                     // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
                         ("runtime", runtime), ("stage", stage), ("parent", parent)), timeout, cancellation).ConfigureAwait(false);
@@ -823,7 +823,7 @@ public static class HostedCampaignPreparation
                         var character = selected with { Input = selected.Input.WithDirectories(folders.Characters!, folders.UserData!) };
                         await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CharacterIntended,
                             ("characters", folders.Characters!), ("userData", folders.UserData!), ("fileName", character.Input.FileName)), timeout, cancellation).ConfigureAwait(false);
-                        await HostedCharacterStage.StageAsync(host, character, HostInstall.Join(parent, "character-stage"), timeout, cancellation).ConfigureAwait(false);
+                        await HostedCharacterStage.StageAsync(host, character, HostPath.Join(parent, "character-stage"), timeout, cancellation).ConfigureAwait(false);
                         stagedCharacters.Add((hostName, name, character.Input));
                         await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CharacterDone,
                             ("fileName", character.Input.FileName)), timeout, cancellation).ConfigureAwait(false);

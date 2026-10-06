@@ -441,7 +441,7 @@ public static class PinnedServerRun
                     ?? throw new InvalidOperationException($"The hosting client {hostName} has no staged character, so its host user's worlds_local is unknown.");
                 var clientHost = actors.ClientHost(hostName);
                 site = new HostedWorldOnHost.Site(clientHost, hostRole.Host, HostedWorldOnHost.WorldsBeside(character.CharactersLocalDirectory),
-                    HostInstall.Join(hostRole.Runtime, runId, "host-world-stage"), HostInstall.Join(hostRole.Runtime, runId, "host-world"),
+                    HostPath.Join(hostRole.Runtime, runId, "host-world-stage"), HostPath.Join(hostRole.Runtime, runId, "host-world"),
                     (entry, token) => journal.AppendAsync(clientHost, prepared.JournalOf(hostRole.Host), hostName, entry, TimeSpan.FromSeconds(60), token),
                     token => actors.HoldHostAsync(hostName, token));
                 report.Provenance["hostWorldOn"] = hostRole.Host + ": " + site.WorldsDirectory;

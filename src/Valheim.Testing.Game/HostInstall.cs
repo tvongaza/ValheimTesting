@@ -240,16 +240,6 @@ public static class HostInstall
             throw new ArgumentException($"{name} must be an absolute path on {host.Name}; '{path}' would depend on the user's home or working directory.", name);
     }
 
-    /// <summary>A path on a host under <paramref name="root"/>: joined with <c>\</c> when the root is a Windows path, else <c>/</c>.</summary>
-    internal static string Join(string root, params string[] parts)
-    {
-        bool windows = root.Contains('\\') || Regex.IsMatch(root, "^[A-Za-z]:");
-        char separator = windows ? '\\' : '/';
-        string path = root.Length > 1 ? root.TrimEnd('/', '\\') : root;
-        foreach (string part in parts) path += (path.EndsWith(separator) ? "" : separator.ToString()) + (windows ? part.Replace('/', '\\') : part);
-        return path;
-    }
-
     private static string Decode(string base64) => Encoding.UTF8.GetString(Convert.FromBase64String(base64));
 
     private static string Unescape(string name)

@@ -223,7 +223,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(0, code);
         // The run journal on the server host (#257): the lock once held, each boot journalled before its start and its process after,
         // the lock's release and the run's end. Each boot's intent precedes its start script.
-        var journal = await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         var processes = journal.Where(record => record.Actor == "server" && record.Entry.Kind.StartsWith("process-", StringComparison.Ordinal)).ToList();
         Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted, JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], processes.Select(record => record.Entry.Kind));
         Assert.Equal(RunDirectory + "/boot-2", processes.Last().Entry.Fields["bootDirectory"]);
@@ -454,7 +454,7 @@ public sealed partial class HostedServerRunTests : IDisposable
             Assert.True(once.Token.IsCancellationRequested);
             Assert.Null(once.Abandoned);
             Assert.Contains("retire", host.Scripts);
-            Assert.Contains(await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5)), record => record.Entry.Kind == JournalEntry.RunEnded);
+            Assert.Contains(await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5)), record => record.Entry.Kind == JournalEntry.RunEnded);
         }
 
         var server2 = NewServer(); var host2 = new FakeServerHost("linux-box", Path.Combine(_root, "mirror-2"), server2);
@@ -465,7 +465,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         string output2 = Path.Combine(_root, "output-2");
         Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile2), ["run", plan2, output2], Options(host2, server2, cancellation: twice)));
         Assert.Contains("second interrupt", twice.Abandoned);
-        var journal = await RunJournal.ReadAsync(host2, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        var journal = await RunJournalOnHost.ReadAsync(host2, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Contains("second interrupt", Assert.Single(journal, record => record.Entry.Kind == JournalEntry.CleanupAbandoned).Entry.Fields["reason"]);
         Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.RunEnded);
         // env status names it (this test is the runner, so the run reads as going until the process ends, then recoverable).
@@ -640,7 +640,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal("/home/tester/runs/" + RunId + "/client-1", start.Variables["dir"]);
         Assert.Contains(FakeServerHost.Spec(start.Variables["spec"]), line => line.Kind == "arg" && line.Text == "+connect");
         // The client host's journal (#257): its lock held and released, the client journalled before its start, then its process.
-        var clientJournal = await RunJournal.ReadAsync(clientHost, "/home/tester/journal", RunId, TimeSpan.FromSeconds(5));
+        var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/home/tester/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
         Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
         Assert.Equal(FakeServerHost.CommandLineSha256("77"), clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["commandLineSha256"]);

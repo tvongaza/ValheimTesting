@@ -591,12 +591,12 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // The run journal (#257): one run id for the campaign; on the host, beside its lock, each copy was journalled before it
         // was made (the first journal entry precedes the first copy script), then done, retired, and the run's end.
         string runId = result.GetProperty("Provenance").GetProperty("runId").GetString()!;
-        var journal = await RunJournal.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
+        var journal = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
             journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
         // The server run's world copy on the host is journalled too, before its ship, and handed over as the run's evidence (under
         // the hooks' fixed run id here; a real campaign's server run has the campaign's).
-        var serverRun = await RunJournal.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5));
+        var serverRun = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
             serverRun.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)).Select(record => record.Entry.Kind));
         Assert.All(serverRun.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)), record => Assert.Equal(@"C:\runs\run-test\world", record.Entry.Fields["runtime"]));
@@ -619,11 +619,11 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.DoesNotContain(unknown.GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString()!.StartsWith("remove the prepared install ", StringComparison.Ordinal));
         Assert.Equal(host.Claims.Count, host.Releases.Count + 1);
         string unknownRun = unknown.GetProperty("Provenance").GetProperty("runId").GetString()!;
-        var unknownJournal = await RunJournal.ReadAsync(host, @"C:\locks\journal", unknownRun, TimeSpan.FromSeconds(5));
+        var unknownJournal = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", unknownRun, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyKept],
             unknownJournal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
         // The world copy too: its server may still run.
-        Assert.Equal(JournalEntry.CopyKept, (await RunJournal.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5)))
+        Assert.Equal(JournalEntry.CopyKept, (await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5)))
             .Last(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)).Entry.Kind);
         Assert.Equal("unknown", Assert.Single(unknownJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["state"]);
 
@@ -657,7 +657,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, failedPrepOutput, options));
         host.Failures.Remove("apply-stage");
         string failedRun = JsonDocument.Parse(File.ReadAllText(Path.Combine(failedPrepOutput, "result.json"))).RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
-        var failedJournal = await RunJournal.ReadAsync(host, @"C:\locks\journal", failedRun, TimeSpan.FromSeconds(5));
+        var failedJournal = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", failedRun, TimeSpan.FromSeconds(5));
         Assert.Equal(JournalEntry.CopyIntended, failedJournal.Single(record => record.Actor == "server").Entry.Kind);
         var failedEnd = Assert.Single(failedJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
         Assert.Equal(("failed in preparation", "true"), (failedEnd["state"], failedEnd["cleanupVerified"]));
@@ -780,7 +780,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         {
             // The run's end is each host's last journal line, written only once the sibling had settled.
             Assert.True(order.LastIndexOf(name + ":journal") > settled, $"{name}: " + string.Join(", ", order));
-            var journal = await RunJournal.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
+            var journal = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
             var intended = Assert.Single(journal, record => record.Entry.Kind == JournalEntry.CopyIntended);
             Assert.Equal(name, intended.Actor);
             Assert.Contains($"vt-prep-{runId}-{name}", intended.Entry.Fields["runtime"]);
@@ -813,8 +813,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string steam = windows ? @"C:\Steam" : "/home/tester/.local/share/Steam";
         machine.Directories.Add(steam);
         string install = machine.App(steam, "896660", "Valheim dedicated server", windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable);
-        string runs = HostInstall.Join(machine.DataRoot, "runs", "local-server");
-        var server = new FakeOwnedServer("test.mod", saveRoot: HostInstall.Join(runs, "run-test", "world"));
+        string runs = HostPath.Join(machine.DataRoot, "runs", "local-server");
+        var server = new FakeOwnedServer("test.mod", saveRoot: HostPath.Join(runs, "run-test", "world"));
         var host = new FakeServerHost("local", Path.Combine(_rig.Root, "this-machine-host"), server, kind: GameHostKind.Local, windows: windows);
         string source = host.Local(install);
         FakeInstalls.Server(source);
@@ -1327,7 +1327,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string evidence = result.GetProperty("Provenance").GetProperty("hostWorldEvidence").GetString()!;
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign", "_main.0.fwl2")));
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign_backup_auto-20261006.db")));
-        var journal = await RunJournal.ReadAsync(pc, RunJournal.DirectoryFor(EnvironmentInventory.Read(inventory).Hosts["pc"]), "run-hosted", TimeSpan.FromSeconds(5));
+        var journal = await RunJournalOnHost.ReadAsync(pc, RunJournal.DirectoryFor(EnvironmentInventory.Read(inventory).Hosts["pc"]), "run-hosted", TimeSpan.FromSeconds(5));
         var worldEntries = journal.Where(record => record.Entry.Fields.GetValueOrDefault("runtime") == worlds + "/Campaign").Select(record => record.Entry.Kind).ToList();
         Assert.Equal(new[] { JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired }, worldEntries);
         // Teardown: the peer first, then the host leaves and stops, then its world; both peer and host were stopped on their hosts.

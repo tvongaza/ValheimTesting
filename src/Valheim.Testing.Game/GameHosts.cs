@@ -45,11 +45,6 @@ public sealed class LocalGameHost : ScriptedGameHost
 /// </summary>
 public sealed class SshGameHost : ScriptedGameHost
 {
-    private static readonly Regex OptionName = new("^[A-Za-z]+$", RegexOptions.CultureInvariant);
-    // Always set first (ssh keeps the first value it reads for an option), so a caller's option cannot switch them off.
-    private static readonly string[] FixedOptions = ["BatchMode", "ConnectTimeout", "ExitOnForwardFailure", "GatewayPorts", "ClearAllForwardings"];
-    // A caller never adds listeners, picks the port twice or replaces the scripts the host runs.
-    private static readonly string[] RefusedOptions = ["LocalForward", "RemoteForward", "DynamicForward", "Port", "RemoteCommand"];
     // ssh takes these values as the rest of the line, quotes included, and runs them with the user's shell: quoting would make
     // the whole command one word (zsh: "no such file or directory: ssh -i ... -W %h:%p").
     private static readonly string[] CommandOptions = ["ProxyCommand", "KnownHostsCommand", "LocalCommand"];
@@ -74,7 +69,7 @@ public sealed class SshGameHost : ScriptedGameHost
     internal SshGameHost(string name, string destination, HostShell shell, int port, IEnumerable<string>? sshOptions, TimeSpan? connectTimeout, string sshExecutable, IProcessLauncher launcher)
         : base(name, shell, launcher)
     {
-        Destination = CheckDestination(destination);
+        Destination = SshChecks.CheckDestination(destination);
         if (port != 0) GameHostPorts.Check(port, nameof(port));
         if (port != 0 && Destination.StartsWith("ssh://", StringComparison.Ordinal)) throw new ArgumentException("Give the port once: in the ssh:// destination or as the port.", nameof(port));
         Port = port;
@@ -82,7 +77,7 @@ public sealed class SshGameHost : ScriptedGameHost
         if (ConnectTimeout < TimeSpan.FromSeconds(1)) throw new ArgumentOutOfRangeException(nameof(connectTimeout), "Use a connect timeout of at least one second.");
         ArgumentException.ThrowIfNullOrWhiteSpace(sshExecutable);
         _ssh = sshExecutable;
-        _options = (sshOptions ?? []).Select(option => OptionArgument(CheckOption(option))).ToArray();
+        _options = (sshOptions ?? []).Select(option => OptionArgument(SshChecks.CheckOption(option))).ToArray();
     }
 
     public override GameHostKind Kind => GameHostKind.Ssh;
@@ -200,39 +195,6 @@ public sealed class SshGameHost : ScriptedGameHost
     internal static string RemoteCommand(HostShell shell) => shell.Kind == HostShellKind.Bash
         ? shell.Executable + " -c '" + HostScripts.BashWrapper + "'"
         : shell.Executable + " " + string.Join(' ', WrapperArguments(shell));
-
-    internal static string CheckDestination(string destination)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(destination);
-        if (destination.StartsWith('-') || destination.Any(ch => char.IsWhiteSpace(ch) || char.IsControl(ch)))
-            throw new ArgumentException("An ssh destination is one word that does not start with '-'.", nameof(destination));
-        // user:password@host is not an ssh form; a colon belongs only in ssh://user@host:port.
-        if (destination.Contains(':') && !destination.StartsWith("ssh://", StringComparison.Ordinal))
-            throw new ArgumentException("Use user@host, ssh://user@host:port or an ssh-config alias. Passwords are never accepted; use keys or an agent.", nameof(destination));
-        return destination;
-    }
-
-    internal static string CheckOption(string option)
-    {
-        int equals = option?.IndexOf('=') ?? -1;
-        if (option == null || equals <= 0 || !OptionName.IsMatch(option[..equals]))
-            throw new ArgumentException($"An ssh option is Name=value, for example IdentityFile=/path/key; got '{option}'.", nameof(option));
-        string name = option[..equals];
-        if (equals == option.Length - 1)
-            throw new ArgumentException($"The ssh option {name} has no value.", nameof(option));
-        if (option.Any(char.IsControl))
-            throw new ArgumentException($"The ssh option {name} has a control character (such as a tab or a line break) in its value, which an ssh option cannot carry.", nameof(option));
-        if (FixedOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
-            throw new ArgumentException(name + " is set by SshGameHost and cannot be overridden.", nameof(option));
-        if (RefusedOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
-            throw new ArgumentException(name + " is refused: " + name.ToLowerInvariant() switch
-            {
-                "port" => "pass the port setting instead.",
-                "remotecommand" => "the host runs its own scripts.",
-                _ => "the host opens only its own loopback CLI tunnel.",
-            }, nameof(option));
-        return option;
-    }
 
     /// <summary>
     /// The <c>-o</c> argument for a checked <c>Name=value</c> option. ssh parses it like a config line (OpenSSH 8.7 and later, on every

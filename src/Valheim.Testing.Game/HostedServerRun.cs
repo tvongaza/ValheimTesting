@@ -39,9 +39,9 @@ internal sealed class HostedServerRun : IServerPlacement
         // A campaign prepared the server's disposable install already (<runtime>/vt-prep-<id>-server/runtime): that is the one
         // copy the server runs from. A standalone run makes its own under <runtime>/<runId>.
         Prepared = preparedRuntime != null;
-        RunDirectory = HostInstall.Join(role.Runtime, runId);
-        RuntimeDirectory = preparedRuntime ?? HostInstall.Join(RunDirectory, "runtime");
-        WorldDirectory = HostInstall.Join(RunDirectory, "world");
+        RunDirectory = HostPath.Join(role.Runtime, runId);
+        RuntimeDirectory = preparedRuntime ?? HostPath.Join(RunDirectory, "runtime");
+        WorldDirectory = HostPath.Join(RunDirectory, "world");
         _clientActors = new CampaignClients(profile, runId, _owner, hooks, (role.Host, host), JournalAsync);
     }
 
@@ -253,7 +253,7 @@ internal sealed class HostedServerRun : IServerPlacement
 
     ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, CancellationToken cancellation)
     {
-        string local = Path.Combine(output, "boot-" + n), bootDirectory = HostInstall.Join(RunDirectory, "boot-" + n);
+        string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
         HostServerProcess process;
         // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
         // With the command line the server will have, so its pid file alone proves it the run's (#257).
@@ -292,7 +292,7 @@ internal sealed class HostedServerRun : IServerPlacement
     StartupEvents? IServerPlacement.Events(ServerRunPlan plan)
     {
         var tunnel = Tunnel;
-        string log = HostInstall.Join(RuntimeDirectory, BepInExLog);
+        string log = HostPath.Join(RuntimeDirectory, BepInExLog);
         return new StartupEvents
         {
             // This boot's log starts empty (the start moved any earlier one into the boot directory), so offset 0 is this boot's.

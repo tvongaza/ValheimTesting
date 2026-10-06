@@ -59,10 +59,10 @@ public sealed partial class HostedServerRunTests
         Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime")));
         Assert.Equal(host.Claims, host.Releases);
         Assert.True(Result().GetProperty("CleanupVerified").GetBoolean());
-        var ended = Assert.Single(await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5)), record => record.Entry.Kind == JournalEntry.RunEnded);
+        var ended = Assert.Single(await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5)), record => record.Entry.Kind == JournalEntry.RunEnded);
         Assert.Equal(("failed", "true"), (ended.Entry.Fields["state"], ended.Entry.Fields["cleanupVerified"]));
         // The client's process was journalled before its start and after it; nothing of the run is left for env recover.
-        var clientJournal = await RunJournal.ReadAsync(clientHost, "/home/tester/journal", RunId, TimeSpan.FromSeconds(5));
+        var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/home/tester/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
     }
 
@@ -75,7 +75,7 @@ public sealed partial class HostedServerRunTests
         var (plan, profile) = Write(host);
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         string runtime = RunDirectory + "/runtime", world = RunDirectory + "/world";
-        var journal = await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyDone, runtime), (JournalEntry.CopyIntended, world), (JournalEntry.CopyDone, world),
             (JournalEntry.CopyRetired, runtime), (JournalEntry.CopyRetired, world)], Copies(journal));
         Assert.Equal("true", journal.Last(record => record.Entry.Kind == JournalEntry.CopyRetired).Entry.Fields["handedOver"]);
@@ -109,7 +109,7 @@ public sealed partial class HostedServerRunTests
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.False(Directory.Exists(host.Local(runtime)));
         Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyRetired, runtime)],
-            Copies(await RunJournal.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5))));
+            Copies(await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5))));
         Assert.Equal(JournalRunState.Ended, Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host, TimeSpan.FromSeconds(5))).Runs).State);
 
         // The run's own removal fails as well: the partial copy is left, and the journal says so.
@@ -140,7 +140,7 @@ public sealed partial class HostedServerRunTests
         Assert.False(Directory.Exists(host3.Local(world)));
         Assert.False(Directory.Exists(host3.Local(runtime)));
         Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyDone, runtime), (JournalEntry.CopyIntended, world), (JournalEntry.CopyRetired, runtime),
-            (JournalEntry.CopyRetired, world)], Copies(await RunJournal.ReadAsync(host3, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5))));
+            (JournalEntry.CopyRetired, world)], Copies(await RunJournalOnHost.ReadAsync(host3, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5))));
         Assert.Empty(Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host3, TimeSpan.FromSeconds(5))).Runs).Items);
     }
 }

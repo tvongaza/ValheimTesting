@@ -20,7 +20,7 @@ public sealed class RunJournalTests : IDisposable
         await run.AppendAsync(host, journal, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", odd), ("stage", "é ü 漢")), TimeSpan.FromSeconds(30));
         await run.AppendAsync(host, journal, "client-a", JournalEntry.Of(JournalEntry.CharacterIntended, ("fileName", "vt0123abcd")), TimeSpan.FromSeconds(30));
         await run.AppendAsync(host, journal, "server", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", odd)), TimeSpan.FromSeconds(30));
-        var read = await RunJournal.ReadAsync(host, journal, run.RunId, TimeSpan.FromSeconds(30));
+        var read = await RunJournalOnHost.ReadAsync(host, journal, run.RunId, TimeSpan.FromSeconds(30));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone], read.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
         var first = read.First(record => record.Actor == "server");
         Assert.Equal(odd, first.Entry.Fields["runtime"]);
@@ -28,24 +28,24 @@ public sealed class RunJournalTests : IDisposable
         Assert.Equal("vt0123abcd", Assert.Single(read, record => record.Actor == "client-a").Entry.Fields["fileName"]);
         Assert.Equal(2, File.ReadAllLines(Path.Combine(journal, run.RunId, "server.jsonl")).Length);
         // A run with no journal on this host reads as empty, not as a failure.
-        Assert.Empty(await RunJournal.ReadAsync(host, journal, "run-unknown", TimeSpan.FromSeconds(30)));
+        Assert.Empty(await RunJournalOnHost.ReadAsync(host, journal, "run-unknown", TimeSpan.FromSeconds(30)));
     }
 
     [Fact] public async Task EveryRunIsReadBackWithTheRunnerThatWroteIt()
     {
         var host = Host();
         string journal = Path.Combine(_root, "data dir", "journal");
-        Assert.Empty((await RunJournal.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30))).Records);
+        Assert.Empty((await RunJournalOnHost.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30))).Records);
         foreach (string run in new[] { "run-a", "run-b" })
             await new RunJournal(run).AppendAsync(host, journal, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", "/x/" + run)), TimeSpan.FromSeconds(30));
         await new RunJournal("run-b").AppendAsync(host, journal, "run", JournalEntry.Of(JournalEntry.RunEnded, ("state", "passed")), TimeSpan.FromSeconds(30));
-        var (all, unreadable) = await RunJournal.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30));
+        var (all, unreadable) = await RunJournalOnHost.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30));
         Assert.Equal(["run-a", "run-b", "run-b"], all.Select(record => record.Run).Order());
         Assert.Equal(0, unreadable);
         Assert.All(all, record => Assert.Equal(JournalRunner.Current, record.Runner));
         // A line cut short (a full disk, a killed write) is counted and skipped; the lines around it still read.
         File.AppendAllText(Path.Combine(journal, "run-a", "server.jsonl"), "{\"utc\":\"2026-10-05T18:");
-        (all, unreadable) = await RunJournal.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30));
+        (all, unreadable) = await RunJournalOnHost.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30));
         Assert.Equal(3, all.Count);
         Assert.Equal(1, unreadable);
         Assert.True(JournalRunner.Current.StillRuns());
@@ -105,8 +105,8 @@ public sealed class RunJournalTests : IDisposable
         string file = Path.Combine(journal, "run-shared", WorldFixture.Actor + ".jsonl");
         using (var writer = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
         {
-            Assert.Single((await RunJournal.ReadAllAsync(Host(), journal, TimeSpan.FromSeconds(30))).Records);
-            Assert.Single((await RunJournal.ReadAsync(Host(), journal, "run-shared", TimeSpan.FromSeconds(30))));
+            Assert.Single((await RunJournalOnHost.ReadAllAsync(Host(), journal, TimeSpan.FromSeconds(30))).Records);
+            Assert.Single((await RunJournalOnHost.ReadAsync(Host(), journal, "run-shared", TimeSpan.FromSeconds(30))));
             // This process, the record's runner, still runs: it holds the copy.
             Assert.Equal(Environment.ProcessId, RunJournal.LocalHolders()[copy]);
             run.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", copy), ("local", "true")));

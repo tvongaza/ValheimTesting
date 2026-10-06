@@ -31,7 +31,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
             "windows" => @"C:\Program Files (x86)\Steam", "macos" => "/Users/tester/Library/Application Support/Steam", _ => "/home/tester/.local/share/Steam",
         };
         machine.Directories.Add(steam);
-        machine.Directories.Add(HostInstall.Join(steam, "userdata"));
+        machine.Directories.Add(HostPath.Join(steam, "userdata"));
         game = machine.App(steam, "892970", "Valheim", machine.Platform switch
             { "windows" => GameLaunch.ClientWindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => GameLaunch.ClientLinuxExecutable });
         return machine;
