@@ -130,7 +130,9 @@ public sealed class GameSession : IAsyncDisposable
             _opened.Add(actor);
         }
         Directory.CreateDirectory(output); // Once the open is accepted: an open refused at teardown leaves no empty folder.
-        return actor.Start();
+        var session = actor.Start();
+        Report.RecordPlugins(actorName, plan.Pins);
+        return session;
     }
     private readonly List<ClientActor> _opened = [];
     private readonly List<RunLog> _added = [];
@@ -268,6 +270,7 @@ public sealed class GameSession : IAsyncDisposable
             starts.Add(Task.Run(() =>
             {
                 Report.Step(StepPhase.Setup, "start and verify owned dedicated fixture", () => server.Start());
+                if (server.Plan is { } plan) Report.RecordPlugins("server", plan.Pins);
                 // Runtime-ready: the mod is loaded and patched in, before any scenario step; a failure cancels the clients' starts.
                 if (Mod is { ChecksPatches: true } mod && ServerPinsMod)
                     Report.Step(StepPhase.Setup, "server: the mod's Harmony patches are applied", () => mod.RequirePatchesApplied(server.Game));
@@ -277,6 +280,7 @@ public sealed class GameSession : IAsyncDisposable
             {
                 // Prepared above: the client to its menu, then its world opens.
                 Report.Step(StepPhase.Setup, $"hosting client {host.Name} at its menu, plugins pinned", () => host.Start());
+                Report.RecordPlugins(host.Name, host.Plan.Pins);
                 Report.Step(StepPhase.Setup, $"hosting client {host.Name}'s ValheimCLI offers the hosted-world session commands", () => CliCapabilities.Require(host.Game, CliCapabilities.HostedRounds));
                 if (Mod is { ChecksPatches: true } mod && ServerPinsMod)
                     Report.Step(StepPhase.Setup, "host: the mod's Harmony patches are applied", () => mod.RequirePatchesApplied(host.Game));
@@ -284,7 +288,11 @@ public sealed class GameSession : IAsyncDisposable
                 if (host.Plan.Owned) Report.Step(StepPhase.Setup, "establish test access on the owned host", () => HostedWorldLifecycle.EstablishTestAccess(host.Game));
             }));
         foreach (var client in _clients)
-            starts.Add(Task.Run(() => Report.Step(StepPhase.Setup, $"client {client.Name} at its menu, plugins pinned", () => client.Start())));
+            starts.Add(Task.Run(() =>
+            {
+                Report.Step(StepPhase.Setup, $"client {client.Name} at its menu, plugins pinned", () => client.Start());
+                Report.RecordPlugins(client.Name, client.Plan.Pins);
+            }));
         // The first failure cancels the rest at once, rather than after every sibling has run out its own deadline.
         var pending = new List<Task>(starts);
         Exception? first = null;

@@ -101,7 +101,8 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         string built = System.Text.RegularExpressions.Regex.Match(project, "<Version>([^<]+)</Version>").Groups[1].Value;
         Assert.NotEmpty(built);
         Assert.Equal(built, SmokeProject.GameVersion);
-        Assert.Equal("Valheim.Testing.Game " + built, TargetedRegression.ToolkitVersion); // the run's provenance names the same version
+        // The run's provenance names the same version.
+        Assert.Equal(built, ToolkitProvenance.Capture().Packages.Single(package => package.Id == "Valheim.Testing.Game").Version);
         Assert.Null(typeof(SmokeProject).Assembly.GetManifestResourceStream("toolkit-versions.json"));
     }
 

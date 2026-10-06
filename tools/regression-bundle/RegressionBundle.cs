@@ -483,7 +483,14 @@ public static class RegressionBundle
 
     // ---- the arms' evidence ----
 
-    private sealed record ResultFile(string Name, Dictionary<string, string> Provenance, List<StepResult> Steps, bool Passed, string? Pinning);
+    private sealed record ResultFile(string Name, Dictionary<string, string> Provenance, List<StepResult> Steps, bool Passed, string? Pinning, ResultToolkit? Toolkit = null)
+    {
+        // The Game version the run used: result.json's Toolkit (schema 3), or the provenance entry older results wrote.
+        public string? GameVersion => Toolkit?.Packages?.FirstOrDefault(package => package.Id == "Valheim.Testing.Game") is { Version: { } version }
+            ? "Valheim.Testing.Game " + version : Provenance.GetValueOrDefault("toolkit");
+    }
+    private sealed record ResultToolkit(List<ResultPackage>? Packages);
+    private sealed record ResultPackage(string Id, string? Version);
 
     // Every strict pin in a command trace: the mod's builds and how often they were pinned, the world UIDs, and every other plugin's values.
     private sealed record TracePins(int ModPins, IReadOnlySet<string> ModBuilds, IReadOnlySet<string> Worlds, IReadOnlyDictionary<string, SortedSet<string>> Others);
@@ -619,7 +626,7 @@ public static class RegressionBundle
         string check = $"arm {name}: result.json agrees with junit.xml ({result.Steps.Count} steps, strict pinning) and with the declared {arm.Expect}" +
             (arm.FailingStep != null ? $" at \"{arm.FailingStep}\"" : "") + $"; {pins.ModPins} strict pins of {plugin} in the command trace, all {md5}" + (run != null ? "; run-manifest.json agrees" : "");
         return new(new(name, commit, md5, sha256, sha256Source, arm.Expect, failed == null, result.Steps.Count(step => step.Passed), result.Steps.Count,
-            failed == null ? null : $"{failed.Name}: {failed.Error}"), pins, files, check, result.Provenance.GetValueOrDefault("toolkit"), privateNames, guids);
+            failed == null ? null : $"{failed.Name}: {failed.Error}"), pins, files, check, result.GameVersion, privateNames, guids);
     }
 
     private static bool LooksLikePath(string value) => Regex.IsMatch(value, @"^([A-Za-z]:[\\/]|\\\\|/)", RegexOptions.CultureInvariant);

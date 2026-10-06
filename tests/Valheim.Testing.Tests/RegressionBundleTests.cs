@@ -349,13 +349,18 @@ internal sealed class BundleRig : IDisposable
         if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         Directory.CreateDirectory(directory);
         var report = new ScenarioReport("example-regression");
-        report.Provenance["toolkit"] = toolkit;
         staged.Record(report.Provenance);
         report.Provenance["hostWorld"] = "SealFixture";
         report.Step("first: the mod marks the ground", () => { });
         try { report.Step("first: exactly one marker stands there", () => { if (!pass) throw new InvalidOperationException(error); }); }
         catch (InvalidOperationException) { }
         report.Write(directory);
+        // The run's toolkit as result.json names it (schema 3): this arm ran the Game version given.
+        var written = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(directory, "result.json")))!;
+        var packages = written["Toolkit"]!["Packages"]!.AsArray();
+        foreach (var ran in packages.Where(package => (string?)package!["Id"] == "Valheim.Testing.Game").ToList()) packages.Remove(ran);
+        packages.Add(new System.Text.Json.Nodes.JsonObject { ["Id"] = "Valheim.Testing.Game", ["Version"] = toolkit.Split(' ').Last() });
+        File.WriteAllText(Path.Combine(directory, "result.json"), written.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         File.WriteAllText(Path.Combine(directory, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, TargetedRegression.ManifestJson));
         var pins = staged.Plan.Pins.ToDictionary(pin => pin.Key, pin => pin.Key == "example.mod" && md5 != null ? md5 : pin.Value);
         string expect = "cli_expect --strict " + string.Join(" ", pins.Select(pin => $"{pin.Key}={pin.Value}")) + extraPins;
@@ -374,7 +379,8 @@ internal sealed class BundleRig : IDisposable
         File.Delete(Path.Combine(directory, "run-manifest.json"));
         var result = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(directory, "result.json")))!;
         var provenance = result["Provenance"]!.AsObject();
-        foreach (string key in new[] { "modSha256", "modCommit", "modPlugin", "toolkit", "allowlist" }) provenance.Remove(key);
+        foreach (string key in new[] { "modSha256", "modCommit", "modPlugin", "allowlist" }) provenance.Remove(key);
+        result.AsObject().Remove("Toolkit");
         File.WriteAllText(Path.Combine(directory, "result.json"), result.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 

@@ -26,7 +26,7 @@ public sealed class ScenarioReportPhaseTests : IDisposable
         Assert.Equal((true, true, true, false, false), (report.PreflightPassed, report.RuntimeReady, report.ScenarioPassed, report.CleanupVerified, report.Passed));
         report.Write(_output);
         var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "result.json"))).RootElement;
-        Assert.Equal(2, result.GetProperty("Schema").GetInt32());
+        Assert.Equal(3, result.GetProperty("Schema").GetInt32());
         Assert.Equal((true, true, true, false, false), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean(), result.GetProperty("Passed").GetBoolean()));
         Assert.Equal(new[] { "Preflight", "Setup", "Scenario", "Cleanup" }, result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
