@@ -372,7 +372,7 @@ public static class PinnedServerRun
                     // The copy is the run's now: the caller's Dispose must not remove one the run keeps (its server may still run).
                     staged.Preserve = true;
                     // Its state now is what the run is compared against at the end, so what staging added is not counted as the run's.
-                    runtime = WorldFixture.Existing(staged.DirectoryPath, new Dictionary<string, string>(Verified(plan.Runtime) ? plan.Runtime.Sha256 : WorldFixture.Manifest(staged.DirectoryPath), StringComparer.Ordinal));
+                    runtime = WorldFixture.Existing(staged.DirectoryPath, new Dictionary<string, string>(Verified(plan.Runtime) ? plan.Runtime.Sha256 : WorldFixture.Manifest(staged.DirectoryPath), StringComparer.Ordinal), madeIn: staged);
                     runtime.Preserve = true;
                 });
             else report.Step(StepPhase.Setup, Verified(plan.Runtime) ? "copy and verify pinned runtime" : "copy unpinned runtime as found", () => { runtime = CopyOf(plan.Runtime); runtime.Preserve = true; });

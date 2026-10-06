@@ -9,6 +9,10 @@
 // Each command is announced with the time and its duration. A test run that makes no progress for five minutes is stopped
 // and the tests that had started and not completed are named (--blame-hang). The same lines go to
 // artifacts/validate/validate.log, next to the test results, for CI to keep when the step fails.
+//
+// No command may create, change or remove anything in ValheimTesting's own folder on this machine (the run journal, host lock,
+// leases, runs and extracted bundles of the user running validation): tests use temporary folders (#411). Each command is
+// followed by a comparison with the folder as validation found it, and the first command that changed it fails, naming what.
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Xml.Linq;
@@ -20,6 +24,8 @@ Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
 File.WriteAllText(transcript, "");
 var started = Stopwatch.StartNew();
+string dataRoot = DataRoot();
+var dataBefore = Snapshot(dataRoot);
 
 Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj");
 Test("tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj");
@@ -102,6 +108,55 @@ void Run(string file, params string[] arguments)
         throw new InvalidOperationException("Validation command failed with exit code " + process.ExitCode);
     }
     Note($"done in {Elapsed(clock.Elapsed)}: {command}");
+    DataRootUnchanged(command);
+}
+
+// ValheimTesting's own folder on this machine, as the toolkit places it (LocalSteamLocator.DataRoot).
+static string DataRoot() =>
+    OperatingSystem.IsWindows() ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ValheimTesting")
+    : OperatingSystem.IsMacOS() ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "ValheimTesting")
+    : Path.Combine(Environment.GetEnvironmentVariable("XDG_DATA_HOME") is { Length: > 0 } data ? data
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share"), "ValheimTesting");
+
+// Every entry under the folder: a file by its size and write time, a directory by its write time (an entry made and removed
+// again still moves its directory's), a link by its target and never followed. Empty when the folder does not exist. A
+// directory removed during the walk is left out (reported as removed); Finder's .DS_Store files are not counted.
+static Dictionary<string, string> Snapshot(string root)
+{
+    var entries = new Dictionary<string, string>(StringComparer.Ordinal);
+    if (!Directory.Exists(root)) return entries;
+    entries["."] = "directory " + Directory.GetLastWriteTimeUtc(root).Ticks;
+    var options = new EnumerationOptions { AttributesToSkip = 0, IgnoreInaccessible = true };
+    void Walk(DirectoryInfo directory)
+    {
+        FileSystemInfo[] found;
+        try { found = directory.GetFileSystemInfos("*", options); }
+        catch (DirectoryNotFoundException) { return; }
+        foreach (var entry in found)
+        {
+            if (entry.Name == ".DS_Store") continue;
+            string relative = Path.GetRelativePath(root, entry.FullName);
+            if (entry.LinkTarget != null) entries[relative] = "link " + entry.LinkTarget;
+            else if (entry is DirectoryInfo child) { entries[relative] = "directory " + child.LastWriteTimeUtc.Ticks; Walk(child); }
+            else entries[relative] = $"file {((FileInfo)entry).Length} {entry.LastWriteTimeUtc.Ticks}";
+        }
+    }
+    Walk(new DirectoryInfo(root));
+    return entries;
+}
+
+void DataRootUnchanged(string command)
+{
+    var now = Snapshot(dataRoot);
+    var changes = now.Where(entry => !dataBefore.ContainsKey(entry.Key)).Select(entry => "added " + entry.Key)
+        .Concat(now.Where(entry => dataBefore.TryGetValue(entry.Key, out string? was) && was != entry.Value).Select(entry => "changed " + entry.Key))
+        .Concat(dataBefore.Keys.Where(key => !now.ContainsKey(key)).Select(key => "removed " + key)).Order(StringComparer.Ordinal).ToList();
+    if (changes.Count == 0) return;
+    foreach (string change in changes.Take(20)) Note($"{change} in {dataRoot}");
+    if (changes.Count > 20) Note($"... and {changes.Count - 20} more");
+    Note($"FAILED: {command} changed ValheimTesting's own folder on this machine ({dataRoot}); tests keep their journal, locks and leases in " +
+        "temporary folders (#411). A real run on this machine during validation changes it too: validate again with no run going.");
+    throw new InvalidOperationException("A validation command changed " + dataRoot);
 }
 
 // One line to the console and the transcript: UTC time and time since validation started.

@@ -134,6 +134,9 @@ public sealed class HostedScenarioTests : IDisposable
         var host = Host();
         // The scripted host keeps its data in the temporary folder, as a real client keeps it in its user's own directory.
         using var data = new FakeClientDataDirectory(Save);
+        // The run journals its copies of the fixture here, never in this machine's own ValheimTesting folder, which
+        // valheim-test env status reads and a killed test would leave a run in.
+        using var machine = new FakeDataRoot(Path.Combine(_root, "valheim-testing"));
         try { HostedScenario.Run(plan, () => ClientSession.Attach(plan.Client, Output, host), report, Output, hostLog); }
         catch (Exception) { Assert.False(report.Passed); }
         return report;
