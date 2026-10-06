@@ -689,6 +689,10 @@ sealed class Valheim.Testing.Game.Fakes.FakeClientDataDirectory : System.IDispos
   method System.Void .ctor(System.String directory)
   method System.Void Dispose()
   property System.String Directory { get; }
+sealed class Valheim.Testing.Game.Fakes.FakeDataRoot : System.IDisposable
+  method System.Void .ctor(System.String directory)
+  method System.Void Dispose()
+  property System.String Directory { get; }
 sealed class Valheim.Testing.Game.Fakes.FakeOwnedProcess : System.IDisposable, Valheim.Testing.Game.IOwnedProcess
   method System.Threading.Tasks.Task`1<System.Int32> WaitForExitAsync(System.Threading.CancellationToken cancellation)
   method System.Void .ctor(System.Int32 id = 1)

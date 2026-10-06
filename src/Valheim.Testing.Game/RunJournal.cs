@@ -116,10 +116,13 @@ internal sealed class RunJournal
     /// This machine's journal (<c>journal</c> beside its default lock, under ValheimTesting's data folder), where copies made
     /// on this machine (<see cref="WorldFixture"/>) are journalled in process, without a shell.
     /// </summary>
-    internal static string LocalDirectory => s_localFlow.Value ?? LocalDirectoryDefault ?? Path.Combine(new LocalSteamLocator().DataRoot, "journal");
+    internal static string LocalDirectory => s_localFlow.Value
+        ?? (LocalSteamLocator.SimulatedDataRoot.Value is { } fake ? Path.Combine(fake.Directory, "journal") : null)
+        ?? LocalDirectoryDefault ?? Path.Combine(new LocalSteamLocator().DataRoot, "journal");
 
     // Test seams: this machine's journal is the real machine's, never a simulated machine's (EnvironmentInventory.ThisMachine
-    // may describe another platform's folders). Tests point it at a temporary folder, for all tests or for one test's flow.
+    // may describe another platform's folders). Tests point it at a temporary folder, for all tests or for one test's flow;
+    // a no-game test outside this assembly uses a Fakes.FakeDataRoot scope.
     internal static string? LocalDirectoryDefault { get; set; }
     private static readonly AsyncLocal<string?> s_localFlow = new();
     internal static IDisposable UseLocalDirectory(string directory)
@@ -185,10 +188,13 @@ internal sealed class RunJournal
     }
 
     private static readonly object s_localWrite = new();
-    /// <summary>Appends <paramref name="entry"/> to this machine's journal (<see cref="LocalDirectory"/>) in this process; throws when it cannot.</summary>
-    internal void AppendLocal(string actor, JournalEntry entry)
+    /// <summary>
+    /// Appends <paramref name="entry"/> to this machine's journal (<paramref name="journal"/>, default <see cref="LocalDirectory"/>)
+    /// in this process; throws when it cannot.
+    /// </summary>
+    internal void AppendLocal(string actor, JournalEntry entry, string? journal = null)
     {
-        string directory = Path.Combine(LocalDirectory, RunId);
+        string directory = Path.Combine(journal ?? LocalDirectory, RunId);
         string line = Line(actor, entry) + "\n";
         lock (s_localWrite)
         {

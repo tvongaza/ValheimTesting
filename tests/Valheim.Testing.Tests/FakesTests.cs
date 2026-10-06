@@ -114,4 +114,55 @@ public class FakesTests
         }
         Assert.False(Directory.Exists(path));
     }
+
+    // #411: a no-game test outside this assembly moves ValheimTesting's own folder, and with it the run journal, for its flow only.
+    [Fact] public void AFakeDataRootIsThisMachinesFolderAndJournalOnlyInsideItsScope()
+    {
+        string realRoot = new LocalSteamLocator().DataRoot, realJournal = RunJournal.LocalDirectory;
+        string outer = Path.Combine(Path.GetTempPath(), "fake-data-outer"), inner = Path.Combine(Path.GetTempPath(), "fake-data-inner");
+        using (var first = new FakeDataRoot(outer))
+        {
+            Assert.Equal((Path.GetFullPath(outer), Path.GetFullPath(outer)), (new LocalSteamLocator().DataRoot, CliBundle.DataRoot));
+            Assert.Equal(Path.Combine(Path.GetFullPath(outer), "journal"), RunJournal.LocalDirectory);
+            using (new FakeDataRoot(inner)) Assert.Equal(Path.Combine(Path.GetFullPath(inner), "journal"), RunJournal.LocalDirectory);
+            Assert.Equal(Path.Combine(Path.GetFullPath(outer), "journal"), RunJournal.LocalDirectory);
+            var outerFirst = new FakeDataRoot(inner);
+            Assert.Throws<InvalidOperationException>(first.Dispose); // Innermost first; nothing changed.
+            Assert.Equal(Path.Combine(Path.GetFullPath(inner), "journal"), RunJournal.LocalDirectory);
+            outerFirst.Dispose();
+            first.Dispose(); first.Dispose(); // Twice is harmless.
+            Assert.Equal((realRoot, realJournal), (new LocalSteamLocator().DataRoot, RunJournal.LocalDirectory));
+        }
+        Assert.Equal((realRoot, realJournal, realRoot), (new LocalSteamLocator().DataRoot, RunJournal.LocalDirectory, CliBundle.DataRoot));
+        Assert.Throws<ArgumentException>(() => new FakeDataRoot(" "));
+    }
+
+    // An AsyncLocal scope opened in a flow that has ended was never in effect here: disposing it says so and changes nothing.
+    [Fact] public async Task AFakeDataRootOpenedInAnotherFlowSaysItIsNotInEffect()
+    {
+        string journal = RunJournal.LocalDirectory;
+        var scope = await Task.Run(() => new FakeDataRoot(Path.Combine(Path.GetTempPath(), "fake-data-elsewhere")));
+        Assert.Equal(journal, RunJournal.LocalDirectory);
+        Assert.Contains("not in effect where it is disposed", Assert.Throws<InvalidOperationException>(scope.Dispose).Message);
+        Assert.Equal(journal, RunJournal.LocalDirectory);
+    }
+
+    // A copy made inside the scope keeps journalling there, even when it is retired after the scope closed.
+    [Fact] public void ACopyMadeInAFakeDataRootIsRetiredInItsJournal()
+    {
+        string root = Directory.CreateTempSubdirectory("fake-data-copy-").FullName;
+        try
+        {
+            string source = Directory.CreateDirectory(Path.Combine(root, "fixture")).FullName, output = Directory.CreateDirectory(Path.Combine(root, "out")).FullName;
+            File.WriteAllText(Path.Combine(source, "w.db"), "world");
+            string journal = Path.Combine(root, "data", "journal");
+            WorldFixture copy;
+            using (new FakeDataRoot(Path.Combine(root, "data"))) copy = WorldFixture.Copy(source, output, WorldFixture.Manifest(source));
+            copy.Dispose();
+            string lines = File.ReadAllText(Assert.Single(Directory.GetFiles(journal, "*.jsonl", SearchOption.AllDirectories)));
+            Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
+                lines.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => System.Text.Json.JsonDocument.Parse(line).RootElement.GetProperty("kind").GetString()));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
 }

@@ -35,7 +35,10 @@ internal sealed class LocalSteamLocator : ISteamLocator
 {
     public string Platform => HostProfile.CurrentPlatform;
     public string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    public string DataRoot => Platform switch
+    // Set only by Fakes.FakeDataRoot: the innermost open scope, whose folder a no-game test uses as ValheimTesting's own.
+    // scripts/validate.cs watches the real folder with the same platform rules: change both together.
+    internal static readonly AsyncLocal<Fakes.FakeDataRoot?> SimulatedDataRoot = new();
+    public string DataRoot => SimulatedDataRoot.Value?.Directory ?? Platform switch
     {
         "windows" => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ValheimTesting"),
         "macos" => Path.Combine(Home, "Library", "Application Support", "ValheimTesting"),
