@@ -1,6 +1,7 @@
 using System.Globalization;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>What a host says about a process a run journalled.</summary>
 internal enum ProbedState

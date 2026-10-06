@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// Test fixtures only: builds the in-memory <see cref="ResolvedEnvironment"/> an inventory or campaign would resolve, from a

@@ -1,4 +1,5 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The runner tests' view of a launched run, over the <see cref="GameSession"/> and plan a scenario gets (#258 step 4), with

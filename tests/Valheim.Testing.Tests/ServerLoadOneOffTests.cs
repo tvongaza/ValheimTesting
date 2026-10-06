@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // server-load as the one-off: the actors come from the inventory (this machine with no file), the derived campaign is
 // written into the output, the host preflight runs before anything is copied, and nothing has to be written by hand.

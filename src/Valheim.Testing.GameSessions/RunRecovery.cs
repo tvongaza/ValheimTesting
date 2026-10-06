@@ -1,7 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>One thing a recovery did or could not do, on one host.</summary>
 internal sealed record RecoveryStep(string Host, string What, string Outcome, bool Failed);

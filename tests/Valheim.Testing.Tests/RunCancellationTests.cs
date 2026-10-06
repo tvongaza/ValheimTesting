@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Valheim.Testing.Game;
 using Valheim.Testing.ProcessSignalProbe;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 public sealed class RunCancellationTests
 {

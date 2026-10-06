@@ -6,6 +6,8 @@ using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
+using Valheim.Testing.GameSessions.Fakes;
 
 namespace Valheim.Testing.NativeAcceptance.Tests;
 

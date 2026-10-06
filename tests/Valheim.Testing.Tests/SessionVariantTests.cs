@@ -3,6 +3,7 @@ using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using valheim_cli.Testing;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // Joins that are not the plain dedicated-server join: one the server must refuse (with the game's status read back at the
 // menu), and a crossplay (PlayFab) join, plus the replies they read. Scripted transports only; no game.

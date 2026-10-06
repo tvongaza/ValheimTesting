@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 namespace MyMod.SystemTests;
 

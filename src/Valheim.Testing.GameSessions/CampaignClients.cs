@@ -1,7 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// A campaign's named clients on their assigned hosts (#258 step 8b: the client half of what was <see cref="HostedServerRun"/>,

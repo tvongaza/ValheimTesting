@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// Cancels a console-owned setup or run on Ctrl+C or SIGTERM. Dispose after cleanup so another run in the same

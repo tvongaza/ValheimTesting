@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>Resolve optional local setup inputs without guessing among builds or account roots.</summary>
 internal static class SmokeInputs

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The hosted runner: the dedicated server on its environment's server host, against a fake host (no shell, no game).
 public sealed partial class HostedServerRunTests : IDisposable

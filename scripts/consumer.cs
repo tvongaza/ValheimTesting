@@ -126,6 +126,7 @@ try
         using Valheim.Testing;
         using Valheim.Testing.Bindings;
         using Valheim.Testing.Game;
+        using Valheim.Testing.GameSessions;
 
         // 40 m at the origin, rising 0.5 m per metre in x: 41 m at x = 2.
         var plane = new PlaneTerrain(40, 0.5f, 0);

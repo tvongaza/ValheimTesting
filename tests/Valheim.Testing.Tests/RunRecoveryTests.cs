@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 using static RunJournalStatusTests;
 
 // env recover|teardown (#257 step 4): clears exactly what one run provably left, refuses anything it cannot prove.

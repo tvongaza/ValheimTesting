@@ -1,4 +1,5 @@
-namespace Valheim.Testing.Game;
+using Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The pinned ValheimCLI bundle this package embeds: <c>cli-dependency.json</c>'s pinned commit and bundle hash, and the zip

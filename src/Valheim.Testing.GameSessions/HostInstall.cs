@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The files of a directory on a host as <see cref="HostInstall.ListAsync"/> found them: every regular file's SHA256 by its

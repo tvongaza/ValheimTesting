@@ -1,6 +1,7 @@
 using System.Diagnostics;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// One run's game processes in their roles (#258, decided on #289): an owned dedicated server (<see cref="Server"/>) or a client

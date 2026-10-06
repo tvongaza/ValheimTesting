@@ -5,6 +5,7 @@ using System.Xml.Linq;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 /// <summary>Fake install trees: a game assembly in the platform's data folder and a BepInEx core (preloader and BepInEx.dll), no game. Existing files are kept.</summary>
 internal static class FakeInstalls

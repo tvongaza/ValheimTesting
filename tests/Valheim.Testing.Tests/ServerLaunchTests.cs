@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 public class ServerLaunchTests
 {

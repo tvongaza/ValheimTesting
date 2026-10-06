@@ -1,6 +1,7 @@
 using System.Text.Json;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>Why a named campaign actor was assigned to one inventory recipe.</summary>
 internal sealed record EnvironmentAssignment(string Actor, string Environment, string Role, string Host, string Reason);

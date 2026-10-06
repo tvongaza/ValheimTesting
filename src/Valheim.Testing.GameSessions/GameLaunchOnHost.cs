@@ -1,6 +1,7 @@
 using System.Text;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>A <see cref="GameLaunch"/> built for a host, as the host's start scripts and process probe read it.</summary>
 internal static class GameLaunchOnHost

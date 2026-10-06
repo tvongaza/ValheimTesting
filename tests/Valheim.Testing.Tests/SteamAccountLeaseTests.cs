@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // Account pools and leases with fake processes: what a pool may hold, what the lease host is sent, and how a claim and a
 // release are read, including lost replies. The contention, no-lapse and release checks run through real shells below. Names only: a credential never appears in anything this API writes, sends or reports.

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using valheimCLI;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The one-off native check for a mod: its server load on an owned dedicated server and, unless <c>--server-only</c>, one

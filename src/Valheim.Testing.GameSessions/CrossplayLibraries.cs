@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// Whether a Linux runtime can load crossplay. The game's PlayFab Party library (<c>libparty.so</c> in the runtime's

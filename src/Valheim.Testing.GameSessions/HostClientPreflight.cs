@@ -1,6 +1,7 @@
 using System.Text;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 // Reads only the few loader and CLI settings needed before a campaign client starts. The remote host remains the authority
 // for its files; no game install or host-global expectation file is copied into the runner's workspace.

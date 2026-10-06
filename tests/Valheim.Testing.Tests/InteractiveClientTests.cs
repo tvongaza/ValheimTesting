@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // Starting a client in a host's desktop session, with fake processes: the launch each platform builds, what the host is sent,
 // how each refusal and a lost reply are reported, that the Windows task is always named for this launch and removed, and that a

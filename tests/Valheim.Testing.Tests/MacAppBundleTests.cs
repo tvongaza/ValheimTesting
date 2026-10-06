@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The real macOS check behind a client copy (#258 run A): a bundle with a file added inside it is fixable, the repair removes
 // that file from the copy only and drops quarantine, and a changed sealed file refuses. macOS only (CI's macOS leg).

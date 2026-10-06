@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The one owner of what a run leaves on disk once its processes have stopped (#257): the clients' disposable characters,

@@ -17,7 +17,7 @@ Topic pages: [pinned world dumps](../world-dump-contract.md) (`WorldDump`) and [
 - **Steam accounts:** `SteamAccountHold` and its lease, so two clients never run on one account.
 - **Evidence from a host:** `WorldDump`, `ReviewCapture` and `ReviewClip` fetch what the game wrote on its machine into the run's evidence.
 
-The types keep the `Valheim.Testing.Game` namespace for now, so moving to this package needs no `using` change.
+From 0.1.0-preview.3 its types are in the `Valheim.Testing.GameSessions` namespace (`using Valheim.Testing.GameSessions;` beside `using Valheim.Testing.Game;`); through 0.1.0-preview.2 they kept the `Valheim.Testing.Game` namespace.
 
 ## Game sessions
 

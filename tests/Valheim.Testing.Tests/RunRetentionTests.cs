@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // #194: a run keeps what it wrote in a game copy and removes the rest, and refuses to start copying onto a full drive.
 public sealed class RunRetentionTests : IDisposable

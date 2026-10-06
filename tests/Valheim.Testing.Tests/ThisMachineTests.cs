@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 /// <summary>An in-memory machine for the inventory's this-machine default: a registry value, folders and files, any platform.</summary>
 internal sealed class FakeMachine(string platform = "windows") : ISteamLocator

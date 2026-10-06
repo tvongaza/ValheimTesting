@@ -1,6 +1,7 @@
 using System.Globalization;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>What the optional signed-in check found on a client's host.</summary>
 [ResultShape]

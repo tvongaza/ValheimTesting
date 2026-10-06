@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The lease host the Steam account tests share: this machine's own shell, so every claim and release runs the real lease

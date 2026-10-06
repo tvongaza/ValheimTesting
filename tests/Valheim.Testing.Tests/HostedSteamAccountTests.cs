@@ -2,6 +2,7 @@ using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // A campaign client's Steam identity lease in the hosted runner: the client's account is leased (real lease scripts on this machine)
 // before its host is touched, renewed while it runs and released after it stopped; without a pool the run is exactly as before.

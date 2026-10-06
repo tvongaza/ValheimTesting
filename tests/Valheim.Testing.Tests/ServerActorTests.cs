@@ -2,6 +2,7 @@ using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // ServerActor is the one owned-server wiring (#258 step 1): every boot's launch, kept logs, process record, recorded
 // connection and test access, over a placement. Here the placement launches a FakeOwnedServer (no game).

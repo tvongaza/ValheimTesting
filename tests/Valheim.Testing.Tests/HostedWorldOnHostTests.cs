@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // #258 step 8b: a hosted fixture placed in a campaign client's own worlds_local on its host. Never over a world already named for
 // it; journalled before anything is shipped; shipped to the run's stage and verified there before it reaches the user's worlds.

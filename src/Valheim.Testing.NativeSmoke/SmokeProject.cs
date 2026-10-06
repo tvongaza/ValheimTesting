@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// <c>valheim-test init</c>: an editable native scenario, the only thing this tool builds. Prove it builds from NuGet.org
@@ -113,6 +114,7 @@ internal static class SmokeProject
         File.WriteAllText(Path.Combine(directory, "Program.cs"), server ? """
             using valheimCLI;
             using Valheim.Testing.Game;
+            using Valheim.Testing.GameSessions;
 
             // Run this with the campaign.json valheim-test server-load wrote (plan.json and client-plan.json beside it), or on a
             // Mac with its plan.json. Supply a new result directory for each run.

@@ -1,7 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// A run's journal on a host other than through this process (#257): appended and read through the host's own shell, so a

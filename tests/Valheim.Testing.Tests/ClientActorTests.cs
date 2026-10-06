@@ -1,6 +1,7 @@
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // ClientActor is the one client open path (#258 step 2): its one open goes through its placement, and that open's kept logs,
 // a failed startup's included, are the actor's for the teardown scan. Here the placement launches fake processes (no game).

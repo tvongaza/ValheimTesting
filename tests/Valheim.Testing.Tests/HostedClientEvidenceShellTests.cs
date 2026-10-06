@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // #254 through the host's real shell (bash on macOS and Linux, Windows PowerShell on Windows): a preloader crash log the
 // launch wrote is read and kept; one from before the launch is only named.

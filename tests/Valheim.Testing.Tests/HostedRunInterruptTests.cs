@@ -3,6 +3,7 @@ using System.Text;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // #257's interrupted-run faults for a hosted run: Ctrl+C while a client waits for its startup, and a standalone run's own
 // runtime and world copies on the server host, journalled before their scripts run.

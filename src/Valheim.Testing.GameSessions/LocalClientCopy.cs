@@ -1,6 +1,7 @@
 using System.Globalization;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// One owned client's disposable copy on this machine (#296): the default for every owned client a run opens here, so the

@@ -8,7 +8,7 @@ internal static class Program
     {
         if (args is ["run-cancellation", var cancellationMarker])
         {
-            using var cancellation = new Valheim.Testing.Game.RunCancellation();
+            using var cancellation = new Valheim.Testing.GameSessions.RunCancellation();
             File.WriteAllText(cancellationMarker + ".ready", Environment.ProcessId.ToString());
             bool signalled = cancellation.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(20));
             File.WriteAllText(cancellationMarker, signalled ? "cancelled" : "timed-out");

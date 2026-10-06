@@ -3,6 +3,7 @@ using Valheim.Testing.Game.Fakes;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 public sealed class NativeDependencyResolverTests : IDisposable
 {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // #257's lease decision, parts 1 and 2: a Steam account plays on one computer at a time. Preflight refuses a campaign whose client
 // account is playing on another inventory host; a client start that Steam signs out ("Logged In Elsewhere") fails at once, naming it.

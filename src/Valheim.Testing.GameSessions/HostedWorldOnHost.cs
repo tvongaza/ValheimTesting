@@ -1,6 +1,7 @@
 using System.Globalization;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// A hosted fixture world on a campaign client's own host (#258 step 8b, part b): placed into that host user's

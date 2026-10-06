@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 if (args is ["help" or "--help"])
 {

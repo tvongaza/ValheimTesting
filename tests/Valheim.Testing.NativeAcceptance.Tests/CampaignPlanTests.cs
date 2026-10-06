@@ -5,6 +5,7 @@ using MyMod.IntegrationTests;
 using MyMod.SystemTests;
 using Valheim.Testing.NativeAcceptance;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance.Tests;
 

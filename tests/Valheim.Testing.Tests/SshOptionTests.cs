@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // ssh reads each -o value like a line of its config file (OpenSSH 8.7 and later): spaces split words, quotes group, a backslash
 // escapes a quote, a backslash or an unquoted space, and a word starting with '#' is a comment. The expected arguments below are

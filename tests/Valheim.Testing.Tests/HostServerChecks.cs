@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The server-on-a-host path through a real shell, without a game: an install shipped to the host, copied and verified there,
 // a stand-in server (a script with the server's name that writes ValheimCLI's listening line and keeps running) started,

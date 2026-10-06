@@ -2,6 +2,7 @@ using MyMod.SystemTests;
 using System.Globalization;
 using System.Text.Json;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance;
 

@@ -1,5 +1,6 @@
 using MyMod.SystemTests;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.NativeAcceptance;
 

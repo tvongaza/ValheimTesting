@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The environments: what the inventory holds (<c>list</c>), whether a one-off can run on it (<c>preflight</c>, read only), and

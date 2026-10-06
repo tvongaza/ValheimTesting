@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
-namespace Valheim.Testing.Game;
+namespace Valheim.Testing.GameSessions;
 
 /// <summary>One registered, disposable local character for one named campaign client.</summary>
 public sealed class HostedCampaignCharacter

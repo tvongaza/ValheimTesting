@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using Xunit;
+using Valheim.Testing.GameSessions;
 
 // The hosted character stage's own scripts in this machine's real shells (bash on macOS and Linux, Windows PowerShell on
 // Windows, pwsh where installed), checked against the one character-file rule they get as variables
