@@ -18,14 +18,18 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     public required string SessionCapability { get; init; }
     /// <summary>The environment variable that passes the owned session token to the in-game adapter.</summary>
     public required string SessionTokenVariable { get; init; }
-    /// <summary>Launching modes beyond <c>run</c>, for fixture preparation; they never pass an acceptance test.</summary>
-    public IReadOnlyList<string> PrepareModes { get; init; } = [];
-    /// <summary>Refuses a mode and plan that do not belong together (throw <see cref="ArgumentException"/>).</summary>
-    public Action<string, TPlan>? CheckMode { get; init; }
-    /// <summary>Adds the mod's provenance (scenario details) to the report.</summary>
+    /// <summary>
+    /// The mod's own rules on the plan as it will run, for validate and run alike (throw <see cref="ArgumentException"/>): a read
+    /// plan, or a campaign's plan once bound to its prepared actors (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>).
+    /// </summary>
+    public Action<TPlan>? CheckPlan { get; init; }
+    /// <summary>Adds the mod's provenance (scenario details) to the report, before anything is copied: it is recorded even when the game never starts.</summary>
     public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
-    /// <summary>The scenario for a launching mode, given the started, strictly pinned server.</summary>
-    public required Func<PinnedServerRunContext<TPlan>, Task> Scenario { get; init; }
+    /// <summary>
+    /// The scenario for <c>run</c>: <c>(session, plan) =&gt; Task</c>, given the <see cref="GameSession"/> whose strictly pinned
+    /// server has started (<c>session.Server.Game</c>), with its report, output and cancellation.
+    /// </summary>
+    public required Func<GameSession, TPlan, Task> Scenario { get; init; }
     /// <summary>
     /// A runtime copy the runner already made and staged (<see cref="WorldFixture.Copy"/>, then its plugins), to run in place
     /// of a second copy of it: the plan's runtime source must be this copy. The run verifies it against the plan's hashes,
@@ -35,86 +39,14 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// </summary>
     public WorldFixture? StagedRuntime { get; init; }
     /// <summary>Test seam: the owned server's session (scripted) instead of launching the copied runtime.</summary>
-    internal Func<PinnedServerRunContext<TPlan>, OwnedServerSession>? SessionOverride { get; init; }
+    internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
     internal IHostedRunHooks Hooks { get; init; } = HostedRunHooks.Production;
 }
 
-/// <summary>A launching run's state, handed to the scenario.</summary>
-public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
-{
-    public required string Mode { get; init; }
-    public required TPlan Plan { get; init; }
-    public required ScenarioReport Report { get; init; }
-    /// <summary>The new output directory: reports, per-boot logs, command records and the fixture copies.</summary>
-    public required string Output { get; init; }
-    /// <summary>The runtime copy the server runs from: a path on <see cref="ServerHost"/> when the run has one.</summary>
-    public required string RuntimeDirectory { get; init; }
-    /// <summary>The world copy the server saves to: a path on <see cref="ServerHost"/> when the run has one.</summary>
-    public required string WorldDirectory { get; init; }
-    public required CancellationToken Cancellation { get; init; }
-    /// <summary>The campaign's client names (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), each on its assigned host; empty when clients open on this machine.</summary>
-    public IReadOnlyList<string> CampaignClients => Hosted?.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList() ?? [];
-    /// <summary>The host a campaign client runs on, for reading its files or capturing there.</summary>
-    public IGameHost ClientHost(string campaignClient) => Hosted?.ClientHost(campaignClient)
-        ?? throw new ArgumentException("This run is not a campaign with named clients.", nameof(campaignClient));
-    /// <summary>The host the dedicated server runs on (<c>--inventory</c> or a campaign), or null when it runs on this machine.</summary>
-    public IGameHost? ServerHost => Hosted?.Host;
-    internal HostedServerRun? Hosted { get; init; }
-    /// <summary>The owned dedicated server: restart it, wait until it is joinable, or hand it to <see cref="ClientRounds.OwnedServer"/>.</summary>
-    public ServerActor Session { get; internal set; } = null!;
-    /// <summary>The owned server's first boot's in-game handle (a restart returns the next boot's).</summary>
-    public GameActor Server { get; internal set; } = null!;
-    /// <summary>
-    /// The logs the teardown scan reads besides the owned server's and the client actors' own (<see cref="ServerActor.Logs"/>,
-    /// <see cref="ClientActor.Logs"/>): add the logs of a client opened another way here. They are scanned after the scenario, once
-    /// the processes have stopped.
-    /// </summary>
-    public List<RunLog> Logs { get; } = [];
-
-    /// <summary>
-    /// Opens the plan's game client through its <see cref="ClientActor"/>, whose logs the teardown scan reads, also when its
-    /// startup fails after the process started (a client that never reached its menu is still scanned and listed in the result).
-    /// In a campaign (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), an owned client starts on the host its environment was assigned,
-    /// inside that host's desktop session (<see cref="InteractiveClient"/>), or in this runner's GUI session for a local macOS
-    /// host: the install and CLI port are its prepared ones, the install's patchers and pins are checked on the host, the host's
-    /// lock is held for the rest of the run, and ValheimCLI is reached through the host's loopback tunnel.
-    /// <paramref name="campaignClient"/> names the campaign's client when it declares several. That client's observed Steam
-    /// identity is leased first, owned or attached (<see cref="SteamAccountHold"/>), and its host must still be signed in to it: a
-    /// held account refuses the client, a lost lease stops it and cancels the run, and the lease is released at teardown.
-    /// Otherwise this is <see cref="ClientActor.OnThisMachine"/>. Disposing the session stops only the client it started.
-    /// </summary>
-    public ClientSession OpenClient(ClientRunPlan client, string? campaignClient = null) => Client(client, campaignClient).Start();
-
-    /// <summary>
-    /// The actor for the plan's client: a campaign's named client on its assigned host (see <see cref="OpenClient"/>), or this
-    /// machine's. Each call is a new actor (each <see cref="OpenClient"/> a new open, as before); its logs join the teardown scan,
-    /// and one the scenario left open is closed at teardown before the server stops.
-    /// </summary>
-    internal ClientActor Client(ClientRunPlan client, string? campaignClient = null)
-    {
-        ArgumentNullException.ThrowIfNull(client);
-        ClientActor actor;
-        if (Hosted != null && Hosted.Profile.Clients.Count != 0 && (client.Owned || Hosted.Profile.SteamAccounts != null))
-        {
-            var clients = Hosted.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList();
-            string name = campaignClient ?? (clients.Count == 1 ? clients[0]
-                : throw new ArgumentException($"The campaign declares clients {string.Join(", ", clients)}; say which one opens.", nameof(campaignClient)));
-            actor = new ClientActor(name, client, Output, Hosted.ClientPlacement(Report), Cancellation);
-        }
-        else if (campaignClient != null) throw new ArgumentException("A named client opens only in a campaign that declares clients (PinnedServerRun.RunCampaignAsync).", nameof(campaignClient));
-        else actor = ClientActor.OnThisMachine("client", client, Output, Cancellation);
-        lock (_clients) _clients.Add(actor);
-        return actor;
-    }
-    private readonly List<ClientActor> _clients = [];
-    /// <summary>Every client actor this run made, in the order made.</summary>
-    internal IReadOnlyList<ClientActor> Clients { get { lock (_clients) return _clients.ToArray(); } }
-}
-
 /// <summary>
 /// The lifecycle of a mod's owned dedicated-server test runner, so the mod supplies only its plan fields, modes and
-/// scenarios. Usage: <c>&lt;runner&gt; [--inventory &lt;environments.json&gt;] validate|run|&lt;prepare modes&gt; &lt;plan.json&gt; &lt;new-output-directory&gt;</c>.
+/// scenarios. Usage: <c>&lt;runner&gt; [--inventory &lt;environments.json&gt;] validate|run &lt;plan.json&gt; &lt;new-output-directory&gt;</c>.
 /// <list type="number">
 /// <item>Refuses an existing output directory (evidence is never overwritten) and one inside a pinned source.</item>
 /// <item>Reads the plan, detects the runtime's platform and checks the host before copying anything.</item>
@@ -122,13 +54,14 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// <item>Copies and verifies the pinned runtime and world (kept for inspection), checks the copy's executable and its
 /// game build, loader and patchers against <see cref="ServerRunPlan.RuntimePins"/> (recorded
 /// as provenance).</item>
-/// <item><c>validate</c> stops there. Otherwise: checks the CLI port is free, starts the owned session on the copies with
-/// per-boot logs (<c>boot-N.*</c>) and recorded commands (<c>connection-N.jsonl</c>), waits on the dedicated startup
-/// events, enables devcommands and runs the scenario.</item>
-/// <item>Always stops only the owned server, records its PIDs, scans every boot's logs and the scenario's
-/// <see cref="PinnedServerRunContext{TPlan}.Logs"/> (<see cref="ScenarioReport.ScanLogs"/>, with the plan's
-/// <see cref="ServerRunPlan.LogScan"/>), writes <c>result.json</c> and <c>junit.xml</c>, and prints PASS (only for
-/// <c>run</c>), VALIDATED or PREPARED, or FAIL. Ctrl+C and SIGTERM cancel the run.</item>
+/// <item><c>validate</c> stops there. Otherwise: checks the CLI port is free, starts the <see cref="GameSession"/>'s owned
+/// server (<see cref="ServerActor"/>) on the copies with per-boot logs (<c>boot-N.*</c>) and recorded commands
+/// (<c>connection-N.jsonl</c>), waits on the dedicated startup events, establishes test access and runs the scenario with the
+/// session and the plan.</item>
+/// <item>Always disposes the session (clients the scenario left open, then only the owned server), records the server's PIDs,
+/// scans the session's logs (<see cref="GameSession.Logs"/>: every boot's and client's; <see cref="ScenarioReport.ScanLogs"/>,
+/// with the plan's <see cref="ServerRunPlan.LogScan"/>), writes <c>result.json</c> and <c>junit.xml</c>, and prints PASS (only
+/// for <c>run</c>), VALIDATED or FAIL. Ctrl+C and SIGTERM cancel the run.</item>
 /// </list>
 /// A plan with <see cref="ServerRunPlan.Pinning"/> <c>none</c> runs without pins: the runner prints
 /// <see cref="EnvironmentPinning.Warning"/> once the plan is read, copies fixtures without a manifest as found, records the
@@ -144,7 +77,7 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 /// starts each boot with <see cref="HostServer"/> and waits for its listening line in the host's log, and at teardown stops only
 /// the process it started, fetches each boot's logs (<c>boot-N/</c>) and the world copy (<c>host-world/</c>), closes the tunnel
 /// and releases the lock. Clients open on this machine; remote clients and several actors are a campaign's
-/// (<see cref="RunCampaignAsync{TPlan}"/>), where <see cref="PinnedServerRunContext{TPlan}.OpenClient"/> starts each in its host's
+/// (<see cref="RunCampaignAsync{TPlan}"/>), where <see cref="GameSession.OpenClient"/> starts each in its host's
 /// desktop session on its leased, observed Steam identity.
 /// A host operation whose outcome is unknown (a lost reply, a transport failure, an unproven lock or lease release), when nothing else
 /// failed for certain, prints UNKNOWN and returns 3: neither a pass nor a failure.
@@ -161,9 +94,9 @@ public sealed class PinnedServerRunContext<TPlan> where TPlan : ServerRunPlan
 ///     ReadPlan = LifecyclePlan.ReadValidated,
 ///     SessionCapability = "mymod.testing/session",
 ///     SessionTokenVariable = LifecyclePlan.SessionTokenVariable,
-///     Scenario = run =&gt;
+///     Scenario = (session, plan) =&gt;
 ///     {
-///         DrySiteServerScenario.Run(run.Plan, run.Server, run.Session.Restart, run.Report);
+///         DrySiteServerScenario.Run(plan, session.Server!.Game, session.Server.Restart, session.Report);
 ///         return Task.CompletedTask;
 ///     },
 /// });
@@ -201,7 +134,7 @@ public static class PinnedServerRun
 
     public static async Task<int> MainAsync<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
     {
-        string[] modes = ["validate", "run", .. options.PrepareModes];
+        string[] modes = ["validate", "run"];
         if (args.Length >= 1 && args[0] == "--profile")
         {
             Console.Error.WriteLine($"{options.Name}: --profile was removed. Place the dedicated server with {InventoryOption} <environments.json> " +
@@ -261,9 +194,9 @@ public static class PinnedServerRun
         (string Manifest, Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> Clients)? campaign, ResolvedEnvironment? given = null) where TPlan : ServerRunPlan
     {
         var report = new ScenarioReport(options.Name);
-        ServerActor? session = null;
+        GameSession? game = null;
+        TPlan? launchedPlan = null;
         WorldFixture? runtime = null, world = null;
-        PinnedServerRunContext<TPlan>? launched = null;
         HostedServerRun? hosted = null;
         PreparedHostedCampaign? prepared = null;
         string output = Path.GetFullPath(outputArgument);
@@ -348,7 +281,7 @@ public static class PinnedServerRun
                 if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, GameLaunch.LocalServerPlatform);
             }
             if (hosted != null && options.StagedRuntime != null) throw new ArgumentException("A run on another host copies its runtime on the server host; a staged local runtime copy cannot stand in for it.");
-            options.CheckMode?.Invoke(mode, plan);
+            options.CheckPlan?.Invoke(plan);
             report.Provenance["planSha256"] = planHash();
             report.Provenance["scenario"] = plan.Scenario;
             options.Provenance?.Invoke(plan, report.Provenance);
@@ -432,23 +365,20 @@ public static class PinnedServerRun
             // Ctrl+C from here abandons what it can still give up (the stop itself is bounded by the plan's own quit and kill).
             var cleanup = cancellation.BeginCleanup();
             bool stopped = true;
-            // Clients before their server: one the scenario left open (a failure inside it) is closed, its logs kept for the scan.
-            foreach (var client in launched?.Clients ?? [])
-                if (client.Session is { } open)
-                    try { report.Step(StepPhase.Cleanup, open.Owned ? $"stop only the owned client {client.Name}" : $"detach from the operator's client {client.Name}", client.Dispose); }
-                    catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); Classify(error); }
-            if (session != null)
+            if (game?.Server is { } session)
             {
-                try { report.Step(StepPhase.Cleanup, "stop only owned server", session.Dispose); }
-                catch (Exception error) { stopped = false; Console.Error.WriteLine("Teardown: " + error.Message); Classify(error); }
-                // A boot that failed to start and could not be stopped may still run from the runtime: keep it, and the host's lock.
-                if (session.MayStillRun) stopped = false;
+                // The session's teardown: clients the scenario left open, in reverse, then only the owned server, each a Cleanup step.
+                await game.DisposeAsync().ConfigureAwait(false);
+                foreach (var failure in game.TeardownFailures) Classify(failure);
+                // A failed stop, or a boot that failed to start and could not be stopped, may still run from the runtime: keep it,
+                // and the host's lock.
+                stopped = game.ServerStopped;
                 report.Provenance["ownedPids"] = string.Join(",", session.StartedProcesses);
                 // How each boot ended, restarts included: asked to quit, then killed only after the plan's quitSeconds.
                 report.Provenance["serverStops"] = string.Join("; ", session.Stops.Select((stop, i) => $"boot-{i + 1} {stop}"));
                 foreach (var (stop, i) in session.Stops.Select((stop, i) => (stop, i)).Where(entry => entry.stop.Outcome == StopOutcome.Killed))
                     Console.Error.WriteLine($"Warning: owned server boot-{i + 1} was {stop}; the game's shutdown (its world save at quit) did not run.");
-                if (stopped && launched is { Plan.Crossplay: true })
+                if (stopped && launchedPlan is { Crossplay: true })
                     try
                     {
                         report.Step(StepPhase.Cleanup, "every boot quit cleanly and retired its crossplay lobby", () =>
@@ -466,20 +396,20 @@ public static class PinnedServerRun
             // and installs under the locks it holds; a campaign whose server run was never created is retired here.
             var retirement = new RunRetirement(report, output);
             if (hosted != null)
-                foreach (var failure in await hosted.TeardownAsync(report, output, session != null, stopped, prepared, retirement, cleanup).ConfigureAwait(false)) Classify(failure);
+                foreach (var failure in await hosted.TeardownAsync(report, output, game != null, stopped, prepared, retirement, cleanup).ConfigureAwait(false)) Classify(failure);
             else if (prepared != null)
                 foreach (var failure in await retirement.CampaignAsync(prepared, [], cleanup).ConfigureAwait(false))
                 { Console.Error.WriteLine("Teardown: " + failure.Message); Classify(failure); }
             // After the stop, which keeps each boot's logs; a client's were kept when the scenario closed it. Logs missing after
             // an unknown outcome are explained by it, so the scan then decides nothing on its own.
-            if (launched != null)
+            if (game != null && launchedPlan != null)
             {
-                List<RunLog> logs = [.. session?.Logs ?? [], .. launched.Logs, .. launched.Clients.SelectMany(client => client.Logs)];
-                if (logs.Count != 0 && !report.ScanLogs(logs, launched.Plan.LogScan) && unknown == null) definite = true;
+                var logs = game.Logs;
+                if (logs.Count != 0 && !report.ScanLogs(logs, launchedPlan.LogScan) && unknown == null) definite = true;
             }
             // A copy that could not be removed is a definite (local) failure, so it comes before the outcome is decided.
             if (runtime != null)
-                try { retirement.Local(runtime, stopped, launchedNothing: session == null); }
+                try { retirement.Local(runtime, stopped, launchedNothing: game == null); }
                 catch (Exception error) { Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message); definite = true; } // Recorded as its failed step.
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
@@ -516,12 +446,8 @@ public static class PinnedServerRun
         }
         // Only `run` is an acceptance result: validate launches nothing, and preparing a fixture never passes a test.
         Console.WriteLine((unknownOutcome ? "UNKNOWN (a host operation's outcome could not be established; neither a pass nor a failure: " + unknown + ")"
-            : !report.Passed ? "FAIL" : mode switch
-            {
-                "run" => "PASS",
-                "validate" => "VALIDATED (plan and fixtures only; no game was launched)",
-                _ => "PREPARED (fixture preparation; not an acceptance test)",
-            }) + (pinned ? "" : $" [{EnvironmentPinning.NotPinned}]"));
+            : !report.Passed ? "FAIL" : mode == "run" ? "PASS" : "VALIDATED (plan and fixtures only; no game was launched)")
+            + (pinned ? "" : $" [{EnvironmentPinning.NotPinned}]"));
         return report.Passed ? 0 : unknownOutcome ? 3 : 1;
 
         async Task Launch(TPlan plan, string runtimeDirectory, string worldDirectory)
@@ -536,19 +462,29 @@ public static class PinnedServerRun
                     try { reservation.Start(); } finally { reservation.Stop(); }
                 });
             }
-            var context = new PinnedServerRunContext<TPlan>
-            {
-                Mode = mode, Plan = plan, Report = report, Output = output, RuntimeDirectory = runtimeDirectory,
-                WorldDirectory = worldDirectory, Cancellation = cancellation.Token, Hosted = hosted,
-            };
-            launched = context;
+            launchedPlan = plan;
             // The actor owns test access on every boot it starts, so a scenario's restart comes back with it too.
-            session = context.Session = options.SessionOverride is { } scripted ? new ServerActor(scripted(context))
-                : new ServerActor(hosted ?? (IServerPlacement)new LocalServerPlacement(runtimeDirectory, worldDirectory, plan.Port),
-                    plan, output, options.SessionCapability, options.SessionTokenVariable, cancellation.Token);
-            report.Step(StepPhase.Setup, "start and verify owned dedicated fixture", () => context.Server = session.Start());
+            var hostedRun = hosted;
+            IReadOnlyList<string> campaignClients = hostedRun?.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList() ?? [];
+            game = new GameSession(report, output, plan.Pins.GetValueOrDefault("worlduid"),
+                token => options.SessionOverride is { } scripted ? new ServerActor(scripted(plan), runtimeDirectory, worldDirectory, hostedRun?.Host)
+                    : new ServerActor(hostedRun ?? (IServerPlacement)new LocalServerPlacement(runtimeDirectory, worldDirectory, plan.Port),
+                        plan, output, options.SessionCapability, options.SessionTokenVariable, token),
+                [], cancellation.Token)
+            {
+                CampaignClients = campaignClients,
+                // A campaign's client starts on its assigned host; an attached one without leases, and any other, on this machine.
+                ResolveClient = (client, name) => hostedRun != null && campaignClients.Count != 0 && (client.Owned || hostedRun.Profile.SteamAccounts != null)
+                    ? (name ?? (campaignClients.Count == 1 ? campaignClients[0]
+                        : throw new ArgumentException($"The campaign declares clients {string.Join(", ", campaignClients)}; say which one opens.", nameof(name))),
+                        hostedRun.ClientPlacement(report))
+                    : GameSession.ThisMachine(client, name),
+                FindClientHost = hostedRun == null ? null : hostedRun.ClientHost,
+                DisposeOnFailedStart = false, // The finally disposes it, on the cleanup's own bounded token.
+            };
+            await game.StartAsync().ConfigureAwait(false); // "start and verify owned dedicated fixture"
             phase = StepPhase.Scenario;
-            await options.Scenario(context).ConfigureAwait(false);
+            await options.Scenario(game, plan).ConfigureAwait(false);
         }
     }
 }

@@ -24,7 +24,8 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     {
         ArgumentNullException.ThrowIfNull(placement); ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrEmpty(output); ArgumentException.ThrowIfNullOrEmpty(sessionTokenVariable);
-        string runtime = placement.RuntimeDirectory, world = placement.WorldDirectory;
+        string runtime = RuntimeDirectory = placement.RuntimeDirectory, world = WorldDirectory = placement.WorldDirectory;
+        Host = placement.Host;
         int boot = 0, connection = 0;
         _session = new OwnedServerSession(token =>
         {
@@ -65,9 +66,10 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     }
 
     // Test seam: an actor over a scripted session (Fakes.FakeOwnedServer), whose boots log nothing.
-    internal ServerActor(OwnedServerSession session)
+    internal ServerActor(OwnedServerSession session, string runtimeDirectory = "", string worldDirectory = "", IGameHost? host = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
+        RuntimeDirectory = runtimeDirectory; WorldDirectory = worldDirectory; Host = host;
         _session.EnsureTestAccess = true;
     }
 
@@ -82,6 +84,12 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         string sessionCapability, string sessionTokenVariable, CancellationToken cancellation = default) =>
         new(new LocalServerPlacement(runtimeDirectory, worldDirectory, plan.Port), plan, output, sessionCapability, sessionTokenVariable, cancellation);
 
+    /// <summary>The runtime copy the server runs from: a path on <see cref="Host"/> when it has one.</summary>
+    public string RuntimeDirectory { get; }
+    /// <summary>The world copy the server saves to: a path on <see cref="Host"/> when it has one.</summary>
+    public string WorldDirectory { get; }
+    /// <summary>The host the server runs on (<c>--inventory</c> or a campaign), or null when it runs on this machine.</summary>
+    public IGameHost? Host { get; }
     /// <summary>The current boot's in-game handle; the server must have started.</summary>
     public GameActor Game => _game ?? throw new InvalidOperationException("The owned server has not started.");
     /// <summary>Each boot's kept logs, in boot order, for the teardown scan (<see cref="ScenarioReport.ScanLogs"/>) once the server stopped.</summary>
@@ -116,6 +124,8 @@ internal interface IServerPlacement
 {
     string RuntimeDirectory { get; }
     string WorldDirectory { get; }
+    /// <summary>The host the boots run on, or null for this machine.</summary>
+    IGameHost? Host { get; }
     /// <summary>The launch's platform on a host, or null for this machine's own.</summary>
     ServerPlatform? Platform { get; }
     /// <summary>Starts boot <paramref name="boot"/> (from 1). A failure after the returned process started is the actor's to stop.</summary>
@@ -134,6 +144,7 @@ internal sealed class LocalServerPlacement(string runtimeDirectory, string world
     public string RuntimeDirectory { get; } = runtimeDirectory;
     public string WorldDirectory { get; } = worldDirectory;
     public ServerPlatform? Platform => null;
+    public IGameHost? Host => null;
 
     public ServerBoot Start(int boot, GameLaunch launch, string output, CancellationToken cancellation)
     {

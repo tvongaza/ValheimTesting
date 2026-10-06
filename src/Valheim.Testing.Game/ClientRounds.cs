@@ -299,7 +299,7 @@ public sealed class ClientRounds
         CheckRoundNames(Rounds);
         if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
         if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with Run(openClient, measure), without a server.");
-        if (OwnedServer == null) throw new ArgumentException("OwnedServer: a joining client's rounds wait on and restart the owned server; supply it, for example the runner's ServerActor (run.Session).");
+        if (OwnedServer == null) throw new ArgumentException("OwnedServer: a joining client's rounds wait on and restart the owned server; supply it, for example the runner's ServerActor (session.Server).");
         if (string.IsNullOrWhiteSpace(WorldUid)) throw new ArgumentException("WorldUid: name the owned server's world UID, which the joined client must report.");
         if (Client.Crossplay && Lobby == null) throw new ArgumentException("Lobby: a crossplay client joins the server's PlayFab lobby; supply Lobby, for example with CrossplayServer.WaitForLobby.");
     }

@@ -361,9 +361,9 @@ public sealed class PinningTests : IDisposable
         Name = "pinning-smoke",
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-        Scenario = run => { run.Server.Execute("cli_extension test.mod/session"); return Task.CompletedTask; },
+        Scenario = (session, _) => { session.Server!.Game.Execute("cli_extension test.mod/session"); return Task.CompletedTask; },
         // The plan's own expectations: strict pins, or EnvironmentPinning.None for an unpinned plan.
-        SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60), expectations: run.Plan.ExpectCommand),
+        SessionOverride = server == null ? null : plan => server.Session(TimeSpan.FromSeconds(60), expectations: plan.ExpectCommand),
     };
     private static JsonElement Result(string output) => JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
     private static JsonElement Step(JsonElement result, string name) => result.GetProperty("Steps").EnumerateArray().Single(s => s.GetProperty("Name").GetString() == name);

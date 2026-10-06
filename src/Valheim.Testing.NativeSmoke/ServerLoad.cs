@@ -370,7 +370,7 @@ internal static class ServerLoad
                         if (serverAuto != null) record["serverLoaderShipped"] = serverAuto.Reason;
                         if (clientAuto != null) record["clientLoaderShipped"] = clientAuto.Reason;
                     },
-                    Scenario = run => Scenario(run, clientPlan, clock),
+                    Scenario = (session, plan) => Scenario(session, clientPlan, clock),
                 }).ConfigureAwait(false);
         }
         finally
@@ -382,22 +382,23 @@ internal static class ServerLoad
     }
 
     // Loaded with the packaged world, joinable, and (with a client) a clean client reading that world.
-    private static Task Scenario(PinnedServerRunContext<ServerRunPlan> run, ClientRunPlan? client, Stopwatch clock)
+    private static Task Scenario(GameSession session, ClientRunPlan? client, Stopwatch clock)
     {
-        run.Report.Step("selected server mods loaded and world identity matches", () =>
+        var server = session.Server!;
+        session.Report.Step("selected server mods loaded and world identity matches", () =>
         {
-            var worlds = run.Server.Execute("cli_world").Output.Select(Expectations.ParseWorld).OfType<WorldFacts>().ToArray();
+            var worlds = server.Game.Execute("cli_world").Output.Select(Expectations.ParseWorld).OfType<WorldFacts>().ToArray();
             if (worlds.Length != 1 || worlds[0].Uid != DefaultSmokeWorld.Uid)
                 throw new InvalidDataException("The dedicated server did not load the packaged smoke world UID.");
         });
-        run.Report.Provenance["firstModLoadedSecondsFromCommand"] = clock.Elapsed.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture);
-        run.Report.Step("dedicated server accepts a game connection", () => run.Session.WaitUntilJoinable(run.Server));
+        session.Report.Provenance["firstModLoadedSecondsFromCommand"] = clock.Elapsed.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture);
+        session.Report.Step("dedicated server accepts a game connection", () => server.WaitUntilJoinable(server.Game));
         if (client != null)
             new ClientRounds
             {
-                Client = client, WorldUid = DefaultSmokeWorld.Uid, Report = run.Report, Output = run.Output,
-                OwnedServer = run.Session, Rounds = ["first"], ProtectPlayer = false, Cancellation = run.Cancellation,
-            }.Run(run.Server, () => run.OpenClient(client), round =>
+                Client = client, WorldUid = DefaultSmokeWorld.Uid, Report = session.Report, Output = session.Output,
+                OwnedServer = server, Rounds = ["first"], ProtectPlayer = false, Cancellation = session.Cancellation,
+            }.Run(server.Game, () => session.OpenClient(client), round =>
                 round.Step("clean client can read the joined world", () =>
                 {
                     var state = new SessionControl(round.Client).Read();
@@ -514,12 +515,12 @@ internal static class ServerLoad
                         if (serverLoader != null) record["serverLoaderPackage"] = serverLoader.Identity;
                         if (clientLoader != null) record["clientLoaderPackage"] = clientLoader.Identity;
                     },
-                    Scenario = run =>
+                    Scenario = (session, _) =>
                     {
-                        if (clientPlan == null) return Scenario(run, null, clock);
+                        if (clientPlan == null) return Scenario(session, null, clock);
                         string saves = HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(clientPlan.Install));
                         using var stagedCharacter = DefaultSmokeCharacter.StageForRun(character!, Path.Combine(saves, "characters_local"), steamUserdata!);
-                        return Scenario(run, clientPlan, clock);
+                        return Scenario(session, clientPlan, clock);
                     },
                 }).ConfigureAwait(false);
         }

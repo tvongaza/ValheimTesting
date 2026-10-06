@@ -124,15 +124,16 @@ internal static class SmokeProject
                 },
                 SessionCapability = NativeServerRuntime.SessionCapability,
                 SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
-                Scenario = run =>
+                Scenario = (session, plan) =>
                 {
-                    run.Report.Step("selected server mods loaded", () =>
+                    var server = session.Server!.Game;
+                    session.Report.Step("selected server mods loaded", () =>
                     {
-                        var worlds = run.Server.Execute("cli_world").Output.Select(Expectations.ParseWorld).OfType<WorldFacts>().ToArray();
+                        var worlds = server.Execute("cli_world").Output.Select(Expectations.ParseWorld).OfType<WorldFacts>().ToArray();
                         if (worlds.Length != 1 || worlds[0].Uid != DefaultSmokeWorld.Uid)
                             throw new InvalidDataException("The dedicated server loaded a different fixture world.");
                     });
-                    // Add your mod's focused observation and assertion here using run.Server and run.Report.Step(...).
+                    // Add your mod's focused observation and assertion here using session.Server.Game and session.Report.Step(...).
                     return Task.CompletedTask;
                 },
             };

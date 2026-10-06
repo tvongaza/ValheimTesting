@@ -892,7 +892,11 @@ sealed class Valheim.Testing.Game.GameSession : System.IAsyncDisposable
   method System.Threading.Tasks.Task`1<Valheim.Testing.Game.PlayerPlacement/TeleportArrival> Join(System.String client, Valheim.Testing.Game.HeightExpectation arrival = null, System.Boolean protect = true, Valheim.Testing.Game.CrossplayLobby lobby = null)
   method System.Threading.Tasks.Task`1<Valheim.Testing.Game.PlayerPlacement/TeleportArrival> Rejoin(System.String client, Valheim.Testing.Game.HeightExpectation arrival = null, System.Boolean protect = true, Valheim.Testing.Game.CrossplayLobby lobby = null)
   method System.Threading.Tasks.ValueTask DisposeAsync()
+  method System.Void AddLog(Valheim.Testing.Game.RunLog log)
+  method Valheim.Testing.Game.ClientSession OpenClient(Valheim.Testing.Game.ClientRunPlan plan, System.String name = null, System.String directory = null)
+  method Valheim.Testing.Game.IGameHost ClientHost(System.String campaignClient)
   property System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientActor> Clients { get; }
+  property System.Collections.Generic.IReadOnlyList`1<System.String> CampaignClients { get; }
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.RunLog> Logs { get; }
   property System.String Output { get; }
   property System.Threading.CancellationToken Cancellation { get; }
@@ -1701,29 +1705,12 @@ static class Valheim.Testing.Game.PinnedServerRun
   field const System.String KeepRuntimeVariable = "VALHEIM_TESTING_KEEP_RUNTIME"
   method static System.Threading.Tasks.Task`1<System.Int32> MainAsync<TPlan>(System.String[] args, Valheim.Testing.Game.PinnedServerRunOptions`1<TPlan> options)
   method static System.Threading.Tasks.Task`1<System.Int32> RunCampaignAsync<TPlan>(System.String manifestFile, TPlan plan, System.Func`2<TPlan,System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientRunPlan>> clients, System.String output, Valheim.Testing.Game.PinnedServerRunOptions`1<TPlan> options)
-sealed class Valheim.Testing.Game.PinnedServerRunContext`1
-  method System.Void .ctor()
-  method Valheim.Testing.Game.ClientSession OpenClient(Valheim.Testing.Game.ClientRunPlan client, System.String campaignClient = null)
-  method Valheim.Testing.Game.IGameHost ClientHost(System.String campaignClient)
-  property System.Collections.Generic.IReadOnlyList`1<System.String> CampaignClients { get; }
-  property System.Collections.Generic.List`1<Valheim.Testing.Game.RunLog> Logs { get; }
-  property System.String Mode { get; init; }
-  property System.String Output { get; init; }
-  property System.String RuntimeDirectory { get; init; }
-  property System.String WorldDirectory { get; init; }
-  property System.Threading.CancellationToken Cancellation { get; init; }
-  property TPlan Plan { get; init; }
-  property Valheim.Testing.Game.GameActor Server { get; }
-  property Valheim.Testing.Game.IGameHost ServerHost { get; }
-  property Valheim.Testing.Game.ScenarioReport Report { get; init; }
-  property Valheim.Testing.Game.ServerActor Session { get; }
 sealed class Valheim.Testing.Game.PinnedServerRunOptions`1
   method System.Void .ctor()
-  property System.Action`2<System.String,TPlan> CheckMode { get; init; }
+  property System.Action`1<TPlan> CheckPlan { get; init; }
   property System.Action`2<TPlan,System.Collections.Generic.IDictionary`2<System.String,System.String>> Provenance { get; init; }
-  property System.Collections.Generic.IReadOnlyList`1<System.String> PrepareModes { get; init; }
   property System.Func`2<System.String,TPlan> ReadPlan { get; init; }
-  property System.Func`2<Valheim.Testing.Game.PinnedServerRunContext`1<TPlan>,System.Threading.Tasks.Task> Scenario { get; init; }
+  property System.Func`3<Valheim.Testing.Game.GameSession,TPlan,System.Threading.Tasks.Task> Scenario { get; init; }
   property System.String Name { get; init; }
   property System.String SessionCapability { get; init; }
   property System.String SessionTokenVariable { get; init; }
@@ -2155,7 +2142,10 @@ sealed class Valheim.Testing.Game.ServerActor : System.IDisposable, Valheim.Test
   property System.Collections.Generic.IReadOnlyList`1<System.Int32> StartedProcesses { get; }
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.ProcessStop> Stops { get; }
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.RunLog> Logs { get; }
+  property System.String RuntimeDirectory { get; }
+  property System.String WorldDirectory { get; }
   property Valheim.Testing.Game.GameActor Game { get; }
+  property Valheim.Testing.Game.IGameHost Host { get; }
 [result shape] enum Valheim.Testing.Game.ServerPlatform
   field const Valheim.Testing.Game.ServerPlatform Linux = 1
   field const Valheim.Testing.Game.ServerPlatform MacOS = 2

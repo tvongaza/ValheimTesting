@@ -43,15 +43,15 @@ public sealed class PinnedServerRunTests : IDisposable
         File.WriteAllText(path, JsonSerializer.Serialize(plan));
         return path;
     }
-    private static PinnedServerRunOptions<ServerRunPlan> Options(Func<PinnedServerRunContext<ServerRunPlan>, Task>? scenario = null,
-        FakeOwnedServer? server = null, Action<string, ServerRunPlan>? checkMode = null) => new()
+    private static PinnedServerRunOptions<ServerRunPlan> Options(Func<TestRun<ServerRunPlan>, Task>? scenario = null,
+        FakeOwnedServer? server = null, Action<ServerRunPlan>? checkPlan = null) => new()
     {
         Name = "toolkit-smoke",
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-        PrepareModes = ["prepare-fixture"], CheckMode = checkMode,
-        Scenario = scenario ?? (_ => Task.CompletedTask),
-        SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60)),
+        CheckPlan = checkPlan,
+        Scenario = TestRun.Scenario(scenario ?? (_ => Task.CompletedTask)),
+        SessionOverride = server == null ? null : _ => server.Session(TimeSpan.FromSeconds(60)),
     };
     private JsonElement Result() => JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "result.json"))).RootElement;
     // A mod plan with a client section, read and validated the way a mod runner's ReadPlan does.
@@ -65,8 +65,8 @@ public sealed class PinnedServerRunTests : IDisposable
             return plan;
         },
         SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-        Scenario = _ => Task.CompletedTask,
-        SessionOverride = server == null ? null : run => server.Session(TimeSpan.FromSeconds(60)),
+        Scenario = (_, _) => Task.CompletedTask,
+        SessionOverride = server == null ? null : _ => server.Session(TimeSpan.FromSeconds(60)),
     };
     private static object MacClient(string install, string architecture) => new
     {
@@ -155,8 +155,8 @@ public sealed class PinnedServerRunTests : IDisposable
         if (OperatingSystem.IsMacOS()) return; // This fake runtime is Windows or Linux, which a Mac cannot run; validate is covered above.
         string plan = WritePlan(linux: HostRunsLinux);
         var server = new FakeOwnedServer("test.mod"); string? seen = null;
-        int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(run => { seen = run.Mode + ":" + run.Server.GetType().Name; return Task.CompletedTask; }, server));
-        Assert.Equal(0, code); Assert.Equal("run:GameActor", seen);
+        int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(run => { seen = run.Server.GetType().Name; return Task.CompletedTask; }, server));
+        Assert.Equal(0, code); Assert.Equal("GameActor", seen);
         Assert.Contains("stop1", server.Events);
         var result = Result();
         Assert.Contains("stop only owned server", result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
@@ -167,7 +167,7 @@ public sealed class PinnedServerRunTests : IDisposable
         if (OperatingSystem.IsMacOS()) return;
         string plan = WritePlan(linux: HostRunsLinux);
         var server = new FakeOwnedServer("test.mod");
-        int code = await PinnedServerRun.MainAsync(["prepare-fixture", plan, Output], Options(_ => throw new InvalidOperationException("fixture refused"), server));
+        int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(_ => throw new InvalidOperationException("fixture refused"), server));
         Assert.Equal(1, code); Assert.Contains("stop1", server.Events);
         Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "runner failed" && s.GetProperty("Error").GetString() == "fixture refused");
     }
@@ -224,7 +224,7 @@ public sealed class PinnedServerRunTests : IDisposable
         if (OperatingSystem.IsMacOS()) return;
         Directory.Delete(Output, true);
         var server = new FakeOwnedServer("test.mod");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["prepare-fixture", plan, Output], Options(_ => throw new InvalidOperationException("fixture refused"), server)));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(_ => throw new InvalidOperationException("fixture refused"), server)));
         var result = Result();
         Assert.False(Directory.Exists(Copy(result, "runtime"))); Assert.True(Directory.Exists(Copy(result, "world")));
     }
@@ -322,10 +322,10 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Contains("Not enough free disk space for this run's runtime and world copies", step.GetProperty("Error").GetString());
         Assert.Empty(Directory.GetDirectories(Output, "valheim-test-*"));
     }
-    [Fact] public async Task AModeThePlanDoesNotAllowIsRefusedBeforeCopying()
+    [Fact] public async Task APlanTheModRefusesIsRefusedBeforeCopying()
     {
         string plan = WritePlan(linux: HostRunsLinux);
-        int code = await PinnedServerRun.MainAsync(["validate", plan, Output], Options(checkMode: (mode, _) => throw new ArgumentException("smoke plans run only")));
+        int code = await PinnedServerRun.MainAsync(["validate", plan, Output], Options(checkPlan: _ => throw new ArgumentException("smoke plans run only")));
         Assert.Equal(1, code); Assert.False(Directory.Exists(Output));
     }
     [Fact] public void ADedicatedServerWaitsOnThisBootsLogAndTheLoadedWorldPush()
@@ -352,10 +352,10 @@ public sealed class PinnedServerRunTests : IDisposable
     // not exist fails a passing scenario, unless the plan reclassifies it with a reason.
     private const string BrokenPatchLog = "[Message:   BepInEx] BepInEx 5.4.23.2\n[Error  :   BepInEx] Error loading [Broken Mod 1.0.0] : Exception has been thrown by the target of an invocation.\n" +
         "System.ArgumentException: Undefined target method for patch method static System.Void BrokenMod.Patches::Postfix()\n";
-    private Func<PinnedServerRunContext<ServerRunPlan>, Task> RegistersClientLog(string text) => run =>
+    private Func<TestRun<ServerRunPlan>, Task> RegistersClientLog(string text) => run =>
     {
         string path = Path.Combine(run.Output, "client-boot.game-0.log"); File.WriteAllText(path, text);
-        run.Logs.Add(new RunLog("client BepInEx log", path, Required: true));
+        run.GameSession.AddLog(new RunLog("client BepInEx log", path, Required: true));
         return Task.CompletedTask;
     };
     [Fact] public async Task TheTeardownScanFailsAPassingScenarioOnABrokenPatch()
@@ -444,7 +444,7 @@ public sealed class KeepRuntimeVariableTests : IDisposable
         {
             Name = "toolkit-smoke", SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
             ReadPlan = path => { var read = ServerRunPlan.Read<ServerRunPlan>(path); read.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return read; },
-            Scenario = _ => Task.CompletedTask,
+            Scenario = (_, _) => Task.CompletedTask,
         };
         string? previous = Environment.GetEnvironmentVariable(PinnedServerRun.KeepRuntimeVariable);
         Environment.SetEnvironmentVariable(PinnedServerRun.KeepRuntimeVariable, "1");

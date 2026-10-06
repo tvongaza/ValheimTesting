@@ -188,6 +188,33 @@ public sealed class GameSessionTests : IDisposable
         Assert.True(report.Steps[^1].Passed);
     }
 
+    [Fact] public async Task AClientTheScenarioOpensIsTheSessionsToCloseAtTeardown()
+    {
+        var report = new ScenarioReport("session");
+        var placement = new Placement(this, (_, _) => Task.CompletedTask);
+        var session = new GameSession(report, _root, WorldUid, Server, [], CancellationToken.None) { ResolveClient = (_, name) => (name ?? "client", placement) };
+        await session.StartAsync();
+        var opened = session.OpenClient(Plan(), "client-x");
+        Assert.False(opened.Closed);
+        await session.DisposeAsync();
+        Assert.True(opened.Closed);
+        Assert.Equal(new[] { "stop only the owned client client-x", "stop only owned server" }, Steps(report, StepPhase.Cleanup));
+        Assert.Throws<ObjectDisposedException>(() => session.OpenClient(Plan()));
+    }
+
+    [Fact] public async Task ARunnerWithItsOwnCleanupTearsAFailedStartDownItself()
+    {
+        var report = new ScenarioReport("session");
+        var placement = new Placement(this, (_, _) => throw new InvalidOperationException("refused"));
+        var session = new GameSession(report, _root, WorldUid, Server, [("client-a", token => new ClientActor("client-a", Plan(), _root, placement, token))], CancellationToken.None)
+        { DisposeOnFailedStart = false };
+        await Assert.ThrowsAsync<InvalidOperationException>(session.StartAsync);
+        Assert.Empty(Steps(report, StepPhase.Cleanup)); // Left to the runner's bounded cleanup.
+        await session.DisposeAsync();
+        Assert.Equal("stop only owned server", Steps(report, StepPhase.Cleanup)[^1]);
+        Assert.All(_serverProcesses, process => Assert.Equal(1, process.Stops));
+    }
+
     [Fact] public async Task TeardownClosesTheClientsInReverseThenStopsTheServer()
     {
         var report = new ScenarioReport("session");
