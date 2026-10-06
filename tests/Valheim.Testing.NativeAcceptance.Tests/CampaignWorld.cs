@@ -1,11 +1,13 @@
 using System.Globalization;
 using System.Text.Json;
+using MyMod.IntegrationTests;
 using MyMod.SystemTests;
+using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using valheim_cli.Testing;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
 /// <summary>
 /// A scripted game for the native campaign's scenarios: an owned server whose saved objects, global keys and config
@@ -83,26 +85,26 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
     public static ClientRunPlan ClientPlan(string mod = Md5Mod, int port = 5556, bool crossplay = false) => new()
     {
         Mode = "attach", Port = port, Join = crossplay ? "" : "127.0.0.1:2456", Character = "Tester", Crossplay = crossplay, JoinSeconds = 2, ArrivalSeconds = 2,
-        Pins = new() { ["valheimCLI.valheimCLI"] = Md5Cli, [LifecyclePlan.ModPlugin] = mod, [LifecyclePlan.AdapterPlugin] = Md5Adapter },
+        Pins = new() { ["valheimCLI.valheimCLI"] = Md5Cli, [AcceptancePlan.ModPlugin] = mod, [AcceptancePlan.AdapterPlugin] = Md5Adapter },
     };
 
-    public LifecyclePlan Plan(string scenario, string? expectFailure = null)
+    public AcceptancePlan Plan(string scenario, string? expectFailure = null)
     {
-        var plan = new LifecyclePlan
+        var plan = new AcceptancePlan
         {
             Scenario = scenario, ExpectFailure = expectFailure,
-            Pins = new() { ["worlduid"] = WorldUid, ["valheimCLI.valheimCLI"] = Md5Cli, [LifecyclePlan.ModPlugin] = Md5Mod, [LifecyclePlan.AdapterPlugin] = Md5Adapter },
-            Client = ClientPlan(scenario is LifecyclePlan.VanillaClientScenario or LifecyclePlan.CrossplayScenario ? "absent" : Md5Mod, crossplay: scenario == LifecyclePlan.CrossplayScenario),
+            Pins = new() { ["worlduid"] = WorldUid, ["valheimCLI.valheimCLI"] = Md5Cli, [AcceptancePlan.ModPlugin] = Md5Mod, [AcceptancePlan.AdapterPlugin] = Md5Adapter },
+            Client = ClientPlan(scenario is AcceptancePlan.VanillaClientScenario or AcceptancePlan.CrossplayScenario ? "absent" : Md5Mod, crossplay: scenario == AcceptancePlan.CrossplayScenario),
         };
         if (plan.MarksSites) { plan.DrySite = Dry; plan.WetSite = Wet; plan.Arrival = Arrival; }
-        if (scenario == LifecyclePlan.WorldScenario)
+        if (scenario == AcceptancePlan.WorldScenario)
         {
             plan.Away = Away; plan.GlobalKey = "defeated_eikthyr"; plan.Dungeon = new() { X = 150, Z = -40 };
             plan.Logout = new() { CharactersDirectory = Characters, WriteSeconds = 1 };
         }
-        if (scenario == LifecyclePlan.SyncedConfigScenario) plan.NewGreeting = "goodbye";
-        if (scenario == LifecyclePlan.RefusedJoinScenario) plan.RefusedClient = ClientPlan(Md5Mismatched, port: 5557);
-        if (scenario == LifecyclePlan.CrossplayScenario) plan.Crossplay = true;
+        if (scenario == AcceptancePlan.SyncedConfigScenario) plan.NewGreeting = "goodbye";
+        if (scenario == AcceptancePlan.RefusedJoinScenario) plan.RefusedClient = ClientPlan(Md5Mismatched, port: 5557);
+        if (scenario == AcceptancePlan.CrossplayScenario) plan.Crossplay = true;
         return plan;
     }
 
@@ -111,7 +113,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
     /// refused plan's client refused), a campaign's named clients open through <paramref name="campaignClient"/>, evidence in
     /// <see cref="Output"/>.
     /// </summary>
-    public GameSession Run(LifecyclePlan plan, ScenarioReport report, bool clientLog = false,
+    public GameSession Run(AcceptancePlan plan, ScenarioReport report, bool clientLog = false,
         Func<ClientRunPlan, string, ClientSession>? campaignClient = null, CancellationToken cancellation = default)
     {
         WriteServerLog();
@@ -126,7 +128,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
     }
 
     /// <summary>Runs <paramref name="plan"/>'s scenario from the example's table on a started session over this world.</summary>
-    public void RunScenario(LifecyclePlan plan, ScenarioReport report, bool clientLog = false)
+    public void RunScenario(AcceptancePlan plan, ScenarioReport report, bool clientLog = false)
     {
         var session = Run(plan, report, clientLog);
         // Disposed as the runner does, also after a failure: clients left open close before the server stops.
@@ -185,7 +187,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
             .On("cli_multiplayer_identity", _ => ScriptedTransport.Ok(
                 $"OK: steamId=0, playFabLoginState=LoggedIn, playFabId={PlayFabId}, backend={(Crossplay ? "PlayFab" : "Steamworks")}, gameState=World, connectionStatus=Connected, isServer=True, isOpenServer=True, server=fake"))
             .Extension("mymod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = true })
-            .Extension("mymod.testing", "harmony", args => args.Count == 1 && args[0] != LifecyclePlan.ModPlugin ? ControlCensus(args[0]) : TestWorld.ModCensus())
+            .Extension("mymod.testing", "harmony", args => args.Count == 1 && args[0] != AcceptancePlan.ModPlugin ? ControlCensus(args[0]) : TestWorld.ModCensus())
             .Extension("mymod.testing", "globalkeys", _ => new { source = "global-keys", complete = true, server = true, keys = _keys.Order(StringComparer.Ordinal).ToArray() })
             .Extension("mymod.testing", "globalkey", args =>
             {

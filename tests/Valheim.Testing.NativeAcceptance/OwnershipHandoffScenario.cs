@@ -1,8 +1,9 @@
+using MyMod.SystemTests;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// Two owned clients on different account hosts remain connected together. The example explicitly claims its marker
@@ -14,7 +15,7 @@ public static class OwnershipHandoffScenario
 {
     private const string OwnerSource = "mymod-marker-owner";
 
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         var first = plan.Client!;
         var second = plan.SecondClient!;
@@ -26,7 +27,7 @@ public static class OwnershipHandoffScenario
             var samples = new[] { CampaignSteps.At(plan.Arrival), CampaignSteps.At(plan.SecondArrival!) };
             var measured = TerrainProbe.Compare(session.Server!.Game, "generator", "declared fixture arrival points", samples, 0.5f);
             report.Provenance["arrival-height-check"] = JsonSerializer.Serialize(measured);
-            if (!measured.Passed || measured.Samples.Any(sample => sample.Actual < LifecyclePlan.WaterLevel + LifecyclePlan.Clearance))
+            if (!measured.Passed || measured.Samples.Any(sample => sample.Actual < AcceptancePlan.WaterLevel + AcceptancePlan.Clearance))
                 throw new InvalidOperationException("Fixture arrivals are not confirmed dry: " + JsonSerializer.Serialize(measured));
         });
         CampaignSteps.MarkSites(plan, session.Server!.Game, report);
@@ -118,7 +119,7 @@ public static class OwnershipHandoffScenario
                 throw;
             }
             session.Report.Provenance[$"arrival-{name}-ground"] = JsonSerializer.Serialize(new { point.X, point.Z, generator = point.Height, loaded = arrival.Target.Height });
-            if (arrival.Target.Height < LifecyclePlan.WaterLevel + LifecyclePlan.Clearance) throw new InvalidOperationException("Loaded arrival ground is not dry.");
+            if (arrival.Target.Height < AcceptancePlan.WaterLevel + AcceptancePlan.Clearance) throw new InvalidOperationException("Loaded arrival ground is not dry.");
             void Capture(string kind, Func<string> read)
             {
                 string key = $"arrival-{name}-{kind}";

@@ -1,8 +1,10 @@
+using MyMod.IntegrationTests;
 using MyMod.SystemTests;
+using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Xunit;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
 /// <summary>
 /// The native campaign's scenarios against the scripted <see cref="CampaignWorld"/>: each passes on a working mod, fails
@@ -14,7 +16,7 @@ public sealed class CampaignScenarioTests : IDisposable
     private readonly CampaignWorld _world = new();
     public void Dispose() => _world.Dispose();
 
-    private ScenarioReport Run(LifecyclePlan plan, bool clientLog = false)
+    private ScenarioReport Run(AcceptancePlan plan, bool clientLog = false)
     {
         var report = new ScenarioReport("mymod-system-test");
         try { _world.RunScenario(plan, report, clientLog); }
@@ -32,7 +34,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void TheWorldLifecyclePassesEveryStepOnAWorkingMod()
     {
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario));
         Assert.True(report.Passed, Explain(report));
         Assert.Equal(2, _world.MarkCommands); // One per site, never repeated.
         Assert.Equal(1, _world.Restarts);
@@ -58,7 +60,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AKeyTheFixtureAlreadyHasIsRefusedBeforeItIsSet()
     {
         _world.PresetKey("defeated_eikthyr");
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario));
         Assert.Equal(new[] { "first: the fixture world does not have defeated_eikthyr yet" }, Failed(report).Take(1));
         Assert.Equal(0, ServerCount("cli_extension mymod.testing/globalkey"));
     }
@@ -66,7 +68,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void ARoomReachingPastItsZoneFailsNamingTheZone()
     {
         _world.OversizedRoom = true;
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario));
         Assert.Equal("first: the dungeon's saved rooms lie in its location's zone", Failed(report).First());
         Assert.Contains("past zone (2, -1)", Step(report, "first: the dungeon's saved rooms lie in its location's zone").Error);
         Assert.True(Evidence("first-dungeon-rooms.json")); // Written before the check.
@@ -75,7 +77,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void ADungeonThatNeverAppearsTimesOutNamingWhereToLook()
     {
         _world.NoDungeon = true; // The zone was never generated, or no dungeon stands at the declared position.
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario));
         Assert.Equal("first: the dungeon's saved rooms lie in its location's zone", Failed(report).First());
         Assert.Contains("cli_world_dump", report.Steps.First(s => !s.Passed).Error);
         Assert.False(Evidence("first-zone-cycle.json")); // Nothing after the failure ran.
@@ -84,7 +86,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void ACharacterThatIsNotSavedAtLogoutFailsTheRun()
     {
         _world.SuppressSave = true; // A broken save without a control run: the logout check must catch it.
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario));
         Assert.Equal("after-restart: the client leaves to its menu and the profile file is rewritten", Failed(report).First());
         Assert.True(Evidence("after-restart-logout.json"));
     }
@@ -92,7 +94,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AMissingHarmonyTargetControlRunPassesOnlyOnItsExpectedFailures()
     {
         _world.ControlMissingTarget = true;
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.True(report.Passed, Explain(report));
         Assert.True(Step(report, "control missing-harmony-target: the control's Harmony patch is applied fails for the named reason").Passed);
         Assert.True(Step(report, "control missing-harmony-target: the server's log scan passes fails for the named reason").Passed);
@@ -112,7 +114,7 @@ public sealed class CampaignScenarioTests : IDisposable
         // Another plugin's lookup warning comes first, and PatchAll threw (no line after it): the run still passes on the
         // control's own warning (the other lookup fails the scan too, as any unnamed lookup does), and says PatchAll did not return.
         _world.ControlMissingTarget = true; _world.OtherPluginLookupWarning = true; _world.ControlPatchAllThrew = true;
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.True(report.Passed, Explain(report));
         Assert.Contains("name MyModControlMethodThatDoesNotExist", report.Provenance["controlLogLine"]);
         Assert.Equal("false", report.Provenance["controlPatchAllReturned"]);
@@ -123,7 +125,7 @@ public sealed class CampaignScenarioTests : IDisposable
     {
         // Only another plugin's lookup warning: the scan fails, but not on the control's line.
         _world.ControlMissingTarget = true; _world.OtherPluginLookupWarning = true; _world.ControlWarningMissing = true;
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.Equal(new[] { "control missing-harmony-target: the server's log scan passes fails for the named reason" }, Failed(report));
         Assert.Contains("none of it is the control's line", report.Steps.Single(s => !s.Passed).Error);
         Assert.Equal("true", report.Provenance["controlPatchAllReturned"]);
@@ -132,7 +134,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AMissingHarmonyTargetControlWhosePatchAppliesFailsTheRun()
     {
         _world.ControlMissingTarget = true; _world.ControlPatchApplied = true; // The census cannot see a defect that is not there.
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.Equal(new[] { "control missing-harmony-target: the control's Harmony patch is applied fails for the named reason" }, Failed(report));
         Assert.Contains("passed: the check cannot see the defect", report.Steps.Single(s => !s.Passed).Error);
     }
@@ -141,14 +143,14 @@ public sealed class CampaignScenarioTests : IDisposable
     {
         // The census still misses the patch, but the log shows nothing: the scan passes, so it cannot see the defect.
         _world.ControlMissingTarget = true; _world.ControlWarningMissing = true;
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.MissingHarmonyTarget));
         Assert.Equal(new[] { "control missing-harmony-target: the server's log scan passes fails for the named reason" }, Failed(report));
         Assert.Contains("passed: the check cannot see the defect", report.Steps.Single(s => !s.Passed).Error);
     }
 
     [Fact] public void AFieldOnlyStateControlRunPassesWhenTheValueIsLostAcrossTheZoneReload()
     {
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.FieldOnlyState));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.FieldOnlyState));
         Assert.True(report.Passed, Explain(report));
         Assert.Equal(1, _world.FieldSets);
         Assert.True(Step(report, "first: control field-only-state: the field-only value survives the zone reload fails for the named reason").Passed);
@@ -163,14 +165,14 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AFieldOnlyStateControlWhoseValueSurvivesFailsTheRun()
     {
         _world.KeepFieldAcrossReload = true; // As if the zones never really unloaded the object.
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.FieldOnlyState));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.FieldOnlyState));
         Assert.Equal(new[] { "first: control field-only-state: the field-only value survives the zone reload fails for the named reason" }, Failed(report));
     }
 
     [Fact] public void ASuppressedProfileSaveControlRunPassesWhenTheLogoutWritesNothing()
     {
         _world.SuppressSave = true;
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.SuppressedProfileSave));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.SuppressedProfileSave));
         Assert.True(report.Passed, Explain(report));
         Assert.True(Step(report, "after-restart: control suppressed-profile-save: the logout rewrites the character file fails for the named reason").Passed);
         Assert.Contains("did not save the character on logout", report.Provenance["controlFailure"]);
@@ -183,7 +185,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AControlCheckThatFailsForAnotherReasonFailsTheRun()
     {
         _world.SuppressSave = true; _world.CloudCharacter = true; // The logout check refuses a cloud character before any logout.
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.SuppressedProfileSave));
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.SuppressedProfileSave));
         Assert.Equal(new[] { "after-restart: control suppressed-profile-save: the logout rewrites the character file fails for the named reason" }, Failed(report));
         Assert.Contains("not for its reason", report.Steps.Single(s => !s.Passed).Error);
         Assert.Contains("not Local", report.Steps.Single(s => !s.Passed).Error);
@@ -192,7 +194,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void ASuppressedProfileSaveControlWhoseSaveHappensFailsTheRun()
     {
-        var report = Run(_world.Plan(LifecyclePlan.WorldScenario, ControlPlugins.SuppressedProfileSave)); // The control is named but saves go through.
+        var report = Run(_world.Plan(AcceptancePlan.WorldScenario, ControlPlugins.SuppressedProfileSave)); // The control is named but saves go through.
         Assert.Equal(new[] { "after-restart: control suppressed-profile-save: the logout rewrites the character file fails for the named reason" }, Failed(report));
     }
 
@@ -200,7 +202,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void AVanillaClientSeesTheMarkerAndResolvesEveryPrefabInBothRounds()
     {
-        var report = Run(_world.Plan(LifecyclePlan.VanillaClientScenario), clientLog: true);
+        var report = Run(_world.Plan(AcceptancePlan.VanillaClientScenario), clientLog: true);
         Assert.True(report.Passed, Explain(report));
         foreach (string round in new[] { "first", "after-restart" })
         {
@@ -215,7 +217,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AServerOnlyObjectFailsTheVanillaClientNamingItsHash()
     {
         _world.PlaceServerOnlyObject(103, -40); // A server-side mod's own prefab near the marker, without any control.
-        var report = Run(_world.Plan(LifecyclePlan.VanillaClientScenario));
+        var report = Run(_world.Plan(AcceptancePlan.VanillaClientScenario));
         Assert.Equal("first: the client resolves every prefab hash where the player stands", Failed(report).First());
         Assert.Contains($"{StableHash.Of(ControlPlugins.ServerOnlyPrefabName)} ({ControlPlugins.ServerOnlyPrefabName})", report.Steps.First(s => !s.Passed).Error);
         Assert.Equal(0, _world.Restarts);
@@ -224,7 +226,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AMissingPrefabLineInTheClientsLogFailsTheVanillaClient()
     {
         File.AppendAllText(_world.ClientLog, "[Warning: Unity Log] Missing prefab hash: 123456\n");
-        var report = Run(_world.Plan(LifecyclePlan.VanillaClientScenario), clientLog: true);
+        var report = Run(_world.Plan(AcceptancePlan.VanillaClientScenario), clientLog: true);
         Assert.Equal("first: the client's logs show no missing prefabs, missing RPC handlers or RemoveObjects errors", Failed(report).First());
         Assert.Contains("missing-prefab-hash x1", report.Steps.First(s => !s.Passed).Error);
     }
@@ -232,7 +234,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AServerOnlyPrefabControlRunPassesWhenTheCensusNamesItsHash()
     {
         _world.ControlServerOnlyPrefab = true;
-        var report = Run(_world.Plan(LifecyclePlan.VanillaClientScenario, ControlPlugins.ServerOnlyPrefab));
+        var report = Run(_world.Plan(AcceptancePlan.VanillaClientScenario, ControlPlugins.ServerOnlyPrefab));
         Assert.True(report.Passed, Explain(report));
         Assert.Equal(1, _world.SpawnCommands);
         Assert.True(Step(report, "first: control server-only-prefab: the vanilla client resolves every prefab hash where the player stands fails for the named reason").Passed);
@@ -243,7 +245,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void AServerOnlyPrefabControlThatIsNotInstalledFailsBeforeTheClientOpens()
     {
-        var report = Run(_world.Plan(LifecyclePlan.VanillaClientScenario, ControlPlugins.ServerOnlyPrefab)); // The server has no such command.
+        var report = Run(_world.Plan(AcceptancePlan.VanillaClientScenario, ControlPlugins.ServerOnlyPrefab)); // The server has no such command.
         Assert.Equal(new[] { "control server-only-prefab: the server spawns its server-only object beside the dry site" }, Failed(report));
         Assert.Empty(_world.Clients);
     }
@@ -252,7 +254,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void TheServersGreetingReachesTheClientAfterTheChangeAndAfterTheRestart()
     {
-        var report = Run(_world.Plan(LifecyclePlan.SyncedConfigScenario), clientLog: true);
+        var report = Run(_world.Plan(AcceptancePlan.SyncedConfigScenario), clientLog: true);
         Assert.True(report.Passed, Explain(report));
         Assert.Equal(1, _world.GreetingCommands); // Changed once, never repeated.
         Assert.Equal(1, _world.Restarts);
@@ -265,7 +267,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AGreetingThatNeverReachesTheClientTimesOutWithTheLastValue()
     {
         _world.SyncBroken = true;
-        var report = Run(_world.Plan(LifecyclePlan.SyncedConfigScenario));
+        var report = Run(_world.Plan(AcceptancePlan.SyncedConfigScenario));
         Assert.Equal(new[] { "first: the client reads the server's new greeting within the wait" }, Failed(report));
         Assert.Contains("= hello", report.Steps.Single(s => !s.Passed).Error);
         Assert.Equal(1, _world.GreetingCommands);
@@ -276,7 +278,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void AMismatchedClientIsRefusedAndAMatchingOneThenJoins()
     {
-        var report = Run(_world.Plan(LifecyclePlan.RefusedJoinScenario));
+        var report = Run(_world.Plan(AcceptancePlan.RefusedJoinScenario));
         Assert.True(report.Passed, Explain(report));
         Assert.Equal(new[]
         {
@@ -297,7 +299,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AMismatchedClientThatGetsInFailsAndTheMatchingClientNeverOpens()
     {
         _world.RefusalSucceeds = true; // Negative control: a server whose handshake refuses nothing.
-        var report = Run(_world.Plan(LifecyclePlan.RefusedJoinScenario));
+        var report = Run(_world.Plan(AcceptancePlan.RefusedJoinScenario));
         Assert.Equal(new[] { "the mismatched client is refused with ErrorVersion (3)" }, Failed(report));
         Assert.Contains("The join succeeded", report.Steps.Single(s => !s.Passed).Error);
         Assert.Single(_world.Clients);
@@ -307,7 +309,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void ARefusalWithAnotherStatusFailsNamingBoth()
     {
         _world.RefusalStatus = "ErrorDisconnected";
-        var report = Run(_world.Plan(LifecyclePlan.RefusedJoinScenario));
+        var report = Run(_world.Plan(AcceptancePlan.RefusedJoinScenario));
         Assert.Equal(new[] { "the mismatched client is refused with ErrorVersion (3)" }, Failed(report));
         Assert.Contains("ErrorDisconnected (4)", report.Steps.Single(s => !s.Passed).Error);
     }
@@ -318,7 +320,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void TheDeclaredContentIsRegisteredOnTheServerAndTheClientInBothRounds()
     {
-        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario));
+        var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario));
         Assert.True(report.Passed, Explain(report));
         foreach (string round in new[] { "first", "after-restart" })
         {
@@ -340,7 +342,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void ARecipeMissingOnBothSidesFailsNamingOnlyIt()
     {
         _world.OmitRecipe = true; // The omit build without naming it as a control: an ordinary run must fail.
-        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario));
+        var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario));
         Assert.Equal(new[] { $"first: {CensusStep}" }, Failed(report));
         string error = Step(report, $"first: {CensusStep}").Error;
         Assert.Contains("2 problem(s): server: missing recipe Recipe_MyMod_SurveyStake (not registered in ObjectDB); client: missing recipe Recipe_MyMod_SurveyStake", error);
@@ -352,21 +354,21 @@ public sealed class CampaignScenarioTests : IDisposable
     {
         // The plan pins the server's MyMod on the client, but the client that joined does not run it.
         _world.ClientHasMod = false;
-        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario));
+        var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario));
         Assert.Equal(new[] { $"first: {CensusStep}" }, Failed(report));
         Assert.Contains("client: example.mymod is not loaded on the client", Step(report, $"first: {CensusStep}").Error);
 
         // A client whose census reports being the server is refused too.
         using var world = new CampaignWorld { ClientCensusSaysServer = true };
         var swapped = new ScenarioReport("mymod-system-test");
-        try { world.RunScenario(world.Plan(LifecyclePlan.ContentCensusScenario), swapped); } catch (Exception) { }
+        try { world.RunScenario(world.Plan(AcceptancePlan.ContentCensusScenario), swapped); } catch (Exception) { }
         Assert.Contains("reports being the server", swapped.Steps.Single(s => s.Name == $"first: {CensusStep}").Error);
     }
 
     [Fact] public void AnOmittedRecipeControlRunPassesOnlyOnThatRecipe()
     {
         _world.OmitRecipe = true;
-        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe));
+        var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe));
         Assert.True(report.Passed, Explain(report));
         Assert.True(Step(report, $"first: control omitted-recipe: {CensusStep} fails for the named reason").Passed);
         Assert.StartsWith("the census fails only on the omitted recipe: server: missing recipe Recipe_MyMod_SurveyStake", report.Provenance["controlFailure"]);
@@ -378,7 +380,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AnOmittedStatusEffectControlFailsOnlyOnThatEffect()
     {
         _world.OmitStatusEffect = true;
-        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedStatusEffect));
+        var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario, ControlPlugins.OmittedStatusEffect));
         Assert.True(report.Passed, Explain(report));
         Assert.Contains(ContentCensusScenario.OnlyTheOmittedStatusEffect, report.Provenance["controlFailure"]);
         Assert.Contains("server: missing statusEffect MyMod_SurveyBlessing", report.Provenance["controlFailure"]);
@@ -387,13 +389,13 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void AnOmittedStatusEffectControlFailsIfTheEffectIsPresent()
     {
-        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedStatusEffect));
+        var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario, ControlPlugins.OmittedStatusEffect));
         Assert.Equal(new[] { $"first: control omitted-status-effect: {CensusStep} fails for the named reason" }, Failed(report));
     }
 
     [Fact] public void AnOmittedRecipeControlWhoseRecipeIsThereFailsTheRun()
     {
-        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe)); // The normal build pinned as the control.
+        var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe)); // The normal build pinned as the control.
         Assert.Equal(new[] { $"first: control omitted-recipe: {CensusStep} fails for the named reason" }, Failed(report));
         Assert.Contains("passed: the check cannot see the defect", report.Steps.Single(s => !s.Passed).Error);
     }
@@ -401,7 +403,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void AnOmittedRecipeControlWithAnotherDefectFailsTheRun()
     {
         _world.OmitRecipe = true; _world.ExtraItem = true; // The recipe is missing, and something else is wrong too.
-        var report = Run(_world.Plan(LifecyclePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe));
+        var report = Run(_world.Plan(AcceptancePlan.ContentCensusScenario, ControlPlugins.OmittedRecipe));
         Assert.Equal(new[] { $"first: control omitted-recipe: {CensusStep} fails for the named reason" }, Failed(report));
         string error = report.Steps.Single(s => !s.Passed).Error;
         Assert.Contains("not for its reason", error);
@@ -414,7 +416,7 @@ public sealed class CampaignScenarioTests : IDisposable
     [Fact] public void TheLifecycleRunsOverACrossplayServersLobby()
     {
         _world.Crossplay = true;
-        var report = Run(_world.Plan(LifecyclePlan.CrossplayScenario));
+        var report = Run(_world.Plan(AcceptancePlan.CrossplayScenario));
         Assert.True(report.Passed, Explain(report));
         Assert.Equal("crossplay", report.Provenance["clientJoin"]);
         Assert.Equal(2, ClientCount("cli_connect_playfab_user " + CampaignWorld.PlayFabId)); // Once per round, each boot's lobby.
@@ -424,7 +426,7 @@ public sealed class CampaignScenarioTests : IDisposable
 
     [Fact] public void ACrossplayRunOnASteamServerFailsAtTheLobby()
     {
-        var report = Run(_world.Plan(LifecyclePlan.CrossplayScenario)); // The server runs Steamworks.
+        var report = Run(_world.Plan(AcceptancePlan.CrossplayScenario)); // The server runs Steamworks.
         Assert.Equal(new[] { "first: the server's crossplay lobby is open" }, Failed(report));
         Assert.Contains("not PlayFab", report.Steps.Single(s => !s.Passed).Error);
         Assert.Equal(0, ClientCount("cli_connect_playfab_user"));

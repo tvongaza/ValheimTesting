@@ -1,9 +1,10 @@
+using MyMod.SystemTests;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// The plan of a hosted run: one game client, with MyMod and its adapter, hosts a pinned fixture world from its menu (a
@@ -57,18 +58,18 @@ public sealed class HostedPlan
         {
             if (!peer.JoinsHost) throw new ArgumentException("The peer joins the host: set its joinsHost.");
             if (!peer.Pinned) throw new ArgumentException("This example runs with strict pins only: remove the peer's \"pinning\".");
-            foreach (string plugin in new[] { LifecyclePlan.ModPlugin, LifecyclePlan.AdapterPlugin })
+            foreach (string plugin in new[] { AcceptancePlan.ModPlugin, AcceptancePlan.AdapterPlugin })
                 if (!peer.Pins.TryGetValue(plugin, out var md5) || md5 == "absent")
                     throw new ArgumentException($"The peer runs MyMod and its adapter: pin {plugin} by its MD5.");
         }
         if (!plan.Client.Pinned) throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
         LogScanner.CheckClassifications(plan.LogScan);
-        foreach (string plugin in new[] { LifecyclePlan.ModPlugin, LifecyclePlan.AdapterPlugin })
+        foreach (string plugin in new[] { AcceptancePlan.ModPlugin, AcceptancePlan.AdapterPlugin })
             if (!plan.Client.Pins.TryGetValue(plugin, out var md5) || md5 == "absent")
                 throw new ArgumentException($"The host runs MyMod and its adapter: pin {plugin} by its MD5.");
         if (ControlPlugins.All.FirstOrDefault(c => plan.Client.Pins.TryGetValue(c.Guid, out var value) && value != "absent") is { } control)
             throw new ArgumentException($"The hosted scenario has no control run: remove {control.Guid}.");
-        LifecyclePlan.CheckSites(plan.DrySite, plan.WetSite);
+        AcceptancePlan.CheckSites(plan.DrySite, plan.WetSite);
         if (!Word.IsMatch(plan.NewGreeting)) throw new ArgumentException("Set newGreeting to one word (letters, digits, - or _): the host's greeting changes to it for the broadcast check.");
         return plan;
     }
@@ -123,7 +124,7 @@ public static class HostedScenario
         if (hostLog != null)
             report.Step("the mod's greeting broadcast runs its handler on the host, which is server and client at once", () =>
             {
-                string before = SyncedConfig.Read(host, Capabilities.Config, LifecyclePlan.ModPlugin, "Server", "Greeting").Value
+                string before = SyncedConfig.Read(host, Capabilities.Config, AcceptancePlan.ModPlugin, "Server", "Greeting").Value
                     ?? throw new InvalidOperationException("The host has no greeting entry.");
                 if (before == plan.NewGreeting) throw new InvalidOperationException($"The host already holds \"{plan.NewGreeting}\"; choose another newGreeting.");
                 using var log = new LogWait(hostLog); // Opened before the change: only this change's line counts.
@@ -154,7 +155,7 @@ public static class HostedScenario
         Name = "mymod-hosted-test",
         ReadPlan = HostedPlan.ReadValidated,
         Host = plan => plan.Client,
-        Mod = LifecyclePlan.Mod,
+        Mod = AcceptancePlan.Mod,
         CheckPlan = plan => HostedPlan.Validated(plan),
         LogScan = plan => plan.LogScan,
         Provenance = (plan, provenance) => provenance["scenario"] = plan.Scenario,

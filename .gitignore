@@ -8,6 +8,9 @@ docs/reference/api/
 docs/reference/_site/
 .DS_Store
 *.user
-# A native GameSession fixture's private environment (examples/FullLifecycle/MyMod.IntegrationTests/MyModSession.cs).
+# A native GameSession fixture's private environment (examples/FullLifecycle/MyMod.IntegrationTests/MyModSession.cs,
+# tests/Valheim.Testing.NativeAcceptance.Tests/AcceptanceSession.cs).
 examples/FullLifecycle/MyMod.IntegrationTests/session.json
 examples/FullLifecycle/MyMod.IntegrationTests/*.plan.json
+tests/Valheim.Testing.NativeAcceptance.Tests/session.json
+tests/Valheim.Testing.NativeAcceptance.Tests/*.plan.json

@@ -1,11 +1,12 @@
+using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>One server and two clients, all owned by the pinned runner. Setup smoke with explicit join and rejoin checkpoints.</summary>
 public static class ThreeActorSmokeScenario
 {
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         session.Report.Step("server accepts game connections", () => session.Server!.WaitUntilJoinable(session.Server!.Game));
         IReadOnlyDictionary<string, ClientSession>? sessions = null;

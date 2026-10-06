@@ -12,7 +12,7 @@ namespace MyMod.IntegrationTests;
 /// keeps only what a confirmed save kept, and a client that sees the server's markers once joined. It models the
 /// contracts the scenario relies on, not Valheim: replies, observations and their completeness.
 /// </summary>
-internal sealed class TestWorld : IOwnedServer
+public sealed class TestWorld : IOwnedServer
 {
     public const string WorldUid = "4242";
     private readonly List<(float X, float Z)> _markers = [], _saved = [];

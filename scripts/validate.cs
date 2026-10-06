@@ -2,7 +2,8 @@
 //
 //   dotnet run scripts/validate.cs
 //
-// Runs the library tests, compiles the adapter source package against reference stubs, builds every example and tool,
+// Runs the library tests, compiles the adapter source package against reference stubs, builds every example and tool, runs
+// the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
 // executes the no-game example (SharedWorld), packs the libraries into the local feed and runs scripts/consumer.cs --feed local:
 // a consumer outside this checkout of exactly the packages just packed.
 //
@@ -38,7 +39,11 @@ Run("dotnet", "build", Solution("examples", new[] { "examples", "tools" }
     .SelectMany(dir => Directory.GetDirectories(Path.Combine(root, dir)).SelectMany(sub => Directory.GetFiles(sub, "*.csproj")))
     .Append(Path.Combine(root, "docker", "linux-server", "smoke", "LinuxServerSmoke.csproj"))), "-c", "Release", "-nodeReuse:false");
 // The full-life-cycle example's external projects; its game-side mod and adapter need a game install and build elsewhere.
-Test("examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj");
+// The native session tests (trait Category=Native) launch the game when a private session.json sits beside their project
+// (the example's skip without one, the native acceptance suite's fail), so validation leaves them out.
+Test("examples/FullLifecycle/MyMod.IntegrationTests/MyMod.IntegrationTests.csproj", "--filter", "Category!=Native");
+// The native acceptance suite's tests against scripted fakes.
+Test("tests/Valheim.Testing.NativeAcceptance.Tests/Valheim.Testing.NativeAcceptance.Tests.csproj", "--filter", "Category!=Native");
 Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no-build");
 // Every package packs as <Version>-candidate.<hash of the package inputs> (pins.cs candidate, one owner of the identity):
 // different inputs never share a version in .packages. Packs of these packages under any other version are removed first; a

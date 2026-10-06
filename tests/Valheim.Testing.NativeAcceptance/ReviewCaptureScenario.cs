@@ -1,6 +1,7 @@
+using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// The plan's declared capture conditions for issue #78: the <see cref="ReviewCapturePlan"/> fields an operator chooses,
@@ -28,7 +29,7 @@ public static class ReviewCaptureScenario
     private static HostShell LocalShell => OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash;
 
     /// <summary>The two stills a run under <paramref name="output"/> captures, as the library validates and takes them.</summary>
-    private static IEnumerable<ReviewCapturePlan> Shots(LifecyclePlan plan, string output) => Ids.Select(id =>
+    private static IEnumerable<ReviewCapturePlan> Shots(AcceptancePlan plan, string output) => Ids.Select(id =>
     {
         var capture = plan.Capture ?? throw new ArgumentException("Add capture conditions to the review-capture plan.");
         var client = plan.Client ?? throw new ArgumentException("The review-capture scenario looks from a client: add the client section.");
@@ -44,13 +45,13 @@ public static class ReviewCaptureScenario
     /// Refuses the declared conditions with the library's rule before anything launches. The output directory is not known
     /// yet, so a fixed placeholder stands in; the run's real directories are checked again when each still is taken.
     /// </summary>
-    public static void Validate(LifecyclePlan plan)
+    public static void Validate(AcceptancePlan plan)
     {
         string placeholder = OperatingSystem.IsWindows() ? @"C:\review-plan-check" : "/review-plan-check";
         foreach (var shot in Shots(plan, placeholder)) ReviewCapture.Validate(shot, LocalShell.Kind);
     }
 
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         if ((session.CampaignClients.Count != 0))
             throw new NotSupportedException("This example captures on the runner's local client. A campaign client needs its host (session.ClientHost) passed to ReviewCapture.");

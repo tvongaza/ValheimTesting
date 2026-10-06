@@ -1,15 +1,16 @@
+using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
-public sealed partial class LifecyclePlan
+public sealed partial class AcceptancePlan
 {
     /// <summary>dry-site-server: then load, replace and remove a patching script with ScriptEngine (<see cref="PatchReloadScenario"/>, #30).</summary>
     public PatchReloadSettings? PatchReload { get; set; }
 }
 
 /// <summary>
-/// The two builds of the PatchReload probe (examples/FullLifecycle/Probes/PatchReload) that <see cref="PatchReloadScenario"/>
+/// The two builds of the PatchReload probe (tests/Valheim.Testing.NativeAcceptance/Probes/PatchReload) that <see cref="PatchReloadScenario"/>
 /// installs in the server runtime's <c>BepInEx/scripts</c>, as this runner reads them. The runtime has ScriptEngine in its
 /// plugins, pinned, watching an empty scripts folder (<c>LoadOnStart</c> and <c>EnableFileSystemWatcher</c> on).
 /// </summary>
@@ -28,7 +29,7 @@ public sealed class PatchReloadSettings
     /// <summary>How long ScriptEngine may take to load, replace or unload the script.</summary>
     public int ReloadSeconds { get; set; } = 60;
 
-    public void Validate(LifecyclePlan plan)
+    public void Validate(AcceptancePlan plan)
     {
         foreach (var (name, path) in new[] { ("revisionA", RevisionA), ("revisionB", RevisionB) })
             if (!Path.IsPathFullyQualified(path) || !File.Exists(path)) throw new ArgumentException($"patchReload.{name} is the full path of a built PatchReload probe on this machine.");
@@ -62,7 +63,7 @@ public static class PatchReloadScenario
     public const string Probe = "example.mymod.probe.patchreload";
     private const string ProbeFile = "MyMod.Probe.PatchReload.dll";
 
-    public static void Run(LifecyclePlan plan, GameActor server, string runtimeDirectory, string output, ScenarioReport report, CancellationToken cancellation)
+    public static void Run(AcceptancePlan plan, GameActor server, string runtimeDirectory, string output, ScenarioReport report, CancellationToken cancellation)
     {
         var settings = plan.PatchReload ?? throw new ArgumentException("The plan has no patchReload section.");
         string scripts = Path.Combine(runtimeDirectory, "BepInEx", "scripts");
@@ -131,7 +132,7 @@ public static class PatchReloadScenario
             var after = Census(stage);
             var changes = HarmonyCensus.OthersChanged(before, after, Probe);
             if (changes.Count != 0) throw new InvalidOperationException("Other owners' patches changed: " + string.Join("; ", changes));
-            after.Check(LifecyclePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied();
+            after.Check(AcceptancePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied();
         }
 
         HarmonyCensus before = null!;
@@ -141,7 +142,7 @@ public static class PatchReloadScenario
                 throw new InvalidOperationException("ScriptEngine's folder must exist and be empty: a reload affects every script. " + scripts);
             server.VerifyEnvironment(Pins("absent"));
             before = Census("before");
-            before.Check(LifecyclePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied();
+            before.Check(AcceptancePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied();
             if (before.Patches.Any(p => p.Owner == Probe)) throw new InvalidOperationException("The probe is patched before it was installed.");
         });
         report.Step("patch reload: revision A loads and patches Terminal::InitTerminal beside MyMod",
@@ -152,7 +153,7 @@ public static class PatchReloadScenario
         const string afterReload = "patch reload: other owners' patches unchanged after the reload";
         if (settings.ExpectOthersRemoved)
         {
-            var control = new ControlPlugin("unpatch-other-reload", Probe, OnServer: true, LifecyclePlan.ServerScenario, afterReload, "removed: " + LifecyclePlan.ModPlugin + " ");
+            var control = new ControlPlugin("unpatch-other-reload", Probe, OnServer: true, AcceptancePlan.ServerScenario, afterReload, "removed: " + AcceptancePlan.ModPlugin + " ");
             ControlPlugins.ExpectFailure(report, control, () => RequireOthersUnchanged(before, "b-others"));
             return; // MyMod's patch is gone: the rest would only repeat it.
         }

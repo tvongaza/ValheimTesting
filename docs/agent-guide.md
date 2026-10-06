@@ -21,11 +21,11 @@ For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTIN
 | Find a run's evidence: snapshots, review stills and clips, round JSON | [Evidence linked from result.json](evidence.md) | That any picture looks right; a human verdict is recorded separately |
 | A/B regression of one mod in the real game | [TargetedRegression](../examples/TargetedRegression/README.md): preflight without the game, then one hosted run per arm | Other mods, dedicated servers or restarts |
 | Load a mod or isolate a mod-set conflict | [NativeSmoke](packages/Valheim.Testing.NativeSmoke.md) through [Debugging mods](debugging-mods.md): `valheim-test server-load`, `server-load-ab` or `start` | The mod's gameplay behavior or which mod owns a conflict |
-| Prepare a dedicated server and multiple owned clients | [FullLifecycle three-actor campaign](../examples/FullLifecycle/README.md#prepare-the-campaign): reviewed per-role locks, separate character/account hosts, strict pins, one run command | An arbitrary mod's gameplay correctness; the small sample is a setup smoke |
+| Prepare a dedicated server and multiple owned clients | [Native acceptance three-actor campaign](../tests/Valheim.Testing.NativeAcceptance/README.md#prepare-the-campaign): reviewed per-role locks, separate character/account hosts, strict pins, one run command | An arbitrary mod's gameplay correctness; the small sample is a setup smoke |
 | Share a native regression's source and result | [tools/regression-bundle](../tools/regression-bundle/README.md), a maintainer tool: a scrubbed directory for review, never published | That a ported runner's harness ran natively, or that no private detail outside its rules remains |
 | Exercise extension replacement | [tools/reload-check](../tools/reload-check/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
 | Collect walking evidence | [ObserveCheck `walk`](../examples/ObserveCheck/README.md#walk-record-a-person-walking-a-route) | Acceptance without a separate human verdict |
-| Collect a short world-only motion clip | [FullLifecycle human review](../examples/FullLifecycle/README.md#bounded-motion-evidence) | UI implemented on an unexpected scene layer, or a visual verdict without watching the clip |
+| Collect a short world-only motion clip | [Native acceptance review evidence](../tests/Valheim.Testing.NativeAcceptance/README.md#bounded-motion-evidence) | UI implemented on an unexpected scene layer, or a visual verdict without watching the clip |
 
 Use an existing mod-owned scenario when one fits: a mod's own repository owns its scenarios. This repository's [FullLifecycle](../examples/FullLifecycle/README.md) example is the pattern for a new one.
 

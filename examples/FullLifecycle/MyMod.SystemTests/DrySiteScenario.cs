@@ -68,6 +68,43 @@ public static class DrySiteScenario
                 () => { RequireServerMarkers(round.Server, plan.DrySite, 1); RequireServerMarkers(round.Server, plan.WetSite, 0); }));
     }
 
+    /// <summary>
+    /// The toolkit runner's options for MyMod: the plan's rules, MyMod's declaration (<see cref="LifecyclePlan.Mod"/>) and
+    /// provenance, with <paramref name="scenario"/> as the scenario (<see cref="Run(GameSession, LifecyclePlan)"/> by default).
+    /// The console runner (Program.cs) and the xUnit session fixture (MyMod.IntegrationTests' <c>MyModSession</c>) use the same options.
+    /// </summary>
+    public static PinnedServerRunOptions<LifecyclePlan> RunnerOptions(Func<GameSession, LifecyclePlan, Task>? scenario = null) => new()
+    {
+        Name = "mymod-system-test",
+        ReadPlan = LifecyclePlan.ReadValidated,
+        // The session capability and token variable MyMod's test adapter serves, and its Harmony patches, which the session
+        // checks on the server before any scenario step.
+        Mod = LifecyclePlan.Mod,
+        CheckPlan = plan =>
+        {
+            if (plan.Client == null && !plan.ServerOnly)
+                throw new ArgumentException($"A run looks from a client: add the client section, or use the {LifecyclePlan.ServerScenario} scenario for the server half alone.");
+            // A session's plan is bound to its prepared actors in memory; the plan's rules apply to the bound plan.
+            LifecyclePlan.Validated(plan);
+        },
+        Provenance = (plan, provenance) =>
+        {
+            provenance["clientMode"] = plan.Client?.Mode ?? "none";
+            provenance["humanReview"] = plan.Review.Enabled ? "requested" : "not requested";
+        },
+        Scenario = scenario ?? Run,
+    };
+
+    /// <summary>The runner's scenario: the server half alone (<see cref="DrySiteServerScenario"/>), or the whole scenario with its client.</summary>
+    public static Task Run(GameSession session, LifecyclePlan plan)
+    {
+        var server = session.Server!;
+        // The client's logs are scanned with the server's at teardown, after the scenario stops the client, and also after a failed startup.
+        if (plan.ServerOnly) DrySiteServerScenario.Run(plan, server.Game, server.Restart, session.Report);
+        else Run(plan, server.Game, server, () => session.OpenClient(plan.Client!), session.Report, session.Output, session.Cancellation);
+        return Task.CompletedTask;
+    }
+
     public static string Mark(Site site) => string.Create(CultureInfo.InvariantCulture, $"mymod_mark {site.X} {site.Z}");
 
     private static readonly Regex ZdoLine = new(@"^ZDO (\S+) id=\S+ pos=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+) ", RegexOptions.CultureInvariant);

@@ -1,7 +1,8 @@
+using MyMod.SystemTests;
 using System.Globalization;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// <c>refused-join</c> (#34): MyMod's version handshake refuses a client that runs another MyMod build, and the server
@@ -20,7 +21,7 @@ public static class RefusedJoinScenario
 {
     public const string RefusedDirectory = "refused-client", MatchingDirectory = "matching-client";
 
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         var report = session.Report; var refusedPlan = plan.RefusedClient!; var client = plan.Client!;
         var expected = plan.RefusalStatus;

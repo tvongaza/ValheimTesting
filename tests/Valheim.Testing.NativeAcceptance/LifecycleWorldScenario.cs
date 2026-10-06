@@ -1,8 +1,9 @@
+using MyMod.SystemTests;
 using System.Globalization;
 using System.Text.Json;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// <c>lifecycle-world</c>: the dry-site rounds on an owned server with a client that runs MyMod and its adapter, plus the
@@ -25,7 +26,7 @@ public static class LifecycleWorldScenario
 {
     public const string NoteKey = "mymod.note";
 
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         var report = session.Report; var client = plan.Client!; var control = plan.Control;
         if (control?.Name == ControlPlugins.MissingHarmonyTarget)
@@ -38,7 +39,7 @@ public static class LifecycleWorldScenario
         var timeout = TimeSpan.FromSeconds(client.ArrivalSeconds);
         var zoneCycle = new ZoneCycle
         {
-            Capability = Capabilities.Zones, Zones = LifecyclePlan.MarkerZones(plan.DrySite), Away = CampaignSteps.At(plan.Away!), Back = CampaignSteps.At(plan.Arrival),
+            Capability = Capabilities.Zones, Zones = AcceptancePlan.MarkerZones(plan.DrySite), Away = CampaignSteps.At(plan.Away!), Back = CampaignSteps.At(plan.Arrival),
             StepTimeout = timeout, Interval = session.Interval,
         };
         var logout = new LogoutCycle
@@ -62,7 +63,7 @@ public static class LifecycleWorldScenario
                 () => CampaignSteps.RequireMarkers(round.Server, plan, dry: 1)));
     }
 
-    private static void First(GameSession session, LifecyclePlan plan, ClientRound round, ZoneCycle zoneCycle, string key, TimeSpan timeout)
+    private static void First(GameSession session, AcceptancePlan plan, ClientRound round, ZoneCycle zoneCycle, string key, TimeSpan timeout)
     {
         var control = plan.Control;
         round.Step("the marker carries MyMod's saved label on the client", () => CampaignSteps.RequireLabelledMarker(round.Client, plan.DrySite));
@@ -111,7 +112,7 @@ public static class LifecycleWorldScenario
         }
     }
 
-    private static void AfterRestart(GameSession session, LifecyclePlan plan, ClientRound round, LogoutCycle logout, string key, TimeSpan timeout)
+    private static void AfterRestart(GameSession session, AcceptancePlan plan, ClientRound round, LogoutCycle logout, string key, TimeSpan timeout)
     {
         var control = plan.Control;
         round.Step($"the server kept {key} through the save and restart, and the client lists it", () =>
@@ -144,7 +145,7 @@ public static class LifecycleWorldScenario
 
     // Waits for a dungeon generator near the declared location (the server creates it when it generates the zone, which
     // the player's arrival nearby causes), then checks every one found.
-    private static void Dungeon(GameSession session, LifecyclePlan plan, ClientRound round, TimeSpan timeout)
+    private static void Dungeon(GameSession session, AcceptancePlan plan, ClientRound round, TimeSpan timeout)
     {
         var site = plan.Dungeon!;
         var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -172,7 +173,7 @@ public static class LifecycleWorldScenario
     // accesstools-not-found warning and no error line, and that pattern fails by default. The plan names the control's line as
     // expected, so the teardown scan counts it apart rather than failing the run on it a second time. Whether PatchAll then
     // returned or threw is recorded (controlPatchAllReturned), and fails nothing.
-    private static void MissingTarget(GameSession session, LifecyclePlan plan, ControlPlugin control)
+    private static void MissingTarget(GameSession session, AcceptancePlan plan, ControlPlugin control)
     {
         ControlPlugins.ExpectFailure(session.Report, control, () =>
             HarmonyCensus.Read(session.Server!.Game, Capabilities.Harmony, control.Guid).Check(control.Guid, [ControlPlugins.MissingPatch]).RequireApplied());
