@@ -150,7 +150,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Empty(campaign.GetProperty("clients").EnumerateObject());
         Assert.True(File.Exists(Path.Combine(output, "plan.json"))); // the consumer's input, written with the campaign
         Assert.False(File.Exists(Path.Combine(output, "REFUSED.txt")));
-        Assert.Equal(1, EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments.Count);
+        Assert.Single(EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments);
     }
 
     // An install whose own Doorstop pair does not match takes the shipped BepInExPack (ShippedLoader): the campaign's role

@@ -29,13 +29,13 @@ public sealed class FileHashTests : IDisposable
         Assert.Matches(Computes, "using (var hash = MD5.Create())");
     }
 
-    [Fact] public void HashesAreLowerCaseHexOfTheContent()
+    [Fact] public async Task HashesAreLowerCaseHexOfTheContent()
     {
         string file = Path.Combine(_root, "a.txt");
         File.WriteAllText(file, "abc");
         Assert.Equal("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", FileHash.Sha256(file));
         Assert.Equal(FileHash.Sha256(file), FileHash.Sha256("abc"u8));
-        Assert.Equal(FileHash.Sha256(file), FileHash.Sha256Async(file).GetAwaiter().GetResult());
+        Assert.Equal(FileHash.Sha256(file), await FileHash.Sha256Async(file));
         Assert.Equal("900150983cd24fb0d6963f7d28e17f72", FileHash.Md5(file));
     }
 

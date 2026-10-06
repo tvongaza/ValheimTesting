@@ -366,12 +366,14 @@ public sealed class RunJournalStatusTests : IDisposable
 
         if (!OperatingSystem.IsLinux()) return;
         string sleep = File.Exists("/usr/bin/sleep") ? "/usr/bin/sleep" : "/bin/sleep";
-        var started = (await local.RunAsync("setsid env \"$exe\" 60 > /dev/null 2>&1 < /dev/null & echo \"VT-PID $!\"",
+        // The ID runs a shell for 2 s before env executes the game in place, as a launch's recorder fork does (#463): the probe
+        // must wait through every launch stage, not only env. 2 s outlasts the probe's own start on a slow runner, inside its 5 s wait.
+        var started = (await local.RunAsync("setsid sh -c 'sleep 2; exec env \"$0\" 60' \"$exe\" > /dev/null 2>&1 < /dev/null & echo \"VT-PID $!\"",
             new Dictionary<string, string> { ["exe"] = sleep }, TimeSpan.FromSeconds(30))).EnsureSuccess("starting sleep");
         int pid = int.Parse(InteractiveClient.Line(started.Stdout, "VT-PID ")!, System.Globalization.CultureInfo.InvariantCulture);
         try
         {
-            // env executes the game in place: until it has, the command line is env's, so wait for the exec as the start's probe does.
+            // Until the game is executed in place, the command line is a launch stage's, so wait for the exec as the start's probe does.
             var probed = (await HostProcessProbe.ProbeAsync(local, [(pid, "")], TimeSpan.FromSeconds(30), settle: true))[(pid, "")];
             Assert.Equal(ProbedState.Same, probed.State);
             Assert.Equal(HostProcessProbe.ExpectedCommandLineSha256(false, sleep, ["60"]), probed.CommandLineSha256);
