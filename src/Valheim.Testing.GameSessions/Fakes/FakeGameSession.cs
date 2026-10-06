@@ -6,7 +6,7 @@ namespace Valheim.Testing.GameSessions.Fakes;
 /// A <see cref="GameSession"/> over a scripted world, for testing a mod's scenarios <c>(GameSession, TPlan) =&gt; Task</c>
 /// without a game: the owned server is <paramref name="server"/> (its restarts and joinable wait), its first boot's actor
 /// <c>firstBoot()</c>, and <see cref="GameSession.OpenClient"/> opens clients with <c>openClient(plan, name, output)</c>, for
-/// example <see cref="ClientSession.Attach(ClientRunPlan, string, IGameTransport)"/> over a <see cref="ScriptedTransport"/>.
+/// example <see cref="ClientSession.Attach(ClientRunPlan, string, IGameTransport)"/> over a <see cref="Valheim.Testing.Game.Fakes.ScriptedTransport"/>.
 /// Start it (<see cref="GameSession.StartAsync"/>) before the scenario and dispose it after, as the runner does.
 /// </summary>
 public static class FakeGameSession
@@ -36,7 +36,7 @@ public static class FakeGameSession
     /// <summary>
     /// A <see cref="GameSession"/> whose world a scripted hosting client hosts (<see cref="GameSession.Host"/>, named <c>host</c>),
     /// with no dedicated server: <paramref name="openClient"/> opens the host from <paramref name="host"/> (a plan with its
-    /// <c>hostWorld</c> section; its fixture is placed in the client data directory a <see cref="FakeClientDataDirectory"/> scope
+    /// <c>hostWorld</c> section; its fixture is placed in the client data directory a <see cref="Valheim.Testing.Game.Fakes.FakeClientDataDirectory"/> scope
     /// gives), each of <paramref name="peers"/> (named clients that start with the session and join the host,
     /// <see cref="GameSession.Join"/>; their plans set <see cref="ClientRunPlan.JoinsHost"/>) and every client the scenario opens
     /// (<see cref="GameSession.OpenClient"/>), each as <c>(plan, name, output)</c>. With peers, each actor's <c>output</c> is its own
