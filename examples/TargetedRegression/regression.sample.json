@@ -1,9 +1,6 @@
 {
   "name": "mymod-mark",
-  "game": "<full path of a prepared Valheim install with BepInEx; only read>",
-  "install": "<full path of a new directory for the disposable install>",
   "client": {
-    "port": 5560,
     "character": "<disposable local character file name, without .fch>",
     "launchArguments": ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"]
   },
