@@ -3,7 +3,9 @@ namespace Valheim.Testing.Game;
 
 // Raw channels deliberately preserve vegetation alpha and mixed paint. They
 // do not infer dirt/stone from appearance or confuse compiler data with a loaded mask.
+[ResultShape]
 public sealed record PaintExpectation(float X, float Z, float R, float G, float B, float A);
+[ResultShape]
 public sealed record PaintMeasurement(PaintExpectation Expected, PaintExpectation Actual, float MaxError, bool Passed);
 public static class PaintProbe
 {

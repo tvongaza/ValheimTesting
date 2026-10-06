@@ -11,6 +11,9 @@
 //
 // The public-api lists are the reviewed public surface (#292, #135): every public or protected type and member of each
 // package, one per line. A pull request that changes one says why in its description, on a line starting "public-api:".
+// In Valheim.Testing.Game every public type is an operation, a result shape or an input an operation takes. A result shape
+// declares no operation, carries the internal [ResultShape] attribute, is listed as "[result shape]" and is versioned with
+// any JSON it is written to. Both commands refuse a type that breaks this (Classify below).
 #:package Mono.Cecil@0.11.6
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -20,14 +23,15 @@ using System.Text.RegularExpressions;
 string root = FindRoot();
 // Each package's release build. Every public type in it is the package's surface (Doubles' game stand-ins included), except
 // in the Adapter's compile check, which also holds the stubs it compiles against: only its own namespace counts there.
-(string Package, string Assembly, string? Namespace)[] packages =
+// Classified: each public type must be an operation, a labelled result shape or an operation's input (#292).
+(string Package, string Assembly, string? Namespace, bool Classified)[] packages =
 [
-    ("Valheim.Testing", "src/Valheim.Testing/bin/Release/netstandard2.0/Valheim.Testing.dll", null),
-    ("Valheim.Testing.Doubles", "src/Valheim.Testing.Doubles/bin/Release/netstandard2.0/Valheim.Testing.Doubles.dll", null),
-    ("Valheim.Testing.Game", "src/Valheim.Testing.Game/bin/Release/net10.0/Valheim.Testing.Game.dll", null),
-    ("Valheim.Testing.Bindings", "src/Valheim.Testing.Bindings/bin/Release/netstandard2.0/Valheim.Testing.Bindings.dll", null),
-    ("Valheim.Testing.Bindings.Tool", "src/Valheim.Testing.Bindings.Tool/bin/Release/net10.0/Valheim.Testing.Bindings.Tool.dll", null),
-    ("Valheim.Testing.Adapter", "tests/Valheim.Testing.Adapter.CompileCheck/bin/Release/net48/Valheim.Testing.Adapter.CompileCheck.dll", "Valheim.Testing.Adapter"),
+    ("Valheim.Testing", "src/Valheim.Testing/bin/Release/netstandard2.0/Valheim.Testing.dll", null, false),
+    ("Valheim.Testing.Doubles", "src/Valheim.Testing.Doubles/bin/Release/netstandard2.0/Valheim.Testing.Doubles.dll", null, false),
+    ("Valheim.Testing.Game", "src/Valheim.Testing.Game/bin/Release/net10.0/Valheim.Testing.Game.dll", null, true),
+    ("Valheim.Testing.Bindings", "src/Valheim.Testing.Bindings/bin/Release/netstandard2.0/Valheim.Testing.Bindings.dll", null, false),
+    ("Valheim.Testing.Bindings.Tool", "src/Valheim.Testing.Bindings.Tool/bin/Release/net10.0/Valheim.Testing.Bindings.Tool.dll", null, false),
+    ("Valheim.Testing.Adapter", "tests/Valheim.Testing.Adapter.CompileCheck/bin/Release/net48/Valheim.Testing.Adapter.CompileCheck.dll", "Valheim.Testing.Adapter", false),
 ];
 foreach (var package in packages)
     if (!File.Exists(Path.Combine(root, package.Assembly)))
@@ -39,7 +43,9 @@ if (args is ["surface"])
     foreach (var package in packages)
         File.WriteAllText(Path.Combine(listDirectory, package.Package + ".txt"), ApiList(package.Package, Path.Combine(root, package.Assembly), package.Namespace));
     Console.WriteLine($"Public API lists written: {Path.GetRelativePath(root, listDirectory)}");
-    return 0;
+    if (Classify()) return 0;
+    Console.Error.WriteLine("Label or internalize the types named above, rebuild (validate.cs), then run this again.");
+    return 1;
 }
 if (args.Length > 0 && args[0] == "check")
 {
@@ -136,7 +142,7 @@ return 0;
 // The committed lists against the builds; then, given the base revision a pull request starts from, its description.
 int CheckLists(string? baseRevision)
 {
-    bool differs = false;
+    bool classified = Classify(), differs = false;
     var expected = packages.ToDictionary(package => package.Package + ".txt", package => ApiList(package.Package, Path.Combine(root, package.Assembly), package.Namespace));
     foreach (string file in Directory.Exists(listDirectory) ? Directory.GetFiles(listDirectory, "*.txt").Select(Path.GetFileName).OfType<string>() : [])
         if (!expected.ContainsKey(file)) { differs = true; Console.Error.WriteLine($"docs/reference/public-api/{file} names no package."); }
@@ -153,12 +159,12 @@ int CheckLists(string? baseRevision)
         foreach (string line in have.Where(line => !want.Contains(line)).Take(40)) Console.Error.WriteLine("  -" + line.Trim());
         if (want.SetEquals(have)) Console.Error.WriteLine("  (same lines in another order)");
     }
+    if (!classified)
+        Console.Error.WriteLine("Each type named above needs [ResultShape] or internal (CONTRIBUTING.md, public API); rebuild and run this check again.");
     if (differs)
-    {
         Console.Error.WriteLine("The public API changed: run `dotnet run scripts/api-docs.cs -- surface`, review the diff, commit it, and add a line " +
             "starting \"public-api:\" to the pull request description saying why.");
-        return 1;
-    }
+    if (!classified || differs) return 1;
     Console.WriteLine($"Public API lists match the builds ({packages.Length} packages).");
     if (baseRevision == null) return 0;
     string changed = Git("diff", "--name-only", baseRevision, "--", "docs/reference/public-api");
@@ -172,6 +178,24 @@ int CheckLists(string? baseRevision)
     Console.Error.WriteLine($"This change alters the public API ({changed.Replace('\n', ' ')}) and its pull request description has no line " +
         "starting \"public-api:\". Add one that says why each type or member is public (or leaves), then re-run this check.");
     return 1;
+}
+
+// #292: in a classified package, the baseline review asks one question per type: "result shape or operation". An operation
+// declares a member that does something (or is an interface, a delegate or an exception). Any other type is data: a result
+// shape, marked [ResultShape], when an operation gives it back (a return, an out parameter, a read-only property, or a
+// property of data given back), else an input an operation takes (a parameter or settable property, or a constructor or
+// setter of such an input). Refuses a labelled type that declares an operation, an unlabelled type an operation gives back,
+// and a data type no operation takes or gives back. Prints each refusal; false if any.
+bool Classify()
+{
+    bool classified = true;
+    foreach (var package in packages.Where(package => package.Classified))
+        foreach (string problem in Unclassified(Path.Combine(root, package.Assembly), package.Namespace))
+        {
+            classified = false;
+            Console.Error.WriteLine($"{package.Package}: {problem}");
+        }
+    return classified;
 }
 
 string Git(params string[] arguments)
@@ -219,16 +243,6 @@ static string ApiList(string package, string assembly, string? ownNamespace)
     }
     return text.ToString();
 
-    static bool Visible(Mono.Cecil.TypeDefinition type) => type.IsNested
-        ? (type.IsNestedPublic || type.IsNestedFamily || type.IsNestedFamilyOrAssembly) && Visible(type.DeclaringType)
-        : type.IsPublic;
-    static bool InNamespace(Mono.Cecil.TypeDefinition type, string? name)
-    {
-        if (name == null) return true;
-        while (type.DeclaringType != null) type = type.DeclaringType;
-        return type.Namespace == name || type.Namespace.StartsWith(name + ".", StringComparison.Ordinal);
-    }
-    static bool VisibleMember(Mono.Cecil.MethodDefinition method) => method.IsPublic || method.IsFamily || method.IsFamilyOrAssembly;
     static string Access(bool isPublic) => isPublic ? "" : "protected ";
     static string Modifiers(Mono.Cecil.MethodDefinition method) =>
         (method.IsStatic ? "static " : "") + (method.IsAbstract && !method.DeclaringType.IsInterface ? "abstract " : "") +
@@ -253,9 +267,112 @@ static string ApiList(string package, string assembly, string? ownNamespace)
         if (type.BaseType != null && type.BaseType.FullName is not ("System.Object" or "System.ValueType" or "System.Enum" or "System.MulticastDelegate"))
             bases.Add(type.BaseType.FullName);
         bases.AddRange(type.Interfaces.Select(implementation => implementation.InterfaceType.FullName).Order(StringComparer.Ordinal));
-        return $"{(Visible(type) && type.IsNested && !type.IsNestedPublic ? "protected " : "")}{kind} {type.FullName}" +
+        return $"{(ResultShape(type) ? "[result shape] " : "")}{(Visible(type) && type.IsNested && !type.IsNestedPublic ? "protected " : "")}{kind} {type.FullName}" +
             (bases.Count > 0 ? " : " + string.Join(", ", bases) : "");
     }
+}
+
+static bool ResultShape(Mono.Cecil.TypeDefinition type) => type.CustomAttributes.Any(attribute => attribute.AttributeType.Name == "ResultShapeAttribute");
+
+static IEnumerable<string> Unclassified(string assembly, string? ownNamespace)
+{
+    using var module = Mono.Cecil.ModuleDefinition.ReadModule(assembly);
+    var types = module.GetTypes().Where(type => Visible(type) && InNamespace(type, ownNamespace)).ToDictionary(type => type.FullName, StringComparer.Ordinal);
+    var operations = types.Values.Where(type => type.IsInterface || type.BaseType?.FullName == "System.MulticastDelegate" || Thrown(type) ||
+        type.Methods.Any(method => VisibleMember(method) && Behaviour(method))).Select(type => type.FullName).ToHashSet(StringComparer.Ordinal);
+    bool Operation(Mono.Cecil.TypeDefinition type) => operations.Contains(type.FullName);
+    // What operations take (parameters, settable properties and fields, then an input's own constructor, setters and fields)
+    // and what they give back (returns, out parameters, read-only properties and fields, event arguments, then every
+    // property and field of a data type given back), transitively.
+    var inputs = Reach(
+        method => Behaviour(method) || method.IsConstructor || method.IsSetter ? method.Parameters.Where(parameter => !parameter.IsOut).Select(parameter => parameter.ParameterType) : [],
+        field => !field.IsInitOnly && !field.HasConstant, method => method.IsConstructor || method.IsSetter);
+    var outputs = Reach(
+        method => Behaviour(method) || (method.IsGetter && ReadOnly(method)) || method.IsAddOn
+            ? method.Parameters.Where(parameter => parameter.IsOut || method.IsAddOn).Select(parameter => parameter.ParameterType).Append(method.ReturnType) : [],
+        field => true, method => method.IsGetter);
+    // A type another public type derives from or implements cannot be internal, whatever its members.
+    var bases = types.Values.SelectMany(type => type.Interfaces.Select(implementation => implementation.InterfaceType).Append(type.BaseType))
+        .Where(type => type != null).SelectMany(type => Named(type!)).ToHashSet(StringComparer.Ordinal);
+    foreach (var type in types.Values.OrderBy(type => type.FullName, StringComparer.Ordinal))
+    {
+        string name = type.FullName.Replace('/', '.');
+        if (ResultShape(type) && Operation(type))
+        {
+            var members = type.Methods.Where(method => VisibleMember(method) && Behaviour(method)).Select(method => method.Name).Distinct().Order(StringComparer.Ordinal).ToList();
+            string what = members.Count > 0 ? $"declares an operation ({string.Join(", ", members)})" : type.IsInterface ? "is an interface" : Thrown(type) ? "is an exception" : "is a delegate";
+            yield return $"{name} is labelled [ResultShape] but {what}; a result shape only describes a result: move the operation out or drop the label.";
+        }
+        else if (ResultShape(type) || Operation(type)) continue;
+        else if (outputs.Contains(type.FullName))
+            yield return $"{name} is part of a result (an operation returns it, or a type it returns holds it) but is not labelled: " +
+                "mark it [ResultShape], versioned with any JSON it is written to.";
+        else if (!inputs.Contains(type.FullName) && !bases.Contains(type.FullName))
+            yield return $"{name} is public but no operation takes or returns it, and it declares none: make it internal.";
+    }
+
+    // Seeds: each operation's visible methods and fields give `seed`'s types; a data type reached then gives the types of
+    // its methods `follow` accepts and of the fields `field` accepts.
+    HashSet<string> Reach(Func<Mono.Cecil.MethodDefinition, IEnumerable<Mono.Cecil.TypeReference>> seed, Func<Mono.Cecil.FieldDefinition, bool> field,
+        Func<Mono.Cecil.MethodDefinition, bool> follow)
+    {
+        var reached = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<Mono.Cecil.TypeDefinition>();
+        void Add(IEnumerable<Mono.Cecil.TypeReference> found)
+        {
+            foreach (string name in found.SelectMany(Named))
+                if (types.TryGetValue(name, out var type) && reached.Add(name) && !Operation(type)) pending.Enqueue(type);
+        }
+        IEnumerable<Mono.Cecil.TypeReference> Fields(Mono.Cecil.TypeDefinition type) =>
+            type.Fields.Where(member => !member.IsSpecialName && (member.IsPublic || member.IsFamily || member.IsFamilyOrAssembly) && field(member)).Select(member => member.FieldType);
+        foreach (var operation in types.Values.Where(Operation))
+        {
+            foreach (var method in operation.Methods.Where(VisibleMember)) Add(seed(method));
+            Add(Fields(operation));
+        }
+        while (pending.TryDequeue(out var data))
+        {
+            foreach (var method in data.Methods.Where(method => VisibleMember(method) && follow(method)))
+                Add(method.IsGetter ? [method.ReturnType] : method.Parameters.Where(parameter => !parameter.IsOut).Select(parameter => parameter.ParameterType));
+            if (!data.IsEnum) Add(Fields(data));
+        }
+        return reached;
+    }
+
+    // A property an operation only reads out (no visible setter or init) gives a result; a settable one is an input.
+    static bool ReadOnly(Mono.Cecil.MethodDefinition getter) =>
+        getter.DeclaringType.Properties.FirstOrDefault(property => property.GetMethod == getter)?.SetMethod is not { } setter || !VisibleMember(setter);
+    // Value semantics (equality, copying, deconstruction, operators, text) are part of a shape, not an operation.
+    static bool Behaviour(Mono.Cecil.MethodDefinition method) =>
+        !method.IsConstructor && !method.IsGetter && !method.IsSetter && !method.IsAddOn && !method.IsRemoveOn &&
+        !method.Name.StartsWith("op_", StringComparison.Ordinal) &&
+        method.Name is not ("Equals" or "GetHashCode" or "ToString" or "Deconstruct" or "<Clone>$" or "PrintMembers" or "CompareTo");
+    // Derives from System.Exception. Only this module's types are resolved; a base outside it is judged by its name.
+    static bool Thrown(Mono.Cecil.TypeDefinition type)
+    {
+        for (var baseType = type.BaseType; baseType != null; baseType = baseType.Scope == type.Module ? baseType.Resolve()?.BaseType : null)
+            if (baseType.Scope != type.Module)
+                return baseType.Namespace.StartsWith("System", StringComparison.Ordinal) && baseType.Name.EndsWith("Exception", StringComparison.Ordinal);
+        return false;
+    }
+    // Every type a signature names: element types of arrays and references, and generic arguments.
+    static IEnumerable<string> Named(Mono.Cecil.TypeReference type) => type switch
+    {
+        Mono.Cecil.GenericInstanceType generic => Named(generic.ElementType).Concat(generic.GenericArguments.SelectMany(Named)),
+        Mono.Cecil.TypeSpecification specification => Named(specification.ElementType),
+        _ => [type.FullName],
+    };
+}
+
+static bool Visible(Mono.Cecil.TypeDefinition type) => type.IsNested
+    ? (type.IsNestedPublic || type.IsNestedFamily || type.IsNestedFamilyOrAssembly) && Visible(type.DeclaringType)
+    : type.IsPublic;
+static bool VisibleMember(Mono.Cecil.MethodDefinition method) => method.IsPublic || method.IsFamily || method.IsFamilyOrAssembly;
+static bool InNamespace(Mono.Cecil.TypeDefinition type, string? name)
+{
+    if (name == null) return true;
+    while (type.DeclaringType != null) type = type.DeclaringType;
+    return type.Namespace == name || type.Namespace.StartsWith(name + ".", StringComparison.Ordinal);
 }
 
 static string SourcePath([CallerFilePath] string path = "") => path;

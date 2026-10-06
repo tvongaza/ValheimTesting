@@ -1,6 +1,7 @@
 namespace Valheim.Testing.Game;
 
 /// <summary>One independent setup problem found before a host is contacted or a fixture is copied.</summary>
+[ResultShape]
 public sealed record CampaignPreflightProblem(string Actor, string Input, string Message);
 
 /// <summary>One statically selected actor. Host eligibility does not claim that the host is currently ready.</summary>

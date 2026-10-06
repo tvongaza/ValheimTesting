@@ -8,6 +8,7 @@ namespace Valheim.Testing.Game;
 /// it is back at its main menu: 3 is a network or mod version mismatch, 6 a wrong password, 7 an id already connected,
 /// 8 the ban or permit list, 9 a full server.
 /// </summary>
+[ResultShape]
 public enum GameConnectionStatus
 {
     None = 0,
@@ -67,6 +68,7 @@ public sealed record ConnectionStatusReading(GameConnectionStatus Status, string
 }
 
 /// <summary>A refused join, as <see cref="SessionControl.JoinExpectingRefusal"/> confirmed it.</summary>
+[ResultShape]
 public sealed record JoinRefusal(GameConnectionStatus Status, string Server, TimeSpan Elapsed)
 {
     /// <summary>The game's number for <see cref="Status"/>: 3 for <c>ErrorVersion</c>.</summary>

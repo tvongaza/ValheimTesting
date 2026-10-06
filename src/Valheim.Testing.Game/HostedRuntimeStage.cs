@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 namespace Valheim.Testing.Game;
 
 /// <summary>A reviewed local file copied to one path in a disposable host runtime.</summary>
+[ResultShape]
 public sealed record HostedRuntimeFile(string Source, string RelativePath);
 
 /// <summary>The game process whose executable must be present in the source install.</summary>

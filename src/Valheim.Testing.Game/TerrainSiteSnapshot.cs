@@ -3,6 +3,7 @@ using System.Globalization;
 namespace Valheim.Testing.Game;
 
 /// <summary>A bounded, read-only observation of loaded terrain at an explicitly named site.</summary>
+[ResultShape]
 public sealed record TerrainSitePoint(int X, int Z);
 /// <summary>
 /// One point's loaded layers, read through the same capabilities as the probes: the ground height
@@ -10,7 +11,9 @@ public sealed record TerrainSitePoint(int X, int Z);
 /// height (<c>valheim.world/terrain-surface</c>, as <see cref="SurfaceProbe"/>) and the raw paint texel
 /// (<c>valheim.world/terrain-paint</c>, as <see cref="PaintProbe"/>: R dirt, G cultivated, B paved, A vegetation: 1 where it may grow, 0 where cleared).
 /// </summary>
+[ResultShape]
 public sealed record TerrainSiteReading(TerrainSitePoint Point, float GroundHeight, float ColliderHeight, float R, float G, float B, float A);
+[ResultShape]
 public sealed record TerrainSiteDelta(TerrainSitePoint Point, double GroundHeight, double ColliderHeight, double R, double G, double B, double A);
 
 /// <summary>

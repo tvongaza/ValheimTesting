@@ -3,6 +3,7 @@ using System.IO.Compression;
 namespace Valheim.Testing.Game;
 
 /// <summary>A ValheimCLI core-and-pack set ready to stage: its capability manifest, the folder holding its DLLs, and where it came from.</summary>
+[ResultShape]
 public sealed record CliBundleSource(string Manifest, string Files, string Origin);
 
 /// <summary>

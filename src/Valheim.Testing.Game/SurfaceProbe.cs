@@ -1,6 +1,7 @@
 using System.Globalization;
 namespace Valheim.Testing.Game;
 
+[ResultShape]
 public sealed record SurfaceMeasurement(float X,float Z,float Expected,float Height,float ColliderHeight,bool Passed);
 public static class SurfaceProbe
 {

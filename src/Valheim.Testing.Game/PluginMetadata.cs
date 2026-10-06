@@ -6,13 +6,16 @@ namespace Valheim.Testing.Game;
 /// <summary>A BepInEx plugin as its assembly declares it: <c>[BepInPlugin]</c> and the attributes BepInEx reads beside it.</summary>
 /// <param name="Type">The plugin class's full name.</param>
 /// <param name="Processes">The <c>[BepInProcess]</c> filters; empty loads in every process.</param>
+[ResultShape]
 public sealed record PluginDeclaration(string Guid, string Name, string Version, string Type,
     IReadOnlyList<PluginDependency> Dependencies, IReadOnlyList<string> Incompatibilities, IReadOnlyList<string> Processes);
 
 /// <summary>A <c>[BepInDependency]</c>: a hard one stops the plugin loading without it; a soft one only orders loading.</summary>
+[ResultShape]
 public sealed record PluginDependency(string Guid, bool Hard, string? MinimumVersion);
 
 /// <summary>What a DLL declares to BepInEx: its assembly name, the assemblies it references and its plugins (none for a library).</summary>
+[ResultShape]
 public sealed record PluginAssembly(string AssemblyName, IReadOnlyList<string> References, IReadOnlyList<PluginDeclaration> Plugins);
 
 /// <summary>

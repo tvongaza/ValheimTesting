@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 namespace Valheim.Testing.Game;
 
 /// <summary>A matched log line and how long its wait took.</summary>
+[ResultShape]
 public sealed record LogLine(string Text, Match Match, TimeSpan Elapsed);
 
 // Follows one log file from a remembered byte offset, so nothing written before it can satisfy a wait. The file

@@ -2,8 +2,11 @@ using System.Globalization;
 
 namespace Valheim.Testing.Game;
 
+[ResultShape]
 public sealed record HeightExpectation(float X, float Z, float Height);
+[ResultShape]
 public sealed record HeightMeasurement(float X, float Z, float Expected, float Actual, double Delta, bool Passed);
+[ResultShape]
 public sealed record TerrainComparison(string Layer, string ExpectedFrom, float Tolerance, IReadOnlyList<HeightMeasurement> Samples)
 {
     public bool Passed => Samples.Count > 0 && Samples.All(x => x.Passed);

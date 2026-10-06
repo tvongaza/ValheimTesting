@@ -4,6 +4,7 @@ using System.Globalization;
 namespace Valheim.Testing.Game;
 
 /// <summary>How an owned process ended when it was stopped.</summary>
+[ResultShape]
 public enum StopOutcome
 {
     /// <summary>It quit by itself after it was asked to, within the wait: the game's own shutdown ran (save, lobby retirement).</summary>
@@ -36,6 +37,7 @@ public enum QuitRequest
 /// <param name="ExitCode">Its exit code, when known.</param>
 /// <param name="Elapsed">From the stop request to the exit.</param>
 /// <param name="Request">How it was asked to quit, and anything that went wrong asking.</param>
+[ResultShape]
 public sealed record ProcessStop(StopOutcome Outcome, int? ExitCode, TimeSpan Elapsed, string Request)
 {
     /// <summary>For example <c>clean after 8.2 s (interrupt, exit 0)</c> or <c>killed after 120.0 s (interrupt; no exit within 120 s)</c>.</summary>

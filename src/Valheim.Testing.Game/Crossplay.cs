@@ -52,6 +52,7 @@ internal sealed record MultiplayerIdentity(string SteamId, string PlayFabLoginSt
 }
 
 /// <summary>A crossplay server's lobby: <see cref="RemotePlayerId"/> is what a client joins (<c>cli_connect_playfab_user</c>).</summary>
+[ResultShape]
 public sealed record CrossplayLobby(string RemotePlayerId, string LobbyId);
 
 /// <summary>

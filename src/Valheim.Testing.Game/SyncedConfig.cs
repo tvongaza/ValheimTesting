@@ -7,6 +7,7 @@ namespace Valheim.Testing.Game;
 /// BepInEx writes them to the config file (<c>true</c>, <c>5</c>, <c>1.5</c>). <see cref="Installed"/> is false when the
 /// plugin is not loaded in that process, <see cref="Found"/> when it has no entry with that section and key.
 /// </summary>
+[ResultShape]
 public sealed record ConfigValue(string Guid, string Section, string Key, bool Server, bool Installed, bool Found, string? Type, string? Value, string? DefaultValue)
 {
     public override string ToString() =>

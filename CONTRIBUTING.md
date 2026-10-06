@@ -39,6 +39,8 @@ dotnet run scripts/api-docs.cs -- surface
 
 A pull request that changes `docs/reference/public-api/` says why in its description, on a line starting `public-api:` (for example `public-api: ZoneCycleResult.Seconds is read by the FullLifecycle example`). CI regenerates the lists from the builds, refuses lists that differ, and refuses a change to them without that line.
 
+Each public type in `Valheim.Testing.Game` is an operation (it declares a member that does something, or is an interface, delegate or exception), a result shape, or an input an operation takes. A result shape declares no operation and is marked `[ResultShape]` (listed as `[result shape]`); it is versioned with any JSON it is written to, so a change to its shape is a change to that JSON's schema (#135). `api-docs.cs` refuses an unlabelled data type that an operation returns or exposes read-only (or that such a type holds), a public data type no operation takes or returns, and a labelled type that declares an operation. Review then asks one question per type: result shape or operation.
+
 Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game example (SharedWorld) and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout. The same lines work in any shell on Windows, macOS and Linux.
 
 For a quick iteration before the full local check:

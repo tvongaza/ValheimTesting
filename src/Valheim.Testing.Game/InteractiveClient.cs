@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 namespace Valheim.Testing.Game;
 
 /// <summary>Why a host refused to start a client in its desktop session.</summary>
+[ResultShape]
 public enum InteractiveRefusal
 {
     /// <summary>The host user has no desktop session there (Windows), or the display does not exist or refuses the user (Linux).</summary>
@@ -56,6 +57,7 @@ public sealed class LinuxDisplay
 }
 
 /// <summary>What stopping an interactive client found: it was killed, had gone already, or quit by itself when asked.</summary>
+[ResultShape]
 public enum InteractiveStop { Stopped, AlreadyGone, Quit }
 
 /// <summary>

@@ -106,6 +106,13 @@ jobs:
           empty=$(git hash-object -t tree /dev/null)
           PR_BODY='' refused 'no line starting "public-api:"' --base "$empty" || exit 1
           PR_BODY='public-api: negative control' dotnet run scripts/api-docs.cs -- check --base "$empty"
+          # A public record an operation returns, without [ResultShape], is refused by name (#292); the rebuild after restores.
+          printf 'namespace Valheim.Testing.Game;\npublic sealed record ScratchResult(int Value);\npublic static class ScratchOperation { public static ScratchResult Read() => new(1); }\n' > src/Valheim.Testing.Game/ScratchResult.cs
+          dotnet build -c Release src/Valheim.Testing.Game --no-restore -v q
+          refused 'ScratchResult is part of a result' || exit 1
+          rm src/Valheim.Testing.Game/ScratchResult.cs
+          dotnet build -c Release src/Valheim.Testing.Game --no-restore -v q
+          dotnet run scripts/api-docs.cs -- check
           git diff --exit-code
       - name: Save the NuGet package cache
         if: steps.nuget-cache.outputs.cache-hit != 'true'

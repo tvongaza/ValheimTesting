@@ -346,6 +346,7 @@ public sealed class DisposableCharacterStore
 /// A character taken from a <see cref="DisposableCharacterStore"/>. Only the store creates these; each use re-reads the
 /// store and refuses the handle if the registration was removed or the stored copy changed since it was taken.
 /// </summary>
+[ResultShape]
 public sealed class DisposableCharacter
 {
     internal DisposableCharacter(DisposableCharacterStore store, string name, long playerId, string sha256)

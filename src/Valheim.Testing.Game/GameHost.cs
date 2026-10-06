@@ -7,7 +7,9 @@ using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
+[ResultShape]
 public enum GameHostKind { Local, Ssh, Container }
+[ResultShape]
 public enum HostShellKind { Bash, PowerShell }
 
 /// <summary>
@@ -38,6 +40,7 @@ public sealed class HostShell
 }
 
 /// <summary>What is known about a host script once its command returned.</summary>
+[ResultShape]
 public enum HostOutcome
 {
     /// <summary>The script ran to its end; <see cref="HostResult.ExitCode"/> is its own exit code.</summary>
@@ -127,6 +130,7 @@ public sealed class HostOperationException(string what, HostResult result) : Inv
 }
 
 /// <summary>What a claim, release or check of a host lock established.</summary>
+[ResultShape]
 public enum HostLockState
 {
     /// <summary>This call created the lock for the owner.</summary>
@@ -145,6 +149,7 @@ public enum HostLockState
     /// </summary>
     Unknown,
 }
+[ResultShape]
 public sealed record HostLockResult(HostLockState State, string? Holder, string Detail);
 
 /// <summary>A lock could not be taken or released: another run holds it (<see cref="HostLockState.HeldByOther"/>) or the outcome is unknown.</summary>
@@ -198,8 +203,10 @@ public sealed record HostLogResult(HostLogOutcome Outcome, string Target, string
 }
 
 /// <summary>Files extracted into a new directory on the host. <see cref="Sha256"/> is the archive's hash, checked on both ends; <see cref="Commit"/> and <see cref="Tree"/> are set for a git revision.</summary>
+[ResultShape]
 public sealed record Shipment(string HostDirectory, string Sha256, long Bytes, string? Commit, string? Tree);
 /// <summary>A host directory extracted locally. <see cref="Sha256"/> and <see cref="Bytes"/> describe the archive, checked on both ends.</summary>
+[ResultShape]
 public sealed record FetchedDirectory(string LocalDirectory, string Sha256, long Bytes, int Files);
 
 /// <summary>

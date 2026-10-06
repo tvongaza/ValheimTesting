@@ -4,6 +4,7 @@ using System.Text.Json;
 namespace Valheim.Testing.Game;
 
 /// <summary>One prefab hash the observing process cannot resolve: how many saved objects carry it, and where the first is.</summary>
+[ResultShape]
 public sealed record UnresolvedPrefab(int Hash, int Count, float X, float Y, float Z);
 
 /// <summary>

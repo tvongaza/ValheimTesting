@@ -37,6 +37,7 @@ public interface IOwnedProcess : IDisposable
 /// What an owned server's startup waits on instead of retrying connections. The process exit is always watched.
 /// Without <see cref="CliLog"/>, connecting falls back to bounded retries at the session's poll interval.
 /// </summary>
+[ResultShape]
 public sealed class StartupEvents
 {
     /// <summary>ValheimCLI's line once its command server accepts connections.</summary>

@@ -196,6 +196,7 @@ public sealed record SteamAccountStatus(string Account, SteamAccountState State,
     };
 }
 
+[ResultShape]
 public enum SteamAccountLeaseState
 {
     Claimed,
@@ -210,6 +211,7 @@ public enum SteamAccountLeaseState
     Unknown,
 }
 
+[ResultShape]
 public sealed record SteamAccountLeaseResult(SteamAccountLeaseState State, string Detail);
 
 /// <summary>A lease could not be taken, renewed or released. <see cref="Accounts"/> lists the holders when none was free; never a credential.</summary>

@@ -2,6 +2,7 @@
 namespace Valheim.Testing.Game;
 
 /// <summary>One live (not closing) extension registration as <c>cli_extensions</c> lists it.</summary>
+[ResultShape]
 public sealed record ExtensionInstance(string Id, string Version, string Instance);
 
 /// <summary>

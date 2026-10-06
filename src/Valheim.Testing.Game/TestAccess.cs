@@ -7,6 +7,7 @@ namespace Valheim.Testing.Game;
 public enum TestActorRole { DedicatedServer, ClientMenu, ClientInWorld }
 
 /// <summary>Observed access facts, not a grant of permission or proof a scenario action succeeded.</summary>
+[ResultShape]
 public sealed record TestAccessState(bool Devcommands, bool CheatsAcknowledged, bool AllowOnServerClients,
     bool Server, bool Dedicated, bool JoinedClient, bool LocalPlayer, bool ProfileAvailable);
 

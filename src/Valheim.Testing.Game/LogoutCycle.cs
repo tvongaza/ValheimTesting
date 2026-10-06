@@ -63,6 +63,7 @@ public sealed record ProfileFileState(string Path, bool Exists, long Length, str
 
 /// <summary>What <see cref="LogoutCycle"/> observed, in order.</summary>
 /// <param name="OldAfter">The game's backup of the previous file (<c>.fch.old</c>) after the logout: the replaced copy.</param>
+[ResultShape]
 public sealed record LogoutResult(CustomDataReading Before, ProfileFileState FileBefore, ProfileFileState FileAfter, ProfileFileState OldAfter, TimeSpan WriteSeen, CustomDataReading After)
 {
     /// <summary>Whether the backup the logout left is the file as it was before: one save replaced it, not several.</summary>
