@@ -72,6 +72,46 @@ public sealed class CliBundleTests : IDisposable
         Assert.Single(Directory.GetDirectories(Path.Combine(data, "cli")));
     }
 
+    // Main's red run 37396097745: one of four concurrent extractions threw "Cannot create ... because a file or directory with
+    // the same name already exists". Many runs released at once, onto no copy and onto a damaged one (every run then wants to
+    // replace it): none throws, each is handed an intact copy, and one folder is left with no copy set aside or half extracted.
+    [Fact] public void ManyRunsExtractingAtOnceNeverFailAndLeaveOneIntactCopy()
+    {
+        byte[] zip = Zip();
+        string sha = FileHash.Sha256(zip), dll = FileHash.Sha256(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")),
+            standard = FileHash.Sha256(Path.Combine(_rig.Root, "cli", "Valheim.Cli.Standard.dll"));
+        const int Runs = 8, Rounds = 24;
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        var wrong = new List<string>();
+        for (int round = 0; round < Rounds; round++)
+        {
+            string data = Path.Combine(_rig.Root, "stress-" + round), target = Path.Combine(data, "cli", "80fb6ce");
+            if (round % 2 == 1)
+            {
+                CliBundle.Extract(new MemoryStream(zip), sha, "80fb6ce", "shipped", data);
+                File.AppendAllText(Path.Combine(target, "Valheim.Cli.Standard.dll"), "damaged");
+            }
+            using var start = new Barrier(Runs);
+            var sources = new System.Collections.Concurrent.ConcurrentQueue<CliBundleSource>();
+            var threads = Enumerable.Range(0, Runs).Select(_ => new Thread(() =>
+            {
+                start.SignalAndWait();
+                try { sources.Enqueue(CliBundle.Extract(new MemoryStream(zip), sha, "80fb6ce", "shipped", data)); }
+                catch (Exception error) { failures.Enqueue(error); }
+            })).ToList();
+            threads.ForEach(thread => thread.Start());
+            threads.ForEach(thread => thread.Join());
+            // Every run that returned was handed the one copy, which is intact, and nothing else is left beside it.
+            if (sources.Any(source => source.Files != target)) wrong.Add($"round {round}: a run was handed another folder");
+            if (!File.Exists(Path.Combine(target, "valheimCLI.dll")) || FileHash.Sha256(Path.Combine(target, "valheimCLI.dll")) != dll ||
+                FileHash.Sha256(Path.Combine(target, "Valheim.Cli.Standard.dll")) != standard)
+                wrong.Add($"round {round}: the copy is not intact");
+            var left = Directory.GetDirectories(Path.Combine(data, "cli")).Where(folder => folder != target).Select(Path.GetFileName).ToList();
+            if (left.Count != 0) wrong.Add($"round {round}: left beside the copy: {string.Join(", ", left)}");
+        }
+        Assert.True(failures.IsEmpty && wrong.Count == 0, $"{failures.Count} of {Runs * Rounds} runs threw; first: {failures.FirstOrDefault()}\n" + string.Join("\n", wrong.Take(10)));
+    }
+
     [Fact] public void AnotherZipOrAZipThatIsNotABundleIsRefused()
     {
         byte[] zip = Zip();
