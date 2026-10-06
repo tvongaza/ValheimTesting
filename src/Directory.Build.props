@@ -1,4 +1,9 @@
 <Project>
+  <!-- The repository's own settings (warnings as errors) when this folder is built inside it. -->
+  <PropertyGroup>
+    <RepositoryBuildProps>$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))</RepositoryBuildProps>
+  </PropertyGroup>
+  <Import Project="$(RepositoryBuildProps)" Condition="'$(RepositoryBuildProps)' != ''" />
   <!-- release.yml packs with -p:ValheimTestingRelease=true: a result's toolkit provenance (ToolkitProvenance) calls such a build
        released; every other build of the same version is unreleased. -->
   <ItemGroup Condition="'$(ValheimTestingRelease)' == 'true'">

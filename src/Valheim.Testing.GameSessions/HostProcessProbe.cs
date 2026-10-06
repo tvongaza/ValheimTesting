@@ -31,9 +31,9 @@ internal static class HostProcessProbe
 {
     /// <summary>
     /// The host's word on each journalled process, keyed by the pair asked about (a reused ID asked about twice, with two start
-    /// identities, gets two answers). <paramref name="settle"/> is for a process just started: on Linux the recorder's
-    /// <c>env</c> may not yet have replaced itself with the game, so the check waits up to 5 s for that before it reads the
-    /// command line.
+    /// identities, gets two answers). <paramref name="settle"/> is for a process just started: on Linux its ID may still run a
+    /// launch stage (the recorder's forked shell, <c>setsid</c> or <c>env</c>) that has not yet executed the game, so the check
+    /// waits up to 5 s for that before it reads the command line (#463).
     /// </summary>
     public static async Task<IReadOnlyDictionary<(int Pid, string StartIdentity), ProbedProcess>> ProbeAsync(IGameHost host,
         IReadOnlyCollection<(int Pid, string StartIdentity)> processes, TimeSpan timeout, CancellationToken cancellation = default, bool settle = false)
@@ -106,7 +106,8 @@ internal static class HostProcessProbe
 
     // Variables: processes (space-separated PID:START pairs; an empty START matches any), settle (optional). One line per pair:
     // VT-PROC <pid> <start asked or -> gone|reused|same|unreadable <start read or -> <sha256 or ->, then VT-PROC-END. With
-    // settle, a process still running as the recorder's env (before it execs the game) is given up to 5 s to exec.
+    // settle, a process still running as a launch stage (the recorder's forked shell, setsid or env, busybox's too, before the game is
+    // executed in its place) is given up to 5 s to exec.
     internal static readonly string Bash = """
         started() { local s; s=$(cat "/proc/$1/stat" 2> /dev/null) || return 1; s=${s##*) }; set -- $s; [ "$1" != Z ] && echo "${20}"; }
         for pair in $processes; do
@@ -117,7 +118,9 @@ internal static class HostProcessProbe
           if [ -n "$start" ] && [ "$identity" != "$start" ]; then echo "VT-PROC $id $asked reused $identity -"; continue; fi
           if [ -n "${settle:-}" ]; then
             n=0
-            while [ "$(basename -- "$(readlink "/proc/$id/exe" 2> /dev/null)")" = env ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+            while [ "$n" -lt 50 ]; do
+              case "$(basename -- "$(readlink "/proc/$id/exe" 2> /dev/null)")" in bash|sh|dash|busybox|setsid|env) sleep 0.1; n=$((n + 1)) ;; *) break ;; esac
+            done
           fi
           hash=$({ sha256sum < "/proc/$id/cmdline"; } 2> /dev/null | cut -d' ' -f1)
           echo "VT-PROC $id $asked same $identity ${hash:--}"
