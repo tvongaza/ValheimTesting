@@ -191,8 +191,6 @@ public sealed class CliCapabilityManifest
         var problems = location.Problems.Select(problem => problem.Message).ToList();
         var lost = location.Problems.Select(problem => problem.File).Distinct().ToList();
         var located = location.Located.Select(found => Path.GetRelativePath(install, found.Path).Replace('\\', '/')).ToList();
-        var have = Capabilities;
-        var missing = wanted.Where(path => !have.TryGetValue(path, out int version) || version != 1).ToList();
         string where = $"the ValheimCLI capability manifest of {Build}";
         if (problems.Count != 0)
         {
@@ -202,12 +200,24 @@ public sealed class CliCapabilityManifest
                 (costs.Count == 0 ? "" : $"The run needs {string.Join(", and ", costs)}, which this install does not have as the manifest's build. ") +
                 "Install the manifest's core and packs together, each once, from one build (or the manifest that build ships), before anything launches.");
         }
+        RequireCapabilities(wanted);
+        return new CliManifestCheck(Build, located, wanted);
+    }
+
+    /// <summary>
+    /// The capability half of <see cref="Check"/> alone, from the manifest without an install: the set must provide each of
+    /// <paramref name="capabilities"/> (<c>owner/command</c>) with result version 1. A disposable copy's set is checked so before the
+    /// copy exists, and again with its files once it does. Refuses with <see cref="InvalidOperationException"/>.
+    /// </summary>
+    internal void RequireCapabilities(IEnumerable<string> capabilities)
+    {
+        var have = Capabilities;
+        var missing = capabilities.Distinct(StringComparer.Ordinal).Where(path => !have.TryGetValue(path, out int version) || version != 1).ToList();
         if (missing.Count != 0)
-            throw new InvalidOperationException($"The client's ValheimCLI set ({where}) lacks {string.Join(", ", missing.Select(path => have.ContainsKey(path) ? path + " (another result schema)" : path))}. " +
+            throw new InvalidOperationException($"The client's ValheimCLI set (the ValheimCLI capability manifest of {Build}) lacks {string.Join(", ", missing.Select(path => have.ContainsKey(path) ? path + " (another result schema)" : path))}. " +
                 (have.Count == 0 ? "Its files register no extension commands at all, as an old monolithic ValheimCLI that predates command packs. " : "") +
                 string.Join(" ", missing.Select(path => path.Split('/')[0]).Distinct(StringComparer.Ordinal).Select(CliCapabilities.Provider)) +
                 " Install a ValheimCLI core with each pack the run needs, from one build, and use that build's manifest.");
-        return new CliManifestCheck(Build, located, wanted);
     }
 
     /// <summary>
@@ -303,6 +313,12 @@ public sealed record CliManifestCheck(string Build, IReadOnlyList<string> Files,
 internal static class CliAssembly
 {
     private const string ExtensionsNamespace = "valheimCLI.Extensions";
+
+    /// <summary>
+    /// Whether a plugin GUID is ValheimCLI's own: its core (<c>valheimCLI.valheimCLI</c>) or one of its packs
+    /// (<c>valheimCLI.standard</c>, <c>valheimCLI.worldtools</c>, ...). A disposable copy replaces every such plugin with the staged set.
+    /// </summary>
+    internal static bool IsCliPlugin(string guid) => guid.StartsWith("valheimCLI.", StringComparison.Ordinal);
 
     /// <summary>The GUIDs of the assembly's <c>[BepInPlugin]</c> attributes; null when the file is not a .NET assembly.</summary>
     internal static IReadOnlyList<string>? Plugins(string path)

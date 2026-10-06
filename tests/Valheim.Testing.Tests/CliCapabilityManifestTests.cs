@@ -116,7 +116,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         var check = plan.CheckCliManifest(CliCapabilities.HostedRounds)!;
         Assert.Equal(new[] { "BepInEx/plugins/valheimCLI.dll", "BepInEx/plugins/valheimCLI/Valheim.Cli.Standard.dll", "BepInEx/plugins/Valheim.Cli.WorldTools.dll" }, check.Files);
         Assert.Equal(new[] { "valheim.world/terrain", "valheim.session/state", "valheim.session/save", "valheim.session/leave" }, check.Capabilities);
-        Assert.Equal("static (cliManifest) and live", plan.CliPreflight);
+        Assert.Equal("static and live", plan.CliPreflight);
 
         // Then the live check, which stays authoritative: the declared capabilities are required once the client answers.
         var game = new ScriptedTransport().Extension("valheim.world", "terrain", _ => new { });
@@ -178,7 +178,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Equal(0, opens); // The client never launched.
         Assert.False(Directory.EnumerateFileSystemEntries(hosted.Worlds).Any()); // Nor was the fixture copied.
         Assert.Equal("preflight the fixture world and the owned client's install, before anything is copied or started", Assert.Single(report.Steps).Name);
-        Assert.Equal("static (cliManifest) and live", report.Provenance["cliPreflight"]);
+        Assert.Equal("static and live", report.Provenance["cliPreflight"]);
         Assert.Contains($"BepInEx/plugins/valheimCLI.dll, declaring valheimCLI.valheimCLI, has SHA256 {Hash(builds.OlderCore)}", error.Message);
         Assert.Contains($"BepInEx/plugins/Valheim.Cli.Standard.dll, declaring valheimCLI.standard, has SHA256 {Hash(builds.OlderStandard)}, not the manifest's Valheim.Cli.Standard.dll ({Hash(builds.Standard)})", error.Message);
         Assert.Contains("The run needs valheim.session/state, valheim.session/save, valheim.session/leave from Valheim.Cli.Standard.dll (plugin valheimCLI.standard)", error.Message);
@@ -318,14 +318,15 @@ public sealed class CliCapabilityManifestTests : IDisposable
 
     // ---- the policy without a manifest, and for attached clients ----
 
-    [Fact] public void WithoutAManifestOnlyTheLiveCheckRunsAndTheReportSaysSo()
+    [Fact] public void InPlaceWithoutAManifestOnlyTheLiveCheckRunsAndTheReportSaysSo()
     {
         var builds = new Builds();
         using var install = Staged(builds, (Core, builds.Monolithic)); // Nothing statically checks it without a manifest.
         var plan = PlanFor(install, manifest: null);
+        Assert.True(plan.InPlace);
         plan.Preflight(CliCapabilities.HostedRounds);
         Assert.Null(plan.CheckCliManifest(CliCapabilities.HostedRounds));
-        Assert.Equal("live only: the plan names no cliManifest", plan.CliPreflight);
+        Assert.Equal("live only: static check not run: your install, run in place", plan.CliPreflight);
         // A named manifest that is missing or malformed is refused, never treated as absent.
         plan.CliManifest = Path.Combine(_root, "missing.json");
         Assert.Contains("does not exist", Assert.Throws<FileNotFoundException>(() => plan.Preflight()).Message);

@@ -28,11 +28,17 @@ public sealed class ClientActor : IDisposable
 
     /// <summary>
     /// A client on this machine, its evidence (command record, process record, kept logs) written to <paramref name="output"/>:
-    /// launched from the plan's install (<see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/>) or attached
-    /// to the operator's client (<see cref="ClientSession.Attach(ClientRunPlan, string, IGameTransport)"/>), as its mode says.
+    /// launched (<see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/>) from a disposable copy of the plan's
+    /// install, which the actor makes when it opens and removes when it is disposed, or from the install itself with
+    /// <see cref="ClientRunPlan.InPlace"/>; or attached to the operator's client
+    /// (<see cref="ClientSession.Attach(ClientRunPlan, string, IGameTransport)"/>), as its mode says.
     /// </summary>
     public static ClientActor OnThisMachine(string name, ClientRunPlan plan, string output, CancellationToken cancellation = default) =>
-        new(name, plan, output, LocalClientPlacement.Instance, cancellation);
+        new(name, plan, output, new LocalClientPlacement(), cancellation) { RetiresPlacement = true };
+
+    /// <summary>Whether disposing the actor retires its placement's disposable copy: an actor on this machine made outside a session.</summary>
+    internal bool RetiresPlacement { get; init; }
+    internal IClientPlacement Placement => _placement;
 
     /// <summary>The client's name in the run, for example <c>client</c> or a campaign's <c>client-a</c>.</summary>
     public string Name { get; }
@@ -78,12 +84,23 @@ public sealed class ClientActor : IDisposable
         return session;
     }
 
-    /// <summary>Closes the client, if open: it stops only a process it started, and detaches from an operator's. A client still opening is closed when its open returns.</summary>
+    /// <summary>
+    /// Closes the client, if open: it stops only a process it started, and detaches from an operator's. A client still opening is
+    /// closed when its open returns. An actor made with <see cref="OnThisMachine"/> then removes its disposable copy (a client
+    /// whose stop failed keeps it, for <c>valheim-test env recover</c>).
+    /// </summary>
     public void Dispose()
     {
         ClientSession? open;
         lock (_state) { _disposed = true; open = _session; _session = null; }
-        open?.Dispose();
+        open?.Dispose(); // Throws when the owned client could not be stopped: its copy is then kept, for env recover.
+        RetireCopy();
+    }
+
+    /// <summary>An actor on this machine made outside a session: removes its disposable copy, once its client was stopped.</summary>
+    internal void RetireCopy()
+    {
+        if (RetiresPlacement && _placement is LocalClientPlacement local) local.RetireAsync().GetAwaiter().GetResult();
     }
 }
 
@@ -94,9 +111,97 @@ internal interface IClientPlacement
     ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation);
 }
 
-/// <summary>A client on this machine: launched, or attached to the operator's, as the plan's mode says.</summary>
+/// <summary>
+/// A client on this machine: launched, or attached to the operator's, as the plan's mode says. An owned client is launched
+/// from its disposable copy (<see cref="LocalClientCopy"/>), made at its plan's first open and kept for the placement's later
+/// opens of the same plan (a client that leaves and rejoins between rounds), or, with <see cref="ClientRunPlan.InPlace"/>, from
+/// its install as it is. <see cref="RetireAsync"/> removes the copies once their clients are closed.
+/// </summary>
 internal sealed class LocalClientPlacement : IClientPlacement
 {
-    public static readonly LocalClientPlacement Instance = new();
-    public ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation) => ClientSession.Open(plan, output, cancellation);
+    // Each copy with, per launch from it, whether that client is proven stopped; a copy is removed only once each one is.
+    private readonly List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> _copies = [];
+    private bool _closed;
+    // Test seam: the copy, in place of LocalClientCopy.PrepareAsync.
+    internal Func<string, ClientRunPlan, CancellationToken, Task<LocalClientCopy>>? PrepareCopy { get; init; }
+
+    public ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation)
+    {
+        if (plan.Owned && plan.InPlace)
+            // Run in place: nothing is staged, so the only conflict to rule out first is a Valheim that already runs here.
+            HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash),
+                LocalClientCopy.StepTimeout, cancellation, clientSession: true).GetAwaiter().GetResult();
+        else if (plan.CopySource)
+        {
+            var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token)))(name, plan, cancellation).GetAwaiter().GetResult();
+            bool closed;
+            lock (_copies) { closed = _closed; if (!closed) _copies.Add((made, plan, [])); }
+            if (closed)
+            {
+                // Closed while the copy was made (teardown, cancellation): nothing else would remove it.
+                made.RetireAsync().GetAwaiter().GetResult();
+                throw new ObjectDisposedException(nameof(LocalClientPlacement), $"Client {name} was closed while its copy was made.");
+            }
+        }
+        var entry = Entry(plan);
+        if (entry == null) return ClientSession.Open(plan, output, cancellation);
+        // Until the launch returns, a game may run from the copy: an open that fails is cleared only once none does.
+        int at;
+        lock (_copies) { entry.Value.Stopped.Add(() => false); at = entry.Value.Stopped.Count - 1; }
+        ClientSession session;
+        try { session = ClientSession.Open(plan, output, cancellation); }
+        catch
+        {
+            // A failed launch stops its process; where the system names a game by its path, that is confirmed and the copy can
+            // go. Elsewhere (Linux), or if a game still runs from it, the copy is kept for env recover.
+            if (!OperatingSystem.IsLinux())
+                try
+                {
+                    HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash),
+                        LocalClientCopy.StepTimeout, CancellationToken.None, runtimes: [entry.Value.Copy.Runtime], clientSession: false).GetAwaiter().GetResult();
+                    lock (_copies) entry.Value.Stopped[at] = () => true;
+                }
+                catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException) { }
+            throw;
+        }
+        lock (_copies) entry.Value.Stopped[at] = () => session.Closed && (session.Stopped != null || !session.Owned);
+        return session;
+    }
+
+    private (LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)? Entry(ClientRunPlan plan)
+    {
+        lock (_copies)
+            foreach (var entry in _copies)
+                if (ReferenceEquals(entry.Plan, plan)) return entry;
+        return null;
+    }
+
+    /// <summary>
+    /// Retires every copy this placement made whose clients were all stopped, each once, and makes no more; a copy one of whose
+    /// clients was not proven stopped is kept (<c>valheim-test env status</c> names it, <c>env recover</c> removes it). The first
+    /// failure is rethrown after all were tried.
+    /// </summary>
+    internal async Task RetireAsync()
+    {
+        List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> copies;
+        lock (_copies) { _closed = true; copies = [.. _copies]; _copies.Clear(); }
+        var failures = new List<Exception>();
+        foreach (var (copy, _, launches) in copies)
+        {
+            bool stopped;
+            lock (_copies) stopped = launches.All(proven => proven());
+            if (!stopped)
+            {
+                failures.Add(new IOException($"The disposable client copy {copy.Runtime} is kept: a client launched from it was not proven stopped. valheim-test env status names it; env recover removes it."));
+                continue;
+            }
+            try { await copy.RetireAsync().ConfigureAwait(false); }
+            catch (Exception error) { failures.Add(new IOException($"The disposable client copy {copy.Runtime} was not removed ({error.Message}); valheim-test env status names it and env recover removes it.", error)); }
+        }
+        if (failures.Count == 1) throw failures[0];
+        if (failures.Count > 1) throw new AggregateException("Disposable client copies were not removed.", failures);
+    }
+
+    /// <summary>Whether this placement made a copy it has not retired.</summary>
+    internal bool HasCopies { get { lock (_copies) return _copies.Count != 0; } }
 }

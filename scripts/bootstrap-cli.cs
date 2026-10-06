@@ -81,12 +81,13 @@ finally
 Console.WriteLine($"Pinned CLI dependency ready as {packageId} {packageVersion} ({targetFramework}, upstream {version}): {feed}");
 
 // The game-side ValheimCLI bundle (core, packs, manifest) built from the same commit and published once, by its SHA-256:
-// valheim-test embeds .packages/valheimcli-bundle.zip, so a run needs no plugins in the game and no network.
+// Valheim.Testing.GameSessions embeds .packages/valheimcli-bundle.zip (valheim-test carries it through GameSessions), so a run needs no
+// plugins in the game and no network.
 if (pinDoc.RootElement.TryGetProperty("bundle", out JsonElement bundlePin))
     await FetchPinned("ValheimCLI bundle", Path.Combine(feed, "valheimcli-bundle.zip"), bundlePin.GetProperty("url").GetString()!, bundlePin.GetProperty("sha256").GetString()!);
 else
-    Console.WriteLine("No ValheimCLI plugin bundle is pinned in cli-dependency.json yet: valheim-test builds without one and asks for --cli-files or VALHEIMCLI_BUNDLE.");
-// The BepInExPack valheim-test applies to a disposable copy whose own Doorstop pair does not match (loader-dependency.json).
+    Console.WriteLine("No ValheimCLI plugin bundle is pinned in cli-dependency.json yet: GameSessions builds without one, and valheim-test asks for --cli-files or VALHEIMCLI_BUNDLE.");
+// The BepInExPack GameSessions embeds for a disposable copy whose own Doorstop pair does not match (loader-dependency.json).
 using (JsonDocument loaderPin = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "loader-dependency.json"))))
     await FetchPinned(loaderPin.RootElement.GetProperty("name").GetString()! + " " + loaderPin.RootElement.GetProperty("version").GetString()!,
         Path.Combine(feed, "bepinexpack-valheim.zip"), loaderPin.RootElement.GetProperty("url").GetString()!, loaderPin.RootElement.GetProperty("sha256").GetString()!);

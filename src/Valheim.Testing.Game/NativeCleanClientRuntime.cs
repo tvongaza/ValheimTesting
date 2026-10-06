@@ -77,7 +77,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
         {
             Mode = "owned", Install = RuntimeDirectory, Port = cliPort, Join = "127.0.0.1:" + gamePort,
             Character = DefaultSmokeCharacter.Name, PasswordVariable = PasswordVariable, Pins = pins,
-            InstallPins = InstallPins.Of(RuntimeDirectory), CliManifest = CliManifestFile,
+            InstallPins = InstallPins.Of(RuntimeDirectory), CliManifest = CliManifestFile, Prepared = true,
             Capabilities = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"],
         };
         plan.Validate(absentServerGuids.ToArray());

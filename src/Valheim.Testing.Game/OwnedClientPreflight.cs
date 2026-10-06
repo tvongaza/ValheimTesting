@@ -25,6 +25,26 @@ internal static class OwnedClientPreflight
         return located;
     }
 
+    /// <summary>
+    /// An install run in place (<see cref="ClientRunPlan.InPlace"/>) gets nothing staged, so it must already hold what the run
+    /// needs: BepInEx (the preloader Doorstop starts, <c>BepInEx/core/BepInEx.Preloader.dll</c>) and ValheimCLI (its core in
+    /// <c>BepInEx/plugins</c> or <c>BepInEx/scripts</c>: <c>valheimCLI.dll</c>, or a plugin declaring <c>valheimCLI.valheimCLI</c>).
+    /// Refuses naming each one missing. Which builds they are is the pins' and the manifest's question, not this one's.
+    /// </summary>
+    internal static void RequireInPlace(string install)
+    {
+        var missing = new List<string>();
+        string preloader = Path.Combine(InstallPins.CoreDirectory, "BepInEx.Preloader.dll");
+        if (!File.Exists(Path.Combine(install, preloader)))
+            missing.Add($"BepInEx ({Slash(preloader)} is not there)");
+        if (!Directory.Exists(install) || !InstalledDlls(install).Any(dll => Path.GetFileName(dll).Equals("valheimCLI.dll", StringComparison.OrdinalIgnoreCase)
+                || CliAssembly.Plugins(dll)?.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) == true))
+            missing.Add($"ValheimCLI (no valheimCLI.dll, nor a plugin declaring valheimCLI.valheimCLI, in {Slash(Plugins)} or {Slash(Scripts)})");
+        if (missing.Count != 0)
+            throw new InvalidOperationException($"The client runs in place, so nothing is staged into {install}, and it lacks {string.Join(" and ", missing)}. " +
+                "Install them there, or leave out inPlace (--in-place) so the run uses a disposable copy that stages ValheimCLI.");
+    }
+
     /// <summary>Where each pinned plugin MD5 is installed (relative paths); refuses one installed nowhere or more than once.</summary>
     internal static Dictionary<string, List<string>> RequireInstalled(string install, IReadOnlyDictionary<string, string> pins)
     {

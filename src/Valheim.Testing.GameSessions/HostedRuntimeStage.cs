@@ -326,6 +326,10 @@ internal static class HostedRuntimeStage
         throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a hosted run's own runtime or world copy, can be retired.", nameof(destination));
     }
 
+    /// <summary>Whether a relative path can be staged into a runtime (letters, digits, '.', '_', '-' and spaces, '/' between parts).</summary>
+    internal static bool IsStageable(string relativePath) =>
+        SafePath.IsMatch(relativePath) && !relativePath.Split('/').Any(part => part is "." or "..") && !relativePath.StartsWith(' ');
+
     internal static readonly string WindowsApply = """
         $utf8 = New-Object Text.UTF8Encoding $false
         foreach ($name in @('plugins', 'scripts', 'config', 'patchers')) {

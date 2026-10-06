@@ -26,7 +26,8 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
     private readonly ClientActor _client;
     private readonly HostedWorldLifecycle _world;
     private readonly CancellationToken _cancellation;
-    private readonly bool _local;
+    private readonly bool _local, _retiresCopy;
+    private readonly IClientPlacement _placement;
 
     /// <param name="site">A campaign client's host, where its world is placed; null for this machine.</param>
     internal HostingClientActor(string name, ClientRunPlan plan, string output, IClientPlacement placement, CancellationToken cancellation,
@@ -34,18 +35,22 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (plan.HostWorld == null) throw new ArgumentException($"Client {name} hosts a world: give its plan a hostWorld section.", nameof(plan));
+        // A hosting client on this machine has its own placement: closing it removes its disposable copy.
         _client = new ClientActor(name, plan, output, placement, cancellation);
+        _retiresCopy = placement is LocalClientPlacement;
         _world = new HostedWorldLifecycle(plan, output, cancellation, site);
-        _cancellation = cancellation; _local = placement is LocalClientPlacement;
+        _cancellation = cancellation; _local = placement is LocalClientPlacement; _placement = placement;
     }
 
     /// <summary>
     /// A hosting client on this machine, its evidence (command and process records, kept logs, the fixture copy and the collected
     /// world) written to <paramref name="output"/>: launched from the plan's install or attached to the operator's client, as its
     /// mode says; the fixture is placed in this machine's client data directory (or the plan's <see cref="HostWorldPlan.SaveDirectory"/>).
+    /// An owned client runs from a disposable copy of its install, made when it opens and removed when it is closed, unless its
+    /// plan runs it in place (<see cref="ClientRunPlan.InPlace"/>).
     /// </summary>
     public static HostingClientActor OnThisMachine(string name, ClientRunPlan plan, string output, CancellationToken cancellation = default) =>
-        new(name, plan, output, LocalClientPlacement.Instance, cancellation);
+        new(name, plan, output, new LocalClientPlacement(), cancellation);
 
     /// <summary>The hosting client's name in the run, for example <c>host</c>.</summary>
     public string Name => _client.Name;
@@ -137,6 +142,8 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
         bool owned = _client.Session?.Owned ?? false;
         _client.Dispose(); // Throws when the owned process could not be stopped.
         if (owned) _world.Stopped();
+        // Its disposable copy on this machine, once it stopped; a failure here is the copy's alone (the world is released).
+        if (_retiresCopy && _placement is LocalClientPlacement local) local.RetireAsync().GetAwaiter().GetResult();
     }
 
     /// <summary>Moves the placed world into the evidence once no client can still host it, else names it (a step and provenance in <paramref name="report"/>).</summary>

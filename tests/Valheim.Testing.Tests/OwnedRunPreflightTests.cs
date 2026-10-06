@@ -464,9 +464,10 @@ internal sealed class PreflightInstall : IDisposable
         if (text != null) Add("BepInEx/config/" + file, text);
     }
 
+    // The install the run launches itself (in place): these tests check what a launch checks on the install it starts.
     public ClientRunPlan Plan() => new()
     {
-        Mode = "owned", Install = Root, Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
+        Mode = "owned", InPlace = true, Install = Root, Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
         Pins = new() { ["valheimCLI.valheimCLI"] = CliMd5, ["my.mod"] = "absent" },
         InstallPins = InstallPins.Of(Root),
     };

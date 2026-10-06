@@ -199,8 +199,9 @@ public sealed class ClientRounds
         }
         public void Prepare()
         {
-            // An owned client's staged ValheimCLI set, read from its manifest before the launch, when the plan names one.
-            if (rounds.Arrival != null && rounds.Client.Owned && rounds.Client.CliManifest != null)
+            // An owned client's ValheimCLI set offers the arrival waits, before the launch: its copy's staged set (checked again
+            // with the copy's files before it launches), or the in-place install against its named manifest.
+            if (rounds.Arrival != null && rounds.Client.Owned)
                 rounds.Report.Step(StepPhase.Preflight, "the owned client's ValheimCLI manifest offers the arrival waits, before launch",
                     () => rounds.Client.CheckCliManifest(PlayerPlacement.ArrivalCapabilities));
         }

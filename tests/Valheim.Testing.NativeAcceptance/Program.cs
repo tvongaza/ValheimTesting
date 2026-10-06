@@ -7,7 +7,9 @@ using Valheim.Testing.NativeAcceptance;
 // A hosted run has no dedicated server to pin: validate-host and host are the toolkit runner's hosted modes, where the
 // session's host is a client that hosts the fixture world (HostedScenario). A fresh world and its server plan come from the
 // example's prepare-server.
-if (args.Length > 0 && args[0] is PinnedServerRun.HostMode or PinnedServerRun.ValidateHostMode) return await PinnedServerRun.MainAsync(args, HostedScenario.RunnerOptions());
+// --in-place (before the mode) runs each owned client from its install as it is instead of a disposable copy.
+string? mode = args.SkipWhile(arg => arg == PinnedServerRun.InPlaceOption).FirstOrDefault();
+if (mode is PinnedServerRun.HostMode or PinnedServerRun.ValidateHostMode) return await PinnedServerRun.MainAsync(args, HostedScenario.RunnerOptions());
 // The runner's options: the suite's plan rules, MyMod's declaration, and every scenario by name (ScenarioTable).
 var options = ScenarioTable.RunnerOptions();
 if (args.Length > 0 && args[0] == "campaign") return await Campaign(args, options);

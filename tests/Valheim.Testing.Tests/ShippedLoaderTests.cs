@@ -4,7 +4,7 @@ using System.Text;
 using Valheim.Testing.Game;
 using Xunit;
 
-// The BepInExPack valheim-test ships for an install whose own Doorstop proxy and configuration do not match (#256): which
+// The BepInExPack Valheim.Testing.GameSessions ships (valheim-test carries it) for an install whose own Doorstop proxy and configuration do not match (#256): which
 // installs take it, how it is extracted once and reused, and what is refused. Fake files only; nothing launches.
 public sealed class ShippedLoaderTests : IDisposable
 {

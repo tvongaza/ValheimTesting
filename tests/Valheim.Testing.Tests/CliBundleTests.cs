@@ -2,7 +2,7 @@ using System.IO.Compression;
 using Valheim.Testing.Game;
 using Xunit;
 
-// The pinned ValheimCLI plugin bundle valheim-test ships: extracted once under ValheimTesting's own folder, by its hash, and
+// The pinned ValheimCLI plugin bundle Valheim.Testing.GameSessions ships (valheim-test carries it): extracted once under ValheimTesting's own folder, by its hash, and
 // the first choice only when neither --cli-* nor VALHEIMCLI_BUNDLE names one; an install's own plugins are never picked up.
 public sealed class CliBundleTests : IDisposable
 {
@@ -142,7 +142,7 @@ public sealed class CliBundleTests : IDisposable
         if (Environment.GetEnvironmentVariable("VALHEIMCLI_BUNDLE") is { } named && !string.IsNullOrWhiteSpace(named)) return; // that variable comes first
         byte[] zip = Zip();
         string data = Path.Combine(_rig.Root, "data");
-        CliBundleSource Shipped() => CliBundle.Extract(new MemoryStream(zip), FileHash.Sha256(zip), "80fb6ce", "the 80fb6ce bundle shipped with valheim-test", data);
+        CliBundleSource Shipped() => CliBundle.Extract(new MemoryStream(zip), FileHash.Sha256(zip), "80fb6ce", "the pinned 80fb6ce bundle", data);
         var (manifest, files) = SmokeInputs.Cli(new Dictionary<string, string>(), Shipped);
         Assert.Equal(Path.Combine(data, "cli", "80fb6ce"), files);
         Assert.Equal(Path.Combine(files, CliBundle.ManifestFile), manifest);
@@ -155,5 +155,25 @@ public sealed class CliBundleTests : IDisposable
         Assert.False(asked);
 
         Assert.Contains("carries no ValheimCLI bundle", Assert.Throws<InvalidDataException>(() => SmokeInputs.Cli(new Dictionary<string, string>(), () => null)).Message);
+    }
+
+    // One copy of the pinned sets (#296 step 3): Valheim.Testing.GameSessions embeds the ValheimCLI bundle and the BepInExPack
+    // with their pins, and valheim-test carries them through it, so a disposable client copy and the tool stage the same set.
+    [Fact] public void GameSessionsCarriesThePinnedSetsAndNoOtherAssemblyDoes()
+    {
+        var game = typeof(PinnedCliBundle).Assembly.GetManifestResourceNames();
+        Assert.Contains("cli-dependency.json", game);
+        Assert.Contains("loader-dependency.json", game);
+        foreach (var other in new[] { typeof(SmokeInputs).Assembly, typeof(CliBundle).Assembly })
+            Assert.DoesNotContain(other.GetManifestResourceNames(),
+                name => name.EndsWith(".zip", StringComparison.Ordinal) || name.EndsWith("-dependency.json", StringComparison.Ordinal));
+        if (!game.Contains("valheimcli-bundle.zip")) return; // A build that never ran bootstrap-cli.cs embeds none (CI builds refuse that).
+        string data = Path.Combine(_rig.Root, "pinned-data");
+        var pinned = PinnedCliBundle.Source(data)!;
+        using var pin = System.Text.Json.JsonDocument.Parse(typeof(PinnedCliBundle).Assembly.GetManifestResourceStream("cli-dependency.json")!);
+        string commit = pin.RootElement.GetProperty("commit").GetString()!;
+        Assert.Equal(Path.Combine(data, "cli", commit, CliBundle.ManifestFile), pinned.Manifest);
+        Assert.StartsWith($"the pinned {commit[..7]} bundle", pinned.Origin);
+        Assert.NotEmpty(CliCapabilityManifest.Read(pinned.Manifest).Files);
     }
 }
