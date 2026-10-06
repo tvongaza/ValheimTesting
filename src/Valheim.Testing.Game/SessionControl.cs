@@ -198,7 +198,7 @@ public sealed class SessionControl(GameActor actor)
 
     /// <summary>
     /// Joins a client plan's disposable character, a host's peer (<see cref="ClientRunPlan.JoinsHost"/>), to the world a hosting
-    /// client hosts (<see cref="HostingClientActor"/>), whose in-game handle is <paramref name="host"/> and world
+    /// client hosts (<c>HostingClientActor</c>), whose in-game handle is <paramref name="host"/> and world
     /// <paramref name="worldUid"/>. A listen server on the game's Steam backend is reached through Steam rather than at an address,
     /// so this reads the host's multiplayer identity (<c>cli_multiplayer_identity</c>, read-only: it must be an open server), then
     /// joins the host's Steam user once (<c>cli_connect_steam_user &lt;steamId&gt;</c>, after <c>cli_select_character</c>, with

@@ -81,7 +81,7 @@ internal sealed class GameRole
     public int GamePort { get; set; }
     /// <summary>The local end of the CLI tunnel; 0 picks a free port.</summary>
     public int LocalCliPort { get; set; }
-    /// <summary>Clients only: the lease key of the Steam identity observed signed in on its host (<see cref="SteamPoolAccount.LeaseKey"/>).</summary>
+    /// <summary>Clients only: the lease key of the Steam identity observed signed in on its host (<c>SteamPoolAccount.LeaseKey</c>).</summary>
     public string? SteamAccount { get; set; }
 
     internal void Validate(string role, HostProfile host, List<string> errors)

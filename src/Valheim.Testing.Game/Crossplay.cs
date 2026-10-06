@@ -96,21 +96,6 @@ public static class CrossplayServer
     }
 
     /// <summary>
-    /// <see cref="WaitForLobby(GameActor, string, TimeSpan, CancellationToken)"/> for a server on another machine
-    /// (<c>PinnedServerRun --inventory</c> or a campaign): the lobby line is awaited on <paramref name="host"/> in <paramref name="serverLog"/>,
-    /// the host's path of this boot's log (<see cref="HostBepInExLog"/> of the run's host runtime), from its start, with
-    /// the host's event-driven <see cref="IGameHost.WaitForLogAsync"/>.
-    /// </summary>
-    public static CrossplayLobby WaitForLobby(GameActor server, IGameHost host, string serverLog, TimeSpan timeout, CancellationToken cancellation = default)
-    {
-        ArgumentNullException.ThrowIfNull(host);
-        WaitText.RequireTimeout(timeout);
-        var identity = RequirePlayFabServer(server);
-        var result = host.WaitForLogAsync(serverLog, 0, LobbyCreated, LobbyFailures, timeout, cancellation).GetAwaiter().GetResult();
-        return Lobby(identity, LobbyCreated.Match(result.EnsureMatched()), host.Name + ":" + serverLog);
-    }
-
-    /// <summary>
     /// The game's line when PlayFab confirms that a lobby is marked inactive (1.0.16, <c>ZPlayFabMatchmaking.DeleteLobby</c>):
     /// <c>Deactivated PlayFab lobby &lt;lobby id&gt;</c>. It is logged from PlayFab's reply, which a dedicated server quitting
     /// on Ctrl+C or SIGINT does not wait for: on the 1.0.16 Windows server the process ended about two seconds after the
@@ -167,7 +152,7 @@ public static class CrossplayServer
     /// <summary>A Linux host runtime's BepInEx log, as a path on that host.</summary>
     public static string HostBepInExLog(string hostRuntimeDirectory) => hostRuntimeDirectory.TrimEnd('/') + "/BepInEx/LogOutput.log";
 
-    private static MultiplayerIdentity RequirePlayFabServer(GameActor server)
+    internal static MultiplayerIdentity RequirePlayFabServer(GameActor server)
     {
         var identity = MultiplayerIdentity.Read(server);
         if (!identity.IsServer) throw new InvalidOperationException("This game is not a server: " + identity);
@@ -176,7 +161,7 @@ public static class CrossplayServer
         return identity;
     }
 
-    private static CrossplayLobby Lobby(MultiplayerIdentity identity, Match match, string where)
+    internal static CrossplayLobby Lobby(MultiplayerIdentity identity, Match match, string where)
     {
         string owner = match.Groups["owner"].Value;
         if (identity.PlayFabIdAvailable && identity.PlayFabId != owner)

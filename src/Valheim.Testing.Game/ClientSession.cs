@@ -12,8 +12,8 @@ namespace Valheim.Testing.Game;
 /// and so on for later sessions: evidence is never overwritten). Disposing closes the
 /// connection and, for an owned client, stops only the process this session started (never one found by name): it asks the
 /// client to quit and kills it only if it does not (<see cref="Stopped"/>), then keeps its logs beside the evidence. An
-/// attached client's process is never touched. The client is pinned at its menu. Given a <see cref="SteamAccountHold"/>, a session starts or attaches only while
-/// that lease is held (and signed-in checked when the profile asks); the hold's owner releases it after disposing the session.
+/// attached client's process is never touched. The client is pinned at its menu. A session given a leased Steam account (a multi-machine session's
+/// client) starts or attaches only while that lease is held (and signed-in checked when the profile asks); the hold's owner releases it after disposing the session.
 /// </summary>
 public sealed class ClientSession : IDisposable
 {
@@ -22,7 +22,7 @@ public sealed class ClientSession : IDisposable
     private bool _disposed;
     public GameActor Actor { get; }
     /// <summary>The Steam account lease this client runs on, or null when the run leases none.</summary>
-    public SteamAccountHold? Account { get; private set; }
+    internal ILeasedSteamAccount? Account { get; private set; }
     /// <summary>Whether <see cref="Dispose"/> has run.</summary>
     public bool Closed => _disposed;
     public bool Owned => _process != null;
@@ -55,7 +55,7 @@ public sealed class ClientSession : IDisposable
         plan.Owned ? Launch(plan, output, cancellation) : Attach(plan, output);
 
     /// <summary><see cref="Open(ClientRunPlan, string, CancellationToken)"/> on the leased Steam account <paramref name="account"/> (none when null).</summary>
-    public static ClientSession Open(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation = default) =>
+    internal static ClientSession Open(ClientRunPlan plan, string output, ILeasedSteamAccount? account, CancellationToken cancellation = default) =>
         plan.Owned ? Launch(plan, output, account, cancellation) : Attach(plan, output, account);
     /// <summary>
     /// <see cref="Open(ClientRunPlan, string, CancellationToken)"/>, adding the logs the owned client keeps beside the evidence
@@ -88,11 +88,11 @@ public sealed class ClientSession : IDisposable
     /// <see cref="Attach(ClientRunPlan, string, IGameTransport)"/> once <paramref name="account"/>'s lease is live (and signed-in
     /// checked when the profile asks). Losing the lease detaches the session; the operator's client is never touched.
     /// </summary>
-    public static ClientSession Attach(ClientRunPlan plan, string output, SteamAccountHold? account, IGameTransport? transport = null) =>
+    internal static ClientSession Attach(ClientRunPlan plan, string output, ILeasedSteamAccount? account, IGameTransport? transport = null) =>
         Attach(plan, output, account, () => transport ?? new CliTransport(plan.Host, plan.Port));
 
     // connect runs only once the plan and the lease are checked: nothing connects to a client this session may not assume.
-    internal static ClientSession Attach(ClientRunPlan plan, string output, SteamAccountHold? account, Func<IGameTransport> connect)
+    internal static ClientSession Attach(ClientRunPlan plan, string output, ILeasedSteamAccount? account, Func<IGameTransport> connect)
     {
         if (plan.Owned) throw new ArgumentException("This plan's client is owned: launch it instead.");
         account?.RequireReady(null); // Before the session assumes the client.
@@ -133,12 +133,12 @@ public sealed class ClientSession : IDisposable
     /// before anything starts unless its lease is live (and signed-in checked on this machine's host when the profile asks); losing
     /// the lease later stops the client.
     /// </summary>
-    public static ClientSession Launch(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation = default)
+    internal static ClientSession Launch(ClientRunPlan plan, string output, ILeasedSteamAccount? account, CancellationToken cancellation = default)
         => Launch(plan, output, account, cancellation, null);
 
     // The profile owner records the exact process as soon as it exists. If startup then fails and its stop is unproven,
     // the Steam account lease remains held instead of being released while that client might still run.
-    internal static ClientSession Launch(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation,
+    internal static ClientSession Launch(ClientRunPlan plan, string output, ILeasedSteamAccount? account, CancellationToken cancellation,
         Action<IOwnedProcess>? processStarted)
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
@@ -229,7 +229,7 @@ public sealed class ClientSession : IDisposable
 
     // exitHint adds to an early exit's reason, for example that BepInEx never wrote its log.
     internal static ClientSession Launch(ClientRunPlan plan, string output, Func<IOwnedProcess> start, Func<IGameTransport> connect,
-        Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, SteamAccountHold? account = null)
+        Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, ILeasedSteamAccount? account = null)
     {
         if (plan.PasswordVariable is { } variable && Environment.GetEnvironmentVariable(variable) == null)
             throw new InvalidOperationException($"Set {variable} in this runner's environment; the launched client inherits it for the join.");
@@ -308,11 +308,30 @@ public sealed class ClientSession : IDisposable
         }
     }
 
-    private ClientSession Using(SteamAccountHold? account)
+    private ClientSession Using(ILeasedSteamAccount? account)
     {
         if (account == null) return this;
         if (account.CheckSignedIn) account.CheckGameIdentity(Actor);
         Account = account;
         return this;
     }
+}
+
+/// <summary>
+/// The Steam account a session's client runs on, as <see cref="ClientSession"/> checks it: a live lease (and a passed signed-in
+/// check) before the client starts or is attached, and the running game's identity once it answers. Implemented by the hosting
+/// layer's lease (<c>SteamAccountHold</c>); a session without a lease passes none.
+/// </summary>
+internal interface ILeasedSteamAccount
+{
+    /// <summary>The leased account's name, for messages.</summary>
+    string Account { get; }
+    /// <summary>The inventory's name of the host the client runs on.</summary>
+    string ClientHost { get; }
+    /// <summary>Whether the client's host must be signed in to this account (always, outside controlled tests).</summary>
+    bool CheckSignedIn { get; }
+    /// <summary>Throws unless a client may start on the account now, on <paramref name="hostName"/> when given.</summary>
+    void RequireReady(string? hostName);
+    /// <summary>Throws unless the running game's Steam identity is the leased account's.</summary>
+    void CheckGameIdentity(GameActor actor);
 }

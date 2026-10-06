@@ -48,7 +48,7 @@ public sealed class ClientRunPlan
     /// </summary>
     public HostWorldPlan? HostWorld { get; set; }
     /// <summary>
-    /// The client is a peer of the run's hosting client (<see cref="HostingClientActor"/>): it joins the host's world by the
+    /// The client is a peer of the run's hosting client (<c>HostingClientActor</c>): it joins the host's world by the
     /// host's multiplayer identity (<see cref="SessionControl.JoinHost"/>), since a listen server is reached through Steam, not
     /// at an address. Leave out <see cref="Join"/>, <see cref="PasswordVariable"/>, <see cref="Crossplay"/> and <see cref="HostWorld"/>.
     /// </summary>

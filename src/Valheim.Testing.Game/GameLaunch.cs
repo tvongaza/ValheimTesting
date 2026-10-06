@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
@@ -9,9 +8,8 @@ namespace Valheim.Testing.Game;
 /// the entries put in front of a search list's existing value, and the inherited variables removed. It reproduces what
 /// BepInExPack_Valheim's start scripts export, without the script, so the started process ID is the game's own.
 /// <see cref="ForServer"/> builds one for a dedicated server and <see cref="ForClient"/> one for a game client. A launch is built
-/// for this machine (render it with <see cref="ToStartInfo"/>) or, given a host platform, for an <see cref="IGameHost"/>, where
-/// <see cref="HostServer.StartAsync(IGameHost, GameLaunch, string, TimeSpan, IReadOnlyList{string}, string, CancellationToken)"/> or
-/// <see cref="InteractiveClient.StartAsync(IGameHost, GameLaunch, string, TimeSpan, LinuxDisplay, CancellationToken)"/> starts it.
+/// for this machine (render it with <see cref="ToStartInfo"/>) or, given a host platform, for a host of a multi-machine session,
+/// where the hosting layer's server or interactive-client start runs it.
 /// It also says what an install on this machine is: <see cref="DetectServer"/> and <see cref="DetectClient"/> read the platform from
 /// the files, <see cref="RequireServerExecutable"/> and <see cref="RequireClientExecutable"/> the executable, and
 /// <see cref="ClientLaunchArchitectures"/> the slices a client can start as.
@@ -82,7 +80,7 @@ public sealed partial class GameLaunch
     /// <c>libdoorstop_x64.so</c> in front of <c>LD_PRELOAD</c>. A caller's own values are kept behind them. A server runs only
     /// on its own OS, except that a Windows machine may build a Linux launch for inspection. Any other mismatch refuses with
     /// <see cref="PlatformNotSupportedException"/>.
-    /// With <paramref name="hostPlatform"/> (Windows or Linux) the launch is for an <see cref="IGameHost"/> of that platform. <paramref name="runtime"/> is then an absolute
+    /// With <paramref name="hostPlatform"/> (Windows or Linux) the launch is for a host of that platform. <paramref name="runtime"/> is then an absolute
     /// path there: a drive path on Windows, and on Linux a path without ':', ';' or '=', which the loader's search lists and
     /// <c>env</c> cannot hold. The caller's variables must be plain names, and on Linux they may not set
     /// <c>LD_LIBRARY_PATH</c>/<c>LD_PRELOAD</c>, which the host session supplies.
@@ -143,7 +141,7 @@ public sealed partial class GameLaunch
     /// <summary>
     /// The launch of one BepInEx game client. A client needs an interactive desktop session with a display, a GPU and a running,
     /// signed-in Steam client. Starting it inside that session is <see cref="ClientSession"/>'s job on this machine and
-    /// <see cref="InteractiveClient"/>'s on a host. <c>-console</c> is added first unless <paramref name="console"/> is false or the
+    /// an interactive client's on a host. <c>-console</c> is added first unless <paramref name="console"/> is false or the
     /// caller passed it; other arguments follow unchanged. On Windows the pack's <c>winhttp.dll</c> proxy loads BepInEx and no
     /// variable is needed. On Linux, Doorstop is enabled for BepInEx's preloader, <c>doorstop_libs</c> goes in front of
     /// <c>LD_LIBRARY_PATH</c> and the library in front of <c>LD_PRELOAD</c>.
@@ -155,7 +153,7 @@ public sealed partial class GameLaunch
     /// the default, is the Rosetta compatibility path on Apple Silicon. Arm64 is the native path and also needs a BepInEx core
     /// whose <c>MonoMod.RuntimeDetour.dll</c> is version 25 or later (legacy MonoMod cannot hook on arm64); an install without it is
     /// refused here, before anything starts. The machine must be the client's own OS.
-    /// With <paramref name="hostPlatform"/> (Windows or Linux) the launch is for an <see cref="IGameHost"/> of that platform.
+    /// With <paramref name="hostPlatform"/> (Windows or Linux) the launch is for a host of that platform.
     /// <paramref name="install"/> is then an absolute path there: a drive or UNC path on Windows, and on Linux a path without
     /// ':', ';' or '='. The caller's variables must be plain names; on Linux a caller's <c>LD_LIBRARY_PATH</c>/<c>LD_PRELOAD</c>
     /// stays behind the loader's entries. A macOS client cannot be started in its desktop session from another machine and
@@ -311,29 +309,6 @@ public sealed partial class GameLaunch
         }
         foreach (string argument in Arguments) start.ArgumentList.Add(argument);
         return start;
-    }
-
-    /// <summary>The hash of the command line the started game has on its host (<see cref="HostProcessProbe.ExpectedCommandLineSha256"/>).</summary>
-    internal string CommandLineSha256() => HostProcessProbe.ExpectedCommandLineSha256(Platform == ClientPlatform.Windows, Executable, Arguments);
-
-    /// <summary>
-    /// The launch as the host start scripts read it: one line per item, <c>kind base64(UTF-8)</c>, in the order exe, dir, the
-    /// arguments (Windows: one <c>args</c> command line; Linux: one <c>arg</c> each), unset, env and prepend. A script ignores the
-    /// kinds it does not use. Never written to disk by this library, and the host scripts delete their copy once read: arguments may
-    /// hold a server password.
-    /// </summary>
-    internal string Spec()
-    {
-        var text = new StringBuilder();
-        void Line(string kind, string value) => text.Append(kind).Append(' ').Append(InteractiveClient.Base64(value)).Append('\n');
-        Line("exe", Executable);
-        Line("dir", WorkingDirectory);
-        if (Platform == ClientPlatform.Windows) Line("args", WindowsCommandLine.Join(Arguments));
-        else foreach (string argument in Arguments) Line("arg", argument);
-        foreach (string name in Unset) Line("unset", name);
-        foreach (var (name, value) in Environment.OrderBy(pair => pair.Key, StringComparer.Ordinal)) Line("env", name + "=" + value);
-        foreach (var (name, value) in Prepended.OrderBy(pair => pair.Key, StringComparer.Ordinal)) Line("prepend", name + "=" + value);
-        return text.ToString();
     }
 
     // An absolute path on a Windows or Linux host, without its trailing separator. A server's task may log on without network

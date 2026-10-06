@@ -106,7 +106,7 @@ public sealed class HostedWorld : IDisposable
     private HostedWorld(string name, string worldUid, string worlds, string copy, string output, string? host = null, Func<string, string>? collectOnHost = null)
     { Name = name; WorldUid = worldUid; WorldsDirectory = worlds; FixtureCopy = copy; _output = output; Host = host; _collectOnHost = collectOnHost; }
 
-    /// <summary>A world placed in a campaign client's worlds on its host (<see cref="HostedWorldOnHost.Place"/>).</summary>
+    /// <summary>A world placed in a campaign client's worlds on its host (<c>HostedWorldOnHost.Place</c>).</summary>
     internal static HostedWorld OnHost(string name, string worldUid, string worlds, string copy, string output, string host, Func<string, string> collect) =>
         new(name, worldUid, worlds, copy, output, host, collect);
 

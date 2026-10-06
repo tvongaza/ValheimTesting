@@ -137,7 +137,7 @@ internal sealed class FakeServerHost : IGameHost
         ("preflight-exists", [HostClientPreflight.BashExists, HostClientPreflight.PowerShellExists]),
         ("steam-user", [SteamSignedInUsers.PowerShell, SteamSignedInUsers.Bash]),
         ("steam-playing", [SteamAccountInUse.PowerShell, SteamAccountInUse.Bash]),
-        ("steam-log", [SteamSessionLog.FindPowerShell, SteamSessionLog.FindBash]),
+        ("steam-log", [SteamSessionLogOnHost.FindPowerShell, SteamSessionLogOnHost.FindBash]),
         ("journal", [RunJournalOnHost.BashAppend, RunJournalOnHost.WindowsAppend]),
         ("journal-read", [RunJournalOnHost.BashRead, RunJournalOnHost.WindowsRead]),
         ("journal-read-all", [RunJournalOnHost.BashReadAll, RunJournalOnHost.WindowsReadAll]),

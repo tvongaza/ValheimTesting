@@ -58,7 +58,7 @@ public sealed class ClientRounds
     public required string Output { get; init; }
     /// <summary>
     /// For a joining client, required: the owned server the rounds wait on before each join and restart between rounds, for
-    /// example the runner's <see cref="ServerActor"/>. A hosting client is its own server: leave this out.
+    /// example the runner's <c>ServerActor</c>. A hosting client is its own server: leave this out.
     /// </summary>
     public IOwnedServer? OwnedServer { get; init; }
     /// <summary>Where the player stands to measure; null leaves the player where it joined. A joining client only.</summary>

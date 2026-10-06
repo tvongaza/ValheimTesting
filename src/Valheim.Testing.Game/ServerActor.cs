@@ -133,8 +133,23 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         var within = TimeSpan.FromSeconds(plan.StartupSeconds);
         return Host == null
             ? CrossplayServer.WaitForLobby(server, plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.BepInExLog(RuntimeDirectory), within, _cancellation)
-            : CrossplayServer.WaitForLobby(server, Host, plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.HostBepInExLog(RuntimeDirectory), within, _cancellation);
+            : WaitForLobby(server, Host, plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.HostBepInExLog(RuntimeDirectory), within, _cancellation);
     }
+    /// <summary>
+    /// <see cref="CrossplayServer.WaitForLobby(GameActor, string, TimeSpan, CancellationToken)"/> for a server on another machine
+    /// (<c>PinnedServerRun --inventory</c> or a campaign): the lobby line is awaited on <paramref name="host"/> in <paramref name="serverLog"/>,
+    /// the host's path of this boot's log (<see cref="CrossplayServer.HostBepInExLog"/> of the run's host runtime), from its start, with
+    /// the host's event-driven <see cref="IGameHost.WaitForLogAsync"/>.
+    /// </summary>
+    internal static CrossplayLobby WaitForLobby(GameActor server, IGameHost host, string serverLog, TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        WaitText.RequireTimeout(timeout);
+        var identity = CrossplayServer.RequirePlayFabServer(server);
+        var result = host.WaitForLogAsync(serverLog, 0, CrossplayServer.LobbyCreated, CrossplayServer.LobbyFailures, timeout, cancellation).GetAwaiter().GetResult();
+        return CrossplayServer.Lobby(identity, CrossplayServer.LobbyCreated.Match(result.EnsureMatched()), host.Name + ":" + serverLog);
+    }
+
     /// <summary>A boot whose start failed after its process started could not be stopped: the server may still run, so its runtime is kept.</summary>
     internal bool MayStillRun { get; private set; }
 
