@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -235,8 +234,6 @@ public static class PinnedServerRun
             report.Provenance["planSha256"] = FileHash.Sha256(planFile);
             report.Provenance["clientMode"] = host.Mode;
             options.Provenance?.Invoke(plan, report.Provenance);
-            if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = FileHash.Sha256(runner);
-            report.Provenance["toolkitSha256"] = FileHash.Sha256(typeof(GameActor).Assembly.Location);
             report.Provenance["cliPreflight"] = host.CliPreflight;
             Directory.CreateDirectory(output); ownOutput = true;
             var opener = options.OpenHost;
@@ -408,8 +405,6 @@ public static class PinnedServerRun
                     throw new ArgumentException($"Client {host} hosts the world on the local {hostProfile.Platform} host {profile.Clients[host].Host}, but this machine is {HostProfile.CurrentPlatform}.");
             });
             options.Provenance?.Invoke(plan, report.Provenance);
-            if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = FileHash.Sha256(runner);
-            report.Provenance["toolkitSha256"] = FileHash.Sha256(typeof(GameActor).Assembly.Location);
             phase = StepPhase.Setup; // From here the hosts are written to.
             await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                 prepared = await HostedCampaignPreparation.PrepareAsync(inspection, preparedDirectory, CampaignTimeout,
@@ -614,8 +609,6 @@ public static class PinnedServerRun
             report.Provenance["planSha256"] = planHash();
             report.Provenance["scenario"] = plan.Scenario;
             options.Provenance?.Invoke(plan, report.Provenance);
-            if (Assembly.GetEntryAssembly()?.Location is { Length: > 0 } runner) report.Provenance["runnerSha256"] = FileHash.Sha256(runner);
-            report.Provenance["toolkitSha256"] = FileHash.Sha256(typeof(GameActor).Assembly.Location);
             report.Provenance["mode"] = mode;
             report.Provenance["serverPlatform"] = platform.ToString();
             report.Provenance["crossplay"] = plan.Crossplay ? "true" : "false";

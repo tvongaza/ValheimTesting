@@ -19,6 +19,8 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     // A scripted server instead (Fakes.FakeGameSession): a no-game world that answers as an owned server.
     private readonly (IOwnedServer Server, Func<GameActor> FirstBoot, string? LiveLog, Func<GameActor, CrossplayLobby>? Lobby)? _scripted;
     private readonly ServerRunPlan? _plan;
+    /// <summary>The plan this server runs, when it was given one (its pins are the server's plugin pins).</summary>
+    internal ServerRunPlan? Plan => _plan;
     private readonly CancellationToken _cancellation;
     private readonly List<RunLog> _logs = [];
     private GameActor? _game;

@@ -1,0 +1,7 @@
+<Project>
+  <!-- release.yml packs with -p:ValheimTestingRelease=true: a result's toolkit provenance (ToolkitProvenance) calls such a build
+       released; every other build of the same version is unreleased. -->
+  <ItemGroup Condition="'$(ValheimTestingRelease)' == 'true'">
+    <AssemblyMetadata Include="ValheimTesting.Release" Value="true" />
+  </ItemGroup>
+</Project>

@@ -118,6 +118,9 @@ public sealed class GameSessionTests : IDisposable
             Steps(report, StepPhase.Setup).Order(StringComparer.Ordinal));
         Assert.NotNull(session.Server!.Game);
         Assert.Same(session.Clients["client-b"].Session!.Actor, session.Clients["client-b"].Game);
+        // Each started client's confirmed plugin pins are in the result (#259 step 2a); this server was given no plan.
+        Assert.Equal(["client-a", "client-b"], report.Plugins.Keys);
+        Assert.Equal(new Dictionary<string, string> { ["my.mod"] = "absent", ["valheimCLI.valheimCLI"] = new string('a', 32) }, report.Plugins["client-b"]);
     }
 
     [Fact] public async Task OneFailedStartCancelsTheOthersThenClosesClientsBeforeTheServerAndRethrowsIt()

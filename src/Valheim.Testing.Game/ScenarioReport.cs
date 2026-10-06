@@ -1,3 +1,4 @@
+using valheimCLI;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -23,11 +24,35 @@ public sealed record StepResult(string Name, bool Passed, double Seconds, string
 /// </summary>
 public sealed class ScenarioReport
 {
-    /// <summary>The <c>result.json</c> schema: 2 since steps carry a phase and the four states are reported.</summary>
-    public int Schema => 2;
+    /// <summary>
+    /// The <c>result.json</c> schema: 2 since steps carry a phase and the four states are reported; 3 since every result names
+    /// the toolkit that ran (<see cref="Toolkit"/>) and each actor's in-game plugin hashes (<see cref="Plugins"/>).
+    /// </summary>
+    public int Schema => 3;
     private readonly object _stepGate = new();
     public string Name { get; }
     public Dictionary<string, string> Provenance { get; } = new();
+    /// <summary>The toolkit packages, ValheimCLI transport and runner that ran, each released, candidate or unreleased (read when written).</summary>
+    public ToolkitProvenance Toolkit => ToolkitProvenance.Capture();
+    private readonly SortedDictionary<string, IReadOnlyDictionary<string, string>> _plugins = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Per actor (<c>server</c>, a client's name, the host), the plugins its game confirmed with strict pins when it started:
+    /// plugin GUID to the MD5 ValheimCLI compares, or <c>absent</c>. An unpinned actor has none.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Plugins { get { lock (_plugins) return new SortedDictionary<string, IReadOnlyDictionary<string, string>>(_plugins, StringComparer.Ordinal); } }
+    /// <summary>
+    /// Records the plugin pins of <paramref name="pins"/> (the world expectations, such as its UID, are left out) as
+    /// <paramref name="actor"/>'s. Call it once the actor's game confirmed them.
+    /// </summary>
+    public void RecordPlugins(string actor, IReadOnlyDictionary<string, string> pins)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actor);
+        ArgumentNullException.ThrowIfNull(pins);
+        var plugins = new SortedDictionary<string, string>(pins.Where(pin => !Expectations.IsWorldKey(pin.Key))
+            .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal), StringComparer.Ordinal);
+        if (plugins.Count == 0) return;
+        lock (_plugins) _plugins[actor] = plugins;
+    }
     public List<StepResult> Steps { get; } = new();
     /// <summary>The teardown log scans (<see cref="ScanLogs"/>), one per log.</summary>
     public List<LogFileScan> Logs { get; } = new();

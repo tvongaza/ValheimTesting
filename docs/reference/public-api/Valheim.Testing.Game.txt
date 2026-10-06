@@ -1702,6 +1702,21 @@ sealed class Valheim.Testing.Game.OwnedServerSession : System.IDisposable, Valhe
   property System.Collections.Generic.List`1<Valheim.Testing.Game.ProcessStop> Stops { get; }
   property System.TimeSpan QuitTimeout { get; init; }
   property Valheim.Testing.Game.StartupEvents Events { get; init; }
+[result shape] sealed class Valheim.Testing.Game.PackageProvenance : System.IEquatable`1<Valheim.Testing.Game.PackageProvenance>
+  method System.Boolean Equals(Valheim.Testing.Game.PackageProvenance other)
+  method System.Void .ctor(System.String Id, System.String Version, System.String Commit, System.String State, System.String Sha256)
+  method System.Void Deconstruct(out System.String& Id, out System.String& Version, out System.String& Commit, out System.String& State, out System.String& Sha256)
+  method Valheim.Testing.Game.PackageProvenance <Clone>$()
+  method static System.Boolean op_Equality(Valheim.Testing.Game.PackageProvenance left, Valheim.Testing.Game.PackageProvenance right)
+  method static System.Boolean op_Inequality(Valheim.Testing.Game.PackageProvenance left, Valheim.Testing.Game.PackageProvenance right)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+  property System.String Commit { get; init; }
+  property System.String Id { get; init; }
+  property System.String Sha256 { get; init; }
+  property System.String State { get; init; }
+  property System.String Version { get; init; }
 [result shape] sealed class Valheim.Testing.Game.PaintExpectation : System.IEquatable`1<Valheim.Testing.Game.PaintExpectation>
   method System.Boolean Equals(Valheim.Testing.Game.PaintExpectation other)
   method System.Void .ctor(System.Single X, System.Single Z, System.Single R, System.Single G, System.Single B, System.Single A)
@@ -2162,6 +2177,7 @@ sealed class Valheim.Testing.Game.ScenarioReport
   method System.Void MarkNotPinned(System.String why)
   method System.Void RecordFailure(System.String name, System.Exception error)
   method System.Void RecordFailure(Valheim.Testing.Game.StepPhase phase, System.String name, System.Exception error)
+  method System.Void RecordPlugins(System.String actor, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> pins)
   method System.Void Step(System.String name, System.Action action)
   method System.Void Step(Valheim.Testing.Game.StepPhase phase, System.String name, System.Action action)
   method System.Void StepWithEvidenceOnFailure(System.String name, System.Action assertion, System.Func`1<Valheim.Testing.Game.IEvidence> capture)
@@ -2172,12 +2188,14 @@ sealed class Valheim.Testing.Game.ScenarioReport
   property System.Boolean RuntimeReady { get; }
   property System.Boolean ScenarioPassed { get; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Provenance { get; }
+  property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String>> Plugins { get; }
   property System.Collections.Generic.List`1<Valheim.Testing.Game.EvidenceReference> Evidence { get; }
   property System.Collections.Generic.List`1<Valheim.Testing.Game.LogFileScan> Logs { get; }
   property System.Collections.Generic.List`1<Valheim.Testing.Game.StepResult> Steps { get; }
   property System.Int32 Schema { get; }
   property System.String Name { get; }
   property System.String Pinning { get; }
+  property Valheim.Testing.Game.ToolkitProvenance Toolkit { get; }
 abstract class Valheim.Testing.Game.ScriptedGameHost : Valheim.Testing.Game.IGameHost
   method System.Threading.Tasks.Task`1<System.Int64> LogOffsetAsync(System.String logPath, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null)
   method System.Threading.Tasks.Task`1<Valheim.Testing.Game.FetchedDirectory> FetchDirectoryAsync(System.String hostDirectory, System.String localDirectory, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null)
@@ -2576,7 +2594,6 @@ sealed class Valheim.Testing.Game.TargetedRegression
   property System.String LoaderPackage { get; }
   property System.String SteamUserData { get; }
   property Valheim.Testing.Game.RegressionInputs Inputs { get; }
-  property static System.String ToolkitVersion { get; }
 sealed class Valheim.Testing.Game.TeleportTrace : System.IEquatable`1<Valheim.Testing.Game.TeleportTrace>
   method System.Boolean Equals(Valheim.Testing.Game.TeleportTrace other)
   method System.Void .ctor(System.Int32 Id, System.Boolean Distant, System.Int64 RequestedMs, System.Int64 MovedMs, System.Int64 AreaReadyMs, System.Int64 FloorReadyMs, System.Int64 DoneMs, System.Boolean FloorAtDone, System.Single FinalX, System.Single FinalY, System.Single FinalZ, System.String Raw)
@@ -2739,6 +2756,23 @@ enum Valheim.Testing.Game.TestActorRole
   field const Valheim.Testing.Game.TestActorRole ClientInWorld = 2
   field const Valheim.Testing.Game.TestActorRole ClientMenu = 1
   field const Valheim.Testing.Game.TestActorRole DedicatedServer = 0
+[result shape] sealed class Valheim.Testing.Game.ToolkitProvenance : System.IEquatable`1<Valheim.Testing.Game.ToolkitProvenance>
+  field const System.String Candidate = "candidate"
+  field const System.String Released = "released"
+  field const System.String Unreleased = "unreleased"
+  method System.Boolean Equals(Valheim.Testing.Game.ToolkitProvenance other)
+  method System.Void .ctor(System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.PackageProvenance> Packages, System.String Runner, System.String RunnerSha256, System.String Error = null)
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.PackageProvenance>& Packages, out System.String& Runner, out System.String& RunnerSha256, out System.String& Error)
+  method Valheim.Testing.Game.ToolkitProvenance <Clone>$()
+  method static System.Boolean op_Equality(Valheim.Testing.Game.ToolkitProvenance left, Valheim.Testing.Game.ToolkitProvenance right)
+  method static System.Boolean op_Inequality(Valheim.Testing.Game.ToolkitProvenance left, Valheim.Testing.Game.ToolkitProvenance right)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+  property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.PackageProvenance> Packages { get; init; }
+  property System.String Error { get; init; }
+  property System.String Runner { get; init; }
+  property System.String RunnerSha256 { get; init; }
 static class Valheim.Testing.Game.TransformMatch
   method static System.Void Match(System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.PlacedObject> actual, System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.PlacedObject> expected, System.Double positionTolerance, System.Double angleToleranceDegrees)
 [result shape] sealed class Valheim.Testing.Game.UnresolvedPrefab : System.IEquatable`1<Valheim.Testing.Game.UnresolvedPrefab>
