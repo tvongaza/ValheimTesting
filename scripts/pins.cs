@@ -188,6 +188,11 @@ async Task<List<Problem>> CheckReleased(HttpClient http, Dictionary<string, stri
             problems.Add(new(VersionsFile, line, $"{id} {version} depends on {dependency.Id}, which has no released version here."));
         else if (!VersionRange.TryParse(dependency.Range, out VersionRange? range) || !NuGetVersion.TryParse(pinned, out NuGetVersion? pinnedVersion) || !range.Satisfies(pinnedVersion))
             problems.Add(new(VersionsFile, line, $"{id} {version} depends on {dependency.Id} {dependency.Range}, but the released {dependency.Id} is {pinned}: a page pinning both would restore a mismatched pair."));
+        // NuGet restores the lowest version a range allows, so a floor below the released dependency makes a project with
+        // this package alone restore an older one than the rest of the release (v2026.10.06: Doubles .11 kept Valheim.Testing .12).
+        else if (range.MinVersion != null && range.MinVersion != pinnedVersion)
+            problems.Add(new(VersionsFile, line, $"{id} {version} depends on {dependency.Id} {dependency.Range}, so a project with {id} alone restores {dependency.Id} " +
+                $"{range.MinVersion}, not the released {pinned}. Release a new {id} built against {dependency.Id} {pinned}."));
     }
     return problems;
 }
