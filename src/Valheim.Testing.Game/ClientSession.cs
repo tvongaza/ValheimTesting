@@ -13,15 +13,13 @@ namespace Valheim.Testing.Game;
 /// connection and, for an owned client, stops only the process this session started (never one found by name): it asks the
 /// client to quit and kills it only if it does not (<see cref="Stopped"/>), then keeps its logs beside the evidence. An
 /// attached client's process is never touched. The client is pinned at its menu. Given a <see cref="SteamAccountHold"/>, a session starts or attaches only while
-/// that lease is live (and signed-in checked when the profile asks), and a lost lease stops the owned client at once (an attached
-/// client is detached); the hold's owner releases it after disposing the session.
+/// that lease is held (and signed-in checked when the profile asks); the hold's owner releases it after disposing the session.
 /// </summary>
 public sealed class ClientSession : IDisposable
 {
     private readonly IOwnedProcess? _process;
     private readonly object _stopping = new();
-    private bool _disposed, _detachedForAccount, _stoppedForAccount;
-    private CancellationTokenRegistration _accountLost;
+    private bool _disposed;
     public GameActor Actor { get; }
     /// <summary>The Steam account lease this client runs on, or null when the run leases none.</summary>
     public SteamAccountHold? Account { get; private set; }
@@ -241,8 +239,6 @@ public sealed class ClientSession : IDisposable
             actor.VerifyEnvironment(plan.MenuExpectations);
             if (plan.Capabilities.Any())
                 CliCapabilities.Require(actor, plan.Capabilities); // Live, after any static manifest check.
-            // A lease lost during startup: this client must not run on the account.
-            account?.ThrowIfLost();
             return new ClientSession(actor, process, logs, architecture).Using(account);
         }
         catch (Exception error)
@@ -281,12 +277,11 @@ public sealed class ClientSession : IDisposable
             if (_disposed) return;
             _disposed = true;
         }
-        _accountLost.Dispose(); // Waits for a loss's stop that is running.
-        try { if (!_detachedForAccount) Actor.Dispose(); }
+        try { Actor.Dispose(); }
         finally
         {
             if (_process != null)
-                try { if (!_stoppedForAccount) Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); }
+                try { Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); }
                 finally { _process.Dispose(); }
         }
     }
@@ -296,25 +291,6 @@ public sealed class ClientSession : IDisposable
         if (account == null) return this;
         if (account.CheckSignedIn) account.CheckGameIdentity(Actor);
         Account = account;
-        _accountLost = account.Lost.Register(StopForLostAccount);
         return this;
-    }
-
-    // The account's lease is gone: another run may take the account, so an owned client is killed now rather than asked to quit; an
-    // attached one is only disconnected. Dispose then keeps what this did.
-    private void StopForLostAccount()
-    {
-        lock (_stopping)
-        {
-            if (_disposed) return;
-            try { Actor.Dispose(); } catch (Exception) { } // The scenario's next command fails on the closed connection.
-            _detachedForAccount = true;
-            if (_process == null) return;
-            var clock = Stopwatch.StartNew();
-            bool exited = _process.HasExited;
-            _process.Stop(TimeSpan.FromSeconds(15));
-            Stopped = new ProcessStop(exited ? StopOutcome.AlreadyExited : StopOutcome.Killed, null, clock.Elapsed, "killed: its Steam account lease was lost");
-            _stoppedForAccount = true;
-        }
     }
 }

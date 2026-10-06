@@ -5,7 +5,7 @@ using Valheim.Testing.Game.Fakes;
 using Xunit;
 
 /// <summary>
-/// The lease host the Steam account tests share: this machine's own shell, so every claim, renewal and release runs the real lease
+/// The lease host the Steam account tests share: this machine's own shell, so every claim and release runs the real lease
 /// scripts. Account names and SteamIDs are obvious fakes (account ids 1 and 2).
 /// </summary>
 internal static class LeaseBox
@@ -26,29 +26,13 @@ internal static class LeaseBox
         string path = Path.Combine(directory, "steam-accounts.json");
         File.WriteAllText(path, JsonSerializer.Serialize(new
         {
-            pool = Pool, leaseDirectory = leases, leaseMinutes = 5, accounts = accounts ?? [new { name = Account, steamId = SteamId }],
+            pool = Pool, leaseDirectory = leases, accounts = accounts ?? [new { name = Account, steamId = SteamId }],
         }));
         return path;
     }
 
-    /// <summary>Marks the account's latest claim released behind its holder's back (as an operator clearing it by hand): its next renewal is Lost.</summary>
-    public static void ReleaseBehindTheHoldersBack(string leases, string account = Account)
-    {
-        string directory = Path.Combine(leases, Pool, account);
-        string latest = Directory.GetFiles(directory, "claim-*").Where(file => Regex.IsMatch(Path.GetFileName(file), "^claim-[0-9]{9}$")).Order(StringComparer.Ordinal).Last();
-        File.WriteAllText(latest + ".released", "");
-    }
-
     public static async Task<SteamAccountStatus> StatusAsync(string poolFile, string account = Account) =>
         (await TestEnvironment.Pool(File.ReadAllText(poolFile)).ListAsync(Host(), Timeout)).Single(status => status.Account == account);
-
-    /// <summary>Completes when <paramref name="token"/> is cancelled; fails after <paramref name="timeout"/>.</summary>
-    public static Task CancelledAsync(CancellationToken token, TimeSpan timeout)
-    {
-        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        token.Register(() => cancelled.TrySetResult());
-        return cancelled.Task.WaitAsync(timeout);
-    }
 }
 
 // The environment's Steam leases and the pool's steamId: every inconsistency is refused when the environment is validated.
@@ -215,7 +199,7 @@ public sealed class SteamSignedInUserTests
 }
 
 // SteamAccountHold with the real lease scripts on this machine: two profiles on different client hosts share one account safely, a
-// crashed run's lease expires, renewals keep a lease alive, and a session starts only on a live, checked lease and stops when it is lost.
+// crashed run's lease never lapses (only the escape hatch hands it on), and a session starts only on a held, checked lease.
 public sealed class SteamAccountHoldTests : IDisposable
 {
     private readonly TempDirectory _root = new();
@@ -266,72 +250,41 @@ public sealed class SteamAccountHoldTests : IDisposable
         Assert.Equal(("tester", "linux-gpu", LeaseBox.Account), (next.Client, next.ClientHost, next.Account));
     }
 
-    [Fact] public async Task ACrashedRunsLeaseExpiresAndItsHolderCannotReleaseTheNextOne()
+    [Fact] public async Task ACrashedRunsLeaseNeverLapsesAndOnlyTheEscapeHatchHandsItToTheNextRun()
     {
         LeaseBox.WritePool(_root.Path, Leases, [new { name = LeaseBox.Account }]);
         var pc = Profile("gaming-pc", "player"); var gpu = Profile("linux-gpu", "tester");
-        // The crashed run never renews or releases; its lease outlasts a shell's start-up.
-        var crashed = await SteamAccountHold.AcquireAsync(pc, "player", "run-crashed", LeaseBox.Host(), LeaseBox.Timeout, TimeSpan.FromSeconds(10), Timeout.InfiniteTimeSpan, default);
-        Assert.Contains("held by run-crashed", (await Assert.ThrowsAsync<SteamAccountLeaseException>(() => SteamAccountHold.AcquireAsync(gpu, "tester", "run-next", LeaseBox.Host()))).Message);
-        // The lease host's clock counts whole seconds; the wait is for time itself.
-        await Task.Delay(crashed.ExpiresUtc - DateTimeOffset.UtcNow + TimeSpan.FromSeconds(1.5));
+        // The crashed run never releases. No timer ends its lease (#257).
+        var crashed = await SteamAccountHold.AcquireAsync(pc, "player", "runner run-crashed client player", LeaseBox.Host(), "run-crashed");
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        var refused = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => SteamAccountHold.AcquireAsync(gpu, "tester", "run-next", LeaseBox.Host()));
+        Assert.Contains("held by runner run-crashed client player until it is released; if run run-crashed is over, valheim-test env recover --run run-crashed releases it", refused.Message);
+        // Its machine is gone for good: the maintainer's escape hatch releases it, and the next run takes the account.
+        var pool = TestEnvironment.Pool(File.ReadAllText(Path.Combine(_root.Path, "steam-accounts.json")));
+        Assert.Contains("VT-LEASE-ABANDONED", (await pool.RunAsync(LeaseBox.Host(), "abandon", LeaseBox.Timeout, default, run: "run-crashed")).Stdout);
         await using var next = await SteamAccountHold.AcquireAsync(gpu, "tester", "run-next", LeaseBox.Host());
         var late = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => crashed.ReleaseAsync());
-        Assert.Equal(SteamAccountLeaseState.Lost, late.State); Assert.Contains("past its lease", late.Message);
+        Assert.Equal(SteamAccountLeaseState.Lost, late.State); Assert.Contains("Another run may have used", late.Message);
         var status = await LeaseBox.StatusAsync(Path.Combine(_root.Path, "steam-accounts.json"));
         Assert.Equal((SteamAccountState.Held, "run-next"), (status.State, status.Holder));
     }
 
-    [Fact] public async Task RenewalsKeepALeasePastItsLeaseTime()
-    {
-        LeaseBox.WritePool(_root.Path, Leases, [new { name = LeaseBox.Account }]);
-        var pc = Profile("gaming-pc", "player"); var gpu = Profile("linux-gpu", "tester");
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        await using var held = await SteamAccountHold.AcquireAsync(pc, "player", "run-long", LeaseBox.Host(), LeaseBox.Timeout, TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(1.5), default);
-        var left = TimeSpan.FromSeconds(12) - clock.Elapsed;
-        if (left > TimeSpan.Zero) await Task.Delay(left); // Past the first lease time: only renewals keep it.
-        Assert.Contains("held by run-long", (await Assert.ThrowsAsync<SteamAccountLeaseException>(() => SteamAccountHold.AcquireAsync(gpu, "tester", "run-next", LeaseBox.Host()))).Message);
-        Assert.Null(held.LostReason);
-        held.ThrowIfLost();
-    }
-
-    [Fact] public async Task ALostLeaseCancelsItsTokenAndItsReleaseFails()
-    {
-        LeaseBox.WritePool(_root.Path, Leases);
-        var held = await SteamAccountHold.AcquireAsync(Profile("gaming-pc", "player"), "player", "run-7", LeaseBox.Host(), LeaseBox.Timeout, null, TimeSpan.FromMilliseconds(200), default);
-        LeaseBox.ReleaseBehindTheHoldersBack(Leases);
-        await LeaseBox.CancelledAsync(held.Lost, LeaseBox.Timeout);
-        Assert.Contains("no longer this run's (released)", held.LostReason);
-        Assert.Equal(SteamAccountLeaseState.Lost, Assert.Throws<SteamAccountLeaseException>(held.ThrowIfLost).State);
-        var error = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => held.ReleaseAsync());
-        Assert.Equal(SteamAccountLeaseState.Lost, error.State); Assert.Contains("was lost during the run", error.Message);
-        await held.ReleaseAsync(); // Only the first call acts.
-    }
-
-    // Against a scripted lease host: renewals that cannot be proven count as lost once the lease would end before the next try, and
-    // a release that cannot be proven is a failed teardown.
-    [Fact] public async Task UnprovenRenewalsAndReleasesAreNeverTakenAsProven()
+    // Against a scripted lease host: a release that cannot be proven is a failed teardown, never taken as proven.
+    [Fact] public async Task AnUnprovenReleaseIsNeverTakenAsProven()
     {
         LeaseBox.WritePool(_root.Path, Leases);
         var profile = Profile("gaming-pc", "player");
-        long soon = DateTimeOffset.UtcNow.AddSeconds(2).ToUnixTimeSeconds();
-        var fake = new FakeLauncher().Exits(0, $"VT-LEASE claimed {LeaseBox.Account} 1 {soon}\n", FakeLauncher.Report(0));
-        for (int i = 0; i < 10; i++) fake.TimesOut();
         SshGameHost LeaseHost(FakeLauncher launcher) => new(LeaseBox.Name, "tester@lease-box.example", HostShell.Parse(LeaseBox.Shell), 0, null, null, "ssh", launcher);
-        var held = await SteamAccountHold.AcquireAsync(profile, "player", "run-8", LeaseHost(fake), LeaseBox.Timeout, null, TimeSpan.FromSeconds(1), default);
-        await LeaseBox.CancelledAsync(held.Lost, LeaseBox.Timeout);
-        Assert.Contains("no renewal was proven", held.LostReason);
-        Assert.Equal(SteamAccountLeaseState.Lost, (await Assert.ThrowsAsync<SteamAccountLeaseException>(() => held.ReleaseAsync())).State);
-
-        var release = new FakeLauncher().Exits(0, $"VT-LEASE claimed {LeaseBox.Account} 2 {DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()}\n", FakeLauncher.Report(0)).TimesOut();
-        var unproven = await SteamAccountHold.AcquireAsync(profile, "player", "run-9", LeaseHost(release), LeaseBox.Timeout, null, Timeout.InfiniteTimeSpan, default);
+        var release = new FakeLauncher().Exits(0, $"VT-LEASE claimed {LeaseBox.Account} 2\n", FakeLauncher.Report(0)).TimesOut();
+        var unproven = await SteamAccountHold.AcquireAsync(profile, "player", "run-9", LeaseHost(release), "run-9");
         var error = await Assert.ThrowsAsync<SteamAccountLeaseException>(() => unproven.ReleaseAsync());
         Assert.Equal(SteamAccountLeaseState.Unknown, error.State); Assert.Contains("not proven", error.Message);
+        Assert.Contains("valheim-test env recover --run run-9", error.Message);
     }
 
     private ClientRunPlan Plan(string mode = "owned") => new() { Mode = mode, Install = mode == "owned" ? _root.Path : "", Port = 5556, Pinning = "none" };
 
-    [Fact] public async Task AClientStartsOnlyOnALiveCheckedLeaseAndALostLeaseStopsIt()
+    [Fact] public async Task AClientStartsOnlyOnAHeldCheckedLease()
     {
         LeaseBox.WritePool(_root.Path, Leases);
         using var output = new TempDirectory();
@@ -347,43 +300,15 @@ public sealed class SteamAccountHoldTests : IDisposable
             Assert.True(pending.SignedInChecked);
         }
 
-        var held = await SteamAccountHold.AcquireAsync(Profile("gaming-pc", "player"), "player", "run-2", LeaseBox.Host(), LeaseBox.Timeout, null, TimeSpan.FromMilliseconds(200), default);
-        // Registered before the session: a token runs its callbacks newest first, so this completes after the session's stop.
-        var lost = LeaseBox.CancelledAsync(held.Lost, LeaseBox.Timeout);
-        var process = new FakeOwnedProcess(99); var transport = new ScriptedTransport();
-        var session = ClientSession.Launch(Plan(), output.Path, () => process, () => transport, (_, _) => Task.CompletedTask, default, null, null, held);
-        Assert.Same(held, session.Account);
-        LeaseBox.ReleaseBehindTheHoldersBack(Leases);
-        await lost;
-        // The lease's loss killed the client at once and closed its connection; disposing keeps that stop.
-        Assert.Equal(1, process.Stops); Assert.True(transport.Disposed);
-        Assert.Contains("Steam account lease was lost", session.Stopped!.Request);
-        session.Dispose();
-        Assert.Equal(1, process.Stops); Assert.Equal(1, process.Disposals); Assert.True(session.Closed);
-        // Nothing starts or attaches on a lost lease.
+        // Nothing starts or attaches on a released lease.
+        var held = await SteamAccountHold.AcquireAsync(Profile("gaming-pc", "player"), "player", "run-2", LeaseBox.Host());
+        await held.ReleaseAsync();
         bool again = false;
-        Assert.Throws<SteamAccountLeaseException>(() => ClientSession.Launch(Plan(), output.Path, () => { again = true; return new FakeOwnedProcess(99); },
+        Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(Plan(), output.Path, () => { again = true; return new FakeOwnedProcess(99); },
             () => new ScriptedTransport(), (_, _) => Task.CompletedTask, default, null, null, held));
         var unused = new ScriptedTransport();
-        Assert.Throws<SteamAccountLeaseException>(() => ClientSession.Attach(Plan("attach"), output.Path, held, unused));
+        Assert.Throws<InvalidOperationException>(() => ClientSession.Attach(Plan("attach"), output.Path, held, unused));
         Assert.False(again); Assert.Empty(unused.Commands);
-        await Assert.ThrowsAsync<SteamAccountLeaseException>(() => held.ReleaseAsync());
-    }
-
-    [Fact] public async Task ALostLeaseDetachesAnAttachedClientWithoutTouchingIt()
-    {
-        LeaseBox.WritePool(_root.Path, Leases);
-        using var output = new TempDirectory();
-        var held = await SteamAccountHold.AcquireAsync(Profile("gaming-pc", "player"), "player", "run-3", LeaseBox.Host(), LeaseBox.Timeout, null, TimeSpan.FromMilliseconds(200), default);
-        var lost = LeaseBox.CancelledAsync(held.Lost, LeaseBox.Timeout);
-        var transport = new ScriptedTransport();
-        var session = ClientSession.Attach(Plan("attach"), output.Path, held, transport);
-        Assert.False(session.Owned);
-        LeaseBox.ReleaseBehindTheHoldersBack(Leases);
-        await lost;
-        Assert.True(transport.Disposed); Assert.Null(session.Stopped);
-        session.Dispose();
-        await Assert.ThrowsAsync<SteamAccountLeaseException>(() => held.ReleaseAsync());
     }
 
     [Fact] public async Task AnInteractiveStartNeedsALiveLeaseForItsOwnHost()

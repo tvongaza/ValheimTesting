@@ -137,7 +137,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     }
 
     private static PinnedServerRunOptions<ServerRunPlan> Options(FakeServerHost host, FakeOwnedServer? server, Func<TestRun<ServerRunPlan>, Task>? scenario = null,
-        FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, TimeSpan? renewEvery = null, string name = "toolkit-smoke",
+        FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, string name = "toolkit-smoke",
         RunCancellation? cancellation = null) => new()
     {
         Name = name,
@@ -148,7 +148,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         {
             Host = hostName => hostName == "linux-box" ? host : hostName == LeaseBox.Name && leaseHost != null ? leaseHost : clientHost ?? throw new InvalidOperationException("No fake host " + hostName),
             Connect = port => port == 15578 ? clientTransport! : server!.Connect(),
-            StateWaits = false, RunId = RunId, SteamRenewEvery = renewEvery, Cancellation = cancellation,
+            StateWaits = false, RunId = RunId, Cancellation = cancellation,
         },
     };
     // Where in a fake host's script log the first journal append of that kind ran.

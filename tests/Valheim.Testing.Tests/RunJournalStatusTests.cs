@@ -78,7 +78,7 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Equal(["copy", "character", "lease", "lock", "process"], cut.Items.Select(item => item.Kind));
         Assert.Equal("copy started, never finished", cut.Items[0].Status);
         Assert.Equal("staged, not retired", cut.Items[1].Status);
-        Assert.Equal("held by this run until 2030-01-01 00:00Z unless released", cut.Items[2].Status);
+        Assert.Equal("held by this run until released", cut.Items[2].Status);
         Assert.Equal("held by this run (run-cut [c])", cut.Items[3].Status);
         Assert.Equal("still runs (ID, start time and command line match)", cut.Items[4].Status);
         Assert.DoesNotContain(cut.Items, item => item.Unrecoverable);
@@ -232,7 +232,7 @@ public sealed class RunJournalStatusTests : IDisposable
         var kept = Run(report, "run-kept");
         Assert.Equal(JournalRunState.Kept, kept.State);
         Assert.All(kept.Items, item => Assert.True(item.Kept));
-        Assert.Equal(["kept: kept on request", "kept: its client may still run; held by this run until 2030-01-01 00:00Z unless released"], kept.Items.Select(item => item.Status));
+        Assert.Equal(["kept: kept on request", "kept: its client may still run; held by this run until released"], kept.Items.Select(item => item.Status));
         Assert.Equal(JournalRunState.Ended, Run(report, "run-start-failed").State);
         Assert.Equal(JournalRunState.Unrecoverable, Run(report, "run-unverified").State);
         Assert.Contains("cleanup not verified", Run(report, "run-unverified").Reason);
@@ -409,11 +409,11 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.StartsWith("journalled without its lease directory", Assert.Single(Run(report, "run-lease-old").Items).Status);
 
         // With the inventory's lease directory, an older lease is checked there: one its owner no longer holds is gone, one it
-        // still holds cannot be released without its id and only lapses.
+        // still holds cannot be released by env recover without its id (it never lapses): the escape hatch names the way out.
         _host.Leases["alt4"] = ("o", "unknown");
         var withDirectory = await RunJournalStatus.InspectAsync(Hosts("pc"), _ => _host, TimeSpan.FromSeconds(5), leaseHost: "pc", leaseDirectory: "/var/tmp/vt/leases");
         Assert.Equal(JournalRunState.Unrecoverable, Run(withDirectory, "run-lease-old").State);
-        Assert.Contains("only its lapse ends it", Assert.Single(Run(withDirectory, "run-lease-old").Items).Status);
+        Assert.Contains("env recover cannot release it; once its client is gone, valheim-test env teardown --run run-lease-old --machine-gone releases it", Assert.Single(Run(withDirectory, "run-lease-old").Items).Status);
         _host.Leases.Remove("alt4");
         withDirectory = await RunJournalStatus.InspectAsync(Hosts("pc"), _ => _host, TimeSpan.FromSeconds(5), leaseHost: "pc", leaseDirectory: "/var/tmp/vt/leases");
         Assert.Equal(JournalRunState.Ended, Run(withDirectory, "run-lease-old").State);
@@ -442,6 +442,47 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Contains("UNRECOVERABLE run-probe-lost on pc, ", text.ToString());
         Assert.Contains("  process 60 (started 1) on pc (server, since ", text.ToString());
         Assert.EndsWith("0 runs ended and left nothing. Nothing was changed." + Environment.NewLine, text.ToString());
+    }
+
+    // End to end through the real local shell (#257): a lease never lapses, so a run whose machine is gone for good holds its
+    // account until the maintainer's escape hatch, env teardown --run ID --machine-gone, releases it on the lease host. Only that
+    // run's leases go; the release and the run's end are journalled there; a run still going is refused.
+    [Fact] public async Task TheMachineGoneEscapeHatchReleasesOnlyThatRunsLeasesAndJournalsIt()
+    {
+        string data = Path.Combine(_root, "data dir"), leases = Path.Combine(data, "leases"), file = Path.Combine(_root, "inventory.json");
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = data });
+        using var localJournal = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        File.WriteAllText(file, JsonSerializer.Serialize(new { hosts = new { local = new { kind = "local", @lock = Path.Combine(data, "lock") } }, leaseHost = "local", leaseDirectory = leases }));
+        var local = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);
+        SteamAccountPool Pool(string account) => new() { Pool = "steam-clients", LeaseDirectory = leases, Accounts = [new SteamPoolAccount { Name = account }] };
+        // The gone run's lease names its run; another run's lease stays; a still-going run (this test is its runner) is refused.
+        var gone = await Pool("steam_gone").AcquireAsync(local, "runner run-gone client player", TimeSpan.FromSeconds(30), run: "run-gone");
+        await Pool("steam_other").AcquireAsync(local, "runner run-other client player", TimeSpan.FromSeconds(30), run: "run-other");
+        await new RunJournal("run-live").AppendAsync(local, Path.Combine(data, "journal"), "player", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", Path.Combine(data, "x"))), TimeSpan.FromSeconds(30));
+
+        foreach (string[] args in new[] { new[] { "teardown", "--machine-gone" }, ["teardown", "--run", "run-gone", "--machine-gone", "--json"], ["recover", "--run", "run-gone", "--machine-gone"] })
+            Assert.Equal(2, await EnvCommand.RunAsync([.. args, "--inventory", file], new StringWriter(), new StringWriter()));
+        var output = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["teardown", "--run", "run-live", "--machine-gone", "--inventory", file], output, new StringWriter()));
+        Assert.Contains("REFUSED run-live: it is still going", output.ToString());
+
+        output = new StringWriter();
+        Assert.Equal(0, await EnvCommand.RunAsync(["teardown", "--run", "run-gone", "--machine-gone", "--inventory", file], output, new StringWriter()));
+        Assert.Contains("RELEASED lease on Steam account steam_gone (steam-clients), held by runner run-gone client player: its machine was declared gone", output.ToString());
+        Assert.Equal(SteamAccountState.Free, Assert.Single(await Pool("steam_gone").ListAsync(local, TimeSpan.FromSeconds(30))).State);
+        Assert.Equal((SteamAccountState.Held, "run-other"), Assert.Single(await Pool("steam_other").ListAsync(local, TimeSpan.FromSeconds(30))) is var other ? (other.State, other.Run) : default);
+        Assert.Equal(SteamAccountLeaseState.Released, (await gone.ReleaseAsync()).State); // Its own release, were it ever to come, finds it released.
+        var (records, _) = await RunJournal.ReadAllAsync(local, Path.Combine(data, "journal"), TimeSpan.FromSeconds(30));
+        var released = Assert.Single(records, record => record.Run == "run-gone" && record.Entry.Kind == JournalEntry.LeaseReleased);
+        Assert.Equal(("recovery", "true", "steam_gone"), (released.Actor, released.Entry.Fields["machineGone"], released.Entry.Fields["account"]));
+        // Its end is journalled for it: env status shows it ended, not a run that may still be going.
+        output = new StringWriter();
+        await EnvCommand.RunAsync(["status", "--inventory", file], output, new StringWriter());
+        Assert.DoesNotContain("run-gone", output.ToString());
+        // Nothing of it is left to release a second time.
+        output = new StringWriter();
+        Assert.Equal(0, await EnvCommand.RunAsync(["teardown", "--run", "run-gone", "--machine-gone", "--inventory", file], output, new StringWriter()));
+        Assert.Contains("Run run-gone holds no lease", output.ToString());
     }
 
     // End to end through the real local shell: valheim-test env status reads this machine's journal and says what a run left.

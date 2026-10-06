@@ -270,8 +270,6 @@ public static class PinnedServerRun
                 // The runtime is the server host's install, copied and checked there; nothing local is read for it.
                 hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId);
                 if (RunJournal.ThisProcess.RunId != hosted.RunId) { journalRun?.Dispose(); journalRun = RunJournal.UseRun(hosted.RunId); }
-                // A client's lost Steam account lease stops that client, then the run, as Ctrl+C would.
-                hosted.AccountLost = () => { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } };
                 hosted.Record(report.Provenance);
                 platform = hosted.HostProfile.Platform == "windows" ? ServerPlatform.Windows : ServerPlatform.Linux;
             }
