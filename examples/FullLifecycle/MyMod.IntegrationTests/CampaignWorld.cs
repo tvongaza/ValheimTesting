@@ -112,7 +112,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
     /// <see cref="Output"/>.
     /// </summary>
     public GameSession Run(LifecyclePlan plan, ScenarioReport report, bool clientLog = false,
-        Func<ClientRunPlan, string, ClientSession>? campaignClient = null)
+        Func<ClientRunPlan, string, ClientSession>? campaignClient = null, CancellationToken cancellation = default)
     {
         WriteServerLog();
         var session = FakeGameSession.Create(report, Output, WorldUid, this, Server,
@@ -120,7 +120,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
                 ? (campaignClient ?? throw new InvalidOperationException("No campaign client was supplied."))(client, name)
                 : ClientSession.Attach(client, output, Client(refused: client == plan.RefusedClient)),
             serverLog: ServerLog, clientLog: _ => clientLog ? ClientLog : null,
-            lobby: server => CrossplayServer.WaitForLobby(server, ServerLog, TimeSpan.FromSeconds(5)));
+            lobby: server => CrossplayServer.WaitForLobby(server, ServerLog, TimeSpan.FromSeconds(5)), cancellation: cancellation);
         session.StartAsync().GetAwaiter().GetResult();
         return session;
     }

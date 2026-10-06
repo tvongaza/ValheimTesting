@@ -220,6 +220,8 @@ checkpoint, the session's `OpenClientsAsync` launches the named clients concurre
 menu checkpoint. The join and rejoin checkpoints are explicit so a test can pause one actor while the others stay in
 the world. A failed client start closes the other successful starts before teardown; it does not advance the test.
 
+The same two scenarios also run as xUnit tests on a native session: [GameSessionFixture](MyMod.IntegrationTests/GameSessionFixture.cs) is a copyable `IAsyncLifetime` adapter (one session per test class) that runs the toolkit's runner up to the scenario, hands the started `GameSession` and plan to the tests, and lets the run tear down and report when the class finishes; a run that never started, or ended with a failed step or cleanup, fails the class with its exit code. [MyModSession](MyMod.IntegrationTests/MyModSession.cs) finds its environment by convention: `session.json` (the campaign manifest below) and `<scenario>.plan.json` beside the integration test project, copied to its output and never committed. Without them the tests are skipped with that reason, so the suite stays offline by default; each run writes a new evidence directory under `session-runs/` in the test output.
+
 Copy the sample campaign and inventory to a private test directory. In the campaign manifest, name the private environment
 inventory, fixture world, direct-join address, and a reviewed dependency lock for each role. Create each lock from an
 explicit `NativeDependencyRequest` with `dotnet run scripts/native-dependencies.cs -- resolve request.json lock.json`;

@@ -1,10 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Controlled integration: the real scenario and runner code against the toolkit's scripted fakes. No game, Steam or ValheimCLI. -->
+  <!-- Controlled integration: the real scenario and runner code against the toolkit's scripted fakes. No game, Steam or ValheimCLI,
+       except the opt-in native session tests (MyModSession.cs), which run only when a private session.json sits beside this project. -->
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../MyMod.SystemTests/MyMod.SystemTests.csproj" />
     <!-- The native campaign's sample plans, read by CampaignPlanTests with their placeholders filled in. -->
     <None Include="../MyMod.SystemTests/sample-plan-*.json" LinkBase="samples" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Where a native session's private environment sits (MyModSession): read in place, never copied or committed. -->
+    <AssemblyMetadata Include="SessionDirectory" Value="$(MSBuildProjectDirectory)" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" PrivateAssets="all" />
   </ItemGroup>
 </Project>
