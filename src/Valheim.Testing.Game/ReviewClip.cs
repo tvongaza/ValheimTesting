@@ -14,6 +14,7 @@ public sealed record ReviewClipPlan(string Id, string ExtensionId, string HostDi
 /// milliseconds, bytes and SHA-256 of every frame) and the JSON sidecar. <see cref="ManifestSha256"/> is the SHA-256 of
 /// <c>frames.csv</c>, which in turn lists every frame's digest. Visual correctness remains for a person to judge.
 /// </summary>
+[ResultShape]
 public sealed record ReviewClipReceipt(string FramesDirectory, string MetadataPath, string ManifestSha256, long Bytes, int Frames, int DurationMs)
 {
     /// <summary>

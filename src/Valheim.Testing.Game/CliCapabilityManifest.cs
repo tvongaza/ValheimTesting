@@ -288,6 +288,7 @@ public sealed class CliManifestFile
 }
 
 /// <summary>What <see cref="CliCapabilityManifest.Check"/> found: the manifest's build, its files where they are installed, and the capabilities checked.</summary>
+[ResultShape]
 public sealed record CliManifestCheck(string Build, IReadOnlyList<string> Files, IReadOnlyList<string> Capabilities)
 {
     /// <summary>One line for the report's provenance.</summary>

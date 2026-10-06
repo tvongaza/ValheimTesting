@@ -6,12 +6,14 @@ using System.Text.RegularExpressions;
 namespace Valheim.Testing.Game;
 
 /// <summary>What an owned copy holds, from its contents.</summary>
+[ResultShape]
 public enum OwnedCopyKind { ServerRuntime, ClientRuntime, World, Other }
 
 /// <summary>
 /// A copy a run left behind: where it is, what it holds, its size, when it was made, which running processes use it, and
 /// the result of the run it belongs to (the nearest <c>result.json</c>), when there is one.
 /// </summary>
+[ResultShape]
 public sealed record OwnedCopy(string Path, OwnedCopyKind Kind, long Bytes, DateTime CreatedUtc, IReadOnlyList<int> InUseBy, string? Result, bool? Passed)
 {
     public bool InUse => InUseBy.Count != 0;

@@ -5,10 +5,12 @@ namespace Valheim.Testing.Game;
 
 /// <summary>A failure fails the run's log scan; a warning is counted and reported only.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<LogSeverity>))]
+[ResultShape]
 public enum LogSeverity { Failure, Warning }
 
 /// <summary>When a pattern applies: the teardown scan of a run's logs, an owned process's startup, or both.</summary>
 [Flags]
+[ResultShape]
 public enum LogPhase { Teardown = 1, Startup = 2 }
 
 /// <summary>
@@ -17,6 +19,7 @@ public enum LogPhase { Teardown = 1, Startup = 2 }
 /// <see cref="LogPhase.Startup"/> pattern also ends an owned startup at once (<see cref="StartupEvents.RuntimeLoadFailures"/>);
 /// startup matching reads its <see cref="Line"/> only, so a startup pattern has no <see cref="Frame"/>.
 /// </summary>
+[ResultShape]
 public sealed record LogPattern(string Name, LogSeverity Severity, Regex Line, Regex? Frame = null, LogPhase Phase = LogPhase.Teardown);
 
 /// <summary>
@@ -25,6 +28,7 @@ public sealed record LogPattern(string Name, LogSeverity Severity, Regex Line, R
 /// <see cref="Line"/> (and optional <see cref="Frame"/>) regex and its <see cref="Severity"/>, for a mod's own known-bad line
 /// or another mod's known noise, counted like the built-in patterns at teardown.
 /// </summary>
+[ResultShape]
 public sealed class LogClassification
 {
     /// <summary>
@@ -50,6 +54,7 @@ public sealed class LogClassification
 /// A log file a run's teardown scan reads. <paramref name="Required"/>: its absence is a failure (a BepInEx log);
 /// otherwise it is recorded as absent (a Unity log that was not redirected there).
 /// </summary>
+[ResultShape]
 public sealed record RunLog(string Role, string Path, bool Required = false);
 
 /// <summary>
@@ -58,12 +63,14 @@ public sealed record RunLog(string Role, string Path, bool Required = false);
 /// and never fail. <see cref="FirstFrame"/> is the most useful stack frame under the first counted line, for
 /// <see cref="LogScanner.UnityException"/>: the first frame outside the runtime's own System, Mono and wrapper frames.
 /// </summary>
+[ResultShape]
 public sealed record LogPatternCount(string Pattern, LogSeverity Severity, string? Reason, int Count, int? FirstLine, string? First, int Expected = 0, string? FirstExpected = null, string? FirstFrame = null);
 
 /// <summary>
 /// One log's scan. An absent log has no counts (absent is not zero); <see cref="Problem"/> says why a required one is
 /// missing. <see cref="Failed"/> when a required log is missing or a failure pattern matched.
 /// </summary>
+[ResultShape]
 public sealed record LogFileScan(string Role, string Path, bool Present, string? Problem, IReadOnlyList<LogPatternCount> Counts)
 {
     public bool Failed => Problem != null || Counts.Any(count => count.Severity == LogSeverity.Failure && count.Count > 0);

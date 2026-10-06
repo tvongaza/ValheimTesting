@@ -146,6 +146,7 @@ public sealed class ScriptedTransport : IGameTransport
 }
 
 /// <summary>A scripted client's test access (<see cref="ScriptedTransport.ClientAccess"/>).</summary>
+[ResultShape]
 public sealed class ScriptedAccess
 {
     public bool Devcommands { get; set; }

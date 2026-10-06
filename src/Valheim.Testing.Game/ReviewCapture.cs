@@ -20,6 +20,7 @@ public sealed record ReviewCapturePlan(
 /// sidecar, which records the image's SHA-256 with the world, build, pins and conditions, for
 /// <see cref="ScenarioReport.Attach(EvidenceReference)"/> (kind <c>review-still</c>, site = the capture id).
 /// </summary>
+[ResultShape]
 public sealed record ReviewCaptureReceipt(string ImagePath, string MetadataPath, string Sha256, long Bytes)
 {
     public required EvidenceReference Evidence { get; init; }

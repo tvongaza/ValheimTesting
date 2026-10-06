@@ -24,6 +24,7 @@ public static class PlayerPlacement
     /// <see cref="Target"/> is the point the landing was judged against: the requested point, or with <c>loadedGround</c>
     /// the same place at the loaded ground's height.
     /// </summary>
+    [ResultShape]
     public sealed record TeleportArrival(JsonElement Support, string Trace, TeleportTrace Timing)
     {
         public required HeightExpectation Target { get; init; }

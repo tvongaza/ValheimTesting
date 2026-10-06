@@ -24,6 +24,7 @@ public sealed class CliTransport : IGameTransport
     }
     public void Dispose() => _client.Dispose(); // Attachment never owns the game's process.
 }
+[ResultShape]
 public sealed record Capability(string Path, string Instance, bool ReadOnly, int SchemaVersion);
 
 /// <summary>

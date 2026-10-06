@@ -3,6 +3,7 @@ using System.Globalization;
 namespace Valheim.Testing.Game;
 
 /// <summary>What the optional signed-in check found on a client's host.</summary>
+[ResultShape]
 public enum SteamSignedInState
 {
     /// <summary>The host's account signal matches the leased account. On Linux and macOS this is the last recorded login.</summary>

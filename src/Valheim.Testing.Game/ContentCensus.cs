@@ -5,6 +5,7 @@ namespace Valheim.Testing.Game;
 
 /// <summary>The process a content observation comes from: a dedicated server or host, or a joined client.</summary>
 [JsonConverter(typeof(CamelCaseEnum<CensusSide>))]
+[ResultShape]
 public enum CensusSide { Server, Client }
 
 /// <summary>
@@ -12,6 +13,7 @@ public enum CensusSide { Server, Client }
 /// <see cref="Present"/> passes; <see cref="Unsupported"/> means the census cannot answer the check and is never a pass.
 /// </summary>
 [JsonConverter(typeof(CamelCaseEnum<CensusState>))]
+[ResultShape]
 public enum CensusState
 {
     /// <summary>Registered once, and the game's own lookup by its hash returns it; declared recipe or piece dependencies resolve.</summary>
@@ -40,6 +42,7 @@ internal sealed class CamelCaseEnum<T>() : JsonStringEnumConverter<T>(JsonNaming
 /// <see cref="Resources"/> (item prefab names). A piece must name the <see cref="Tool"/> whose build table should contain
 /// it, and may also declare its station and resources. An optional dependency left null is not checked.
 /// </summary>
+[ResultShape]
 public sealed record ExpectedContent
 {
     public required string Kind { get; init; }
@@ -196,21 +199,28 @@ public sealed class ContentExpectations
 }
 
 /// <summary>The owner plugin as the observing process has it: loaded or not, its version and the MD5 of its file.</summary>
+[ResultShape]
 public sealed record CensusOwner(string Guid, bool Installed, string? Version, string? Md5);
 /// <summary>The sizes of the observing process's whole registries and its in-scope build-table entries.</summary>
+[ResultShape]
 public sealed record CensusTotals(int Items, int ItemIndex, int Recipes, int Prefabs, int PrefabIndex, int? StatusEffects = null, int? Pieces = null);
 /// <summary>
 /// An item or prefab in scope: the game's hash of its name, how many times its registry's list holds it (0: only in the
 /// index) and the name of what the game's lookup by that hash returns (null: nothing).
 /// </summary>
+[ResultShape]
 public sealed record ObservedContent(string Name, int Hash, int Listed, string? Resolves);
 /// <summary>A recipe's item, station or resource: its prefab name (null for no reference) and the game's lookup of it.</summary>
+[ResultShape]
 public sealed record ObservedReference(string? Name, string Lookup, int Amount = 0);
+[ResultShape]
 public sealed record ObservedRecipe(string Name, bool Enabled, int Amount, ObservedReference Item, ObservedReference Station, int MinStationLevel, IReadOnlyList<ObservedReference> Resources);
 /// <summary>A prefab found through a build tool's PieceTable, with the dependencies of its Piece component.</summary>
+[ResultShape]
 public sealed record ObservedPiece(string Name, int Hash, string Tool, string Table, int Listed, string? Resolves, bool HasComponent, bool Enabled,
     ObservedReference Station, IReadOnlyList<ObservedReference> Resources);
 /// <summary>A hash two different names share in a registry (<c>items</c> or <c>prefabs</c>), and the name its index holds.</summary>
+[ResultShape]
 public sealed record CensusCollision(string Registry, int Hash, IReadOnlyList<string> Names, string? Indexed);
 
 /// <summary>
@@ -219,6 +229,7 @@ public sealed record CensusCollision(string Registry, int Hash, IReadOnlyList<st
 /// every shared hash. An older adapter may omit <see cref="StatusEffects"/> or <see cref="Pieces"/>; those checks then
 /// report unsupported, never missing or present. Read with <see cref="ContentCensus.Read"/>.
 /// </summary>
+[ResultShape]
 public sealed record ContentObservation(CensusSide Side, bool Dedicated, CensusOwner Owner, IReadOnlyList<string> Scope, CensusTotals Totals,
     IReadOnlyList<ObservedContent> Items, IReadOnlyList<ObservedContent> Prefabs, IReadOnlyList<ObservedRecipe> Recipes, IReadOnlyList<CensusCollision> Collisions,
     IReadOnlyList<ObservedContent>? StatusEffects = null, IReadOnlyList<ObservedPiece>? Pieces = null);
@@ -227,6 +238,7 @@ public sealed record ContentObservation(CensusSide Side, bool Dedicated, CensusO
 /// The observation one side supplies, and the build its owner plugin is pinned to there (the plan's MD5 for that side, or
 /// <c>absent</c>). A null <see cref="Observation"/> is a side that was not observed.
 /// </summary>
+[ResultShape]
 public sealed record SideObservation(CensusSide Side, string PinnedBuild, ContentObservation? Observation);
 
 /// <summary>
@@ -235,6 +247,7 @@ public sealed record SideObservation(CensusSide Side, string PinnedBuild, Conten
 /// and <see cref="Name"/> (a dependency as <c>recipe/dependency</c>), the game's hash for an item or prefab, the state and
 /// why.
 /// </summary>
+[ResultShape]
 public sealed record CensusEntry(CensusSide Side, string Kind, string Name, int? Hash, CensusState State, string Detail)
 {
     public override string ToString() => $"{Side.ToString().ToLowerInvariant()}: {State.ToString().ToLowerInvariant()} {Kind} {Name}{(Detail.Length > 0 ? " (" + Detail + ")" : "")}";
@@ -244,6 +257,7 @@ public sealed record CensusEntry(CensusSide Side, string Kind, string Name, int?
 /// How a side's observation was taken: whether it was supplied, which side and build it reported, and why it was refused
 /// (<see cref="Problem"/>; null when it was used).
 /// </summary>
+[ResultShape]
 public sealed record CensusSideResult(CensusSide Side, bool Expected, bool Observed, bool? Dedicated, string PinnedBuild, string? ObservedBuild, string? Problem);
 
 /// <summary>

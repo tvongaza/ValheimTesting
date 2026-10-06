@@ -60,6 +60,7 @@ public sealed record SimulationRange(int Near, int Far, bool Classic)
 /// <param name="NearInstances">Those not marked distant: while any is there, the game keeps the zone's terrain.</param>
 /// <param name="Saved">Saved objects of known prefabs that this client holds for the zone.</param>
 /// <param name="WithoutInstance">Of those, the ones not instantiated.</param>
+[ResultShape]
 public sealed record ZoneState(ZoneId Zone, bool TerrainLoaded, int Instances, int NearInstances, int Saved, int WithoutInstance)
 {
     /// <summary>Nothing of the zone is in the scene: no terrain and no object instance, distant ones included.</summary>
@@ -110,6 +111,7 @@ public sealed record ZoneReading(ZoneId Reference, SimulationRange Range, IReadO
 }
 
 /// <summary>What <see cref="ZoneCycle.Run(GameActor, GameActor, CancellationToken)"/> observed, in order.</summary>
+[ResultShape]
 public sealed record ZoneCycleResult(ZoneReading Before, JsonElement AwayArrival, ZoneReading Unloaded, TimeSpan UnloadTook, JsonElement BackArrival, ZoneReading Reloaded, TimeSpan ReloadTook);
 
 /// <summary>

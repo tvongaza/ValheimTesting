@@ -6,6 +6,7 @@ namespace Valheim.Testing.Game;
 /// One applied Harmony patch, as the adapter's census reports it. <see cref="Method"/> and <see cref="Patch"/> are
 /// <c>Type::Name(ParameterType,...)</c>; <see cref="Kind"/> is prefix, postfix, transpiler, finalizer or ilmanipulator.
 /// </summary>
+[ResultShape]
 public sealed record AppliedPatch(string Method, string Owner, string Kind, int Priority, int Index, IReadOnlyList<string> Before, IReadOnlyList<string> After, string? Patch)
 {
     public override string ToString() => $"{Owner} {Kind} {Patch ?? "?"} on {Method} (priority {Priority})";

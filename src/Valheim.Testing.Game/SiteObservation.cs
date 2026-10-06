@@ -5,6 +5,7 @@ using valheim_cli.Testing;
 namespace Valheim.Testing.Game;
 
 /// <summary>One read-only ValheimCLI observation retained with the actor's role and its complete reply.</summary>
+[ResultShape]
 public sealed record ObservedCommand(string Role, string Command, DateTimeOffset AtUtc, IReadOnlyList<string> Reply);
 
 /// <summary>

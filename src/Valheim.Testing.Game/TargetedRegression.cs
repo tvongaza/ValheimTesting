@@ -243,6 +243,7 @@ public sealed class RegressionArm
 }
 
 /// <summary>One DLL in the staged allowlist, as the run manifest records it (install-relative path, no machine path).</summary>
+[ResultShape]
 public sealed record StagedFile(string Role, string Path, string Sha256, string Md5, string? Assembly, IReadOnlyList<string> Plugins);
 
 /// <summary>
@@ -252,12 +253,14 @@ public sealed record StagedFile(string Role, string Path, string Sha256, string 
 /// <param name="Capabilities">Every ValheimCLI extension command the run uses: checked against <c>cli.manifest</c> before launch, when set, and live.</param>
 /// <param name="LiveOnlyCapabilities">The scenario's commands of other owners (a probe's or the mod's extensions): checked live only.</param>
 /// <param name="CliManifest">What the static ValheimCLI check found, or why none ran.</param>
+[ResultShape]
 public sealed record RunManifest(string Name, string Arm, string ModPlugin, string? ModCommit, string ModSha256, bool Repeatability,
     IReadOnlyList<RunManifestArm> Arms, IReadOnlyList<StagedFile> Allowlist, IReadOnlyList<StagedFile> Configs,
     InstallPins InstallPins, string World, string WorldUid, int FixtureFiles, IReadOnlyList<string> Capabilities,
     IReadOnlyList<string> LiveOnlyCapabilities, string CliManifest);
 
 /// <summary>One arm of the comparison: its name, commit, distinct artifact name and SHA256.</summary>
+[ResultShape]
 public sealed record RunManifestArm(string Arm, string? Commit, string Artifact, string Sha256, string Md5);
 
 /// <summary>

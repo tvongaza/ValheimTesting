@@ -19,12 +19,14 @@ public sealed record WalkSample(double Seconds, float X, float Y, float Z, float
             Math.Abs(Y - point.Height) <= verticalTolerance && Speed <= maximumSpeed && Grounded && !Flying && !Attached && !Dead && !Teleporting;
     }
 }
+[ResultShape]
 public sealed record WalkEvidence(int ReachedCheckpoints, int PlannedCheckpoints, double TravelledMetres, double GroundedFraction, IReadOnlyList<string> Issues)
 {
     public bool Sufficient => Issues.Count == 0;
 }
 // Observation quality and human usability are separate: even good telemetry
 // cannot say whether a turn feels awkward or a road looks unnatural.
+[ResultShape]
 public sealed record WalkingReview(WalkEvidence Evidence, string HumanVerdict = "not-reviewed", string Notes = "");
 public static class WalkingProbe
 {

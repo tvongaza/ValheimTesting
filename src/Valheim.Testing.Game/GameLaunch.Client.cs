@@ -5,12 +5,14 @@ namespace Valheim.Testing.Game;
 
 // Also the host type: a client runs only on its own OS, so a host is the platform it can launch.
 // Other Unix hosts behave as Linux. The host is injectable so every host's branches are tested on any OS.
+[ResultShape]
 public enum ClientPlatform { Windows, Linux, MacOS }
 
 // Windows and Linux clients are x64 only. The macOS client is universal, so its slice is chosen at launch and the Doorstop
 // library inserted into it must contain the same one. X64 runs under Rosetta on Apple Silicon, with BepInExPack_Valheim's own
 // loader and core: the compatibility path. Arm64 runs natively, with a Doorstop library that has an arm64 slice and a
 // BepInEx core whose MonoMod can hook on arm64. Both are modded paths; neither is chosen for the caller.
+[ResultShape]
 public enum ClientArchitecture { X64, Arm64 }
 
 // What a game-client install is: its platform, decided from its contents, its executable and the architectures it can launch

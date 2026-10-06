@@ -102,6 +102,7 @@ public static class HostServer
 }
 
 /// <summary>What stopping a server on a host found: it was killed, had gone already, or quit by itself when asked (SIGINT).</summary>
+[ResultShape]
 public enum HostServerStop { Stopped, AlreadyGone, Quit }
 
 /// <summary>

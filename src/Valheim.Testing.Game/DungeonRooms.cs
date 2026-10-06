@@ -7,6 +7,7 @@ namespace Valheim.Testing.Game;
 /// One saved dungeon room: its prefab-name hash (<see cref="StableHash.Of"/> of the room prefab's name), position and
 /// rotation as Euler angles in degrees, as the dungeon generator saved them. <see cref="Index"/> is its place in the save.
 /// </summary>
+[ResultShape]
 public sealed record DungeonRoom(int Index, int Hash, float X, float Y, float Z, float RotationX, float RotationY, float RotationZ);
 
 /// <summary>
@@ -14,12 +15,14 @@ public sealed record DungeonRoom(int Index, int Hash, float X, float Y, float Z,
 /// each location instance by the zone its own position stands in, so this is found from the query, not from the
 /// generator's zone, and a generator displaced into a neighbouring zone still pairs with its location.
 /// </summary>
+[ResultShape]
 public sealed record DungeonLocation(string? Prefab, float X, float Y, float Z, int ZoneX, int ZoneZ);
 
 /// <summary>A room prefab's size (<c>Room.m_size</c>) in metres: x across, y up, z along the room's own axes.</summary>
 public sealed record RoomSize(float X, float Y, float Z);
 
 /// <summary>A reason a dungeon fails <see cref="DungeonRooms.OutsideZone"/>: a room (when <see cref="Room"/> is set) or the dungeon itself.</summary>
+[ResultShape]
 public sealed record DungeonRoomProblem(int? Room, int? Hash, string Reason)
 {
     public override string ToString() => Room is int index ? $"room {index} ({Hash}): {Reason}" : Reason;
@@ -31,6 +34,7 @@ public sealed record DungeonRoomProblem(int? Room, int? Hash, string Reason)
 /// absent) or <c>none</c>. The generator stands at its location's position plus the location's rotation applied to the
 /// generator's offset in the location prefab (typically about 5000 m up); <see cref="InteriorOffset"/> is that difference.
 /// </summary>
+[ResultShape]
 public sealed record SavedDungeon(string Prefab, string Uid, float X, float Y, float Z, int ZoneX, int ZoneZ, bool CustomInterior, string Format,
     IReadOnlyList<DungeonRoom> Rooms, DungeonLocation? Location)
 {

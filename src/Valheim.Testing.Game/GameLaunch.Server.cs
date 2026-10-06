@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace Valheim.Testing.Game;
 
+[ResultShape]
 public enum ServerPlatform { Windows, Linux, MacOS }
 
 // The machine building the launch. Each dedicated server runs only on its own OS (a Windows host may build a Linux launch

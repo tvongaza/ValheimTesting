@@ -12,7 +12,9 @@ namespace Valheim.Testing.Game;
 /// stopping, retiring, restoring and the log scan.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<StepPhase>))]
+[ResultShape]
 public enum StepPhase { Preflight, Setup, Scenario, Cleanup }
+[ResultShape]
 public sealed record StepResult(string Name, bool Passed, double Seconds, string Error, StepPhase Phase = StepPhase.Scenario);
 /// <summary>
 /// The result of one run: its steps, each in a <see cref="StepPhase"/>, the four states derived from them, provenance, log

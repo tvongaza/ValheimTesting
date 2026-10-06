@@ -3,6 +3,7 @@ using System.Text.Json;
 namespace Valheim.Testing.Game;
 
 /// <summary>How a client's global keys differ from the server's: keys it lacks and keys only it has.</summary>
+[ResultShape]
 public sealed record GlobalKeyDifference(IReadOnlyList<string> MissingOnClient, IReadOnlyList<string> ExtraOnClient)
 {
     public bool Same => MissingOnClient.Count == 0 && ExtraOnClient.Count == 0;

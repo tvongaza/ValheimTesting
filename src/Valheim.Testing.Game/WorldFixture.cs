@@ -238,12 +238,14 @@ public sealed class WorldFixture : IDisposable
 }
 
 /// <summary>A file a run made or changed that <see cref="WorldFixture.Retire"/> listed instead of keeping: its size and SHA256 (none for a link), and why.</summary>
+[ResultShape]
 public sealed record NotKeptFile(string Path, long? Bytes, string? Sha256, string Reason);
 
 /// <summary>
 /// What <see cref="WorldFixture.Retire"/> did: the removed copy, where the changes went, the files the run added or changed
 /// and those it removed (relative paths), what was listed and not kept, the bytes kept and the bytes the copy held.
 /// </summary>
+[ResultShape]
 public sealed record RetiredCopy(string Copy, string KeptIn, IReadOnlyList<string> Added, IReadOnlyList<string> Changed,
     IReadOnlyList<string> Missing, IReadOnlyList<NotKeptFile> NotKept, long KeptBytes, long BytesFreed)
 {

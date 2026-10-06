@@ -10,6 +10,7 @@ namespace Valheim.Testing.Game;
 /// directory) and, on a bash host, which game executables at the root carry
 /// the user-execute bit.
 /// </summary>
+[ResultShape]
 public sealed class HostListing
 {
     internal HostListing(string hostName, HostShellKind shell, string root, IReadOnlyDictionary<string, string> files, IReadOnlyList<string> executables)
