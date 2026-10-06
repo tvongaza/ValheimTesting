@@ -26,7 +26,7 @@ public sealed class NativeCleanClientRuntime : IDisposable
             throw new InvalidDataException("A ready dependency lock with a pinned ValheimCLI build is required.");
         if (cliPort is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(cliPort));
         source = Path.GetFullPath(source);
-        _ = ClientLaunch.Detect(source);
+        _ = GameLaunch.DetectClient(source);
         loaderPackage?.Validate();
         if (loaderPackage != null && RegressionInputs.Inside(loaderPackage.Root, source))
             throw new InvalidOperationException("The client loader package must be an extracted, reviewed set outside the source game install.");

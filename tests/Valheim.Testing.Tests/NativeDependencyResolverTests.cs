@@ -81,7 +81,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             host.SteamUserReply = "VT-STEAMUSER account " + (name == "client-b" ? 202 : name == "client-c" ? 303 : 101) + "\n";
             string source = host.Local(@"C:\game\source");
             if (name == "server") FakeInstalls.Server(source); else FakeInstalls.Client(source);
-            File.WriteAllText(Path.Combine(source, name == "server" ? ServerLaunch.WindowsExecutable : ClientLaunch.WindowsExecutable), "game");
+            File.WriteAllText(Path.Combine(source, name == "server" ? GameLaunch.ServerWindowsExecutable : GameLaunch.ClientWindowsExecutable), "game");
             File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
             File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
             if (name != "server")
@@ -209,7 +209,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var sharedHost = hosts["server"];
         string sharedClientSource = sharedHost.Local(@"C:\game\client-source");
         FakeInstalls.Client(sharedClientSource);
-        File.WriteAllText(Path.Combine(sharedClientSource, ClientLaunch.WindowsExecutable), "game");
+        File.WriteAllText(Path.Combine(sharedClientSource, GameLaunch.ClientWindowsExecutable), "game");
         File.WriteAllText(Path.Combine(sharedClientSource, "winhttp.dll"), "MZ target_assembly");
         File.WriteAllText(Path.Combine(sharedClientSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         Directory.CreateDirectory(sharedHost.Local(@"C:\save\characters_local"));
@@ -299,7 +299,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             {
                 string source = host.Local(install);
                 if (server) FakeInstalls.Server(source); else FakeInstalls.Client(source);
-                File.WriteAllText(Path.Combine(source, server ? ServerLaunch.WindowsExecutable : ClientLaunch.WindowsExecutable), "game");
+                File.WriteAllText(Path.Combine(source, server ? GameLaunch.ServerWindowsExecutable : GameLaunch.ClientWindowsExecutable), "game");
                 File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
                 File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
             }
@@ -385,7 +385,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var host = new FakeServerHost("pc", Path.Combine(_rig.Root, "run-campaign-pc"), server, windows: true);
         string source = host.Local(@"C:\game\source");
         FakeInstalls.Server(source);
-        File.WriteAllText(Path.Combine(source, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(source, GameLaunch.ServerWindowsExecutable), "server");
         File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
         File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         string inventory = Path.Combine(_rig.Root, "run-campaign-inventory.json");
@@ -548,13 +548,13 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var machine = new FakeMachine(windows ? "windows" : "linux") { SteamPath = windows ? @"C:\Steam" : null };
         string steam = windows ? @"C:\Steam" : "/home/tester/.local/share/Steam";
         machine.Directories.Add(steam);
-        string install = machine.App(steam, "896660", "Valheim dedicated server", windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable);
+        string install = machine.App(steam, "896660", "Valheim dedicated server", windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable);
         string runs = HostInstall.Join(machine.DataRoot, "runs", "local-server");
         var server = new FakeOwnedServer("test.mod", saveRoot: HostInstall.Join(runs, "run-test", "world"));
         var host = new FakeServerHost("local", Path.Combine(_rig.Root, "this-machine-host"), server, kind: GameHostKind.Local, windows: windows);
         string source = host.Local(install);
         FakeInstalls.Server(source);
-        File.WriteAllText(Path.Combine(source, windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable), "server");
+        File.WriteAllText(Path.Combine(source, windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable), "server");
         if (windows)
         {
             File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");

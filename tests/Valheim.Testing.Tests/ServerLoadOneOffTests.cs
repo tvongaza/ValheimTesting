@@ -33,7 +33,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         machine.Directories.Add(steam);
         machine.Directories.Add(HostInstall.Join(steam, "userdata"));
         game = machine.App(steam, "892970", "Valheim", machine.Platform switch
-            { "windows" => ClientLaunch.WindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => ClientLaunch.LinuxExecutable });
+            { "windows" => GameLaunch.ClientWindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => GameLaunch.ClientLinuxExecutable });
         return machine;
     }
 

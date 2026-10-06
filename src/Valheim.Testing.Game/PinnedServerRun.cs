@@ -333,8 +333,8 @@ public static class PinnedServerRun
             else
             {
                 // The runtime's contents decide its platform; checked on the pinned source so a wrong host fails before copying.
-                platform = ServerLaunch.Detect(plan.Runtime.Source); plan.CheckExecutable(platform);
-                if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);
+                platform = GameLaunch.DetectServer(plan.Runtime.Source); plan.CheckExecutable(platform);
+                if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, GameLaunch.LocalServerPlatform);
             }
             if (hosted != null && options.StagedRuntime != null) throw new ArgumentException("A run on another host copies its runtime on the server host; a staged local runtime copy cannot stand in for it.");
             options.CheckMode?.Invoke(mode, plan);
@@ -394,8 +394,8 @@ public static class PinnedServerRun
                 // Hashes do not cover file modes: a launch also requires the copy's Linux or macOS execute bit.
                 report.Step(StepPhase.Setup, "copied runtime has the plan's server executable", () =>
                 {
-                    plan.CheckExecutable(ServerLaunch.Detect(runtime!.DirectoryPath));
-                    if (mode != "validate") ServerLaunch.RequireExecutable(runtime.DirectoryPath);
+                    plan.CheckExecutable(GameLaunch.DetectServer(runtime!.DirectoryPath));
+                    if (mode != "validate") GameLaunch.RequireServerExecutable(runtime.DirectoryPath);
                 });
                 // What the game cannot report in game: its build and the loader, pinned on disk before anything launches.
                 report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers",

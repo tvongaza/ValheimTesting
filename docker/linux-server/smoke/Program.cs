@@ -43,7 +43,7 @@ try
     {
         // A previous run's log would satisfy the chainloader check without this boot.
         if (File.Exists(bepinexLog)) throw new InvalidOperationException("BepInEx/LogOutput.log already exists; use a fresh runtime copy.");
-        report.Provenance["platform"] = ServerLaunch.Detect(runtime).ToString();
+        report.Provenance["platform"] = GameLaunch.DetectServer(runtime).ToString();
         report.Provenance["world"] = world;
         report.Provenance["steamBuildId"] = SteamBuildId(runtime);
         Directory.CreateDirectory(saves);

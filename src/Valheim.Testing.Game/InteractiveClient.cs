@@ -132,7 +132,7 @@ public static class InteractiveClient
         else
         {
             display ??= new LinuxDisplay();
-            variables["exe"] = ClientLaunch.LinuxExecutable;
+            variables["exe"] = GameLaunch.ClientLinuxExecutable;
             variables["display"] = display.Display; variables["wayland"] = display.WaylandDisplay ?? "";
             variables["runtime"] = display.RuntimeDirectory ?? ""; variables["xauthority"] = display.XAuthority ?? "";
         }

@@ -136,7 +136,7 @@ public sealed class ShippedLoaderTests : IDisposable
     {
         byte[] zip = Pack();
         string install = WithCore(Install("mac-old", "MZ target_assembly", Doorstop4), new Version(5, 4, 22, 0));
-        Directory.CreateDirectory(Path.Combine(install, ClientLaunch.MacBundle));
+        Directory.CreateDirectory(Path.Combine(install, GameLaunch.ClientMacBundle));
         Assert.Null(ShippedLoader.Instead("client", install, () => (new MemoryStream(zip), Pin(zip)), Path.Combine(_root, "data")));
     }
 

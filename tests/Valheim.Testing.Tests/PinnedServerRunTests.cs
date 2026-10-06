@@ -20,7 +20,7 @@ public sealed class PinnedServerRunTests : IDisposable
         object? client = null)
     {
         Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
-        string server = Path.Combine(Runtime, linux ? ServerLaunch.LinuxExecutable : ServerLaunch.WindowsExecutable);
+        string server = Path.Combine(Runtime, linux ? GameLaunch.ServerLinuxExecutable : GameLaunch.ServerWindowsExecutable);
         File.WriteAllText(server, "server");
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
         FakeInstalls.Server(Runtime);
@@ -427,7 +427,7 @@ public sealed class KeepRuntimeVariableTests : IDisposable
         string runtime = Path.Combine(_root, "runtime"), world = Path.Combine(_root, "world"), output = Path.Combine(_root, "out");
         Directory.CreateDirectory(runtime); Directory.CreateDirectory(Path.Combine(world, "worlds_local"));
         bool linux = !OperatingSystem.IsWindows();
-        string server = Path.Combine(runtime, linux ? ServerLaunch.LinuxExecutable : ServerLaunch.WindowsExecutable);
+        string server = Path.Combine(runtime, linux ? GameLaunch.ServerLinuxExecutable : GameLaunch.ServerWindowsExecutable);
         File.WriteAllText(server, "server");
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
         FakeInstalls.Server(runtime);

@@ -237,7 +237,7 @@ public sealed class WindowsSshQuitSignalTests
         Environment.SetEnvironmentVariable("SSH_CLIENT", null);
         try
         {
-            // ping -t runs until Ctrl+C. Its own windowless console, as ServerLaunch gives the dedicated server, so the Ctrl+C
+            // ping -t runs until Ctrl+C. Its own windowless console, as GameLaunch.ToStartInfo gives the dedicated server, so the Ctrl+C
             // reaches only it and the helper, never this test's console.
             using var owned = new DirectServerProcess(new ProcessStartInfo("ping", "-t 127.0.0.1") { CreateNoWindow = true }, Path.Combine(dir.Path, "owned"));
             var stop = owned.StopCleanly(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5));

@@ -14,18 +14,17 @@ public enum ClientPlatform { Windows, Linux, MacOS }
 public enum ClientArchitecture { X64, Arm64 }
 
 // What a game-client install is: its platform, decided from its contents, its executable and the architectures it can launch
-// as. GameLaunch.ForClient builds the launch from it.
-public static class ClientLaunch
+// as. ForClient builds the launch from it.
+public sealed partial class GameLaunch
 {
-    public const string WindowsExecutable = "valheim.exe";
-    public const string LinuxExecutable = "valheim.x86_64";
-    public const string MacBundle = "Valheim.app";
-    public const string GameSteamAppId = "892970";
+    public const string ClientWindowsExecutable = "valheim.exe";
+    public const string ClientLinuxExecutable = "valheim.x86_64";
+    public const string ClientMacBundle = "Valheim.app";
     public const string ConsoleArgument = "-console";
     // A SIP-protected system binary: the kernel strips DYLD_* from its environment, so they are passed with -e.
     // It execs the game in place, so the started PID is still the game's.
     public const string MacArchLauncher = "/usr/bin/arch";
-    private static readonly string MacExecutable = Path.Combine("Contents", "MacOS", "Valheim");
+    private static readonly string MacClientExecutable = Path.Combine("Contents", "MacOS", "Valheim");
     // The pack's x64 library first (its route, under Rosetta on Apple Silicon), then libdoorstop.dylib at the install's
     // root, where a native install puts UnityDoorstop 4.5 or later: universal or arm64-only, what matters is its arm64 slice.
     // The Doorstop libraries a macOS install may load BepInEx through, relative with '/': BepInExPack's x64 one or a root one.
@@ -36,7 +35,7 @@ public static class ClientLaunch
     internal static readonly string MacNativeDetour = Path.Combine("BepInEx", "core", "MonoMod.RuntimeDetour.dll");
     internal const int MacNativeDetourMajor = 25;
 
-    internal static ClientPlatform CurrentHost =>
+    internal static ClientPlatform CurrentClientHost =>
         OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
 
     /// <summary>
@@ -44,60 +43,60 @@ public static class ClientLaunch
     /// or a <c>Valheim.app</c> bundle. Refuses an install holding more than one, an empty one, the bundle itself instead
     /// of the directory holding it, and a dedicated-server runtime (which <see cref="GameLaunch.ForServer"/> launches).
     /// </summary>
-    public static ClientPlatform Detect(string installDirectory)
+    public static ClientPlatform DetectClient(string installDirectory)
     {
         string install = FullInstall(installDirectory);
-        bool windows = File.Exists(Path.Combine(install, WindowsExecutable)), linux = File.Exists(Path.Combine(install, LinuxExecutable));
+        bool windows = File.Exists(Path.Combine(install, ClientWindowsExecutable)), linux = File.Exists(Path.Combine(install, ClientLinuxExecutable));
         bool mac = FindMacBundle(install) != null;
         if ((windows ? 1 : 0) + (linux ? 1 : 0) + (mac ? 1 : 0) > 1)
-            throw new InvalidOperationException($"Install contains more than one of {WindowsExecutable}, {LinuxExecutable} and {MacBundle}; refusing to guess its platform.");
+            throw new InvalidOperationException($"Install contains more than one of {ClientWindowsExecutable}, {ClientLinuxExecutable} and {ClientMacBundle}; refusing to guess its platform.");
         if (windows) return ClientPlatform.Windows;
         if (linux) return ClientPlatform.Linux;
         if (mac) return ClientPlatform.MacOS;
-        if (Path.GetExtension(install).Equals(".app", StringComparison.OrdinalIgnoreCase) || File.Exists(Path.Combine(install, MacExecutable)))
-            throw new ArgumentException($"{install} is the {MacBundle} bundle itself; pass the directory that holds it and BepInEx.", nameof(installDirectory));
-        string? server = new[] { ServerLaunch.WindowsExecutable, ServerLaunch.LinuxExecutable, ServerLaunch.MacExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(install, name)));
+        if (Path.GetExtension(install).Equals(".app", StringComparison.OrdinalIgnoreCase) || File.Exists(Path.Combine(install, MacClientExecutable)))
+            throw new ArgumentException($"{install} is the {ClientMacBundle} bundle itself; pass the directory that holds it and BepInEx.", nameof(installDirectory));
+        string? server = new[] { ServerWindowsExecutable, ServerLinuxExecutable, ServerMacExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(install, name)));
         if (server != null)
             throw new InvalidOperationException($"{install} is a dedicated-server runtime ({server}), not a game client; launch it with GameLaunch.ForServer.");
-        throw new FileNotFoundException($"Install contains none of {WindowsExecutable}, {LinuxExecutable} or {MacBundle}.", install);
+        throw new FileNotFoundException($"Install contains none of {ClientWindowsExecutable}, {ClientLinuxExecutable} or {ClientMacBundle}.", install);
     }
 
     /// <summary>
     /// Returns the detected client executable's full path (inside the bundle on macOS). A client runs only on its own OS:
     /// another host refuses with <see cref="PlatformNotSupportedException"/>. On Linux and macOS it must carry the user-execute bit.
     /// </summary>
-    public static string RequireExecutable(string installDirectory) => RequireExecutable(installDirectory, CurrentHost);
-    internal static string RequireExecutable(string installDirectory, ClientPlatform host) => Resolve(FullInstall(installDirectory), host).Executable;
+    public static string RequireClientExecutable(string installDirectory) => RequireClientExecutable(installDirectory, CurrentClientHost);
+    internal static string RequireClientExecutable(string installDirectory, ClientPlatform host) => ResolveClient(FullInstall(installDirectory), host).Executable;
 
     /// <summary>
     /// The architectures this install can be launched as, host aside: x64 for Windows and Linux; on macOS, the slices
     /// both the game executable and one of its Doorstop libraries contain, arm64 only when the BepInEx core also runs
     /// natively (<see cref="GameLaunch.ForClient"/> explains the rule). Empty when no Doorstop library matches.
     /// </summary>
-    public static IReadOnlyList<ClientArchitecture> LaunchArchitectures(string installDirectory)
+    public static IReadOnlyList<ClientArchitecture> ClientLaunchArchitectures(string installDirectory)
     {
         string install = FullInstall(installDirectory);
-        if (Detect(install) != ClientPlatform.MacOS) return [ClientArchitecture.X64];
-        var game = MachOArchitectures(Path.Combine(FindMacBundle(install)!, MacExecutable));
+        if (DetectClient(install) != ClientPlatform.MacOS) return [ClientArchitecture.X64];
+        var game = MachOArchitectures(Path.Combine(FindMacBundle(install)!, MacClientExecutable));
         var doorstops = MacDoorstops.Select(relative => Path.Combine(install, relative)).Where(File.Exists).SelectMany(MachOArchitectures).ToHashSet();
         return Enum.GetValues<ClientArchitecture>().Where(architecture => game.Contains(architecture) && doorstops.Contains(architecture)
             && (architecture != ClientArchitecture.Arm64 || MacNativeCoreProblem(install) == null)).ToList();
     }
 
-    internal static (ClientPlatform Platform, string Executable) Resolve(string install, ClientPlatform host)
+    internal static (ClientPlatform Platform, string Executable) ResolveClient(string install, ClientPlatform host)
     {
-        var platform = Detect(install);
+        var platform = DetectClient(install);
         string executable = platform switch
         {
-            ClientPlatform.Windows => Path.Combine(install, WindowsExecutable),
-            ClientPlatform.Linux => Path.Combine(install, LinuxExecutable),
-            _ => Path.Combine(FindMacBundle(install)!, MacExecutable),
+            ClientPlatform.Windows => Path.Combine(install, ClientWindowsExecutable),
+            ClientPlatform.Linux => Path.Combine(install, ClientLinuxExecutable),
+            _ => Path.Combine(FindMacBundle(install)!, MacClientExecutable),
         };
         // Refused before any file mode is read: exec of another OS's binary fails with an opaque error.
         if (platform != host)
             throw new PlatformNotSupportedException($"This {host} host cannot run the {platform} Valheim client {executable}; " +
                 $"start it on a {platform} machine. GameLaunch does not support Wine, Proton or other cross-OS launches.");
-        if (!File.Exists(executable)) throw new FileNotFoundException($"{MacBundle} has no executable: {MacExecutable}", executable);
+        if (!File.Exists(executable)) throw new FileNotFoundException($"{ClientMacBundle} has no executable: {MacClientExecutable}", executable);
         // The outer check is the real OS (Unix modes exist); the inner one is the host this launch is built for.
         if (!OperatingSystem.IsWindows())
         {
@@ -133,8 +132,8 @@ public static class ClientLaunch
     // a native core. Returns the Doorstop library to insert.
     internal static string RequireMacArchitecture(string install, ClientArchitecture architecture)
     {
-        string executable = Path.Combine(FindMacBundle(install) ?? throw new FileNotFoundException($"Install contains no {MacBundle}.", install), MacExecutable);
-        if (!File.Exists(executable)) throw new FileNotFoundException($"{MacBundle} has no executable: {MacExecutable}", executable);
+        string executable = Path.Combine(FindMacBundle(install) ?? throw new FileNotFoundException($"Install contains no {ClientMacBundle}.", install), MacClientExecutable);
+        if (!File.Exists(executable)) throw new FileNotFoundException($"{ClientMacBundle} has no executable: {MacClientExecutable}", executable);
         string doorstop = MacDoorstop(install, executable, architecture);
         if (architecture == ClientArchitecture.Arm64 && MacNativeCoreProblem(install) is { } problem) throw new InvalidOperationException(problem);
         return doorstop;
@@ -192,12 +191,6 @@ public static class ClientLaunch
         slices.Count == 0 ? "no x86_64 or arm64 Mach-O slice" : string.Join(", ", slices.Order().Select(SliceName));
     // Steam installs name it Valheim.app; a case-insensitive match also finds it on a case-sensitive file system.
     private static string? FindMacBundle(string install) =>
-        Directory.EnumerateDirectories(install).FirstOrDefault(path => Path.GetFileName(path).Equals(MacBundle, StringComparison.OrdinalIgnoreCase));
-    internal static string FullInstall(string installDirectory)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(installDirectory);
-        string install = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDirectory));
-        if (!Directory.Exists(install)) throw new DirectoryNotFoundException("Client install directory does not exist: " + install);
-        return install;
-    }
+        Directory.EnumerateDirectories(install).FirstOrDefault(path => Path.GetFileName(path).Equals(ClientMacBundle, StringComparison.OrdinalIgnoreCase));
+    internal static string FullInstall(string installDirectory) => FullDirectory(installDirectory, "Client install");
 }

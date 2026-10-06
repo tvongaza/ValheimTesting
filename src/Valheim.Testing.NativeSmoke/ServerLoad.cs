@@ -517,7 +517,7 @@ internal static class ServerLoad
                     Scenario = run =>
                     {
                         if (clientPlan == null) return Scenario(run, null, clock);
-                        string saves = HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(clientPlan.Install));
+                        string saves = HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(clientPlan.Install));
                         using var stagedCharacter = DefaultSmokeCharacter.StageForRun(character!, Path.Combine(saves, "characters_local"), steamUserdata!);
                         return Scenario(run, clientPlan, clock);
                     },

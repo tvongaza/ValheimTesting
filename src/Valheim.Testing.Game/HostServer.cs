@@ -63,7 +63,7 @@ public static class HostServer
 
         var variables = new Dictionary<string, string>
         {
-            ["runtime"] = launch.WorkingDirectory, ["exe"] = windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
+            ["runtime"] = launch.WorkingDirectory, ["exe"] = windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
             ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),

@@ -215,7 +215,7 @@ public sealed class PinningTests : IDisposable
     // The loader identity covers every file a launch requires (#364's one list), so no required file can change unpinned.
     [Fact] public void TheLoaderPinCoversEveryFileALaunchRequires()
     {
-        foreach (string file in BepInExLoader.LoaderFiles(ClientPlatform.Windows).Concat(BepInExLoader.LoaderFiles(ClientPlatform.Linux)).Concat(ClientLaunch.MacDoorstopFiles))
+        foreach (string file in BepInExLoader.LoaderFiles(ClientPlatform.Windows).Concat(BepInExLoader.LoaderFiles(ClientPlatform.Linux)).Concat(GameLaunch.MacDoorstopFiles))
             Assert.True(InstallPins.IsLoaderFile(file), file);
         Assert.Equal(["winhttp.dll", "doorstop_config.ini", "libdoorstop.dylib", "BepInEx/core", "doorstop_libs"], InstallPins.LoaderEntries);
     }
@@ -333,7 +333,7 @@ public sealed class PinningTests : IDisposable
     private string WritePlan(object? pinning = null, InstallPins? runtimePins = null, bool manifests = true)
     {
         Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
-        string server = Path.Combine(Runtime, OperatingSystem.IsWindows() ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable);
+        string server = Path.Combine(Runtime, OperatingSystem.IsWindows() ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable);
         File.WriteAllText(server, "server");
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
         FakeInstalls.Server(Runtime);

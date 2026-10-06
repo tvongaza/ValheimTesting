@@ -990,7 +990,7 @@ public static class RegressionBundle
             var environment = run.Inputs;
             // The machine the run used: its game, disposable install and save folder are private paths too.
             string? save = null;
-            try { save = HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(run.Game)); }
+            try { save = HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(run.Game)); }
             catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException) { } // no install left to look at
             string? loaderRoot = null;
             try { loaderRoot = run.LoaderPackage == null ? null : BepInExLoaderPackage.Read(run.LoaderPackage).Root; }

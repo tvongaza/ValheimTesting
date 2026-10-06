@@ -148,7 +148,7 @@ public sealed class ClientSession : IDisposable
         finally { reservation.Stop(); }
         if (!SteamRunning()) throw new InvalidOperationException("No Steam client is running in this session. An owned client needs Steam running and signed in, in the desktop session this runner runs in.");
         string log = Path.Combine(plan.Install, "BepInEx", "LogOutput.log");
-        var platform = ClientLaunch.Detect(plan.Install);
+        var platform = GameLaunch.DetectClient(plan.Install);
         string playerLog = PlayerLog(platform);
         string prefix = Path.Combine(output, "client-boot");
         LogWait? cliLog = null;
@@ -217,7 +217,7 @@ public sealed class ClientSession : IDisposable
         GameActor? actor = null;
         try
         {
-            File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["install"] = plan.Install, ["architecture"] = ClientLaunch.PlanName(architecture) }, plan.Pinned)));
+            File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["install"] = plan.Install, ["architecture"] = GameLaunch.PlanName(architecture) }, plan.Pinned)));
             using (var abandon = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             {
                 var exited = process.WaitForExitAsync(abandon.Token);

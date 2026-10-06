@@ -47,7 +47,7 @@ public sealed class DoorstopMixPathsTests : IDisposable
     {
         string install = Path.Combine(_root, "client");
         FakeInstalls.Client(install);
-        File.WriteAllText(Path.Combine(install, ClientLaunch.WindowsExecutable), "game");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ClientWindowsExecutable), "game");
         Loader(install, proxy, config);
         AssertRefusal(Record.Exception(() => GameLaunch.LocalClient(install, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows).ToStartInfo()), "install", expected);
     }
@@ -57,9 +57,9 @@ public sealed class DoorstopMixPathsTests : IDisposable
     {
         string runtime = Path.Combine(_root, "server");
         FakeInstalls.Server(runtime);
-        File.WriteAllText(Path.Combine(runtime, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(runtime, GameLaunch.ServerWindowsExecutable), "server");
         Loader(runtime, proxy, config);
-        AssertRefusal(Record.Exception(() => GameLaunch.LocalServer(runtime, [], null, ServerHost.Windows, ServerLaunch.MacArchitecture).ToStartInfo()), "runtime", expected);
+        AssertRefusal(Record.Exception(() => GameLaunch.LocalServer(runtime, [], null, ServerHost.Windows, GameLaunch.MacServerArchitecture).ToStartInfo()), "runtime", expected);
     }
 
     [Theory] [MemberData(nameof(Loaders))]
@@ -77,7 +77,7 @@ public sealed class DoorstopMixPathsTests : IDisposable
         var host = new FakeServerHost("windows-client", Path.Combine(_root, "mirror"), windows: true);
         string source = host.Local(@"C:\game\source");
         FakeInstalls.Client(source);
-        File.WriteAllText(Path.Combine(source, ClientLaunch.WindowsExecutable), "game");
+        File.WriteAllText(Path.Combine(source, GameLaunch.ClientWindowsExecutable), "game");
         Loader(source, proxy, config);
         AssertRefusal(await Record.ExceptionAsync(() => HostedRuntimeStage.InspectSourceAsync(host, HostedRuntimeKind.Client, @"C:\game\source", null, TimeSpan.FromSeconds(30))),
             "source install on windows-client", expected);

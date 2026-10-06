@@ -49,7 +49,7 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal("/srv/runs/run-1/runtime", launch.WorkingDirectory);
         Assert.Equal("/srv/runs/run-1/runtime/valheim_server.x86_64", launch.Executable);
         Assert.Equal("abc", launch.Environment["MY_MOD_TOKEN"]);
-        Assert.Equal(ServerLaunch.DedicatedServerSteamAppId, launch.Environment["SteamAppId"]);
+        Assert.Equal(GameLaunch.SteamAppId, launch.Environment["SteamAppId"]);
         Assert.Equal("1", launch.Environment["DOORSTOP_ENABLED"]);
         Assert.Equal("/srv/runs/run-1/runtime/BepInEx/core/BepInEx.Preloader.dll", launch.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
         Assert.Equal("/srv/runs/run-1/runtime/linux64:/srv/runs/run-1/runtime/doorstop_libs", launch.Prepended["LD_LIBRARY_PATH"]);
@@ -73,7 +73,7 @@ public sealed class HostServerTests : IDisposable
             File.WriteAllText(path, "fake");
             if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, File.GetUnixFileMode(path) | UnixFileMode.UserExecute);
         }
-        var local = GameLaunch.LocalServer(runtime, ["-batchmode"], null, OperatingSystem.IsWindows() ? ServerHost.Windows : ServerHost.Linux, ServerLaunch.MacArchitecture);
+        var local = GameLaunch.LocalServer(runtime, ["-batchmode"], null, OperatingSystem.IsWindows() ? ServerHost.Windows : ServerHost.Linux, GameLaunch.MacServerArchitecture);
         var host = new QueueHost(HostShell.Bash);
         var error = await Assert.ThrowsAsync<ArgumentException>(() => HostServer.StartAsync(host, local, "/srv/runs/boot-1", TimeSpan.FromSeconds(60)));
         Assert.Contains("GameLaunch.ForServer", error.Message);
@@ -194,7 +194,7 @@ public sealed class HostServerTests : IDisposable
         catch (InvalidOperationException) when (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") != "1") { return; }
         string root = Path.Combine(_root, "Valheim Testing Server"), runtime = Path.Combine(root, "runtime copy");
         Directory.CreateDirectory(runtime);
-        File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), Path.Combine(runtime, ServerLaunch.WindowsExecutable));
+        File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), Path.Combine(runtime, GameLaunch.ServerWindowsExecutable));
         foreach (string file in GameLaunch.ForServer(runtime, [], hostPlatform: ServerPlatform.Windows).RequiredFiles.Skip(1))
         {
             string path = Path.Combine(runtime, file.Replace('/', Path.DirectorySeparatorChar));

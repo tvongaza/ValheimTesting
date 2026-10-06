@@ -114,11 +114,11 @@ public static class HostedRuntimeStage
         if (kind == HostedRuntimeKind.Server) _ = HostInstall.DetectServer(sourceListing);
         else
         {
-            bool windows = sourceListing.Files.ContainsKey(ClientLaunch.WindowsExecutable);
-            bool linux = sourceListing.Files.ContainsKey(ClientLaunch.LinuxExecutable);
+            bool windows = sourceListing.Files.ContainsKey(GameLaunch.ClientWindowsExecutable);
+            bool linux = sourceListing.Files.ContainsKey(GameLaunch.ClientLinuxExecutable);
             bool mac = sourceListing.Files.ContainsKey("Valheim.app/Contents/MacOS/Valheim");
-            if ((windows ? 1 : 0) + (linux ? 1 : 0) + (mac ? 1 : 0) != 1 || sourceListing.Files.ContainsKey(ServerLaunch.WindowsExecutable) ||
-                sourceListing.Files.ContainsKey(ServerLaunch.LinuxExecutable))
+            if ((windows ? 1 : 0) + (linux ? 1 : 0) + (mac ? 1 : 0) != 1 || sourceListing.Files.ContainsKey(GameLaunch.ServerWindowsExecutable) ||
+                sourceListing.Files.ContainsKey(GameLaunch.ServerLinuxExecutable))
                 throw new InvalidOperationException($"The source install on {host.Name} must contain exactly one Windows, Linux or macOS client executable and no server executable.");
             if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
                 throw new InvalidOperationException($"The client install on {host.Name} does not match its host platform.");

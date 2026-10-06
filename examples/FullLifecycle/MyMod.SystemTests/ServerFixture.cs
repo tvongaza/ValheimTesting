@@ -77,8 +77,8 @@ public static class ServerFixture
         {
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
             if (IsInside(output, runtime)) throw new ArgumentException("The output must be outside the runtime.");
-            var platform = ServerLaunch.Detect(runtime);
-            ServerRunPlan.CheckLaunchHost(platform, ServerLaunch.LocalPlatform);
+            var platform = GameLaunch.DetectServer(runtime);
+            ServerRunPlan.CheckLaunchHost(platform, GameLaunch.LocalServerPlatform);
             report.Provenance["serverPlatform"] = platform.ToString();
             report.Provenance["steamBuildId"] = SteamBuildId(runtime);
             Directory.CreateDirectory(output); ownOutput = true;
@@ -92,7 +92,7 @@ public static class ServerFixture
             report.Step(StepPhase.Setup, "copy the runtime; the source is never launched", () =>
             {
                 copy = WorldFixture.Copy(runtime, output, runtimeHashes);
-                ServerLaunch.RequireExecutable(copy.DirectoryPath);
+                GameLaunch.RequireServerExecutable(copy.DirectoryPath);
             });
 
             // A throwaway password for a server that is never listed (-public 0) and whose port nothing publishes.

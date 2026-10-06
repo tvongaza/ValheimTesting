@@ -19,7 +19,7 @@ internal static class HostServerChecks
         File.WriteAllText(Path.Combine(directory, "BepInEx", "core", "BepInEx.Preloader.dll"), "preloader");
         Directory.CreateDirectory(Path.Combine(directory, "doorstop_libs"));
         File.WriteAllText(Path.Combine(directory, "doorstop_libs", "libdoorstop_x64.so"), "not a library");
-        string server = Path.Combine(directory, ServerLaunch.LinuxExecutable);
+        string server = Path.Combine(directory, GameLaunch.ServerLinuxExecutable);
         File.WriteAllText(server, string.Join('\n',
             "#!/bin/bash",
             "mkdir -p BepInEx",
@@ -44,12 +44,12 @@ internal static class HostServerChecks
         // The copy on the host is every file of the source, and its pins are the source's.
         var listing = await HostInstall.ListAsync(host, runtime, Generous);
         HostInstall.RequireSame(WorldFixture.Manifest(source.Path), listing, "runtime copy", ["SOURCE.txt"]);
-        Assert.Contains(ServerLaunch.LinuxExecutable, listing.Executables);
+        Assert.Contains(GameLaunch.ServerLinuxExecutable, listing.Executables);
         var pins = InstallPins.Of(source.Path);
         Assert.Equal(pins.Game, HostInstall.CheckPins(pins, listing, "runtime").Game);
         Assert.Equal(ServerPlatform.Linux, HostInstall.DetectServer(listing));
         var partial = await HostInstall.ListAsync(host, runtime, Generous, HostInstall.PinPaths);
-        Assert.DoesNotContain(ServerLaunch.LinuxExecutable, partial.Files.Keys);
+        Assert.DoesNotContain(GameLaunch.ServerLinuxExecutable, partial.Files.Keys);
         Assert.Equal(pins.Loader, HostInstall.Pins(partial).Loader);
 
         // A listener here is a listener there: the host shares this machine's network.
@@ -115,7 +115,7 @@ internal static class HostServerChecks
             string stdout = File.ReadAllText(Path.Combine(local, "stdout.log"));
             Assert.Contains("args=-batchmode -name it's a test", stdout);
             Assert.Contains("VT_TEST_TOKEN=token-123", stdout);
-            Assert.Contains("SteamAppId=" + ServerLaunch.DedicatedServerSteamAppId, stdout);
+            Assert.Contains("SteamAppId=" + GameLaunch.SteamAppId, stdout);
             Assert.Contains("DOORSTOP_ENABLED=1", stdout);
             Assert.Contains("DOORSTOP_TARGET_ASSEMBLY=" + runtime + "/BepInEx/core/BepInEx.Preloader.dll", stdout);
             // The server's working directory was the runtime: its log is gone from there, into the boot's evidence.

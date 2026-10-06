@@ -509,7 +509,7 @@ public sealed class TargetedRegression
             .SelectMany(folder => Directory.EnumerateFiles(folder, "*.dll")).Select(Path.GetFileNameWithoutExtension).OfType<string>();
         var unmet = DependencyRule.Check(staged.Select(entry => (entry.File.Path, entry.Metadata)).ToList(), provided, Inputs.OptionalReferences, "valheim");
         if (unmet.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", unmet.Select(problem => problem.Message)) + ".");
-        string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(install));
+        string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(install));
         string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
         if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
         else if (!File.Exists(character))
@@ -566,7 +566,7 @@ public sealed class TargetedRegression
                 report.Provenance["bepInExPackage"] = BepInExLoaderPackage.Read(loaderPath).Identity;
             if (Inputs.Client.CharacterStore is { } store)
             {
-                string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(ClientLaunch.Detect(Game));
+                string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(Game));
                 report.Step(StepPhase.Setup, "stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
                     store, Inputs.Client.Character, Path.Combine(save, "characters_local"),
                     SteamUserData ?? throw new DirectoryNotFoundException("No Steam userdata was detected on this machine; a registered character is checked against it for a same-named Steam Cloud character."),

@@ -232,10 +232,10 @@ public sealed class InstallPins
         if (LoaderRootFiles.FirstOrDefault(file => relative.Equals(file, comparison)) is { } root) return root;
         return LoaderFolders.FirstOrDefault(folder => relative.StartsWith(folder + "/", comparison)) is { } folder ? folder + relative[folder.Length..] : null;
     }
-    // Derived from the files a launch needs (BepInExLoader.LoaderFiles, ClientLaunch.MacDoorstopFiles): each one at the root,
+    // Derived from the files a launch needs (BepInExLoader.LoaderFiles, GameLaunch.MacDoorstopFiles): each one at the root,
     // and the whole folder of each one in a folder, so the identity covers every required file and what loads beside it.
     private static readonly string[] Required =
-        [.. BepInExLoader.LoaderFiles(ClientPlatform.Windows), .. BepInExLoader.LoaderFiles(ClientPlatform.Linux), .. ClientLaunch.MacDoorstopFiles];
+        [.. BepInExLoader.LoaderFiles(ClientPlatform.Windows), .. BepInExLoader.LoaderFiles(ClientPlatform.Linux), .. GameLaunch.MacDoorstopFiles];
     internal static readonly string[] LoaderRootFiles = Required.Where(file => !file.Contains('/')).Distinct(StringComparer.Ordinal).ToArray();
     internal static readonly string[] LoaderFolders = Required.Where(file => file.Contains('/')).Select(file => file[..file.LastIndexOf('/')])
         .Distinct(StringComparer.Ordinal).ToArray();

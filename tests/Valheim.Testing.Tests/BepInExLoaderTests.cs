@@ -2,7 +2,7 @@ using System.Diagnostics;
 using Valheim.Testing.Game;
 using Xunit;
 
-// The loader policy ServerLaunch and ClientLaunch share. Each launcher's own tests check that it applies it.
+// The loader policy GameLaunch.ForServer and ForClient share. Each builder's own tests check that it applies it.
 public class BepInExLoaderTests
 {
     private const string Doorstop4 = "[General]\nenabled = true\ntarget_assembly={0}\n[UnityMono]\ndebug_enabled = false\n";
