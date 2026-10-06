@@ -2,7 +2,7 @@
 //
 //   dotnet run scripts/validate.cs
 //
-// Runs the library tests, compiles the adapter source package against reference stubs, builds every example and tool, runs
+// Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
 // executes the no-game example (SharedWorld), packs the libraries into the local feed and runs scripts/consumer.cs --feed local:
 // a consumer outside this checkout of exactly the packages just packed.
@@ -38,6 +38,11 @@ Run("dotnet", "build", "tests/Valheim.Testing.Adapter.CompileCheck/Valheim.Testi
 Run("dotnet", "build", Solution("examples", new[] { "examples", "tools" }
     .SelectMany(dir => Directory.GetDirectories(Path.Combine(root, dir)).SelectMany(sub => Directory.GetFiles(sub, "*.csproj")))
     .Append(Path.Combine(root, "docker", "linux-server", "smoke", "LinuxServerSmoke.csproj"))), "-c", "Release", "-nodeReuse:false");
+// Every file-based script builds, warnings being errors here too: the maintainer tools no step below runs would otherwise
+// first fail when someone needs them. This script is running, so it is not built again.
+foreach (string script in Directory.GetFiles(Path.Combine(root, "scripts"), "*.cs").Order(StringComparer.Ordinal)
+    .Where(script => Path.GetFileName(script) != "validate.cs"))
+    Run("dotnet", "build", script);
 // The full-life-cycle example's external projects; its game-side mod and adapter need a game install and build elsewhere.
 // The native session tests (trait Category=Native) launch the game when a private session.json sits beside their project
 // (the example's skip without one, the native acceptance suite's fail), so validation leaves them out.
