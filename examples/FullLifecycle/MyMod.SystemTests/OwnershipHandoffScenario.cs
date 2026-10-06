@@ -14,36 +14,35 @@ public static class OwnershipHandoffScenario
 {
     private const string OwnerSource = "mymod-marker-owner";
 
-    public static void Run(CampaignRun run)
+    public static void Run(GameSession session, LifecyclePlan plan)
     {
-        var plan = run.Plan;
         var first = plan.Client!;
         var second = plan.SecondClient!;
-        var report = run.Report;
+        var report = session.Report;
         ClientSession? a = null, b = null;
         Exception? failure = null;
         report.Step(StepPhase.Setup, "fixture arrival heights are dry and measured before either client starts", () =>
         {
             var samples = new[] { CampaignSteps.At(plan.Arrival), CampaignSteps.At(plan.SecondArrival!) };
-            var measured = TerrainProbe.Compare(run.Server, "generator", "declared fixture arrival points", samples, 0.5f);
+            var measured = TerrainProbe.Compare(session.Server!.Game, "generator", "declared fixture arrival points", samples, 0.5f);
             report.Provenance["arrival-height-check"] = JsonSerializer.Serialize(measured);
             if (!measured.Passed || measured.Samples.Any(sample => sample.Actual < LifecyclePlan.WaterLevel + LifecyclePlan.Clearance))
                 throw new InvalidOperationException("Fixture arrivals are not confirmed dry: " + JsonSerializer.Serialize(measured));
         });
-        CampaignSteps.MarkSites(plan, run.Server, report);
+        CampaignSteps.MarkSites(plan, session.Server!.Game, report);
         try
         {
-            report.Step(StepPhase.Setup, "the dedicated server accepts both clients", () => run.OwnedServer.WaitUntilJoinable(run.Server));
-            report.Step(StepPhase.Setup, "open pinned client A on its leased account", () => a = run.OpenCampaignClient(first, "client-a"));
-            JoinAndArrive(run, a!.Actor, first, plan.Arrival, "A");
+            report.Step(StepPhase.Setup, "the dedicated server accepts both clients", () => session.Server!.WaitUntilJoinable(session.Server!.Game));
+            report.Step(StepPhase.Setup, "open pinned client A on its leased account", () => a = session.OpenClient(first, "client-a"));
+            JoinAndArrive(session, plan.WorldUid, a!.Actor, first, plan.Arrival, "A");
             report.Step("A sees one labelled marker", () => CampaignSteps.RequireLabelledMarker(a.Actor, plan.DrySite));
             string aId = "";
             report.Step("A explicitly claims the example marker once", () => aId = Claim(a.Actor, plan.DrySite));
-            report.Step("server observes A's owner-change notification", () => WaitForOwner(run.Server, plan.DrySite, aId, report, "server-owner-a"));
+            report.Step("server observes A's owner-change notification", () => WaitForOwner(session.Server!.Game, plan.DrySite, aId, report, "server-owner-a"));
 
-            report.Step("open pinned client B on its separate leased account", () => b = run.OpenCampaignClient(second, "client-b"));
-            JoinAndArrive(run, b!.Actor, second, plan.SecondArrival!, "B");
-            report.Step("two clients remain connected at once", () => CampaignSteps.RequirePeers(run.Server, 2));
+            report.Step("open pinned client B on its separate leased account", () => b = session.OpenClient(second, "client-b"));
+            JoinAndArrive(session, plan.WorldUid, b!.Actor, second, plan.SecondArrival!, "B");
+            report.Step("two clients remain connected at once", () => CampaignSteps.RequirePeers(session.Server!.Game, 2));
             report.Step("B sees A as the marker's only owner", () =>
             {
                 CampaignSteps.RequireLabelledMarker(b.Actor, plan.DrySite);
@@ -60,13 +59,13 @@ public static class OwnershipHandoffScenario
             string bId = "";
             report.Step("B explicitly claims the example marker once", () => bId = Claim(b.Actor, plan.DrySite));
             if (bId == aId) throw new InvalidOperationException("The two clients reported the same ZDO session ID.");
-            report.Step("server observes B's owner-change notification", () => WaitForOwner(run.Server, plan.DrySite, bId, report, "server-owner-b"));
+            report.Step("server observes B's owner-change notification", () => WaitForOwner(session.Server!.Game, plan.DrySite, bId, report, "server-owner-b"));
             report.Step("B still sees the marker and is its only owner", () =>
             {
                 CampaignSteps.RequireLabelledMarker(b.Actor, plan.DrySite);
                 RequireOwner(b.Actor, plan.DrySite, bId, ownedHere: true);
-                RequireOwner(run.Server, plan.DrySite, bId, ownedHere: false, requireInstance: false);
-                CampaignSteps.RequirePeers(run.Server, 1);
+                RequireOwner(session.Server!.Game, plan.DrySite, bId, ownedHere: false, requireInstance: false);
+                CampaignSteps.RequirePeers(session.Server!.Game, 1);
             });
         }
         catch (Exception error) { failure = error; }
@@ -88,23 +87,23 @@ public static class OwnershipHandoffScenario
         if (failure != null) ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
-    private static void JoinAndArrive(CampaignRun run, GameActor actor, ClientRunPlan plan, Site site, string name)
+    private static void JoinAndArrive(GameSession session, string worldUid, GameActor actor, ClientRunPlan client, Site site, string name)
     {
         // The toolkit's one join: the join once, world pins, the world awaited and the player protected, test access.
-        run.Report.Step(StepPhase.Setup, $"{name} joins the pinned world once and is protected",
-            () => new SessionControl(actor).JoinWorld(plan, run.Plan.WorldUid, cancellation: run.Cancellation));
-        run.Report.Step(StepPhase.Setup, $"{name} arrives on dry ground by game-side signals", () =>
+        session.Report.Step(StepPhase.Setup, $"{name} joins the pinned world once and is protected",
+            () => new SessionControl(actor).JoinWorld(client, worldUid, cancellation: session.Cancellation));
+        session.Report.Step(StepPhase.Setup, $"{name} arrives on dry ground by game-side signals", () =>
         {
             var point = CampaignSteps.At(site);
             PlayerPlacement.TeleportArrival arrival;
             // With two players the server cannot name one, so the client teleports itself (no server). This scenario tests
             // ownership, not terrain generation: a location's levelling can move the ground from the generator's height, so
             // the landing is judged on the loaded ground the client measures once its floor is ready (loadedGround).
-            try { arrival = PlayerPlacement.Arrive(null, actor, point, TimeSpan.FromSeconds(plan.ArrivalSeconds), run.Cancellation, loadedGround: true); }
+            try { arrival = PlayerPlacement.Arrive(null, actor, point, TimeSpan.FromSeconds(client.ArrivalSeconds), session.Cancellation, loadedGround: true); }
             catch
             {
                 // Read-only diagnostics before teardown: never retry a teleport or replace its failure.
-                if (!run.Cancellation.IsCancellationRequested)
+                if (!session.Cancellation.IsCancellationRequested)
                 {
                     var previous = actor.CommandTimeout;
                     try
@@ -118,13 +117,13 @@ public static class OwnershipHandoffScenario
                 }
                 throw;
             }
-            run.Report.Provenance[$"arrival-{name}-ground"] = JsonSerializer.Serialize(new { point.X, point.Z, generator = point.Height, loaded = arrival.Target.Height });
+            session.Report.Provenance[$"arrival-{name}-ground"] = JsonSerializer.Serialize(new { point.X, point.Z, generator = point.Height, loaded = arrival.Target.Height });
             if (arrival.Target.Height < LifecyclePlan.WaterLevel + LifecyclePlan.Clearance) throw new InvalidOperationException("Loaded arrival ground is not dry.");
             void Capture(string kind, Func<string> read)
             {
                 string key = $"arrival-{name}-{kind}";
-                try { run.Report.Provenance[key] = read(); }
-                catch (Exception error) { run.Report.Provenance[key] = "Diagnostic unavailable: " + error.Message; }
+                try { session.Report.Provenance[key] = read(); }
+                catch (Exception error) { session.Report.Provenance[key] = "Diagnostic unavailable: " + error.Message; }
             }
         });
     }

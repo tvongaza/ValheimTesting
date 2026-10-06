@@ -36,55 +36,41 @@ var options = new PinnedServerRunOptions<LifecyclePlan>
         provenance["humanReview"] = plan.Review.Enabled ? "requested" : "not requested";
         provenance["expectFailure"] = plan.ExpectFailure ?? "none";
     },
-    Scenario = (session, plan) =>
-    {
-        var owned = session.Server!;
-        if (plan.ServerOnly)
-        {
-            var server = DrySiteServerScenario.Run(plan, owned.Game, owned.Restart, session.Report);
-            if (plan.PatchReload != null)
-            {
-                // It writes into the runtime copy's scripts folder, which must be on this machine.
-                if (owned.Host != null) throw new ArgumentException("patchReload runs only with the server on this machine (no --inventory).");
-                PatchReloadScenario.Run(plan, server, owned.RuntimeDirectory, session.Output, session.Report, session.Cancellation);
-            }
-            return Task.CompletedTask;
-        }
-        if (plan.Scenario == LifecyclePlan.LifecycleScenario)
-        {
-            // Its logs are scanned with the server's at teardown, after the scenario stops the client, and also after a failed startup.
-            DrySiteScenario.Run(plan, owned.Game, owned, () => session.OpenClient(plan.Client!), session.Report, session.Output, session.Cancellation);
-            return Task.CompletedTask;
-        }
-        // The native campaign's scenarios (CampaignScenarios). Their in-run log reads open files on this machine, so a server on
-        // another host (--inventory or a campaign) skips the server's, and a campaign's clients skip theirs; only the crossplay
-        // lobby is read on the server's host.
-        bool local = owned.Host == null, localClients = session.CampaignClients.Count == 0;
-        CampaignScenarios.Run(new CampaignRun
-        {
-            Plan = plan, Server = owned.Game, OwnedServer = owned, Report = session.Report,
-            Output = session.Output, Cancellation = session.Cancellation, ServerHost = owned.Host, RemoteClients = !localClients,
-            OpenClient = (client, directory) =>
-            {
-                if (directory == null) return session.OpenClient(client); // Its logs join the teardown scan.
-                // A second client in one run keeps its command record and logs apart from the first one's, on this machine.
-                var second = ClientActor.OnThisMachine(directory, client, Directory.CreateDirectory(Path.Combine(session.Output, directory)).FullName, session.Cancellation);
-                try { return second.Start(); }
-                finally { foreach (var log in second.Logs) session.AddLog(log); } // Also a failed startup's, for the scan.
-            },
-            OpenCampaignClient = (client, name) => session.OpenClient(client, name),
-            ServerLog = () => local ? Path.Combine(owned.RuntimeDirectory, "BepInEx", "LogOutput.log") : null,
-            ClientLog = client => localClients && client.Owned ? Path.Combine(client.Install, "BepInEx", "LogOutput.log") : null,
-            // The lobby line is in the log the game writes to: the -logFile file when the plan passes one (the Windows server's
-            // BepInEx log did not carry it), otherwise BepInEx's. A crossplay server on another machine (--inventory): the host's own log.
-            Lobby = server => local
-                ? CrossplayServer.WaitForLobby(server, plan.GameLogFile(owned.RuntimeDirectory, owned.WorldDirectory) ?? CrossplayServer.BepInExLog(owned.RuntimeDirectory),
-                    TimeSpan.FromSeconds(plan.StartupSeconds), session.Cancellation)
-                : CrossplayServer.WaitForLobby(server, owned.Host!, plan.GameLogFile(owned.RuntimeDirectory, owned.WorldDirectory) ?? CrossplayServer.HostBepInExLog(owned.RuntimeDirectory),
-                    TimeSpan.FromSeconds(plan.StartupSeconds), session.Cancellation),
-        });
-        return Task.CompletedTask;
-    },
+    // Every scenario by name: ScenarioTable.
+    Scenario = ScenarioTable.Run,
 };
-if (ThreeActorCampaign.Handles(args)) return await ThreeActorCampaign.RunAsync(args, options);
+if (args.Length > 0 && args[0] == "campaign") return await Campaign(args, options);
 return await PinnedServerRun.MainAsync(args, options);
+
+// The example's campaign command around the toolkit's campaign runner (PinnedServerRun.RunCampaignAsync): the manifest declares
+// the actors (a dedicated server and named clients) and the private inventory they are placed from; the scenario's table entry
+// names which of the plan's client sections are client-a and client-b. It never modifies the source game installs.
+static async Task<int> Campaign(string[] args, PinnedServerRunOptions<LifecyclePlan> options)
+{
+    if (args is not ["campaign", "check" or "run", var manifestFile, var templateFile, .. var rest] || (args[1] == "check" ? rest.Length != 0 : rest.Length != 1))
+    {
+        Console.Error.WriteLine("Usage: MyMod.SystemTests campaign check <campaign.json> <scenario-template.json> | campaign run <campaign.json> <scenario-template.json> <new-output-directory>");
+        return 2;
+    }
+    LifecyclePlan template;
+    Func<LifecyclePlan, IReadOnlyDictionary<string, ClientRunPlan>> clients;
+    try
+    {
+        template = ServerRunPlan.Read<LifecyclePlan>(templateFile);
+        clients = ScenarioTable.Find(template.Scenario)?.CampaignClients
+            ?? throw new ArgumentException($"This example campaign runs {LifecyclePlan.ThreeActorScenario} or {LifecyclePlan.OwnershipHandoffScenario}.");
+        if (args[1] == "check")
+        {
+            // The same Preflight the run starts with: the campaign's inputs and actor assignment, then the plan's agreement with it.
+            HostedCampaignPreparation.CheckPlan(manifestFile, template, clients(template));
+            Console.WriteLine("ELIGIBLE: reviewed mod and ValheimCLI locks, fixture, independent disposable characters, actor assignment and plan. No host was contacted.");
+            return 0;
+        }
+    }
+    catch (Exception error) when (error is ArgumentException or IOException or InvalidDataException or System.Text.Json.JsonException)
+    {
+        Console.Error.WriteLine("Campaign setup: " + error.Message);
+        return 2;
+    }
+    return await PinnedServerRun.RunCampaignAsync(manifestFile, template, clients, rest[0], options).ConfigureAwait(false);
+}

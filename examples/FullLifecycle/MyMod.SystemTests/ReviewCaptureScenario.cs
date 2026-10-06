@@ -50,27 +50,26 @@ public static class ReviewCaptureScenario
         foreach (var shot in Shots(plan, placeholder)) ReviewCapture.Validate(shot, LocalShell.Kind);
     }
 
-    public static void Run(CampaignRun run)
+    public static void Run(GameSession session, LifecyclePlan plan)
     {
-        if (run.RemoteClients)
-            throw new NotSupportedException("This example captures on the runner's local client. A campaign client needs its host (run.ClientHost) passed to ReviewCapture.");
-        var plan = run.Plan;
+        if ((session.CampaignClients.Count != 0))
+            throw new NotSupportedException("This example captures on the runner's local client. A campaign client needs its host (session.ClientHost) passed to ReviewCapture.");
         var client = plan.Client!;
         // The run's own directories, before the client launches: an output path with a space is refused here, not mid-round.
-        foreach (var shot in Shots(plan, run.Output)) ReviewCapture.Validate(shot, LocalShell.Kind);
+        foreach (var shot in Shots(plan, session.Output)) ReviewCapture.Validate(shot, LocalShell.Kind);
         IGameHost host = new LocalGameHost("review-client", LocalShell);
-        run.Report.Provenance["humanReview"] = "two stills; no visual verdict asserted";
+        session.Report.Provenance["humanReview"] = "two stills; no visual verdict asserted";
         new ClientRounds
         {
-            Client = client, WorldUid = plan.WorldUid, Report = run.Report, Output = run.Output,
-            OwnedServer = run.OwnedServer,
-            Rounds = ["joined"], Cancellation = run.Cancellation,
-        }.Run(run.Server, () => run.OpenClient(client, null), round =>
+            Client = client, WorldUid = plan.WorldUid, Report = session.Report, Output = session.Output,
+            OwnedServer = session.Server!,
+            Rounds = ["joined"], Cancellation = session.Cancellation,
+        }.Run(session.Server!.Game, () => session.OpenClient(client), round =>
         {
             // Each still is linked from result.json (kind review-still) with its SHA-256; inspect both images by eye.
-            foreach (var shot in Shots(plan, run.Output))
-                round.Step($"capture {shot.Id} view for human review", () => run.Report.Attach(ReviewCapture.Capture(round.Server, round.Client, host, shot,
-                    TimeSpan.FromSeconds(client.ArrivalSeconds), TimeSpan.FromSeconds(30), run.Cancellation).Evidence));
+            foreach (var shot in Shots(plan, session.Output))
+                round.Step($"capture {shot.Id} view for human review", () => session.Report.Attach(ReviewCapture.Capture(round.Server, round.Client, host, shot,
+                    TimeSpan.FromSeconds(client.ArrivalSeconds), TimeSpan.FromSeconds(30), session.Cancellation).Evidence));
         });
     }
 }

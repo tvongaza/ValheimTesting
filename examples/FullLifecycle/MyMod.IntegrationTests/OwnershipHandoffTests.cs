@@ -23,10 +23,10 @@ public sealed class OwnershipHandoffTests
             return first = ClientSession.Attach(requested, Directory.CreateDirectory(Path.Combine(world.Output, name)).FullName,
                 new ScriptedTransport());
         });
-        var failure = Assert.Throws<InvalidOperationException>(() => run.OpenCampaignClientsParallel(new Dictionary<string, ClientRunPlan>
+        var failure = Assert.Throws<InvalidOperationException>(() => run.OpenClientsAsync(new Dictionary<string, ClientRunPlan>
         {
             ["client-a"] = CampaignWorld.ClientPlan(), ["client-b"] = CampaignWorld.ClientPlan(port: 5557),
-        }));
+        }).GetAwaiter().GetResult());
         Assert.Contains("loader failed", failure.Message);
         Assert.NotNull(first);
         Assert.True(first.Closed);
@@ -68,7 +68,7 @@ public sealed class OwnershipHandoffTests
         });
         ServerOwnership(world);
 
-        Assert.Contains("Second account lease lost", Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run)).Message);
+        Assert.Contains("Second account lease lost", Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run, plan)).Message);
         Assert.Equal(new[] { "client-a", "client-b" }, opened);
         Assert.True(client.Disposed);
         Assert.Equal(1, client.Count("cli_extension valheim.session/join"));
@@ -93,7 +93,7 @@ public sealed class OwnershipHandoffTests
             : ClientSession.Launch(requested, world.Output, () => process, () => client, (_, _) => Task.CompletedTask));
         ServerOwnership(world);
 
-        var error = Assert.Throws<AggregateException>(() => OwnershipHandoffScenario.Run(run));
+        var error = Assert.Throws<AggregateException>(() => OwnershipHandoffScenario.Run(run, plan));
         Assert.Contains(error.InnerExceptions, inner => inner.Message == "B startup failed");
         Assert.Contains(error.InnerExceptions, inner => inner.Message == "A process stop was unproven");
         Assert.Contains(report.Steps, step => step.Name == "stop only owned client A before lease teardown" && !step.Passed);
@@ -140,7 +140,7 @@ public sealed class OwnershipHandoffTests
             return ClientSession.Attach(CampaignWorld.ClientPlan(), world.Output, first);
         });
 
-        var error = Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run));
+        var error = Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run, plan));
         Assert.Equal(loadedGroundIsWet ? "Loaded arrival ground is not dry." : "Incomplete observation or wrong observation layer.", error.Message);
         Assert.Equal(1, first.Count("cli_extension valheim.world/player-support-wait"));
         Assert.Equal(1, first.Count("cli_teleport")); // Never repeated.
@@ -172,13 +172,13 @@ public sealed class OwnershipHandoffTests
 
         if (wrongOwner)
         {
-            var error = Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run));
+            var error = Assert.Throws<InvalidOperationException>(() => OwnershipHandoffScenario.Run(run, plan));
             Assert.Contains("wrong session", error.Message);
             Assert.False(report.Passed);
         }
         else
         {
-            OwnershipHandoffScenario.Run(run);
+            OwnershipHandoffScenario.Run(run, plan);
             Assert.True(report.Passed, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Error)));
             Assert.Equal("202", JsonDocument.Parse(report.Provenance["server-owner-b"]).RootElement.GetProperty("owner").GetString());
             // B's landing was judged at the loaded ground it measured, not at the generator's height.

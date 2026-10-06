@@ -89,13 +89,17 @@ public sealed class GameSession : IAsyncDisposable
     /// <paramref name="name"/> names the campaign's client (left out when it declares one), which starts on its assigned host on
     /// its leased Steam identity; otherwise the client opens on this machine. With <paramref name="directory"/>, its evidence goes
     /// to that subdirectory of <see cref="Output"/>, so a second client never overwrites the first one's. Until the scenarios
-    /// declare their clients (#258 step 6), this is how a scenario opens one.
+    /// declare their clients, this is how a scenario opens one. A client opened into its own <paramref name="directory"/> and no
+    /// name is named by its directory in the report.
     /// </summary>
-    public ClientSession OpenClient(ClientRunPlan plan, string? name = null, string? directory = null)
+    public ClientSession OpenClient(ClientRunPlan plan, string? name = null, string? directory = null) => OpenClient(plan, name, directory, Cancellation);
+
+    private ClientSession OpenClient(ClientRunPlan plan, string? name, string? directory, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ObjectDisposedException.ThrowIf(_disposed, this);
         var (actorName, placement) = ResolveClient(plan, name);
+        if (name == null && directory != null) actorName = directory;
         string output = Output;
         if (directory != null)
         {
@@ -104,7 +108,7 @@ public sealed class GameSession : IAsyncDisposable
                 throw new ArgumentException("Name a subdirectory of the session's output.", nameof(directory));
             Directory.CreateDirectory(output);
         }
-        var actor = new ClientActor(actorName, plan, output, placement, Cancellation);
+        var actor = new ClientActor(actorName, plan, output, placement, cancellation);
         lock (_opened)
         {
             // Under the lock teardown takes its list with: an actor added here is one teardown closes.
@@ -115,6 +119,48 @@ public sealed class GameSession : IAsyncDisposable
     }
     private readonly List<ClientActor> _opened = [];
     private readonly List<RunLog> _added = [];
+
+    /// <summary>
+    /// Opens the named campaign clients at once (<see cref="OpenClient"/> for each), each on its own host, Steam lease, install and
+    /// character; all have opened before this returns. If one fails, every client that opened is closed and the first failure is
+    /// rethrown.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, ClientSession>> OpenClientsAsync(IReadOnlyDictionary<string, ClientRunPlan> clients)
+    {
+        ArgumentNullException.ThrowIfNull(clients);
+        if (clients.Count == 0) throw new ArgumentException("Name at least one client.", nameof(clients));
+        var opened = new System.Collections.Concurrent.ConcurrentDictionary<string, ClientSession>(StringComparer.Ordinal);
+        // The first failure ends the other opens' waits at once, rather than after their whole start deadlines.
+        using var siblings = CancellationTokenSource.CreateLinkedTokenSource(Cancellation);
+        var opens = clients.Select(pair => Task.Run(() =>
+        {
+            siblings.Token.ThrowIfCancellationRequested();
+            try { opened[pair.Key] = OpenClient(pair.Value, pair.Key, null, siblings.Token); }
+            catch { siblings.Cancel(); throw; }
+        })).ToArray();
+        try { await Task.WhenAll(opens).ConfigureAwait(false); }
+        catch
+        {
+            foreach (var session in opened.Values) try { session.Dispose(); } catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
+            throw;
+        }
+        return new Dictionary<string, ClientSession>(opened, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// An owned client's live BepInEx log on this machine, for a scenario's in-run log reads; null for a campaign's clients (on
+    /// their hosts) and an attached client (its logs are its operator's).
+    /// </summary>
+    public string? ClientLog(ClientRunPlan client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        return LiveClientLog != null ? LiveClientLog(client)
+            : CampaignClients.Count == 0 && client.Owned ? Path.Combine(client.Install, "BepInEx", "LogOutput.log") : null;
+    }
+    internal Func<ClientRunPlan, string?>? LiveClientLog { get; init; }
+
+    /// <summary>How often a scenario's observation waits re-read: one second; scenario tests over scripted worlds shorten it.</summary>
+    public TimeSpan Interval { get; internal init; } = TimeSpan.FromSeconds(1);
 
     /// <summary>A campaign's client names (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), each opened on its assigned host by <see cref="OpenClient"/>; empty when clients open on this machine.</summary>
     public IReadOnlyList<string> CampaignClients { get; internal init; } = [];

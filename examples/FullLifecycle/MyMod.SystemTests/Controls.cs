@@ -94,7 +94,7 @@ public static class ControlPlugins
 
 /// <summary>
 /// Ends a control run once its expected failure is recorded: the rest of the scenario would only repeat what the control
-/// breaks. Thrown out of a round's measurement (the client is still closed), caught by <see cref="CampaignScenarios.Run"/>.
+/// breaks. Thrown out of a round's measurement (the client is still closed), caught by <see cref="ScenarioTable.Run"/>.
 /// </summary>
 public sealed class ControlConcluded(ControlPlugin control) : Exception($"The {control.Name} control failed its check as expected; the run ends here.")
 {

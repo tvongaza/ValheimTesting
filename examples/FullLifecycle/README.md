@@ -197,7 +197,7 @@ A control run is the scenario's own plan plus the control's pin (by MD5, on the 
 
 The control is the `-p:ProbeUnpatch=Other` build as `revisionA` with `"expectOthersRemoved": true`: its unload also removes MyMod's patches (`Harmony.UnpatchID("example.mymod")`), and the check after the reload must fail naming them. Not `Harmony.UnpatchAll()`: that removes ValheimCLI's patches too, and no CLI command ran after it, so the run lost the census it reads; the teardown scan's `harmony-unpatch-all` failure is what names that case. Local runs only (no `--inventory`): the scenario writes into the runtime copy. Each census is kept as `patch-reload-{stage}.txt`.
 
-The integration tests ([CampaignScenarioTests](MyMod.IntegrationTests/CampaignScenarioTests.cs), [HostedScenarioTests](MyMod.IntegrationTests/HostedScenarioTests.cs), [CampaignPlanTests](MyMod.IntegrationTests/CampaignPlanTests.cs)) run every scenario, each control's expected failure, each control whose check would pass, and every plan refusal against scripted replies; they read the sample plans too.
+Every scenario is a function of the runner's `GameSession` and the plan, `(session, plan)`, listed once by name in [ScenarioTable](MyMod.SystemTests/ScenarioTable.cs) (how it runs, whether it marks the sites, and a campaign scenario's named clients); `Program.cs` hands `ScenarioTable.Run` to the runner, and `campaign run` is `PinnedServerRun.RunCampaignAsync` with the entry's clients. The integration tests ([CampaignScenarioTests](MyMod.IntegrationTests/CampaignScenarioTests.cs), [HostedScenarioTests](MyMod.IntegrationTests/HostedScenarioTests.cs), [CampaignPlanTests](MyMod.IntegrationTests/CampaignPlanTests.cs)) run every scenario on a `FakeGameSession` over a scripted world, each control's expected failure, each control whose check would pass, and every plan refusal against scripted replies; they read the sample plans too.
 
 ### Prepare the campaign
 
@@ -216,7 +216,7 @@ lock/character object, and `ApplyTo` binds a dictionary of client plans by name.
 changing preparation. Simultaneous clients need different signed-in Steam identities, hosts and registered character player IDs.
 
 The server and every client prepare their runtime in parallel, with one claim per host. After the server's ready
-checkpoint, `OpenCampaignClientsParallel` launches the named clients concurrently and waits for all of them at the
+checkpoint, the session's `OpenClientsAsync` launches the named clients concurrently and waits for all of them at the
 menu checkpoint. The join and rejoin checkpoints are explicit so a test can pause one actor while the others stay in
 the world. A failed client start closes the other successful starts before teardown; it does not advance the test.
 

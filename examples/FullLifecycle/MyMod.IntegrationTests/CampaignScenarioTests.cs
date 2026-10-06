@@ -17,7 +17,7 @@ public sealed class CampaignScenarioTests : IDisposable
     private ScenarioReport Run(LifecyclePlan plan, bool clientLog = false)
     {
         var report = new ScenarioReport("mymod-system-test");
-        try { CampaignScenarios.Run(_world.Run(plan, report, clientLog)); }
+        try { _world.RunScenario(plan, report, clientLog); }
         catch (Exception) { Assert.False(report.Passed); }
         return report;
     }
@@ -280,11 +280,13 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.True(report.Passed, Explain(report));
         Assert.Equal(new[]
         {
+            "start and verify owned dedicated fixture", // The session's start, as the runner records it.
             "attach to the operator's mismatched client at its menu, plugins pinned", "the server accepts game connections",
             "the mismatched client is refused with ErrorVersion (3)", "detach from the operator's mismatched client",
             "attach to the operator's matching client at its menu, plugins pinned", "matching: the server accepts game connections",
             "matching: join the owned server with the disposable character, protected", "matching: the server keeps the matching client connected as its one player",
             "matching: the client leaves to its menu", "detach from the operator's client",
+            "stop only owned server", // The session's teardown.
         }, report.Steps.Select(s => s.Name));
         Assert.StartsWith("ErrorVersion (3)", report.Provenance["refusal"]);
         Assert.Equal(1, _world.Clients[0].Count("cli_extension valheim.session/join")); // Refused once, never retried.
@@ -357,7 +359,7 @@ public sealed class CampaignScenarioTests : IDisposable
         // A client whose census reports being the server is refused too.
         using var world = new CampaignWorld { ClientCensusSaysServer = true };
         var swapped = new ScenarioReport("mymod-system-test");
-        try { CampaignScenarios.Run(world.Run(world.Plan(LifecyclePlan.ContentCensusScenario), swapped)); } catch (Exception) { }
+        try { world.RunScenario(world.Plan(LifecyclePlan.ContentCensusScenario), swapped); } catch (Exception) { }
         Assert.Contains("reports being the server", swapped.Steps.Single(s => s.Name == $"first: {CensusStep}").Error);
     }
 

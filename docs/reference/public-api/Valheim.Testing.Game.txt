@@ -702,6 +702,8 @@ sealed class Valheim.Testing.Game.Fakes.FakeDataRoot : System.IDisposable
   method System.Void .ctor(System.String directory)
   method System.Void Dispose()
   property System.String Directory { get; }
+static class Valheim.Testing.Game.Fakes.FakeGameSession
+  method static Valheim.Testing.Game.GameSession Create(Valheim.Testing.Game.ScenarioReport report, System.String output, System.String worldUid, Valheim.Testing.Game.IOwnedServer server, System.Func`1<Valheim.Testing.Game.GameActor> firstBoot, System.Func`4<Valheim.Testing.Game.ClientRunPlan,System.String,System.String,Valheim.Testing.Game.ClientSession> openClient, System.String serverLog = null, System.Func`2<Valheim.Testing.Game.ClientRunPlan,System.String> clientLog = null, System.Func`2<Valheim.Testing.Game.GameActor,Valheim.Testing.Game.CrossplayLobby> lobby = null, System.Nullable`1<System.TimeSpan> interval = null, System.Collections.Generic.IReadOnlyList`1<System.String> campaignClients = null, System.Threading.CancellationToken cancellation = null)
 sealed class Valheim.Testing.Game.Fakes.FakeOwnedProcess : System.IDisposable, Valheim.Testing.Game.IOwnedProcess
   method System.Threading.Tasks.Task`1<System.Int32> WaitForExitAsync(System.Threading.CancellationToken cancellation)
   method System.Void .ctor(System.Int32 id = 1)
@@ -885,10 +887,12 @@ sealed class Valheim.Testing.Game.GameReply
   property System.String Refusal { get; }
   property valheim_cli.Testing.CommandResult Result { get; }
 sealed class Valheim.Testing.Game.GameSession : System.IAsyncDisposable
+  method System.String ClientLog(Valheim.Testing.Game.ClientRunPlan client)
   method System.Threading.Tasks.Task Barrier(System.String name, System.Func`2<System.Threading.CancellationToken,System.Threading.Tasks.Task> wait, System.TimeSpan within)
   method System.Threading.Tasks.Task JoinAll(Valheim.Testing.Game.CrossplayLobby lobby = null)
   method System.Threading.Tasks.Task ServerJoinable()
   method System.Threading.Tasks.Task StartAsync()
+  method System.Threading.Tasks.Task`1<System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientSession>> OpenClientsAsync(System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientRunPlan> clients)
   method System.Threading.Tasks.Task`1<Valheim.Testing.Game.PlayerPlacement/TeleportArrival> Join(System.String client, Valheim.Testing.Game.HeightExpectation arrival = null, System.Boolean protect = true, Valheim.Testing.Game.CrossplayLobby lobby = null)
   method System.Threading.Tasks.Task`1<Valheim.Testing.Game.PlayerPlacement/TeleportArrival> Rejoin(System.String client, Valheim.Testing.Game.HeightExpectation arrival = null, System.Boolean protect = true, Valheim.Testing.Game.CrossplayLobby lobby = null)
   method System.Threading.Tasks.ValueTask DisposeAsync()
@@ -900,6 +904,7 @@ sealed class Valheim.Testing.Game.GameSession : System.IAsyncDisposable
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.RunLog> Logs { get; }
   property System.String Output { get; }
   property System.Threading.CancellationToken Cancellation { get; }
+  property System.TimeSpan Interval { get; }
   property Valheim.Testing.Game.ScenarioReport Report { get; }
   property Valheim.Testing.Game.ServerActor Server { get; }
 [result shape] sealed class Valheim.Testing.Game.GlobalKeyDifference : System.IEquatable`1<Valheim.Testing.Game.GlobalKeyDifference>
@@ -2153,12 +2158,14 @@ abstract class Valheim.Testing.Game.ScriptedGameHost : Valheim.Testing.Game.IGam
 sealed class Valheim.Testing.Game.ServerActor : System.IDisposable, Valheim.Testing.Game.IOwnedServer
   method System.Void Dispose()
   method System.Void WaitUntilJoinable(Valheim.Testing.Game.GameActor server)
+  method Valheim.Testing.Game.CrossplayLobby Lobby(Valheim.Testing.Game.GameActor server)
   method Valheim.Testing.Game.GameActor Restart()
   method Valheim.Testing.Game.GameActor Start()
   method static Valheim.Testing.Game.ServerActor OnThisMachine(Valheim.Testing.Game.ServerRunPlan plan, System.String runtimeDirectory, System.String worldDirectory, System.String output, System.String sessionCapability, System.String sessionTokenVariable, System.Threading.CancellationToken cancellation = null)
   property System.Collections.Generic.IReadOnlyList`1<System.Int32> StartedProcesses { get; }
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.ProcessStop> Stops { get; }
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.RunLog> Logs { get; }
+  property System.String LiveLog { get; }
   property System.String RuntimeDirectory { get; }
   property System.String WorldDirectory { get; }
   property Valheim.Testing.Game.GameActor Game { get; }

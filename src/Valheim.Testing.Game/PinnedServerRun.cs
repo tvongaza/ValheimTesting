@@ -468,7 +468,7 @@ public static class PinnedServerRun
             var hostedRun = hosted;
             IReadOnlyList<string> campaignClients = hostedRun?.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList() ?? [];
             game = new GameSession(report, output, plan.Pins.GetValueOrDefault("worlduid"),
-                token => options.SessionOverride is { } scripted ? new ServerActor(scripted(plan), runtimeDirectory, worldDirectory, hostedRun?.Host)
+                token => options.SessionOverride is { } scripted ? new ServerActor(scripted(plan), runtimeDirectory, worldDirectory, hostedRun?.Host, plan, token)
                     : new ServerActor(hostedRun ?? (IServerPlacement)new LocalServerPlacement(runtimeDirectory, worldDirectory, plan.Port),
                         plan, output, options.Mod.SessionCapability, options.Mod.SessionTokenVariable, token),
                 [], cancellation.Token)
