@@ -399,12 +399,17 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("no client environment nobody", Assert.Throws<ArgumentException>(() => new TargetedRegression(_rig.Manifest(), inventory: remote, clientEnvironment: "nobody")).Message);
     }
 
-    // The example runs on the published package it pins, which still reads its environment manifest; this checkout refuses
-    // that shape and names the fields to move. The example moves to regression.json when it pins a release that has it.
-    [Fact] public void TheExamplesPinnedSampleIsTheRetiredShape()
+    // The example's sample is a regression's inputs (#376): no retired machine field, and every field one RegressionInputs has
+    // (read strictly, unknown fields refused). Its placeholders are not valid inputs, so it is not validated; the shape is.
+    [Fact] public void TheExamplesSampleIsARegressionsInputs()
     {
         string sample = Path.Combine(FixtureProjects.RepositoryRoot(), "examples", "TargetedRegression", "regression.sample.json");
-        Assert.Contains("game now comes from", Assert.Throws<ArgumentException>(() => RegressionInputs.Read(sample)).Message);
+        var error = Assert.Throws<ArgumentException>(() => RegressionInputs.Read(sample));
+        Assert.DoesNotContain("retired environment manifest", error.Message);
+        var inputs = ClientPlanFile.Read<RegressionInputs>(sample);
+        Assert.Equal("mymod-mark", inputs.Name);
+        Assert.Equal(["parent", "candidate"], inputs.Mod.Arms.Keys);
+        Assert.NotNull(inputs.Cli.Manifest); // a regression.json must name cli.manifest (#296)
     }
 
     [Fact] public void PluginMetadataIsReadFromTheAttributesBepInExReads()

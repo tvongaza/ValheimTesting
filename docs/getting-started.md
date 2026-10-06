@@ -17,15 +17,14 @@ The toolkit packages are all on NuGet.org. The versions below are the **newest r
 
 | Package | Released version | Use |
 |---|---|---|
-| [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing) | `0.1.0-preview.12` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
-| [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) | `0.1.0-preview.41` | External game observations, owned sessions, comparisons and reports |
+| [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing) | `0.1.0-preview.13` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
+| [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) | `0.1.0-preview.42` | External game observations, owned sessions, comparisons and reports |
+| [Valheim.Testing.GameSessions](https://www.nuget.org/packages/Valheim.Testing.GameSessions) | `0.1.0-preview.1` | Game sessions: a dedicated server, clients and hosted worlds as one run (`GameSession`, `PinnedServerRun`), on this PC or on other machines, with Steam-account leases and recovery ([page](packages/Valheim.Testing.GameSessions.md)); depends on exactly the Game it was built with |
 | [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) | `0.1.0-preview.8` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
-| [Valheim.Testing.Adapter](https://www.nuget.org/packages/Valheim.Testing.Adapter) | `0.1.0-preview.5` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity ([page](packages/Valheim.Testing.Adapter.md)) |
+| [Valheim.Testing.Adapter](https://www.nuget.org/packages/Valheim.Testing.Adapter) | `0.1.0-preview.6` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity ([page](packages/Valheim.Testing.Adapter.md)) |
 | [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.1.0-preview.11` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game ([page](packages/Valheim.Testing.Doubles.md)) |
 | [Valheim.Testing.Bindings](https://www.nuget.org/packages/Valheim.Testing.Bindings) | `0.1.0-preview.2` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member ([page](packages/Valheim.Testing.Bindings.md)) |
 | [Valheim.Testing.Bindings.Tool](https://www.nuget.org/packages/Valheim.Testing.Bindings.Tool) | `0.1.0-preview.2` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
-
-[Valheim.Testing.GameSessions](packages/Valheim.Testing.GameSessions.md) (game sessions: `GameSession`, `PinnedServerRun`, hosts on other machines, Steam-account leases and recovery) is new and not yet on NuGet.org; it joins this table at its first release, depending on exactly the Game it was built with. Until then a project that runs a session references it from this checkout (`src/Valheim.Testing.GameSessions`) or from the local `.packages` feed below.
 
 Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies, and reference the exact version `validate.cs` packed: `<Version>-candidate.<id>`, as the file names in `.packages` show (the id is a hash of the package inputs, so a build of other sources never shares it). For example, from your mod checkout:
 
@@ -39,11 +38,13 @@ Pin only the package your test project needs:
 
 ```xml
 <!-- Pure test project; not the production mod project. -->
-<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.12]" />
-<!-- A separate external system-test project instead uses (and, to run a session, Valheim.Testing.GameSessions; see above): -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.41]" />
+<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.13]" />
+<!-- A separate external system-test project instead uses: -->
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.42]" />
+<!-- and, to run a game session (a server and clients as one run): -->
+<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.1.0-preview.1]" />
 <!-- A game-side test adapter plugin compiles the adapter source: -->
-<PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.5]" PrivateAssets="all" />
+<PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.6]" PrivateAssets="all" />
 <!-- A test that checks a built mod DLL against the game's assemblies in code: -->
 <PackageReference Include="Valheim.Testing.Bindings" Version="[0.1.0-preview.2]" />
 ```
