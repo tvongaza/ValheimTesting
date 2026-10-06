@@ -32,7 +32,9 @@
 // repository's main branch, whose file or heading anchor does not exist (#278). It needs no network, so a docs problem is
 // never hidden behind a release the pins have not caught up with.
 //
-// versions refuses a release whose manifest or packed dependencies name a `-candidate.<sha>` version: a candidate is a
+// versions refuses a release that publishes a new version of a package another released package references, unless that one
+// gets a new version too (its dependency floor would stay on the old one). It also refuses a release whose manifest or packed
+// dependencies name a `-candidate.<sha>` version: a candidate is a
 // local build identity, and NuGet.org never lets a published id/version be replaced. Checked are each packed project's
 // <Version> and Valheim.Testing* PackageReferences, and the Cli packageVersion in cli-dependency.json. It also refuses a
 // source version older than the release recorded in toolkit-versions.json. A candidate may sit on main between releases.
@@ -224,7 +226,9 @@ async Task<int> Versions()
             ? $"sets {pin.Id}'s version through a property ({pin.Version}), which this check cannot read; write the exact version."
             : $"names the candidate version {pin.Version}. A candidate is a local build identity and is never released; " +
               "move it to a version NuGet.org has never served before tagging."));
-    problems.AddRange(SourceOlderThanReleased(stated, ReadReleased()));
+    var released = ReadReleased();
+    problems.AddRange(SourceOlderThanReleased(stated, released));
+    problems.AddRange(DependentsNotBumped(stated, released));
     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     var embedded = ProjectClosure(Tool);
     foreach (var found in await Task.WhenAll(embedded.Select(id => ChangedUnderPublishedVersion(http, stated, id))))
@@ -366,6 +370,26 @@ List<Pin> SourceVersions()
 }
 
 // A source version older than its release would go backwards; one equal to it is simply not republished.
+// A package packs each project it references as a dependency at that project's version as a minimum, and NuGet restores the
+// lowest version a range allows. So when a release publishes a new version of a referenced package, every package that
+// references it needs a new version too: otherwise its published floor stays on the old one, and a project with it alone
+// restores the old dependency beside the new one (v2026.10.06: Doubles 0.1.0-preview.11 kept Valheim.Testing at .12).
+IEnumerable<Problem> DependentsNotBumped(List<Pin> stated, Dictionary<string, string> released)
+{
+    bool IsNew(string id) => stated.FirstOrDefault(p => p.Declares && p.Id == id) is { } source
+        && (!released.TryGetValue(id, out string? r) || !string.Equals(source.Version, r, StringComparison.OrdinalIgnoreCase));
+    foreach (string id in packed.Where(id => !IsNew(id)))
+        foreach (string referenced in DirectReferences(id).Where(referenced => packed.Contains(referenced) && IsNew(referenced)))
+            if (stated.FirstOrDefault(p => p.Declares && p.Id == id) is { } source)
+                yield return new Problem(source.File, source.Line, $"{id} {source.Version} is released and unchanged, but it references {referenced}, " +
+                    $"whose new version this release publishes: {id}'s published dependency would keep the {referenced} it was packed against as its floor, " +
+                    $"and a project with {id} alone restores that beside the new one. Bump {id}'s <Version>.");
+}
+
+IEnumerable<string> DirectReferences(string id) =>
+    XDocument.Load(Path.Combine(root, ProjectFile(id))).Descendants("ProjectReference").Select(e => (string?)e.Attribute("Include")).OfType<string>()
+        .Select(include => Path.GetFileNameWithoutExtension(include.Replace('\\', '/')));
+
 IEnumerable<Problem> SourceOlderThanReleased(List<Pin> stated, Dictionary<string, string> released) =>
     stated.Where(p => p.Declares && released.TryGetValue(p.Id, out string? r)
             && NuGetVersion.TryParse(p.Version, out NuGetVersion? source) && NuGetVersion.TryParse(r, out NuGetVersion? release) && source < release)
