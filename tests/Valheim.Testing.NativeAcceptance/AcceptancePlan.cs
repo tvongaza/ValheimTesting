@@ -1,13 +1,17 @@
+using MyMod.SystemTests;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
-// The native campaign's plan fields and rules: five more scenarios on the owned dedicated server, each proving a few of the
-// toolkit's native acceptance items, and the controls that must make their checks fail. Each field is refused in a plan
-// whose scenario does not read it, so a plan never looks like it tests something it does not.
-public sealed partial class LifecyclePlan
+/// <summary>
+/// The native acceptance suite's plan: the FullLifecycle example's plan (<see cref="LifecyclePlan"/>: MyMod's dry and wet
+/// sites, the client, the review) plus the fields and rules of the suite's further scenarios on the owned dedicated server,
+/// each proving a few of the toolkit's native acceptance items, and the controls that must make their checks fail. Each field
+/// is refused in a plan whose scenario does not read it, so a plan never looks like it tests something it does not.
+/// </summary>
+public sealed partial class AcceptancePlan : LifecyclePlan
 {
     /// <summary>The dry-site rounds with a zone cycle, global keys, a dungeon's rooms and a logout (<see cref="LifecycleWorldScenario"/>).</summary>
     public const string WorldScenario = "lifecycle-world";
@@ -29,8 +33,8 @@ public sealed partial class LifecyclePlan
     public const string OwnershipHandoffScenario = "ownership-handoff";
     /// <summary>A small three-actor setup smoke: server and two clients join one world with strict pins.</summary>
     public const string ThreeActorScenario = "three-actor-smoke";
-    /// <summary>Every scenario this example runs: <see cref="ScenarioTable"/>'s.</summary>
-    public static string[] Scenarios => [.. ScenarioTable.Names];
+    /// <summary>Every scenario this suite runs: <see cref="ScenarioTable"/>'s.</summary>
+    [JsonIgnore] public override IReadOnlyList<string> Scenarios => ScenarioTable.Names;
     /// <summary>The adapter's fixture commands (the global-key change) run only when the server starts with this set to 1.</summary>
     public const string FixturesVariable = "MYMOD_TEST_FIXTURES";
     private static readonly Regex Word = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
@@ -62,13 +66,16 @@ public sealed partial class LifecyclePlan
     /// <summary>Declared capture conditions for the review-capture scenario.</summary>
     public CaptureSettings? Capture { get; set; }
 
-    [JsonIgnore] public bool MarksSites => ScenarioTable.Find(Scenario)?.MarksSites == true;
+    [JsonIgnore] public override bool MarksSites => ScenarioTable.Find(Scenario)?.MarksSites == true;
+    [JsonIgnore] protected override IEnumerable<ClientRunPlan?> ClientSections => [Client, RefusedClient, SecondClient];
+
+    public static new AcceptancePlan ReadValidated(string path) => Validated(Read<AcceptancePlan>(path));
     /// <summary>One of the native campaign's scenarios: every table entry but the dry-site lifecycle and the server half.</summary>
     [JsonIgnore] public bool IsCampaign => Scenario is not (LifecycleScenario or ServerScenario) && ScenarioTable.Find(Scenario) != null;
     [JsonIgnore] public ControlPlugin? Control => ControlPlugins.Named(ExpectFailure);
     [JsonIgnore] public GameConnectionStatus RefusalStatus => ExpectedRefusal == null ? GameConnectionStatus.ErrorVersion : ConnectionStatusReading.ParseStatus(ExpectedRefusal);
 
-    private void ValidateCampaign()
+    protected override void ValidateScenario()
     {
         OnlyForScenario("away, globalKey, dungeon and logout", Away != null || GlobalKey != null || Dungeon != null || Logout != null, WorldScenario);
         OnlyForScenario("newGreeting", NewGreeting != null, SyncedConfigScenario);

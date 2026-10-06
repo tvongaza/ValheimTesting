@@ -1,11 +1,13 @@
 using System.Text.Json;
 using System.Globalization;
+using MyMod.IntegrationTests;
 using MyMod.SystemTests;
+using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
 /// <summary>
 /// The hosted scenario on a session whose host is scripted (<see cref="FakeGameSession.Hosted"/>): one client that hosts the
@@ -52,7 +54,7 @@ public sealed class HostedScenarioTests : IDisposable
         Client = new()
         {
             Mode = "attach", Port = 5556, Character = "Tester", JoinSeconds = 2,
-            Pins = new() { ["valheimCLI.valheimCLI"] = CampaignWorld.Md5Cli, [LifecyclePlan.ModPlugin] = CampaignWorld.Md5Mod, [LifecyclePlan.AdapterPlugin] = CampaignWorld.Md5Adapter },
+            Pins = new() { ["valheimCLI.valheimCLI"] = CampaignWorld.Md5Cli, [AcceptancePlan.ModPlugin] = CampaignWorld.Md5Mod, [AcceptancePlan.AdapterPlugin] = CampaignWorld.Md5Adapter },
             HostWorld = new() { World = new() { Source = Fixture, Sha256 = new(WorldFixture.Manifest(Fixture)) }, WorldUid = WorldUid, SaveDirectory = Save },
         },
     };
@@ -139,7 +141,7 @@ public sealed class HostedScenarioTests : IDisposable
         using var machine = new FakeDataRoot(Path.Combine(_root, "valheim-testing"));
         // As the runner's host mode builds it: MyMod's declaration, so its Harmony patches are checked on the host.
         await using var session = FakeGameSession.Hosted(report, Output, plan.Client, (client, _, output) => ClientSession.Attach(client, output, host),
-            hostLog: hostLog, mod: LifecyclePlan.Mod);
+            hostLog: hostLog, mod: AcceptancePlan.Mod);
         try
         {
             await session.StartAsync();

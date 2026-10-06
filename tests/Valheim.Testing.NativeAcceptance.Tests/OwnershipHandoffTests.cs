@@ -1,17 +1,19 @@
 using System.Text.Json;
+using MyMod.IntegrationTests;
 using MyMod.SystemTests;
+using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
 public sealed class OwnershipHandoffTests
 {
     [Fact] public void NamedClientSetupsOverlapAndAFailedSetupClosesTheOtherActor()
     {
         using var world = new CampaignWorld();
-        var plan = world.Plan(LifecyclePlan.ThreeActorScenario);
+        var plan = world.Plan(AcceptancePlan.ThreeActorScenario);
         var report = new ScenarioReport("parallel-client-setup");
         using var bothStarted = new CountdownEvent(2);
         ClientSession? first = null;
@@ -54,7 +56,7 @@ public sealed class OwnershipHandoffTests
     [Fact] public void FailureOpeningSecondClientDisposesFirstWithoutRetryingActions()
     {
         using var world = new CampaignWorld();
-        var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
+        var plan = world.Plan(AcceptancePlan.OwnershipHandoffScenario);
         plan.SecondClient = CampaignWorld.ClientPlan(port: 5557);
         plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
         var report = new ScenarioReport("ownership-startup-failure");
@@ -80,7 +82,7 @@ public sealed class OwnershipHandoffTests
     [Fact] public void FailedSecondStartupDoesNotHideAnUnprovenFirstClientStop()
     {
         using var world = new CampaignWorld();
-        var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
+        var plan = world.Plan(AcceptancePlan.OwnershipHandoffScenario);
         plan.Client!.Mode = "owned";
         plan.Client.Install = Path.Combine(world.Root, "client-a-install");
         plan.SecondClient = CampaignWorld.ClientPlan(port: 5557);
@@ -106,7 +108,7 @@ public sealed class OwnershipHandoffTests
     public void FailedFirstClientObservationClosesItBeforeSecondClientOpens(bool loadedGroundIsWet)
     {
         using var world = new CampaignWorld();
-        var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
+        var plan = world.Plan(AcceptancePlan.OwnershipHandoffScenario);
         plan.SecondClient = CampaignWorld.ClientPlan(port: 5557);
         plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
         var report = new ScenarioReport("ownership-first-failure");
@@ -159,7 +161,7 @@ public sealed class OwnershipHandoffTests
     public void TwoClientsHandoffOnceAndRejectTheWrongObservedOwner(bool wrongOwner, float loadedOffset)
     {
         using var world = new CampaignWorld();
-        var plan = world.Plan(LifecyclePlan.OwnershipHandoffScenario);
+        var plan = world.Plan(AcceptancePlan.OwnershipHandoffScenario);
         plan.SecondClient = CampaignWorld.ClientPlan(port: 5557);
         plan.SecondArrival = new Site { X = 100, Z = -32, Ground = 42.4f };
         var report = new ScenarioReport("ownership-handoff");
@@ -193,7 +195,7 @@ public sealed class OwnershipHandoffTests
     }
 
     // CampaignWorld's client answers the arrival waits (ScriptedTransport.ArrivalSignals); this one also teleports itself.
-    private static ScriptedTransport ReadyClient(CampaignWorld world, LifecyclePlan plan) => world.Client()
+    private static ScriptedTransport ReadyClient(CampaignWorld world, AcceptancePlan plan) => world.Client()
             .OnPrefix("cli_teleport ", _ => { world.MoveClient(plan.Arrival.X, plan.Arrival.Ground, plan.Arrival.Z); return ScriptedTransport.Ok("OK: Teleported to test point"); })
             .Extension("valheim.world", "terrain", _ => new
             {
@@ -204,7 +206,7 @@ public sealed class OwnershipHandoffTests
                 source = "mymod-marker-owner", complete = true, id = "1:2", owner = "101", self = "101", ownedHere = true, instance = true,
             }, readOnly: false);
 
-    private static ScriptedTransport ReadySecond(LifecyclePlan plan, bool wrongOwner, float loadedOffset = 0)
+    private static ScriptedTransport ReadySecond(AcceptancePlan plan, bool wrongOwner, float loadedOffset = 0)
     {
         bool joined = false, devcommands = false, claimed = false, acknowledged = false;
         return new ScriptedTransport()

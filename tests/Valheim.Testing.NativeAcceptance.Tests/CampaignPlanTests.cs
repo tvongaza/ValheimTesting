@@ -1,10 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Runtime.CompilerServices;
+using MyMod.IntegrationTests;
 using MyMod.SystemTests;
+using Valheim.Testing.NativeAcceptance;
 using Xunit;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
 /// <summary>
 /// The native campaign's plan rules, from plan files as an operator writes them: each scenario's valid plan is read, and
@@ -21,7 +23,7 @@ public sealed class CampaignPlanTests : IDisposable
         var client = new JsonObject
         {
             ["mode"] = "attach", ["port"] = port, ["character"] = "Tester",
-            ["pins"] = new JsonObject { ["valheimCLI.valheimCLI"] = Cli, [LifecyclePlan.ModPlugin] = mod, [LifecyclePlan.AdapterPlugin] = Adapter },
+            ["pins"] = new JsonObject { ["valheimCLI.valheimCLI"] = Cli, [AcceptancePlan.ModPlugin] = mod, [AcceptancePlan.AdapterPlugin] = Adapter },
         };
         if (crossplay) client["crossplay"] = true; else client["join"] = "127.0.0.1:2456";
         return client;
@@ -46,35 +48,35 @@ public sealed class CampaignPlanTests : IDisposable
             ["runtime"] = new JsonObject { ["source"] = Path.Combine(_directory, "runtime"), ["sha256"] = new JsonObject { ["valheim_server.exe"] = hash } },
             ["world"] = new JsonObject { ["source"] = Path.Combine(_directory, "world"), ["sha256"] = new JsonObject { ["adminlist.txt"] = hash } },
             ["arguments"] = new JsonArray("-batchmode", "-nographics", "-port", "2466", "-savedir", "{world}", "-public", "0"),
-            ["pins"] = new JsonObject { ["worlduid"] = "4242", ["valheimCLI.valheimCLI"] = Cli, [LifecyclePlan.ModPlugin] = Mod, [LifecyclePlan.AdapterPlugin] = Adapter },
+            ["pins"] = new JsonObject { ["worlduid"] = "4242", ["valheimCLI.valheimCLI"] = Cli, [AcceptancePlan.ModPlugin] = Mod, [AcceptancePlan.AdapterPlugin] = Adapter },
             ["runtimePins"] = new JsonObject { ["game"] = new string('c', 64), ["loader"] = new string('d', 64), ["patchers"] = new string('e', 64) },
             ["client"] = Client(),
         };
-        if (scenario is LifecyclePlan.WorldScenario or LifecyclePlan.VanillaClientScenario or LifecyclePlan.CrossplayScenario or LifecyclePlan.OwnershipHandoffScenario)
+        if (scenario is AcceptancePlan.WorldScenario or AcceptancePlan.VanillaClientScenario or AcceptancePlan.CrossplayScenario or AcceptancePlan.OwnershipHandoffScenario)
         {
             plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
             plan["wetSite"] = new JsonObject { ["x"] = 400, ["z"] = 300, ["ground"] = 22 };
             plan["arrival"] = new JsonObject { ["x"] = 105, ["z"] = -40, ["ground"] = 42.3 };
         }
-        if (scenario == LifecyclePlan.AreaObjectsScenarioName)
+        if (scenario == AcceptancePlan.AreaObjectsScenarioName)
             plan["arrival"] = new JsonObject { ["x"] = 105, ["z"] = -40, ["ground"] = 42.3 };
         switch (scenario)
         {
-            case LifecyclePlan.WorldScenario:
-                plan["environment"] = new JsonObject { [LifecyclePlan.FixturesVariable] = "1" };
+            case AcceptancePlan.WorldScenario:
+                plan["environment"] = new JsonObject { [AcceptancePlan.FixturesVariable] = "1" };
                 plan["away"] = new JsonObject { ["x"] = 420, ["z"] = -40, ["ground"] = 36 };
                 plan["globalKey"] = "defeated_eikthyr";
                 plan["dungeon"] = new JsonObject { ["x"] = 150, ["z"] = -40 };
                 plan["logout"] = new JsonObject { ["charactersDirectory"] = Path.Combine(_directory, "characters_local") };
                 break;
-            case LifecyclePlan.VanillaClientScenario: plan["client"]!["pins"]![LifecyclePlan.ModPlugin] = "absent"; break;
-            case LifecyclePlan.SyncedConfigScenario: plan["newGreeting"] = "goodbye"; break;
-            case LifecyclePlan.RefusedJoinScenario: plan["refusedClient"] = Client(CampaignWorld.Md5Mismatched, port: 5557); break;
-            case LifecyclePlan.CrossplayScenario:
+            case AcceptancePlan.VanillaClientScenario: plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent"; break;
+            case AcceptancePlan.SyncedConfigScenario: plan["newGreeting"] = "goodbye"; break;
+            case AcceptancePlan.RefusedJoinScenario: plan["refusedClient"] = Client(CampaignWorld.Md5Mismatched, port: 5557); break;
+            case AcceptancePlan.CrossplayScenario:
                 plan["crossplay"] = true;
                 plan["client"] = Client("absent", crossplay: true);
                 break;
-            case LifecyclePlan.OwnershipHandoffScenario:
+            case AcceptancePlan.OwnershipHandoffScenario:
                 plan["client"] = Owned(Client(port: 5556), "ClientA");
                 plan["secondClient"] = Owned(Client(port: 5557), "ClientB");
                 foreach (var entry in new[] { plan["client"]!, plan["secondClient"]! })
@@ -82,7 +84,7 @@ public sealed class CampaignPlanTests : IDisposable
                         Capabilities.MarkerOwnerWait, Capabilities.MarkerOwnerClaim, "valheim.world/terrain", "valheim.world/player-support-wait", "valheim.world/player-support", Valheim.Testing.Game.CliCapabilities.TeleportSignals);
                 plan["secondArrival"] = new JsonObject { ["x"] = 100, ["z"] = -32, ["ground"] = 42.4 };
                 break;
-            case LifecyclePlan.ThreeActorScenario:
+            case AcceptancePlan.ThreeActorScenario:
                 plan["client"] = Owned(Client(port: 5556), "ClientA");
                 plan["secondClient"] = Owned(Client(port: 5557), "ClientB");
                 plan["client"]!["capabilities"] = new JsonArray(Capabilities.Markers);
@@ -92,11 +94,11 @@ public sealed class CampaignPlanTests : IDisposable
         return plan;
     }
 
-    private LifecyclePlan Read(JsonObject plan)
+    private AcceptancePlan Read(JsonObject plan)
     {
         string path = Path.Combine(_directory, Guid.NewGuid().ToString("N") + ".json");
         File.WriteAllText(path, plan.ToJsonString());
-        return LifecyclePlan.ReadValidated(path);
+        return AcceptancePlan.ReadValidated(path);
     }
     private void Refused(JsonObject plan, string because)
     {
@@ -105,9 +107,9 @@ public sealed class CampaignPlanTests : IDisposable
     }
 
     [Theory]
-    [InlineData(LifecyclePlan.WorldScenario)] [InlineData(LifecyclePlan.VanillaClientScenario)] [InlineData(LifecyclePlan.SyncedConfigScenario)]
-    [InlineData(LifecyclePlan.RefusedJoinScenario)] [InlineData(LifecyclePlan.CrossplayScenario)] [InlineData(LifecyclePlan.ContentCensusScenario)]
-    [InlineData(LifecyclePlan.AreaObjectsScenarioName)] [InlineData(LifecyclePlan.OwnershipHandoffScenario)] [InlineData(LifecyclePlan.ThreeActorScenario)]
+    [InlineData(AcceptancePlan.WorldScenario)] [InlineData(AcceptancePlan.VanillaClientScenario)] [InlineData(AcceptancePlan.SyncedConfigScenario)]
+    [InlineData(AcceptancePlan.RefusedJoinScenario)] [InlineData(AcceptancePlan.CrossplayScenario)] [InlineData(AcceptancePlan.ContentCensusScenario)]
+    [InlineData(AcceptancePlan.AreaObjectsScenarioName)] [InlineData(AcceptancePlan.OwnershipHandoffScenario)] [InlineData(AcceptancePlan.ThreeActorScenario)]
     public void EachScenariosValidPlanIsRead(string scenario) => Assert.Equal(scenario, Read(Plan(scenario)).Scenario);
 
     [Theory]
@@ -115,14 +117,14 @@ public sealed class CampaignPlanTests : IDisposable
     [InlineData(106)]
     public void HandoffRefusesOverlappingLandingPoints(float secondX)
     {
-        var plan = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        var plan = Plan(AcceptancePlan.OwnershipHandoffScenario);
         plan["secondArrival"] = new JsonObject { ["x"] = secondX, ["z"] = -40, ["ground"] = 42.3 };
         Refused(plan, "at least 3 m apart");
     }
 
     [Fact] public void ObjectSnapshotPlanRefusesAnAmbiguousCentreBeforeLaunch()
     {
-        var plan = Plan(LifecyclePlan.AreaObjectsScenarioName);
+        var plan = Plan(AcceptancePlan.AreaObjectsScenarioName);
         plan["arrival"]!["x"] = 105.5f;
         Refused(plan, "whole-metre coordinates");
     }
@@ -130,13 +132,13 @@ public sealed class CampaignPlanTests : IDisposable
     [Fact] public void OwnershipHandoffRejectsAmbiguousClients()
     {
         // Separate hosts, distinct signed-in Steam identities and CLI ports are the inventory's assignment (EnvironmentInventoryTests).
-        Read(Plan(LifecyclePlan.OwnershipHandoffScenario));
-        var duplicateCharacter = Plan(LifecyclePlan.OwnershipHandoffScenario);
+        Read(Plan(AcceptancePlan.OwnershipHandoffScenario));
+        var duplicateCharacter = Plan(AcceptancePlan.OwnershipHandoffScenario);
         duplicateCharacter["secondClient"]!["character"] = "ClientA";
         Refused(duplicateCharacter, "distinct disposable character");
-        var missingCapability = Plan(LifecyclePlan.OwnershipHandoffScenario);
-        missingCapability["secondClient"]!["pins"]!.AsObject().Remove(LifecyclePlan.AdapterPlugin);
-        Refused(missingCapability, "Pin " + LifecyclePlan.AdapterPlugin);
+        var missingCapability = Plan(AcceptancePlan.OwnershipHandoffScenario);
+        missingCapability["secondClient"]!["pins"]!.AsObject().Remove(AcceptancePlan.AdapterPlugin);
+        Refused(missingCapability, "Pin " + AcceptancePlan.AdapterPlugin);
     }
 
     [Fact] public void OwnershipHandoffRequiresTheArrivalSignalsBeforeGameplay()
@@ -144,7 +146,7 @@ public sealed class CampaignPlanTests : IDisposable
         // Every capability the toolkit's arrival needs, and the loaded-ground reading, is checked before launch.
         foreach (string capability in Valheim.Testing.Game.PlayerPlacement.ArrivalCapabilities.Append("valheim.world/terrain"))
         {
-            var missing = Plan(LifecyclePlan.OwnershipHandoffScenario);
+            var missing = Plan(AcceptancePlan.OwnershipHandoffScenario);
             var capabilities = missing["secondClient"]!["capabilities"]!.AsArray();
             capabilities.Remove(capabilities.Single(c => c!.GetValue<string>() == capability));
             Refused(missing, capability);
@@ -152,7 +154,7 @@ public sealed class CampaignPlanTests : IDisposable
 
         foreach (string removed in new[] { "eventDrivenArrival", "fastTestTeleports" })
         {
-            var stale = Plan(LifecyclePlan.OwnershipHandoffScenario);
+            var stale = Plan(AcceptancePlan.OwnershipHandoffScenario);
             stale["client"]![removed] = true;
             Refused(stale, removed + " was removed (ValheimTesting #299)");
         }
@@ -160,7 +162,7 @@ public sealed class CampaignPlanTests : IDisposable
 
     [Fact] public void TheSamplePlansAreValidPlans()
     {
-        // The samples beside sample-plan.json have placeholders for hashes and paths; with those filled in, each reads.
+        // The sample plans have placeholders for hashes and paths; with those filled in, each reads.
         string samples = Path.Combine(AppContext.BaseDirectory, "samples");
         // Discover the source inventory, not arbitrary files left in bin/ from an older build.
         var names = Directory.GetFiles(SourceSamples(), "sample-plan-*.json")
@@ -181,7 +183,7 @@ public sealed class CampaignPlanTests : IDisposable
     {
         // The example keeps no copy of the capture ranges: ReviewCapture.Validate refuses them when the plan is read.
         JsonObject Sample() => JsonNode.Parse(Fill(File.ReadAllText(Path.Combine(SourceSamples(), "sample-plan-review-capture.json"))))!.AsObject();
-        Assert.Equal(LifecyclePlan.ReviewCaptureScenarioName, Read(Sample()).Scenario);
+        Assert.Equal(AcceptancePlan.ReviewCaptureScenarioName, Read(Sample()).Scenario);
         var plan = Sample(); plan["capture"]!["cameraAzimuthDegrees"] = 360;
         Assert.Contains("azimuth", Assert.ThrowsAny<ArgumentException>(() => Read(plan)).Message);
         plan = Sample(); plan["capture"]!["supersize"] = 5;
@@ -197,7 +199,7 @@ public sealed class CampaignPlanTests : IDisposable
     }
 
     private static string SourceSamples([CallerFilePath] string sourceFile = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "../MyMod.SystemTests"));
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "../Valheim.Testing.NativeAcceptance"));
 
     // Puts full paths, hashes and MD5s where the samples have placeholders ("<...>"); the builds the client runs are the server's.
     private string Fill(string text) => System.Text.RegularExpressions.Regex.Replace(text, "\"<([^\"]*)>\"", match =>
@@ -220,7 +222,7 @@ public sealed class CampaignPlanTests : IDisposable
     // A dry-site-server plan with the patch reload (#30): ScriptEngine pinned, two probe builds on disk.
     private JsonObject PatchReloadPlan(bool control = false)
     {
-        var plan = Plan(LifecyclePlan.ServerScenario);
+        var plan = Plan(AcceptancePlan.ServerScenario);
         plan.Remove("client");
         plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
         plan["wetSite"] = new JsonObject { ["x"] = 400, ["z"] = 300, ["ground"] = 22 };
@@ -243,79 +245,79 @@ public sealed class CampaignPlanTests : IDisposable
         Refused(plan, "the same build");
         plan = PatchReloadPlan(); plan["patchReload"]!["revisionA"] = "probe-a.dll";
         Refused(plan, "patchReload.revisionA is the full path");
-        plan = Plan(LifecyclePlan.SyncedConfigScenario); plan["patchReload"] = PatchReloadPlan()["patchReload"]!.DeepClone();
+        plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["patchReload"] = PatchReloadPlan()["patchReload"]!.DeepClone();
         Refused(plan, "patchReload are for the dry-site-server scenario");
     }
 
     [Fact] public void FieldsOfAnotherScenarioAreRefused()
     {
-        var plan = Plan(LifecyclePlan.SyncedConfigScenario); plan["globalKey"] = "defeated_eikthyr";
+        var plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["globalKey"] = "defeated_eikthyr";
         Refused(plan, "are for the lifecycle-world scenario");
-        plan = Plan(LifecyclePlan.WorldScenario); plan["newGreeting"] = "goodbye";
+        plan = Plan(AcceptancePlan.WorldScenario); plan["newGreeting"] = "goodbye";
         Refused(plan, "newGreeting are for the synced-config scenario");
-        plan = Plan(LifecyclePlan.VanillaClientScenario); plan["crossplay"] = true;
+        plan = Plan(AcceptancePlan.VanillaClientScenario); plan["crossplay"] = true;
         Refused(plan, "crossplay are for the crossplay scenario");
-        plan = Plan(LifecyclePlan.SyncedConfigScenario); plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
+        plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
         Refused(plan, "marks nothing");
     }
 
     [Fact] public void TheWorldScenarioRefusesWhatWouldMakeItProveNothing()
     {
-        var plan = Plan(LifecyclePlan.WorldScenario); plan.Remove("environment");
-        Refused(plan, LifecyclePlan.FixturesVariable);
-        plan = Plan(LifecyclePlan.WorldScenario); plan["away"] = new JsonObject { ["x"] = 356, ["z"] = -40, ["ground"] = 36 }; // Four zones: still loaded.
+        var plan = Plan(AcceptancePlan.WorldScenario); plan.Remove("environment");
+        Refused(plan, AcceptancePlan.FixturesVariable);
+        plan = Plan(AcceptancePlan.WorldScenario); plan["away"] = new JsonObject { ["x"] = 356, ["z"] = -40, ["ground"] = 36 }; // Four zones: still loaded.
         Refused(plan, "at least 5 zones (320 m");
-        plan = Plan(LifecyclePlan.WorldScenario); plan["client"]!["pins"]![LifecyclePlan.ModPlugin] = "absent";
+        plan = Plan(AcceptancePlan.WorldScenario); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent";
         Refused(plan, "the check needs the server's MyMod on the client");
-        plan = Plan(LifecyclePlan.WorldScenario); plan["globalKey"] = "Defeated Eikthyr";
+        plan = Plan(AcceptancePlan.WorldScenario); plan["globalKey"] = "Defeated Eikthyr";
         Refused(plan, "one lower-case key");
-        plan = Plan(LifecyclePlan.WorldScenario); plan["dungeon"] = new JsonObject { ["x"] = 400, ["z"] = -40 };
+        plan = Plan(AcceptancePlan.WorldScenario); plan["dungeon"] = new JsonObject { ["x"] = 400, ["z"] = -40 };
         Refused(plan, "within two zones");
-        plan = Plan(LifecyclePlan.WorldScenario); plan["logout"] = new JsonObject { ["charactersDirectory"] = Path.Combine(_directory, "characters") };
+        plan = Plan(AcceptancePlan.WorldScenario); plan["logout"] = new JsonObject { ["charactersDirectory"] = Path.Combine(_directory, "characters") };
         Refused(plan, "characters_local");
-        plan = Plan(LifecyclePlan.WorldScenario); plan.Remove("client");
+        plan = Plan(AcceptancePlan.WorldScenario); plan.Remove("client");
         Refused(plan, "add the client section");
     }
 
     [Fact] public void TheVanillaClientMustLackMyModAndHaveTheServersAdapter()
     {
-        var plan = Plan(LifecyclePlan.VanillaClientScenario); plan["client"]!["pins"]![LifecyclePlan.ModPlugin] = Mod;
+        var plan = Plan(AcceptancePlan.VanillaClientScenario); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = Mod;
         Refused(plan, "must pin example.mymod=absent");
-        plan = Plan(LifecyclePlan.VanillaClientScenario); plan["client"]!["pins"]![LifecyclePlan.AdapterPlugin] = new string('9', 32);
+        plan = Plan(AcceptancePlan.VanillaClientScenario); plan["client"]!["pins"]![AcceptancePlan.AdapterPlugin] = new string('9', 32);
         Refused(plan, "with the server's MD5");
     }
 
     [Fact] public void TheSyncedConfigScenarioNeedsOneNewWord()
     {
-        var plan = Plan(LifecyclePlan.SyncedConfigScenario); plan.Remove("newGreeting");
+        var plan = Plan(AcceptancePlan.SyncedConfigScenario); plan.Remove("newGreeting");
         Refused(plan, "Set newGreeting");
-        plan = Plan(LifecyclePlan.SyncedConfigScenario); plan["newGreeting"] = "good bye";
+        plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["newGreeting"] = "good bye";
         Refused(plan, "Set newGreeting");
     }
 
     [Fact] public void TheRefusedClientMustRunAnotherBuildThanTheServer()
     {
-        var plan = Plan(LifecyclePlan.RefusedJoinScenario); plan["refusedClient"] = Client(Mod, port: 5557);
+        var plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["refusedClient"] = Client(Mod, port: 5557);
         Refused(plan, "pins the server's own MyMod build");
-        plan = Plan(LifecyclePlan.RefusedJoinScenario); plan["refusedClient"] = Client("absent", port: 5557);
+        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["refusedClient"] = Client("absent", port: 5557);
         Refused(plan, "runs another MyMod build");
-        plan = Plan(LifecyclePlan.RefusedJoinScenario); plan["refusedClient"] = Client(CampaignWorld.Md5Mismatched);
+        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["refusedClient"] = Client(CampaignWorld.Md5Mismatched);
         Refused(plan, "different ValheimCLI ports");
-        plan = Plan(LifecyclePlan.RefusedJoinScenario); plan["expectedRefusal"] = "Connected";
+        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["expectedRefusal"] = "Connected";
         Refused(plan, "one of the game's Error statuses");
-        plan = Plan(LifecyclePlan.RefusedJoinScenario); plan["expectedRefusal"] = "ErrorSomethingNew";
+        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["expectedRefusal"] = "ErrorSomethingNew";
         Refused(plan, "expectedRefusal: Unknown connection status");
-        plan = Plan(LifecyclePlan.RefusedJoinScenario); plan["expectedRefusal"] = "ErrorDisconnected";
+        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["expectedRefusal"] = "ErrorDisconnected";
         Assert.Equal(Valheim.Testing.Game.GameConnectionStatus.ErrorDisconnected, Read(plan).RefusalStatus);
     }
 
     [Fact] public void TheCrossplayScenarioNeedsCrossplayOnBothSidesAndNoPassword()
     {
-        var plan = Plan(LifecyclePlan.CrossplayScenario); plan["client"] = Client("absent");
+        var plan = Plan(AcceptancePlan.CrossplayScenario); plan["client"] = Client("absent");
         Refused(plan, "in its client section");
-        plan = Plan(LifecyclePlan.CrossplayScenario); plan["arguments"]!.AsArray().Add("-password"); plan["arguments"]!.AsArray().Add("secret1");
+        plan = Plan(AcceptancePlan.CrossplayScenario); plan["arguments"]!.AsArray().Add("-password"); plan["arguments"]!.AsArray().Add("secret1");
         Refused(plan, "without -password");
-        plan = Plan(LifecyclePlan.CrossplayScenario); plan["arguments"] = new JsonArray("-batchmode", "-nographics", "-savedir", "{world}");
+        plan = Plan(AcceptancePlan.CrossplayScenario); plan["arguments"] = new JsonArray("-batchmode", "-nographics", "-savedir", "{world}");
         Assert.Throws<ArgumentException>(() => Read(plan)); // The toolkit's rule: a crossplay server names its port.
     }
 
@@ -323,24 +325,24 @@ public sealed class CampaignPlanTests : IDisposable
     {
         const string md5 = "55555555555555555555555555555555";
         // Pinned without a control run: refused, naming what to write.
-        var plan = Plan(LifecyclePlan.WorldScenario); plan["pins"]!["example.mymod.control.missingtarget"] = md5;
+        var plan = Plan(AcceptancePlan.WorldScenario); plan["pins"]!["example.mymod.control.missingtarget"] = md5;
         Refused(plan, "Name it in expectFailure (\"missing-harmony-target\")");
         // Named without being installed.
-        plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState;
+        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState;
         Refused(plan, "pin example.mymod.control.fieldonlystate there");
         // The wrong side, the wrong scenario, an unknown name.
-        plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["pins"]!["example.mymod.control.fieldonlystate"] = md5;
+        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["pins"]!["example.mymod.control.fieldonlystate"] = md5;
         Refused(plan, "on the client");
-        plan = Plan(LifecyclePlan.VanillaClientScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = md5;
+        plan = Plan(AcceptancePlan.VanillaClientScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState; plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = md5;
         Refused(plan, "belongs to the lifecycle-world scenario");
-        plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = "some-control";
+        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = "some-control";
         Refused(plan, "expectFailure names no control");
         // Two controls at once.
-        plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState;
+        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.FieldOnlyState;
         plan["client"]!["pins"]!["example.mymod.control.fieldonlystate"] = md5; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
         Refused(plan, "exactly the control it names");
         // A server-side control run must name its line as expected: it fails the teardown scan by default.
-        plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["example.mymod.control.missingtarget"] = md5;
+        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.MissingHarmonyTarget; plan["pins"]!["example.mymod.control.missingtarget"] = md5;
         Refused(plan, "names the control's lines as expected");
         plan["logScan"] = new JsonObject { ["accesstools-not-found"] = new JsonObject { ["expected"] = new JsonArray("name OtherMethod"), ["reason"] = "the control plants it" } };
         Refused(plan, "names the control's lines as expected");
@@ -352,45 +354,54 @@ public sealed class CampaignPlanTests : IDisposable
         plan["logScan"]!["accesstools-not-found"]!["severity"] = "Warning";
         Refused(plan, "keeps accesstools-not-found a failure");
         // A valid client-side control run.
-        plan = Plan(LifecyclePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
+        plan = Plan(AcceptancePlan.WorldScenario); plan["expectFailure"] = ControlPlugins.SuppressedProfileSave; plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = md5;
         Assert.Equal(ControlPlugins.SuppressedProfileSave, Read(plan).Control!.Name);
         // An explicit absence is not an install.
-        plan = Plan(LifecyclePlan.WorldScenario); plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = "absent";
+        plan = Plan(AcceptancePlan.WorldScenario); plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = "absent";
         Assert.Null(Read(plan).Control);
     }
 
     [Fact] public void TheContentCensusNeedsTheServersModOnTheClientAndItsControlIsABuild()
     {
         // The client's registries are its own: a client without MyMod, or with another build, cannot stand in.
-        var plan = Plan(LifecyclePlan.ContentCensusScenario); plan["client"]!["pins"]![LifecyclePlan.ModPlugin] = "absent";
+        var plan = Plan(AcceptancePlan.ContentCensusScenario); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent";
         Refused(plan, "the check needs the server's MyMod on the client");
-        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["client"]!["pins"]![LifecyclePlan.ModPlugin] = CampaignWorld.Md5Mismatched;
+        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = CampaignWorld.Md5Mismatched;
         Refused(plan, "the check needs the server's MyMod on the client");
-        plan = Plan(LifecyclePlan.ContentCensusScenario); plan.Remove("client");
+        plan = Plan(AcceptancePlan.ContentCensusScenario); plan.Remove("client");
         Refused(plan, "add the client section");
-        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
+        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["drySite"] = new JsonObject { ["x"] = 100, ["z"] = -40, ["ground"] = 42.5 };
         Refused(plan, "marks nothing");
 
         // The omitted-recipe control is MyMod's own build, pinned where MyMod is; it belongs to this scenario alone and
         // runs without any control plugin.
-        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
+        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
         var control = Read(plan).Control!;
         Assert.True(control.Build);
         Assert.Equal(ControlPlugins.OmittedRecipe, control.Name);
-        plan = Plan(LifecyclePlan.SyncedConfigScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
+        plan = Plan(AcceptancePlan.SyncedConfigScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe;
         Refused(plan, "belongs to the content-census scenario");
-        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]!["example.mymod.control.missingtarget"] = new string('5', 32);
+        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]!["example.mymod.control.missingtarget"] = new string('5', 32);
         Refused(plan, "remove the control plugin example.mymod.control.missingtarget");
-        plan = Plan(LifecyclePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]![LifecyclePlan.ModPlugin] = "any";
+        plan = Plan(AcceptancePlan.ContentCensusScenario); plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]![AcceptancePlan.ModPlugin] = "any";
         Assert.ThrowsAny<ArgumentException>(() => Read(plan));
         // A normal content-census plan names no control, although MyMod is pinned.
-        Assert.Null(Read(Plan(LifecyclePlan.ContentCensusScenario)).Control);
+        Assert.Null(Read(Plan(AcceptancePlan.ContentCensusScenario)).Control);
+    }
+
+    // Every client section runs with strict pins, the suite's two extra ones included (LifecyclePlan's rule over AcceptancePlan's sections).
+    [Fact] public void EveryClientSectionRunsWithStrictPins()
+    {
+        var plan = Plan(AcceptancePlan.OwnershipHandoffScenario); plan["secondClient"]!["pinning"] = "none";
+        Refused(plan, "strict pins only");
+        plan = Plan(AcceptancePlan.RefusedJoinScenario); plan["refusedClient"]!["pinning"] = "none";
+        Refused(plan, "strict pins only");
     }
 
     [Fact] public void TheTwoDrySiteScenariosAreUnchanged()
     {
-        var plan = Plan(LifecyclePlan.CrossplayScenario);
-        plan["scenario"] = LifecyclePlan.LifecycleScenario; plan.Remove("crossplay"); plan["client"] = Client("absent");
+        var plan = Plan(AcceptancePlan.CrossplayScenario);
+        plan["scenario"] = AcceptancePlan.LifecycleScenario; plan.Remove("crossplay"); plan["client"] = Client("absent");
         Assert.False(Read(plan).IsCampaign);
         plan["expectFailure"] = ControlPlugins.FieldOnlyState;
         Refused(plan, "belongs to the lifecycle-world scenario");
@@ -417,11 +428,11 @@ public sealed class CampaignPlanTests : IDisposable
         Assert.Equal(HostedPlan.HostedScenarioName, ReadHosted(Hosted()).Scenario);
         var plan = Hosted(); plan["client"]!.AsObject().Remove("hostWorld");
         Assert.Contains("hostWorld", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
-        plan = Hosted(); plan["client"]!["pins"]![LifecyclePlan.ModPlugin] = "absent";
+        plan = Hosted(); plan["client"]!["pins"]![AcceptancePlan.ModPlugin] = "absent";
         Assert.Contains("The host runs MyMod", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
         plan = Hosted(); plan["client"]!["pins"]!["example.mymod.control.suppressedsave"] = new string('5', 32);
         Assert.Contains("no control run", Assert.Throws<ArgumentException>(() => ReadHosted(plan)).Message);
-        plan = Hosted(); plan["scenario"] = LifecyclePlan.WorldScenario;
+        plan = Hosted(); plan["scenario"] = AcceptancePlan.WorldScenario;
         Assert.Throws<ArgumentException>(() => ReadHosted(plan));
         // A peer (#258 step 8b) joins from another machine: only as a campaign, as a joinsHost client with MyMod and its adapter.
         JsonObject Peer() { var peer = Client(); peer.Remove("join"); peer["port"] = 5557; peer["joinsHost"] = true; return peer; }
@@ -433,7 +444,7 @@ public sealed class CampaignPlanTests : IDisposable
         plan = Hosted(); var notJoining = Peer(); notJoining.Remove("joinsHost"); notJoining["join"] = "127.0.0.1:2456"; plan["peer"] = notJoining;
         File.WriteAllText(path, plan.ToJsonString());
         Assert.Contains("set its joinsHost", Assert.Throws<ArgumentException>(() => HostedPlan.Validated(HostedPlan.Read(path))).Message);
-        plan = Hosted(); var vanilla = Peer(); vanilla["pins"]![LifecyclePlan.AdapterPlugin] = "absent"; plan["peer"] = vanilla;
+        plan = Hosted(); var vanilla = Peer(); vanilla["pins"]![AcceptancePlan.AdapterPlugin] = "absent"; plan["peer"] = vanilla;
         File.WriteAllText(path, plan.ToJsonString());
         Assert.Contains("The peer runs MyMod", Assert.Throws<ArgumentException>(() => HostedPlan.Validated(HostedPlan.Read(path))).Message);
     }

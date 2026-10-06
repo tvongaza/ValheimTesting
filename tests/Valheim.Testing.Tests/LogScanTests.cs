@@ -246,7 +246,7 @@ public sealed class LogScanTests : IDisposable
         Assert.True(scan.Failed); // Now because of the RPC warning.
     }
     // What BepInEx's log on the Valheim 1.0.16 Windows dedicated server has of a [HarmonyPatch] on a method that does not
-    // exist (native, 30 Sep 2026: BepInEx 5.4.23.5, HarmonyX 2.9.0, the FullLifecycle MissingHarmonyTarget control): this one
+    // exist (native, 30 Sep 2026: BepInEx 5.4.23.5, HarmonyX 2.9.0, the NativeAcceptance MissingHarmonyTarget control): this one
     // warning. PatchAll's "Undefined target method" exception went to Unity's log only.
     private const string MissingTarget = "[Warning:  HarmonyX] AccessTools.DeclaredMethod: Could not find method for type Player and name MyModControlMethodThatDoesNotExist and parameters \n";
     [Fact] public void AMissingHarmonyTargetFailsTheScanByDefault()

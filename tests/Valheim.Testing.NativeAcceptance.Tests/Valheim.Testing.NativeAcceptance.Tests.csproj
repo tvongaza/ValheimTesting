@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The native acceptance suite's controlled integration tests: its scenarios, plan rules and runner code against the toolkit's
+    scripted fakes (CampaignWorld). No game, Steam or ValheimCLI, except the native session tests (AcceptanceSession.cs,
+    trait Category=Native), which need a private session.json beside this project and FAIL without it; validation runs the rest.
+  -->
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Valheim.Testing.NativeAcceptance/Valheim.Testing.NativeAcceptance.csproj" />
+    <!-- One source each, owned by the example: its copyable session fixture and its scripted dry-site world. -->
+    <Compile Include="../../examples/FullLifecycle/MyMod.IntegrationTests/GameSessionFixture.cs" Link="Example/GameSessionFixture.cs" />
+    <Compile Include="../../examples/FullLifecycle/MyMod.IntegrationTests/TestWorld.cs" Link="Example/TestWorld.cs" />
+    <!-- The sample plans, read by CampaignPlanTests with their placeholders filled in. -->
+    <None Include="../Valheim.Testing.NativeAcceptance/sample-plan-*.json" LinkBase="samples" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Where a native session's private environment sits (AcceptanceSession): read in place, never copied or committed. -->
+    <AssemblyMetadata Include="SessionDirectory" Value="$(MSBuildProjectDirectory)" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

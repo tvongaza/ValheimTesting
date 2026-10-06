@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    This repository's own native acceptance suite: the toolkit's scenarios, controls and probes, run on the FullLifecycle
+    example's MyMod (its plan, scenario code and mod; see README.md). Not packed. A console runner like the example's: no game
+    assemblies, it drives the game through ValheimCLI. The control and probe plugins (Controls/, Probes/) build separately,
+    against a game install.
+  -->
+  <PropertyGroup><OutputType>Exe</OutputType><RollForward>Major</RollForward><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable></PropertyGroup>
+  <PropertyGroup><DefaultItemExcludes>$(DefaultItemExcludes);Controls/**;Probes/**</DefaultItemExcludes></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../examples/FullLifecycle/MyMod.SystemTests/MyMod.SystemTests.csproj" /></ItemGroup>
+  <!-- MyMod's declared content for the content-census scenario, shipped inside the runner. -->
+  <ItemGroup><EmbeddedResource Include="content-expectations.json" LogicalName="Valheim.Testing.NativeAcceptance.content-expectations.json" /></ItemGroup>
+</Project>

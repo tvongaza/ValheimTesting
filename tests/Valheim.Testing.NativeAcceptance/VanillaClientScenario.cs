@@ -1,6 +1,7 @@
+using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// <c>vanilla-client</c> (#33): MyMod claims clients do not need it. A client with BepInEx, ValheimCLI and MyMod's test
@@ -13,7 +14,7 @@ namespace MyMod.SystemTests;
 /// </summary>
 public static class VanillaClientScenario
 {
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         var report = session.Report; var client = plan.Client!; var control = plan.Control;
         CampaignSteps.MarkSites(plan, session.Server!.Game, report);

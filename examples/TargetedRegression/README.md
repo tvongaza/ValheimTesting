@@ -95,7 +95,7 @@ From a checkout of this repository, make a public copy with the maintainer tool 
 
 ## Limits
 
-- One owned client hosting one world. A dedicated server, a second client and restarts of a server process are FullLifecycle's.
+- One owned client hosting one world. A dedicated server and restarts of a server process are FullLifecycle's; a second client is the native acceptance suite's.
 - The disposable install is a full copy of the game the first time (a few GB); it is reused while the game build, BepInEx core and the files at the game's root (its Doorstop loader) stay the same, and copied again when one changes.
 - The optional registered-character path stages and removes one owned test character. Without it, stage your disposable local character yourself. The tool does not reserve a machine or publish anything.
 - The metadata checks read what BepInEx reads; a dependency a mod finds by reflection at run time, or a config value it needs, is caught only by the live run.

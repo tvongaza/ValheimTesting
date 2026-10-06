@@ -83,7 +83,7 @@ public sealed class DrySiteScenarioTests : IDisposable
     {
         var mod = LifecyclePlan.Mod;
         mod.Validate();
-        Assert.Equal((Capabilities.Harmony, LifecyclePlan.ModPlugin), (mod.HarmonyCapability, mod.Owner));
+        Assert.Equal((LifecyclePlan.HarmonyCapability, LifecyclePlan.ModPlugin), (mod.HarmonyCapability, mod.Owner));
         var census = HarmonyCensus.Parse(JsonSerializer.SerializeToElement(TestWorld.ModCensus()));
         census.Check(mod.Owner!, mod.Patches).RequireApplied();
         var empty = HarmonyCensus.Parse(JsonSerializer.SerializeToElement(new { source = "harmony-patches", complete = true, owner = mod.Owner, methods = Array.Empty<object>() }));
@@ -170,5 +170,28 @@ public sealed class DrySiteScenarioTests : IDisposable
         Assert.Equal("fail", report.Provenance["humanReview"]);
         Assert.Equal("marker floats", report.Provenance["humanReviewNotes"]);
         Assert.DoesNotContain(report.Steps, s => s.Name.Contains("review", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // The native session (MyModSession) has one client, the plan's client section, and is skipped here without session.json.
+    [Fact] public void TheNativeSessionsOneClientIsThePlansClientSection()
+    {
+        var plan = _world.Plan();
+        Assert.Same(plan.Client, Assert.Single(MyModSession.Clients(plan)).Value);
+        Assert.Equal("client", MyModSession.Clients(plan).Keys.Single());
+        plan.Client = null;
+        Assert.Contains("needs its client section", Assert.Throws<ArgumentException>(() => MyModSession.Clients(plan)).Message);
+        if (!File.Exists(MyModSession.Manifest)) Assert.Contains("No session.json", MyModSession.Missing);
+    }
+
+    // The example's plan runs its two scenarios; the toolkit's acceptance scenarios and their fields are the NativeAcceptance suite's.
+    [Fact] public void ThePlanRunsOnlyTheExamplesTwoScenarios()
+    {
+        var plan = _world.Plan();
+        Assert.Equal(new[] { LifecyclePlan.LifecycleScenario, LifecyclePlan.ServerScenario }, plan.Scenarios);
+        plan.Scenario = "lifecycle-world";
+        Assert.Contains("Unknown scenario \"lifecycle-world\"", Assert.Throws<ArgumentException>(() => plan.RequireScenario([.. plan.Scenarios])).Message);
+        string file = Path.Combine(_output, "plan.json");
+        File.WriteAllText(file, """{ "scenario": "dry-site-lifecycle", "secondClient": {} }""");
+        Assert.Contains("secondClient", Assert.ThrowsAny<System.Text.Json.JsonException>(() => LifecyclePlan.ReadValidated(file)).Message);
     }
 }

@@ -1,27 +1,30 @@
+using MyMod.IntegrationTests;
 using MyMod.SystemTests;
+using Valheim.Testing.NativeAcceptance;
 using Valheim.Testing.Game;
 using Xunit;
 
-namespace MyMod.IntegrationTests;
+namespace Valheim.Testing.NativeAcceptance.Tests;
 
-// GameSessionFixture over a scripted world (#258 step 7): the fixture hands a started session to the tests, its disposal lets
-// the run tear down, and a run that never started or ended badly fails the test class with its exit code. No game.
+// GameSessionFixture (the FullLifecycle example's copyable source, compiled here too) over a scripted world (#258 step 7): the
+// fixture hands a started session to the tests, its disposal lets the run tear down, and a run that never started or ended
+// badly fails the test class with its exit code. No game.
 public sealed class GameSessionFixtureTests : IDisposable
 {
     private readonly CampaignWorld _world = new();
     public void Dispose() => _world.Dispose();
 
     // A runner like the toolkit's: start, the scenario, then the teardown and the run's verdict as its exit code.
-    private sealed class ScriptedFixture(CampaignWorld world, bool startFails = false, bool cleanupFails = false) : GameSessionFixture<LifecyclePlan>
+    private sealed class ScriptedFixture(CampaignWorld world, bool startFails = false, bool cleanupFails = false) : GameSessionFixture<AcceptancePlan>
     {
         public ScenarioReport Report { get; } = new("fixture");
         public bool Unavailable { get; init; }
         public CancellationToken Cancellation { get; init; }
         protected override bool Available => !Unavailable;
-        protected override async Task<int> RunAsync(Func<GameSession, LifecyclePlan, Task> scenario)
+        protected override async Task<int> RunAsync(Func<GameSession, AcceptancePlan, Task> scenario)
         {
             if (startFails) return 1;
-            var plan = world.Plan(LifecyclePlan.SyncedConfigScenario);
+            var plan = world.Plan(AcceptancePlan.SyncedConfigScenario);
             var session = world.Run(plan, Report, cancellation: Cancellation);
             try { await scenario(session, plan); }
             catch (Exception error) { Report.RecordFailure("scenario", error); }
@@ -38,7 +41,7 @@ public sealed class GameSessionFixtureTests : IDisposable
     {
         var fixture = new ScriptedFixture(_world);
         await fixture.InitializeAsync();
-        Assert.Equal(LifecyclePlan.SyncedConfigScenario, fixture.Plan.Scenario);
+        Assert.Equal(AcceptancePlan.SyncedConfigScenario, fixture.Plan.Scenario);
         fixture.Session.Report.Step("the test's own step", () => Assert.NotNull(fixture.Session.Server!.Game));
         Assert.Null(fixture.ExitCode); // The run waits for the test class.
         await fixture.DisposeAsync();
@@ -102,7 +105,19 @@ public sealed class GameSessionFixtureTests : IDisposable
         await fixture.DisposeAsync();
         Assert.Null(fixture.ExitCode);
         Assert.Empty(fixture.Report.Steps);
-        // Here, without session.json beside the tests, the native sessions are skipped with that reason.
-        if (!File.Exists(MyModSession.Manifest)) Assert.Contains("No session.json", MyModSession.Missing(LifecyclePlan.OwnershipHandoffScenario));
     }
+
+    // The suite's native sessions are never skipped (#258 Q7): without session.json beside the tests, one fails at its start
+    // with that reason, before anything is read or launched.
+    [Fact] public async Task AnAcceptanceSessionWithoutItsEnvironmentFailsAtItsStart()
+    {
+        // No machine has this scenario's plan; without session.json the manifest is named instead.
+        var session = new NoPlanSession();
+        string expected = File.Exists(AcceptanceSession.Manifest) ? $"No {NoPlanSession.Scenario}.plan.json" : "No session.json";
+        Assert.Contains(expected, (await Assert.ThrowsAsync<InvalidOperationException>(session.InitializeAsync)).Message);
+        await session.DisposeAsync(); // Nothing started, nothing to end.
+        Assert.Null(session.ExitCode);
+    }
+
+    private sealed class NoPlanSession() : AcceptanceSession(Scenario) { public const string Scenario = "no-such-scenario"; }
 }

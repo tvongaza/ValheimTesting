@@ -1,6 +1,7 @@
+using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// <c>content-census</c> (#91/#114): MyMod registers one item, its network prefabs, a recipe, a build piece and a status effect
@@ -18,7 +19,7 @@ namespace MyMod.SystemTests;
 public static class ContentCensusScenario
 {
     /// <summary>MyMod's declared content, embedded from <c>content-expectations.json</c>.</summary>
-    public const string ExpectationsResource = "MyMod.SystemTests.content-expectations.json";
+    public const string ExpectationsResource = "Valheim.Testing.NativeAcceptance.content-expectations.json";
     /// <summary>The names MyMod's <c>Content.cs</c> registers.</summary>
     public const string ItemName = "MyMod_SurveyStake", RecipeName = "Recipe_MyMod_SurveyStake",
         PieceName = "MyMod_SurveyPost", StatusName = "MyMod_SurveyBlessing";
@@ -37,7 +38,7 @@ public static class ContentCensusScenario
         return ContentExpectations.Parse(reader.ReadToEnd());
     }
 
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         var report = session.Report; var client = plan.Client!; var control = plan.Control;
         var expectations = Expectations();
@@ -52,8 +53,8 @@ public static class ContentCensusScenario
             round.Step("read the server's content census", () => server = ContentCensus.Read(round.Server, Capabilities.ContentCensus, expectations));
             round.Step("read the client's content census", () => joined = ContentCensus.Read(round.Client, Capabilities.ContentCensus, expectations));
             var census = ContentCensus.Reconcile(expectations,
-                new SideObservation(CensusSide.Server, plan.Pins[LifecyclePlan.ModPlugin], server),
-                new SideObservation(CensusSide.Client, client.Pins[LifecyclePlan.ModPlugin], joined));
+                new SideObservation(CensusSide.Server, plan.Pins[AcceptancePlan.ModPlugin], server),
+                new SideObservation(CensusSide.Client, client.Pins[AcceptancePlan.ModPlugin], joined));
             round.Write("content-census", new { expectations = expectations.Entries, server, client = joined, report = census });
             if (control == null) { round.Step(Check, census.RequirePassed); return; }
             ControlPlugins.ExpectFailure(report, control, () =>

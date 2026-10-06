@@ -1,11 +1,12 @@
+using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>Example of issue #201: optional read-only object evidence alongside, not inside, terrain checks.</summary>
 public static class AreaObjectsScenario
 {
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         var client = plan.Client!;
         new ClientRounds

@@ -1,12 +1,13 @@
+using MyMod.SystemTests;
 using System.Globalization;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>The test adapter's capabilities (MyMod.TestAdapter), by path.</summary>
 public static class Capabilities
 {
-    public const string Harmony = "mymod.testing/harmony", Zones = "mymod.testing/zones", CustomData = "mymod.testing/custom-data",
+    public const string Harmony = LifecyclePlan.HarmonyCapability, Zones = "mymod.testing/zones", CustomData = "mymod.testing/custom-data",
         GlobalKeys = "mymod.testing/globalkeys", GlobalKeyChange = "mymod.testing/globalkey", Config = "mymod.testing/config",
         UnresolvedPrefabs = "mymod.testing/unresolved-prefabs", DungeonRooms = "mymod.testing/dungeon-rooms", Markers = "mymod.testing/markers",
         ContentCensus = "mymod.testing/content-census";
@@ -20,7 +21,7 @@ public static class Capabilities
 public static class CampaignSteps
 {
     /// <summary>No marker before; the mod marks the dry site and refuses the wet one, each asked once; the server shows it.</summary>
-    public static void MarkSites(LifecyclePlan plan, GameActor server, ScenarioReport report, string side = "server")
+    public static void MarkSites(AcceptancePlan plan, GameActor server, ScenarioReport report, string side = "server")
     {
         report.Step("no marker at either site before the mod acts", () => { DrySiteScenario.RequireServerMarkers(server, plan.DrySite, 0); DrySiteScenario.RequireServerMarkers(server, plan.WetSite, 0); });
         report.Step("the mod marks the dry site", () => server.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
@@ -35,7 +36,7 @@ public static class CampaignSteps
         if (connected != expected) throw new InvalidOperationException($"Expected {expected} connected peer(s); the server lists {connected}.");
     }
 
-    public static void RequireMarkers(GameActor server, LifecyclePlan plan, int dry)
+    public static void RequireMarkers(GameActor server, AcceptancePlan plan, int dry)
     {
         DrySiteScenario.RequireServerMarkers(server, plan.DrySite, dry);
         DrySiteScenario.RequireServerMarkers(server, plan.WetSite, 0);

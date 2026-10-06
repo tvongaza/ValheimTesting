@@ -1,7 +1,8 @@
+using MyMod.SystemTests;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// <c>synced-config</c> (#20): MyMod's one server-synced entry, <c>[Server] Greeting</c>, on a client that runs MyMod. The
@@ -16,7 +17,7 @@ namespace MyMod.SystemTests;
 /// </summary>
 public static class SyncedConfigScenario
 {
-    public static void Run(GameSession session, LifecyclePlan plan)
+    public static void Run(GameSession session, AcceptancePlan plan)
     {
         var report = session.Report; var client = plan.Client!; string greeting = plan.NewGreeting!;
         var timeout = TimeSpan.FromSeconds(client.JoinSeconds);
@@ -55,12 +56,12 @@ public static class SyncedConfigScenario
         });
     }
 
-    private static ConfigValue Read(GameActor actor) => SyncedConfig.Read(actor, Capabilities.Config, LifecyclePlan.ModPlugin, "Server", "Greeting");
+    private static ConfigValue Read(GameActor actor) => SyncedConfig.Read(actor, Capabilities.Config, AcceptancePlan.ModPlugin, "Server", "Greeting");
 
-    private static ConfigValue Wait(GameSession session, LifecyclePlan plan, GameActor client, string expected, TimeSpan timeout, LogWait? log)
+    private static ConfigValue Wait(GameSession session, AcceptancePlan plan, GameActor client, string expected, TimeSpan timeout, LogWait? log)
     {
         Func<TimeSpan, CancellationToken, Task>? received = log == null ? null : (left, token) => log.WaitAsync(Received(expected), left, cancellation: token);
-        return SyncedConfig.WaitForValue(client, Capabilities.Config, LifecyclePlan.ModPlugin, "Server", "Greeting", expected, timeout, session.Interval,
+        return SyncedConfig.WaitForValue(client, Capabilities.Config, AcceptancePlan.ModPlugin, "Server", "Greeting", expected, timeout, session.Interval,
             received, session.Cancellation).GetAwaiter().GetResult();
     }
 

@@ -1,9 +1,10 @@
+using MyMod.SystemTests;
 using Valheim.Testing.Game;
 
-namespace MyMod.SystemTests;
+namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
-/// A negative-control plugin (examples/FullLifecycle/Controls): installed only for a run whose plan names it in
+/// A negative-control plugin (tests/Valheim.Testing.NativeAcceptance/Controls): installed only for a run whose plan names it in
 /// <c>expectFailure</c>, on the server or the client, in one scenario. <see cref="Check"/> names the check it must make
 /// fail and <see cref="Reason"/> the text that failure must contain; any other outcome fails the run. A
 /// <see cref="Build"/> control is not a plugin but a build of the plugin <see cref="Guid"/> names (MyMod built with a
@@ -35,13 +36,13 @@ public static class ControlPlugins
 
     public static readonly IReadOnlyList<ControlPlugin> All =
     [
-        new(MissingHarmonyTarget, "example.mymod.control.missingtarget", OnServer: true, LifecyclePlan.WorldScenario,
+        new(MissingHarmonyTarget, "example.mymod.control.missingtarget", OnServer: true, AcceptancePlan.WorldScenario,
             "the control's Harmony patch is applied", "not applied: " + MissingPatch),
-        new(ServerOnlyPrefab, "example.mymod.control.serveronlyprefab", OnServer: true, LifecyclePlan.VanillaClientScenario,
+        new(ServerOnlyPrefab, "example.mymod.control.serveronlyprefab", OnServer: true, AcceptancePlan.VanillaClientScenario,
             "the vanilla client resolves every prefab hash where the player stands", $"{StableHash.Of(ServerOnlyPrefabName)} ({ServerOnlyPrefabName})"),
-        new(FieldOnlyState, "example.mymod.control.fieldonlystate", OnServer: false, LifecyclePlan.WorldScenario,
+        new(FieldOnlyState, "example.mymod.control.fieldonlystate", OnServer: false, AcceptancePlan.WorldScenario,
             "the field-only value survives the zone reload", "did not survive the zone reload"),
-        new(SuppressedProfileSave, "example.mymod.control.suppressedsave", OnServer: false, LifecyclePlan.WorldScenario,
+        new(SuppressedProfileSave, "example.mymod.control.suppressedsave", OnServer: false, AcceptancePlan.WorldScenario,
             "the logout rewrites the character file", "to be rewritten by the logout"),
     ];
 
@@ -51,9 +52,9 @@ public static class ControlPlugins
     /// </summary>
     public static readonly IReadOnlyList<ControlPlugin> Builds =
     [
-        new(OmittedRecipe, LifecyclePlan.ModPlugin, OnServer: true, LifecyclePlan.ContentCensusScenario,
+        new(OmittedRecipe, AcceptancePlan.ModPlugin, OnServer: true, AcceptancePlan.ContentCensusScenario,
             ContentCensusScenario.Check, ContentCensusScenario.OnlyTheOmittedRecipe, Build: true),
-        new(OmittedStatusEffect, LifecyclePlan.ModPlugin, OnServer: true, LifecyclePlan.ContentCensusScenario,
+        new(OmittedStatusEffect, AcceptancePlan.ModPlugin, OnServer: true, AcceptancePlan.ContentCensusScenario,
             ContentCensusScenario.Check, ContentCensusScenario.OnlyTheOmittedStatusEffect, Build: true),
     ];
 

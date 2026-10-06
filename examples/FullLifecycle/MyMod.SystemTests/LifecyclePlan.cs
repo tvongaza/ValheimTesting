@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Valheim.Testing.Game;
 
 namespace MyMod.SystemTests;
@@ -5,21 +6,23 @@ namespace MyMod.SystemTests;
 /// <summary>
 /// The example's plan: the toolkit's pinned server plan (runtime, world, launch, pins, port) plus what this mod's
 /// scenario needs. The expectations are declared here by whoever prepared the fixture, from the world's generator
-/// heights; the runner never derives them from the mod's own replies. The native campaign's scenarios and controls add
-/// their fields and rules in CampaignPlan.cs.
+/// heights; the runner never derives them from the mod's own replies. This repository's own native acceptance suite
+/// (tests/Valheim.Testing.NativeAcceptance) extends it with more scenarios, so its rules have four extension points.
 /// </summary>
-public sealed partial class LifecyclePlan : ServerRunPlan
+public class LifecyclePlan : ServerRunPlan
 {
     public const string SessionTokenVariable = "MYMOD_TEST_SESSION_TOKEN";
     /// <summary>MyMod as the runner sees it: its adapter's session and Harmony capabilities and the patches it declares.</summary>
     public static readonly ModDeclaration Mod = new("mymod.testing/session", SessionTokenVariable)
     {
-        HarmonyCapability = Capabilities.Harmony, Owner = ModPlugin, Patches = DrySiteScenario.Patches,
+        HarmonyCapability = HarmonyCapability, Owner = ModPlugin, Patches = DrySiteScenario.Patches,
     };
     /// <summary>The full scenario (<see cref="DrySiteScenario"/>) and its server half alone (<see cref="DrySiteServerScenario"/>).</summary>
     public const string LifecycleScenario = "dry-site-lifecycle", ServerScenario = "dry-site-server";
     public const string ModPlugin = "example.mymod";
     public const string AdapterPlugin = "example.mymod.testadapter";
+    /// <summary>The test adapter's census of applied Harmony patches (<c>HarmonyCensus.Command()</c> in MyMod.TestAdapter).</summary>
+    public const string HarmonyCapability = "mymod.testing/harmony";
     // The mod's rule inputs (see ModWithTests' DrySiteRule): the sea at 30 m, 1.5 m of clearance.
     public const float WaterLevel = 30f, Clearance = 1.5f;
 
@@ -36,30 +39,40 @@ public sealed partial class LifecyclePlan : ServerRunPlan
 
     public static LifecyclePlan ReadValidated(string path) => Validated(Read<LifecyclePlan>(path));
 
-    /// <summary>The example's rules on a plan in memory: a read plan, or a campaign template once bound to its prepared actors.</summary>
-    public static LifecyclePlan Validated(LifecyclePlan plan)
+    /// <summary>The plan's rules on a plan in memory: a read plan, or a session's plan once bound to its prepared actors.</summary>
+    public static TPlan Validated<TPlan>(TPlan plan) where TPlan : LifecyclePlan { plan.Validate(); return plan; }
+
+    /// <summary>The scenarios this plan runs.</summary>
+    [JsonIgnore] public virtual IReadOnlyList<string> Scenarios => [LifecycleScenario, ServerScenario];
+    /// <summary>Whether the scenario marks the dry site and refuses the wet one (both of this example's do).</summary>
+    [JsonIgnore] public virtual bool MarksSites => true;
+    /// <summary>Every client section, each of which runs with strict pins.</summary>
+    [JsonIgnore] protected virtual IEnumerable<ClientRunPlan?> ClientSections => [Client];
+    /// <summary>A scenario's own rules, checked after the server plan's and before the sites'.</summary>
+    protected virtual void ValidateScenario() { }
+
+    private void Validate()
     {
         // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
-        if (!plan.Pinned || plan.Client is { Pinned: false } || plan.RefusedClient is { Pinned: false } || plan.SecondClient is { Pinned: false })
+        if (!Pinned || ClientSections.Any(client => client is { Pinned: false }))
             throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
-        plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
-        plan.RequireScenario(Scenarios);
-        plan.ValidateCampaign(); // The native campaign's scenarios and controls; the two dry-site scenarios pass through.
-        if (!plan.MarksSites) return plan;
-        CheckSites(plan.DrySite, plan.WetSite);
-        if (plan.ServerOnly)
+        ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
+        RequireScenario([.. Scenarios]);
+        ValidateScenario();
+        if (!MarksSites) return;
+        CheckSites(DrySite, WetSite);
+        if (ServerOnly)
         {
             // Nothing looks from a client here: a client or review section would suggest a check this scenario never makes.
-            if (plan.Client != null || plan.Review.Enabled) throw new ArgumentException($"The {ServerScenario} scenario has no client and no review; remove those sections or use {LifecycleScenario}.");
-            return plan;
+            if (Client != null || Review.Enabled) throw new ArgumentException($"The {ServerScenario} scenario has no client and no review; remove those sections or use {LifecycleScenario}.");
+            return;
         }
-        plan.Arrival.Validate("arrival point", requireGround: true);
-        float fromMarker = MathF.Sqrt(MathF.Pow(plan.Arrival.X - plan.DrySite.X, 2) + MathF.Pow(plan.Arrival.Z - plan.DrySite.Z, 2));
+        Arrival.Validate("arrival point", requireGround: true);
+        float fromMarker = MathF.Sqrt(MathF.Pow(Arrival.X - DrySite.X, 2) + MathF.Pow(Arrival.Z - DrySite.Z, 2));
         if (fromMarker is < 3 or > 20) throw new ArgumentException("Put the arrival point 3 to 20 m from the dry site: beside the marker, not on it.");
-        if (plan.Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("The arrival point must be dry ground; a swimming player is not supported.");
-        if (plan.Scenario == LifecycleScenario) plan.Client?.Validate(ModPlugin); // A server-only mod: the claim is what a client without it sees.
-        plan.Review.Validate();
-        return plan;
+        if (Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("The arrival point must be dry ground; a swimming player is not supported.");
+        if (Scenario == LifecycleScenario) Client?.Validate(ModPlugin); // A server-only mod: the claim is what a client without it sees.
+        Review.Validate();
     }
 
     /// <summary>
