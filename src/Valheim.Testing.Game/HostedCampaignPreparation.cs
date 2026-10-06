@@ -21,7 +21,8 @@ public sealed class HostedCampaignRole
 }
 
 /// <summary>
-/// Private setup input for one dedicated server and named clients: the campaign's actor declaration. The inventory supplies hosts,
+/// Private setup input for one dedicated server (or none, when one of the clients hosts the world) and named clients: the
+/// campaign's actor declaration. The inventory supplies hosts,
 /// source installs and the Steam lease location; each role has its own dependency lock so server-only mods never appear on a
 /// client by accident.
 /// Paths to local inputs may be relative to this manifest. No code or dependencies are downloaded implicitly.
@@ -35,11 +36,15 @@ public sealed class HostedCampaignManifest
     public string Inventory { get; set; } = "";
     /// <summary>Optional pinned world fixture for a scenario runner built on this preparation.</summary>
     public string World { get; set; } = "";
-    /// <summary>The dedicated server's public or LAN game address, including port, for direct-join scenarios.</summary>
+    /// <summary>The dedicated server's public or LAN game address, including port, for direct-join scenarios; none without a server.</summary>
     public string Join { get; set; } = "";
     /// <summary>Optional reviewed world UID; a different fixture is refused before copying.</summary>
     public string WorldUid { get; set; } = "";
-    public HostedCampaignRole Server { get; set; } = new();
+    /// <summary>
+    /// The dedicated server. Left out, the campaign has none: one client hosts the world (its plan section's <c>hostWorld</c>,
+    /// with the campaign's <see cref="World"/> as its fixture) and the others are its peers (<c>joinsHost</c>).
+    /// </summary>
+    public HostedCampaignRole? Server { get; set; }
     public Dictionary<string, HostedCampaignRole> Clients { get; set; } = [];
 
     private static readonly JsonSerializerOptions Json = new()
@@ -61,7 +66,10 @@ public sealed class HostedCampaignManifest
         if (manifest.Inventory == null) throw new InvalidDataException("A campaign's inventory is a path, not null; leave it out for this machine.");
         if (manifest.Inventory.Length != 0) manifest.Inventory = Path.GetFullPath(manifest.Inventory, directory);
         if (manifest.World.Length != 0) manifest.World = Path.GetFullPath(manifest.World, directory);
-        if (manifest.Server == null || manifest.Clients == null) throw new InvalidDataException("A hosted campaign needs a server and named clients.");
+        if (manifest.Clients == null) throw new InvalidDataException("A campaign needs its named clients (a list, not null).");
+        if (manifest.Server == null && manifest.Clients.Count == 0) throw new InvalidDataException("A campaign needs a dedicated server or at least one client.");
+        if (manifest.Server == null && manifest.Join.Length != 0)
+            throw new InvalidDataException("join is the dedicated server's address; a campaign without a server has none (its peers join the hosting client).");
         void Resolve(HostedCampaignRole role)
         {
             if (string.IsNullOrWhiteSpace(role.DependencyLock)) throw new InvalidDataException("Every campaign role needs its own reviewed dependencyLock.");
@@ -75,7 +83,7 @@ public sealed class HostedCampaignManifest
             if (role.Character != null && !string.IsNullOrWhiteSpace(role.Character.Store))
                 role.Character.Store = Path.GetFullPath(role.Character.Store, directory);
         }
-        Resolve(manifest.Server);
+        if (manifest.Server != null) Resolve(manifest.Server);
         foreach (var client in manifest.Clients.Values) Resolve(client);
         return manifest;
     }
@@ -127,6 +135,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         IReadOnlyDictionary<string, ClientRunPlan> clients, string outputDirectory)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        if (_profile.Server == null) throw new ArgumentException("This campaign has no dedicated server; bind a hosted plan with ApplyToHosted.");
         if (!clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(_profile.Clients.Keys))
             throw new ArgumentException("Bind exactly the prepared named clients to the plan.", nameof(clients));
         if (manifest.World.Length == 0 || manifest.Join.Length == 0)
@@ -161,19 +170,48 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         plan.Port = _profile.Server.CliPort;
         foreach (var (name, client) in clients)
         {
-            var role = _profile.Clients[name];
-            client.Mode = "owned";
-            client.Install = role.Install;
-            client.Port = role.CliPort;
-            client.InstallPins = HostInstall.Pins(Listings[name]);
-            client.Pins = Bound(client.Pins, PluginPins(name));
-            client.Character = manifest.Clients[name].Character?.FileName ??
-                throw new ArgumentException($"Client {name} has no registered character.");
+            Bind(name, client, manifest, outputDirectory);
             client.Join = manifest.Join;
-            string path = Path.Combine(Path.GetFullPath(outputDirectory), name + "-cli-manifest.json");
-            NativeDependencyLock.ReadReady(manifest.Clients[name].DependencyLock).CliManifest.Write(path);
-            client.CliManifest = path;
         }
+    }
+
+    /// <summary>
+    /// Binds a campaign without a dedicated server (#258 step 8b): one client hosts the campaign's fixture world (its section's
+    /// <c>hostWorld</c>, whose world becomes the campaign's <see cref="HostedCampaignManifest.World"/> with its hashes and UID) and
+    /// every other client is its peer (<c>joinsHost</c>). Each client is bound as for a direct-join campaign: its prepared
+    /// install, CLI port, install and plugin pins, character and staged ValheimCLI manifest. Returns the hosting client's name.
+    /// </summary>
+    internal string ApplyToHosted(HostedCampaignManifest manifest, IReadOnlyDictionary<string, ClientRunPlan> clients, string outputDirectory)
+    {
+        if (_profile.Server != null) throw new ArgumentException("This campaign has a dedicated server; bind it with ApplyTo.");
+        if (!clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(_profile.Clients.Keys))
+            throw new ArgumentException("Bind exactly the prepared named clients to the plan.", nameof(clients));
+        string host = HostedCampaignPreparation.HostOf(clients);
+        var identity = WorldIdentity.Read(manifest.World);
+        foreach (var (name, client) in clients)
+        {
+            Bind(name, client, manifest, outputDirectory);
+            if (client.HostWorld is not { } world) continue;
+            world.World = new PinnedDirectory { Source = manifest.World, Sha256 = new Dictionary<string, string>(WorldFixture.Manifest(manifest.World), StringComparer.Ordinal) };
+            world.WorldUid = identity.UidText;
+        }
+        return host;
+    }
+
+    // A client's binding to its prepared role: the copy it runs from, its ports, pins, character and ValheimCLI manifest.
+    private void Bind(string name, ClientRunPlan client, HostedCampaignManifest manifest, string outputDirectory)
+    {
+        var role = _profile.Clients[name];
+        client.Mode = "owned";
+        client.Install = role.Install;
+        client.Port = role.CliPort;
+        client.InstallPins = HostInstall.Pins(Listings[name]);
+        client.Pins = Bound(client.Pins, PluginPins(name));
+        client.Character = manifest.Clients[name].Character?.FileName ??
+            throw new ArgumentException($"Client {name} has no registered character.");
+        string path = Path.Combine(Path.GetFullPath(outputDirectory), name + "-cli-manifest.json");
+        NativeDependencyLock.ReadReady(manifest.Clients[name].DependencyLock).CliManifest.Write(path);
+        client.CliManifest = path;
     }
 
     // A plan's own world keys and absent plugins, then the role's selected plugins by their files' MD5.
@@ -484,33 +522,79 @@ public static class HostedCampaignPreparation
         inspection.Report.RequireReady();
         var inputs = inspection.Inputs!;
         var problems = new List<string>();
+        if (inputs.Manifest.Server == null)
+            problems.Add("The campaign has no dedicated server: run a hosted plan on it (one client hosts, the others join it).");
         if (inputs.Manifest.World.Length == 0 || inputs.Manifest.Join.Length == 0)
             problems.Add("Set world (the fixture) and join (the server's address) in the campaign manifest.");
         if (!clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(inputs.Manifest.Clients.Keys))
             problems.Add($"The plan binds clients {string.Join(", ", clients.Keys.Order(StringComparer.Ordinal))}; the campaign declares {string.Join(", ", inputs.Manifest.Clients.Keys.Order(StringComparer.Ordinal))}.");
-        void Pins(string role, IReadOnlyDictionary<string, string> pins)
-        {
-            if (!inputs.Selections.TryGetValue(role, out var files)) return;
-            var selected = PluginPins(role, files);
-            foreach (var (guid, value) in pins.Where(pin => !Expectations.IsWorldKey(pin.Key)).OrderBy(pin => pin.Key, StringComparer.Ordinal))
-                if (value == "absent" && selected.ContainsKey(guid))
-                    problems.Add($"The plan pins plugin {guid} absent for {role}, but its dependency lock selects it.");
-                else if (value != "absent" && !selected.ContainsKey(guid))
-                    problems.Add($"The plan pins plugin {guid} for {role}, which its dependency lock does not select.");
-        }
-        void Placeholders(string role, IEnumerable<string> arguments)
-        {
-            foreach (string argument in arguments.Where(argument => argument.Contains('<') || argument.Contains('>')))
-                problems.Add($"Replace the {role}'s placeholder argument {argument} before preparing any host.");
-        }
-        Pins("server", plan.Pins);
-        Placeholders("server", plan.Arguments);
+        AgreeingPins(inputs, "server", plan.Pins, problems);
+        Placeholders("server", plan.Arguments, problems);
         foreach (var (name, client) in clients.Where(client => inputs.Manifest.Clients.ContainsKey(client.Key)))
         {
-            Pins(name, client.Pins);
-            Placeholders(name, client.LaunchArguments);
+            AgreeingPins(inputs, name, client.Pins, problems);
+            Placeholders(name, client.LaunchArguments, problems);
         }
         if (problems.Count != 0) throw new ArgumentException("The plan does not agree with the campaign: " + string.Join(" ", problems));
+    }
+
+    /// <summary>
+    /// Stage-1 agreement of a plan with a campaign without a dedicated server (#258 step 8b), before any host is contacted: the
+    /// campaign has no server and names its fixture world; the plan binds exactly the campaign's clients; exactly one of them hosts
+    /// (<c>hostWorld</c>) and every other one is its peer (<c>joinsHost</c>); and each client's pins and launch arguments agree
+    /// with its role as <see cref="CheckPlan(string, ServerRunPlan, IReadOnlyDictionary{string, ClientRunPlan})"/> checks them.
+    /// Every problem is reported at once.
+    /// </summary>
+    public static void CheckHostedPlan(string manifestFile, IReadOnlyDictionary<string, ClientRunPlan> clients) =>
+        CheckHostedPlan(InspectInputs(manifestFile), clients);
+
+    internal static void CheckHostedPlan(Inspection inspection, IReadOnlyDictionary<string, ClientRunPlan> clients)
+    {
+        ArgumentNullException.ThrowIfNull(clients);
+        inspection.Report.RequireReady();
+        var inputs = inspection.Inputs!;
+        var problems = new List<string>();
+        if (inputs.Manifest.Server != null)
+            problems.Add("The campaign declares a dedicated server; a hosted plan runs on a campaign without one (leave server out).");
+        if (inputs.Manifest.World.Length == 0) problems.Add("Set world (the hosted fixture) in the campaign manifest.");
+        if (!clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(inputs.Manifest.Clients.Keys))
+            problems.Add($"The plan binds clients {string.Join(", ", clients.Keys.Order(StringComparer.Ordinal))}; the campaign declares {string.Join(", ", inputs.Manifest.Clients.Keys.Order(StringComparer.Ordinal))}.");
+        try { _ = HostOf(clients); } catch (ArgumentException error) { problems.Add(error.Message); }
+        foreach (var (name, client) in clients.Where(client => inputs.Manifest.Clients.ContainsKey(client.Key)))
+        {
+            AgreeingPins(inputs, name, client.Pins, problems);
+            Placeholders(name, client.LaunchArguments, problems);
+        }
+        if (problems.Count != 0) throw new ArgumentException("The plan does not agree with the campaign: " + string.Join(" ", problems));
+    }
+
+    /// <summary>The one client whose section hosts the world; every other one must be its peer.</summary>
+    internal static string HostOf(IReadOnlyDictionary<string, ClientRunPlan> clients)
+    {
+        var hosts = clients.Where(client => client.Value.HostWorld != null).Select(client => client.Key).Order(StringComparer.Ordinal).ToList();
+        if (hosts.Count != 1)
+            throw new ArgumentException($"A campaign without a dedicated server has exactly one hosting client (a hostWorld section); the plan has {(hosts.Count == 0 ? "none" : string.Join(", ", hosts))}.");
+        var others = clients.Where(client => client.Value.HostWorld == null && !client.Value.JoinsHost).Select(client => client.Key).Order(StringComparer.Ordinal).ToList();
+        if (others.Count != 0) throw new ArgumentException($"Clients {string.Join(", ", others)} join no server: set joinsHost, as the host's peers.");
+        return hosts[0];
+    }
+
+    // A plugin a role's section pins must be one its lock selects (binding replaces those pins), and one pinned absent must not be.
+    private static void AgreeingPins(Inputs inputs, string role, IReadOnlyDictionary<string, string> pins, List<string> problems)
+    {
+        if (!inputs.Selections.TryGetValue(role, out var files)) return;
+        var selected = PluginPins(role, files);
+        foreach (var (guid, value) in pins.Where(pin => !Expectations.IsWorldKey(pin.Key)).OrderBy(pin => pin.Key, StringComparer.Ordinal))
+            if (value == "absent" && selected.ContainsKey(guid))
+                problems.Add($"The plan pins plugin {guid} absent for {role}, but its dependency lock selects it.");
+            else if (value != "absent" && !selected.ContainsKey(guid))
+                problems.Add($"The plan pins plugin {guid} for {role}, which its dependency lock does not select.");
+    }
+
+    private static void Placeholders(string role, IEnumerable<string> arguments, List<string> problems)
+    {
+        foreach (string argument in arguments.Where(argument => argument.Contains('<') || argument.Contains('>')))
+            problems.Add($"Replace the {role}'s placeholder argument {argument} before preparing any host.");
     }
 
     /// <summary>Require the same shared preflight used by preparation, before any host is contacted.</summary>
@@ -549,12 +633,12 @@ public static class HostedCampaignPreparation
             resolved = inventory.Resolve(manifest);
             profile = resolved.Environment;
         });
-        if (manifest.Server.Character != null)
+        if (manifest.Server?.Character != null)
             problems.Add(new("server", "character", "A dedicated server has no character."));
 
         var selected = new Dictionary<string, HostedRuntimeFile[]>(StringComparer.Ordinal);
         var characters = new Dictionary<string, HostedCharacterSelection>(StringComparer.Ordinal);
-        var manifestRoles = new[] { (Name: "server", Input: manifest.Server) }
+        var manifestRoles = (manifest.Server == null ? [] : new[] { (Name: "server", Input: manifest.Server) })
             .Concat(manifest.Clients.OrderBy(client => client.Key, StringComparer.Ordinal)
                 .Select(client => (Name: client.Key, Input: client.Value))).ToArray();
         foreach (var (name, input) in manifestRoles)
@@ -605,7 +689,7 @@ public static class HostedCampaignPreparation
                 { Environment = assignment?.Environment, SelectionReason = assignment?.Reason };
             }).ToArray();
         var report = new CampaignPreflightReport(problems) { Actors = actors, Detected = detected };
-        if (profile?.Server == null || !manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))
+        if (profile == null || (manifest.Server != null) != (profile.Server != null) || !manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))
             return new Inspection(null, report);
         HostedCampaignRole RoleInput(string name, HostedCampaignRole input)
         {
@@ -618,8 +702,8 @@ public static class HostedCampaignPreparation
                 Files = input.Files, Character = input.Character,
             };
         }
-        var roles = new List<(string Name, GameRole Role, HostedCampaignRole Input)>
-            { ("server", profile.Server, RoleInput("server", manifest.Server)) };
+        var roles = new List<(string Name, GameRole Role, HostedCampaignRole Input)>();
+        if (manifest.Server != null) roles.Add(("server", profile.Server!, RoleInput("server", manifest.Server)));
         roles.AddRange(profile.Clients.Select(client => (client.Key, client.Value,
             RoleInput(client.Key, manifest.Clients[client.Key]))));
         return new Inspection(new Inputs(manifest, profile, roles, selected, characters), report);

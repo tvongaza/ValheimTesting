@@ -18,13 +18,9 @@ internal sealed class HostedServerRun : IServerPlacement
     internal const string BepInExLog = "BepInEx/LogOutput.log", UnityLog = "toolkit-unity.log";
     private static readonly TimeSpan Quick = TimeSpan.FromSeconds(60), Long = TimeSpan.FromMinutes(15);
     private readonly IHostedRunHooks _hooks;
-    private readonly object _clientState = new();
-    private readonly SemaphoreSlim _clientLockGate = new(1, 1);
     private readonly string _owner;
-    private readonly List<(string Host, HostLock Lock)> _clientLocks = [];
-    private readonly List<(string Host, IOwnedProcess Process)> _localMacProcesses = [];
-    private readonly List<ClientAccount> _accounts = [];
-    private IGameHost? _leaseHost;
+    // The campaign's clients, their leases and their hosts' locks: owned by CampaignClients, as in a campaign without a server.
+    private readonly CampaignClients _clientActors;
     private HostLock? _lock;
     private CliTunnel? _tunnel;
     private HostListing? _runtime;
@@ -34,7 +30,6 @@ internal sealed class HostedServerRun : IServerPlacement
     private bool _runtimeIntended;
     private WorldCopy _world;
     private enum WorldCopy { None, Intended, Shipped, Verified }
-    private int _clients;
 
     private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, IHostedRunHooks hooks,
         string? preparedRuntime)
@@ -47,6 +42,7 @@ internal sealed class HostedServerRun : IServerPlacement
         RunDirectory = HostInstall.Join(role.Runtime, runId);
         RuntimeDirectory = preparedRuntime ?? HostInstall.Join(RunDirectory, "runtime");
         WorldDirectory = HostInstall.Join(RunDirectory, "world");
+        _clientActors = new CampaignClients(profile, runId, _owner, hooks, (role.Host, host), JournalAsync);
     }
 
     // The run's journal on each host it touches (RunJournal): a process is journalled before it starts, a lock once held.
@@ -65,10 +61,6 @@ internal sealed class HostedServerRun : IServerPlacement
     }
     private Task NoteLockAsync(IGameHost host, string hostName, HostLock held, string kind) =>
         NoteAsync(host, hostName, "run", JournalEntry.Of(kind, ("lock", held.Path), ("claimant", held.Owner)));
-
-    private static JournalEntry LeaseEntry(string kind, SteamAccountHold hold, params (string Key, string Value)[] more) =>
-        JournalEntry.Of(kind, [("account", hold.Account), ("pool", hold.Pool), ("owner", hold.Owner), ("leaseId", hold.LeaseId),
-            ("number", hold.LeaseNumber.ToString(CultureInfo.InvariantCulture)), ("directory", hold.LeaseDirectory), .. more]);
 
     /// <summary>
     /// The run's end in its server host's journal, when the run wrote there at all (a standalone run; a campaign's preparation
@@ -313,233 +305,12 @@ internal sealed class HostedServerRun : IServerPlacement
 
     private CliTunnel Tunnel => _tunnel ?? throw new InvalidOperationException("Open the CLI tunnel before the server starts.");
 
-    private IGameTransport Connect(CliTunnel tunnel) => _hooks.Connect(tunnel.Address, tunnel.LocalPort);
-
-    /// <summary>
-    /// An owned client on its environment's client host, started in its desktop session (<see cref="InteractiveClient"/>) with the
-    /// checks <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/> makes locally, made on the host: the
-    /// install's pins, a free CLI port. ValheimCLI is reached through the host's tunnel. Disposing the session stops
-    /// only that client, keeps its logs, fetches them to <c>client-N</c> in the output and closes the tunnel. With the environment's
-    /// Steam leases, the client's observed identity is leased (and its host's signed-in user checked, when asked) before anything
-    /// else on its host is touched, and released at teardown once the client is gone.
-    /// </summary>
-    private ClientSession OpenClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
-        OpenClientAsync(report, output, plan, name, cancellation).GetAwaiter().GetResult();
-
-    /// <summary>An attached campaign client: its account is leased (and checked) before the session assumes the client.</summary>
-    private ClientSession AttachClient(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation) =>
-        AttachClientAsync(report, output, plan, name, cancellation).GetAwaiter().GetResult();
-
-    /// <summary>
-    /// A named campaign client's placement: owned, on its assigned host (its desktop session, or this runner's GUI session for a
-    /// local macOS host); attached, on its leased account. The leases and host locks stay this run's, released at its teardown.
-    /// </summary>
-    internal IClientPlacement ClientPlacement(ScenarioReport report) => new CampaignClientPlacement(this, report);
-
-    private sealed class CampaignClientPlacement(HostedServerRun run, ScenarioReport report) : IClientPlacement
-    {
-        public ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation) =>
-            plan.Owned ? run.OpenClient(report, output, plan, name, cancellation) : run.AttachClient(report, output, plan, name, cancellation);
-    }
-
-    private async Task<ClientSession> AttachClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation)
-    {
-        if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
-        var account = await HoldAccountAsync(report, name, () => ClientHost(role), cancellation).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("The environment has no Steam leases; attach with ClientSession.Attach.");
-        return account.Session = ClientSession.Attach(plan, output, account.Hold, () => _hooks.Connect(plan.Host, plan.Port));
-    }
-
-    private IGameHost ClientHost(GameRole role) => role.Host == Role.Host ? Host : _hooks.CreateHost(Profile, role.Host);
+    /// <summary>A named campaign client's placement (<see cref="CampaignClients.Placement"/>).</summary>
+    internal IClientPlacement ClientPlacement(ScenarioReport report) => _clientActors.Placement(report);
     /// <summary>The named client's host, as its client is reached.</summary>
-    public IGameHost ClientHost(string name) => Profile.Clients.TryGetValue(name, out var role) ? ClientHost(role)
-        : throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
+    public IGameHost ClientHost(string name) => _clientActors.ClientHost(name);
 
-    // With Steam leases: leases the client's account and, when the environment asks, checks its host's signed-in user, each as its own
-    // step, before the client starts or is attached. A held account refuses the client here, naming its holder.
-    private async Task<ClientAccount?> HoldAccountAsync(ScenarioReport report, string name, Func<IGameHost> clientHost, CancellationToken cancellation)
-    {
-        var section = Profile.SteamAccounts;
-        if (section == null) return null;
-        ClientAccount? held = null;
-        await report.StepAsync(StepPhase.Setup, $"lease a Steam account for client {name}", async () =>
-        {
-            IGameHost leaseHost;
-            lock (_clientState)
-                leaseHost = _leaseHost ??= section.LeaseHost == Role.Host ? Host : _hooks.CreateHost(Profile, section.LeaseHost);
-            var hold = await _hooks.LeaseAsync(Profile, name, _owner + " client " + name, RunId, leaseHost, Quick, cancellation).ConfigureAwait(false);
-            lock (_clientState)
-            {
-                _accounts.Add(held = new ClientAccount(name, hold, leaseHost, section.LeaseHost));
-                hold.Record(report);
-            }
-            // On the lease host, where the lease lives: which account this run holds for the client, and as whom.
-            await NoteAsync(leaseHost, section.LeaseHost, name, LeaseEntry(JournalEntry.LeaseHeld, hold)).ConfigureAwait(false);
-        }).ConfigureAwait(false);
-        if (section.CheckSignedIn)
-            await report.StepAsync(StepPhase.Setup, $"client {name}'s host is signed in to Steam account {held!.Hold.Account} (signed-in check)",
-                () => held.Hold.CheckSignedInAsync(clientHost(), cancellation)).ConfigureAwait(false);
-        return held;
-    }
-
-    private async Task<ClientSession> OpenClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name, CancellationToken cancellation)
-    {
-        if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
-        var hostProfile = Profile.Hosts[role.Host];
-        var platform = hostProfile.Platform switch { "windows" => ClientPlatform.Windows, "linux" => ClientPlatform.Linux, _ => ClientPlatform.MacOS };
-        if (platform == ClientPlatform.MacOS)
-            return await OpenLocalMacClientAsync(report, output, plan, name, role, hostProfile, cancellation).ConfigureAwait(false);
-        // Remote Windows and Linux clients are x64 only.
-        if (plan.LaunchArchitecture != ClientArchitecture.X64)
-            throw new ArgumentException($"Profile client '{name}' starts in a remote host's desktop session, where only x64 Windows and Linux clients run; " +
-                "architecture arm64 is for a macOS client launched locally in this runner's GUI session. Leave architecture out.");
-        var launch = GameLaunch.ForClient(role.Install, plan.LaunchArguments, hostPlatform: platform, secretVariables: plan.PasswordVariable is { } password ? new[] { password } : null);
-        var host = ClientHost(role);
-        var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
-        // The server's lock covers its own host; another client host is locked for the rest of the run.
-        if (role.Host != Role.Host)
-        {
-            await _clientLockGate.WaitAsync(cancellation).ConfigureAwait(false);
-            try
-            {
-                if (!_clientLocks.Any(held => held.Host == role.Host))
-                {
-                    var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false);
-                    _clientLocks.Add((role.Host, taken));
-                    await NoteLockAsync(host, role.Host, taken, JournalEntry.LockHeld).ConfigureAwait(false);
-                }
-            }
-            finally { _clientLockGate.Release(); }
-        }
-        int n = Interlocked.Increment(ref _clients);
-        string runDirectory = HostInstall.Join(role.Runtime, RunId), launchDirectory = HostInstall.Join(runDirectory, "client-" + n);
-        string log = HostInstall.Join(role.Install, BepInExLog);
-        var listing = await HostInstall.ListAsync(host, role.Install, Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
-        if (plan.Pinned)
-            HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, "client install");
-        await HostClientPreflight.CheckAsync(host, role.Install, platform, plan, Quick, cancellation).ConfigureAwait(false);
-        await HostInstall.RequirePortFreeAsync(host, role.CliPort, Quick, cancellation).ConfigureAwait(false);
-        // BepInEx rewrites its log at each start; an earlier one moves aside so the wait from offset 0 sees this start's lines only.
-        var moved = (await host.RunAsync(HostedClientScripts.MoveAside(host.Shell.Kind), new Dictionary<string, string>
-            { ["log"] = log, ["to"] = HostInstall.Join(runDirectory, $"client-{n}.previous-LogOutput.log") }, Quick, cancellation).ConfigureAwait(false))
-            .EnsureSuccess($"Moving the client's previous BepInEx log aside on {host.Name}");
-        if (InteractiveClient.Line(moved.Stdout, "VT-MOVED") == null && InteractiveClient.Line(moved.Stdout, "VT-NONE") == null)
-            throw new HostOperationException($"Unexpected reply while moving the client's previous log on {host.Name}", moved);
-        // #257: Steam's connection_log from here on. "Logged In Elsewhere" in it means the account plays on another computer.
-        var steamLog = await SteamSessionLog.MarkAsync(host, Quick, cancellation).ConfigureAwait(false);
-        string SteamMessage() => SteamSessionLog.Message(account?.Hold.Account, role.Host);
-        // A failed start looks once: the readiness guard and the exit's reason share the answer.
-        Task<bool>? looked = null;
-        Task<bool> FinalLook() => LazyInitializer.EnsureInitialized(ref looked, () => steamLog is { } watched
-            ? SteamSessionLog.SeenAsync(host, watched, SteamSessionLog.FinalLook, CancellationToken.None) : Task.FromResult(false));
-        var tunnel = await host.OpenCliTunnelAsync(role.CliPort, Quick, role.LocalCliPort, cancellation).ConfigureAwait(false);
-        try
-        {
-            string local = Path.Combine(output, "client-" + n);
-            var display = platform != ClientPlatform.Linux ? null : new LinuxDisplay();
-            var start = TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds));
-            var session = ClientSession.Launch(plan, output,
-                () =>
-                {
-                    string expected = launch.CommandLineSha256();
-                    JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),
-                        ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
-                    var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
-                        : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
-                    var client = started.GetAwaiter().GetResult();
-                    string commandLine = HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
-                    WarnUnexpectedCommandLine(host, client.Id, expected, commandLine);
-                    NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
-                        ("startIdentity", client.StartIdentity), ("commandLineSha256", commandLine), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
-                    var process = new HostedClientProcess(client, host, role.Install, tunnel, local);
-                    if (account != null) account.Process = process; // Its lease is released only once this process is gone.
-                    return process;
-                },
-                () => Connect(tunnel),
-                SteamSessionLog.Guard(async (left, token) =>
-                {
-                    var clock = Stopwatch.StartNew();
-                    var bepInEx = TimeSpan.FromSeconds(plan.BepInExSeconds);
-                    if (bepInEx > left) bepInEx = left;
-                    try
-                    {
-                        (await host.WaitForLogAsync(log, 0, new System.Text.RegularExpressions.Regex("^"), StartupEvents.StartupFailures,
-                            bepInEx, token).ConfigureAwait(false)).EnsureMatched();
-                    }
-                    catch (WaitTimeoutException error)
-                    {
-                        // A preloader crash log this launch wrote says why (#254); an older one is not this launch's and says nothing.
-                        var preloader = await HostedClientScripts.ReadPreloaderAsync(host, role.Install, launchDirectory).ConfigureAwait(false);
-                        // A nullable projection: FirstOrDefault of a tuple list is a default tuple, never null.
-                        var failed = preloader?.Fresh.Where(log => log.FirstError != null).Select(log => ((string Name, string Error)?)(log.Name, log.FirstError!)).FirstOrDefault();
-                        string why = failed is { } hit
-                            ? $"BepInEx's preloader failed: {hit.Error} (from {hit.Name}, which the client's evidence keeps as game-2.preloader-*.log). "
-                            : preloader?.Fresh.Count > 0 ? $"BepInEx's preloader wrote {string.Join(", ", preloader.Value.Fresh.Select(log => log.Name))} with no error line (the client's evidence keeps it as game-2.preloader-*.log). "
-                            : "The game may have reached its menu without BepInEx; check winhttp.dll, doorstop_config.ini and BepInEx/core as one pack. ";
-                        string stale = preloader?.Stale.Count > 0 ? $"Older preloader logs beside the game ({string.Join(", ", preloader.Value.Stale)}) predate this launch and are not its. " : "";
-                        throw new InvalidOperationException($"BepInEx wrote no fresh log line on {host.Name} within {plan.BepInExSeconds}s. {why}{stale}" +
-                            $"The client's Player.log and boot output are kept in {local}.", error);
-                    }
-                    (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
-                    if (!_hooks.StateWaits) return;
-                    using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
-                    await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
-                },
-                (left, token) => steamLog is { } watched ? SteamSessionLog.SeenAsync(host, watched, left, token) : Task.FromResult(false),
-                FinalLook, SteamMessage), cancellation,
-                // A client that quit before its menu: Steam's log says whether another computer took the account.
-                () => FinalLook().GetAwaiter().GetResult() ? SteamSessionLog.ExitHint(SteamMessage()) : null,
-                [new RunLog($"client-{n} BepInEx log", Path.Combine(local, "game-0.log"), Required: true), new RunLog($"client-{n} Player.log", Path.Combine(local, "game-1.log"))],
-                account?.Hold);
-            if (account != null) account.Session = session;
-            return session;
-        }
-        catch { tunnel.Dispose(); throw; }
-    }
-
-    private async Task<ClientSession> OpenLocalMacClientAsync(ScenarioReport report, string output, ClientRunPlan plan, string name,
-        GameRole role, HostProfile hostProfile, CancellationToken cancellation)
-    {
-        if (hostProfile.Kind != "local" || !_hooks.LocalMacClients)
-            throw new PlatformNotSupportedException($"Profile client '{name}' needs a local macOS host in this runner's logged-in GUI session; SSH cannot launch it there.");
-        if (!plan.Owned) throw new ArgumentException($"Profile client '{name}' must be an owned client for local macOS launch.");
-        if (Path.GetFullPath(plan.Install) != Path.GetFullPath(role.Install) || plan.Port != role.CliPort ||
-            plan.Host is not ("127.0.0.1" or "localhost" or "::1"))
-            throw new ArgumentException($"Profile client '{name}' must pin the local role's exact install and CLI port on loopback.");
-        _hooks.RequireMacGui();
-        var host = ClientHost(role);
-        if (host.Kind != GameHostKind.Local)
-            throw new PlatformNotSupportedException($"Profile client '{name}' must use a local host; a remote process cannot enter this runner's GUI session.");
-        var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
-        if (role.Host != Role.Host)
-        {
-            await _clientLockGate.WaitAsync(cancellation).ConfigureAwait(false);
-            try
-            {
-                if (!_clientLocks.Any(held => held.Host == role.Host))
-                {
-                    var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false);
-                    _clientLocks.Add((role.Host, taken));
-                    await NoteLockAsync(host, role.Host, taken, JournalEntry.LockHeld).ConfigureAwait(false);
-                }
-            }
-            finally { _clientLockGate.Release(); }
-        }
-        // ClientSession owns the direct child process and its logs. No SSH-launched GUI process or remote task is involved.
-        ClientSession session;
-        Action<IOwnedProcess> processStarted = process =>
-        {
-            lock (_clientState) _localMacProcesses.Add((role.Host, process));
-            if (account != null) account.Process = process;
-        };
-        session = _hooks.LaunchLocalMac(plan, output, account?.Hold, cancellation, processStarted);
-        if (session.OwnedProcess is { } owned)
-            lock (_clientState)
-                if (!_localMacProcesses.Any(item => ReferenceEquals(item.Process, owned)))
-                    _localMacProcesses.Add((role.Host, owned));
-        if (account != null) { account.Process = session.OwnedProcess; account.Session = session; }
-        return session;
-    }
+    private IGameTransport Connect(CliTunnel tunnel) => _hooks.Connect(tunnel.Address, tunnel.LocalPort);
 
     /// <summary>
     /// After the owned server stopped: fetches the host's world copy, retires the runtime copy (<see cref="RunRetirement"/>),
@@ -601,41 +372,18 @@ internal sealed class HostedServerRun : IServerPlacement
                 await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", WorldDirectory), ("handedOver", "true"))).ConfigureAwait(false);
         }
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
-        foreach (var account in _accounts)
-        {
-            // An account is released only once its client is gone: a session the scenario left open is closed first.
-            if (account.Session is { Closed: false } open)
-                await Try(open.Owned ? $"stop only the owned client {account.Client}" : $"detach from the operator's client {account.Client}",
-                    () => { open.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
-            await Try($"release client {account.Client}'s Steam account lease", async () =>
-            {
-                if (account.Process is { HasExited: false })
-                {
-                    account.Hold.Keep();
-                    await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseKept, account.Hold,
-                        ("why", "its client may still run"))).ConfigureAwait(false);
-                    throw new SteamAccountLeaseException(SteamAccountLeaseState.Unknown, account.Hold.Pool, [], $"Kept the lease on Steam account {account.Hold.Account}: the client " +
-                        $"{account.Client} may still run on {account.Hold.ClientHost}. It is held until that client is proven stopped: valheim-test env teardown --run {RunId} releases it then.");
-                }
-                await account.Hold.ReleaseAsync().ConfigureAwait(false);
-                await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseReleased, account.Hold)).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-        }
+        await _clientActors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
         // Every process is stopped (or named as possibly running), so the campaign's characters and prepared installs go, under the
         // locks held here; a host whose lock this run never took (a client that never opened) is locked for its retire.
         if (prepared != null)
         {
-            var locked = _clientLocks.Select(held => held.Host).ToList();
+            var locked = _clientActors.LockedHosts.ToList();
             if (_lock != null) locked.Add(Host.Name);
             // A server that may still run kept its own copy above; the process check below only looks at the copies retired.
             foreach (var failure in await retirement.CampaignAsync(prepared, locked, cleanup).ConfigureAwait(false))
             { failures.Add(failure); Console.Error.WriteLine("Teardown: " + failure.Message); }
         }
-        foreach (var (name, held) in _clientLocks) await Try($"release client host {name}'s lock", () =>
-            _localMacProcesses.Any(item => item.Host == name && !item.Process.HasExited)
-                ? throw new HostLockException(new HostLockResult(HostLockState.Unknown, held.Owner,
-                    $"Kept {held.Path} on {name}: an owned local Mac client may still run. Confirm its recorded process has stopped before releasing this lock."))
-                : ReleaseAndNoteAsync(ClientHost(Profile.Clients.Values.First(client => client.Host == name)), name, held)).ConfigureAwait(false);
+        await _clientActors.ReleaseLocksAsync(Try).ConfigureAwait(false);
         if (_lock != null)
             await Try("release the server host's lock", () => serverStopped ? ReleaseAndNoteAsync(Host, Role.Host, _lock)
                 : throw new HostLockException(new HostLockResult(HostLockState.Unknown, _lock.Owner,
@@ -657,7 +405,7 @@ internal sealed class HostedServerRun : IServerPlacement
 
     // The started game's command line should be the one its launch journalled: where it is not, a run interrupted before its
     // process was journalled could not prove that process its own from the pid file (env status leaves it unrecoverable).
-    private static void WarnUnexpectedCommandLine(IGameHost host, int pid, string expected, string read)
+    internal static void WarnUnexpectedCommandLine(IGameHost host, int pid, string expected, string read)
     {
         if (read.Length != 0 && !string.Equals(read, expected, StringComparison.OrdinalIgnoreCase))
             Console.Error.WriteLine($"Warning: process {pid} on {host.Name} runs another command line than its launch journalled (SHA-256 {read}, expected {expected}); " +

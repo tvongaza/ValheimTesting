@@ -1160,6 +1160,7 @@ static class Valheim.Testing.Game.HostedCampaignPreparation
   method static System.Threading.Tasks.Task`1<Valheim.Testing.Game.CampaignPreflightReport> InspectAsync(System.String manifestFile, System.TimeSpan timeout, System.Func`2<System.String,Valheim.Testing.Game.IGameHost> hostFactory = null, System.Threading.CancellationToken cancellation = null)
   method static System.Threading.Tasks.Task`1<Valheim.Testing.Game.PreparedHostedCampaign> PrepareAsync(System.String manifestFile, System.String outputDirectory, System.TimeSpan timeout, System.Func`2<System.String,Valheim.Testing.Game.IGameHost> hostFactory = null, System.Threading.CancellationToken cancellation = null)
   method static System.Void Check(System.String manifestFile)
+  method static System.Void CheckHostedPlan(System.String manifestFile, System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientRunPlan> clients)
   method static System.Void CheckPlan(System.String manifestFile, Valheim.Testing.Game.ServerRunPlan plan, System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientRunPlan> clients)
   method static Valheim.Testing.Game.CampaignPreflightReport Inspect(System.String manifestFile)
 sealed class Valheim.Testing.Game.HostedCampaignRole
@@ -1172,6 +1173,7 @@ sealed class Valheim.Testing.Game.HostedCampaignRole
   property Valheim.Testing.Game.HostedCampaignCharacter Character { get; set; }
 sealed class Valheim.Testing.Game.HostedRunOptions`1
   method System.Void .ctor()
+  property System.Action`1<TPlan> CheckPlan { get; init; }
   property System.Action`2<TPlan,System.Collections.Generic.IDictionary`2<System.String,System.String>> Provenance { get; init; }
   property System.Func`2<System.String,TPlan> ReadPlan { get; init; }
   property System.Func`2<TPlan,System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.LogClassification>> LogScan { get; init; }
@@ -1760,6 +1762,7 @@ static class Valheim.Testing.Game.PinnedServerRun
   field const System.String ValidateHostMode = "validate-host"
   method static System.Threading.Tasks.Task`1<System.Int32> MainAsync<TPlan>(System.String[] args, Valheim.Testing.Game.HostedRunOptions`1<TPlan> options)
   method static System.Threading.Tasks.Task`1<System.Int32> MainAsync<TPlan>(System.String[] args, Valheim.Testing.Game.PinnedServerRunOptions`1<TPlan> options)
+  method static System.Threading.Tasks.Task`1<System.Int32> RunCampaignAsync<TPlan>(System.String manifestFile, TPlan plan, System.Func`2<TPlan,System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientRunPlan>> clients, System.String output, Valheim.Testing.Game.HostedRunOptions`1<TPlan> options)
   method static System.Threading.Tasks.Task`1<System.Int32> RunCampaignAsync<TPlan>(System.String manifestFile, TPlan plan, System.Func`2<TPlan,System.Collections.Generic.IReadOnlyDictionary`2<System.String,Valheim.Testing.Game.ClientRunPlan>> clients, System.String output, Valheim.Testing.Game.PinnedServerRunOptions`1<TPlan> options)
 sealed class Valheim.Testing.Game.PinnedServerRunOptions`1
   method System.Void .ctor()

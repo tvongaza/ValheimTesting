@@ -501,7 +501,7 @@ public sealed class EnvironmentInventory
     internal ResolvedEnvironmentInventory Resolve(HostedCampaignManifest campaign)
     {
         ArgumentNullException.ThrowIfNull(campaign);
-        var actors = new[] { (Name: "server", Kind: "server", Input: campaign.Server) }
+        var actors = (campaign.Server == null ? [] : new[] { (Name: "server", Kind: "server", Input: campaign.Server) })
             .Concat(campaign.Clients.OrderBy(pair => pair.Key, StringComparer.Ordinal)
                 .Select(pair => (Name: pair.Key, Kind: "client", Input: pair.Value))).ToArray();
         var names = actors.Select(actor => actor.Name).ToHashSet(StringComparer.Ordinal);
@@ -540,7 +540,7 @@ public sealed class EnvironmentInventory
         var profile = new ResolvedEnvironment
         {
             Hosts = Hosts,
-            Server = chosen["server"].Role(),
+            Server = campaign.Server == null ? null : chosen["server"].Role(),
             Clients = campaign.Clients.Keys.ToDictionary(name => name, name => chosen[name].Role(), StringComparer.Ordinal),
         };
         if (profile.Clients.Count > 0)
