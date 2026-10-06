@@ -19,7 +19,7 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 
 | The mod supplies | The toolkit supplies |
 |---|---|
-| The feature and its command (`MyMod/Plugin.cs`) | The owned server lifecycle: copies, startup events, identity handshake, restart, teardown, report (`PinnedServerRun`, `OwnedServerSession`) |
+| The feature and its command (`MyMod/Plugin.cs`) | The owned server lifecycle: copies, startup events, identity handshake, restart, teardown, report (`PinnedServerRun`, `ServerActor`) |
 | The plan fields and their rules (`LifecyclePlan.cs`): which site is dry, which is wet, where the player stands | The client section and its rules (`ClientRunPlan`), and owned or attached clients (`ClientSession`) |
 | The expectations and the scenario (`DrySiteScenario.cs`): one marker here, none there, still there after a restart | Session steps (`SessionControl`: devcommands, join, leave, readiness, protection once the world is ready), player placement (`PlayerPlacement`: intro, arrival, support), strict pins (`GameActor`) |
 | A test adapter serving the owned-session identity and the Harmony census (`MyMod.TestAdapter`) | The adapter's registration, identity capability and census command ([Valheim.Testing.Adapter](../../src/Valheim.Testing.Adapter/Adapter/), compiled into the adapter) |

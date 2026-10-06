@@ -8,12 +8,12 @@ namespace Valheim.Testing.Game;
 /// <summary>
 /// The parts of a <see cref="PinnedServerRun"/> that differ when its dedicated server runs on the environment's server
 /// host (<c>--inventory</c> or a campaign): the host lock, the runtime copied from the host's install and verified there, the world copy
-/// shipped and verified there, the port check, the loopback CLI tunnel, the owned session through <see cref="HostServer"/>,
+/// shipped and verified there, the port check, the loopback CLI tunnel, the owned server's boots through <see cref="HostServer"/> (its <see cref="ServerActor"/>'s placement),
 /// remote clients through <see cref="InteractiveClient"/> and a local macOS GUI client through <see cref="ClientSession"/>,
 /// each client's Steam identity lease in a campaign, and the teardown
 /// that fetches evidence, closes the tunnel and releases the leases and locks.
 /// </summary>
-internal sealed class HostedServerRun
+internal sealed class HostedServerRun : IServerPlacement
 {
     internal const string BepInExLog = "BepInEx/LogOutput.log", UnityLog = "toolkit-unity.log";
     private static readonly TimeSpan Quick = TimeSpan.FromSeconds(60), Long = TimeSpan.FromMinutes(15);
@@ -258,70 +258,63 @@ internal sealed class HostedServerRun
         }).ConfigureAwait(false);
     }
 
-    /// <summary>The owned session: each boot through <see cref="HostServer"/>, ValheimCLI only through the tunnel.</summary>
-    public OwnedServerSession Session<TPlan>(PinnedServerRunContext<TPlan> run, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
+    // The owned server's placement on the host (ServerActor owns the rest of the wiring): each boot through HostServer, its
+    // log waited on in the host's log, ValheimCLI only through the tunnel.
+    ServerPlatform? IServerPlacement.Platform => Host.Shell.Kind == HostShellKind.PowerShell ? ServerPlatform.Windows : ServerPlatform.Linux;
+
+    ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, CancellationToken cancellation)
     {
-        var plan = run.Plan;
-        var tunnel = _tunnel ?? throw new InvalidOperationException("Open the CLI tunnel before the session.");
-        string log = HostInstall.Join(RuntimeDirectory, BepInExLog);
-        int boot = 0, connection = 0;
-        return new OwnedServerSession(token =>
+        string local = Path.Combine(output, "boot-" + n), bootDirectory = HostInstall.Join(RunDirectory, "boot-" + n);
+        HostServerProcess process;
+        // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
+        // With the command line the server will have, so its pid file alone proves it the run's (#257).
+        string expected = launch.CommandLineSha256();
+        JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
+            ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
+        try { process = HostServer.StartAsync(Host, launch, bootDirectory, Quick, [BepInExLog, UnityLog], local, cancellation).GetAwaiter().GetResult(); }
+        catch (Exception error) when (UnknownOutcome(error) != null)
         {
-            var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, RuntimeDirectory, WorldDirectory));
-            environment[options.SessionTokenVariable] = token;
-            var launch = GameLaunch.ForServer(RuntimeDirectory, plan.LaunchArguments(RuntimeDirectory, WorldDirectory), environment,
-                Host.Shell.Kind == HostShellKind.PowerShell ? ServerPlatform.Windows : ServerPlatform.Linux);
-            int n = ++boot;
-            string local = Path.Combine(run.Output, "boot-" + n), bootDirectory = HostInstall.Join(RunDirectory, "boot-" + n);
-            HostServerProcess process;
-            // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
-            // With the command line the server will have, so its pid file alone proves it the run's (#257).
-            string expected = launch.CommandLineSha256();
-            JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
-                ("expectedCommandLineSha256", expected)), run.Cancellation).GetAwaiter().GetResult();
-            try { process = HostServer.StartAsync(Host, launch, bootDirectory, Quick, [BepInExLog, UnityLog], local, run.Cancellation).GetAwaiter().GetResult(); }
-            catch (Exception error) when (UnknownOutcome(error) != null)
+            // The start's reply was lost: a server may be running there that no session knows. The lock stays.
+            _serverMayRun = true;
+            throw;
+        }
+        // What the stop keeps and fetches into boot-N/.
+        return new ServerBoot(process,
+            [new RunLog($"boot-{n} BepInEx log", Path.Combine(local, "game-0.log"), Required: true), new RunLog($"boot-{n} Unity log", Path.Combine(local, "game-1.log")),
+             new RunLog($"boot-{n} stdout", Path.Combine(local, "stdout.log"))],
+            new()
             {
-                // The start's reply was lost: a server may be running there that no session knows. The lock stays.
-                _serverMayRun = true;
-                throw;
-            }
-            // What the stop keeps and fetches: BepInEx's log, Unity's log when the plan passes -logFile {runtime}/toolkit-unity.log,
-            // and the process output (Unity's log on Linux without -logFile).
-            run.Logs.Add(new RunLog($"boot-{n} BepInEx log", Path.Combine(local, "game-0.log"), Required: true));
-            run.Logs.Add(new RunLog($"boot-{n} Unity log", Path.Combine(local, "game-1.log")));
-            run.Logs.Add(new RunLog($"boot-{n} stdout", Path.Combine(local, "stdout.log")));
-            try
-            {
-                File.WriteAllText(Path.Combine(run.Output, "boot-" + n + ".process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new()
-                {
-                    ["pid"] = process.Id, ["startIdentity"] = process.StartIdentity, ["host"] = Host.Name, ["bootDirectory"] = bootDirectory,
-                    ["startedUtc"] = DateTime.UtcNow, ["world"] = WorldDirectory, ["taskLogon"] = process.TaskLogon,
-                }, plan.Pinned)));
-            }
-            catch { process.Stop(TimeSpan.FromSeconds(15)); throw; }
-            // The command line's hash is the third fact env recover requires before it stops the process (#257 Q2).
-            string commandLine = HostProcessProbe.CommandLineAsync(Host, process.Id, process.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
-            WarnUnexpectedCommandLine(Host, process.Id, expected, commandLine);
-            NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", process.Id.ToString(CultureInfo.InvariantCulture)),
-                ("startIdentity", process.StartIdentity), ("commandLineSha256", commandLine), ("bootDirectory", bootDirectory),
-                ("taskLogon", process.TaskLogon ?? ""))).GetAwaiter().GetResult();
-            return process;
-        }, () => new RecordingTransport(Connect(tunnel), Path.Combine(run.Output, "connection-" + ++connection + ".jsonl"), plan.Pinned ? null : EnvironmentPinning.NotPinned),
-            WorldDirectory, plan.ExpectCommand, options.SessionCapability,
-            TimeSpan.FromSeconds(plan.StartupSeconds), TimeSpan.FromSeconds(plan.CommandSeconds), cancellation: run.Cancellation)
-        {
-            QuitTimeout = TimeSpan.FromSeconds(plan.QuitSeconds),
-            // This boot's log starts empty (the start moved any earlier one into the boot directory), so offset 0 is this boot's.
-            Events = new StartupEvents
-            {
-                CliListeningWait = async (left, token) =>
-                    (await Host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left, token).ConfigureAwait(false)).EnsureMatched(),
-                States = _hooks.StateWaits ? () => StateWait.Connect(tunnel.Address, tunnel.LocalPort) : null,
-                ReadyStates = [StateWait.InWorldNoPlayer],
+                ["pid"] = process.Id, ["startIdentity"] = process.StartIdentity, ["host"] = Host.Name, ["bootDirectory"] = bootDirectory,
+                ["startedUtc"] = DateTime.UtcNow, ["world"] = WorldDirectory, ["taskLogon"] = process.TaskLogon,
             },
+            () =>
+            {
+                // The command line's hash is the third fact env recover requires before it stops the process (#257 Q2).
+                string commandLine = HostProcessProbe.CommandLineAsync(Host, process.Id, process.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
+                WarnUnexpectedCommandLine(Host, process.Id, expected, commandLine);
+                NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", process.Id.ToString(CultureInfo.InvariantCulture)),
+                    ("startIdentity", process.StartIdentity), ("commandLineSha256", commandLine), ("bootDirectory", bootDirectory),
+                    ("taskLogon", process.TaskLogon ?? ""))).GetAwaiter().GetResult();
+            });
+    }
+
+    IGameTransport IServerPlacement.Connect() => Connect(Tunnel);
+
+    StartupEvents? IServerPlacement.Events(ServerRunPlan plan)
+    {
+        var tunnel = Tunnel;
+        string log = HostInstall.Join(RuntimeDirectory, BepInExLog);
+        return new StartupEvents
+        {
+            // This boot's log starts empty (the start moved any earlier one into the boot directory), so offset 0 is this boot's.
+            CliListeningWait = async (left, token) =>
+                (await Host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left, token).ConfigureAwait(false)).EnsureMatched(),
+            States = _hooks.StateWaits ? () => StateWait.Connect(tunnel.Address, tunnel.LocalPort) : null,
+            ReadyStates = [StateWait.InWorldNoPlayer],
         };
     }
+
+    private CliTunnel Tunnel => _tunnel ?? throw new InvalidOperationException("Open the CLI tunnel before the server starts.");
 
     private IGameTransport Connect(CliTunnel tunnel) => _hooks.Connect(tunnel.Address, tunnel.LocalPort);
 

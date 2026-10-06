@@ -1692,8 +1692,8 @@ sealed class Valheim.Testing.Game.PinnedServerRunContext`1
   property TPlan Plan { get; init; }
   property Valheim.Testing.Game.GameActor Server { get; }
   property Valheim.Testing.Game.IGameHost ServerHost { get; }
-  property Valheim.Testing.Game.OwnedServerSession Session { get; }
   property Valheim.Testing.Game.ScenarioReport Report { get; init; }
+  property Valheim.Testing.Game.ServerActor Session { get; }
 sealed class Valheim.Testing.Game.PinnedServerRunOptions`1
   method System.Void .ctor()
   property System.Action`2<System.String,TPlan> CheckMode { get; init; }
@@ -2123,6 +2123,16 @@ abstract class Valheim.Testing.Game.ScriptedGameHost : Valheim.Testing.Game.IGam
   property System.String Name { get; }
   property Valheim.Testing.Game.HostShell Shell { get; }
   property abstract Valheim.Testing.Game.GameHostKind Kind { get; }
+sealed class Valheim.Testing.Game.ServerActor : System.IDisposable, Valheim.Testing.Game.IOwnedServer
+  method System.Void Dispose()
+  method System.Void WaitUntilJoinable(Valheim.Testing.Game.GameActor server)
+  method Valheim.Testing.Game.GameActor Restart()
+  method Valheim.Testing.Game.GameActor Start()
+  method static Valheim.Testing.Game.ServerActor OnThisMachine(Valheim.Testing.Game.ServerRunPlan plan, System.String runtimeDirectory, System.String worldDirectory, System.String output, System.String sessionCapability, System.String sessionTokenVariable, System.Threading.CancellationToken cancellation = null)
+  property System.Collections.Generic.IReadOnlyList`1<System.Int32> StartedProcesses { get; }
+  property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.ProcessStop> Stops { get; }
+  property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.RunLog> Logs { get; }
+  property Valheim.Testing.Game.GameActor Game { get; }
 [result shape] enum Valheim.Testing.Game.ServerPlatform
   field const Valheim.Testing.Game.ServerPlatform Linux = 1
   field const Valheim.Testing.Game.ServerPlatform MacOS = 2

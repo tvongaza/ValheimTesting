@@ -58,7 +58,7 @@ public sealed class ClientRounds
     public required string Output { get; init; }
     /// <summary>
     /// For a joining client, required: the owned server the rounds wait on before each join and restart between rounds, for
-    /// example the runner's <see cref="OwnedServerSession"/>. A hosting client is its own server: leave this out.
+    /// example the runner's <see cref="ServerActor"/>. A hosting client is its own server: leave this out.
     /// </summary>
     public IOwnedServer? OwnedServer { get; init; }
     /// <summary>Where the player stands to measure; null leaves the player where it joined. A joining client only.</summary>
@@ -299,7 +299,7 @@ public sealed class ClientRounds
         CheckRoundNames(Rounds);
         if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
         if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with Run(openClient, measure), without a server.");
-        if (OwnedServer == null) throw new ArgumentException("OwnedServer: a joining client's rounds wait on and restart the owned server; supply it, for example the runner's OwnedServerSession.");
+        if (OwnedServer == null) throw new ArgumentException("OwnedServer: a joining client's rounds wait on and restart the owned server; supply it, for example the runner's ServerActor (run.Session).");
         if (string.IsNullOrWhiteSpace(WorldUid)) throw new ArgumentException("WorldUid: name the owned server's world UID, which the joined client must report.");
         if (Client.Crossplay && Lobby == null) throw new ArgumentException("Lobby: a crossplay client joins the server's PlayFab lobby; supply Lobby, for example with CrossplayServer.WaitForLobby.");
     }
