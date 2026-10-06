@@ -32,6 +32,8 @@ public sealed partial class AcceptancePlan : LifecyclePlan
     public const string OwnershipHandoffScenario = "ownership-handoff";
     /// <summary>A small three-actor setup smoke: server and two clients join one world with strict pins.</summary>
     public const string ThreeActorScenario = "three-actor-smoke";
+    /// <summary>A protected player stays invisible to a creature another client simulates (<see cref="GhostProtectionScenario"/>, #261).</summary>
+    public const string GhostProtectionScenarioName = "ghost-protection";
     /// <summary>Every scenario this suite runs: <see cref="ScenarioTable"/>'s.</summary>
     [JsonIgnore] public override IReadOnlyList<string> Scenarios => ScenarioTable.Names;
     /// <summary>The adapter's fixture commands (the global-key change) run only when the server starts with this set to 1.</summary>
@@ -79,9 +81,9 @@ public sealed partial class AcceptancePlan : LifecyclePlan
         OnlyForScenario("away, globalKey, dungeon and logout", Away != null || GlobalKey != null || Dungeon != null || Logout != null, WorldScenario);
         OnlyForScenario("newGreeting", NewGreeting != null, SyncedConfigScenario);
         OnlyForScenario("refusedClient and expectedRefusal", RefusedClient != null || ExpectedRefusal != null, RefusedJoinScenario);
-        if (SecondClient != null && Scenario is not (OwnershipHandoffScenario or ThreeActorScenario))
+        if (SecondClient != null && Scenario is not (OwnershipHandoffScenario or ThreeActorScenario or GhostProtectionScenarioName))
             throw new ArgumentException("secondClient belongs to a two-client scenario.");
-        OnlyForScenario("secondArrival", SecondArrival != null, OwnershipHandoffScenario);
+        OnlyForScenario("secondArrival", SecondArrival != null, OwnershipHandoffScenario, GhostProtectionScenarioName);
         OnlyForScenario("crossplay", Crossplay, CrossplayScenario);
         OnlyForScenario("patchReload", PatchReload != null, ServerScenario);
         OnlyForScenario("capture", Capture != null, ReviewCaptureScenarioName);
@@ -90,7 +92,7 @@ public sealed partial class AcceptancePlan : LifecyclePlan
         if (!IsCampaign) return;
         if (Review.Enabled) throw new ArgumentException($"review is for the {LifecycleScenario} scenario; remove it from this plan.");
         if (!MarksSites && (float.IsFinite(DrySite.Ground) || float.IsFinite(WetSite.Ground) ||
-            Scenario is not (ReviewCaptureScenarioName or AreaObjectsScenarioName) && float.IsFinite(Arrival.Ground)))
+            Scenario is not (ReviewCaptureScenarioName or AreaObjectsScenarioName or GhostProtectionScenarioName) && float.IsFinite(Arrival.Ground)))
             throw new ArgumentException($"The {Scenario} scenario marks nothing: remove drySite, wetSite and arrival.");
         var client = Client ?? throw new ArgumentException($"The {Scenario} scenario looks from a client: add the client section.");
         if (client.HostWorld != null) throw new ArgumentException("A hosting client runs with the host mode and a hosted plan, not on the owned server.");
@@ -141,6 +143,9 @@ public sealed partial class AcceptancePlan : LifecyclePlan
             case ThreeActorScenario:
                 CheckThreeActorSmoke(client);
                 break;
+            case GhostProtectionScenarioName:
+                CheckGhostProtection(client);
+                break;
             case CrossplayScenario:
                 if (!Crossplay || !client.Crossplay) throw new ArgumentException("The crossplay scenario needs \"crossplay\": true in the plan and in its client section.");
                 if (Arguments.Any(argument => argument.Equals("-password", StringComparison.OrdinalIgnoreCase)))
@@ -174,6 +179,28 @@ public sealed partial class AcceptancePlan : LifecyclePlan
         if (secondArrival.Ground < WaterLevel + Clearance) throw new ArgumentException("The second arrival must be dry ground.");
         float fromMarker = MathF.Sqrt(MathF.Pow(secondArrival.X - DrySite.X, 2) + MathF.Pow(secondArrival.Z - DrySite.Z, 2));
         if (fromMarker is < 3 or > 20) throw new ArgumentException("Put secondArrival 3 to 20 m from the dry-site marker.");
+    }
+
+    private void CheckGhostProtection(ClientRunPlan first)
+    {
+        var second = SecondClient ?? throw new ArgumentException("Add secondClient: the client that owns the hostile.");
+        SameBuildsAs(first, "client A"); SameBuildsAs(second, "client B");
+        foreach (var (client, name) in new[] { (first, "client A"), (second, "client B") })
+            foreach (string capability in new[] { Capabilities.AiWatch, Capabilities.CreatureSpawn, Capabilities.CreatureRemove, Capabilities.GhostMode,
+                         "valheim.world/terrain" }.Concat(PlayerPlacement.ArrivalCapabilities))
+                if (!client.Capabilities.Contains(capability, StringComparer.Ordinal))
+                    throw new ArgumentException($"The {name} must require {capability} before gameplay.");
+        if (!first.Owned || !second.Owned || first.Crossplay || second.Crossplay || first.HostWorld != null || second.HostWorld != null)
+            throw new ArgumentException("Ghost protection needs two owned clients joining one dedicated server by address.");
+        if (!string.Equals(first.Join, second.Join, StringComparison.OrdinalIgnoreCase) || string.Equals(first.Character, second.Character, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Give the two clients one join address and distinct characters.");
+        Arrival.Validate("arrival point", requireGround: true);
+        var secondArrival = SecondArrival ?? throw new ArgumentException("Add secondArrival on dry ground for client B, which spawns the hostile beside it.");
+        secondArrival.Validate("second arrival", requireGround: true);
+        if (Arrival.Ground < WaterLevel + Clearance || secondArrival.Ground < WaterLevel + Clearance) throw new ArgumentException("Both arrivals must be dry ground.");
+        float between = MathF.Sqrt(MathF.Pow(secondArrival.X - Arrival.X, 2) + MathF.Pow(secondArrival.Z - Arrival.Z, 2));
+        // Within the hostile's view and the watch radius, but not stacked.
+        if (between is < 3 or > 15) throw new ArgumentException("Put arrival 3 to 15 m from secondArrival: A must stand within view of the hostile B spawns.");
     }
 
     private void CheckThreeActorSmoke(ClientRunPlan first)

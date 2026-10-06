@@ -41,12 +41,13 @@ public abstract class AcceptanceSession(string scenario) : GameSessionFixture<Ac
 
 public sealed class OwnershipHandoffSession() : AcceptanceSession(AcceptancePlan.OwnershipHandoffScenario);
 public sealed class ThreeActorSmokeSession() : AcceptanceSession(AcceptancePlan.ThreeActorScenario);
+public sealed class GhostProtectionSession() : AcceptanceSession(AcceptancePlan.GhostProtectionScenarioName);
 
 /// <summary>The native session classes: one at a time, since they share the inventory's hosts and Steam identities.</summary>
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class NativeSessions { public const string Name = "native sessions"; }
 
-/// <summary>The two stateful campaign scenarios as async tests on a native session; the console's <c>campaign run</c> calls the same methods.</summary>
+/// <summary>The stateful campaign scenarios as async tests on a native session; the console's <c>campaign run</c> calls the same methods.</summary>
 [Collection(NativeSessions.Name), Trait("Category", "Native")]
 public sealed class OwnershipHandoffSessionTests(OwnershipHandoffSession fixture) : IClassFixture<OwnershipHandoffSession>
 {
@@ -59,4 +60,12 @@ public sealed class ThreeActorSmokeSessionTests(ThreeActorSmokeSession fixture) 
 {
     [Fact]
     public Task AServerAndTwoClientsJoinAndRejoin() => fixture.Test("three-actor smoke", () => Task.Run(() => ThreeActorSmokeScenario.Run(fixture.Session, fixture.Plan)));
+}
+
+[Collection(NativeSessions.Name), Trait("Category", "Native")]
+public sealed class GhostProtectionSessionTests(GhostProtectionSession fixture) : IClassFixture<GhostProtectionSession>
+{
+    [Fact]
+    public Task AProtectedPlayerIsInvisibleToAHostileAnotherClientSimulates() =>
+        fixture.Test("ghost protection", () => Task.Run(() => GhostProtectionScenario.Run(fixture.Session, fixture.Plan)));
 }

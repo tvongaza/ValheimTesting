@@ -207,7 +207,7 @@ public sealed class CrossplayPlanTests : IDisposable
                 worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined, saving = false, loadError = false,
                 connectionStatus = joined ? "Connected" : "None",
             })
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"));
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
     }
 
     private ClientRounds Rounds(ScenarioReport report, ClientRunPlan plan, Func<GameActor, CrossplayLobby>? lobby) => new()

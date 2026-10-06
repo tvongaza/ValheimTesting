@@ -5,6 +5,7 @@
 //
 // A resolve with unresolved choices writes the lock for review and exits 2. Edit request.json (roots or confirmed
 // optionalReferences), then resolve again. The check command verifies the pinned files without rediscovery.
+#:property PublishAot=false
 #:project ../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
 using Valheim.Testing.Game;
 

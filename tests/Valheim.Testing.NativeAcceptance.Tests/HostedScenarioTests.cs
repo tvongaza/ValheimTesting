@@ -97,7 +97,7 @@ public sealed class HostedScenarioTests : IDisposable
                 _markers.Clear(); if (!_loseMarkers) _markers.AddRange(_saved); // Hosting again loads what was saved.
                 return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
-            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"))
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"))
             .Extension("acceptancemod.testing", "harmony", _ => TestWorld.ModCensus())
             .Extension("acceptancemod.testing", "config", args => new
             {

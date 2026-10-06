@@ -179,10 +179,35 @@ public class PlayerPlacementTests
 
     [Fact] public void ProtectionMustBeReadBack()
     {
-        using var ok = new ScriptedTransport().On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True")).Actor();
+        using var ok = new ScriptedTransport().On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True")).Actor();
         PlayerPlacement.Protect(ok);
         using var refused = new ScriptedTransport().On("cli_set_player_safety true", _ => ScriptedTransport.Ok("ERROR: code=safety_not_applied playerSafety enabled=True god=True ghost=False debugMode=True cheats=True")).Actor();
         Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Protect(refused));
+    }
+
+    // #261: ghost mode only the player's own game knows about is no protection from a creature another peer simulates. A
+    // ValheimCLI that does not replicate it reads back an ordinary local OK line, and that is refused, naming why.
+    [Fact] public void ProtectionThatHoldsOnlyLocallyIsRefused()
+    {
+        using var local = new ScriptedTransport().On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True")).Actor();
+        Assert.Contains("ghostReplicated=True", Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Protect(local)).Message);
+        using var unreplicated = new ScriptedTransport().On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=False")).Actor();
+        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Protect(unreplicated));
+    }
+
+    // The deliberate opt-out (ClientRunPlan.Targetable): god and debug modes, ghost off, and the reply must say so.
+    [Fact] public void TargetableProtectionLeavesGhostModeOffAndIsReadBack()
+    {
+        var transport = new ScriptedTransport().On("cli_set_player_safety true targetable", _ =>
+            ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=False debugMode=True cheats=True ghostReplicated=True targetable=True"));
+        using (var client = transport.Actor()) PlayerPlacement.Protect(client, targetable: true);
+        Assert.Equal(["cli_set_player_safety true targetable"], transport.Commands.Where(c => c.StartsWith("cli_set_player_safety", StringComparison.Ordinal)));
+        // A ValheimCLI without the mode answers with its usage, and a ghost reply is not targetable.
+        using var old = new ScriptedTransport().On("cli_set_player_safety true targetable", _ => ScriptedTransport.Ok("Usage: cli_set_player_safety <true|false>")).Actor();
+        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Protect(old, targetable: true));
+        using var ghost = new ScriptedTransport().On("cli_set_player_safety true targetable", _ =>
+            ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True")).Actor();
+        Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Protect(ghost, targetable: true));
     }
 
     [Theory]

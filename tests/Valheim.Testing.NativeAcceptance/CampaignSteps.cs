@@ -12,6 +12,9 @@ public static class Capabilities
         ContentCensus = "acceptancemod.testing/content-census";
     public const string MarkerOwner = "acceptancemod.testing/marker-owner", MarkerOwnerWait = "acceptancemod.testing/marker-owner-wait",
         MarkerOwnerClaim = "acceptancemod.testing/marker-owner-claim";
+    /// <summary>The ghost-protection scenario's commands (AcceptanceMod.Adapter's AiWatch, #261).</summary>
+    public const string AiWatch = "acceptancemod.testing/ai-watch", CreatureSpawn = "acceptancemod.testing/creature-spawn",
+        CreatureRemove = "acceptancemod.testing/creature-remove", GhostMode = "acceptancemod.testing/ghost-mode";
     /// <summary>The field-only-state control's own commands (Controls/FieldOnlyState).</summary>
     public const string FieldStateSet = "acceptancemodcontrol.fieldstate/set", FieldStateRead = "acceptancemodcontrol.fieldstate/read";
 }

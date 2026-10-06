@@ -101,7 +101,7 @@ public sealed class TestWorld : IOwnedServer
             })
             // ValheimCLI's reply reads each mode back; one that did not take makes it an error line.
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok(ConfirmProtection
-                ? "OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True"
+                ? "OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"
                 : "ERROR: code=safety_not_applied playerSafety enabled=True god=True ghost=False debugMode=True cheats=True"))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => new

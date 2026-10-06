@@ -122,13 +122,29 @@ public static class PlayerPlacement
 
     /// <summary>
     /// Turns on god, ghost and debug modes for the local player (<c>cli_set_player_safety true</c>) and requires the game
-    /// to read all three back. The command sets the modes rather than toggling them, so running it again changes nothing;
-    /// it is issued once and an unconfirmed reply fails. Debug flying stays off, so support observations remain
-    /// meaningful. <see cref="SessionControl.WaitForWorld"/> calls this by default once the world is ready.
+    /// to read all three back, and ghost mode to be written where every other peer reads it (<c>ghostReplicated=True</c>):
+    /// the game keeps ghost mode in the player's own process, while a creature's AI runs in whichever process owns it, so a
+    /// ghost only the local game knows about is still hunted by creatures another client simulates (#261). The command sets
+    /// the modes rather than toggling them, so running it again changes nothing; it is issued once and an unconfirmed reply
+    /// fails. Debug flying stays off, so support observations remain meaningful. <see cref="SessionControl.WaitForWorld"/>
+    /// calls this by default once the world is ready.
     /// </summary>
-    public static void Protect(GameActor client)
+    public static void Protect(GameActor client) => Protect(client, targetable: false);
+
+    /// <summary>
+    /// <see cref="Protect(GameActor)"/>, or with <paramref name="targetable"/> god and debug modes without ghost mode
+    /// (<c>cli_set_player_safety true targetable</c>): the player cannot die but creatures notice it, for a test of AI or
+    /// targeting that opts out of ghost mode on purpose (<see cref="ClientRunPlan.Targetable"/>).
+    /// </summary>
+    public static void Protect(GameActor client, bool targetable)
     {
-        client.Execute("cli_set_player_safety true").RequireLine("OK: playerSafety enabled=True god=True ghost=True debugMode=True", "Player protection was not confirmed");
+        var reply = client.Execute(targetable ? "cli_set_player_safety true targetable" : "cli_set_player_safety true");
+        string confirmed = $"OK: playerSafety enabled=True god=True ghost={!targetable} debugMode=True";
+        reply.RequireLine(confirmed, "Player protection was not confirmed");
+        string replicated = targetable ? " ghostReplicated=True targetable=True" : " ghostReplicated=True";
+        if (!reply.Output.Any(line => line.StartsWith(confirmed, StringComparison.Ordinal) && line.Contains(replicated, StringComparison.Ordinal)))
+            throw new InvalidOperationException("Player protection held only in the player's own game: ValheimCLI did not report ghostReplicated=True, so creatures " +
+                "another peer simulates could still see the player. Use a ValheimCLI whose Standard pack replicates ghost mode. Reply: " + string.Join(" | ", reply.Output));
     }
 
     /// <summary>

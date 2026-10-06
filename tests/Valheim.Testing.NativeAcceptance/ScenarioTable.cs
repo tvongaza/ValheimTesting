@@ -34,6 +34,7 @@ public static class ScenarioTable
         new(AcceptancePlan.AreaObjectsScenarioName, AreaObjectsScenario.Run),
         new(AcceptancePlan.OwnershipHandoffScenario, OwnershipHandoffScenario.Run, MarksSites: true, CampaignClients: TwoClients),
         new(AcceptancePlan.ThreeActorScenario, ThreeActorSmokeScenario.Run, CampaignClients: TwoClients),
+        new(AcceptancePlan.GhostProtectionScenarioName, GhostProtectionScenario.Run, CampaignClients: TwoClients),
     ];
 
     /// <summary>Every scenario's name, in table order.</summary>
@@ -50,7 +51,7 @@ public static class ScenarioTable
         {
             var plan = AcceptancePlan.ReadValidated(path);
             // Two simultaneous clients are a campaign's actors (an inventory assigns their hosts and Steam identities).
-            if (plan.Scenario is AcceptancePlan.ThreeActorScenario or AcceptancePlan.OwnershipHandoffScenario)
+            if (Find(plan.Scenario)?.CampaignClients != null)
                 throw new ArgumentException($"The {plan.Scenario} scenario runs as a campaign: campaign run <campaign.json> <plan.json> <new-output-directory>.");
             return plan;
         },
@@ -62,7 +63,7 @@ public static class ScenarioTable
             if (plan.Client == null && !plan.ServerOnly)
                 throw new ArgumentException($"A run looks from a client: add the client section, or use the {AcceptancePlan.ServerScenario} scenario for the server half alone.");
             // A campaign template is bound to its prepared actors in memory; its own rules apply to the bound plan.
-            if (plan.Scenario is AcceptancePlan.ThreeActorScenario or AcceptancePlan.OwnershipHandoffScenario) AcceptancePlan.Validated(plan);
+            if (Find(plan.Scenario)?.CampaignClients != null) AcceptancePlan.Validated(plan);
         },
         Provenance = (plan, provenance) =>
         {
@@ -75,7 +76,7 @@ public static class ScenarioTable
 
     /// <summary>The campaign's named clients of <paramref name="plan"/>'s scenario; refuses a scenario that does not run as a campaign.</summary>
     public static IReadOnlyDictionary<string, ClientRunPlan> CampaignClientsFor(AcceptancePlan plan) =>
-        (Find(plan.Scenario)?.CampaignClients ?? throw new ArgumentException($"This suite's campaign runs {AcceptancePlan.ThreeActorScenario} or {AcceptancePlan.OwnershipHandoffScenario}."))(plan);
+        (Find(plan.Scenario)?.CampaignClients ?? throw new ArgumentException("This suite's campaign runs " + string.Join(", ", Entries.Where(entry => entry.CampaignClients != null).Select(entry => entry.Name)) + "."))(plan);
 
     /// <summary>The scenario named <paramref name="name"/>, or null.</summary>
     public static Entry? Find(string? name) => Entries.FirstOrDefault(entry => entry.Name == name);

@@ -235,7 +235,7 @@ public sealed class SessionControl(GameActor actor)
         // Protection is a mutating test command on a joined client: an owned client's access is established first and must
         // allow it (AllowOnServerClients), so a client staged without it is named here rather than by a refused command.
         if (plan.Owned) TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: protectPlayer);
-        if (protectPlayer) PlayerPlacement.Protect(actor);
+        if (protectPlayer) PlayerPlacement.Protect(actor, plan.Targetable);
         return state;
     }
 

@@ -1,0 +1,136 @@
+{
+  "scenario": "ghost-protection",
+  "runtime": {
+    "source": "<full path of the server runtime>",
+    "sha256": {
+      "valheim_server.exe": "<sha256 of every file, from WorldFixture.Manifest>"
+    }
+  },
+  "world": {
+    "source": "<full path of the fixture world>",
+    "sha256": {
+      "worlds_local/Fixture.db": "<sha256>",
+      "worlds_local/Fixture.fwl": "<sha256>",
+      "adminlist.txt": "<sha256>"
+    }
+  },
+  "arguments": [
+    "-batchmode",
+    "-nographics",
+    "-name",
+    "AcceptanceTest",
+    "-port",
+    "2456",
+    "-world",
+    "Fixture",
+    "-password",
+    "<fixture password>",
+    "-savedir",
+    "{world}",
+    "-public",
+    "0",
+    "-logFile",
+    "{runtime}/toolkit-unity.log"
+  ],
+  "environment": {},
+  "pins": {
+    "worlduid": "<the fixture world's UID>",
+    "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",
+    "valheimCLI.standard": "<md5 of the runtime's Valheim.Cli.Standard.dll>",
+    "valheimCLI.worldtools": "<md5 of the runtime's Valheim.Cli.WorldTools.dll>",
+    "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+    "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
+  },
+  "runtimePins": {
+    "game": "<InstallPins.Of(runtime).Game>",
+    "loader": "<InstallPins.Of(runtime).Loader>",
+    "patchers": "<InstallPins.Of(runtime).Patchers>"
+  },
+  "port": 5577,
+  "arrival": {
+    "x": 125,
+    "z": -380,
+    "ground": 45.0
+  },
+  "client": {
+    "mode": "owned",
+    "install": "<full path of client A install>",
+    "launchArguments": [
+      "-screen-fullscreen",
+      "0",
+      "-screen-width",
+      "1280",
+      "-screen-height",
+      "720"
+    ],
+    "port": 5556,
+    "pins": {
+      "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
+      "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
+      "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
+      "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+      "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
+    },
+    "installPins": {
+      "game": "<InstallPins.Of(install).Game>",
+      "loader": "<InstallPins.Of(install).Loader>",
+      "patchers": "<InstallPins.Of(install).Patchers>"
+    },
+    "join": "192.0.2.1:2456",
+    "character": "ghostA",
+    "passwordVariable": "ACCEPTANCEMOD_TEST_PASSWORD",
+    "capabilities": [
+      "acceptancemod.testing/ai-watch",
+      "acceptancemod.testing/creature-spawn",
+      "acceptancemod.testing/creature-remove",
+      "acceptancemod.testing/ghost-mode",
+      "valheim.world/terrain",
+      "valheim.world/player-support-wait",
+      "valheim.world/player-support",
+      "valheim.session/teleport-signals"
+    ]
+  },
+  "secondClient": {
+    "mode": "owned",
+    "install": "<full path of client B install>",
+    "launchArguments": [
+      "-screen-fullscreen",
+      "0",
+      "-screen-width",
+      "1280",
+      "-screen-height",
+      "720"
+    ],
+    "port": 5557,
+    "pins": {
+      "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
+      "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
+      "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
+      "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
+      "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
+    },
+    "installPins": {
+      "game": "<InstallPins.Of(install).Game>",
+      "loader": "<InstallPins.Of(install).Loader>",
+      "patchers": "<InstallPins.Of(install).Patchers>"
+    },
+    "join": "192.0.2.1:2456",
+    "character": "ghostB",
+    "passwordVariable": "ACCEPTANCEMOD_TEST_PASSWORD",
+    "capabilities": [
+      "acceptancemod.testing/ai-watch",
+      "acceptancemod.testing/creature-spawn",
+      "acceptancemod.testing/creature-remove",
+      "acceptancemod.testing/ghost-mode",
+      "valheim.world/terrain",
+      "valheim.world/player-support-wait",
+      "valheim.world/player-support",
+      "valheim.session/teleport-signals"
+    ]
+  },
+  "secondArrival": {
+    "x": 120,
+    "z": -372,
+    "ground": 45.0
+  }
+}

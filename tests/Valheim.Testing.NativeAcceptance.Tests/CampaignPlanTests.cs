@@ -260,7 +260,7 @@ public sealed class CampaignPlanTests : IDisposable
         // Discover the source inventory, not arbitrary files left in bin/ from an older build.
         var names = Directory.GetFiles(SourceSamples(), "sample-plan-*.json")
             .Select(path => Path.GetFileName(path)!).Where(name => name != "sample-plan-hosted.json").ToArray();
-        Assert.Equal(11, names.Length);
+        Assert.Equal(12, names.Length);
         foreach (string name in names)
         {
             string file = Path.Combine(samples, name);
