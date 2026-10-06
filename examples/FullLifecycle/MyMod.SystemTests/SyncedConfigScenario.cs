@@ -20,7 +20,6 @@ public static class SyncedConfigScenario
     {
         var plan = run.Plan; var report = run.Report; var client = plan.Client!; string greeting = plan.NewGreeting!;
         var timeout = TimeSpan.FromSeconds(client.JoinSeconds);
-        CampaignSteps.ModPatchesApplied(run.Server, report);
         new ClientRounds
         {
             Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Cancellation = run.Cancellation,

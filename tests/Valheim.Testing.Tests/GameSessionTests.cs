@@ -18,6 +18,7 @@ public sealed class GameSessionTests : IDisposable
     private readonly Dictionary<string, FakeOwnedProcess> _clientProcesses = [];
     private readonly Dictionary<string, ScriptedTransport> _clientTransports = [];
 
+    private bool _patchApplied = true;
     private int ServerPid() { lock (_serverProcesses) return _serverProcesses[^1].Id; }
 
     // An owned server whose session adapter answers its token, pid and save root and accepts connections, with test access.
@@ -33,6 +34,15 @@ public sealed class GameSessionTests : IDisposable
             .Extension("test.mod", "session", _ => new
             {
                 source = "owned-test-session", token, pid = ServerPid(), saveRoot = Path.GetFullPath(Save), complete = true, dedicated = true, acceptingConnections = true,
+            })
+            .Extension("test.mod", "harmony", _ => new
+            {
+                source = "harmony-patches", complete = true, owner = "test.mod",
+                methods = !_patchApplied ? Array.Empty<object>() : new object[]
+                {
+                    new { method = "Terminal::InitTerminal()", patches = new[] { new { owner = "test.mod", kind = "postfix", priority = 400, index = 0,
+                        before = Array.Empty<string>(), after = Array.Empty<string>(), patch = "Test.Mod+Commands::Postfix()" } } },
+                },
             })
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
             .On("confirmcheats", _ => { cheats = true; return ScriptedTransport.Ok(); })
@@ -213,6 +223,52 @@ public sealed class GameSessionTests : IDisposable
         await session.DisposeAsync();
         Assert.Equal("stop only owned server", Steps(report, StepPhase.Cleanup)[^1]);
         Assert.All(_serverProcesses, process => Assert.Equal(1, process.Stops));
+    }
+
+    private static readonly ModDeclaration Declared = new("test.mod/session", "TEST_TOKEN")
+    {
+        HarmonyCapability = "test.mod/harmony", Owner = "test.mod", Patches = [new("Terminal::InitTerminal", "postfix", "Test.Mod+Commands::Postfix")],
+    };
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task TheDeclaredPatchesAreCheckedOnTheServerAtRuntimeReady(bool applied, bool serverPinsMod)
+    {
+        _patchApplied = applied;
+        var report = new ScenarioReport("session");
+        var session = new GameSession(report, _root, WorldUid, Server, [], CancellationToken.None) { Mod = Declared, ServerPinsMod = serverPinsMod };
+        const string step = "server: the mod's Harmony patches are applied";
+        if (applied || !serverPinsMod)
+        {
+            await session.StartAsync();
+            // A server whose pins leave the mod out gets no check: there is nothing of it to patch in.
+            Assert.Equal(serverPinsMod, Steps(report, StepPhase.Setup).Contains(step));
+            Assert.True(report.RuntimeReady);
+            await session.DisposeAsync();
+            return;
+        }
+        // Loaded but not patched in: Setup fails at runtime-ready, no scenario step can run, and the session is torn down.
+        var error = await Assert.ThrowsAnyAsync<Exception>(session.StartAsync);
+        Assert.Contains("Terminal::InitTerminal", error.Message);
+        Assert.False(report.RuntimeReady);
+        Assert.Equal(step, report.Steps.Single(s => !s.Passed).Name);
+        Assert.Equal("stop only owned server", Steps(report, StepPhase.Cleanup)[^1]);
+    }
+
+    [Fact] public void ADeclarationNamesItsHarmonyCheckWholeAndItsOwnerPin()
+    {
+        var partial = new ModDeclaration("test.mod/session", "TEST_TOKEN") { HarmonyCapability = "test.mod/harmony" };
+        Assert.Throws<ArgumentException>(partial.Validate);
+        Assert.Throws<ArgumentException>((Declared with { Patches = [new("Terminal::InitTerminal", "postfixx")] }).Validate);
+        new ModDeclaration("test.mod/session", "TEST_TOKEN").Validate(); // No Harmony check declared: nothing to refuse.
+        Assert.False(new ModDeclaration("test.mod/session", "TEST_TOKEN").ChecksPatches);
+        // The pin is the plugin's GUID, which may differ from the Harmony ID.
+        Assert.True((Declared with { Plugin = "test.mod.plugin" }).PinnedIn(new Dictionary<string, string> { ["test.mod.plugin"] = new string('a', 32) }));
+        Assert.True(Declared.PinnedIn(new Dictionary<string, string> { ["test.mod"] = new string('a', 32) }));
+        Assert.False(Declared.PinnedIn(new Dictionary<string, string> { ["test.mod"] = "absent" }));
+        Assert.False(Declared.PinnedIn(new Dictionary<string, string>()));
     }
 
     [Fact] public async Task TeardownClosesTheClientsInReverseThenStopsTheServer()

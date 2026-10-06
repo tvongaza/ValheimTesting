@@ -410,7 +410,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var options = new PinnedServerRunOptions<SitePlan>
         {
             Name = "campaign-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
-            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+            Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (session, _) => { scenarioRan = true; Assert.NotNull(session.Server!.Host); return Task.CompletedTask; },
             Hooks = new FakeRunHooks { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
         };
@@ -631,7 +631,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var options = new PinnedServerRunOptions<SitePlan>
         {
             Name = "cut-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
-            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+            Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (_, _) => throw new InvalidOperationException("The scenario must not run after a cancelled preparation."),
             Hooks = new FakeRunHooks { Host = name => hosts[name], Connect = _ => server.Connect(), StateWaits = false, Cancellation = interrupt },
         };
@@ -717,7 +717,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var options = new PinnedServerRunOptions<SitePlan>
         {
             Name = "this-machine-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
-            SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+            Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (_, _) => Task.CompletedTask,
             Hooks = new FakeRunHooks { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
         };

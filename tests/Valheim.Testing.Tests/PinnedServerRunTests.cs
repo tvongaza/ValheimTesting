@@ -48,7 +48,7 @@ public sealed class PinnedServerRunTests : IDisposable
     {
         Name = "toolkit-smoke",
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
-        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+        Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
         CheckPlan = checkPlan,
         Scenario = TestRun.Scenario(scenario ?? (_ => Task.CompletedTask)),
         SessionOverride = server == null ? null : _ => server.Session(TimeSpan.FromSeconds(60)),
@@ -64,7 +64,7 @@ public sealed class PinnedServerRunTests : IDisposable
             plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); plan.Client?.Validate();
             return plan;
         },
-        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+        Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
         Scenario = (_, _) => Task.CompletedTask,
         SessionOverride = server == null ? null : _ => server.Session(TimeSpan.FromSeconds(60)),
     };
@@ -266,7 +266,7 @@ public sealed class PinnedServerRunTests : IDisposable
     }
     private static PinnedServerRunOptions<ServerRunPlan> WithStaged(PinnedServerRunOptions<ServerRunPlan> options, WorldFixture staged) => new()
     {
-        Name = options.Name, ReadPlan = options.ReadPlan, SessionCapability = options.SessionCapability, SessionTokenVariable = options.SessionTokenVariable,
+        Name = options.Name, ReadPlan = options.ReadPlan, Mod = options.Mod,
         Scenario = options.Scenario, SessionOverride = options.SessionOverride, StagedRuntime = staged,
     };
     [Fact] public async Task AStagedRuntimeIsRunInPlaceAndRetiredAgainstItsStagedState()
@@ -442,7 +442,7 @@ public sealed class KeepRuntimeVariableTests : IDisposable
         }));
         var options = new PinnedServerRunOptions<ServerRunPlan>
         {
-            Name = "toolkit-smoke", SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+            Name = "toolkit-smoke", Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             ReadPlan = path => { var read = ServerRunPlan.Read<ServerRunPlan>(path); read.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return read; },
             Scenario = (_, _) => Task.CompletedTask,
         };

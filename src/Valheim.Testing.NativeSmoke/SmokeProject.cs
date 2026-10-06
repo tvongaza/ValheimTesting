@@ -122,8 +122,7 @@ internal static class SmokeProject
                     plan.ValidateServerPlan(plan.Pins.Keys.Where(key => key != "worlduid"), NativeServerRuntime.SessionTokenVariable);
                     return plan;
                 },
-                SessionCapability = NativeServerRuntime.SessionCapability,
-                SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
+                Mod = new(NativeServerRuntime.SessionCapability, NativeServerRuntime.SessionTokenVariable),
                 Scenario = (session, plan) =>
                 {
                     var server = session.Server!.Game;

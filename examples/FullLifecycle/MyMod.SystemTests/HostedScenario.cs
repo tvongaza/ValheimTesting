@@ -76,7 +76,7 @@ public static class HostedScenario
             }
             // A clean character needs explicit acknowledgement before Terminal will run this mod's cheat commands.
             round.Step("host: the mod's Harmony patches are applied", () =>
-                HarmonyCensus.Read(host, Capabilities.Harmony, LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied());
+                LifecyclePlan.Mod.RequirePatchesApplied(host)); // A hosted world is not a session yet (#258 step 8).
             round.Step("no marker at either site before the mod acts", () => RequireMarkers(host, plan, dry: 0));
             round.Step("the mod marks the dry site", () => host.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
             round.Step("the mod refuses the wet site", () => host.Execute(DrySiteScenario.Mark(plan.WetSite)).RequireLine("REFUSED: ", "MyMod did not refuse the wet site"));

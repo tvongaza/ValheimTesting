@@ -9,7 +9,8 @@ namespace Valheim.Testing.Game;
 /// named Setup step with a bounded wait that names itself when it times out:
 /// <list type="bullet">
 /// <item><see cref="StartAsync"/>: the server boots and every client reaches its menu at the same time; one failure cancels the
-/// others, lets them settle, closes the clients and then the server, and is rethrown.</item>
+/// others, lets them settle, closes the clients and then the server, and is rethrown. Then, with the mod's
+/// <see cref="ModDeclaration"/>, its declared Harmony patches must be applied on the server when its pins load the mod.</item>
 /// <item><see cref="ServerJoinable"/>: the server accepts game connections.</item>
 /// <item><see cref="Join"/>, <see cref="JoinAll"/>: a client (every client) in the server's world, by the one join
 /// (<see cref="SessionControl.JoinWorld"/>), optionally standing at an arrival point (<see cref="PlayerPlacement.Arrive"/>).</item>
@@ -142,8 +143,15 @@ public sealed class GameSession : IAsyncDisposable
         _started = true;
         Cancellation.ThrowIfCancellationRequested();
         var starts = new List<Task>();
+        Mod?.Validate(); // Before anything starts.
         if (Server is { } server)
-            starts.Add(Task.Run(() => Report.Step(StepPhase.Setup, "start and verify owned dedicated fixture", () => server.Start())));
+            starts.Add(Task.Run(() =>
+            {
+                Report.Step(StepPhase.Setup, "start and verify owned dedicated fixture", () => server.Start());
+                // Runtime-ready: the mod is loaded and patched in, before any scenario step; a failure cancels the clients' starts.
+                if (Mod is { ChecksPatches: true } mod && ServerPinsMod)
+                    Report.Step(StepPhase.Setup, "server: the mod's Harmony patches are applied", () => mod.RequirePatchesApplied(server.Game));
+            }));
         foreach (var client in _clients)
             starts.Add(Task.Run(() => Report.Step(StepPhase.Setup, $"client {client.Name} at its menu, plugins pinned", () => client.Start())));
         // The first failure cancels the rest at once, rather than after every sibling has run out its own deadline.
@@ -165,6 +173,12 @@ public sealed class GameSession : IAsyncDisposable
         if (DisposeOnFailedStart) await DisposeAsync().ConfigureAwait(false);
         System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(first).Throw();
     }
+
+    /// <summary>The mod's declaration, whose Harmony check <see cref="StartAsync"/> runs on the server when <see cref="ServerPinsMod"/>.</summary>
+    internal ModDeclaration? Mod { get; init; }
+    /// <summary>Whether the server loads the mod: its plugin pinned to a build, or an unpinned plan.</summary>
+    internal bool ServerPinsMod { get; init; }
+
 
     /// <summary>Whether a failed <see cref="StartAsync"/> disposes the session before rethrowing; false where the caller's own cleanup does it.</summary>
     internal bool DisposeOnFailedStart { get; init; } = true;

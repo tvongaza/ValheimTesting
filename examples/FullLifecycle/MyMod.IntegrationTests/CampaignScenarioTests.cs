@@ -39,7 +39,7 @@ public sealed class CampaignScenarioTests : IDisposable
         var names = report.Steps.Select(s => s.Name).ToList();
         foreach (string step in new[]
         {
-            "server: the mod's Harmony patches are applied", "first: the marker carries MyMod's saved label on the client",
+            "first: the marker carries MyMod's saved label on the client",
             "first: set defeated_eikthyr on the server; the client lists the server's keys", "first: the dungeon's saved rooms lie in its location's zone",
             "first: the client unloads the zones", "first: after the zone reload the client has the marker again, with its saved label",
             "after-restart: the server kept defeated_eikthyr through the save and restart, and the client lists it",
@@ -280,7 +280,6 @@ public sealed class CampaignScenarioTests : IDisposable
         Assert.True(report.Passed, Explain(report));
         Assert.Equal(new[]
         {
-            "server: the mod's Harmony patches are applied",
             "attach to the operator's mismatched client at its menu, plugins pinned", "the server accepts game connections",
             "the mismatched client is refused with ErrorVersion (3)", "detach from the operator's mismatched client",
             "attach to the operator's matching client at its menu, plugins pinned", "matching: the server accepts game connections",

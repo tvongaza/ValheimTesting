@@ -361,8 +361,7 @@ internal static class ServerLoad
                 {
                     Name = "native-smoke-server-load",
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),
-                    SessionCapability = NativeServerRuntime.SessionCapability,
-                    SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
+                    Mod = new(NativeServerRuntime.SessionCapability, NativeServerRuntime.SessionTokenVariable),
                     Provenance = (_, record) =>
                     {
                         if (serverLoader != null) record["serverLoaderPackage"] = BepInExLoaderPackage.Read(serverLoader).Identity;
@@ -506,9 +505,9 @@ internal static class ServerLoad
                         read.ValidateServerPlan(read.Pins.Keys.Where(key => key != "worlduid"), NativeServerRuntime.SessionTokenVariable);
                         return read;
                     },
-                    SessionCapability = NativeServerRuntime.SessionCapability,
+                    Mod = new(NativeServerRuntime.SessionCapability, NativeServerRuntime.SessionTokenVariable),
                     StagedRuntime = runtime.Copy, // the run uses the staged copy itself: one server copy, not two
-                    SessionTokenVariable = NativeServerRuntime.SessionTokenVariable,
+
                     Provenance = (_, record) =>
                     {
                         record["path"] = "staged local copies (macOS)";

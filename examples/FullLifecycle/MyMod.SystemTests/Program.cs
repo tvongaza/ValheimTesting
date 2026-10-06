@@ -20,8 +20,9 @@ var options = new PinnedServerRunOptions<LifecyclePlan>
             throw new ArgumentException($"The {plan.Scenario} scenario runs as a campaign: campaign run <campaign.json> <plan.json> <new-output-directory>.");
         return plan;
     },
-    SessionCapability = "mymod.testing/session",
-    SessionTokenVariable = LifecyclePlan.SessionTokenVariable,
+    // The session capability and token variable MyMod's test adapter serves, and its Harmony patches, which the session
+    // checks on the server before any scenario step.
+    Mod = LifecyclePlan.Mod,
     CheckPlan = plan =>
     {
         if (plan.Client == null && !plan.ServerOnly)

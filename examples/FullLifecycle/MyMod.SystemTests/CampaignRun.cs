@@ -112,11 +112,6 @@ public static class CampaignScenarios
 /// <summary>Steps the campaign scenarios share, with the same names as <see cref="DrySiteScenario"/>'s.</summary>
 public static class CampaignSteps
 {
-    /// <summary>Every patch MyMod declares is applied on the server (the adapter's census).</summary>
-    public static void ModPatchesApplied(GameActor server, ScenarioReport report, string side = "server") =>
-        report.Step($"{side}: the mod's Harmony patches are applied", () =>
-            HarmonyCensus.Read(server, Capabilities.Harmony, LifecyclePlan.ModPlugin).Check(LifecyclePlan.ModPlugin, DrySiteScenario.Patches).RequireApplied());
-
     /// <summary>No marker before; the mod marks the dry site and refuses the wet one, each asked once; the server shows it.</summary>
     public static void MarkSites(LifecyclePlan plan, GameActor server, ScenarioReport report, string side = "server")
     {

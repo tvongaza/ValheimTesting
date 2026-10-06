@@ -33,7 +33,7 @@ public sealed record DeclaredPatch(string Target, string Kind, string? Patch = n
 public sealed class HarmonyCensus
 {
     public const string Source = "harmony-patches";
-    private static readonly string[] Kinds = ["prefix", "postfix", "transpiler", "finalizer", "ilmanipulator"];
+    internal static readonly string[] Kinds = ["prefix", "postfix", "transpiler", "finalizer", "ilmanipulator"];
     /// <summary>Every method the census lists, including one whose patches have all been removed.</summary>
     public IReadOnlyList<string> Methods { get; }
     public IReadOnlyList<AppliedPatch> Patches { get; }

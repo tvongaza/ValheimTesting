@@ -43,7 +43,6 @@ public static class ContentCensusScenario
         var expectations = Expectations();
         report.Provenance["contentExpectations"] = $"{expectations.Owner} [{string.Join(", ", expectations.Scope)}]: " +
             string.Join(", ", expectations.Entries.Select(e => $"{e.Kind} {e.Name} ({string.Join("+", e.Sides).ToLowerInvariant()})"));
-        CampaignSteps.ModPatchesApplied(run.Server, report);
         new ClientRounds
         {
             Client = client, WorldUid = plan.WorldUid, Report = report, Output = run.Output, OwnedServer = run.OwnedServer, Cancellation = run.Cancellation,

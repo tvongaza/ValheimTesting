@@ -360,7 +360,7 @@ public sealed class PinningTests : IDisposable
     {
         Name = "pinning-smoke",
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
-        SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
+        Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
         Scenario = (session, _) => { session.Server!.Game.Execute("cli_extension test.mod/session"); return Task.CompletedTask; },
         // The plan's own expectations: strict pins, or EnvironmentPinning.None for an unpinned plan.
         SessionOverride = server == null ? null : plan => server.Session(TimeSpan.FromSeconds(60), expectations: plan.ExpectCommand),
