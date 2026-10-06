@@ -103,6 +103,10 @@ public sealed class CliBundleTests : IDisposable
             threads.ForEach(thread => thread.Join());
             // Every run that returned was handed the one copy, which is intact, and nothing else is left beside it.
             if (sources.Any(source => source.Files != target)) wrong.Add($"round {round}: a run was handed another folder");
+            // Exactly one run extracted (the others found its copy current, outside the lock or again under it): a current
+            // copy is never replaced (ExtractOnce, shared with the shipped BepInExPack).
+            int extracted = sources.Count(source => source.Origin.Contains("extracted to", StringComparison.Ordinal));
+            if (sources.Count == Runs && extracted != 1) wrong.Add($"round {round}: {extracted} runs extracted, not 1");
             if (!File.Exists(Path.Combine(target, "valheimCLI.dll")) || FileHash.Sha256(Path.Combine(target, "valheimCLI.dll")) != dll ||
                 FileHash.Sha256(Path.Combine(target, "Valheim.Cli.Standard.dll")) != standard)
                 wrong.Add($"round {round}: the copy is not intact");

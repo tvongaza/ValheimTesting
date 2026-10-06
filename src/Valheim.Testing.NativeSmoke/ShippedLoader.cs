@@ -78,7 +78,8 @@ internal static class ShippedLoader
     /// <summary>
     /// The pack under <paramref name="dataRoot"/>/loader/&lt;name&gt;-&lt;version&gt;-&lt;sha256 prefix&gt;, captured as a loader package
     /// (<c>loader.json</c> beside it). An existing copy is reused while <see cref="BepInExLoaderPackage.Read"/> still accepts it
-    /// (every pinned file unchanged); otherwise the pack's folder is extracted again beside it and swapped in. A zip of another
+    /// (every pinned file unchanged); otherwise the pack's folder is extracted again beside it and swapped in, one run at a time
+    /// (<c>&lt;folder&gt;.lock</c> beside it), so concurrent runs share one copy and never replace a current one. A zip of another
     /// hash is refused.
     /// </summary>
     internal static string Extract(Stream zip, LoaderPin pin, string dataRoot)
@@ -90,11 +91,10 @@ internal static class ShippedLoader
             throw new InvalidDataException($"The shipped {pin.Name} {pin.Version} is sha256 {found}, not the pinned {pin.Sha256.ToLowerInvariant()}.");
         string folder = Path.Combine(dataRoot, "loader", $"{pin.Name}-{pin.Version}-{found[..12]}");
         string manifest = Path.Combine(folder, "loader.json");
-        if (Usable(manifest)) return manifest;
-
-        string staging = folder + ".extract-" + Guid.NewGuid().ToString("N");
         string prefix = pin.Root.TrimEnd('/') + "/";
-        try
+        // One extraction at a time for this folder, across processes (<folder>.lock beside it; ExtractOnce, the same file
+        // CliBundle uses, owns the swap): concurrent runs share one copy and a current copy is never replaced.
+        ExtractOnce.Ensure(folder, copy => Current(Path.Combine(copy, "loader.json")), staging =>
         {
             buffer.Position = 0;
             using (var archive = new ZipArchive(buffer, ZipArchiveMode.Read, leaveOpen: true))
@@ -114,30 +114,17 @@ internal static class ShippedLoader
             var json = JsonNode.Parse(File.ReadAllText(staged))!.AsObject();
             json["root"] = ".";
             File.WriteAllText(staged, json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n");
-            // Another run may have extracted the same pack meanwhile: use its copy rather than replace it under it.
-            if (Usable(manifest)) return manifest;
-            Directory.CreateDirectory(Path.GetDirectoryName(folder)!);
-            if (Directory.Exists(folder))
-            {
-                string old = folder + ".old-" + Guid.NewGuid().ToString("N");
-                try { Directory.Move(folder, old); } catch (IOException) when (Usable(manifest)) { return manifest; }
-                try { Directory.Delete(old, recursive: true); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-            }
-            try { Directory.Move(staging, folder); }
-            catch (IOException) when (Usable(manifest)) { return manifest; }
-            if (!Usable(manifest)) throw new InvalidDataException($"The shipped {pin.Name} {pin.Version} at {folder} is not a usable loader package.");
-            return manifest;
-        }
-        finally
-        {
-            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
-        }
+            if (!Current(staged)) throw new InvalidDataException($"The shipped {pin.Name} {pin.Version} is not a usable loader package.");
+        }, $"shipped {pin.Name} {pin.Version}");
+        return manifest;
     }
 
-    private static bool Usable(string manifest)
+    // A missing or changed copy is not current; any other IO error (a file another process holds) goes to ExtractOnce,
+    // which treats it as "not current" outside the lock and as a failure under it, so a copy it cannot read is never replaced.
+    private static bool Current(string manifest)
     {
         if (!File.Exists(manifest)) return false;
         try { _ = BepInExLoaderPackage.Read(manifest); return true; }
-        catch (Exception error) when (error is InvalidDataException or IOException or ArgumentException or InvalidOperationException or JsonException) { return false; }
+        catch (Exception error) when (error is InvalidDataException or FileNotFoundException or DirectoryNotFoundException or ArgumentException or InvalidOperationException or JsonException) { return false; }
     }
 }

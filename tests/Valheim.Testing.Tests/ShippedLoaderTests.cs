@@ -91,6 +91,48 @@ public sealed class ShippedLoaderTests : IDisposable
         Assert.Single(Directory.GetDirectories(Path.Combine(data, "loader"))); // no staging or old copies left
     }
 
+    // Two valheim-test runs starting together on one machine (#419, the race #418 fixed in CliBundle): every run is handed
+    // the one copy, none throws, the copy is intact, and no staging or set-aside copy is left beside it. Alternate rounds
+    // start from no copy and from a damaged one.
+    [Fact] public void ManyRunsExtractingAtOnceNeverFailAndLeaveOneIntactCopy()
+    {
+        byte[] zip = Pack(("BepInExPack_Valheim/changelog.txt", "not a loader file"));
+        var pin = Pin(zip);
+        const int Runs = 8, Rounds = 24;
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        var wrong = new List<string>();
+        for (int round = 0; round < Rounds; round++)
+        {
+            string data = Path.Combine(_root, "stress-" + round);
+            string expected = Path.Combine(data, "loader", $"{pin.Name}-{pin.Version}-{pin.Sha256[..12]}", "loader.json");
+            if (round % 2 == 1)
+            {
+                ShippedLoader.Extract(new MemoryStream(zip), pin, data);
+                File.AppendAllText(Path.Combine(Path.GetDirectoryName(expected)!, "winhttp.dll"), "damaged");
+            }
+            using var start = new Barrier(Runs);
+            var manifests = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var threads = Enumerable.Range(0, Runs).Select(_ => new Thread(() =>
+            {
+                start.SignalAndWait();
+                try { manifests.Enqueue(ShippedLoader.Extract(new MemoryStream(zip), pin, data)); }
+                catch (Exception error) { failures.Enqueue(error); }
+            })).ToList();
+            threads.ForEach(thread => thread.Start());
+            threads.ForEach(thread => thread.Join());
+            if (manifests.Any(manifest => manifest != expected)) wrong.Add($"round {round}: a run was handed another copy");
+            try
+            {
+                var package = BepInExLoaderPackage.Read(expected);
+                if (File.ReadAllText(Path.Combine(package.Root, "winhttp.dll")) != "MZ target_assembly") wrong.Add($"round {round}: the copy is not intact");
+            }
+            catch (Exception error) { wrong.Add($"round {round}: the copy is not usable: {error.Message}"); }
+            var left = Directory.GetDirectories(Path.Combine(data, "loader")).Where(folder => folder != Path.GetDirectoryName(expected)).Select(Path.GetFileName).ToList();
+            if (left.Count != 0) wrong.Add($"round {round}: left beside the copy: {string.Join(", ", left)}");
+        }
+        Assert.True(failures.IsEmpty && wrong.Count == 0, $"{failures.Count} of {Runs * Rounds} runs threw; first: {failures.FirstOrDefault()}\n" + string.Join("\n", wrong.Take(10)));
+    }
+
     [Fact] public void AnotherZipOrAnEntryOutsideThePackFolderIsRefused()
     {
         byte[] zip = Pack();
