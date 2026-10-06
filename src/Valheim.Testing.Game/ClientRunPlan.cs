@@ -156,10 +156,10 @@ public sealed class ClientRunPlan
             throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {other} client is x64 only. Leave architecture out.");
         // The launch's own slice and core check on an install on this machine, so validate and run refuse it before a server starts.
         if (platform == ClientPlatform.MacOS)
-            try { ClientLaunch.RequireMacArchitecture(Path.GetFullPath(Install), architecture); }
+            try { GameLaunch.RequireMacArchitecture(Path.GetFullPath(Install), architecture); }
             catch (Exception error) when (error is InvalidOperationException or IOException)
             {
-                throw new ArgumentException($"The client install cannot launch as {ClientLaunch.PlanName(architecture)}: {error.Message}", error);
+                throw new ArgumentException($"The client install cannot launch as {GameLaunch.PlanName(architecture)}: {error.Message}", error);
             }
         if (string.IsNullOrWhiteSpace(Host) || Port is < 1024 or > 65535) throw new ArgumentException("Give the client's ValheimCLI host and port.");
         if (Owned && Host is not ("127.0.0.1" or "localhost")) throw new ArgumentException("An owned client runs on this machine; its ValheimCLI host is 127.0.0.1.");
@@ -202,7 +202,7 @@ public sealed class ClientRunPlan
     private ClientPlatform? InstallPlatform()
     {
         if (Directory.Exists(Install))
-            try { return ClientLaunch.Detect(Install); }
+            try { return GameLaunch.DetectClient(Install); }
             catch (Exception error) when (error is IOException or ArgumentException or InvalidOperationException) { return null; }
         return System.Text.RegularExpressions.Regex.IsMatch(Install, @"^([A-Za-z]:[\\/]|\\\\)") ? ClientPlatform.Windows : null;
     }
@@ -244,7 +244,7 @@ public sealed class ClientRunPlan
     internal System.Diagnostics.ProcessStartInfo CheckOwnedInstall(string? hostWorldName = null, IEnumerable<string>? capabilities = null)
     {
         CheckInstallPins();
-        var start = ClientSession.StartInfo(this, ClientLaunch.CurrentHost); // The install's loader and slices.
+        var start = ClientSession.StartInfo(this, GameLaunch.CurrentClientHost); // The install's loader and slices.
         var located = OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);
         var manifestCheck = CheckCliManifest(capabilities);
         if (manifestCheck != null)

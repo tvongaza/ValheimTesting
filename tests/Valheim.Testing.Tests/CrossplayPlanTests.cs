@@ -61,7 +61,7 @@ public sealed class CrossplayPlanTests : IDisposable
         {
             string runtime = Path.Combine(root, "runtime"), world = Path.Combine(root, "world");
             Directory.CreateDirectory(runtime); Directory.CreateDirectory(world);
-            File.WriteAllText(Path.Combine(runtime, ServerLaunch.LinuxExecutable), "server"); File.WriteAllText(Path.Combine(world, "Test.db"), "world");
+            File.WriteAllText(Path.Combine(runtime, GameLaunch.ServerLinuxExecutable), "server"); File.WriteAllText(Path.Combine(world, "Test.db"), "world");
             FakeInstalls.Server(runtime);
             // On Linux a crossplay validate asks this machine's ldd whether libparty.so loads: a copy of `true` does.
             string party = Path.Combine(runtime, "valheim_server_Data", "Plugins", "libparty.so");

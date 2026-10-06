@@ -14,41 +14,41 @@ public class ClientLaunchTests
     [Fact] public void CurrentHostFollowsTheOperatingSystem()
     {
         var expected = OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
-        Assert.Equal(expected, ClientLaunch.CurrentHost);
+        Assert.Equal(expected, GameLaunch.CurrentClientHost);
     }
     [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)] [InlineData(ClientPlatform.MacOS)]
     public void EachClientIsDetectedFromItsInstall(ClientPlatform platform)
     {
         using var install = Install.For(platform);
-        Assert.Equal(platform, ClientLaunch.Detect(install.Root));
-        Assert.Equal(install.Executable, ClientLaunch.RequireExecutable(install.Root, platform));
+        Assert.Equal(platform, GameLaunch.DetectClient(install.Root));
+        Assert.Equal(install.Executable, GameLaunch.RequireClientExecutable(install.Root, platform));
     }
     [Fact] public void MacBundleNameMatchesWhateverItsCase()
     {
         using var install = Install.Mac(bundle: "valheim.app");
-        Assert.Equal(ClientPlatform.MacOS, ClientLaunch.Detect(install.Root));
-        Assert.Equal(install.Executable, ClientLaunch.RequireExecutable(install.Root, ClientPlatform.MacOS));
+        Assert.Equal(ClientPlatform.MacOS, GameLaunch.DetectClient(install.Root));
+        Assert.Equal(install.Executable, GameLaunch.RequireClientExecutable(install.Root, ClientPlatform.MacOS));
     }
     [Theory] [InlineData("valheim.x86_64")] [InlineData("Valheim.app/Contents/MacOS/Valheim")]
     public void InstallWithMoreThanOneClientIsRefused(string second)
     {
         using var install = Install.Windows(); install.Add(second);
-        Assert.Throws<InvalidOperationException>(() => ClientLaunch.Detect(install.Root));
+        Assert.Throws<InvalidOperationException>(() => GameLaunch.DetectClient(install.Root));
         Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows).ToStartInfo());
     }
     [Fact] public void EmptyOrMissingInstallIsRefused()
     {
         using var install = new Install();
-        Assert.Throws<FileNotFoundException>(() => ClientLaunch.Detect(install.Root));
-        Assert.Throws<DirectoryNotFoundException>(() => ClientLaunch.Detect(Path.Combine(install.Root, "missing")));
+        Assert.Throws<FileNotFoundException>(() => GameLaunch.DetectClient(install.Root));
+        Assert.Throws<DirectoryNotFoundException>(() => GameLaunch.DetectClient(Path.Combine(install.Root, "missing")));
         Directory.CreateDirectory(Path.Combine(install.Root, "valheim.exe"));
-        Assert.Throws<FileNotFoundException>(() => ClientLaunch.Detect(install.Root)); // a directory is not the executable
+        Assert.Throws<FileNotFoundException>(() => GameLaunch.DetectClient(install.Root)); // a directory is not the executable
     }
     [Theory] [InlineData("valheim_server.exe")] [InlineData("valheim_server.x86_64")] [InlineData("valheim_server/Valheim")]
-    public void DedicatedServerRuntimeIsRefusedWithAPointerToServerLaunch(string server)
+    public void DedicatedServerRuntimeIsRefusedWithAPointerToTheServerBuilder(string server)
     {
         using var install = new Install(); install.Add(server); install.Add("BepInEx/core/BepInEx.Preloader.dll");
-        var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.Detect(install.Root));
+        var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.DetectClient(install.Root));
         Assert.Contains("dedicated-server runtime", error.Message);
         Assert.Contains("GameLaunch.ForServer", error.Message);
         foreach (var host in Enum.GetValues<ClientPlatform>())
@@ -57,20 +57,20 @@ public class ClientLaunchTests
     [Fact] public void ClientExecutableWinsOverAServerBesideIt()
     {
         using var install = Install.Linux(); install.Add("valheim_server.x86_64");
-        Assert.Equal(ClientPlatform.Linux, ClientLaunch.Detect(install.Root));
+        Assert.Equal(ClientPlatform.Linux, GameLaunch.DetectClient(install.Root));
     }
     [Fact] public void MacBundleItselfIsRefusedWithTheDirectoryToPass()
     {
         using var install = Install.Mac();
-        var error = Assert.Throws<ArgumentException>(() => ClientLaunch.Detect(Path.Combine(install.Root, "Valheim.app")));
+        var error = Assert.Throws<ArgumentException>(() => GameLaunch.DetectClient(Path.Combine(install.Root, "Valheim.app")));
         Assert.Contains("pass the directory that holds it", error.Message);
     }
     [Fact] public void MacBundleWithoutItsExecutableIsRefused()
     {
         using var install = Install.Mac();
         File.Delete(install.Executable);
-        Assert.Equal(ClientPlatform.MacOS, ClientLaunch.Detect(install.Root));
-        Assert.Throws<FileNotFoundException>(() => ClientLaunch.RequireExecutable(install.Root, ClientPlatform.MacOS));
+        Assert.Equal(ClientPlatform.MacOS, GameLaunch.DetectClient(install.Root));
+        Assert.Throws<FileNotFoundException>(() => GameLaunch.RequireClientExecutable(install.Root, ClientPlatform.MacOS));
     }
 
     [Theory]
@@ -81,9 +81,9 @@ public class ClientLaunchTests
     {
         using var install = Install.For(platform, executable: false);
         // Detection reads the install's contents and works on any host, e.g. to check a copy before it is moved.
-        Assert.Equal(platform, ClientLaunch.Detect(install.Root));
+        Assert.Equal(platform, GameLaunch.DetectClient(install.Root));
         // Refused before the execute bit is read, which would otherwise suggest chmod.
-        var error = Assert.Throws<PlatformNotSupportedException>(() => ClientLaunch.RequireExecutable(install.Root, host));
+        var error = Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.RequireClientExecutable(install.Root, host));
         Assert.Contains($"This {host} host cannot run the {platform} Valheim client", error.Message);
         Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, host).ToStartInfo());
     }
@@ -92,7 +92,7 @@ public class ClientLaunchTests
     {
         if (OperatingSystem.IsWindows()) return; // Real file modes are needed.
         using var install = Install.For(platform, executable: false);
-        var error = Assert.Throws<InvalidOperationException>(() => ClientLaunch.RequireExecutable(install.Root, platform));
+        var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.RequireClientExecutable(install.Root, platform));
         Assert.Contains("chmod u+x", error.Message);
         Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, platform).ToStartInfo());
     }
@@ -174,7 +174,7 @@ public class ClientLaunchTests
         var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Windows).ToStartInfo());
         Assert.Contains("Other.Preloader.dll", error.Message);
     }
-    // Set in this process, as a parent shell would: only the loader values ClientLaunch sets itself may reach the game.
+    // Set in this process, as a parent shell would: only the loader values GameLaunch.ForClient sets itself may reach the game.
     [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)]
     public void InheritedLoaderVariablesNeverReachTheClient(ClientPlatform platform)
     {
@@ -250,7 +250,7 @@ public class ClientLaunchTests
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "libdoorstop.dylib") }, ExportPair(arm, "DYLD_INSERT_LIBRARIES"));
         var x64 = GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS).ToStartInfo().ArgumentList.ToList();
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "doorstop_libs", "libdoorstop_x64.dylib") }, ExportPair(x64, "DYLD_INSERT_LIBRARIES"));
-        Assert.Equal(new[] { ClientArchitecture.X64, ClientArchitecture.Arm64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal(new[] { ClientArchitecture.X64, ClientArchitecture.Arm64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
     [Fact] public void MacArm64WithoutAnArm64DoorstopIsRefused()
     {
@@ -260,7 +260,7 @@ public class ClientLaunchTests
         Assert.Contains("libdoorstop_x64.dylib: x86_64", error.Message);
         Assert.Contains("UnityDoorstop 4.5 or later, universal or arm64-only", error.Message);
         Assert.Contains("request x64 to run under Rosetta", error.Message);
-        Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
     // What a native install looks like: an arm64-only (or universal) Doorstop at the root, the pack's x64 library removed.
     [Fact] public void MacArm64OnlyDoorstopLaunchesNativelyAndRefusesX64()
@@ -271,7 +271,7 @@ public class ClientLaunchTests
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "libdoorstop.dylib") }, ExportPair(arm, "DYLD_INSERT_LIBRARIES"));
         var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS).ToStartInfo());
         Assert.Contains("No Doorstop library in the install has an x86_64 slice (libdoorstop.dylib: arm64)", error.Message);
-        Assert.Equal(new[] { ClientArchitecture.Arm64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal(new[] { ClientArchitecture.Arm64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
     [Fact] public void MacArm64OnlyDoorstopBesideThePackLibraryServesEachArchitecture()
     {
@@ -281,7 +281,7 @@ public class ClientLaunchTests
         var x64 = GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS).ToStartInfo().ArgumentList.ToList();
         Assert.Equal("-x86_64", x64[0]);
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(install.Root, "doorstop_libs", "libdoorstop_x64.dylib") }, ExportPair(x64, "DYLD_INSERT_LIBRARIES"));
-        Assert.Equal(new[] { ClientArchitecture.X64, ClientArchitecture.Arm64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal(new[] { ClientArchitecture.X64, ClientArchitecture.Arm64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
     // The pack's core with an arm64 Doorstop: dyld would load it natively and the first Harmony patch would fail, so it never starts.
     [Fact] public void MacArm64WithTheLegacyMonoModCoreIsRefusedAndX64StillLaunches()
@@ -291,7 +291,7 @@ public class ClientLaunchTests
         Assert.Contains("MonoMod.RuntimeDetour.dll is version 22.1.29.1", error.Message);
         Assert.Contains("MonoMod before 25 cannot apply Harmony hooks on arm64", error.Message);
         Assert.Contains("request x64 to run under Rosetta", error.Message);
-        Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
         Assert.Equal("-x86_64", GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS).ToStartInfo().ArgumentList[0]);
     }
     [Fact] public void MacArm64WithoutAReadableMonoModCoreIsRefused()
@@ -302,7 +302,7 @@ public class ClientLaunchTests
         install.Add("BepInEx/core/MonoMod.RuntimeDetour.dll", "fake");
         var unreadable = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS).ToStartInfo());
         Assert.Contains("MonoMod.RuntimeDetour.dll is not a .NET assembly", unreadable.Message);
-        Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
     // Unchanged by the native path: an x64 launch reads no MonoMod version, whatever core the install has.
     [Fact] public void MacX64NeverReadsTheCoresMonoModVersion()
@@ -318,7 +318,7 @@ public class ClientLaunchTests
         using var install = Install.Mac(game: Thin(X86_64), universalDoorstop: true, core: NativeDetour);
         var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS).ToStartInfo());
         Assert.Contains("has no arm64 slice (found: x86_64)", error.Message);
-        Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
     [Fact] public void MacDoorstopThatIsNotMachOIsRefused()
     {
@@ -326,14 +326,14 @@ public class ClientLaunchTests
         install.Add("doorstop_libs/libdoorstop_x64.dylib", "fake");
         var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS).ToStartInfo());
         Assert.Contains("no x86_64 or arm64 Mach-O slice", error.Message);
-        Assert.Empty(ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Empty(GameLaunch.ClientLaunchArchitectures(install.Root));
     }
     [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)]
     public void Arm64IsRefusedForWindowsAndLinuxClients(ClientPlatform platform)
     {
         using var install = Install.For(platform);
         Assert.Throws<ArgumentException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.Arm64, true, platform).ToStartInfo());
-        Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.LaunchArchitectures(install.Root));
+        Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
 
     [Theory]
@@ -380,10 +380,10 @@ public class ClientLaunchTests
     }
     [Fact] public void PublicOverloadsUseTheCurrentHost()
     {
-        var host = ClientLaunch.CurrentHost;
+        var host = GameLaunch.CurrentClientHost;
         using (var own = Install.For(host))
         {
-            Assert.Equal(own.Executable, ClientLaunch.RequireExecutable(own.Root));
+            Assert.Equal(own.Executable, GameLaunch.RequireClientExecutable(own.Root));
             Assert.Equal(own.Root, GameLaunch.ForClient(own.Root, []).ToStartInfo().WorkingDirectory);
         }
         using var other = Install.For(host == ClientPlatform.Windows ? ClientPlatform.Linux : ClientPlatform.Windows);
@@ -393,13 +393,13 @@ public class ClientLaunchTests
     [Fact] public void MachOSlicesAreReadFromThinAndUniversalImages()
     {
         using var install = new Install();
-        Assert.Equal(new[] { ClientArchitecture.X64 }, ClientLaunch.MachOArchitectures(install.Add("thin", Thin(X86_64))));
-        Assert.Equal(new[] { ClientArchitecture.Arm64 }, ClientLaunch.MachOArchitectures(install.Add("arm", Thin(Arm64))));
-        Assert.Equal(new[] { ClientArchitecture.X64, ClientArchitecture.Arm64 }, ClientLaunch.MachOArchitectures(install.Add("fat", Fat(X86_64, Arm64))).Order());
-        Assert.Empty(ClientLaunch.MachOArchitectures(install.Add("text", "fake")));
-        Assert.Empty(ClientLaunch.MachOArchitectures(install.Add("short", new byte[] { 0xCA, 0xFE })));
+        Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.MachOArchitectures(install.Add("thin", Thin(X86_64))));
+        Assert.Equal(new[] { ClientArchitecture.Arm64 }, GameLaunch.MachOArchitectures(install.Add("arm", Thin(Arm64))));
+        Assert.Equal(new[] { ClientArchitecture.X64, ClientArchitecture.Arm64 }, GameLaunch.MachOArchitectures(install.Add("fat", Fat(X86_64, Arm64))).Order());
+        Assert.Empty(GameLaunch.MachOArchitectures(install.Add("text", "fake")));
+        Assert.Empty(GameLaunch.MachOArchitectures(install.Add("short", new byte[] { 0xCA, 0xFE })));
         // Java class files share the universal magic; their version field reads as a huge slice count.
-        Assert.Empty(ClientLaunch.MachOArchitectures(install.Add("class", new byte[] { 0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x00, 0x00, 0x41 })));
+        Assert.Empty(GameLaunch.MachOArchitectures(install.Add("class", new byte[] { 0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x00, 0x00, 0x41 })));
     }
 
     internal static string[] ExportPair(List<string> arguments, string name)
@@ -430,7 +430,7 @@ public class ClientLaunchTests
         Assert.Equal(new[] { "-console", "+connect", "a b" }, there.Arguments);
         Assert.Equal(here.Arguments, there.Arguments);
         Assert.Equal(here.Environment.Keys.Order(StringComparer.Ordinal), there.Environment.Keys.Order(StringComparer.Ordinal));
-        Assert.Equal(ClientLaunch.GameSteamAppId, there.Environment["SteamAppId"]);
+        Assert.Equal(GameLaunch.SteamAppId, there.Environment["SteamAppId"]);
         Assert.Equal(here.Environment["SteamAppId"], there.Environment["SteamAppId"]);
         Assert.Equal(here.Prepended.Keys.Order(StringComparer.Ordinal), there.Prepended.Keys.Order(StringComparer.Ordinal));
         Assert.Equal(here.Unset, there.Unset);
@@ -459,7 +459,7 @@ public class ClientLaunchTests
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(@"C:\Games\Valheim", [], hostPlatform: ClientPlatform.Linux));
         // On Linux the executable is what the start script runs, "$install/$exe", so the journalled command line matches the process.
         var launch = GameLaunch.ForClient("/home/steam/valheim/", [], hostPlatform: ClientPlatform.Linux);
-        Assert.Equal(launch.WorkingDirectory + "/" + ClientLaunch.LinuxExecutable, launch.Executable);
+        Assert.Equal(launch.WorkingDirectory + "/" + GameLaunch.ClientLinuxExecutable, launch.Executable);
     }
 
     internal static byte[] Fat(params int[] cpus)

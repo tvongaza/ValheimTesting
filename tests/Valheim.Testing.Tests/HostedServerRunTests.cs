@@ -350,7 +350,7 @@ internal sealed class FakeServerHost : IGameHost
                 if (!Directory.Exists(root)) return Ok("VT-LIST missing\n");
                 var text = new StringBuilder();
                 foreach (var (relative, sha) in WorldFixture.Manifest(root)) text.Append(sha).Append("  ./").Append(relative.Replace('\\', '/')).Append('\n');
-                if (File.Exists(Path.Combine(root, ServerLaunch.LinuxExecutable))) text.Append("VT-EXEC ").Append(ServerLaunch.LinuxExecutable).Append('\n');
+                if (File.Exists(Path.Combine(root, GameLaunch.ServerLinuxExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerLinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }
             case "port": return Ok(PortReply ?? (PortBusy ? "VT-PORT busy\n" : "VT-PORT free\n"));
@@ -582,12 +582,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.True(hosted.Prepared);
         Assert.Equal(Install, hosted.RuntimeDirectory);
         Assert.Equal(RunDirectory, hosted.RunDirectory); // world and boot evidence stay in the run's own directory
-        File.AppendAllText(Path.Combine(host.Local(Install), ServerLaunch.LinuxExecutable), " changed after preparation");
+        File.AppendAllText(Path.Combine(host.Local(Install), GameLaunch.ServerLinuxExecutable), " changed after preparation");
         var report = new ScenarioReport("prepared runtime");
         await Assert.ThrowsAnyAsync<Exception>(() => hosted.LockAndCopyRuntimeAsync(report, plan, pinned: true, CancellationToken.None));
         var step = Assert.Single(report.Steps, step => step.Name == "verify the prepared runtime on the server host");
         Assert.False(step.Passed);
-        Assert.Contains(ServerLaunch.LinuxExecutable, step.Error);
+        Assert.Contains(GameLaunch.ServerLinuxExecutable, step.Error);
         Assert.DoesNotContain("copy", host.Scripts);
         Assert.DoesNotContain("start", host.Scripts);
     }
@@ -630,7 +630,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\server", runtime = @"C:\runs\one\runtime", staging = @"C:\runs\one\staging";
         string install = host.Local(source);
         FakeInstalls.Server(install);
-        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
         StageLoader(install);
         string old = Path.Combine(install, "BepInEx", "plugins", "unrelated.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(old)!);
@@ -664,7 +664,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\client", runtime = @"C:\runs\loader\runtime", staging = @"C:\runs\loader\staging";
         string install = host.Local(source);
         FakeInstalls.Client(install);
-        File.WriteAllText(Path.Combine(install, ClientLaunch.WindowsExecutable), "client");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ClientWindowsExecutable), "client");
         StageLoader(install);
         string packageRoot = Path.Combine(_root, "approved-loader");
         Directory.CreateDirectory(Path.Combine(packageRoot, "BepInEx/core"));
@@ -697,7 +697,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\client", runtime = @"C:\runs\loader\runtime", staging = @"C:\runs\loader\staging";
         string install = host.Local(source);
         FakeInstalls.Client(install);
-        File.WriteAllText(Path.Combine(install, ClientLaunch.WindowsExecutable), "client");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ClientWindowsExecutable), "client");
         StageLoader(install);
         string packageRoot = Path.Combine(_root, "approved-loader");
         Directory.CreateDirectory(Path.Combine(packageRoot, "BepInEx/core"));
@@ -725,7 +725,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\client", runtime = @"C:\runs\client\runtime", staging = @"C:\runs\client\staging";
         string install = host.Local(source);
         FakeInstalls.Client(install);
-        File.WriteAllText(Path.Combine(install, ClientLaunch.WindowsExecutable), "client");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ClientWindowsExecutable), "client");
         StageLoader(install);
         string old = Path.Combine(install, "BepInEx", "plugins", "unrelated.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(old)!);
@@ -749,7 +749,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var windows = new FakeServerHost("windows-client", Path.Combine(_root, "windows-source"), windows: true);
         string winSource = windows.Local(@"C:\game\source");
         FakeInstalls.Client(winSource);
-        File.WriteAllText(Path.Combine(winSource, ClientLaunch.WindowsExecutable), "game");
+        File.WriteAllText(Path.Combine(winSource, GameLaunch.ClientWindowsExecutable), "game");
         File.WriteAllText(Path.Combine(winSource, "winhttp.dll"), "MZ fake");
         File.WriteAllText(Path.Combine(winSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         var unrecognised = await Assert.ThrowsAsync<DoorstopPairingException>(() =>
@@ -770,7 +770,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var linux = new FakeServerHost("linux-client", Path.Combine(_root, "linux-source"));
         string linuxSource = linux.Local("/game/source");
         FakeInstalls.Client(linuxSource);
-        File.WriteAllText(Path.Combine(linuxSource, ClientLaunch.LinuxExecutable), "game");
+        File.WriteAllText(Path.Combine(linuxSource, GameLaunch.ClientLinuxExecutable), "game");
         var incomplete = await Assert.ThrowsAsync<FileNotFoundException>(() =>
             HostedRuntimeStage.InspectSourceAsync(linux, HostedRuntimeKind.Client, "/game/source", null, TimeSpan.FromSeconds(30)));
         Assert.Contains("doorstop_libs/libdoorstop_x64.so", incomplete.Message);
@@ -821,7 +821,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\server", runtime = @"C:\game\server\runs\one\runtime", staging = @"C:\game\server\runs\one\staging";
         string install = host.Local(source);
         FakeInstalls.Server(install);
-        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
         StageLoader(install);
         string chosen = Path.Combine(_root, "chosen.dll");
         File.WriteAllText(chosen, "selected");
@@ -839,7 +839,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\server", runtime = @"C:\runs\failed\runtime", staging = @"C:\runs\failed\staging";
         string install = host.Local(source);
         FakeInstalls.Server(install);
-        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
         StageLoader(install);
         string unrelated = Path.Combine(install, "BepInEx", "plugins", "unrelated.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(unrelated)!);
@@ -864,7 +864,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\server", runtime = @"C:\runs\partial\runtime", staging = @"C:\runs\partial\staging";
         string install = host.Local(source);
         FakeInstalls.Server(install);
-        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
         StageLoader(install);
         string chosen = Path.Combine(_root, "selected.dll");
         File.WriteAllText(chosen, "selected");
@@ -879,7 +879,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(Directory.Exists(host.Local(runtime)));
         Assert.False(Directory.Exists(host.Local(staging)));
         Assert.Contains("cleanup-stage", host.Scripts);
-        Assert.True(File.Exists(Path.Combine(install, ServerLaunch.WindowsExecutable)));
+        Assert.True(File.Exists(Path.Combine(install, GameLaunch.ServerWindowsExecutable)));
     }
 
     [Fact] public async Task FailedCleanupKeepsBothTheOriginalErrorAndTheUnprovenResidue()
@@ -888,7 +888,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\server", runtime = @"C:\runs\residue\runtime", staging = @"C:\runs\residue\staging";
         string install = host.Local(source);
         FakeInstalls.Server(install);
-        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
         StageLoader(install);
         string chosen = Path.Combine(_root, "selected.dll");
         File.WriteAllText(chosen, "selected");
@@ -910,7 +910,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         const string source = @"C:\game\server", runtime = @"C:\runs\cancelled\runtime", staging = @"C:\runs\cancelled\staging";
         string install = host.Local(source);
         FakeInstalls.Server(install);
-        File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
         StageLoader(install);
         string chosen = Path.Combine(_root, "selected.dll");
         File.WriteAllText(chosen, "selected");
@@ -941,12 +941,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         FakeInstalls.Server(install);
         if (windows)
         {
-            File.Delete(Path.Combine(install, ServerLaunch.LinuxExecutable));
-            File.WriteAllText(Path.Combine(install, ServerLaunch.WindowsExecutable), "server");
+            File.Delete(Path.Combine(install, GameLaunch.ServerLinuxExecutable));
+            File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
             File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
             File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), doorstopConfig);
         }
-        else File.WriteAllText(Path.Combine(install, ServerLaunch.LinuxExecutable), "server");
+        else File.WriteAllText(Path.Combine(install, GameLaunch.ServerLinuxExecutable), "server");
         File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.Preloader.dll"), "preloader");
         string world = Path.Combine(_root, "world");
         Directory.CreateDirectory(Path.Combine(world, "worlds_local"));
@@ -1466,7 +1466,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         string clientInstall = clientHost.Local("/home/tester/valheim");
         Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
         FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
         FakeInstalls.LinuxLoader(clientInstall);
         File.WriteAllText(Path.Combine(clientInstall, "BepInEx", "LogOutput.log"), "an earlier run's log\n");
         var (plan, profile) = Write(host, withClient: true);
@@ -1516,7 +1516,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
         string clientInstall = clientHost.Local("/home/tester/valheim");
         FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
         var (plan, profile) = Write(host, withClient: true);
         var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
         Exception? refused = null;
@@ -1608,7 +1608,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         string clientInstall = clientHost.Local("/home/tester/valheim");
         Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
         FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
         FakeInstalls.LinuxLoader(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
         // Strict, so the menu pins are checked; the scripted client does not hold them.
@@ -1637,7 +1637,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         string clientInstall = clientHost.Local("/home/tester/valheim");
         Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
         FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
         FakeInstalls.LinuxLoader(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
         var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
@@ -1665,7 +1665,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         string clientInstall = clientHost.Local("/home/tester/valheim");
         Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
         FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, ClientLaunch.LinuxExecutable), "client");
+        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
         FakeInstalls.LinuxLoader(clientInstall);
         static string B(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
         clientHost.PreloaderReply = (fresh ? $"VT-PRELOADER fresh {B("preloader_20261005_190000.log")} {B("[Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core")}\n" : "") +

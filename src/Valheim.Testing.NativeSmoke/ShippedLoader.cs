@@ -34,7 +34,7 @@ internal static class ShippedLoader
     /// </summary>
     internal static string? OutdatedCore(string install)
     {
-        if (Directory.Exists(Path.Combine(install, ClientLaunch.MacBundle)) || File.Exists(Path.Combine(install, ServerLaunch.MacExecutable))) return null;
+        if (Directory.Exists(Path.Combine(install, GameLaunch.ClientMacBundle)) || File.Exists(Path.Combine(install, GameLaunch.ServerMacExecutable))) return null;
         string library = Path.Combine(install, InstallPins.CoreDirectory, "BepInEx.dll");
         if (!File.Exists(library)) return null;
         Version? version;

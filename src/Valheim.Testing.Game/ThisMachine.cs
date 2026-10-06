@@ -84,7 +84,7 @@ internal sealed record SteamDetection(string? Root, string? RootRule, IReadOnlyL
     IReadOnlyDictionary<string, SteamAppInstall> Apps)
 {
     /// <summary>The game client, Valheim.</summary>
-    internal const string GameApp = ClientLaunch.GameSteamAppId;
+    internal const string GameApp = "892970";
     /// <summary>Valheim Dedicated Server, a free Steam app of its own.</summary>
     internal const string DedicatedServerApp = "896660";
 

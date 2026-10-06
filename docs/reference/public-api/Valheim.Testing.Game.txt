@@ -273,16 +273,6 @@ sealed class Valheim.Testing.Game.CliTunnel : System.IDisposable
 enum Valheim.Testing.Game.ClientArchitecture
   field const Valheim.Testing.Game.ClientArchitecture Arm64 = 1
   field const Valheim.Testing.Game.ClientArchitecture X64 = 0
-static class Valheim.Testing.Game.ClientLaunch
-  field const System.String ConsoleArgument = "-console"
-  field const System.String GameSteamAppId = "892970"
-  field const System.String LinuxExecutable = "valheim.x86_64"
-  field const System.String MacArchLauncher = "/usr/bin/arch"
-  field const System.String MacBundle = "Valheim.app"
-  field const System.String WindowsExecutable = "valheim.exe"
-  method static System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.ClientArchitecture> LaunchArchitectures(System.String installDirectory)
-  method static System.String RequireExecutable(System.String installDirectory)
-  method static Valheim.Testing.Game.ClientPlatform Detect(System.String installDirectory)
 enum Valheim.Testing.Game.ClientPlatform
   field const Valheim.Testing.Game.ClientPlatform Linux = 1
   field const Valheim.Testing.Game.ClientPlatform MacOS = 2
@@ -839,9 +829,23 @@ enum Valheim.Testing.Game.GameHostKind
   field const Valheim.Testing.Game.GameHostKind Local = 0
   field const Valheim.Testing.Game.GameHostKind Ssh = 1
 sealed class Valheim.Testing.Game.GameLaunch
+  field const System.String ClientLinuxExecutable = "valheim.x86_64"
+  field const System.String ClientMacBundle = "Valheim.app"
+  field const System.String ClientWindowsExecutable = "valheim.exe"
+  field const System.String ConsoleArgument = "-console"
+  field const System.String MacArchLauncher = "/usr/bin/arch"
+  field const System.String ServerLinuxExecutable = "valheim_server.x86_64"
+  field const System.String ServerMacExecutable = "valheim_server/Valheim"
+  field const System.String ServerWindowsExecutable = "valheim_server.exe"
+  field const System.String SteamAppId = "892970"
   method System.Diagnostics.ProcessStartInfo ToStartInfo()
+  method static System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.ClientArchitecture> ClientLaunchArchitectures(System.String installDirectory)
+  method static System.String RequireClientExecutable(System.String installDirectory)
+  method static System.String RequireServerExecutable(System.String runtimeDirectory)
+  method static Valheim.Testing.Game.ClientPlatform DetectClient(System.String installDirectory)
   method static Valheim.Testing.Game.GameLaunch ForClient(System.String install, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, System.Nullable`1<Valheim.Testing.Game.ClientPlatform> hostPlatform = null, Valheim.Testing.Game.ClientArchitecture architecture = 0, System.Boolean console = true, System.Collections.Generic.IEnumerable`1<System.String> secretVariables = null)
   method static Valheim.Testing.Game.GameLaunch ForServer(System.String runtime, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, System.Nullable`1<Valheim.Testing.Game.ServerPlatform> hostPlatform = null)
+  method static Valheim.Testing.Game.ServerPlatform DetectServer(System.String runtimeDirectory)
   property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> Environment { get; }
   property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> Prepended { get; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> Arguments { get; }
@@ -850,6 +854,7 @@ sealed class Valheim.Testing.Game.GameLaunch
   property System.Collections.Generic.IReadOnlyList`1<System.String> Unset { get; }
   property System.String Executable { get; }
   property System.String WorkingDirectory { get; }
+  property static Valheim.Testing.Game.ServerPlatform LocalServerPlatform { get; }
 sealed class Valheim.Testing.Game.GameReply
   method System.Collections.Generic.IEnumerable`1<System.String> Lines(System.String prefix)
   method System.String Describe()
@@ -2114,14 +2119,6 @@ abstract class Valheim.Testing.Game.ScriptedGameHost : Valheim.Testing.Game.IGam
   property System.String Name { get; }
   property Valheim.Testing.Game.HostShell Shell { get; }
   property abstract Valheim.Testing.Game.GameHostKind Kind { get; }
-static class Valheim.Testing.Game.ServerLaunch
-  field const System.String DedicatedServerSteamAppId = "892970"
-  field const System.String LinuxExecutable = "valheim_server.x86_64"
-  field const System.String MacExecutable = "valheim_server/Valheim"
-  field const System.String WindowsExecutable = "valheim_server.exe"
-  method static System.String RequireExecutable(System.String runtimeDirectory)
-  method static Valheim.Testing.Game.ServerPlatform Detect(System.String runtimeDirectory)
-  property static Valheim.Testing.Game.ServerPlatform LocalPlatform { get; }
 enum Valheim.Testing.Game.ServerPlatform
   field const Valheim.Testing.Game.ServerPlatform Linux = 1
   field const Valheim.Testing.Game.ServerPlatform MacOS = 2

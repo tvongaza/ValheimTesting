@@ -109,7 +109,7 @@ public sealed class BepInExLoaderPackage
     internal void Apply(string install)
     {
         Validate();
-        RequireFor(ClientLaunch.CurrentHost, "reviewed loader package for this machine");
+        RequireFor(GameLaunch.CurrentClientHost, "reviewed loader package for this machine");
         foreach (string file in InstallPins.LoaderRootFiles.Append(Settings))
             if (File.Exists(Path.Combine(install, file))) File.Delete(Path.Combine(install, file));
         foreach (string folder in InstallPins.LoaderFolders)

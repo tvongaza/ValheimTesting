@@ -373,7 +373,7 @@ public sealed class TargetedRegressionTests : IDisposable
         if (machine.Platform == "windows") machine.SteamPath = steam;
         machine.Directories.Add(steam);
         string detected = machine.App(steam, "892970", "Valheim", machine.Platform switch
-            { "windows" => ClientLaunch.WindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => ClientLaunch.LinuxExecutable });
+            { "windows" => GameLaunch.ClientWindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => GameLaunch.ClientLinuxExecutable });
         using (EnvironmentInventory.UseMachine(machine))
             Assert.Equal((detected, "local-client"), (TargetedRegression.Read(inputs).Game, TargetedRegression.Read(inputs).ClientEnvironment));
         File.WriteAllText(Path.Combine(run, "environments.json"), System.Text.Json.JsonSerializer.Serialize(new
@@ -444,7 +444,7 @@ internal sealed class RegressionRig : IDisposable
     public RegressionRig()
     {
         Runtime = Path.Combine(Root, "runs");
-        var platform = ClientLaunch.CurrentHost;
+        var platform = GameLaunch.CurrentClientHost;
         var game = ClientLaunchTests.Install.For(platform);
         CopyTree(game.Root, Game);
         game.Dispose();

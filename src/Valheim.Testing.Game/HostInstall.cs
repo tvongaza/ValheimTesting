@@ -222,13 +222,13 @@ public static class HostInstall
             () => Under(listing, "BepInEx/patchers/").Select(file => file.Relative.Split('/')[0]).Distinct(listing.Names).ToList());
     }
 
-    /// <summary>The dedicated server's platform from the files at the root, as <see cref="ServerLaunch.Detect"/> decides it for a local runtime.</summary>
+    /// <summary>The dedicated server's platform from the files at the root, as <see cref="GameLaunch.DetectServer"/> decides it for a local runtime.</summary>
     public static ServerPlatform DetectServer(HostListing listing)
     {
-        bool windows = listing.Files.ContainsKey(ServerLaunch.WindowsExecutable), linux = listing.Files.ContainsKey(ServerLaunch.LinuxExecutable);
-        if (windows && linux) throw new InvalidOperationException($"The runtime on {listing.HostName} contains both {ServerLaunch.WindowsExecutable} and {ServerLaunch.LinuxExecutable}; refusing to guess its platform.");
+        bool windows = listing.Files.ContainsKey(GameLaunch.ServerWindowsExecutable), linux = listing.Files.ContainsKey(GameLaunch.ServerLinuxExecutable);
+        if (windows && linux) throw new InvalidOperationException($"The runtime on {listing.HostName} contains both {GameLaunch.ServerWindowsExecutable} and {GameLaunch.ServerLinuxExecutable}; refusing to guess its platform.");
         if (windows || linux) return windows ? ServerPlatform.Windows : ServerPlatform.Linux;
-        throw new FileNotFoundException($"The runtime at {listing.Root} on {listing.HostName} contains neither {ServerLaunch.WindowsExecutable} nor {ServerLaunch.LinuxExecutable}.");
+        throw new FileNotFoundException($"The runtime at {listing.Root} on {listing.HostName} contains neither {GameLaunch.ServerWindowsExecutable} nor {GameLaunch.ServerLinuxExecutable}.");
     }
 
     internal static void RequireHostPath(IGameHost host, string path, string name)

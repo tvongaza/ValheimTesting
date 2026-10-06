@@ -22,7 +22,7 @@ public sealed partial class HostedServerRunTests
         string install = client.Local("/home/tester/valheim");
         Directory.CreateDirectory(Path.Combine(install, "BepInEx", "core"));
         FakeInstalls.Client(install);
-        File.WriteAllText(Path.Combine(install, ClientLaunch.LinuxExecutable), "client");
+        File.WriteAllText(Path.Combine(install, GameLaunch.ClientLinuxExecutable), "client");
         FakeInstalls.LinuxLoader(install);
         var (plan, profile) = Write(host, withClient: true, steamAccounts: steamAccounts);
         return (host, fixture, client, plan, profile);

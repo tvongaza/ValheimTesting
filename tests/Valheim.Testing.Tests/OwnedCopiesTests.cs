@@ -21,21 +21,21 @@ public sealed class OwnedCopiesTests : IDisposable
     // A pinned run's output (copies beside result.json), a NativeSmoke output (staged copies beside evidence/), and things that are not copies.
     private (string Server, string Client, string World, string Staged) Layout()
     {
-        string server = Source("server", ServerLaunch.WindowsExecutable, "valheim_server_Data/Managed/assembly_valheim.dll");
-        string client = Source("client", ClientLaunch.WindowsExecutable, "valheim_Data/Managed/assembly_valheim.dll");
+        string server = Source("server", GameLaunch.ServerWindowsExecutable, "valheim_server_Data/Managed/assembly_valheim.dll");
+        string client = Source("client", GameLaunch.ClientWindowsExecutable, "valheim_Data/Managed/assembly_valheim.dll");
         string world = Source("world", "worlds_local/Test.db");
         string first = Path.Combine(Runs, "first"); Result(first, passed: true);
         string smoke = Path.Combine(Runs, "smoke"); Result(Path.Combine(smoke, "evidence"), passed: false);
         var copies = (Copy(server, first), Copy(client, Path.Combine(Runs, "orphan")), Copy(world, first), Copy(server, Path.Combine(smoke, "staged-runtime")));
         Directory.CreateDirectory(Path.Combine(Runs, "valheim-test-" + new string('a', 32))); // the name without the manifest: not a copy
-        Directory.CreateDirectory(Path.Combine(Runs, "unrelated", "game")); File.WriteAllText(Path.Combine(Runs, "unrelated", "game", ServerLaunch.WindowsExecutable), "a live install");
+        Directory.CreateDirectory(Path.Combine(Runs, "unrelated", "game")); File.WriteAllText(Path.Combine(Runs, "unrelated", "game", GameLaunch.ServerWindowsExecutable), "a live install");
         return copies;
     }
 
     [Fact] public void FindListsOnlyCopiesWithTheirKindRunAndUseAndChangesNothing()
     {
         var (server, client, world, staged) = Layout();
-        OwnedCopies.ProcessesOverride = () => [(42, Path.Combine(client, ClientLaunch.WindowsExecutable)), (7, Path.Combine(_root, "elsewhere.exe"))];
+        OwnedCopies.ProcessesOverride = () => [(42, Path.Combine(client, GameLaunch.ClientWindowsExecutable)), (7, Path.Combine(_root, "elsewhere.exe"))];
         var copies = OwnedCopies.Find(Runs);
         Assert.Equal(new[] { client, server, staged, world }.Order(StringComparer.Ordinal), copies.Select(copy => copy.Path).Order(StringComparer.Ordinal));
         var byPath = copies.ToDictionary(copy => copy.Path);
@@ -52,7 +52,7 @@ public sealed class OwnedCopiesTests : IDisposable
     {
         var (server, client, world, _) = Layout();
         File.WriteAllText(Path.Combine(server, "toolkit-unity.log"), "written by the run");
-        OwnedCopies.ProcessesOverride = () => [(42, Path.Combine(client, ClientLaunch.WindowsExecutable))];
+        OwnedCopies.ProcessesOverride = () => [(42, Path.Combine(client, GameLaunch.ClientWindowsExecutable))];
 
         var retired = OwnedCopies.Remove(server);
         Assert.False(Directory.Exists(server));
@@ -67,7 +67,7 @@ public sealed class OwnedCopiesTests : IDisposable
         Assert.False(Directory.Exists(world));
         Assert.Throws<ArgumentException>(() => OwnedCopies.Remove(Path.Combine(Runs, "valheim-test-" + new string('a', 32))));
         Assert.Throws<ArgumentException>(() => OwnedCopies.Remove(Path.Combine(Runs, "unrelated", "game")));
-        Assert.True(File.Exists(Path.Combine(Runs, "unrelated", "game", ServerLaunch.WindowsExecutable)));
+        Assert.True(File.Exists(Path.Combine(Runs, "unrelated", "game", GameLaunch.ServerWindowsExecutable)));
     }
 
     // valheim-test env status lists copies no journal names (made before runs journalled them) and changes nothing;
@@ -78,7 +78,7 @@ public sealed class OwnedCopiesTests : IDisposable
         (string Server, string Client, string World, string Staged) layout;
         using (RunJournal.UseLocalDirectory(Path.Combine(_root, "older", "journal"))) layout = Layout();
         var (server, client, world, staged) = layout;
-        OwnedCopies.ProcessesOverride = () => [(42, Path.Combine(client, ClientLaunch.WindowsExecutable))];
+        OwnedCopies.ProcessesOverride = () => [(42, Path.Combine(client, GameLaunch.ClientWindowsExecutable))];
         string data = Path.Combine(_root, "data");
         string inventory = Path.Combine(_root, "inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
@@ -112,7 +112,7 @@ public sealed class OwnedCopiesTests : IDisposable
         Assert.False(Directory.Exists(world));
 
         // A copy this process made is journalled: teardown --copy refuses it and names the run.
-        string source = Source("journalled", ServerLaunch.WindowsExecutable);
+        string source = Source("journalled", GameLaunch.ServerWindowsExecutable);
         using var held = WorldFixture.Copy(source, Runs, WorldFixture.Manifest(source));
         output = new StringWriter();
         Assert.Equal(3, await EnvCommand.RunAsync(["teardown", "--copy", held.DirectoryPath, "--inventory", inventory], output, new StringWriter()));
@@ -129,7 +129,7 @@ public sealed class OwnedCopiesTests : IDisposable
 
     [Fact] public void AnEmptyOrCorruptProvenanceCannotAuthorizeRemoval()
     {
-        string copy = Copy(Source("server", ServerLaunch.WindowsExecutable), Runs);
+        string copy = Copy(Source("server", GameLaunch.ServerWindowsExecutable), Runs);
         string provenance = Path.Combine(copy, "fixture-provenance.json");
         File.WriteAllText(provenance, "{}");
         Assert.Throws<InvalidDataException>(() => OwnedCopies.Remove(copy));
@@ -147,7 +147,7 @@ public sealed class OwnedCopiesTests : IDisposable
         string data = Path.Combine(_root, "data");
         using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = data });
         using var localJournal = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        string source = Source("server", ServerLaunch.WindowsExecutable);
+        string source = Source("server", GameLaunch.ServerWindowsExecutable);
         var host = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);
         var hosts = new Dictionary<string, HostProfile> { ["local"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
         async Task<JournalRunStatus> Status() =>
@@ -190,7 +190,7 @@ public sealed class OwnedCopiesTests : IDisposable
     // A retry after a removal that could not finish keeps its changes beside the first attempt's.
     [Fact] public void ARetryKeepsItsChangesInANewFolder()
     {
-        string copy = Copy(Source("server", ServerLaunch.WindowsExecutable), Runs);
+        string copy = Copy(Source("server", GameLaunch.ServerWindowsExecutable), Runs);
         Directory.CreateDirectory(copy + "-changes"); File.WriteAllText(Path.Combine(copy + "-changes", "changes.json"), "{}");
         var retired = OwnedCopies.Remove(copy);
         Assert.Equal(copy + "-changes-2", retired.KeptIn);

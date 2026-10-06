@@ -290,15 +290,15 @@ public sealed class EnvironmentInventory
         if (steam.Root != null && machine.DirectoryExists(HostInstall.Join(steam.Root, "userdata"))) SteamUserData = HostInstall.Join(steam.Root, "userdata");
         _detected.Add(steam.Root == null ? "Steam: not found (tried " + string.Join(", ", steam.RootsTried) + ")"
             : $"Steam: {steam.Root} (from {steam.RootRule}); libraries {string.Join(", ", steam.Libraries)}");
-        string? game = Installed(machine, steam, SteamDetection.GameApp, windows ? ClientLaunch.WindowsExecutable
-            : machine.Platform == "macos" ? ClientLaunch.MacBundle + "/Contents/MacOS/Valheim" : ClientLaunch.LinuxExecutable, "Valheim", out string? noGame);
+        string? game = Installed(machine, steam, SteamDetection.GameApp, windows ? GameLaunch.ClientWindowsExecutable
+            : machine.Platform == "macos" ? GameLaunch.ClientMacBundle + "/Contents/MacOS/Valheim" : GameLaunch.ClientLinuxExecutable, "Valheim", out string? noGame);
         string? server = null, noServer;
         if (machine.Platform == "macos")
             noServer = "No local dedicated server: the campaign runner does not run a macOS dedicated server. Add a Windows or Linux " +
                 "server environment, or run `valheim-test start` for a hosted local world.";
         else
         {
-            server = Installed(machine, steam, SteamDetection.DedicatedServerApp, windows ? ServerLaunch.WindowsExecutable : ServerLaunch.LinuxExecutable,
+            server = Installed(machine, steam, SteamDetection.DedicatedServerApp, windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable,
                 "Valheim Dedicated Server", out noServer);
             if (noServer != null)
                 noServer += " Install Valheim Dedicated Server from Steam (it is free), add a server environment, or run `valheim-test start` for a hosted local world.";

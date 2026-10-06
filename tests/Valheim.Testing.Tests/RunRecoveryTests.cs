@@ -268,7 +268,7 @@ public sealed class RunRecoveryTests : IDisposable
     {
         string data = Path.Combine(_root, "data"), output = Path.Combine(_root, "output");
         string server = Path.Combine(_root, "source-server"), world = Path.Combine(_root, "source-world");
-        Directory.CreateDirectory(server); File.WriteAllText(Path.Combine(server, ServerLaunch.WindowsExecutable), "game");
+        Directory.CreateDirectory(server); File.WriteAllText(Path.Combine(server, GameLaunch.ServerWindowsExecutable), "game");
         Directory.CreateDirectory(Path.Combine(world, "worlds_local")); File.WriteAllText(Path.Combine(world, "worlds_local", "W.db"), "save");
         string runtime, save;
         using (RunJournal.UseLocalDirectory(Path.Combine(_root, "elsewhere", "journal")))

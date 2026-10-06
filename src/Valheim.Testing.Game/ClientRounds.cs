@@ -112,7 +112,7 @@ public sealed class ClientRounds
     {
         world.Record();
         // What an owned client is launched as (never another slice); an attached client's is its operator's.
-        Report.Provenance["clientArchitecture"] = Client.Owned ? ClientLaunch.PlanName(Client.LaunchArchitecture) : "attached";
+        Report.Provenance["clientArchitecture"] = Client.Owned ? GameLaunch.PlanName(Client.LaunchArchitecture) : "attached";
         Report.Provenance["cliPreflight"] = Client.CliPreflight;
         var completed = new List<string>();
         ClientSession? session = null;
@@ -234,7 +234,7 @@ public sealed class ClientRounds
             string? saveDirectory = null;
             Report.Step(StepPhase.Preflight, "preflight the native client's hosted-world save directory", () =>
             {
-                var platform = Client.Owned ? ClientLaunch.Detect(Client.Install) : HostedWorld.CurrentPlatform;
+                var platform = Client.Owned ? GameLaunch.DetectClient(Client.Install) : HostedWorld.CurrentPlatform;
                 string defaultSaveDirectory = HostedWorld.DefaultSaveDirectory(platform);
                 HostedWorld.RequireNativeSaveDirectory(platform, plan.SaveDirectory, Client.LaunchArguments, defaultSaveDirectory);
                 saveDirectory = plan.SaveDirectory ?? defaultSaveDirectory;

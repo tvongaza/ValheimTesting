@@ -68,7 +68,7 @@ public sealed class NativeServerRuntime : IDisposable
         var directoryHashes = sidecarDirectories.ToDictionary(directory => directory, WorldFixture.Manifest, StringComparer.Ordinal);
         if (directoryHashes.Any(entry => entry.Value.Keys.Any(path => Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase))))
             throw new InvalidDataException("Plugin sidecar directories cannot contain DLLs; select each plugin or library through dependency resolution.");
-        ServerLaunch.Detect(source);
+        GameLaunch.DetectServer(source);
         if (!File.Exists(adapter)) throw new FileNotFoundException("The test-only session adapter is missing.", adapter);
         var files = dependencies.CliFiles.Concat(dependencies.Mods).Concat(dependencies.Plugins)
             .Select(file => file.File).Append(adapter).ToList();
@@ -187,7 +187,7 @@ public sealed class NativeServerRuntime : IDisposable
             Runtime = new PinnedDirectory { Source = RuntimeDirectory, Sha256 = Manifest().ToDictionary(entry => entry.Key, entry => entry.Value) },
             World = new PinnedDirectory { Source = worldRoot, Sha256 = WorldFixture.Manifest(worldRoot).ToDictionary(entry => entry.Key, entry => entry.Value) },
             RuntimePins = InstallPins.Of(RuntimeDirectory),
-            Executable = ServerRunPlan.ExecutableFor(ServerLaunch.Detect(RuntimeDirectory)),
+            Executable = ServerRunPlan.ExecutableFor(GameLaunch.DetectServer(RuntimeDirectory)),
             Arguments = ["-batchmode", "-nographics", "-name", DefaultSmokeWorld.Name,
                 "-port", gamePort.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 "-world", DefaultSmokeWorld.Name, "-password", password, "-public", "0",

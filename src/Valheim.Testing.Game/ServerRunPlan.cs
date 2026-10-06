@@ -94,12 +94,12 @@ public partial class ServerRunPlan
         CheckLogScan();
         if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > 1800)
             throw new ArgumentException("Invalid port or time budget.");
-        if (!string.IsNullOrEmpty(Executable) && Executable != ServerLaunch.WindowsExecutable && Executable != ServerLaunch.LinuxExecutable && Executable != ServerLaunch.MacExecutable)
-            throw new ArgumentException($"Executable must be omitted, {ServerLaunch.WindowsExecutable}, {ServerLaunch.LinuxExecutable} or {ServerLaunch.MacExecutable} (relative to the copied runtime's root).");
+        if (!string.IsNullOrEmpty(Executable) && Executable != GameLaunch.ServerWindowsExecutable && Executable != GameLaunch.ServerLinuxExecutable && Executable != GameLaunch.ServerMacExecutable)
+            throw new ArgumentException($"Executable must be omitted, {GameLaunch.ServerWindowsExecutable}, {GameLaunch.ServerLinuxExecutable} or {GameLaunch.ServerMacExecutable} (relative to the copied runtime's root).");
         if (Environment.ContainsKey(sessionTokenVariable)) throw new ArgumentException("Session token is runner-owned.");
         var doorstop = Environment.Keys.FirstOrDefault(key => key.StartsWith("DOORSTOP_", StringComparison.OrdinalIgnoreCase));
         if (doorstop != null)
-            throw new ArgumentException(doorstop + " is refused: BepInEx's Doorstop loader variables are set by the runner's ServerLaunch; remove them from the plan environment.");
+            throw new ArgumentException(doorstop + " is refused: BepInEx's Doorstop loader variables are set by the runner's launch (GameLaunch.ForServer); remove them from the plan environment.");
         int savedir = Array.IndexOf(Arguments, "-savedir");
         if (savedir < 0 || savedir + 1 >= Arguments.Length || Arguments[savedir + 1] != "{world}" || Arguments.Count(x => x == "-savedir") != 1 ||
             !Arguments.Contains("-batchmode") || !Arguments.Contains("-nographics"))
@@ -127,11 +127,11 @@ public partial class ServerRunPlan
     }
     public static string ExecutableFor(ServerPlatform platform) => platform switch
     {
-        ServerPlatform.Windows => ServerLaunch.WindowsExecutable,
-        ServerPlatform.MacOS => ServerLaunch.MacExecutable,
-        _ => ServerLaunch.LinuxExecutable,
+        ServerPlatform.Windows => GameLaunch.ServerWindowsExecutable,
+        ServerPlatform.MacOS => GameLaunch.ServerMacExecutable,
+        _ => GameLaunch.ServerLinuxExecutable,
     };
-    /// <summary>The runtime decides the platform (<see cref="ServerLaunch.Detect"/>); a stated executable must agree with it.</summary>
+    /// <summary>The runtime decides the platform (<see cref="GameLaunch.DetectServer"/>); a stated executable must agree with it.</summary>
     public void CheckExecutable(ServerPlatform platform)
     {
         if (!string.IsNullOrEmpty(Executable) && Executable != ExecutableFor(platform))
@@ -142,7 +142,7 @@ public partial class ServerRunPlan
         CheckLaunchHost(platform, windowsHost ? ServerPlatform.Windows : ServerPlatform.Linux);
     /// <summary>
     /// A launch needs a host of the runtime's own platform: each dedicated server runs only on its own OS (see
-    /// <see cref="ServerLaunch.LocalPlatform"/> for this machine's).
+    /// <see cref="GameLaunch.LocalServerPlatform"/> for this machine's).
     /// </summary>
     public static void CheckLaunchHost(ServerPlatform platform, ServerPlatform host)
     {

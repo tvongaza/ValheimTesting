@@ -8,7 +8,7 @@ internal static class SmokeAdapter
     internal static async Task<string> BuildAsync(string server, NativeDependencyLock dependencies, string output,
         CancellationToken cancellation, string? bepInExCore = null)
     {
-        ServerLaunch.Detect(server);
+        GameLaunch.DetectServer(server);
         var cliCore = dependencies.CliFiles.Where(file => dependencies.CliManifest.Files.Any(entry =>
             entry.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase) &&
             entry.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal))).ToArray();

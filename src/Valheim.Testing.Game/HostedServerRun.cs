@@ -141,8 +141,8 @@ internal sealed class HostedServerRun
         if (hostProfile.Kind == "local" && hostProfile.Platform != HostProfile.CurrentPlatform)
             return $"it is a local {hostProfile.Platform} host, but this machine is {HostProfile.CurrentPlatform}.";
         // The plan's runtime names its platform by its server executable; a pinned manifest lists it.
-        string? planned = plan.Executable == ServerLaunch.WindowsExecutable || plan.Runtime.Sha256.ContainsKey(ServerLaunch.WindowsExecutable) ? "windows"
-            : plan.Executable == ServerLaunch.LinuxExecutable || plan.Runtime.Sha256.ContainsKey(ServerLaunch.LinuxExecutable) ? "linux" : null;
+        string? planned = plan.Executable == GameLaunch.ServerWindowsExecutable || plan.Runtime.Sha256.ContainsKey(GameLaunch.ServerWindowsExecutable) ? "windows"
+            : plan.Executable == GameLaunch.ServerLinuxExecutable || plan.Runtime.Sha256.ContainsKey(GameLaunch.ServerLinuxExecutable) ? "linux" : null;
         if (planned != null && planned != hostProfile.Platform)
             return $"the plan's runtime is a {planned} server, but the host is {hostProfile.Platform}.";
         if (role.CliPort != plan.Port)
@@ -231,8 +231,8 @@ internal sealed class HostedServerRun
             var platform = HostInstall.DetectServer(runtime);
             plan.CheckExecutable(platform);
             ServerRunPlan.CheckLaunchHost(platform, Host.Shell.Kind == HostShellKind.PowerShell);
-            if (platform == ServerPlatform.Linux && !runtime.Executables.Contains(ServerLaunch.LinuxExecutable))
-                throw new InvalidOperationException($"{ServerLaunch.LinuxExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
+            if (platform == ServerPlatform.Linux && !runtime.Executables.Contains(GameLaunch.ServerLinuxExecutable))
+                throw new InvalidOperationException($"{GameLaunch.ServerLinuxExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
         });
         report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers", () =>
             (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, "runtime")

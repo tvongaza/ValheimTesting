@@ -82,7 +82,7 @@ internal static class BepInExLoader
     /// </summary>
     internal static List<string> MissingLoaderFiles(ClientPlatform platform, Func<string, bool> present) => platform == ClientPlatform.MacOS
         ? new[] { CorePreloader, CoreLibrary }.Where(file => !present(file))
-            .Concat(ClientLaunch.MacDoorstopFiles.Any(present) ? [] : [string.Join(" or ", ClientLaunch.MacDoorstopFiles)]).ToList()
+            .Concat(GameLaunch.MacDoorstopFiles.Any(present) ? [] : [string.Join(" or ", GameLaunch.MacDoorstopFiles)]).ToList()
         : LoaderFiles(platform).Where(file => !present(file)).ToList();
 
     internal static void RequireFile(string root, string relative, string message)

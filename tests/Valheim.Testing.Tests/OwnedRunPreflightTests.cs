@@ -448,7 +448,7 @@ internal sealed class PreflightInstall : IDisposable
 
     public static PreflightInstall Create(string cliIn = "plugins")
     {
-        var platform = ClientLaunch.CurrentHost;
+        var platform = GameLaunch.CurrentClientHost;
         var install = new PreflightInstall(ClientLaunchTests.Install.For(platform));
         install.Add(platform == ClientPlatform.MacOS ? "Valheim.app/Contents/Resources/Data/Managed/assembly_valheim.dll" : "valheim_Data/Managed/assembly_valheim.dll", "game");
         install.Add($"BepInEx/{cliIn}/valheimCLI.dll", CliBuild);
