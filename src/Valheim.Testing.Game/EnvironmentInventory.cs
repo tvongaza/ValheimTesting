@@ -148,6 +148,83 @@ public sealed class EnvironmentInventory
     }
 
     /// <summary>
+    /// The escape hatch for a run whose machine is gone for good (<c>valheim-test env teardown --run ID --machine-gone</c>): a
+    /// lease never lapses (#257), so a run that can no longer be recovered would otherwise hold its Steam accounts forever (as
+    /// would a claim whose reply was lost, which no journal names). On the inventory's lease host, it releases every unreleased
+    /// lease that names <paramref name="runId"/> and journals each release there as the maintainer's (<c>machineGone</c>). The
+    /// flag is the maintainer's confirmation that no client of that run can still run; a client that does is not told. When it
+    /// released a lease of a run no readable journal had ended (unknown, or journalled only on the gone machine), the run is
+    /// journalled there as ended too, so <c>env status</c> and preflight stop waiting for it; nothing else of the run is touched.
+    /// Refused when the run is still going, when the lease host's journal cannot be read, and when every host was read and
+    /// <c>env recover|teardown --run</c> can settle the run (its clients can be proven stopped). Returns true when nothing the
+    /// run held is left unreleased.
+    /// </summary>
+    public static async Task<bool> ReleaseLeasesOfGoneRunAsync(string? inventoryPath, string runId, TextWriter output, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        if (!RunJournal.SafeName(runId) || runId == "-") throw new ArgumentException("A run id is letters, digits, '.', '_' and '-'.", nameof(runId));
+        var inventory = ReadHosts(inventoryPath, ThisMachine);
+        foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
+        if (!inventory.Hosts.TryGetValue(inventory.LeaseHost ?? "", out var leaseProfile) || string.IsNullOrWhiteSpace(inventory.LeaseDirectory))
+            throw new ArgumentException("The inventory names no leaseHost and leaseDirectory, so there is no lease to release.");
+        var (hosts, _) = inventory.JournalScope();
+        var factory = new ResolvedEnvironment { Hosts = hosts }.CreateHost;
+        var timeout = TimeSpan.FromSeconds(60);
+        var status = await RunJournalStatus.InspectAsync(hosts, factory, timeout, cancellation, inventory.LeaseHost, inventory.LeaseDirectory).ConfigureAwait(false);
+        var known = status.Runs.SingleOrDefault(run => run.Run == runId);
+        var unread = status.Hosts.Where(host => host.Error != null).Select(host => host.Name).ToList();
+        string? refused = unread.Contains(inventory.LeaseHost!) ? $"the lease host {inventory.LeaseHost}'s journal cannot be read, so whether the run is going is unknown"
+            : known?.State switch
+            {
+                JournalRunState.Live => "it is still going: " + known.Reason,
+                // With every host read, recovery can prove its clients stopped; a gone machine's host is one that cannot be read.
+                JournalRunState.Recoverable or JournalRunState.Kept when unread.Count == 0 =>
+                    $"every host was read, so valheim-test env teardown --run {runId} proves its clients stopped and releases its leases the ordinary way",
+                _ => null,
+            };
+        if (refused != null) { output.WriteLine($"REFUSED {runId}: {refused}"); return false; }
+        if (unread.Count != 0) output.WriteLine($"Not read: host {string.Join(", ", unread)}; releasing on the maintainer's word that no client of run {runId} runs there.");
+        var host = factory(inventory.LeaseHost!);
+        if (!leaseProfile.IsAbsolutePath(inventory.LeaseDirectory)) throw new ArgumentException($"leaseDirectory '{inventory.LeaseDirectory}' is not an absolute path on {inventory.LeaseHost}.");
+        var pool = new SteamAccountPool { Pool = "abandon", LeaseDirectory = inventory.LeaseDirectory };
+        var result = (await pool.RunAsync(host, "abandon", timeout, cancellation, run: runId).ConfigureAwait(false))
+            .EnsureSuccess($"Releasing the leases of run {runId} on {inventory.LeaseHost}");
+        var lines = result.Stdout.Split('\n').Select(line => line.TrimEnd()).ToList();
+        if (!lines.Contains("VT-LEASE abandoned")) throw new HostOperationException($"Unexpected reply while releasing the leases of run {runId} on {inventory.LeaseHost}", result);
+        bool whole = true;
+        int released = 0;
+        var journal = new RunJournal(runId);
+        async Task Note(JournalEntry entry)
+        {
+            // After the effect: a lost line leaves the run in env status, never a lease held.
+            try { await journal.AppendAsync(host, RunJournal.DirectoryFor(leaseProfile), RunRecovery.Actor, entry, timeout, cancellation).ConfigureAwait(false); }
+            catch (Exception error) when (error is not OperationCanceledException) { output.WriteLine($"  {entry.Kind} could not be journalled on {inventory.LeaseHost}: {error.Message}"); }
+        }
+        foreach (string line in lines)
+        {
+            var parts = line.Split(' ', 6);
+            if (parts[0] == "VT-LEASE-UNREADABLE" && parts.Length == 3)
+            {
+                output.WriteLine($"UNREADABLE lease on Steam account {parts[2]} ({parts[1]}): its claim cannot be read, so whether run {runId} holds it is unknown; inspect it by hand");
+                whole = false;
+            }
+            if (parts[0] != "VT-LEASE-ABANDONED" || parts.Length != 6) continue;
+            released++;
+            output.WriteLine($"RELEASED lease on Steam account {parts[2]} ({parts[1]}), held by {parts[5]}: its machine was declared gone");
+            await Note(JournalEntry.Of(JournalEntry.LeaseReleased, ("account", parts[2]), ("pool", parts[1]), ("owner", parts[5]), ("leaseId", parts[4]),
+                ("number", parts[3]), ("directory", inventory.LeaseDirectory), ("machineGone", "true"))).ConfigureAwait(false);
+        }
+        if (released == 0 && whole) output.WriteLine($"Run {runId} holds no lease in {inventory.LeaseDirectory} on {inventory.LeaseHost}.");
+        // Its end, which its gone machine can no longer journal: only for a run whose end no readable journal holds.
+        if (released != 0 && (known == null || known.State == JournalRunState.Unknown))
+        {
+            await Note(JournalEntry.Of(JournalEntry.RunEnded, ("state", "abandoned: its machine is gone"), ("cleanupVerified", "false"))).ConfigureAwait(false);
+            output.WriteLine($"Journalled run {runId} as ended on {inventory.LeaseHost}: its machine is gone.");
+        }
+        return whole;
+    }
+
+    /// <summary>
     /// Removes one copy on this machine that no run's journal names (made before runs journalled their copies), keeping what
     /// its run changed in <c>&lt;copy&gt;-changes</c> beside it (<see cref="OwnedCopies.Remove"/>). Refuses a copy a journal names
     /// (<see cref="RecoverRunAsync"/> owns those) and one a running process uses. Returns true when it was removed.

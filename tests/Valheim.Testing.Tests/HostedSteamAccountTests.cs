@@ -105,7 +105,7 @@ public sealed partial class HostedServerRunTests
     {
         LeaseBox.WritePool(_root, Leases);
         var run = WithClient(Accounts());
-        await using var other = await TestEnvironment.Pool(File.ReadAllText(PoolFile)).AcquireAsync(LeaseBox.Host(), "another-runner run-x client player", LeaseBox.Timeout);
+        await using var other = await TestEnvironment.Pool(File.ReadAllText(PoolFile)).AcquireAsync(LeaseBox.Host(), "another-runner run-x client player", LeaseBox.Timeout, run: "run-x");
         bool opened = false;
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
@@ -115,34 +115,12 @@ public sealed partial class HostedServerRunTests
         Assert.False(opened);
         var step = Step("lease a Steam account for client player");
         Assert.False(step.GetProperty("Passed").GetBoolean());
-        Assert.Contains($"{LeaseBox.Account} is held by another-runner run-x client player", step.GetProperty("Error").GetString());
+        Assert.Contains($"{LeaseBox.Account} is held by another-runner run-x client player until it is released; if run run-x is over, valheim-test env recover --run run-x releases it",
+            step.GetProperty("Error").GetString());
         // Nothing ran on the client's host and its lock was never taken; there is no lease of this run's to release.
         Assert.Empty(run.Client.Runs); Assert.Empty(run.Client.Claims);
         Assert.DoesNotContain("release client player's Steam account lease", StepNames());
         Assert.Equal("another-runner run-x client player", (await LeaseBox.StatusAsync(PoolFile)).Holder);
-    }
-
-    [Fact] public async Task ALostLeaseStopsTheClientAndFailsTheRun()
-    {
-        LeaseBox.WritePool(_root, Leases);
-        var run = WithClient(Accounts());
-        bool cancelled = false;
-        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, async context =>
-        {
-            using var session = context.OpenClient(OwnedClient());
-            LeaseBox.ReleaseBehindTheHoldersBack(Leases);
-            try { await Task.Delay(LeaseBox.Timeout, context.Cancellation); }
-            catch (OperationCanceledException) { cancelled = true; throw; }
-        }, run.Client, new ScriptedTransport(), LeaseBox.Host(), renewEvery: TimeSpan.FromMilliseconds(200)));
-        Assert.Equal(1, code);
-        Assert.True(cancelled);
-        // The client was killed once, when the lease was lost; closing the session later stopped nothing more.
-        var stop = Assert.Single(run.Client.Runs, entry => entry.Script == "stop");
-        Assert.Equal("0", stop.Variables["quit"]);
-        var release = Step("release client player's Steam account lease");
-        Assert.False(release.GetProperty("Passed").GetBoolean());
-        Assert.Contains("was lost during the run", release.GetProperty("Error").GetString());
-        Assert.False(Result().GetProperty("Provenance").TryGetProperty("outcome", out _)); // A failure, not an unknown outcome.
     }
 
     [Fact] public async Task AClientThatFailsToStartStillReleasesItsLease()

@@ -25,13 +25,12 @@ public sealed class SteamSignedInException(SteamSignedInState state, string acco
 }
 
 /// <summary>
-/// One campaign client's Steam account for a run (<see cref="ResolvedEnvironment.SteamAccounts"/>): the lease on it, renewed while the
-/// run lasts, and the optional signed-in check. <see cref="AcquireAsync"/> leases the account the client names, or the first free one
-/// for its host, and refuses at once when another run holds it, naming that holder; nothing waits. Renewals then run on a timer, every
-/// third of the lease time. A renewal that finds the lease no longer this run's, or that cannot be proven before the lease runs out,
-/// marks it <see cref="Lost"/>: a <see cref="ClientSession"/> using it stops its client (an attached client is only detached), and
-/// <see cref="PinnedServerRun"/> cancels the run. <see cref="ReleaseAsync"/> belongs after the client's teardown; it fails when the
-/// lease was lost or its release cannot be proven. Its text names the account, never a credential or a SteamID.
+/// One campaign client's Steam account for a run (<see cref="ResolvedEnvironment.SteamAccounts"/>): the lease on it and the optional
+/// signed-in check. <see cref="AcquireAsync"/> leases the account the client names, or the first free one for its host, and refuses at
+/// once when another run holds it, naming that holder run; nothing waits. The lease never lapses on a timer (#257): it is held until
+/// <see cref="ReleaseAsync"/>, which belongs after the client's teardown, or until <c>valheim-test env recover|teardown --run</c>
+/// releases it once its client is proven stopped. A release that finds the lease no longer this run's, or cannot be proven, fails.
+/// Its text names the account, never a credential or a SteamID.
 /// </summary>
 public sealed class SteamAccountHold : IAsyncDisposable
 {
@@ -39,16 +38,12 @@ public sealed class SteamAccountHold : IAsyncDisposable
     private readonly SteamAccountLease _lease;
     private readonly SteamPoolAccount _account;
     private readonly TimeSpan _timeout;
-    private readonly CancellationTokenSource _lost = new(), _stop = new();
-    private readonly Task _renewing;
     private int _released;
-    private volatile string? _lostReason;
 
-    private SteamAccountHold(SteamAccountLease lease, SteamPoolAccount account, string client, string clientHost, bool checkSignedIn, TimeSpan timeout, TimeSpan renewEvery)
+    private SteamAccountHold(SteamAccountLease lease, SteamPoolAccount account, string client, string clientHost, bool checkSignedIn, TimeSpan timeout)
     {
         _lease = lease; _account = account; _timeout = timeout;
         Client = client; ClientHost = clientHost; CheckSignedIn = checkSignedIn;
-        _renewing = renewEvery == Timeout.InfiniteTimeSpan ? Task.CompletedTask : Task.Run(() => RenewAsync(renewEvery));
     }
 
     /// <summary>The campaign client this account is for.</summary>
@@ -65,26 +60,19 @@ public sealed class SteamAccountHold : IAsyncDisposable
     internal string LeaseId => _lease.LeaseId;
     internal long LeaseNumber => _lease.Number;
     internal string LeaseDirectory => _lease.Directory;
-    /// <summary>When the lease ends by the lease host's clock unless renewed again.</summary>
-    public DateTimeOffset ExpiresUtc => _lease.ExpiresUtc;
     /// <summary>Whether the client's host must be signed in to this account before it starts (always, outside controlled tests).</summary>
     public bool CheckSignedIn { get; }
     /// <summary>Whether <see cref="CheckSignedInAsync"/> found the client's host signed in to this account.</summary>
     public bool SignedInChecked { get; private set; }
-    /// <summary>Cancelled once the lease is lost; register what must stop using the account.</summary>
-    public CancellationToken Lost => _lost.Token;
-    /// <summary>Why the lease was lost, or null.</summary>
-    public string? LostReason => _lostReason;
 
     /// <summary>
     /// Leases <paramref name="client"/>'s observed Steam identity on <paramref name="leaseHost"/> (the environment's
-    /// <see cref="SteamAccountsProfile.LeaseHost"/>) for <paramref name="owner"/> (a run id; other runs see it as the holder), and
-    /// starts renewing it. Throws <see cref="SteamAccountLeaseException"/> when the account is held (<see cref="SteamAccountLeaseState.NoneFree"/>,
-    /// with its holder) or the claim is not proven. A campaign's runner calls it for each client it opens.
+    /// <see cref="SteamAccountsProfile.LeaseHost"/>) for <paramref name="owner"/> (other runs see it as the holder) and run
+    /// <paramref name="run"/>. Throws <see cref="SteamAccountLeaseException"/> when the account is held (<see cref="SteamAccountLeaseState.NoneFree"/>,
+    /// naming its holder run) or the claim is not proven. A campaign's runner calls it for each client it opens.
     /// </summary>
-    // leaseTime and renewEvery shorten both for tests; Timeout.InfiniteTimeSpan never renews (a crashed holder).
-    internal static async Task<SteamAccountHold> AcquireAsync(ResolvedEnvironment profile, string client, string owner, IGameHost leaseHost, TimeSpan? timeout = null,
-        TimeSpan? leaseTime = null, TimeSpan? renewEvery = null, CancellationToken cancellation = default)
+    internal static async Task<SteamAccountHold> AcquireAsync(ResolvedEnvironment profile, string client, string owner, IGameHost leaseHost, string? run = null,
+        TimeSpan? timeout = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(leaseHost);
@@ -98,9 +86,8 @@ public sealed class SteamAccountHold : IAsyncDisposable
         // A named account is leased by itself, from the same pool name and directory as every other run of the pool.
         var source = role.SteamAccount != null ? pool.Only(candidates[0]) : pool;
         var wait = timeout ?? DefaultTimeout;
-        var lease = await source.AcquireAsync(leaseHost, owner, wait, role.Host, leaseTime, cancellation).ConfigureAwait(false);
-        var every = renewEvery ?? lease.LeaseTime / 3;
-        return new SteamAccountHold(lease, candidates.First(account => account.Name == lease.Account), client, role.Host, section.CheckSignedIn, wait, every);
+        var lease = await source.AcquireAsync(leaseHost, owner, wait, role.Host, run, cancellation).ConfigureAwait(false);
+        return new SteamAccountHold(lease, candidates.First(account => account.Name == lease.Account), client, role.Host, section.CheckSignedIn, wait);
     }
 
     /// <summary>
@@ -115,7 +102,7 @@ public sealed class SteamAccountHold : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(clientHost);
         if (clientHost.Name != ClientHost) throw new ArgumentException($"The client {Client} runs on host '{ClientHost}', not '{clientHost.Name}'.", nameof(clientHost));
-        ThrowIfLost();
+        ThrowIfReleased();
         uint expected = SteamPoolAccount.AccountId(_account.SteamId) ?? throw new SteamSignedInException(SteamSignedInState.Unknown, Account, clientHost.Name,
             $"Pool {Pool} records no steamId for {Account}, so the signed-in check on {clientHost.Name} has nothing to compare; add it to the pool. Refused before launch.");
         var (state, id, detail) = await SteamSignedInUsers.ReadAsync(clientHost, _timeout, cancellation).ConfigureAwait(false);
@@ -137,7 +124,7 @@ public sealed class SteamAccountHold : IAsyncDisposable
     /// <summary>Confirms the running game's Steam identity against the leased account, including on Unix where preflight reads a remembered login.</summary>
     public void CheckGameIdentity(GameActor actor)
     {
-        ThrowIfLost();
+        ThrowIfReleased();
         var reply = actor.Execute("cli_multiplayer_identity");
         var ids = reply.Output.SelectMany(line => System.Text.RegularExpressions.Regex.Matches(line,
             @"\bsteamId=([0-9]{17})(?=,|\s|$)").Select(match => match.Groups[1].Value)).ToArray();
@@ -145,11 +132,9 @@ public sealed class SteamAccountHold : IAsyncDisposable
             throw new InvalidOperationException($"The running client {Client} did not confirm the leased Steam identity for {Account}; setup is refused.");
     }
 
-    /// <summary>Throws when the lease was lost or released: the client must not start, or must stop, on this account.</summary>
-    public void ThrowIfLost()
+    /// <summary>Throws when the lease was released: the client must not start on this account.</summary>
+    private void ThrowIfReleased()
     {
-        if (_lostReason is { } reason)
-            throw new SteamAccountLeaseException(SteamAccountLeaseState.Lost, Pool, [], $"The lease on Steam account {Account} was lost ({reason}); stop using the account.");
         if (Volatile.Read(ref _released) == 1) throw new InvalidOperationException($"The lease on Steam account {Account} was released.");
     }
 
@@ -159,7 +144,7 @@ public sealed class SteamAccountHold : IAsyncDisposable
     /// </summary>
     internal void RequireReady(string? hostName)
     {
-        ThrowIfLost();
+        ThrowIfReleased();
         if (hostName != null && hostName != ClientHost)
             throw new ArgumentException($"Steam account {Account} was leased for the client {Client} on host '{ClientHost}', not for a client on '{hostName}'.");
         if (CheckSignedIn && !SignedInChecked)
@@ -170,67 +155,25 @@ public sealed class SteamAccountHold : IAsyncDisposable
     public void Record(ScenarioReport report) => _lease.Record(report, Client);
 
     /// <summary>
-    /// After the client's teardown: stops the renewals and releases the lease. Only the first call acts. Throws
-    /// <see cref="SteamAccountLeaseException"/> when the lease was lost during the run (<see cref="SteamAccountLeaseState.Lost"/>) or its
-    /// release cannot be proven (<see cref="SteamAccountLeaseState.Unknown"/>; the lease then ends at <see cref="ExpiresUtc"/>): a failed teardown.
+    /// After the client's teardown: releases the lease. Only the first call acts. Throws <see cref="SteamAccountLeaseException"/>
+    /// when the lease was no longer this run's (<see cref="SteamAccountLeaseState.Lost"/>: a maintainer released it) or its release
+    /// cannot be proven (<see cref="SteamAccountLeaseState.Unknown"/>; the lease is then held until a recovery releases it): a failed teardown.
     /// </summary>
     public async Task ReleaseAsync()
     {
         if (Interlocked.Exchange(ref _released, 1) == 1) return;
-        await StopRenewingAsync().ConfigureAwait(false);
-        // Released even after a loss: an unproven renewal may still have kept the claim this run's.
         var result = await _lease.ReleaseAsync().ConfigureAwait(false);
-        if (_lostReason is { } reason)
-            throw new SteamAccountLeaseException(SteamAccountLeaseState.Lost, Pool, [], $"The lease on Steam account {Account} was lost during the run ({reason}); its client was stopped, " +
-                "and another run may have used the account meanwhile.");
         if (result.State == SteamAccountLeaseState.Lost)
-            throw new SteamAccountLeaseException(SteamAccountLeaseState.Lost, Pool, [], $"{result.Detail} The run held Steam account {Account} past its lease.");
+            throw new SteamAccountLeaseException(SteamAccountLeaseState.Lost, Pool, [], $"{result.Detail} Another run may have used Steam account {Account} meanwhile.");
         if (result.State == SteamAccountLeaseState.Unknown) throw new SteamAccountLeaseException(SteamAccountLeaseState.Unknown, Pool, [], result.Detail);
     }
 
-    /// <summary>Stops the renewals and keeps the claim (a client may still run on the account); it ends at <see cref="ExpiresUtc"/>. Only acts before a release.</summary>
-    internal async Task<bool> KeepAsync()
-    {
-        if (Interlocked.Exchange(ref _released, 1) == 1) return false;
-        await StopRenewingAsync().ConfigureAwait(false);
-        return true;
-    }
+    /// <summary>Keeps the claim (a client may still run on the account): it is held until a recovery proves the client stopped. Only acts before a release.</summary>
+    internal bool Keep() => Interlocked.Exchange(ref _released, 1) == 0;
 
     public ValueTask DisposeAsync() => new(ReleaseAsync());
 
-    public override string ToString() => $"Steam account {Account} from pool {Pool} for client {Client}, leased by {Owner} until {ExpiresUtc:u}";
-
-    private async Task StopRenewingAsync()
-    {
-        _stop.Cancel();
-        try { await _renewing.ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
-    }
-
-    private async Task RenewAsync(TimeSpan every)
-    {
-        var token = _stop.Token;
-        while (true)
-        {
-            try { await Task.Delay(every, token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return; }
-            try { await _lease.RenewAsync(_timeout, token).ConfigureAwait(false); }
-            catch (SteamAccountLeaseException error) when (error.State == SteamAccountLeaseState.Lost) { MarkLost(error.Message); return; }
-            catch (Exception) when (token.IsCancellationRequested) { return; } // Released meanwhile: that release decides.
-            catch (Exception error)
-            {
-                // An unproven renewal may still have happened: the next one decides, unless the lease runs out before it.
-                if (DateTimeOffset.UtcNow + every >= _lease.ExpiresUtc) { MarkLost($"no renewal was proven before it ends at {_lease.ExpiresUtc:u}: {error.Message}"); return; }
-            }
-        }
-    }
-
-    private void MarkLost(string reason)
-    {
-        _lostReason = reason;
-        // What stops the client runs here; its failure is reported where that client is torn down. The loss stands either way.
-        try { _lost.Cancel(); } catch (AggregateException) { }
-    }
+    public override string ToString() => $"Steam account {Account} from pool {Pool} for client {Client}, leased by {Owner} until released";
 }
 
 /// <summary>Reads which Steam account a host's user is signed in to, through the host's own shell. Only account ids leave the host.</summary>

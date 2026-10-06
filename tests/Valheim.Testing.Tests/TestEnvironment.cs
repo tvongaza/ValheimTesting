@@ -48,7 +48,7 @@ internal static class TestEnvironment
         return environment;
     }
 
-    /// <summary>An account pool from its JSON fields (pool, leaseDirectory, leaseMinutes, accounts), as a campaign builds it in memory.</summary>
+    /// <summary>An account pool from its JSON fields (pool, leaseDirectory, accounts), as a campaign builds it in memory.</summary>
     public static SteamAccountPool Pool(string json)
     {
         var pool = JsonSerializer.Deserialize<SteamAccountPool>(json, Json)!;

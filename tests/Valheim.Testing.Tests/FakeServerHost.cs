@@ -346,7 +346,7 @@ internal sealed class FakeServerHost : IGameHost
                         var text = new StringBuilder();
                         foreach (string account in v["accounts"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
                             lock (_sync)
-                                text.Append(Leases.TryGetValue(account, out var held) ? $"VT-LEASE-ACCOUNT held {account} 1893456000 {held.Holder}\n" : $"VT-LEASE-ACCOUNT free {account}\n");
+                                text.Append(Leases.TryGetValue(account, out var held) ? $"VT-LEASE-ACCOUNT held {account} - {held.Holder}\n" : $"VT-LEASE-ACCOUNT free {account}\n");
                         return Ok(text.Append("VT-LEASE listed\n").ToString());
                     }
                     case "release":

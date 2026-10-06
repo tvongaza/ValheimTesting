@@ -43,7 +43,7 @@ public sealed class RunCancellation : IDisposable
     /// <summary>The token to pass through preparation, launch and event waits.</summary>
     public CancellationToken Token => _source.Token;
 
-    /// <summary>Cancel when another owned resource, such as an account lease, is lost.</summary>
+    /// <summary>Cancels the run from code, as Ctrl+C would.</summary>
     public void Cancel() => _source.Cancel();
 
     /// <summary>

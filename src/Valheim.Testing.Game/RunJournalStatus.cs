@@ -208,7 +208,7 @@ internal static class RunJournalStatus
             var settled = new List<JournalItem>();
             foreach (var item in pending.GetValueOrDefault(run.Key) ?? [])
             {
-                var judged = await JudgeAsync(item, isEnded && end.Cleaned, probed, probeFailed, pidFiles, timeout, cancellation,
+                var judged = await JudgeAsync(item, run.Key, isEnded && end.Cleaned, probed, probeFailed, pidFiles, timeout, cancellation,
                     item.Host == leaseHost && !string.IsNullOrEmpty(leaseDirectory) ? leaseDirectory : null).ConfigureAwait(false);
                 if (judged != null) items.Add(judged);
                 else if (item.Kind == "launch" && !(isEnded && end.Cleaned))
@@ -240,7 +240,7 @@ internal static class RunJournalStatus
         IReadOnlyDictionary<string, string> Fields);
 
     // One open entry as the host now shows it: null when it is provably gone after all (a process that exited, a lock someone released).
-    private static async Task<JournalItem?> JudgeAsync(Pending item, bool endedClean, Dictionary<(string Host, int Pid, string Start), ProbedProcess> probed,
+    private static async Task<JournalItem?> JudgeAsync(Pending item, string run, bool endedClean, Dictionary<(string Host, int Pid, string Start), ProbedProcess> probed,
         Dictionary<string, string> probeFailed, Dictionary<(string Host, string Directory), PidFile> pidFiles, TimeSpan timeout, CancellationToken cancellation,
         string? inventoryLeaseDirectory)
     {
@@ -287,13 +287,14 @@ internal static class RunJournalStatus
             }
             case "lease":
             {
-                // Checked on the lease host by its claim: held by this run's owner, or not (released, lapsed, or another run's now).
+                // Checked on the lease host by its claim: held by this run's owner, or not (released, or another run's now). A lease
+                // never lapses (#257), so one this run still holds stays until a recovery releases it.
                 var fields = item.Fields;
                 // A lease journalled before leases named their id and directory is looked up in the inventory's lease directory.
                 bool withId = fields.ContainsKey("leaseId");
                 string? directory = fields.GetValueOrDefault("directory") ?? inventoryLeaseDirectory;
                 if (directory == null)
-                    return judged with { Status = $"journalled without its lease directory, so it cannot be checked; it lapses by itself, or check pool {fields.GetValueOrDefault("pool")} by hand",
+                    return judged with { Status = $"journalled without its lease directory, so it cannot be checked; check pool {fields.GetValueOrDefault("pool")} by hand",
                         Unrecoverable = true };
                 try
                 {
@@ -302,9 +303,10 @@ internal static class RunJournalStatus
                     return account switch
                     {
                         { State: SteamAccountState.Held } when account.Holder == fields.GetValueOrDefault("owner") && !withId =>
-                            judged with { Status = $"held by this run until {account.ExpiresUtc:yyyy-MM-dd HH:mm}Z, but journalled without its lease id, so only its lapse ends it", Unrecoverable = true },
+                            judged with { Status = "held by this run, but journalled without its lease id, so env recover cannot release it; once its client is gone, " +
+                                $"valheim-test env teardown --run {run} --machine-gone releases it", Unrecoverable = true },
                         { State: SteamAccountState.Held } when account.Holder == fields.GetValueOrDefault("owner") =>
-                            judged with { Status = (item.Kept ? item.Status + "; " : "") + $"held by this run until {account.ExpiresUtc:yyyy-MM-dd HH:mm}Z unless released" },
+                            judged with { Status = (item.Kept ? item.Status + "; " : "") + "held by this run until released" },
                         { State: SteamAccountState.Free } or { State: SteamAccountState.Held } => null,
                         _ => judged with { Status = "cannot be checked: " + (account?.Describe() ?? "the lease host named no such account"), Unrecoverable = true },
                     };

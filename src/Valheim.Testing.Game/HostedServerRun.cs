@@ -67,8 +67,7 @@ internal sealed class HostedServerRun : IServerPlacement
         NoteAsync(host, hostName, "run", JournalEntry.Of(kind, ("lock", held.Path), ("claimant", held.Owner)));
 
     private static JournalEntry LeaseEntry(string kind, SteamAccountHold hold, params (string Key, string Value)[] more) =>
-        JournalEntry.Of(kind, [("account", hold.Account), ("pool", hold.Pool), ("owner", hold.Owner),
-            ("expiresUtc", hold.ExpiresUtc.ToString("O", CultureInfo.InvariantCulture)), ("leaseId", hold.LeaseId),
+        JournalEntry.Of(kind, [("account", hold.Account), ("pool", hold.Pool), ("owner", hold.Owner), ("leaseId", hold.LeaseId),
             ("number", hold.LeaseNumber.ToString(CultureInfo.InvariantCulture)), ("directory", hold.LeaseDirectory), .. more]);
 
     /// <summary>
@@ -97,8 +96,6 @@ internal sealed class HostedServerRun : IServerPlacement
     public string WorldDirectory { get; }
     /// <summary>The runtime copy's files on the host, once copied.</summary>
     public IReadOnlyDictionary<string, string> RuntimeHashes => _runtime?.Files ?? new Dictionary<string, string>();
-    /// <summary>Runs when a client's Steam account lease is lost: the runner cancels the run (its client was stopped already).</summary>
-    public Action? AccountLost { get; set; }
 
     /// <summary>Refuses an environment and plan that cannot run a server on the environment's server host, before anything is touched.</summary>
     public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, IHostedRunHooks? hooks = null) =>
@@ -370,7 +367,7 @@ internal sealed class HostedServerRun : IServerPlacement
             IGameHost leaseHost;
             lock (_clientState)
                 leaseHost = _leaseHost ??= section.LeaseHost == Role.Host ? Host : _hooks.CreateHost(Profile, section.LeaseHost);
-            var hold = await _hooks.LeaseAsync(Profile, name, _owner + " client " + name, leaseHost, Quick, cancellation).ConfigureAwait(false);
+            var hold = await _hooks.LeaseAsync(Profile, name, _owner + " client " + name, RunId, leaseHost, Quick, cancellation).ConfigureAwait(false);
             lock (_clientState)
             {
                 _accounts.Add(held = new ClientAccount(name, hold, leaseHost, section.LeaseHost));
@@ -378,7 +375,6 @@ internal sealed class HostedServerRun : IServerPlacement
             }
             // On the lease host, where the lease lives: which account this run holds for the client, and as whom.
             await NoteAsync(leaseHost, section.LeaseHost, name, LeaseEntry(JournalEntry.LeaseHeld, hold)).ConfigureAwait(false);
-            hold.Lost.Register(() => AccountLost?.Invoke());
         }).ConfigureAwait(false);
         if (section.CheckSignedIn)
             await report.StepAsync(StepPhase.Setup, $"client {name}'s host is signed in to Steam account {held!.Hold.Account} (signed-in check)",
@@ -604,11 +600,11 @@ internal sealed class HostedServerRun : IServerPlacement
             {
                 if (account.Process is { HasExited: false })
                 {
-                    await account.Hold.KeepAsync().ConfigureAwait(false);
+                    account.Hold.Keep();
                     await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseKept, account.Hold,
                         ("why", "its client may still run"))).ConfigureAwait(false);
                     throw new SteamAccountLeaseException(SteamAccountLeaseState.Unknown, account.Hold.Pool, [], $"Kept the lease on Steam account {account.Hold.Account}: the client " +
-                        $"{account.Client} may still run on {account.Hold.ClientHost}. Without renewals it ends at {account.Hold.ExpiresUtc:u}.");
+                        $"{account.Client} may still run on {account.Hold.ClientHost}. It is held until that client is proven stopped: valheim-test env teardown --run {RunId} releases it then.");
                 }
                 await account.Hold.ReleaseAsync().ConfigureAwait(false);
                 await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseReleased, account.Hold)).ConfigureAwait(false);

@@ -198,8 +198,8 @@ internal sealed class GameRole
 /// <summary>
 /// The clients' Steam leases: the one host and directory the leases live on (an inventory's <c>leaseHost</c> and
 /// <c>leaseDirectory</c>, shared by every run on these accounts), and the pool of identities observed signed in on the
-/// clients' hosts. Each client leases its identity before it starts (<see cref="SteamAccountHold"/>), keeps it renewed while it
-/// runs and releases it after teardown; before it starts, its host's signed-in user is checked against it.
+/// clients' hosts. Each client leases its identity before it starts (<see cref="SteamAccountHold"/>), holds it while it runs
+/// and releases it after teardown; before it starts, its host's signed-in user is checked against it.
 /// </summary>
 internal sealed class SteamAccountsProfile
 {

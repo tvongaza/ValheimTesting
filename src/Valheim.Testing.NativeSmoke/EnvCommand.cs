@@ -8,7 +8,8 @@ using Valheim.Testing.Game;
 internal static class EnvCommand
 {
     internal const string Usage = "valheim-test env preflight [MANIFEST [--hosts] | --inventory FILE] [--json] | valheim-test env status [--inventory FILE] [--json] | " +
-        "valheim-test env recover|teardown --run ID [--inventory FILE] [--json] | valheim-test env teardown --copy PATH [--inventory FILE]";
+        "valheim-test env recover|teardown --run ID [--inventory FILE] [--json] | valheim-test env teardown --copy PATH [--inventory FILE] | " +
+        "valheim-test env teardown --run ID --machine-gone [--inventory FILE]";
 
     public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
     {
@@ -102,12 +103,13 @@ internal static class EnvCommand
     }
 
     // From each host's run journal: status (what earlier runs left; changes nothing), recover (clear what one run provably
-    // left, except what it kept on purpose) or teardown (that too, or one unjournalled copy by --copy). Exit 0 when nothing is left (status: of any run; recover and
+    // left, except what it kept on purpose) or teardown (that too, or one unjournalled copy by --copy; with --machine-gone, only the
+    // Steam leases of a run whose machine is gone for good). Exit 0 when nothing is left (status: of any run; recover and
     // teardown: of that run); 3 otherwise or when refused; 2 for a usage error.
     private static async Task<int> Journal(string action, string[] args, TextWriter output, TextWriter error)
     {
         var rest = args.ToList();
-        bool json = rest.Remove("--json");
+        bool json = rest.Remove("--json"), machineGone = action == "teardown" && rest.Remove("--machine-gone");
         string? Option(string name)
         {
             int at = rest.IndexOf(name);
@@ -118,7 +120,7 @@ internal static class EnvCommand
             return value;
         }
         string? file = Option("--inventory"), run = action == "status" ? null : Option("--run"), copy = action == "teardown" ? Option("--copy") : null;
-        if (rest.Count != 0 || (action != "status" && (run == null) == (copy == null)) || (copy != null && json))
+        if (rest.Count != 0 || (action != "status" && (run == null) == (copy == null)) || (copy != null && json) || (machineGone && (run == null || json)))
         {
             error.WriteLine("Usage: " + Usage);
             return 2;
@@ -128,10 +130,11 @@ internal static class EnvCommand
             string? inventory = file == null ? null : Path.GetFullPath(file);
             bool clean = action == "status" ? await EnvironmentInventory.WriteRunStatusAsync(inventory, output, json).ConfigureAwait(false)
                 : copy != null ? await EnvironmentInventory.TeardownCopyAsync(inventory, copy, output).ConfigureAwait(false)
+                : machineGone ? await EnvironmentInventory.ReleaseLeasesOfGoneRunAsync(inventory, run!, output).ConfigureAwait(false)
                 : await EnvironmentInventory.RecoverRunAsync(inventory, run!, action == "teardown", output, json).ConfigureAwait(false);
             return clean ? 0 : 3;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException or HostOperationException)
         {
             error.WriteLine("REFUSED: " + failure.Message);
             return 3;
