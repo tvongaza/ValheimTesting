@@ -375,15 +375,30 @@ public sealed class GameSession : IAsyncDisposable
 
     /// <summary>
     /// The barrier "client X back at its menu", then <see cref="Join"/> again: the client leaves the world (pins verified at the
-    /// menu again) and rejoins the server's current boot, or the host's world.
+    /// menu again) and rejoins the server's current boot, or the host's world. It first waits, within the client's join time, for
+    /// the client to settle where it is (<see cref="SessionControl"/>: idle at its menu, or in the world with its player): a client the
+    /// world already dropped (a host's restart disconnects its peers) is only re-pinned at its menu and recorded in
+    /// <c>rejoinedFromMenu</c>; a leave is issued only from a loaded world.
     /// </summary>
     public async Task<PlayerPlacement.TeleportArrival?> Rejoin(string client, HeightExpectation? arrival = null, bool protect = true, CrossplayLobby? lobby = null)
     {
         var actor = RequireClient(client);
+        string? world = _worldUid;
         await Task.Run(() => Report.Step(StepPhase.Setup, $"client {client} back at its menu", () =>
         {
-            new SessionControl(actor.Game).Leave();
-            actor.Game.VerifyEnvironment(actor.Plan.MenuExpectations); // A transition always needs fresh pins.
+            var game = actor.Game;
+            var control = new SessionControl(game);
+            // Where the client is now, once it settles (a host's restart drops its peers to their menus, and they may still be leaving).
+            if (!control.SettleAtMenuOrInWorld(actor.Plan, world, TimeSpan.FromSeconds(actor.Plan.JoinSeconds), Cancellation))
+            {
+                // Already at its menu (the world dropped it): nothing to leave.
+                var rejoined = Report.Provenance.TryGetValue("rejoinedFromMenu", out var earlier) ? earlier.Split(',').ToList() : [];
+                if (!rejoined.Contains(client)) rejoined.Add(client);
+                Report.Provenance["rejoinedFromMenu"] = string.Join(",", rejoined);
+                return;
+            }
+            control.Leave();
+            game.VerifyEnvironment(actor.Plan.MenuExpectations); // A transition always needs fresh pins.
         }), Cancellation).ConfigureAwait(false);
         return await Join(client, arrival, protect, lobby).ConfigureAwait(false);
     }

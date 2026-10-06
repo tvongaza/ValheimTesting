@@ -110,7 +110,7 @@ public static class HostedScenario
         var report = session.Report;
         var timeout = TimeSpan.FromSeconds(plan.Client.JoinSeconds);
         string? hostLog = owned.LiveLog;
-        report.Provenance["hostBroadcast"] = hostLog == null ? "not observed: an attached host's log is its operator's" : "the owned host's live BepInEx log";
+        report.Provenance["hostBroadcast"] = hostLog == null ? "not observed: the host's log is not on this machine (an operator's client, or a campaign host on another machine)" : "the owned host's live BepInEx log";
         var host = owned.Game; // The server of its world and its client.
         report.Step("no marker at either site before the mod acts", () => RequireMarkers(host, plan, dry: 0));
         report.Step("the mod marks the dry site", () => host.Execute(DrySiteScenario.Mark(plan.DrySite)).RequireLine("OK: marked ", "MyMod did not mark the dry site"));
