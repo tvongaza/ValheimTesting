@@ -65,7 +65,69 @@ public sealed class GameSession : IAsyncDisposable
     /// <summary>Cancelled by Ctrl+C or SIGTERM, and when <see cref="StartAsync"/> fails.</summary>
     public CancellationToken Cancellation => _token;
     /// <summary>Every actor's kept logs, the server's first, for the teardown scan once the processes stopped.</summary>
-    public IReadOnlyList<RunLog> Logs => [.. Server?.Logs ?? [], .. _clients.SelectMany(client => client.Logs)];
+    public IReadOnlyList<RunLog> Logs
+    {
+        get
+        {
+            List<ClientActor> opened; List<RunLog> added;
+            lock (_opened) { opened = [.. _opened]; added = [.. _added]; }
+            return [.. Server?.Logs ?? [], .. _clients.SelectMany(client => client.Logs), .. opened.SelectMany(client => client.Logs), .. added];
+        }
+    }
+
+    /// <summary>Adds a log the teardown scan reads besides the actors' own, for example one a scenario's own tool wrote.</summary>
+    public void AddLog(RunLog log)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        lock (_opened) _added.Add(log);
+    }
+
+    /// <summary>
+    /// Opens a client of <paramref name="plan"/> through a new <see cref="ClientActor"/> and returns its session; its logs join
+    /// <see cref="Logs"/>, and one the scenario leaves open is closed at teardown before the server stops. In a campaign,
+    /// <paramref name="name"/> names the campaign's client (left out when it declares one), which starts on its assigned host on
+    /// its leased Steam identity; otherwise the client opens on this machine. With <paramref name="directory"/>, its evidence goes
+    /// to that subdirectory of <see cref="Output"/>, so a second client never overwrites the first one's. Until the scenarios
+    /// declare their clients (#258 step 6), this is how a scenario opens one.
+    /// </summary>
+    public ClientSession OpenClient(ClientRunPlan plan, string? name = null, string? directory = null)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var (actorName, placement) = ResolveClient(plan, name);
+        string output = Output;
+        if (directory != null)
+        {
+            output = Path.GetFullPath(Path.Combine(Output, directory));
+            if (!output.StartsWith(Path.GetFullPath(Output) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new ArgumentException("Name a subdirectory of the session's output.", nameof(directory));
+            Directory.CreateDirectory(output);
+        }
+        var actor = new ClientActor(actorName, plan, output, placement, Cancellation);
+        lock (_opened)
+        {
+            // Under the lock teardown takes its list with: an actor added here is one teardown closes.
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _opened.Add(actor);
+        }
+        return actor.Start();
+    }
+    private readonly List<ClientActor> _opened = [];
+    private readonly List<RunLog> _added = [];
+
+    /// <summary>A campaign's client names (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), each opened on its assigned host by <see cref="OpenClient"/>; empty when clients open on this machine.</summary>
+    public IReadOnlyList<string> CampaignClients { get; internal init; } = [];
+
+    /// <summary>Where <see cref="OpenClient"/> places a client: the runner's campaign placement, or this machine by default.</summary>
+    internal Func<ClientRunPlan, string?, (string Name, IClientPlacement Placement)> ResolveClient { get; init; } = ThisMachine;
+    internal static (string Name, IClientPlacement Placement) ThisMachine(ClientRunPlan plan, string? name) =>
+        name == null ? ("client", LocalClientPlacement.Instance)
+        : throw new ArgumentException("A named client opens only in a campaign that declares clients (PinnedServerRun.RunCampaignAsync).", nameof(name));
+
+    /// <summary>The host a campaign client runs on, for reading its files or capturing there.</summary>
+    public IGameHost ClientHost(string campaignClient) => FindClientHost?.Invoke(campaignClient)
+        ?? throw new ArgumentException("This run is not a campaign with named clients.", nameof(campaignClient));
+    internal Func<string, IGameHost>? FindClientHost { get; init; }
 
     /// <summary>
     /// Starts every actor at once: the server's boot ("start and verify owned dedicated fixture") and each client to its menu
@@ -98,10 +160,14 @@ public sealed class GameSession : IAsyncDisposable
             }
         }
         if (first == null) return;
-        // Every start settled: the teardown (clients before their server, each a Cleanup step), then the first failure.
-        await DisposeAsync().ConfigureAwait(false);
+        // Every start settled: the teardown (clients before their server, each a Cleanup step), then the first failure. A runner
+        // with its own bounded cleanup (PinnedServerRun) disposes the session there instead.
+        if (DisposeOnFailedStart) await DisposeAsync().ConfigureAwait(false);
         System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(first).Throw();
     }
+
+    /// <summary>Whether a failed <see cref="StartAsync"/> disposes the session before rethrowing; false where the caller's own cleanup does it.</summary>
+    internal bool DisposeOnFailedStart { get; init; } = true;
 
     /// <summary>The barrier "the server accepts game connections", within the server's startup deadline.</summary>
     public async Task ServerJoinable()
@@ -186,17 +252,22 @@ public sealed class GameSession : IAsyncDisposable
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
+        lock (_opened)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
         try { await _cancellation.CancelAsync().ConfigureAwait(false); } catch (AggregateException error) { Console.Error.WriteLine("Teardown: " + error.Message); }
-        foreach (var client in Enumerable.Reverse(_clients))
+        List<ClientActor> opened;
+        lock (_opened) opened = [.. _opened];
+        foreach (var client in Enumerable.Reverse(_clients.Concat(opened).ToList()))
             if (client.Session is { } open)
                 try { Report.Step(StepPhase.Cleanup, open.Owned ? $"stop only the owned client {client.Name}" : $"detach from the operator's client {client.Name}", client.Dispose); }
-                catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
+                catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
             else client.Dispose();
         if (Server is { } server)
             try { Report.Step(StepPhase.Cleanup, "stop only owned server", server.Dispose); }
-            catch (Exception error) { ServerStopped = false; Console.Error.WriteLine("Teardown: " + error.Message); }
+            catch (Exception error) { ServerStopped = false; TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         // A boot that failed to start and could not be stopped may still run too.
         if (Server is { MayStillRun: true }) ServerStopped = false;
         _cancellation.Dispose();
@@ -204,6 +275,8 @@ public sealed class GameSession : IAsyncDisposable
 
     /// <summary>After disposing: false when the server's stop failed or a boot may still run, so its runtime and host lock are kept.</summary>
     internal bool ServerStopped { get; private set; } = true;
+    /// <summary>After disposing: each failed close or stop, for the runner to classify (an unknown host outcome is not a failure).</summary>
+    internal List<Exception> TeardownFailures { get; } = [];
 
     private ServerActor RequireServer()
     {

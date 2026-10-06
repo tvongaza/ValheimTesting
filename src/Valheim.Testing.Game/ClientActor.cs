@@ -6,7 +6,7 @@ namespace Valheim.Testing.Game;
 /// included, are the actor's (<see cref="Logs"/>) for the teardown scan. Where the client runs is its placement: this machine
 /// (<see cref="OnThisMachine"/>: launched, or attached to an operator's client, as the plan's mode says), or the host a
 /// campaign assigned it, in that host's desktop session or, for a local macOS host, this runner's GUI session, on its leased
-/// Steam identity (<see cref="PinnedServerRunContext{TPlan}.OpenClient"/>). <see cref="Game"/> is the open client's in-game
+/// Steam identity (<see cref="GameSession.OpenClient"/>). <see cref="Game"/> is the open client's in-game
 /// handle. Disposing it closes the client: it stops only a process it started, and detaches from an operator's.
 /// </summary>
 public sealed class ClientActor : IDisposable

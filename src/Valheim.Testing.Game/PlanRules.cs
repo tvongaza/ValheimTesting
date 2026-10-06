@@ -2,7 +2,7 @@ namespace Valheim.Testing.Game;
 
 // The plan-validation idioms mod runners repeat: a known scenario, an environment flag that must be exactly "1" and
 // settings that belong to another scenario. Each refusal is an ArgumentException whose message names the plan field and
-// the fix. A runner refuses a mode and plan that do not belong together with PinnedServerRunOptions.CheckMode.
+// the fix. A runner applies them in its ReadPlan, so validate and run refuse the same plans.
 public partial class ServerRunPlan
 {
     /// <summary>Refuses a <see cref="Scenario"/> that is not one of <paramref name="known"/>.</summary>

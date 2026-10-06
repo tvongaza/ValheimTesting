@@ -22,9 +22,9 @@ var options = new PinnedServerRunOptions<LifecyclePlan>
     },
     SessionCapability = "mymod.testing/session",
     SessionTokenVariable = LifecyclePlan.SessionTokenVariable,
-    CheckMode = (mode, plan) =>
+    CheckPlan = plan =>
     {
-        if (mode == "run" && plan.Client == null && !plan.ServerOnly)
+        if (plan.Client == null && !plan.ServerOnly)
             throw new ArgumentException($"A run looks from a client: add the client section, or use the {LifecyclePlan.ServerScenario} scenario for the server half alone.");
         // A campaign template is bound to its prepared actors in memory; its own rules apply to the bound plan.
         if (plan.Scenario is LifecyclePlan.ThreeActorScenario or LifecyclePlan.OwnershipHandoffScenario) LifecyclePlan.Validated(plan);
@@ -35,52 +35,52 @@ var options = new PinnedServerRunOptions<LifecyclePlan>
         provenance["humanReview"] = plan.Review.Enabled ? "requested" : "not requested";
         provenance["expectFailure"] = plan.ExpectFailure ?? "none";
     },
-    Scenario = run =>
+    Scenario = (session, plan) =>
     {
-        if (run.Plan.ServerOnly)
+        var owned = session.Server!;
+        if (plan.ServerOnly)
         {
-            var server = DrySiteServerScenario.Run(run.Plan, run.Server, run.Session.Restart, run.Report);
-            if (run.Plan.PatchReload != null)
+            var server = DrySiteServerScenario.Run(plan, owned.Game, owned.Restart, session.Report);
+            if (plan.PatchReload != null)
             {
                 // It writes into the runtime copy's scripts folder, which must be on this machine.
-                if (run.ServerHost != null) throw new ArgumentException("patchReload runs only with the server on this machine (no --inventory).");
-                PatchReloadScenario.Run(run.Plan, server, run.RuntimeDirectory, run.Output, run.Report, run.Cancellation);
+                if (owned.Host != null) throw new ArgumentException("patchReload runs only with the server on this machine (no --inventory).");
+                PatchReloadScenario.Run(plan, server, owned.RuntimeDirectory, session.Output, session.Report, session.Cancellation);
             }
             return Task.CompletedTask;
         }
-        if (run.Plan.Scenario == LifecyclePlan.LifecycleScenario)
+        if (plan.Scenario == LifecyclePlan.LifecycleScenario)
         {
             // Its logs are scanned with the server's at teardown, after the scenario stops the client, and also after a failed startup.
-            DrySiteScenario.Run(run.Plan, run.Server, run.Session, () => ClientSession.Open(run.Plan.Client!, run.Output, run.Logs, run.Cancellation),
-                run.Report, run.Output, run.Cancellation);
+            DrySiteScenario.Run(plan, owned.Game, owned, () => session.OpenClient(plan.Client!), session.Report, session.Output, session.Cancellation);
             return Task.CompletedTask;
         }
         // The native campaign's scenarios (CampaignScenarios). Their in-run log reads open files on this machine, so a server on
         // another host (--inventory or a campaign) skips the server's, and a campaign's clients skip theirs; only the crossplay
         // lobby is read on the server's host.
-        bool local = run.ServerHost == null, localClients = run.CampaignClients.Count == 0;
+        bool local = owned.Host == null, localClients = session.CampaignClients.Count == 0;
         CampaignScenarios.Run(new CampaignRun
         {
-            Plan = run.Plan, Server = run.Server, OwnedServer = run.Session, Report = run.Report,
-            Output = run.Output, Cancellation = run.Cancellation, ServerHost = run.ServerHost, RemoteClients = !localClients,
+            Plan = plan, Server = owned.Game, OwnedServer = owned, Report = session.Report,
+            Output = session.Output, Cancellation = session.Cancellation, ServerHost = owned.Host, RemoteClients = !localClients,
             OpenClient = (client, directory) =>
             {
-                if (directory == null) return run.OpenClient(client); // Its logs join the teardown scan.
-                // A second client in one run keeps its command record and logs apart from the first one's.
-                string own = Path.Combine(run.Output, directory);
-                Directory.CreateDirectory(own);
-                return ClientSession.Open(client, own, run.Logs, run.Cancellation);
+                if (directory == null) return session.OpenClient(client); // Its logs join the teardown scan.
+                // A second client in one run keeps its command record and logs apart from the first one's, on this machine.
+                var second = ClientActor.OnThisMachine(directory, client, Directory.CreateDirectory(Path.Combine(session.Output, directory)).FullName, session.Cancellation);
+                try { return second.Start(); }
+                finally { foreach (var log in second.Logs) session.AddLog(log); } // Also a failed startup's, for the scan.
             },
-            OpenCampaignClient = (client, name) => run.OpenClient(client, name),
-            ServerLog = () => local ? Path.Combine(run.RuntimeDirectory, "BepInEx", "LogOutput.log") : null,
+            OpenCampaignClient = (client, name) => session.OpenClient(client, name),
+            ServerLog = () => local ? Path.Combine(owned.RuntimeDirectory, "BepInEx", "LogOutput.log") : null,
             ClientLog = client => localClients && client.Owned ? Path.Combine(client.Install, "BepInEx", "LogOutput.log") : null,
             // The lobby line is in the log the game writes to: the -logFile file when the plan passes one (the Windows server's
             // BepInEx log did not carry it), otherwise BepInEx's. A crossplay server on another machine (--inventory): the host's own log.
             Lobby = server => local
-                ? CrossplayServer.WaitForLobby(server, run.Plan.GameLogFile(run.RuntimeDirectory, run.WorldDirectory) ?? CrossplayServer.BepInExLog(run.RuntimeDirectory),
-                    TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation)
-                : CrossplayServer.WaitForLobby(server, run.ServerHost!, run.Plan.GameLogFile(run.RuntimeDirectory, run.WorldDirectory) ?? CrossplayServer.HostBepInExLog(run.RuntimeDirectory),
-                    TimeSpan.FromSeconds(run.Plan.StartupSeconds), run.Cancellation),
+                ? CrossplayServer.WaitForLobby(server, plan.GameLogFile(owned.RuntimeDirectory, owned.WorldDirectory) ?? CrossplayServer.BepInExLog(owned.RuntimeDirectory),
+                    TimeSpan.FromSeconds(plan.StartupSeconds), session.Cancellation)
+                : CrossplayServer.WaitForLobby(server, owned.Host!, plan.GameLogFile(owned.RuntimeDirectory, owned.WorldDirectory) ?? CrossplayServer.HostBepInExLog(owned.RuntimeDirectory),
+                    TimeSpan.FromSeconds(plan.StartupSeconds), session.Cancellation),
         });
         return Task.CompletedTask;
     },

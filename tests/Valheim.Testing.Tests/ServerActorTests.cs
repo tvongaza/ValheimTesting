@@ -51,6 +51,7 @@ public sealed class ServerActorTests : IDisposable
         }
         public IGameTransport Connect() => server.Connect();
         public StartupEvents? Events(ServerRunPlan plan) => null;
+        public IGameHost? Host => null;
     }
 
     [Fact] public void EachBootRegistersItsLogsOnceWritesItsRecordsAndGetsTestAccessAgain()

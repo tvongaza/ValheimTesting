@@ -82,7 +82,7 @@ public sealed class CrossplayPlanTests : IDisposable
             var options = new PinnedServerRunOptions<ServerRunPlan>
             {
                 Name = "crossplay", SessionCapability = "test.mod/session", SessionTokenVariable = Token,
-                ReadPlan = ServerRunPlan.Read<ServerRunPlan>, Scenario = _ => Task.CompletedTask,
+                ReadPlan = ServerRunPlan.Read<ServerRunPlan>, Scenario = (_, _) => Task.CompletedTask,
             };
             string refused = Path.Combine(root, "out-refused");
             Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", Plan("raw.json", false, "-crossplay"), refused], options));

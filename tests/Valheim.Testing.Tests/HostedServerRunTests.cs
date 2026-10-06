@@ -136,14 +136,14 @@ public sealed partial class HostedServerRunTests : IDisposable
         return (planPath, profilePath);
     }
 
-    private static PinnedServerRunOptions<ServerRunPlan> Options(FakeServerHost host, FakeOwnedServer? server, Func<PinnedServerRunContext<ServerRunPlan>, Task>? scenario = null,
+    private static PinnedServerRunOptions<ServerRunPlan> Options(FakeServerHost host, FakeOwnedServer? server, Func<TestRun<ServerRunPlan>, Task>? scenario = null,
         FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, TimeSpan? renewEvery = null, string name = "toolkit-smoke",
         RunCancellation? cancellation = null) => new()
     {
         Name = name,
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-        Scenario = scenario ?? (_ => Task.CompletedTask),
+        Scenario = TestRun.Scenario(scenario ?? (_ => Task.CompletedTask)),
         Hooks = new FakeRunHooks
         {
             Host = hostName => hostName == "linux-box" ? host : hostName == LeaseBox.Name && leaseHost != null ? leaseHost : clientHost ?? throw new InvalidOperationException("No fake host " + hostName),
@@ -628,7 +628,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         {
             // A scenario reaches a campaign client's host by its name.
             Assert.Equal(["player"], run.CampaignClients);
-            Assert.Same(clientHost, run.ClientHost("player"));
+            Assert.Same(clientHost, run.GameSession.ClientHost("player"));
             using (var session = run.OpenClient(client)) pid = session.ProcessId;
             return Task.CompletedTask;
         }, clientHost, clientTransport));

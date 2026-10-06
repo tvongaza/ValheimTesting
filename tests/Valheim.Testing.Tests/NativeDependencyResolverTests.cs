@@ -411,7 +411,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         {
             Name = "campaign-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-            Scenario = run => { scenarioRan = true; Assert.NotNull(run.ServerHost); return Task.CompletedTask; },
+            Scenario = (session, _) => { scenarioRan = true; Assert.NotNull(session.Server!.Host); return Task.CompletedTask; },
             Hooks = new FakeRunHooks { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
         };
         IReadOnlyDictionary<string, ClientRunPlan> NoClients(SitePlan _) => new Dictionary<string, ClientRunPlan>();
@@ -632,7 +632,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         {
             Name = "cut-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-            Scenario = _ => throw new InvalidOperationException("The scenario must not run after a cancelled preparation."),
+            Scenario = (_, _) => throw new InvalidOperationException("The scenario must not run after a cancelled preparation."),
             Hooks = new FakeRunHooks { Host = name => hosts[name], Connect = _ => server.Connect(), StateWaits = false, Cancellation = interrupt },
         };
         string output = Path.Combine(_rig.Root, "cut-campaign-out");
@@ -718,7 +718,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         {
             Name = "this-machine-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             SessionCapability = "test.mod/session", SessionTokenVariable = "TEST_SESSION_TOKEN",
-            Scenario = _ => Task.CompletedTask,
+            Scenario = (_, _) => Task.CompletedTask,
             Hooks = new FakeRunHooks { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
         };
         string output = Path.Combine(_rig.Root, "this-machine-out");
