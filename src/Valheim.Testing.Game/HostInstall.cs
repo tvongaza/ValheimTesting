@@ -139,7 +139,8 @@ public static class HostInstall
 
     /// <summary>
     /// Refuses when anything on the host listens on TCP <paramref name="port"/> (any address), so a command can never reach a
-    /// process this run does not own. Bash reads <c>/proc/net/tcp</c> (Linux); PowerShell asks .NET for the active listeners.
+    /// process this run does not own. Bash reads <c>/proc/net/tcp</c> (Linux) or <c>netstat</c>'s listeners (macOS); PowerShell asks
+    /// .NET for the active listeners.
     /// </summary>
     public static async Task RequirePortFreeAsync(IGameHost host, int port, TimeSpan timeout, CancellationToken cancellation = default)
     {
@@ -151,7 +152,7 @@ public static class HostInstall
         {
             case "free": return;
             case "busy": throw new InvalidOperationException($"Something already listens on port {port} on {host.Name}; stop it first, this run only drives processes it started.");
-            case "unknown": throw new PlatformNotSupportedException($"{host.Name} cannot tell which ports are in use (no /proc/net/tcp); a server host must be Linux.");
+            case "unknown": throw new PlatformNotSupportedException($"{host.Name} cannot tell which ports are in use (neither /proc/net/tcp nor macOS's netstat table); use bash on Linux or macOS, or PowerShell on Windows.");
             default: throw new HostOperationException($"Unexpected reply while checking port {port} on {host.Name}", result);
         }
     }
@@ -399,10 +400,20 @@ internal static class HostInstallScripts
         'VT-COPY copied'
         """.ReplaceLineEndings("\n");
 
-    // Variables: port. A listening socket is state 0A; the local address's port is the hex after its last colon.
+    // Variables: port. Linux: a listening socket is state 0A; the local address's port is the hex after its last colon. macOS
+    // (no /proc): netstat's LISTEN lines, whose local address ends in .<port> (127.0.0.1.5688, *.5688, ::1.5688).
     public static readonly string BashPort = """
         set -u
-        if [ ! -r /proc/net/tcp ]; then echo "VT-PORT unknown"; exit 0; fi
+        if [ ! -r /proc/net/tcp ]; then
+            if [ "$(uname -s)" = Darwin ] && listing=$(netstat -an -p tcp 2>/dev/null); then
+                # 0 busy, 1 free, anything else (no header: not netstat's table, or awk failed) unknown: never "free" by default.
+                printf '%s\n' "$listing" | awk -v p="$port" '$1 == "Proto" { header = 1 } $NF == "LISTEN" { n = split($4, a, "."); if (a[n] == p) found = 1 }
+                    END { if (!header) exit 2; exit found ? 0 : 1 }'
+                case $? in 0) echo "VT-PORT busy";; 1) echo "VT-PORT free";; *) echo "VT-PORT unknown";; esac
+                exit 0
+            fi
+            echo "VT-PORT unknown"; exit 0
+        fi
         hex=$(printf '%04X' "$port") || exit 3
         for f in /proc/net/tcp /proc/net/tcp6; do
             [ -r "$f" ] || continue

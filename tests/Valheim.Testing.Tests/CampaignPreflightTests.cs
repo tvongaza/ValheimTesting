@@ -277,6 +277,32 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task");
     }
 
+    // A Mac hosts clients only. A remote one is refused as a server by the inventory; this machine's own, whose port check
+    // works now (netstat), is refused by name in the preflight, before anything is copied, rather than at its start. Only a
+    // Mac can name itself as a local macOS host, so this runs on the macOS CI leg.
+    [Fact]
+    public async Task ADedicatedServerOnThisMacIsRefusedInThePreflight()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        string inventory = Write("mac-inventory.json", new
+        {
+            hosts = new { mac = new { kind = "local", platform = "macos", shell = "bash", @lock = Path.Combine(_root, "lock") } },
+            environments = new object[]
+            {
+                new { name = "mac-server", host = "mac", roles = new[] { "server" }, install = Path.Combine(_root, "server"), runtime = Path.Combine(_root, "runs"), cliPort = 5577, gamePort = 2456 },
+            },
+        });
+        string file = Write("campaign.json", new
+        {
+            inventory, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
+        });
+        var host = new FakeServerHost("mac", Path.Combine(_root, "mirror"));
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        Assert.False(report.Ready);
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "server host" && problem.Message.Contains("macOS host"));
+        Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start" or "apply-stage");
+    }
+
     // A probe's refusal of a kind no check listed (a bash host that cannot tell which ports are in use) fills its own line
     // beside the others; it used to escape the concurrent preflight as an exception and lose every other fault.
     [Fact]
