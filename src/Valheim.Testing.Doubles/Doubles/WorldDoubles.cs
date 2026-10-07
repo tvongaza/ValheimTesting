@@ -17,7 +17,7 @@ namespace Valheim.Testing.Doubles
     public static class DoubledGame
     {
         /// <summary>The game's version string; <c>ZNet.VersionString</c>'s default.</summary>
-        public const string Version = "1.0.16";
+        public const string Version = "1.0.17";
         /// <summary>The game's network version (<c>Version.c_networkVersion</c>); <c>ZNet.NetworkVersion</c>'s default.</summary>
         public const uint NetworkVersion = 40;
     }

@@ -6,8 +6,8 @@ using Valheim.Testing.Doubles;
 using Xunit;
 
 // The doubles against bytes the game itself wrote (issue #15): GameBytes/zpackage-capture.tsv comes from the capture plugin
-// (tests/Valheim.Testing.Doubles.GameCapture) running ZPackageCases in a real 1.0.16 server, so a hand-derived expectation
-// in RpcTests cannot agree with the double and still be wrong. Recapture after a game update changes the encoding.
+// (tests/Valheim.Testing.Doubles.GameCapture) running ZPackageCases in a real server of the game the doubles copy, so a
+// hand-derived expectation in RpcTests cannot agree with the double and still be wrong. Recapture after every game update.
 public sealed class GameCapturedBytesTests
 {
     private sealed record Captured(string Kind, string Hex);
