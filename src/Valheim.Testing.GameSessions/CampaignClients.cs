@@ -197,14 +197,9 @@ internal sealed class CampaignClients
                     {
                         // A preloader crash log this launch wrote says why (#254); an older one is not this launch's and says nothing.
                         var preloader = await HostedClientScripts.ReadPreloaderAsync(host, role.Install, launchDirectory).ConfigureAwait(false);
-                        // A nullable projection: FirstOrDefault of a tuple list is a default tuple, never null.
-                        var failed = preloader?.Fresh.Where(log => log.FirstError != null).Select(log => ((string Name, string Error)?)(log.Name, log.FirstError!)).FirstOrDefault();
-                        string why = failed is { } hit
-                            ? $"BepInEx's preloader failed: {hit.Error} (from {hit.Name}, which the client's evidence keeps as game-2.preloader-*.log). "
-                            : preloader?.Fresh.Count > 0 ? $"BepInEx's preloader wrote {string.Join(", ", preloader.Value.Fresh.Select(log => log.Name))} with no error line (the client's evidence keeps it as game-2.preloader-*.log). "
-                            : "The game may have reached its menu without BepInEx; check winhttp.dll, doorstop_config.ini and BepInEx/core as one pack. ";
-                        string stale = preloader?.Stale.Count > 0 ? $"Older preloader logs beside the game ({string.Join(", ", preloader.Value.Stale)}) predate this launch and are not its. " : "";
-                        throw new InvalidOperationException($"BepInEx wrote no fresh log line on {host.Name} within {plan.BepInExSeconds}s. {why}{stale}" +
+                        string why = PreloaderLogs.Explain(preloader, "game-2.preloader-*.log",
+                            "The game may have reached its menu without BepInEx; check winhttp.dll, doorstop_config.ini and BepInEx/core as one pack. ");
+                        throw new InvalidOperationException($"BepInEx wrote no fresh log line on {host.Name} within {plan.BepInExSeconds}s. {why}" +
                             $"The client's Player.log and boot output are kept in {local}.", error);
                     }
                     (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
