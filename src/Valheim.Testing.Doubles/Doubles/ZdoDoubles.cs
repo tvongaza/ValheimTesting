@@ -144,7 +144,7 @@ public partial class ZDO
             RemoveObsoleteValues();
         }
         m_owner = 0;
-        m_uid = new ZDOID { ID = s_nextId++ };
+        m_uid = new ZDOID(0L, s_nextId++);
     }
 
     // The old-format reader's per-value rules: empty strings and byte arrays and identity rotations are not read,

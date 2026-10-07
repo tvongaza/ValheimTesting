@@ -28,6 +28,38 @@ public sealed class DoublesTests : IDisposable
     }
     private static List<ZDO> InZone(Vector2s zone) { var found = new List<ZDO>(); ZDOMan.instance!.FindObjects(zone, found, new HashSet<ZoneSystem.SectorIndex>()); return found; }
 
+    // As the game's FindObjects: a sector already in the visited set adds nothing the second time.
+    [Fact] public void FindObjectsSkipsASectorAlreadyVisited()
+    {
+        var zdo = ZDOMan.instance!.CreateNewZDO(new UnityEngine.Vector3(10, 30, 10), 7);
+        var zone = ZoneSystem.GetZone(zdo.GetPosition());
+        var visited = new HashSet<ZoneSystem.SectorIndex>(); var found = new List<ZDO>();
+        ZDOMan.instance.FindObjects(zone, found, visited); ZDOMan.instance.FindObjects(zone, found, visited);
+        Assert.Equal(new[] { zdo }, found);
+        Assert.Equal(new[] { ZoneSystem.SectorToIndex(zone) }, visited);
+    }
+    [Fact] public void SectorIndicesAreTheGamesRowMajorNumbers()
+    {
+        Assert.Equal(256u * 512 + 256, ZoneSystem.SectorToIndex(new Vector2s(0, 0)).Sector);
+        Assert.Equal(257u * 512 + 255, ZoneSystem.SectorToIndex(-1, 1).Sector);
+        Assert.Equal(0u, ZoneSystem.SectorToIndex(256, 0).Sector); // outside the table, as in the game
+        Assert.Equal(new Vector2s(-1, 1), ZoneSystem.IndexToSector(ZoneSystem.SectorToIndex(-1, 1).Sector));
+    }
+    // ZDOID.ID is the game's uint, and a ZDOID prints as the game's "session:number".
+    [Fact] public void AZdoidIsTheSessionAndAUintNumber()
+    {
+        var id = new ZDOID(42L, uint.MaxValue);
+        Assert.Equal((42L, uint.MaxValue), (id.UserID, id.ID));
+        Assert.Equal("42:4294967295", id.ToString());
+        var pkg = new ZPackage(); pkg.Write(id); pkg.SetPos(0);
+        Assert.Equal(id, pkg.ReadZDOID());
+    }
+    [Fact] public void TheLocationListIsTheLocationInstancesValues()
+    {
+        var instance = new ZoneSystem.LocationInstance { m_location = new ZoneSystem.ZoneLocation(), m_position = new UnityEngine.Vector3(70, 0, 0) };
+        ZoneSystem.instance!.m_locationInstances[new Vector2s(1, 0)] = instance;
+        Assert.Equal(new[] { instance.m_position }, ZoneSystem.instance.GetLocationList().Select(l => l.m_position));
+    }
     [Fact] public void DestroyedZdosStayVisibleUntilTheQueueIsProcessed()
     {
         var zdo = ZDOMan.instance!.CreateNewZDO(new UnityEngine.Vector3(10, 30, 10), 7);
@@ -232,6 +264,20 @@ public sealed class DoublesTests : IDisposable
         comp.Save(); Assert.Equal(1, comp.SaveCount);
         comp.m_nview.GetZDO().SetOwner(99); comp.Save(); Assert.Equal(1, comp.SaveCount);
     }
+    // The game's Save(paintOnly: true) writes only when its paint hash changed since the last paint-only save. That hash
+    // sums each modified texel's channels, so repainting paved (0,0,1,1) as dirt (1,0,0,1) keeps it and is not saved.
+    [Fact] public void APaintOnlySaveSkipsPaintWhoseHashIsUnchanged()
+    {
+        var comp = Heightmap.CreateForZone(new Vector2s(0, 0)).m_terrainComp!;
+        comp.m_modifiedPaint[0] = true; comp.m_paintMask[0] = Heightmap.m_paintMaskPaved;
+        comp.Save(paintOnly: true); Assert.Equal(1, comp.SaveCount);
+        comp.Save(paintOnly: true); Assert.Equal(1, comp.SaveCount);
+        comp.m_paintMask[0] = Heightmap.m_paintMaskDirt;
+        comp.Save(paintOnly: true); Assert.Equal(1, comp.SaveCount);
+        comp.m_paintMask[0] = Heightmap.m_paintMaskClearVegetation;
+        comp.Save(paintOnly: true); Assert.Equal(2, comp.SaveCount);
+        comp.Save(); Assert.Equal(3, comp.SaveCount);
+    }
     [Fact] public void ZoneIdsNarrowToShortAsTheGamesDo()
     {
         Assert.Equal(new Vector2s(1, -1), ZoneSystem.GetZone(new UnityEngine.Vector3(40, 0, -40)));
@@ -364,9 +410,13 @@ public sealed class DoublesTests : IDisposable
         using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithCommands();
         new Terminal.ConsoleCommand("fails", "", (Terminal.ConsoleEventFailable)(_ => "no world"));
         new Terminal.ConsoleCommand("works", "", (Terminal.ConsoleEventFailable)(_ => true));
+        new Terminal.ConsoleCommand("refuses", "", (Terminal.ConsoleEventFailable)(_ => false));
+        new Terminal.ConsoleCommand("counts", "", (Terminal.ConsoleEventFailable)(_ => 3));
         var console = new Terminal();
         console.TryRunCommand("nothing"); console.TryRunCommand("nothing", silentFail: true); console.TryRunCommand("fails"); console.TryRunCommand("works");
-        Assert.Equal(new[] { "Unknown command: nothing", "Error executing command: no world" }, console.Output);
+        console.TryRunCommand("refuses"); console.TryRunCommand("counts");
+        // As the game's RunAction: false prints its generic error, a string is the error, any other result prints nothing.
+        Assert.Equal(new[] { "Unknown command: nothing", "Error executing command: no world", "Error executing command. Check parameters and context." }, console.Output);
     }
     [Fact] public void AScopeGivesItsOwnCommandTableAndLocalPlayerAndRestoresThem()
     {

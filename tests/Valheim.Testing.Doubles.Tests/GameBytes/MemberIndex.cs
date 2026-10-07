@@ -10,7 +10,7 @@ using System.Reflection;
 public static class MemberIndex
 {
     /// <summary>The namespaces whose types stand in for game, Unity, BepInEx, Harmony, Jotunn and platform types (and the global one).</summary>
-    public static readonly string[] Namespaces = { "UnityEngine", "BepInEx", "HarmonyLib", "Jotunn", "Splatform", "Steamworks" };
+    public static readonly string[] Namespaces = { "UnityEngine", "BepInEx", "HarmonyLib", "Jotunn", "Splatform", "Steamworks", "SoftReferenceableAssets" };
 
     public const BindingFlags Declared = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 

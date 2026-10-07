@@ -848,7 +848,7 @@ Player	method	GetPlayerID() : long	game
 Player	method	GetPlayerName() : string	game
 Player	method	GetZDOID() : ZDOID	game
 Player	method	IsOwner() : bool	game
-Player	method	OnSpawned() : void	differs	OnSpawned(bool) : void
+Player	method	OnSpawned(bool) : void	game
 Player	method	static GetAllPlayers() : List<Player>	game
 RandomObject	type	class : UnityEngine.MonoBehaviour	game
 RandomObject	ctor	.ctor()	game
@@ -939,6 +939,27 @@ SocketDouble	method	Recv() : ZPackage	absent
 SocketDouble	method	Send(ZPackage) : void	absent
 SocketDouble	method	VersionMatch() : void	absent
 SocketDouble	method	static Link(SocketDouble, SocketDouble) : void	absent
+SoftReferenceableAssets.LoadResult	type	enum	game
+SoftReferenceableAssets.LoadResult	field	static Aborted : SoftReferenceableAssets.LoadResult	game
+SoftReferenceableAssets.LoadResult	field	static Failed : SoftReferenceableAssets.LoadResult	game
+SoftReferenceableAssets.LoadResult	field	static Succeeded : SoftReferenceableAssets.LoadResult	game
+SoftReferenceableAssets.SoftReference<T>	type	struct	game
+SoftReferenceableAssets.SoftReference<T>	ctor	.ctor(string, T)	differs	.ctor(SoftReferenceableAssets.AssetID)
+SoftReferenceableAssets.SoftReference<T>	method	Equals(SoftReferenceableAssets.SoftReference<T>) : bool	game
+SoftReferenceableAssets.SoftReference<T>	method	Equals(object) : bool	game
+SoftReferenceableAssets.SoftReference<T>	method	GetHashCode() : int	game
+SoftReferenceableAssets.SoftReference<T>	method	HoldReference() : void	game
+SoftReferenceableAssets.SoftReference<T>	method	Load() : SoftReferenceableAssets.LoadResult	game
+SoftReferenceableAssets.SoftReference<T>	method	Release() : void	game
+SoftReferenceableAssets.SoftReference<T>	method	ToString() : string	game
+SoftReferenceableAssets.SoftReference<T>	method	static op_Equality(SoftReferenceableAssets.SoftReference<T>, SoftReferenceableAssets.SoftReference<T>) : bool	game
+SoftReferenceableAssets.SoftReference<T>	method	static op_Inequality(SoftReferenceableAssets.SoftReference<T>, SoftReferenceableAssets.SoftReference<T>) : bool	game
+SoftReferenceableAssets.SoftReference<T>	property	Asset : T	game
+SoftReferenceableAssets.SoftReference<T>	property	IsLoaded : bool	game
+SoftReferenceableAssets.SoftReference<T>	property	IsLoading : bool	game
+SoftReferenceableAssets.SoftReference<T>	property	IsValid : bool	game
+SoftReferenceableAssets.SoftReference<T>	property	Name : string	game
+SoftReferenceableAssets.SoftReference<T>	property	References : int	absent
 SpawnArea	type	class : UnityEngine.MonoBehaviour	game
 SpawnArea	ctor	.ctor()	game
 SpawnArea	field	m_farRadius : float	game
@@ -1046,7 +1067,7 @@ Terminal.ConsoleCommand	field	OnlyAdmin : bool	game
 Terminal.ConsoleCommand	field	OnlyServer : bool	game
 Terminal.ConsoleCommand	field	RemoteCommand : bool	game
 Terminal.ConsoleCommand	method	IsValid(Terminal, bool) : bool	game
-Terminal.ConsoleCommand	method	RunAction(Terminal.ConsoleEventArgs) : object	differs	RunAction(Terminal.ConsoleEventArgs) : void
+Terminal.ConsoleCommand	method	RunAction(Terminal.ConsoleEventArgs) : void	game
 Terminal.ConsoleEvent	type	delegate	game
 Terminal.ConsoleEventArgs	type	class	game
 Terminal.ConsoleEventArgs	ctor	.ctor(string, Terminal)	differs	.ctor(string, Terminal, Terminal.ConsoleCommand)
@@ -1078,7 +1099,7 @@ TerrainComp	field	m_smoothDelta : float[]	game
 TerrainComp	field	m_width : int	game
 TerrainComp	field	static PrefabName : string	absent
 TerrainComp	method	Load() : bool	game
-TerrainComp	method	Save() : void	differs	Save(bool) : void
+TerrainComp	method	Save(bool) : void	game
 TerrainComp	method	static FindTerrainCompiler(UnityEngine.Vector3) : TerrainComp	game
 TerrainModifier	type	class : UnityEngine.MonoBehaviour	game
 TerrainModifier	ctor	.ctor()	game
@@ -1422,11 +1443,11 @@ UnityEngine.Object	method	static FindObjectsByType<T>(UnityEngine.FindObjectsIna
 UnityEngine.Object	method	static FindObjectsByType<T>(UnityEngine.FindObjectsSortMode) : T[]	game
 UnityEngine.Object	method	static FindObjectsOfType<T>() : T[]	game
 UnityEngine.Object	method	static FindObjectsOfType<T>(bool) : T[]	game
-UnityEngine.Object	method	static Instantiate(UnityEngine.GameObject, UnityEngine.Vector3, UnityEngine.Quaternion) : UnityEngine.GameObject	differs	static Instantiate(UnityEngine.Object) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.SceneManagement.Scene) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.Transform) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.Transform, bool) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.Vector3, UnityEngine.Quaternion) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.Vector3, UnityEngine.Quaternion, UnityEngine.Transform) : UnityEngine.Object | static Instantiate<T>(T) : T | static Instantiate<T>(T, UnityEngine.InstantiateParameters) : T | static Instantiate<T>(T, UnityEngine.Transform) : T | static Instantiate<T>(T, UnityEngine.Transform, bool) : T | static Instantiate<T>(T, UnityEngine.Vector3, UnityEngine.Quaternion) : T | static Instantiate<T>(T, UnityEngine.Vector3, UnityEngine.Quaternion, UnityEngine.InstantiateParameters) : T | static Instantiate<T>(T, UnityEngine.Vector3, UnityEngine.Quaternion, UnityEngine.Transform) : T
-UnityEngine.Object	method	static Instantiate(UnityEngine.GameObject, UnityEngine.Vector3, UnityEngine.Quaternion, UnityEngine.Transform) : UnityEngine.GameObject	differs	static Instantiate(UnityEngine.Object) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.SceneManagement.Scene) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.Transform) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.Transform, bool) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.Vector3, UnityEngine.Quaternion) : UnityEngine.Object | static Instantiate(UnityEngine.Object, UnityEngine.Vector3, UnityEngine.Quaternion, UnityEngine.Transform) : UnityEngine.Object | static Instantiate<T>(T) : T | static Instantiate<T>(T, UnityEngine.InstantiateParameters) : T | static Instantiate<T>(T, UnityEngine.Transform) : T | static Instantiate<T>(T, UnityEngine.Transform, bool) : T | static Instantiate<T>(T, UnityEngine.Vector3, UnityEngine.Quaternion) : T | static Instantiate<T>(T, UnityEngine.Vector3, UnityEngine.Quaternion, UnityEngine.InstantiateParameters) : T | static Instantiate<T>(T, UnityEngine.Vector3, UnityEngine.Quaternion, UnityEngine.Transform) : T
 UnityEngine.Object	method	static Instantiate<T>(T) : T	game
 UnityEngine.Object	method	static Instantiate<T>(T, UnityEngine.Transform) : T	game
 UnityEngine.Object	method	static Instantiate<T>(T, UnityEngine.Transform, bool) : T	game
+UnityEngine.Object	method	static Instantiate<T>(T, UnityEngine.Vector3, UnityEngine.Quaternion) : T	game
+UnityEngine.Object	method	static Instantiate<T>(T, UnityEngine.Vector3, UnityEngine.Quaternion, UnityEngine.Transform) : T	game
 UnityEngine.Object	method	static RunFrame(float) : void	absent
 UnityEngine.Object	method	static UnityOrdered<T>(IEnumerable<T>) : List<T>	absent
 UnityEngine.Object	method	static op_Equality(UnityEngine.Object, UnityEngine.Object) : bool	game
@@ -1674,8 +1695,8 @@ WorldGenerator	ctor	.ctor()	differs	.ctor(World)
 WorldGenerator	field	static WaterLevel : float	absent
 WorldGenerator	field	static instance : WorldGenerator	game
 WorldGenerator	method	GetBaseHeight(float, float, bool) : float	game
-WorldGenerator	method	GetBiome(float, float) : Heightmap.Biome	differs	GetBiome(UnityEngine.Vector3) : Heightmap.Biome | GetBiome(Vector2s) : Heightmap.Biome | GetBiome(float, float, float, bool) : Heightmap.Biome
-WorldGenerator	method	GetBiomeHeight(Heightmap.Biome, float, float, out UnityEngine.Color) : float	differs	GetBiomeHeight(Heightmap.Biome, float, float, out UnityEngine.Color, bool, bool) : float
+WorldGenerator	method	GetBiome(float, float, float, bool) : Heightmap.Biome	game
+WorldGenerator	method	GetBiomeHeight(Heightmap.Biome, float, float, out UnityEngine.Color, bool, bool) : float	game
 WorldGenerator	method	GetHeight(float, float) : float	game
 WorldGenerator	method	GetRiverWeight(float, float, out float, out float) : void	game
 WorldGenerator	method	GetSeed() : int	game
@@ -1764,7 +1785,6 @@ ZDO.SavedWorld	field	static BeforeNewSaveFormat : ZDO.SavedWorld	absent
 ZDO.SavedWorld	field	static Current : ZDO.SavedWorld	absent
 ZDOID	type	struct	game
 ZDOID	ctor	.ctor(long, uint)	game
-ZDOID	field	ID : long	differs	ID : uint
 ZDOID	field	UserID : long	game
 ZDOID	method	Equals(ZDOID) : bool	game
 ZDOID	method	Equals(object) : bool	game
@@ -1773,6 +1793,7 @@ ZDOID	method	IsNone() : bool	game
 ZDOID	method	ToString() : string	game
 ZDOID	method	static op_Equality(ZDOID, ZDOID) : bool	game
 ZDOID	method	static op_Inequality(ZDOID, ZDOID) : bool	game
+ZDOID	property	ID : uint	game
 ZDOID	property	static None : ZDOID	game
 ZDOMan	type	class	game
 ZDOMan	ctor	.ctor()	differs	.ctor(int)
@@ -1806,11 +1827,12 @@ ZDOVars	field	static s_scaleScalarHash : int	game
 ZDOVars	field	static s_terrainModifierTimeCreated : int	game
 ZInput	type	class	game
 ZInput	ctor	.ctor()	game
-ZInput	field	GamepadActive : bool	differs	static GamepadActive : bool
+ZInput	field	UsingGamepad : bool	absent
 ZInput	method	GetBoundKeyString(string, bool) : string	game
 ZInput	method	SetBinding(string, string) : void	absent
 ZInput	method	static IsGamepadActive() : bool	game
 ZInput	property	static Current : ZInput	absent
+ZInput	property	static GamepadActive : bool	game
 ZInput	property	static instance : ZInput	game
 ZLog	type	class	game
 ZLog	ctor	.ctor()	game
@@ -1920,7 +1942,6 @@ ZNetView	type	class : UnityEngine.MonoBehaviour	game
 ZNetView	ctor	.ctor()	game
 ZNetView	ctor	.ctor(ZDO)	differs	.ctor()
 ZNetView	field	Zdo : ZDO	absent
-ZNetView	field	m_functions : Dictionary<int, ValueTuple<string, Delegate>>	differs	m_functions : Dictionary<int, RoutedMethodBase>
 ZNetView	field	m_persistent : bool	game
 ZNetView	field	m_syncInitialScale : bool	game
 ZNetView	field	static Everybody : long	game
@@ -1930,6 +1951,7 @@ ZNetView	field	static m_useInitZDO : bool	game
 ZNetView	method	ClaimOwnership() : void	game
 ZNetView	method	GetZDO() : ZDO	game
 ZNetView	method	HandleRoutedRPC(ZRoutedRpc.RoutedRPCData) : void	game
+ZNetView	method	Handles(int) : bool	absent
 ZNetView	method	HasOwner() : bool	game
 ZNetView	method	InvokeRPC(long, string, params object[]) : void	game
 ZNetView	method	InvokeRPC(string, params object[]) : void	game
@@ -2095,7 +2117,6 @@ ZoneSystem	type	class : UnityEngine.MonoBehaviour	game
 ZoneSystem	ctor	.ctor()	game
 ZoneSystem	event	GenerateLocationsCompleted : Action	game
 ZoneSystem	field	Generated : HashSet<Vector2s>	absent
-ZoneSystem	field	Locations : List<ZoneSystem.LocationInstance>	absent
 ZoneSystem	field	WorldStartingGlobalKeys : List<string>	absent
 ZoneSystem	field	m_globalKeys : HashSet<string>	game
 ZoneSystem	field	m_globalKeysEnums : HashSet<GlobalKeys>	game
@@ -2115,7 +2136,7 @@ ZoneSystem	method	GetGlobalKey(string) : bool	game
 ZoneSystem	method	GetGlobalKey(string, out string) : bool	game
 ZoneSystem	method	GetGlobalKeyExact(string) : bool	game
 ZoneSystem	method	GetGlobalKeys() : List<string>	game
-ZoneSystem	method	GetLocationList() : List<ZoneSystem.LocationInstance>	differs	GetLocationList() : Dictionary<Vector2s, ZoneSystem.LocationInstance>.ValueCollection
+ZoneSystem	method	GetLocationList() : Dictionary<Vector2s, ZoneSystem.LocationInstance>.ValueCollection	game
 ZoneSystem	method	GlobalKeyAdd(string, bool) : void	game
 ZoneSystem	method	GlobalKeyRemove(string, bool) : bool	game
 ZoneSystem	method	IsZoneGenerated(Vector2s) : bool	game
@@ -2140,6 +2161,9 @@ ZoneSystem	method	Update() : void	game
 ZoneSystem	method	static GetKeyValue(string, out string, out GlobalKeys) : string	game
 ZoneSystem	method	static GetZone(UnityEngine.Vector3) : Vector2s	game
 ZoneSystem	method	static GetZonePos(Vector2s) : UnityEngine.Vector3	game
+ZoneSystem	method	static IndexToSector(uint) : Vector2s	game
+ZoneSystem	method	static SectorToIndex(Vector2s) : ZoneSystem.SectorIndex	game
+ZoneSystem	method	static SectorToIndex(int, int) : ZoneSystem.SectorIndex	game
 ZoneSystem	property	LocationsGenerated : bool	game
 ZoneSystem	property	Started : bool	absent
 ZoneSystem.ClearArea	type	class	game
@@ -2151,11 +2175,12 @@ ZoneSystem.LocationInstance	field	m_location : ZoneSystem.ZoneLocation	game
 ZoneSystem.LocationInstance	field	m_placed : bool	game
 ZoneSystem.LocationInstance	field	m_position : UnityEngine.Vector3	game
 ZoneSystem.SectorIndex	type	struct	game
-ZoneSystem.SectorIndex	ctor	.ctor(Vector2s)	differs	.ctor(uint)
-ZoneSystem.SectorIndex	field	Sector : Vector2s	differs	Sector : uint
-ZoneSystem.SectorIndex	method	Equals(ZoneSystem.SectorIndex) : bool	differs	Equals(object) : bool
+ZoneSystem.SectorIndex	ctor	.ctor(uint)	game
+ZoneSystem.SectorIndex	field	Sector : uint	game
 ZoneSystem.SectorIndex	method	Equals(object) : bool	game
 ZoneSystem.SectorIndex	method	GetHashCode() : int	game
+ZoneSystem.SectorIndex	method	static op_Equality(ZoneSystem.SectorIndex, ZoneSystem.SectorIndex) : bool	game
+ZoneSystem.SectorIndex	method	static op_Inequality(ZoneSystem.SectorIndex, ZoneSystem.SectorIndex) : bool	game
 ZoneSystem.SpawnMode	type	enum	game
 ZoneSystem.SpawnMode	field	static Client : ZoneSystem.SpawnMode	game
 ZoneSystem.SpawnMode	field	static Full : ZoneSystem.SpawnMode	game
@@ -2189,7 +2214,7 @@ ZoneSystem.ZoneLocation	field	m_minDistanceFromSimilar : float	game
 ZoneSystem.ZoneLocation	field	m_minTerrainDelta : float	game
 ZoneSystem.ZoneLocation	field	m_minimumVegetation : float	game
 ZoneSystem.ZoneLocation	field	m_name : string	game
-ZoneSystem.ZoneLocation	field	m_prefab : ZoneSystem.ZoneLocation.PrefabEntry	differs	m_prefab : SoftReferenceableAssets.SoftReference<UnityEngine.GameObject>
+ZoneSystem.ZoneLocation	field	m_prefab : SoftReferenceableAssets.SoftReference<UnityEngine.GameObject>	game
 ZoneSystem.ZoneLocation	field	m_prefabName : string	game
 ZoneSystem.ZoneLocation	field	m_prioritized : bool	game
 ZoneSystem.ZoneLocation	field	m_quantity : int	game
@@ -2214,12 +2239,3 @@ ZoneSystem.ZoneLocation.Placement	field	static Biome : ZoneSystem.ZoneLocation.P
 ZoneSystem.ZoneLocation.Placement	field	static CenterDistance : ZoneSystem.ZoneLocation.Placement	absent
 ZoneSystem.ZoneLocation.Placement	field	static Distance : ZoneSystem.ZoneLocation.Placement	absent
 ZoneSystem.ZoneLocation.Placement	field	static TerrainDelta : ZoneSystem.ZoneLocation.Placement	absent
-ZoneSystem.ZoneLocation.PrefabEntry	type	class	absent
-ZoneSystem.ZoneLocation.PrefabEntry	ctor	.ctor()	absent
-ZoneSystem.ZoneLocation.PrefabEntry	field	Name : string	absent
-ZoneSystem.ZoneLocation.PrefabEntry	method	Load() : void	absent
-ZoneSystem.ZoneLocation.PrefabEntry	method	Release() : void	absent
-ZoneSystem.ZoneLocation.PrefabEntry	property	Asset : UnityEngine.GameObject	absent
-ZoneSystem.ZoneLocation.PrefabEntry	property	IsLoaded : bool	absent
-ZoneSystem.ZoneLocation.PrefabEntry	property	IsValid : bool	absent
-ZoneSystem.ZoneLocation.PrefabEntry	property	References : int	absent

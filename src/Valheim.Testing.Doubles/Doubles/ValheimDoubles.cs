@@ -316,12 +316,13 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
 public partial struct ZDOID : System.IEquatable<ZDOID>
 {
     public long UserID;
-    [TestOnly] public long ID;
+    public uint ID { get; private set; }
     public ZDOID(long userID, uint id) { UserID = userID; ID = id; }
     /// <summary>No object; what a peer's character id is before it spawns.</summary>
     public static ZDOID None => default;
     public bool IsNone() => UserID == 0 && ID == 0;
-    public override string ToString() => ID.ToString();
+    /// <summary>The session id, a colon and the number, as the game writes a ZDOID ("0:12" for a doubles-made object).</summary>
+    public override string ToString() => UserID + ":" + ID;
     public bool Equals(ZDOID other) => UserID == other.UserID && ID == other.ID;
     public override bool Equals(object? obj) => obj is ZDOID other && Equals(other);
     public override int GetHashCode() => ID.GetHashCode();
@@ -335,9 +336,9 @@ public partial struct ZDOID : System.IEquatable<ZDOID>
 /// </summary>
 public partial class ZDO
 {
-    private static long s_nextId = 1;
+    private static uint s_nextId = 1;
 
-    public ZDOID m_uid = new() { ID = s_nextId++ };
+    public ZDOID m_uid = new(0L, s_nextId++);
     public bool Persistent;
     private int m_prefab;
     private long m_owner;
@@ -416,15 +417,13 @@ public partial class ZDOMan
     }
 
     /// <summary>
-    /// The ZDOs whose position lies in the sector (zone). Valheim 1.0 added the
-    /// set of sectors the caller has already visited; it is required here, as it
-    /// is in the game, so a caller that forgets it fails to compile rather than
-    /// silently passing null. The shim records it and otherwise answers as before.
+    /// The ZDOs whose position lies in the sector (zone), as the game's (private) FindObjects: a sector already in
+    /// <paramref name="visitedSectorIndices"/> adds nothing, and the sector is added to it, so pass a new set per lookup.
     /// </summary>
     public void FindObjects(Vector2s sector, System.Collections.Generic.List<ZDO> objects,
         System.Collections.Generic.HashSet<ZoneSystem.SectorIndex> visitedSectorIndices)
     {
-        visitedSectorIndices.Add(new ZoneSystem.SectorIndex(sector));
+        if (!visitedSectorIndices.Add(ZoneSystem.SectorToIndex(sector))) return;
         foreach (var zdo in Zdos)
             if (zdo.GetSector() == sector)
                 objects.Add(zdo);
@@ -491,17 +490,35 @@ public partial class TerrainComp
         m_modifiedPaint = new bool[n];
     }
 
+    private int m_lastHash;
+    // The game's ComputePaintMaskHash: a double summing each modified texel's flag and colour channels, hashed.
+    private int PaintMaskHash()
+    {
+        double sum = 0.0;
+        for (int i = 0; i < m_modifiedPaint.Length; i++)
+        {
+            sum += m_modifiedPaint[i] ? 1 : 0;
+            if (m_modifiedPaint[i]) { var c = m_paintMask[i]; sum += c.r; sum += c.g; sum += c.b; sum += c.a; }
+        }
+        return sum.GetHashCode();
+    }
+
     /// <summary>
     /// Like the game (1.0.16): only the owner's compiler saves, into the ZDO's TCData, the bytes the game writes:
     /// <c>Utils.Compress</c> of a ZPackage holding version 1, <see cref="m_operations"/>, <see cref="m_lastOpPoint"/>,
     /// <see cref="m_lastOpRadius"/>, the vertex count and per vertex a modified flag (then its level and smooth deltas),
     /// the texel count and per texel a modified flag (then its paint r, g, b, a). A peer that does not own the ZDO writes
     /// nothing, and so does a compiler that is not <see cref="m_initialized"/>: the game's Save returns silently in both cases.
+    /// With <paramref name="paintOnly"/> it also skips the write when the paint has not changed since the last paint-only
+    /// save (the game's hash of the modified texels). Private in the game; mods reach it through a publicized assembly.
     /// </summary>
-    [TestOnly] public void Save()
+    public void Save(bool paintOnly = false)
     {
         if (!m_initialized || m_nview == null || !m_nview.IsValid() || !m_nview.IsOwner())
             return;
+        int hash = paintOnly ? PaintMaskHash() : 0;
+        if (hash == m_lastHash && paintOnly) return;
+        m_lastHash = hash;
         SaveCount++;
         var package = new ZPackage();
         package.Write(1);
@@ -598,7 +615,11 @@ public partial class WorldGenerator
 
     public virtual float GetHeight(float wx, float wy) => 0f;
 
-    [TestOnly] public virtual Heightmap.Biome GetBiome(float wx, float wy) => Heightmap.Biome.Meadows;
+    /// <summary>
+    /// The biome at a point, with the game's signature and defaults. A test world overrides it; the double passes the
+    /// game's ocean parameters through and does not model them.
+    /// </summary>
+    public virtual Heightmap.Biome GetBiome(float wx, float wy, float oceanLevel = 0.02f, bool waterAlwaysOcean = false) => Heightmap.Biome.Meadows;
 
     public virtual void GetRiverWeight(float wx, float wy, out float weight, out float width)
     {
@@ -620,7 +641,8 @@ public partial class WorldGenerator
     /// <summary>The game's water level in metres (ZoneSystem.m_waterLevel).</summary>
     [TestOnly] public const float WaterLevel = 30f;
 
-    [TestOnly] public virtual float GetBiomeHeight(Heightmap.Biome biome, float wx, float wy, out UnityEngine.Color mask)
+    /// <summary>One biome's height at a point, with the game's signature and defaults; the generation flags are not modelled.</summary>
+    public virtual float GetBiomeHeight(Heightmap.Biome biome, float wx, float wy, out UnityEngine.Color mask, bool preGeneration = false, bool riverPreDN = true)
     {
         mask = default;
         return GetHeight(wx, wy);
@@ -628,22 +650,33 @@ public partial class WorldGenerator
 }
 
 /// <summary>
-/// Shim for Valheim's ZoneSystem with the members mod logic has needed so far.
-/// GetLocationList returns an empty list unless a test fills it.
+/// Shim for Valheim's ZoneSystem with the members mod logic has needed so far. A test places locations by adding them to
+/// <see cref="m_locationInstances"/>, which GetLocationList lists.
 /// </summary>
 public partial class ZoneSystem : UnityEngine.MonoBehaviour
 {
     [TestOnly] public const float ZoneSize = 64f;
 
-    /// <summary>Valheim 1.0's index of a zone within the sector tables.</summary>
-    public readonly partial struct SectorIndex : System.IEquatable<SectorIndex>
+    /// <summary>Valheim 1.0's index of a zone within the 512 x 512 sector tables (<see cref="SectorToIndex(int, int)"/>).</summary>
+    public partial struct SectorIndex
     {
-        [TestOnly] public readonly Vector2s Sector;
-        [TestOnly] public SectorIndex(Vector2s sector) => Sector = sector;
-        [TestOnly] public bool Equals(SectorIndex other) => Sector == other.Sector;
-        public override bool Equals(object? o) => o is SectorIndex s && Equals(s);
-        public override int GetHashCode() => Sector.GetHashCode();
+        public uint Sector;
+        public SectorIndex(uint sector) => Sector = sector;
+        public override bool Equals(object? o) => o is SectorIndex s && s.Sector == Sector;
+        public override int GetHashCode() => (int)Sector;
+        public static bool operator ==(SectorIndex s1, SectorIndex s2) => s1.Sector == s2.Sector;
+        public static bool operator !=(SectorIndex s1, SectorIndex s2) => s1.Sector != s2.Sector;
     }
+
+    /// <summary>The sector's index, as the game's: sectors -256..255 on each axis, row by row; any other sector is index 0.</summary>
+    public static SectorIndex SectorToIndex(Vector2s sector) => SectorToIndex(sector.x, sector.y);
+    public static SectorIndex SectorToIndex(int sectorX, int sectorY)
+    {
+        uint x = (uint)(sectorX + 256), y = (uint)(sectorY + 256);
+        return new SectorIndex(x >= 512 || y >= 512 ? 0u : y * 512 + x);
+    }
+    /// <summary>The sector an index stands for, as the game's.</summary>
+    public static Vector2s IndexToSector(uint index) => new((int)(index % 512 - 256), (int)(index / 512 - 256));
 
     public static ZoneSystem? instance;
 
@@ -660,25 +693,12 @@ public partial class ZoneSystem : UnityEngine.MonoBehaviour
 
     public partial class ZoneLocation
     {
-        [TestOnly] public PrefabEntry m_prefab = new();
-        public float m_exteriorRadius;
-
         /// <summary>
-        /// The game's <c>SoftReference&lt;GameObject&gt;</c>: the asset's name and, once loaded, the asset. A test sets
-        /// <see cref="Asset"/> to the template the location loads; <see cref="Load"/> and <see cref="Release"/> count the
-        /// references taken and given back, as the game does.
+        /// The location's template, as the game's soft reference: a test gives it one with
+        /// <c>new SoftReference&lt;GameObject&gt;(name, template)</c>.
         /// </summary>
-        [TestOnly] public partial class PrefabEntry
-        {
-            public string Name = "";
-            public UnityEngine.GameObject? Asset { get; set; }
-            public bool IsValid => Name.Length != 0 || Asset != null;
-            public bool IsLoaded => Asset != null && References > 0;
-            /// <summary>Loads taken and not released.</summary>
-            public int References { get; private set; }
-            public void Load() => References++;
-            public void Release() { if (References > 0) References--; }
-        }
+        public SoftReferenceableAssets.SoftReference<UnityEngine.GameObject> m_prefab;
+        public float m_exteriorRadius;
     }
 
     public partial struct LocationInstance
@@ -688,9 +708,8 @@ public partial class ZoneSystem : UnityEngine.MonoBehaviour
         public bool m_placed; // spawned in its zone; generation registers a location unplaced
     }
 
-    [TestOnly] public System.Collections.Generic.List<LocationInstance> Locations = new();
-
-    [TestOnly] public System.Collections.Generic.List<LocationInstance> GetLocationList() => Locations;
+    /// <summary>The placements, as the game's: the values of <see cref="m_locationInstances"/>.</summary>
+    public System.Collections.Generic.Dictionary<Vector2s, LocationInstance>.ValueCollection GetLocationList() => m_locationInstances.Values;
 
     /// <summary>The placements the game has decided on, one per zone.</summary>
     public System.Collections.Generic.Dictionary<Vector2s, LocationInstance> m_locationInstances = new();

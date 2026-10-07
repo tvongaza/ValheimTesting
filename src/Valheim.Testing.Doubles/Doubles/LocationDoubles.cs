@@ -73,7 +73,7 @@ public partial class ZoneSystem
         /// <summary>Highest ground height allowed, in metres above the water level (y = 30), not absolute.</summary>
         public float m_maxAltitude = 1000f;
 
-        public int Hash => m_prefab.Name.GetStableHashCode();
+        public int Hash => m_prefab.Name!.GetStableHashCode(); // throws on a handle with no asset, as the game's does
 
         /// <summary>The height the placement measures altitude from: 30 m, the default water level.</summary>
         [TestOnly] public const float AltitudeZero = 30f;
