@@ -529,7 +529,7 @@ internal static class HostedClientScripts
     /// this launch wrote (#254), and the names of older ones, which are not this launch's and explain nothing. Null when it
     /// cannot be read.
     /// </summary>
-    public static async Task<(IReadOnlyList<(string Name, string? FirstError)> Fresh, IReadOnlyList<string> Stale)?> ReadPreloaderAsync(IGameHost host, string install, string launchDirectory)
+    public static async Task<PreloaderLogs.Reading?> ReadPreloaderAsync(IGameHost host, string install, string launchDirectory)
     {
         try
         {
@@ -544,7 +544,7 @@ internal static class HostedClientScripts
                     if (kind == "stale") stale.Add(Decode(name));
                     else fresh.Add((Decode(name), error == "-" ? null : Decode(error)));
                 }
-            return (fresh, stale);
+            return new PreloaderLogs.Reading(fresh, stale);
         }
         catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or FormatException or InvalidOperationException) { return null; }
     }

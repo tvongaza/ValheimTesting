@@ -124,7 +124,9 @@ public sealed class ClientSession : IDisposable
     /// write this launch's first log line within <see cref="ClientRunPlan.BepInExSeconds"/>, or startup fails then, naming the
     /// loader, instead of at the start deadline. A failed startup stops the process it started. The process's output goes to
     /// <c>client-boot.stdout.log</c>/<c>.stderr.log</c>, and its BepInEx log and Unity's Player.log are copied beside them
-    /// (<c>client-boot.game-0.log</c>, <c>client-boot.game-1.log</c>) when it stops; <see cref="Logs"/> lists them.
+    /// (<c>client-boot.game-0.log</c>, <c>client-boot.game-1.log</c>) when it stops; <see cref="Logs"/> lists them. When BepInEx never
+    /// logged, a BepInEx preloader crash log this launch wrote beside the game is kept as <c>client-boot.game-2.preloader-N.log</c>
+    /// and its first error quoted in the failure; an older one is only named.
     /// </summary>
     public static ClientSession Launch(ClientRunPlan plan, string output, CancellationToken cancellation = default) => Launch(plan, output, null, cancellation);
 
@@ -164,6 +166,15 @@ public sealed class ClientSession : IDisposable
         string SteamMessage() => SteamSessionLog.Message(account?.Account, machine);
         LogWait? cliLog = null, steamLog = null;
         long steamOffset = 0;
+        // BepInEx's preloader logs this launch wrote say why BepInEx never logged (#409): kept beside the boot output as a hosted
+        // client's are, and quoted in the failure; older ones are only named.
+        var launched = DateTime.MaxValue;
+        string Preloader(string otherwise)
+        {
+            var reading = PreloaderLogs.Read(plan.Install, launched);
+            if (reading != null) PreloaderLogs.Keep(plan.Install, reading, output, "client-boot.");
+            return PreloaderLogs.Explain(reading, "client-boot.game-2.preloader-*.log", otherwise);
+        }
         bool SteamSeen() => steamLog != null && SteamSessionLog.SeenInFile(steamLogPath!, steamOffset);
         try
         {
@@ -176,6 +187,7 @@ public sealed class ClientSession : IDisposable
                         steamLog = new LogWait(steamLogPath);
                         steamOffset = steamLog.Offset;
                     }
+                    launched = DateTime.UtcNow;
                     var process = new DirectServerProcess(start, prefix, log, playerLog) { Quit = QuitRequest.CloseWindow };
                     processStarted?.Invoke(process);
                     return process;
@@ -185,13 +197,13 @@ public sealed class ClientSession : IDisposable
                 {
                     var clock = Stopwatch.StartNew();
                     var bepInEx = TimeSpan.FromSeconds(plan.BepInExSeconds);
-                    await StartupEvents.WaitForBepInExLog(cliLog!, bepInEx < left ? bepInEx : left, playerLog, token).ConfigureAwait(false);
+                    await StartupEvents.WaitForBepInExLog(cliLog!, bepInEx < left ? bepInEx : left, playerLog, token, Preloader).ConfigureAwait(false);
                     await cliLog!.WaitAsync(StartupEvents.CliListening, left - clock.Elapsed, StartupEvents.StartupFailures, token).ConfigureAwait(false);
                     using var states = StateWait.Connect(plan.Host, plan.Port);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
                 }, (left, token) => WatchLocalAsync(steamLog, left, token), () => Task.FromResult(SteamSeen()), SteamMessage), cancellation,
                 () => SteamSeen() ? SteamSessionLog.ExitHint(SteamMessage())
-                    : cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog) : null,
+                    : cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog, Preloader("")) : null,
                 [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")], account);
             return session;
         }

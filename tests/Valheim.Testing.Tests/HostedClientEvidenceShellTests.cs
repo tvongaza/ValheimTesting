@@ -24,10 +24,10 @@ public sealed class HostedClientEvidenceShellTests : IDisposable
 
         var read = await HostedClientScripts.ReadPreloaderAsync(host, install, launch);
         Assert.NotNull(read);
-        var (name, first) = Assert.Single(read.Value.Fresh);
+        var (name, first) = Assert.Single(read!.Fresh);
         Assert.Equal("preloader_20261005_190000.log", name);
         Assert.Equal("[Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core", first);
-        Assert.Equal(["preloader_20260101_000000.log"], read.Value.Stale);
+        Assert.Equal(["preloader_20260101_000000.log"], read!.Stale);
 
         var kept = await host.RunAsync(HostedClientScripts.Keep(host.Shell.Kind), new Dictionary<string, string> { ["install"] = install, ["dir"] = launch }, TimeSpan.FromSeconds(60));
         Assert.True(kept.Succeeded, kept.Describe());
