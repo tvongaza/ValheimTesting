@@ -42,7 +42,7 @@ public partial class TerrainModifier : UnityEngine.MonoBehaviour
     private long m_creationTime;
 
     // The live modifiers, as the game's static list. ValheimWorldScope.WithTerrainModifiers installs a fresh one.
-    internal static List<TerrainModifier> s_instances = new();
+    internal static List<TerrainModifier> s_instances { get; private set; } = new();
     internal static bool s_needsSorting;
 
     public TerrainModifier() { }
@@ -196,7 +196,7 @@ namespace Valheim.Testing.Doubles
         /// <summary>No live terrain modifiers yet: the modifiers this test wakes join a fresh list.</summary>
         public ValheimWorldScope WithTerrainModifiers()
         {
-            global::TerrainModifier.s_instances = new List<global::TerrainModifier>();
+            _statics.And(() => global::TerrainModifier.s_instances, new List<global::TerrainModifier>());
             global::TerrainModifier.s_needsSorting = false;
             return this;
         }

@@ -1,5 +1,6 @@
-# The game's verdict on each line of docs/packages/Valheim.Testing.Doubles.members.txt: game (the game has this signature),
-# differs (the game has the name with the signatures in the last column) or absent. Written by
+# The game's verdict on each line of docs/packages/Valheim.Testing.Doubles.members.txt: game (the game has this signature,
+# or a read-only double of a writable member), differs (the game has the name with the signatures in the last column,
+# including a writable double of a member the game has "{ get; }") or absent. Written by
 # tools/doubles-members/capture-game-members.cs from metadata; MemberIndexTests reads it. Inputs:
 # game assembly_valheim.dll sha256 25a0a107dce4d834c44c2b72d0eafd5cb7793933bda81816accfa1ea9543dace (valheim-1.0.17-25730771)
 # game version 1.0.17
@@ -12,17 +13,17 @@ Achievements	field	static CheatedAtAll : bool	absent
 Achievements	method	static IsCheatedAtAll() : bool	game
 BepInEx.BaseUnityPlugin	type	class : UnityEngine.MonoBehaviour	game
 BepInEx.BaseUnityPlugin	ctor	.ctor()	game
-BepInEx.BaseUnityPlugin	property	Config : BepInEx.Configuration.ConfigFile	game
-BepInEx.BaseUnityPlugin	property	Info : BepInEx.PluginInfo	game
-BepInEx.BaseUnityPlugin	property	Logger : BepInEx.Logging.ManualLogSource	game
+BepInEx.BaseUnityPlugin	property	Config : BepInEx.Configuration.ConfigFile { get; }	game
+BepInEx.BaseUnityPlugin	property	Info : BepInEx.PluginInfo { get; }	game
+BepInEx.BaseUnityPlugin	property	Logger : BepInEx.Logging.ManualLogSource { get; }	game
 BepInEx.BepInDependency	type	class : Attribute	game
 BepInEx.BepInDependency	ctor	.ctor(string, BepInEx.BepInDependency.DependencyFlags)	game
 BepInEx.BepInDependency	ctor	.ctor(string, string)	game
 BepInEx.BepInDependency	property	DependencyGUID : string	game
 BepInEx.BepInDependency	property	Flags : BepInEx.BepInDependency.DependencyFlags	game
 BepInEx.BepInDependency.DependencyFlags	type	enum	game
-BepInEx.BepInDependency.DependencyFlags	field	static HardDependency : BepInEx.BepInDependency.DependencyFlags	game
-BepInEx.BepInDependency.DependencyFlags	field	static SoftDependency : BepInEx.BepInDependency.DependencyFlags	game
+BepInEx.BepInDependency.DependencyFlags	field	static HardDependency : BepInEx.BepInDependency.DependencyFlags { get; }	game
+BepInEx.BepInDependency.DependencyFlags	field	static SoftDependency : BepInEx.BepInDependency.DependencyFlags { get; }	game
 BepInEx.BepInIncompatibility	type	class : Attribute	game
 BepInEx.BepInIncompatibility	ctor	.ctor(string)	game
 BepInEx.BepInIncompatibility	property	IncompatibilityGUID : string	game
@@ -39,20 +40,20 @@ BepInEx.Configuration.AcceptableValueBase	ctor	.ctor(Type)	game
 BepInEx.Configuration.AcceptableValueBase	method	Clamp(object) : object	game
 BepInEx.Configuration.AcceptableValueBase	method	IsValid(object) : bool	game
 BepInEx.Configuration.AcceptableValueBase	method	ToDescriptionString() : string	game
-BepInEx.Configuration.AcceptableValueBase	property	ValueType : Type	game
+BepInEx.Configuration.AcceptableValueBase	property	ValueType : Type { get; }	game
 BepInEx.Configuration.AcceptableValueList<T>	type	class : BepInEx.Configuration.AcceptableValueBase	game
 BepInEx.Configuration.AcceptableValueList<T>	ctor	.ctor(params T[])	game
 BepInEx.Configuration.AcceptableValueList<T>	method	Clamp(object) : object	game
 BepInEx.Configuration.AcceptableValueList<T>	method	IsValid(object) : bool	game
 BepInEx.Configuration.AcceptableValueList<T>	method	ToDescriptionString() : string	game
-BepInEx.Configuration.AcceptableValueList<T>	property	AcceptableValues : T[]	game
+BepInEx.Configuration.AcceptableValueList<T>	property	AcceptableValues : T[] { get; }	game
 BepInEx.Configuration.AcceptableValueRange<T>	type	class : BepInEx.Configuration.AcceptableValueBase	game
 BepInEx.Configuration.AcceptableValueRange<T>	ctor	.ctor(T, T)	game
 BepInEx.Configuration.AcceptableValueRange<T>	method	Clamp(object) : object	game
 BepInEx.Configuration.AcceptableValueRange<T>	method	IsValid(object) : bool	game
 BepInEx.Configuration.AcceptableValueRange<T>	method	ToDescriptionString() : string	game
-BepInEx.Configuration.AcceptableValueRange<T>	property	MaxValue : T	game
-BepInEx.Configuration.AcceptableValueRange<T>	property	MinValue : T	game
+BepInEx.Configuration.AcceptableValueRange<T>	property	MaxValue : T { get; }	game
+BepInEx.Configuration.AcceptableValueRange<T>	property	MinValue : T { get; }	game
 BepInEx.Configuration.ConfigDefinition	type	class	game
 BepInEx.Configuration.ConfigDefinition	ctor	.ctor(string, string)	game
 BepInEx.Configuration.ConfigDefinition	method	Equals(BepInEx.Configuration.ConfigDefinition) : bool	game
@@ -61,14 +62,14 @@ BepInEx.Configuration.ConfigDefinition	method	GetHashCode() : int	game
 BepInEx.Configuration.ConfigDefinition	method	ToString() : string	game
 BepInEx.Configuration.ConfigDefinition	method	static op_Equality(BepInEx.Configuration.ConfigDefinition, BepInEx.Configuration.ConfigDefinition) : bool	game
 BepInEx.Configuration.ConfigDefinition	method	static op_Inequality(BepInEx.Configuration.ConfigDefinition, BepInEx.Configuration.ConfigDefinition) : bool	game
-BepInEx.Configuration.ConfigDefinition	property	Key : string	game
-BepInEx.Configuration.ConfigDefinition	property	Section : string	game
+BepInEx.Configuration.ConfigDefinition	property	Key : string { get; }	game
+BepInEx.Configuration.ConfigDefinition	property	Section : string { get; }	game
 BepInEx.Configuration.ConfigDescription	type	class	game
 BepInEx.Configuration.ConfigDescription	ctor	.ctor(string, BepInEx.Configuration.AcceptableValueBase, params object[])	game
-BepInEx.Configuration.ConfigDescription	property	AcceptableValues : BepInEx.Configuration.AcceptableValueBase	game
-BepInEx.Configuration.ConfigDescription	property	Description : string	game
-BepInEx.Configuration.ConfigDescription	property	Tags : object[]	game
-BepInEx.Configuration.ConfigDescription	property	static Empty : BepInEx.Configuration.ConfigDescription	game
+BepInEx.Configuration.ConfigDescription	property	AcceptableValues : BepInEx.Configuration.AcceptableValueBase { get; }	game
+BepInEx.Configuration.ConfigDescription	property	Description : string { get; }	game
+BepInEx.Configuration.ConfigDescription	property	Tags : object[] { get; }	game
+BepInEx.Configuration.ConfigDescription	property	static Empty : BepInEx.Configuration.ConfigDescription { get; }	game
 BepInEx.Configuration.ConfigEntry<T>	type	class : BepInEx.Configuration.ConfigEntryBase	game
 BepInEx.Configuration.ConfigEntry<T>	ctor	.ctor(BepInEx.Configuration.ConfigFile, BepInEx.Configuration.ConfigDefinition, T, BepInEx.Configuration.ConfigDescription)	game
 BepInEx.Configuration.ConfigEntry<T>	event	SettingChanged : EventHandler	game
@@ -83,11 +84,11 @@ BepInEx.Configuration.ConfigEntryBase	method	OnSettingChanged(object) : void	gam
 BepInEx.Configuration.ConfigEntryBase	method	SetSerializedValue(string) : void	game
 BepInEx.Configuration.ConfigEntryBase	method	WriteDescription(StreamWriter) : void	game
 BepInEx.Configuration.ConfigEntryBase	property	BoxedValue : object	game
-BepInEx.Configuration.ConfigEntryBase	property	ConfigFile : BepInEx.Configuration.ConfigFile	game
-BepInEx.Configuration.ConfigEntryBase	property	DefaultValue : object	game
-BepInEx.Configuration.ConfigEntryBase	property	Definition : BepInEx.Configuration.ConfigDefinition	game
-BepInEx.Configuration.ConfigEntryBase	property	Description : BepInEx.Configuration.ConfigDescription	game
-BepInEx.Configuration.ConfigEntryBase	property	SettingType : Type	game
+BepInEx.Configuration.ConfigEntryBase	property	ConfigFile : BepInEx.Configuration.ConfigFile { get; }	game
+BepInEx.Configuration.ConfigEntryBase	property	DefaultValue : object { get; }	game
+BepInEx.Configuration.ConfigEntryBase	property	Definition : BepInEx.Configuration.ConfigDefinition { get; }	game
+BepInEx.Configuration.ConfigEntryBase	property	Description : BepInEx.Configuration.ConfigDescription { get; }	game
+BepInEx.Configuration.ConfigEntryBase	property	SettingType : Type { get; }	game
 BepInEx.Configuration.ConfigFile	type	class	game
 BepInEx.Configuration.ConfigFile	ctor	.ctor(string, bool)	game
 BepInEx.Configuration.ConfigFile	ctor	.ctor(string, bool, BepInEx.BepInPlugin)	game
@@ -110,19 +111,19 @@ BepInEx.Configuration.ConfigFile	method	TryGetEntry<T>(BepInEx.Configuration.Con
 BepInEx.Configuration.ConfigFile	method	TryGetEntry<T>(string, string, out BepInEx.Configuration.ConfigEntry<T>) : bool	game
 BepInEx.Configuration.ConfigFile	method	static ReadFile(string) : string	absent
 BepInEx.Configuration.ConfigFile	method	static WriteFile(string, string) : void	absent
-BepInEx.Configuration.ConfigFile	property	ConfigFilePath : string	game
-BepInEx.Configuration.ConfigFile	property	Count : int	game
-BepInEx.Configuration.ConfigFile	property	Entries : Dictionary<BepInEx.Configuration.ConfigDefinition, BepInEx.Configuration.ConfigEntryBase>	game
+BepInEx.Configuration.ConfigFile	property	ConfigFilePath : string { get; }	game
+BepInEx.Configuration.ConfigFile	property	Count : int { get; }	game
+BepInEx.Configuration.ConfigFile	property	Entries : Dictionary<BepInEx.Configuration.ConfigDefinition, BepInEx.Configuration.ConfigEntryBase> { get; }	game
 BepInEx.Configuration.ConfigFile	property	FileText : string	absent
-BepInEx.Configuration.ConfigFile	property	IsReadOnly : bool	game
-BepInEx.Configuration.ConfigFile	property	Keys : ICollection<BepInEx.Configuration.ConfigDefinition>	game
-BepInEx.Configuration.ConfigFile	property	SaveCount : int	absent
+BepInEx.Configuration.ConfigFile	property	IsReadOnly : bool { get; }	game
+BepInEx.Configuration.ConfigFile	property	Keys : ICollection<BepInEx.Configuration.ConfigDefinition> { get; }	game
+BepInEx.Configuration.ConfigFile	property	SaveCount : int { get; }	absent
 BepInEx.Configuration.ConfigFile	property	SaveOnConfigSet : bool	game
-BepInEx.Configuration.ConfigFile	property	this[BepInEx.Configuration.ConfigDefinition] : BepInEx.Configuration.ConfigEntryBase	game
-BepInEx.Configuration.ConfigFile	property	this[string, string] : BepInEx.Configuration.ConfigEntryBase	game
+BepInEx.Configuration.ConfigFile	property	this[BepInEx.Configuration.ConfigDefinition] : BepInEx.Configuration.ConfigEntryBase { get; }	game
+BepInEx.Configuration.ConfigFile	property	this[string, string] : BepInEx.Configuration.ConfigEntryBase { get; }	game
 BepInEx.Configuration.SettingChangedEventArgs	type	class : EventArgs	game
 BepInEx.Configuration.SettingChangedEventArgs	ctor	.ctor(BepInEx.Configuration.ConfigEntryBase)	game
-BepInEx.Configuration.SettingChangedEventArgs	property	ChangedSetting : BepInEx.Configuration.ConfigEntryBase	game
+BepInEx.Configuration.SettingChangedEventArgs	property	ChangedSetting : BepInEx.Configuration.ConfigEntryBase { get; }	game
 BepInEx.Configuration.TomlTypeConverter	type	static class	game
 BepInEx.Configuration.TomlTypeConverter	method	static AddConverter(Type, BepInEx.Configuration.TypeConverter) : bool	game
 BepInEx.Configuration.TomlTypeConverter	method	static CanConvert(Type) : bool	game
@@ -136,16 +137,16 @@ BepInEx.Configuration.TypeConverter	ctor	.ctor()	game
 BepInEx.Configuration.TypeConverter	property	ConvertToObject : Func<string, Type, object>	game
 BepInEx.Configuration.TypeConverter	property	ConvertToString : Func<object, Type, string>	game
 BepInEx.Logging.LogLevel	type	enum	game
-BepInEx.Logging.LogLevel	field	static All : BepInEx.Logging.LogLevel	game
-BepInEx.Logging.LogLevel	field	static Debug : BepInEx.Logging.LogLevel	game
-BepInEx.Logging.LogLevel	field	static Error : BepInEx.Logging.LogLevel	game
-BepInEx.Logging.LogLevel	field	static Fatal : BepInEx.Logging.LogLevel	game
-BepInEx.Logging.LogLevel	field	static Info : BepInEx.Logging.LogLevel	game
-BepInEx.Logging.LogLevel	field	static Message : BepInEx.Logging.LogLevel	game
-BepInEx.Logging.LogLevel	field	static None : BepInEx.Logging.LogLevel	game
-BepInEx.Logging.LogLevel	field	static Warning : BepInEx.Logging.LogLevel	game
+BepInEx.Logging.LogLevel	field	static All : BepInEx.Logging.LogLevel { get; }	game
+BepInEx.Logging.LogLevel	field	static Debug : BepInEx.Logging.LogLevel { get; }	game
+BepInEx.Logging.LogLevel	field	static Error : BepInEx.Logging.LogLevel { get; }	game
+BepInEx.Logging.LogLevel	field	static Fatal : BepInEx.Logging.LogLevel { get; }	game
+BepInEx.Logging.LogLevel	field	static Info : BepInEx.Logging.LogLevel { get; }	game
+BepInEx.Logging.LogLevel	field	static Message : BepInEx.Logging.LogLevel { get; }	game
+BepInEx.Logging.LogLevel	field	static None : BepInEx.Logging.LogLevel { get; }	game
+BepInEx.Logging.LogLevel	field	static Warning : BepInEx.Logging.LogLevel { get; }	game
 BepInEx.Logging.Logger	type	static class	game
-BepInEx.Logging.Logger	field	static Internal : BepInEx.Logging.ManualLogSource	absent
+BepInEx.Logging.Logger	field	static Internal : BepInEx.Logging.ManualLogSource { get; }	absent
 BepInEx.Logging.Logger	method	static CreateLogSource(string) : BepInEx.Logging.ManualLogSource	game
 BepInEx.Logging.ManualLogSource	type	class	game
 BepInEx.Logging.ManualLogSource	ctor	.ctor()	differs	.ctor(string)
@@ -160,7 +161,7 @@ BepInEx.Logging.ManualLogSource	method	LogFatal(object) : void	game
 BepInEx.Logging.ManualLogSource	method	LogInfo(object) : void	game
 BepInEx.Logging.ManualLogSource	method	LogMessage(object) : void	game
 BepInEx.Logging.ManualLogSource	method	LogWarning(object) : void	game
-BepInEx.Logging.ManualLogSource	property	SourceName : string	game
+BepInEx.Logging.ManualLogSource	property	SourceName : string { get; }	game
 BepInEx.Paths	type	static class	game
 BepInEx.Paths	field	static BepInExRootPath : string	game
 BepInEx.Paths	field	static ConfigPath : string	game
@@ -184,9 +185,9 @@ Container	field	m_privacy : Container.PrivacySetting	game
 Container	field	m_width : int	game
 Container	method	GetInventory() : Inventory	game
 Container.PrivacySetting	type	enum	game
-Container.PrivacySetting	field	static Group : Container.PrivacySetting	game
-Container.PrivacySetting	field	static Private : Container.PrivacySetting	game
-Container.PrivacySetting	field	static Public : Container.PrivacySetting	game
+Container.PrivacySetting	field	static Group : Container.PrivacySetting { get; }	game
+Container.PrivacySetting	field	static Private : Container.PrivacySetting { get; }	game
+Container.PrivacySetting	field	static Public : Container.PrivacySetting { get; }	game
 CraftingStation	type	class : UnityEngine.MonoBehaviour	game
 CraftingStation	ctor	.ctor()	game
 CraftingStation	field	m_name : string	game
@@ -235,63 +236,63 @@ DropTable.DropData	field	m_stackMax : int	game
 DropTable.DropData	field	m_stackMin : int	game
 DropTable.DropData	field	m_weight : float	game
 GlobalKeys	type	enum	game
-GlobalKeys	field	static AdrenalineRate : GlobalKeys	game
-GlobalKeys	field	static AllHeavySnow : GlobalKeys	game
-GlobalKeys	field	static AllPiecesUnlocked : GlobalKeys	game
-GlobalKeys	field	static AllRecipesUnlocked : GlobalKeys	game
-GlobalKeys	field	static AshlandsOcean : GlobalKeys	game
-GlobalKeys	field	static CarryWeightRate : GlobalKeys	game
-GlobalKeys	field	static Count : GlobalKeys	game
-GlobalKeys	field	static DeathDeleteItems : GlobalKeys	game
-GlobalKeys	field	static DeathDeleteUnequipped : GlobalKeys	game
-GlobalKeys	field	static DeathKeepEquip : GlobalKeys	game
-GlobalKeys	field	static DeathKeepInventory : GlobalKeys	game
-GlobalKeys	field	static DeathSkillsReset : GlobalKeys	game
-GlobalKeys	field	static DungeonBuild : GlobalKeys	game
-GlobalKeys	field	static DurabilityRate : GlobalKeys	game
-GlobalKeys	field	static EitrRate : GlobalKeys	game
-GlobalKeys	field	static EnemyDamage : GlobalKeys	game
-GlobalKeys	field	static EnemyLevelUpRate : GlobalKeys	game
-GlobalKeys	field	static EnemySpeedSize : GlobalKeys	game
-GlobalKeys	field	static EventRate : GlobalKeys	game
-GlobalKeys	field	static Fire : GlobalKeys	game
-GlobalKeys	field	static FoodRate : GlobalKeys	game
-GlobalKeys	field	static KilledBat : GlobalKeys	game
-GlobalKeys	field	static KilledTroll : GlobalKeys	game
-GlobalKeys	field	static MoveStaminaRate : GlobalKeys	game
-GlobalKeys	field	static NoBossPortals : GlobalKeys	game
-GlobalKeys	field	static NoBuildCost : GlobalKeys	game
-GlobalKeys	field	static NoBuildingFall : GlobalKeys	game
-GlobalKeys	field	static NoCraftCost : GlobalKeys	game
-GlobalKeys	field	static NoHeavySnow : GlobalKeys	game
-GlobalKeys	field	static NoMap : GlobalKeys	game
-GlobalKeys	field	static NoPortals : GlobalKeys	game
-GlobalKeys	field	static NoPseudoDrops : GlobalKeys	game
-GlobalKeys	field	static NoWorkbench : GlobalKeys	game
-GlobalKeys	field	static NonServerOption : GlobalKeys	game
-GlobalKeys	field	static PassiveMobs : GlobalKeys	game
-GlobalKeys	field	static PlayerDamage : GlobalKeys	game
-GlobalKeys	field	static PlayerEvents : GlobalKeys	game
-GlobalKeys	field	static Preset : GlobalKeys	game
-GlobalKeys	field	static ResourceRate : GlobalKeys	game
-GlobalKeys	field	static SkillGainRate : GlobalKeys	game
-GlobalKeys	field	static SkillReductionRate : GlobalKeys	game
-GlobalKeys	field	static StaminaRate : GlobalKeys	game
-GlobalKeys	field	static StaminaRegenRate : GlobalKeys	game
-GlobalKeys	field	static StoneCircle : GlobalKeys	game
-GlobalKeys	field	static TeleportAll : GlobalKeys	game
-GlobalKeys	field	static WorldLevel : GlobalKeys	game
-GlobalKeys	field	static WorldLevelLockedTools : GlobalKeys	game
-GlobalKeys	field	static activeBosses : GlobalKeys	game
-GlobalKeys	field	static defeated_bonemass : GlobalKeys	game
-GlobalKeys	field	static defeated_dragon : GlobalKeys	game
-GlobalKeys	field	static defeated_eikthyr : GlobalKeys	game
-GlobalKeys	field	static defeated_gdking : GlobalKeys	game
-GlobalKeys	field	static defeated_goblinking : GlobalKeys	game
-GlobalKeys	field	static killed_surtling : GlobalKeys	game
+GlobalKeys	field	static AdrenalineRate : GlobalKeys { get; }	game
+GlobalKeys	field	static AllHeavySnow : GlobalKeys { get; }	game
+GlobalKeys	field	static AllPiecesUnlocked : GlobalKeys { get; }	game
+GlobalKeys	field	static AllRecipesUnlocked : GlobalKeys { get; }	game
+GlobalKeys	field	static AshlandsOcean : GlobalKeys { get; }	game
+GlobalKeys	field	static CarryWeightRate : GlobalKeys { get; }	game
+GlobalKeys	field	static Count : GlobalKeys { get; }	game
+GlobalKeys	field	static DeathDeleteItems : GlobalKeys { get; }	game
+GlobalKeys	field	static DeathDeleteUnequipped : GlobalKeys { get; }	game
+GlobalKeys	field	static DeathKeepEquip : GlobalKeys { get; }	game
+GlobalKeys	field	static DeathKeepInventory : GlobalKeys { get; }	game
+GlobalKeys	field	static DeathSkillsReset : GlobalKeys { get; }	game
+GlobalKeys	field	static DungeonBuild : GlobalKeys { get; }	game
+GlobalKeys	field	static DurabilityRate : GlobalKeys { get; }	game
+GlobalKeys	field	static EitrRate : GlobalKeys { get; }	game
+GlobalKeys	field	static EnemyDamage : GlobalKeys { get; }	game
+GlobalKeys	field	static EnemyLevelUpRate : GlobalKeys { get; }	game
+GlobalKeys	field	static EnemySpeedSize : GlobalKeys { get; }	game
+GlobalKeys	field	static EventRate : GlobalKeys { get; }	game
+GlobalKeys	field	static Fire : GlobalKeys { get; }	game
+GlobalKeys	field	static FoodRate : GlobalKeys { get; }	game
+GlobalKeys	field	static KilledBat : GlobalKeys { get; }	game
+GlobalKeys	field	static KilledTroll : GlobalKeys { get; }	game
+GlobalKeys	field	static MoveStaminaRate : GlobalKeys { get; }	game
+GlobalKeys	field	static NoBossPortals : GlobalKeys { get; }	game
+GlobalKeys	field	static NoBuildCost : GlobalKeys { get; }	game
+GlobalKeys	field	static NoBuildingFall : GlobalKeys { get; }	game
+GlobalKeys	field	static NoCraftCost : GlobalKeys { get; }	game
+GlobalKeys	field	static NoHeavySnow : GlobalKeys { get; }	game
+GlobalKeys	field	static NoMap : GlobalKeys { get; }	game
+GlobalKeys	field	static NoPortals : GlobalKeys { get; }	game
+GlobalKeys	field	static NoPseudoDrops : GlobalKeys { get; }	game
+GlobalKeys	field	static NoWorkbench : GlobalKeys { get; }	game
+GlobalKeys	field	static NonServerOption : GlobalKeys { get; }	game
+GlobalKeys	field	static PassiveMobs : GlobalKeys { get; }	game
+GlobalKeys	field	static PlayerDamage : GlobalKeys { get; }	game
+GlobalKeys	field	static PlayerEvents : GlobalKeys { get; }	game
+GlobalKeys	field	static Preset : GlobalKeys { get; }	game
+GlobalKeys	field	static ResourceRate : GlobalKeys { get; }	game
+GlobalKeys	field	static SkillGainRate : GlobalKeys { get; }	game
+GlobalKeys	field	static SkillReductionRate : GlobalKeys { get; }	game
+GlobalKeys	field	static StaminaRate : GlobalKeys { get; }	game
+GlobalKeys	field	static StaminaRegenRate : GlobalKeys { get; }	game
+GlobalKeys	field	static StoneCircle : GlobalKeys { get; }	game
+GlobalKeys	field	static TeleportAll : GlobalKeys { get; }	game
+GlobalKeys	field	static WorldLevel : GlobalKeys { get; }	game
+GlobalKeys	field	static WorldLevelLockedTools : GlobalKeys { get; }	game
+GlobalKeys	field	static activeBosses : GlobalKeys { get; }	game
+GlobalKeys	field	static defeated_bonemass : GlobalKeys { get; }	game
+GlobalKeys	field	static defeated_dragon : GlobalKeys { get; }	game
+GlobalKeys	field	static defeated_eikthyr : GlobalKeys { get; }	game
+GlobalKeys	field	static defeated_gdking : GlobalKeys { get; }	game
+GlobalKeys	field	static defeated_goblinking : GlobalKeys { get; }	game
+GlobalKeys	field	static killed_surtling : GlobalKeys { get; }	game
 HarmonyLib.AccessTools	type	static class	game
-HarmonyLib.AccessTools	field	static all : BindingFlags	game
-HarmonyLib.AccessTools	field	static allDeclared : BindingFlags	game
+HarmonyLib.AccessTools	field	static all : BindingFlags { get; }	game
+HarmonyLib.AccessTools	field	static allDeclared : BindingFlags { get; }	game
 HarmonyLib.AccessTools	method	static DeclaredField(Type, string) : FieldInfo	game
 HarmonyLib.AccessTools	method	static DeclaredMethod(Type, string, Type[], Type[]) : MethodInfo	game
 HarmonyLib.AccessTools	method	static DeclaredProperty(Type, string) : PropertyInfo	game
@@ -306,10 +307,10 @@ HarmonyLib.AccessTools	method	static Method(Type, string, Type[], Type[]) : Meth
 HarmonyLib.AccessTools	method	static Property(Type, string) : PropertyInfo	game
 HarmonyLib.AccessTools	method	static TypeByName(string) : Type	game
 HarmonyLib.ArgumentType	type	enum	game
-HarmonyLib.ArgumentType	field	static Normal : HarmonyLib.ArgumentType	game
-HarmonyLib.ArgumentType	field	static Out : HarmonyLib.ArgumentType	game
-HarmonyLib.ArgumentType	field	static Pointer : HarmonyLib.ArgumentType	game
-HarmonyLib.ArgumentType	field	static Ref : HarmonyLib.ArgumentType	game
+HarmonyLib.ArgumentType	field	static Normal : HarmonyLib.ArgumentType { get; }	game
+HarmonyLib.ArgumentType	field	static Out : HarmonyLib.ArgumentType { get; }	game
+HarmonyLib.ArgumentType	field	static Pointer : HarmonyLib.ArgumentType { get; }	game
+HarmonyLib.ArgumentType	field	static Ref : HarmonyLib.ArgumentType { get; }	game
 HarmonyLib.Harmony	type	class	game
 HarmonyLib.Harmony	ctor	.ctor(string)	game
 HarmonyLib.Harmony	method	PatchAll() : void	game
@@ -322,8 +323,8 @@ HarmonyLib.Harmony	method	static CreateAndPatchAll(Type, string) : HarmonyLib.Ha
 HarmonyLib.Harmony	method	static HasAnyPatches(string) : bool	game
 HarmonyLib.Harmony	method	static UnpatchAll() : void	game
 HarmonyLib.Harmony	method	static UnpatchID(string) : void	game
-HarmonyLib.Harmony	property	Id : string	game
-HarmonyLib.Harmony	property	Patches : IReadOnlyList<ValueTuple<Type, HarmonyLib.HarmonyMethod>>	absent
+HarmonyLib.Harmony	property	Id : string { get; }	game
+HarmonyLib.Harmony	property	Patches : IReadOnlyList<ValueTuple<Type, HarmonyLib.HarmonyMethod>> { get; }	absent
 HarmonyLib.HarmonyAfter	type	class : HarmonyLib.HarmonyAttribute	game
 HarmonyLib.HarmonyAfter	ctor	.ctor(params string[])	game
 HarmonyLib.HarmonyArgument	type	class : Attribute	game
@@ -331,9 +332,9 @@ HarmonyLib.HarmonyArgument	ctor	.ctor(int)	game
 HarmonyLib.HarmonyArgument	ctor	.ctor(int, string)	game
 HarmonyLib.HarmonyArgument	ctor	.ctor(string)	game
 HarmonyLib.HarmonyArgument	ctor	.ctor(string, string)	game
-HarmonyLib.HarmonyArgument	property	Index : int	game
-HarmonyLib.HarmonyArgument	property	NewName : string	game
-HarmonyLib.HarmonyArgument	property	OriginalName : string	game
+HarmonyLib.HarmonyArgument	property	Index : int { get; }	game
+HarmonyLib.HarmonyArgument	property	NewName : string { get; }	game
+HarmonyLib.HarmonyArgument	property	OriginalName : string { get; }	game
 HarmonyLib.HarmonyAttribute	type	class : Attribute	game
 HarmonyLib.HarmonyAttribute	ctor	.ctor()	game
 HarmonyLib.HarmonyAttribute	field	info : HarmonyLib.HarmonyMethod	game
@@ -364,7 +365,7 @@ HarmonyLib.HarmonyMethod	field	methodType : HarmonyLib.MethodType?	game
 HarmonyLib.HarmonyMethod	field	nonVirtualDelegate : bool	game
 HarmonyLib.HarmonyMethod	field	priority : int	game
 HarmonyLib.HarmonyMethod	field	reversePatchType : HarmonyLib.HarmonyReversePatchType?	game
-HarmonyLib.HarmonyMethod	field	static s_fields : FieldInfo[]	absent
+HarmonyLib.HarmonyMethod	field	static s_fields : FieldInfo[] { get; }	absent
 HarmonyLib.HarmonyMethod	field	wrapTryCatch : bool?	game
 HarmonyLib.HarmonyMethod	method	ToString() : string	game
 HarmonyLib.HarmonyMethod	method	static Merge(List<HarmonyLib.HarmonyMethod>) : HarmonyLib.HarmonyMethod	game
@@ -401,13 +402,13 @@ HarmonyLib.HarmonyPatch	ctor	.ctor(string, string, HarmonyLib.MethodType, Type[]
 HarmonyLib.HarmonyPatchAll	type	class : HarmonyLib.HarmonyAttribute	game
 HarmonyLib.HarmonyPatchAll	ctor	.ctor()	game
 HarmonyLib.HarmonyPatchType	type	enum	game
-HarmonyLib.HarmonyPatchType	field	static All : HarmonyLib.HarmonyPatchType	game
-HarmonyLib.HarmonyPatchType	field	static Finalizer : HarmonyLib.HarmonyPatchType	game
-HarmonyLib.HarmonyPatchType	field	static ILManipulator : HarmonyLib.HarmonyPatchType	game
-HarmonyLib.HarmonyPatchType	field	static Postfix : HarmonyLib.HarmonyPatchType	game
-HarmonyLib.HarmonyPatchType	field	static Prefix : HarmonyLib.HarmonyPatchType	game
-HarmonyLib.HarmonyPatchType	field	static ReversePatch : HarmonyLib.HarmonyPatchType	game
-HarmonyLib.HarmonyPatchType	field	static Transpiler : HarmonyLib.HarmonyPatchType	game
+HarmonyLib.HarmonyPatchType	field	static All : HarmonyLib.HarmonyPatchType { get; }	game
+HarmonyLib.HarmonyPatchType	field	static Finalizer : HarmonyLib.HarmonyPatchType { get; }	game
+HarmonyLib.HarmonyPatchType	field	static ILManipulator : HarmonyLib.HarmonyPatchType { get; }	game
+HarmonyLib.HarmonyPatchType	field	static Postfix : HarmonyLib.HarmonyPatchType { get; }	game
+HarmonyLib.HarmonyPatchType	field	static Prefix : HarmonyLib.HarmonyPatchType { get; }	game
+HarmonyLib.HarmonyPatchType	field	static ReversePatch : HarmonyLib.HarmonyPatchType { get; }	game
+HarmonyLib.HarmonyPatchType	field	static Transpiler : HarmonyLib.HarmonyPatchType { get; }	game
 HarmonyLib.HarmonyPostfix	type	class : Attribute	game
 HarmonyLib.HarmonyPostfix	ctor	.ctor()	game
 HarmonyLib.HarmonyPrefix	type	class : Attribute	game
@@ -419,8 +420,8 @@ HarmonyLib.HarmonyPriority	ctor	.ctor(int)	game
 HarmonyLib.HarmonyReversePatch	type	class : HarmonyLib.HarmonyAttribute	game
 HarmonyLib.HarmonyReversePatch	ctor	.ctor(HarmonyLib.HarmonyReversePatchType)	game
 HarmonyLib.HarmonyReversePatchType	type	enum	game
-HarmonyLib.HarmonyReversePatchType	field	static Original : HarmonyLib.HarmonyReversePatchType	game
-HarmonyLib.HarmonyReversePatchType	field	static Snapshot : HarmonyLib.HarmonyReversePatchType	game
+HarmonyLib.HarmonyReversePatchType	field	static Original : HarmonyLib.HarmonyReversePatchType { get; }	game
+HarmonyLib.HarmonyReversePatchType	field	static Snapshot : HarmonyLib.HarmonyReversePatchType { get; }	game
 HarmonyLib.HarmonyTargetMethod	type	class : Attribute	game
 HarmonyLib.HarmonyTargetMethod	ctor	.ctor()	game
 HarmonyLib.HarmonyTargetMethods	type	class : Attribute	game
@@ -430,22 +431,22 @@ HarmonyLib.HarmonyTranspiler	ctor	.ctor()	game
 HarmonyLib.HarmonyWrapSafe	type	class : HarmonyLib.HarmonyAttribute	game
 HarmonyLib.HarmonyWrapSafe	ctor	.ctor()	game
 HarmonyLib.MethodType	type	enum	game
-HarmonyLib.MethodType	field	static Constructor : HarmonyLib.MethodType	game
-HarmonyLib.MethodType	field	static Enumerator : HarmonyLib.MethodType	game
-HarmonyLib.MethodType	field	static Getter : HarmonyLib.MethodType	game
-HarmonyLib.MethodType	field	static Normal : HarmonyLib.MethodType	game
-HarmonyLib.MethodType	field	static Setter : HarmonyLib.MethodType	game
-HarmonyLib.MethodType	field	static StaticConstructor : HarmonyLib.MethodType	game
+HarmonyLib.MethodType	field	static Constructor : HarmonyLib.MethodType { get; }	game
+HarmonyLib.MethodType	field	static Enumerator : HarmonyLib.MethodType { get; }	game
+HarmonyLib.MethodType	field	static Getter : HarmonyLib.MethodType { get; }	game
+HarmonyLib.MethodType	field	static Normal : HarmonyLib.MethodType { get; }	game
+HarmonyLib.MethodType	field	static Setter : HarmonyLib.MethodType { get; }	game
+HarmonyLib.MethodType	field	static StaticConstructor : HarmonyLib.MethodType { get; }	game
 HarmonyLib.Priority	type	static class	game
-HarmonyLib.Priority	field	static First : int	game
-HarmonyLib.Priority	field	static High : int	game
-HarmonyLib.Priority	field	static HigherThanNormal : int	game
-HarmonyLib.Priority	field	static Last : int	game
-HarmonyLib.Priority	field	static Low : int	game
-HarmonyLib.Priority	field	static LowerThanNormal : int	game
-HarmonyLib.Priority	field	static Normal : int	game
-HarmonyLib.Priority	field	static VeryHigh : int	game
-HarmonyLib.Priority	field	static VeryLow : int	game
+HarmonyLib.Priority	field	static First : int { get; }	game
+HarmonyLib.Priority	field	static High : int { get; }	game
+HarmonyLib.Priority	field	static HigherThanNormal : int { get; }	game
+HarmonyLib.Priority	field	static Last : int { get; }	game
+HarmonyLib.Priority	field	static Low : int { get; }	game
+HarmonyLib.Priority	field	static LowerThanNormal : int { get; }	game
+HarmonyLib.Priority	field	static Normal : int { get; }	game
+HarmonyLib.Priority	field	static VeryHigh : int { get; }	game
+HarmonyLib.Priority	field	static VeryLow : int { get; }	game
 HarmonyLib.Traverse	type	class	game
 HarmonyLib.Traverse	ctor	.ctor(Type)	game
 HarmonyLib.Traverse	ctor	.ctor(object)	game
@@ -493,8 +494,7 @@ Heightmap	field	static m_paintMaskDeepSnow : UnityEngine.Color	game
 Heightmap	field	static m_paintMaskDirt : UnityEngine.Color	game
 Heightmap	field	static m_paintMaskNothing : UnityEngine.Color	game
 Heightmap	field	static m_paintMaskPaved : UnityEngine.Color	game
-Heightmap	field	static s_heightmaps : List<Heightmap>	game
-Heightmap	field	transform : UnityEngine.Transform	game
+Heightmap	field	transform : UnityEngine.Transform { get; }	game
 Heightmap	method	CheckTerrainModIsContained(TerrainModifier) : bool	game
 Heightmap	method	GetAndCreateTerrainCompiler() : TerrainComp	game
 Heightmap	method	IsPointInside(UnityEngine.Vector3, float) : bool	game
@@ -507,21 +507,22 @@ Heightmap	method	static CreateForZone(Vector2s, int, bool) : Heightmap	absent
 Heightmap	method	static FindHeightmap(UnityEngine.Vector3) : Heightmap	game
 Heightmap	method	static GetAllHeightmaps() : List<Heightmap>	game
 Heightmap	property	static Registered : Heightmap	absent
+Heightmap	property	static s_heightmaps : List<Heightmap> { get; }	game
 Heightmap.Biome	type	enum	game
-Heightmap.Biome	field	static AshLands : Heightmap.Biome	game
-Heightmap.Biome	field	static BlackForest : Heightmap.Biome	game
-Heightmap.Biome	field	static DeepNorth : Heightmap.Biome	game
-Heightmap.Biome	field	static Meadows : Heightmap.Biome	game
-Heightmap.Biome	field	static Mistlands : Heightmap.Biome	game
-Heightmap.Biome	field	static Mountain : Heightmap.Biome	game
-Heightmap.Biome	field	static None : Heightmap.Biome	game
-Heightmap.Biome	field	static Ocean : Heightmap.Biome	game
-Heightmap.Biome	field	static Plains : Heightmap.Biome	game
-Heightmap.Biome	field	static Swamp : Heightmap.Biome	game
+Heightmap.Biome	field	static AshLands : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static BlackForest : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static DeepNorth : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static Meadows : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static Mistlands : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static Mountain : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static None : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static Ocean : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static Plains : Heightmap.Biome { get; }	game
+Heightmap.Biome	field	static Swamp : Heightmap.Biome { get; }	game
 Heightmap.BiomeArea	type	enum	game
-Heightmap.BiomeArea	field	static Edge : Heightmap.BiomeArea	game
-Heightmap.BiomeArea	field	static Everything : Heightmap.BiomeArea	game
-Heightmap.BiomeArea	field	static Median : Heightmap.BiomeArea	game
+Heightmap.BiomeArea	field	static Edge : Heightmap.BiomeArea { get; }	game
+Heightmap.BiomeArea	field	static Everything : Heightmap.BiomeArea { get; }	game
+Heightmap.BiomeArea	field	static Median : Heightmap.BiomeArea { get; }	game
 HeightmapBuilder	type	class	game
 HeightmapBuilder	ctor	.ctor()	game
 HeightmapBuilder	field	static m_instance : HeightmapBuilder	game
@@ -529,10 +530,10 @@ HeightmapBuilder	method	BuildQueued() : int	absent
 HeightmapBuilder	method	IsTerrainReady(UnityEngine.Vector3, int, float, bool, WorldGenerator) : bool	game
 HeightmapBuilder	method	MakeReady(UnityEngine.Vector3, int, float, bool, WorldGenerator) : HeightmapBuilder.HMBuildData	absent
 HeightmapBuilder	method	RequestTerrainSync(UnityEngine.Vector3, int, float, bool, WorldGenerator) : HeightmapBuilder.HMBuildData	game
-HeightmapBuilder	property	QueuedCount : int	absent
-HeightmapBuilder	property	ReadyCount : int	absent
-HeightmapBuilder	property	SyncRequests : int	absent
-HeightmapBuilder	property	static instance : HeightmapBuilder	game
+HeightmapBuilder	property	QueuedCount : int { get; }	absent
+HeightmapBuilder	property	ReadyCount : int { get; }	absent
+HeightmapBuilder	property	SyncRequests : int { get; }	absent
+HeightmapBuilder	property	static instance : HeightmapBuilder { get; }	game
 HeightmapBuilder.HMBuildData	type	class	game
 HeightmapBuilder.HMBuildData	ctor	.ctor(UnityEngine.Vector3, int, float, bool, WorldGenerator)	game
 HeightmapBuilder.HMBuildData	field	m_baseHeights : List<float>	game
@@ -589,31 +590,31 @@ HitData.DamageTypes	field	m_poison : float	game
 HitData.DamageTypes	field	m_slash : float	game
 HitData.DamageTypes	field	m_spirit : float	game
 HitData.HitType	type	enum	game
-HitData.HitType	field	static AshlandsLava : HitData.HitType	game
-HitData.HitType	field	static AshlandsOcean : HitData.HitType	game
-HitData.HitType	field	static Boat : HitData.HitType	game
-HitData.HitType	field	static Burning : HitData.HitType	game
-HitData.HitType	field	static Cart : HitData.HitType	game
-HitData.HitType	field	static Catapult : HitData.HitType	game
-HitData.HitType	field	static CinderFire : HitData.HitType	game
-HitData.HitType	field	static DrawBridge : HitData.HitType	game
-HitData.HitType	field	static Drowning : HitData.HitType	game
-HitData.HitType	field	static EdgeOfWorld : HitData.HitType	game
-HitData.HitType	field	static EnemyHit : HitData.HitType	game
-HitData.HitType	field	static Fall : HitData.HitType	game
-HitData.HitType	field	static Freezing : HitData.HitType	game
-HitData.HitType	field	static Impact : HitData.HitType	game
-HitData.HitType	field	static Incinerator : HitData.HitType	game
-HitData.HitType	field	static PlayerHit : HitData.HitType	game
-HitData.HitType	field	static Poisoned : HitData.HitType	game
-HitData.HitType	field	static Self : HitData.HitType	game
-HitData.HitType	field	static Smoke : HitData.HitType	game
-HitData.HitType	field	static Stalagtite : HitData.HitType	game
-HitData.HitType	field	static Structural : HitData.HitType	game
-HitData.HitType	field	static Tree : HitData.HitType	game
-HitData.HitType	field	static Turret : HitData.HitType	game
-HitData.HitType	field	static Undefined : HitData.HitType	game
-HitData.HitType	field	static Water : HitData.HitType	game
+HitData.HitType	field	static AshlandsLava : HitData.HitType { get; }	game
+HitData.HitType	field	static AshlandsOcean : HitData.HitType { get; }	game
+HitData.HitType	field	static Boat : HitData.HitType { get; }	game
+HitData.HitType	field	static Burning : HitData.HitType { get; }	game
+HitData.HitType	field	static Cart : HitData.HitType { get; }	game
+HitData.HitType	field	static Catapult : HitData.HitType { get; }	game
+HitData.HitType	field	static CinderFire : HitData.HitType { get; }	game
+HitData.HitType	field	static DrawBridge : HitData.HitType { get; }	game
+HitData.HitType	field	static Drowning : HitData.HitType { get; }	game
+HitData.HitType	field	static EdgeOfWorld : HitData.HitType { get; }	game
+HitData.HitType	field	static EnemyHit : HitData.HitType { get; }	game
+HitData.HitType	field	static Fall : HitData.HitType { get; }	game
+HitData.HitType	field	static Freezing : HitData.HitType { get; }	game
+HitData.HitType	field	static Impact : HitData.HitType { get; }	game
+HitData.HitType	field	static Incinerator : HitData.HitType { get; }	game
+HitData.HitType	field	static PlayerHit : HitData.HitType { get; }	game
+HitData.HitType	field	static Poisoned : HitData.HitType { get; }	game
+HitData.HitType	field	static Self : HitData.HitType { get; }	game
+HitData.HitType	field	static Smoke : HitData.HitType { get; }	game
+HitData.HitType	field	static Stalagtite : HitData.HitType { get; }	game
+HitData.HitType	field	static Structural : HitData.HitType { get; }	game
+HitData.HitType	field	static Tree : HitData.HitType { get; }	game
+HitData.HitType	field	static Turret : HitData.HitType { get; }	game
+HitData.HitType	field	static Undefined : HitData.HitType { get; }	game
+HitData.HitType	field	static Water : HitData.HitType { get; }	game
 ISerializableParameter	type	interface	game
 ISerializableParameter	method	Deserialize(ref ZPackage) : void	game
 ISerializableParameter	method	Serialize(ref ZPackage) : void	game
@@ -672,30 +673,30 @@ ItemDrop.ItemData	field	m_worldLevel : int	game
 ItemDrop.ItemData	method	Clone() : ItemDrop.ItemData	game
 ItemDrop.ItemData	method	IsWeapon() : bool	game
 ItemDrop.ItemData.ItemType	type	enum	game
-ItemDrop.ItemData.ItemType	field	static Ammo : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static AmmoNonEquipable : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Attach_Atgeir : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Bow : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Chest : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Consumable : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Customization : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Fish : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Hands : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Helmet : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Legs : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Material : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Misc : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static None : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static OneHandedWeapon : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Shield : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Shoulder : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Tool : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Torch : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Trinket : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Trophy : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static TwoHandedWeapon : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static TwoHandedWeaponLeft : ItemDrop.ItemData.ItemType	game
-ItemDrop.ItemData.ItemType	field	static Utility : ItemDrop.ItemData.ItemType	game
+ItemDrop.ItemData.ItemType	field	static Ammo : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static AmmoNonEquipable : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Attach_Atgeir : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Bow : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Chest : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Consumable : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Customization : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Fish : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Hands : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Helmet : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Legs : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Material : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Misc : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static None : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static OneHandedWeapon : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Shield : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Shoulder : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Tool : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Torch : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Trinket : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Trophy : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static TwoHandedWeapon : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static TwoHandedWeaponLeft : ItemDrop.ItemData.ItemType { get; }	game
+ItemDrop.ItemData.ItemType	field	static Utility : ItemDrop.ItemData.ItemType { get; }	game
 ItemDrop.ItemData.SharedData	type	class	game
 ItemDrop.ItemData.SharedData	ctor	.ctor()	game
 ItemDrop.ItemData.SharedData	field	m_buildPieces : PieceTable	game
@@ -710,10 +711,10 @@ ItemDrop.ItemData.SharedData	field	m_teleportable : bool	game
 ItemDrop.ItemData.SharedData	field	m_value : int	game
 ItemDrop.ItemData.SharedData	field	m_weight : float	game
 Jotunn.Entities.CustomRPC	type	class	game
-Jotunn.Entities.CustomRPC	ctor	.ctor()	differs	.ctor(BepInEx.BepInPlugin, string, Jotunn.Managers.NetworkManager.CoroutineHandler, Jotunn.Managers.NetworkManager.CoroutineHandler)
+Jotunn.Entities.CustomRPC	ctor	.ctor(string)	differs	.ctor(BepInEx.BepInPlugin, string, Jotunn.Managers.NetworkManager.CoroutineHandler, Jotunn.Managers.NetworkManager.CoroutineHandler)
 Jotunn.Entities.CustomRPC	field	Client : Jotunn.Managers.NetworkManager.CoroutineHandler	absent
-Jotunn.Entities.CustomRPC	field	Name : string	game
-Jotunn.Entities.CustomRPC	field	Sent : List<ValueTuple<long, ZPackage>>	absent
+Jotunn.Entities.CustomRPC	field	Name : string { get; }	game
+Jotunn.Entities.CustomRPC	field	Sent : List<ValueTuple<long, ZPackage>> { get; }	absent
 Jotunn.Entities.CustomRPC	field	Server : Jotunn.Managers.NetworkManager.CoroutineHandler	absent
 Jotunn.Entities.CustomRPC	method	Initiate() : void	game
 Jotunn.Entities.CustomRPC	method	SendPackage(List<ZNetPeer>, ZPackage) : void	game
@@ -721,9 +722,9 @@ Jotunn.Entities.CustomRPC	method	SendPackage(long, ZPackage) : void	game
 Jotunn.Managers.NetworkManager	type	class	game
 Jotunn.Managers.NetworkManager	ctor	.ctor()	game
 Jotunn.Managers.NetworkManager	field	Rpc : Jotunn.Entities.CustomRPC	absent
-Jotunn.Managers.NetworkManager	field	Rpcs : Dictionary<string, Jotunn.Entities.CustomRPC>	absent
-Jotunn.Managers.NetworkManager	field	static Instance : Jotunn.Managers.NetworkManager	game
+Jotunn.Managers.NetworkManager	field	Rpcs : Dictionary<string, Jotunn.Entities.CustomRPC> { get; }	absent
 Jotunn.Managers.NetworkManager	method	AddRPC(string, Jotunn.Managers.NetworkManager.CoroutineHandler, Jotunn.Managers.NetworkManager.CoroutineHandler) : Jotunn.Entities.CustomRPC	game
+Jotunn.Managers.NetworkManager	property	static Instance : Jotunn.Managers.NetworkManager { get; }	game
 Jotunn.Managers.NetworkManager.CoroutineHandler	type	delegate	game
 Localization	type	class	game
 Localization	field	static OnLanguageChange : Action	game
@@ -734,11 +735,11 @@ Localization	method	Localize(string) : string	game
 Localization	method	Localize(string, params string[]) : string	game
 Localization	method	SetLanguage(string) : void	game
 Localization	property	static Current : Localization	absent
-Localization	property	static instance : Localization	game
+Localization	property	static instance : Localization { get; }	game
 ObjectDB	type	class : UnityEngine.MonoBehaviour	game
 ObjectDB	ctor	.ctor()	game
-ObjectDB	field	EarlyLookups : List<string>	absent
-ObjectDB	field	NotYetRegistered : HashSet<int>	absent
+ObjectDB	field	EarlyLookups : List<string> { get; }	absent
+ObjectDB	field	NotYetRegistered : HashSet<int> { get; }	absent
 ObjectDB	field	m_StatusEffects : List<StatusEffect>	game
 ObjectDB	field	m_items : List<UnityEngine.GameObject>	game
 ObjectDB	field	m_recipes : List<Recipe>	game
@@ -764,13 +765,13 @@ ObjectDB	method	UpdateRegisters() : void	game
 ObjectDB	method	static DeclareVanilla(IEnumerable<UnityEngine.GameObject>, IEnumerable<Recipe>, IEnumerable<StatusEffect>) : ObjectDB	absent
 ObjectDB	method	static LoadMainMenu(ObjectDB) : ObjectDB	absent
 ObjectDB	method	static LoadWorld(ObjectDB) : ObjectDB	absent
-ObjectDB	property	static instance : ObjectDB	game
+ObjectDB	property	static instance : ObjectDB { get; }	game
 OnlineBackendType	type	enum	game
-OnlineBackendType	field	static CustomSocket : OnlineBackendType	game
-OnlineBackendType	field	static EOS : OnlineBackendType	game
-OnlineBackendType	field	static None : OnlineBackendType	game
-OnlineBackendType	field	static PlayFab : OnlineBackendType	game
-OnlineBackendType	field	static Steamworks : OnlineBackendType	game
+OnlineBackendType	field	static CustomSocket : OnlineBackendType { get; }	game
+OnlineBackendType	field	static EOS : OnlineBackendType { get; }	game
+OnlineBackendType	field	static None : OnlineBackendType { get; }	game
+OnlineBackendType	field	static PlayFab : OnlineBackendType { get; }	game
+OnlineBackendType	field	static Steamworks : OnlineBackendType { get; }	game
 Pickable	type	class : UnityEngine.MonoBehaviour	game
 Pickable	ctor	.ctor()	game
 Pickable	field	m_amount : int	game
@@ -792,7 +793,7 @@ Pickable	method	GetPicked() : bool	game
 Pickable	method	SetEnabled(bool) : void	game
 Pickable	method	SetEnabled(int) : void	game
 Pickable	method	SetPicked(bool) : void	game
-Pickable	property	GetEnabled : int	game
+Pickable	property	GetEnabled : int { get; }	game
 PickableItem	type	class : UnityEngine.MonoBehaviour	game
 PickableItem	ctor	.ctor()	game
 PickableItem	field	m_hoverOffset : float	game
@@ -824,7 +825,7 @@ PieceTable	ctor	.ctor()	game
 PieceTable	field	m_pieces : List<UnityEngine.GameObject>	game
 PlatformPrefs	type	static class	game
 PlatformPrefs	field	static Unavailable : string	absent
-PlatformPrefs	field	static c_PreferencesPath : string	game
+PlatformPrefs	field	static c_PreferencesPath : string { get; }	game
 PlatformPrefs	field	static s_values : Dictionary<string, object>	absent
 PlatformPrefs	method	static DeleteAll() : void	game
 PlatformPrefs	method	static DeleteKey(string) : void	game
@@ -842,14 +843,14 @@ Player	type	class	game
 Player	ctor	.ctor()	game
 Player	field	m_nview : ZNetView	game
 Player	field	static m_localPlayer : Player	game
-Player	field	static s_players : List<Player>	game
-Player	field	transform : UnityEngine.Transform	game
+Player	field	transform : UnityEngine.Transform { get; }	game
 Player	method	GetPlayerID() : long	game
 Player	method	GetPlayerName() : string	game
 Player	method	GetZDOID() : ZDOID	game
 Player	method	IsOwner() : bool	game
 Player	method	OnSpawned(bool) : void	game
 Player	method	static GetAllPlayers() : List<Player>	game
+Player	property	static s_players : List<Player> { get; }	game
 RandomObject	type	class : UnityEngine.MonoBehaviour	game
 RandomObject	ctor	.ctor()	game
 RandomObject	field	m_maxElevation : int	game
@@ -892,35 +893,35 @@ RoutedMethod<T, U, V, B>.Method	type	delegate	game
 Skills	type	class : UnityEngine.MonoBehaviour	game
 Skills	ctor	.ctor()	game
 Skills.SkillType	type	enum	game
-Skills.SkillType	field	static All : Skills.SkillType	game
-Skills.SkillType	field	static Axes : Skills.SkillType	game
-Skills.SkillType	field	static Blocking : Skills.SkillType	game
-Skills.SkillType	field	static BloodMagic : Skills.SkillType	game
-Skills.SkillType	field	static Bows : Skills.SkillType	game
-Skills.SkillType	field	static Clubs : Skills.SkillType	game
-Skills.SkillType	field	static Cooking : Skills.SkillType	game
-Skills.SkillType	field	static Crafting : Skills.SkillType	game
-Skills.SkillType	field	static Crossbows : Skills.SkillType	game
-Skills.SkillType	field	static Dodge : Skills.SkillType	game
-Skills.SkillType	field	static ElementalMagic : Skills.SkillType	game
-Skills.SkillType	field	static Farming : Skills.SkillType	game
-Skills.SkillType	field	static Fishing : Skills.SkillType	game
-Skills.SkillType	field	static Jump : Skills.SkillType	game
-Skills.SkillType	field	static Knives : Skills.SkillType	game
-Skills.SkillType	field	static None : Skills.SkillType	game
-Skills.SkillType	field	static Pickaxes : Skills.SkillType	game
-Skills.SkillType	field	static Polearms : Skills.SkillType	game
-Skills.SkillType	field	static Ride : Skills.SkillType	game
-Skills.SkillType	field	static Run : Skills.SkillType	game
-Skills.SkillType	field	static Sneak : Skills.SkillType	game
-Skills.SkillType	field	static Spears : Skills.SkillType	game
-Skills.SkillType	field	static Swim : Skills.SkillType	game
-Skills.SkillType	field	static Swords : Skills.SkillType	game
-Skills.SkillType	field	static Unarmed : Skills.SkillType	game
-Skills.SkillType	field	static WoodCutting : Skills.SkillType	game
+Skills.SkillType	field	static All : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Axes : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Blocking : Skills.SkillType { get; }	game
+Skills.SkillType	field	static BloodMagic : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Bows : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Clubs : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Cooking : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Crafting : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Crossbows : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Dodge : Skills.SkillType { get; }	game
+Skills.SkillType	field	static ElementalMagic : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Farming : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Fishing : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Jump : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Knives : Skills.SkillType { get; }	game
+Skills.SkillType	field	static None : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Pickaxes : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Polearms : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Ride : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Run : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Sneak : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Spears : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Swim : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Swords : Skills.SkillType { get; }	game
+Skills.SkillType	field	static Unarmed : Skills.SkillType { get; }	game
+Skills.SkillType	field	static WoodCutting : Skills.SkillType { get; }	game
 SocketDouble	type	class	absent
 SocketDouble	ctor	.ctor()	absent
-SocketDouble	field	Sent : List<ZPackage>	absent
+SocketDouble	field	Sent : List<ZPackage> { get; }	absent
 SocketDouble	method	Accept() : ISocket	absent
 SocketDouble	method	Close() : void	absent
 SocketDouble	method	Dispose() : void	absent
@@ -940,9 +941,9 @@ SocketDouble	method	Send(ZPackage) : void	absent
 SocketDouble	method	VersionMatch() : void	absent
 SocketDouble	method	static Link(SocketDouble, SocketDouble) : void	absent
 SoftReferenceableAssets.LoadResult	type	enum	game
-SoftReferenceableAssets.LoadResult	field	static Aborted : SoftReferenceableAssets.LoadResult	game
-SoftReferenceableAssets.LoadResult	field	static Failed : SoftReferenceableAssets.LoadResult	game
-SoftReferenceableAssets.LoadResult	field	static Succeeded : SoftReferenceableAssets.LoadResult	game
+SoftReferenceableAssets.LoadResult	field	static Aborted : SoftReferenceableAssets.LoadResult { get; }	game
+SoftReferenceableAssets.LoadResult	field	static Failed : SoftReferenceableAssets.LoadResult { get; }	game
+SoftReferenceableAssets.LoadResult	field	static Succeeded : SoftReferenceableAssets.LoadResult { get; }	game
 SoftReferenceableAssets.SoftReference<T>	type	struct	game
 SoftReferenceableAssets.SoftReference<T>	ctor	.ctor(string, T)	differs	.ctor(SoftReferenceableAssets.AssetID)
 SoftReferenceableAssets.SoftReference<T>	method	Equals(SoftReferenceableAssets.SoftReference<T>) : bool	game
@@ -954,12 +955,12 @@ SoftReferenceableAssets.SoftReference<T>	method	Release() : void	game
 SoftReferenceableAssets.SoftReference<T>	method	ToString() : string	game
 SoftReferenceableAssets.SoftReference<T>	method	static op_Equality(SoftReferenceableAssets.SoftReference<T>, SoftReferenceableAssets.SoftReference<T>) : bool	game
 SoftReferenceableAssets.SoftReference<T>	method	static op_Inequality(SoftReferenceableAssets.SoftReference<T>, SoftReferenceableAssets.SoftReference<T>) : bool	game
-SoftReferenceableAssets.SoftReference<T>	property	Asset : T	game
-SoftReferenceableAssets.SoftReference<T>	property	IsLoaded : bool	game
-SoftReferenceableAssets.SoftReference<T>	property	IsLoading : bool	game
-SoftReferenceableAssets.SoftReference<T>	property	IsValid : bool	game
-SoftReferenceableAssets.SoftReference<T>	property	Name : string	game
-SoftReferenceableAssets.SoftReference<T>	property	References : int	absent
+SoftReferenceableAssets.SoftReference<T>	property	Asset : T { get; }	game
+SoftReferenceableAssets.SoftReference<T>	property	IsLoaded : bool { get; }	game
+SoftReferenceableAssets.SoftReference<T>	property	IsLoading : bool { get; }	game
+SoftReferenceableAssets.SoftReference<T>	property	IsValid : bool { get; }	game
+SoftReferenceableAssets.SoftReference<T>	property	Name : string { get; }	game
+SoftReferenceableAssets.SoftReference<T>	property	References : int { get; }	absent
 SpawnArea	type	class : UnityEngine.MonoBehaviour	game
 SpawnArea	ctor	.ctor()	game
 SpawnArea	field	m_farRadius : float	game
@@ -982,7 +983,7 @@ SpawnArea.SpawnData	field	m_prefab : UnityEngine.GameObject	game
 SpawnArea.SpawnData	field	m_weight : float	game
 Splatform.Platform	type	struct	game
 Splatform.Platform	ctor	.ctor(string)	game
-Splatform.Platform	field	m_platform : string	game
+Splatform.Platform	field	m_platform : string { get; }	game
 Splatform.Platform	method	Equals(Splatform.Platform) : bool	game
 Splatform.Platform	method	Equals(object) : bool	game
 Splatform.Platform	method	Equals(string) : bool	game
@@ -992,16 +993,16 @@ Splatform.Platform	method	static op_Equality(Splatform.Platform, Splatform.Platf
 Splatform.Platform	method	static op_Equality(Splatform.Platform, string) : bool	game
 Splatform.Platform	method	static op_Inequality(Splatform.Platform, Splatform.Platform) : bool	game
 Splatform.Platform	method	static op_Inequality(Splatform.Platform, string) : bool	game
-Splatform.Platform	property	IsValid : bool	game
-Splatform.Platform	property	static Unknown : Splatform.Platform	game
+Splatform.Platform	property	IsValid : bool { get; }	game
+Splatform.Platform	property	static Unknown : Splatform.Platform { get; }	game
 Splatform.PlatformUserID	type	struct	game
 Splatform.PlatformUserID	ctor	.ctor(Splatform.Platform, string)	game
 Splatform.PlatformUserID	ctor	.ctor(Splatform.Platform, ulong, bool)	game
 Splatform.PlatformUserID	ctor	.ctor(string)	game
 Splatform.PlatformUserID	ctor	.ctor(string, string)	game
 Splatform.PlatformUserID	ctor	.ctor(string, ulong, bool)	game
-Splatform.PlatformUserID	field	m_platform : Splatform.Platform	game
-Splatform.PlatformUserID	field	m_userID : string	game
+Splatform.PlatformUserID	field	m_platform : Splatform.Platform { get; }	game
+Splatform.PlatformUserID	field	m_userID : string { get; }	game
 Splatform.PlatformUserID	method	Equals(Splatform.PlatformUserID) : bool	game
 Splatform.PlatformUserID	method	Equals(object) : bool	game
 Splatform.PlatformUserID	method	GetHashCode() : int	game
@@ -1014,8 +1015,8 @@ Splatform.PlatformUserID	method	static IsPlatformUserIDNumberFiltered(Splatform.
 Splatform.PlatformUserID	method	static TryParse(string, out Splatform.PlatformUserID) : bool	game
 Splatform.PlatformUserID	method	static op_Equality(Splatform.PlatformUserID, Splatform.PlatformUserID) : bool	game
 Splatform.PlatformUserID	method	static op_Inequality(Splatform.PlatformUserID, Splatform.PlatformUserID) : bool	game
-Splatform.PlatformUserID	property	IsValid : bool	game
-Splatform.PlatformUserID	property	static None : Splatform.PlatformUserID	game
+Splatform.PlatformUserID	property	IsValid : bool { get; }	game
+Splatform.PlatformUserID	property	static None : Splatform.PlatformUserID { get; }	game
 StatusEffect	type	class : UnityEngine.ScriptableObject	game
 StatusEffect	ctor	.ctor()	game
 StatusEffect	field	m_category : string	game
@@ -1046,8 +1047,8 @@ SyncedList	method	GetList() : List<string>	game
 SyncedList	method	Remove(string) : void	game
 Terminal	type	class	game
 Terminal	ctor	.ctor()	game
-Terminal	field	Output : List<string>	absent
-Terminal	field	static ConfirmCheat : string	absent
+Terminal	field	Output : List<string> { get; }	absent
+Terminal	field	static ConfirmCheat : string { get; }	absent
 Terminal	field	static commands : Dictionary<string, Terminal.ConsoleCommand>	game
 Terminal	field	static m_cheat : bool	game
 Terminal	method	AddString(string) : void	game
@@ -1078,8 +1079,8 @@ Terminal.ConsoleEventArgs	field	FullLine : string	game
 Terminal.ConsoleEventArgs	method	HasArgumentAnywhere(string, int, bool) : bool	game
 Terminal.ConsoleEventArgs	method	TryParameterFloat(int, float) : float	game
 Terminal.ConsoleEventArgs	method	TryParameterInt(int, int) : int	game
-Terminal.ConsoleEventArgs	property	Length : int	game
-Terminal.ConsoleEventArgs	property	this[int] : string	game
+Terminal.ConsoleEventArgs	property	Length : int { get; }	game
+Terminal.ConsoleEventArgs	property	this[int] : string { get; }	game
 Terminal.ConsoleEventFailable	type	delegate	game
 Terminal.ConsoleOptionsFetcher	type	delegate	game
 TerrainComp	type	class	game
@@ -1097,7 +1098,7 @@ TerrainComp	field	m_operations : int	game
 TerrainComp	field	m_paintMask : UnityEngine.Color[]	game
 TerrainComp	field	m_smoothDelta : float[]	game
 TerrainComp	field	m_width : int	game
-TerrainComp	field	static PrefabName : string	absent
+TerrainComp	field	static PrefabName : string { get; }	absent
 TerrainComp	method	Load() : bool	game
 TerrainComp	method	Save(bool) : void	game
 TerrainComp	method	static FindTerrainCompiler(UnityEngine.Vector3) : TerrainComp	game
@@ -1120,7 +1121,6 @@ TerrainModifier	field	m_smoothRadius : float	game
 TerrainModifier	field	m_sortOrder : int	game
 TerrainModifier	field	m_square : bool	game
 TerrainModifier	field	m_useTerrainCompiler : bool	game
-TerrainModifier	field	static s_instances : List<TerrainModifier>	game
 TerrainModifier	field	static s_needsSorting : bool	game
 TerrainModifier	method	Awake() : void	game
 TerrainModifier	method	GetRadius() : float	game
@@ -1129,14 +1129,15 @@ TerrainModifier	method	OnDestroy() : void	game
 TerrainModifier	method	static GetAllInstances() : List<TerrainModifier>	game
 TerrainModifier	method	static RemoveAll() : void	game
 TerrainModifier	method	static SortByModifiers(TerrainModifier, TerrainModifier) : int	game
-TerrainModifier	property	CreationTime : long	absent
+TerrainModifier	property	CreationTime : long { get; }	absent
+TerrainModifier	property	static s_instances : List<TerrainModifier> { get; }	game
 TerrainModifier.PaintType	type	enum	game
-TerrainModifier.PaintType	field	static ClearVegetation : TerrainModifier.PaintType	game
-TerrainModifier.PaintType	field	static Cultivate : TerrainModifier.PaintType	game
-TerrainModifier.PaintType	field	static DeepSnow : TerrainModifier.PaintType	game
-TerrainModifier.PaintType	field	static Dirt : TerrainModifier.PaintType	game
-TerrainModifier.PaintType	field	static Paved : TerrainModifier.PaintType	game
-TerrainModifier.PaintType	field	static Reset : TerrainModifier.PaintType	game
+TerrainModifier.PaintType	field	static ClearVegetation : TerrainModifier.PaintType { get; }	game
+TerrainModifier.PaintType	field	static Cultivate : TerrainModifier.PaintType { get; }	game
+TerrainModifier.PaintType	field	static DeepSnow : TerrainModifier.PaintType { get; }	game
+TerrainModifier.PaintType	field	static Dirt : TerrainModifier.PaintType { get; }	game
+TerrainModifier.PaintType	field	static Paved : TerrainModifier.PaintType { get; }	game
+TerrainModifier.PaintType	field	static Reset : TerrainModifier.PaintType { get; }	game
 UnityEngine.Animator	type	class : UnityEngine.Behaviour	game
 UnityEngine.Animator	ctor	.ctor()	game
 UnityEngine.Animator	method	GetBool(int) : bool	game
@@ -1160,15 +1161,15 @@ UnityEngine.Animator	property	keepAnimatorStateOnDisable : bool	game
 UnityEngine.Animator	property	speed : float	game
 UnityEngine.Animator	property	updateMode : UnityEngine.AnimatorUpdateMode	game
 UnityEngine.AnimatorUpdateMode	type	enum	game
-UnityEngine.AnimatorUpdateMode	field	static Fixed : UnityEngine.AnimatorUpdateMode	game
-UnityEngine.AnimatorUpdateMode	field	static Normal : UnityEngine.AnimatorUpdateMode	game
-UnityEngine.AnimatorUpdateMode	field	static UnscaledTime : UnityEngine.AnimatorUpdateMode	game
+UnityEngine.AnimatorUpdateMode	field	static Fixed : UnityEngine.AnimatorUpdateMode { get; }	game
+UnityEngine.AnimatorUpdateMode	field	static Normal : UnityEngine.AnimatorUpdateMode { get; }	game
+UnityEngine.AnimatorUpdateMode	field	static UnscaledTime : UnityEngine.AnimatorUpdateMode { get; }	game
 UnityEngine.Behaviour	type	class : UnityEngine.Component	game
 UnityEngine.Behaviour	ctor	.ctor()	game
 UnityEngine.Behaviour	field	m_behaviourEnabled : bool	absent
 UnityEngine.Behaviour	method	UnityEnabledChanged() : void	absent
 UnityEngine.Behaviour	property	enabled : bool	game
-UnityEngine.Behaviour	property	isActiveAndEnabled : bool	game
+UnityEngine.Behaviour	property	isActiveAndEnabled : bool { get; }	game
 UnityEngine.Bounds	type	struct	game
 UnityEngine.Bounds	ctor	.ctor(UnityEngine.Vector3, UnityEngine.Vector3)	game
 UnityEngine.Bounds	method	ClosestPoint(UnityEngine.Vector3) : UnityEngine.Vector3	game
@@ -1199,9 +1200,9 @@ UnityEngine.Canvas	type	class : UnityEngine.Behaviour	game
 UnityEngine.Canvas	ctor	.ctor()	game
 UnityEngine.Canvas	field	static ForceUpdateCount : int	absent
 UnityEngine.Canvas	method	static ForceUpdateCanvases() : void	game
-UnityEngine.Canvas	property	isRootCanvas : bool	game
+UnityEngine.Canvas	property	isRootCanvas : bool { get; }	game
 UnityEngine.Canvas	property	renderMode : UnityEngine.RenderMode	game
-UnityEngine.Canvas	property	rootCanvas : UnityEngine.Canvas	game
+UnityEngine.Canvas	property	rootCanvas : UnityEngine.Canvas { get; }	game
 UnityEngine.Canvas	property	scaleFactor : float	game
 UnityEngine.Canvas	property	sortingOrder : int	game
 UnityEngine.CapsuleCollider	type	class : UnityEngine.Collider	game
@@ -1215,8 +1216,8 @@ UnityEngine.Collider	type	class : UnityEngine.Component	game
 UnityEngine.Collider	ctor	.ctor()	game
 UnityEngine.Collider	method	ClosestPoint(UnityEngine.Vector3) : UnityEngine.Vector3	game
 UnityEngine.Collider	method	ShapeBounds() : UnityEngine.Bounds	absent
-UnityEngine.Collider	property	attachedRigidbody : UnityEngine.Rigidbody	game
-UnityEngine.Collider	property	bounds : UnityEngine.Bounds	game
+UnityEngine.Collider	property	attachedRigidbody : UnityEngine.Rigidbody { get; }	game
+UnityEngine.Collider	property	bounds : UnityEngine.Bounds { get; }	game
 UnityEngine.Collider	property	enabled : bool	game
 UnityEngine.Collider	property	isTrigger : bool	game
 UnityEngine.Color	type	struct	game
@@ -1242,33 +1243,33 @@ UnityEngine.Component	method	GetComponentInParent<T>(bool) : T	game
 UnityEngine.Component	method	GetComponents<T>() : T[]	game
 UnityEngine.Component	method	GetComponentsInChildren<T>(bool) : T[]	game
 UnityEngine.Component	method	TryGetComponent<T>(out T) : bool	game
-UnityEngine.Component	property	gameObject : UnityEngine.GameObject	game
+UnityEngine.Component	property	gameObject : UnityEngine.GameObject { get; }	game
 UnityEngine.Component	property	tag : string	game
-UnityEngine.Component	property	transform : UnityEngine.Transform	game
+UnityEngine.Component	property	transform : UnityEngine.Transform { get; }	game
 UnityEngine.Coroutine	type	class : UnityEngine.YieldInstruction	game
 UnityEngine.Coroutine	ctor	.ctor(UnityEngine.MonoBehaviour, IEnumerator)	differs	.ctor()
 UnityEngine.Coroutine	field	m_done : bool	absent
-UnityEngine.Coroutine	field	m_owner : UnityEngine.MonoBehaviour	absent
-UnityEngine.Coroutine	field	m_routine : IEnumerator	absent
+UnityEngine.Coroutine	field	m_owner : UnityEngine.MonoBehaviour { get; }	absent
+UnityEngine.Coroutine	field	m_routine : IEnumerator { get; }	absent
 UnityEngine.Coroutine	method	Advance() : void	absent
 UnityEngine.Coroutine	method	IsDue(bool) : bool	absent
 UnityEngine.CustomYieldInstruction	type	class	game
 UnityEngine.CustomYieldInstruction	ctor	.ctor()	game
 UnityEngine.CustomYieldInstruction	method	MoveNext() : bool	game
 UnityEngine.CustomYieldInstruction	method	Reset() : void	game
-UnityEngine.CustomYieldInstruction	property	Current : object	game
-UnityEngine.CustomYieldInstruction	property	keepWaiting : bool	game
+UnityEngine.CustomYieldInstruction	property	Current : object { get; }	game
+UnityEngine.CustomYieldInstruction	property	keepWaiting : bool { get; }	game
 UnityEngine.Debug	type	static class	game
 UnityEngine.Debug	method	static Log(object) : void	game
 UnityEngine.Debug	method	static LogError(object) : void	game
 UnityEngine.Debug	method	static LogException(Exception) : void	game
 UnityEngine.Debug	method	static LogWarning(object) : void	game
 UnityEngine.FindObjectsInactive	type	enum	game
-UnityEngine.FindObjectsInactive	field	static Exclude : UnityEngine.FindObjectsInactive	game
-UnityEngine.FindObjectsInactive	field	static Include : UnityEngine.FindObjectsInactive	game
+UnityEngine.FindObjectsInactive	field	static Exclude : UnityEngine.FindObjectsInactive { get; }	game
+UnityEngine.FindObjectsInactive	field	static Include : UnityEngine.FindObjectsInactive { get; }	game
 UnityEngine.FindObjectsSortMode	type	enum	game
-UnityEngine.FindObjectsSortMode	field	static InstanceID : UnityEngine.FindObjectsSortMode	game
-UnityEngine.FindObjectsSortMode	field	static None : UnityEngine.FindObjectsSortMode	game
+UnityEngine.FindObjectsSortMode	field	static InstanceID : UnityEngine.FindObjectsSortMode { get; }	game
+UnityEngine.FindObjectsSortMode	field	static None : UnityEngine.FindObjectsSortMode { get; }	game
 UnityEngine.GameObject	type	class : UnityEngine.Object	game
 UnityEngine.GameObject	ctor	.ctor()	game
 UnityEngine.GameObject	ctor	.ctor(string)	game
@@ -1296,17 +1297,17 @@ UnityEngine.GameObject	method	UnityDestroying() : void	absent
 UnityEngine.GameObject	method	static CheckComponentType(Type) : void	absent
 UnityEngine.GameObject	method	static HierarchyActivityChanged(UnityEngine.GameObject, bool) : void	absent
 UnityEngine.GameObject	property	Health : float?	absent
-UnityEngine.GameObject	property	InScene : bool	absent
+UnityEngine.GameObject	property	InScene : bool { get; }	absent
 UnityEngine.GameObject	property	Networked : bool	absent
-UnityEngine.GameObject	property	OwnTransform : UnityEngine.Transform	absent
+UnityEngine.GameObject	property	OwnTransform : UnityEngine.Transform { get; }	absent
 UnityEngine.GameObject	property	Position : UnityEngine.Vector3	absent
 UnityEngine.GameObject	property	Rotation : UnityEngine.Quaternion	absent
-UnityEngine.GameObject	property	View : ZNetView	absent
-UnityEngine.GameObject	property	Wear : WearNTear	absent
-UnityEngine.GameObject	property	activeInHierarchy : bool	game
-UnityEngine.GameObject	property	activeSelf : bool	game
+UnityEngine.GameObject	property	View : ZNetView { get; }	absent
+UnityEngine.GameObject	property	Wear : WearNTear { get; }	absent
+UnityEngine.GameObject	property	activeInHierarchy : bool { get; }	game
+UnityEngine.GameObject	property	activeSelf : bool { get; }	game
 UnityEngine.GameObject	property	tag : string	game
-UnityEngine.GameObject	property	transform : UnityEngine.Transform	game
+UnityEngine.GameObject	property	transform : UnityEngine.Transform { get; }	game
 UnityEngine.Light	type	class : UnityEngine.Behaviour	game
 UnityEngine.Light	ctor	.ctor()	game
 UnityEngine.Light	property	color : UnityEngine.Color	game
@@ -1317,19 +1318,19 @@ UnityEngine.Light	property	shadows : UnityEngine.LightShadows	game
 UnityEngine.Light	property	spotAngle : float	game
 UnityEngine.Light	property	type : UnityEngine.LightType	game
 UnityEngine.LightShadows	type	enum	game
-UnityEngine.LightShadows	field	static Hard : UnityEngine.LightShadows	game
-UnityEngine.LightShadows	field	static None : UnityEngine.LightShadows	game
-UnityEngine.LightShadows	field	static Soft : UnityEngine.LightShadows	game
+UnityEngine.LightShadows	field	static Hard : UnityEngine.LightShadows { get; }	game
+UnityEngine.LightShadows	field	static None : UnityEngine.LightShadows { get; }	game
+UnityEngine.LightShadows	field	static Soft : UnityEngine.LightShadows { get; }	game
 UnityEngine.LightType	type	enum	game
-UnityEngine.LightType	field	static Area : UnityEngine.LightType	game
-UnityEngine.LightType	field	static Box : UnityEngine.LightType	game
-UnityEngine.LightType	field	static Directional : UnityEngine.LightType	game
-UnityEngine.LightType	field	static Disc : UnityEngine.LightType	game
-UnityEngine.LightType	field	static Point : UnityEngine.LightType	game
-UnityEngine.LightType	field	static Pyramid : UnityEngine.LightType	game
-UnityEngine.LightType	field	static Rectangle : UnityEngine.LightType	game
-UnityEngine.LightType	field	static Spot : UnityEngine.LightType	game
-UnityEngine.LightType	field	static Tube : UnityEngine.LightType	game
+UnityEngine.LightType	field	static Area : UnityEngine.LightType { get; }	game
+UnityEngine.LightType	field	static Box : UnityEngine.LightType { get; }	game
+UnityEngine.LightType	field	static Directional : UnityEngine.LightType { get; }	game
+UnityEngine.LightType	field	static Disc : UnityEngine.LightType { get; }	game
+UnityEngine.LightType	field	static Point : UnityEngine.LightType { get; }	game
+UnityEngine.LightType	field	static Pyramid : UnityEngine.LightType { get; }	game
+UnityEngine.LightType	field	static Rectangle : UnityEngine.LightType { get; }	game
+UnityEngine.LightType	field	static Spot : UnityEngine.LightType { get; }	game
+UnityEngine.LightType	field	static Tube : UnityEngine.LightType { get; }	game
 UnityEngine.Material	type	class : UnityEngine.Object	game
 UnityEngine.Material	ctor	.ctor(UnityEngine.Material)	game
 UnityEngine.Material	ctor	.ctor(UnityEngine.Shader)	game
@@ -1344,7 +1345,7 @@ UnityEngine.Material	method	SetFloat(string, float) : void	game
 UnityEngine.Material	method	SetInt(string, int) : void	game
 UnityEngine.Material	property	color : UnityEngine.Color	game
 UnityEngine.Mathf	type	struct	game
-UnityEngine.Mathf	field	static PI : float	game
+UnityEngine.Mathf	field	static PI : float { get; }	game
 UnityEngine.Mathf	method	static Abs(float) : float	game
 UnityEngine.Mathf	method	static Atan2(float, float) : float	game
 UnityEngine.Mathf	method	static CeilToInt(float) : int	game
@@ -1373,7 +1374,7 @@ UnityEngine.Mesh	method	CopyForInstantiate() : UnityEngine.Object	absent
 UnityEngine.Mesh	method	RecalculateBounds() : void	game
 UnityEngine.Mesh	property	bounds : UnityEngine.Bounds	game
 UnityEngine.Mesh	property	triangles : int[]	game
-UnityEngine.Mesh	property	vertexCount : int	game
+UnityEngine.Mesh	property	vertexCount : int { get; }	game
 UnityEngine.Mesh	property	vertices : UnityEngine.Vector3[]	game
 UnityEngine.MeshCollider	type	class : UnityEngine.Collider	game
 UnityEngine.MeshCollider	ctor	.ctor()	game
@@ -1414,8 +1415,8 @@ UnityEngine.MonoBehaviour	method	UnityRunDueInvokes() : void	absent
 UnityEngine.MonoBehaviour	method	UnityRunStart() : void	absent
 UnityEngine.MonoBehaviour	method	UnitySendMessage(string) : void	absent
 UnityEngine.MonoBehaviour	method	static UnityFindMessage(Type, string) : MethodInfo	absent
-UnityEngine.MonoBehaviour	property	UnityAlive : bool	absent
-UnityEngine.MonoBehaviour	property	UnityRunning : bool	absent
+UnityEngine.MonoBehaviour	property	UnityAlive : bool { get; }	absent
+UnityEngine.MonoBehaviour	property	UnityRunning : bool { get; }	absent
 UnityEngine.Object	type	class	game
 UnityEngine.Object	ctor	.ctor()	game
 UnityEngine.Object	field	static s_pendingDestroy : List<UnityEngine.Object>	absent
@@ -1453,7 +1454,7 @@ UnityEngine.Object	method	static UnityOrdered<T>(IEnumerable<T>) : List<T>	absen
 UnityEngine.Object	method	static op_Equality(UnityEngine.Object, UnityEngine.Object) : bool	game
 UnityEngine.Object	method	static op_Implicit(UnityEngine.Object) : bool	game
 UnityEngine.Object	method	static op_Inequality(UnityEngine.Object, UnityEngine.Object) : bool	game
-UnityEngine.Object	property	Destroyed : bool	absent
+UnityEngine.Object	property	Destroyed : bool { get; }	absent
 UnityEngine.Object	property	name : string	game
 UnityEngine.Quaternion	type	struct	game
 UnityEngine.Quaternion	ctor	.ctor(float, float, float, float)	game
@@ -1470,18 +1471,18 @@ UnityEngine.Quaternion	method	static Inverse(UnityEngine.Quaternion) : UnityEngi
 UnityEngine.Quaternion	method	static op_Multiply(UnityEngine.Quaternion, UnityEngine.Quaternion) : UnityEngine.Quaternion	game
 UnityEngine.Quaternion	method	static op_Multiply(UnityEngine.Quaternion, UnityEngine.Vector3) : UnityEngine.Vector3	game
 UnityEngine.Quaternion	property	eulerAngles : UnityEngine.Vector3	game
-UnityEngine.Quaternion	property	static identity : UnityEngine.Quaternion	game
+UnityEngine.Quaternion	property	static identity : UnityEngine.Quaternion { get; }	game
 UnityEngine.Random	type	static class	game
 UnityEngine.Random	field	static s_random : Random	absent
 UnityEngine.Random	method	static InitState(int) : void	game
 UnityEngine.Random	method	static Range(float, float) : float	game
 UnityEngine.Random	method	static Range(int, int) : int	game
-UnityEngine.Random	property	static insideUnitCircle : UnityEngine.Vector2	game
-UnityEngine.Random	property	static value : float	game
+UnityEngine.Random	property	static insideUnitCircle : UnityEngine.Vector2 { get; }	game
+UnityEngine.Random	property	static value : float { get; }	game
 UnityEngine.RenderMode	type	enum	game
-UnityEngine.RenderMode	field	static ScreenSpaceCamera : UnityEngine.RenderMode	game
-UnityEngine.RenderMode	field	static ScreenSpaceOverlay : UnityEngine.RenderMode	game
-UnityEngine.RenderMode	field	static WorldSpace : UnityEngine.RenderMode	game
+UnityEngine.RenderMode	field	static ScreenSpaceCamera : UnityEngine.RenderMode { get; }	game
+UnityEngine.RenderMode	field	static ScreenSpaceOverlay : UnityEngine.RenderMode { get; }	game
+UnityEngine.RenderMode	field	static WorldSpace : UnityEngine.RenderMode { get; }	game
 UnityEngine.Renderer	type	class : UnityEngine.Component	game
 UnityEngine.Renderer	ctor	.ctor()	game
 UnityEngine.Renderer	property	enabled : bool	game
@@ -1505,9 +1506,9 @@ UnityEngine.Rigidbody	property	rotation : UnityEngine.Quaternion	game
 UnityEngine.Rigidbody	property	useGravity : bool	game
 UnityEngine.Rigidbody	property	velocity : UnityEngine.Vector3	game
 UnityEngine.RigidbodyInterpolation	type	enum	game
-UnityEngine.RigidbodyInterpolation	field	static Extrapolate : UnityEngine.RigidbodyInterpolation	game
-UnityEngine.RigidbodyInterpolation	field	static Interpolate : UnityEngine.RigidbodyInterpolation	game
-UnityEngine.RigidbodyInterpolation	field	static None : UnityEngine.RigidbodyInterpolation	game
+UnityEngine.RigidbodyInterpolation	field	static Extrapolate : UnityEngine.RigidbodyInterpolation { get; }	game
+UnityEngine.RigidbodyInterpolation	field	static Interpolate : UnityEngine.RigidbodyInterpolation { get; }	game
+UnityEngine.RigidbodyInterpolation	field	static None : UnityEngine.RigidbodyInterpolation { get; }	game
 UnityEngine.ScriptableObject	type	class : UnityEngine.Object	game
 UnityEngine.ScriptableObject	ctor	.ctor()	game
 UnityEngine.ScriptableObject	method	static CreateInstance(Type) : UnityEngine.ScriptableObject	game
@@ -1523,19 +1524,20 @@ UnityEngine.SphereCollider	type	class : UnityEngine.Collider	game
 UnityEngine.SphereCollider	ctor	.ctor()	game
 UnityEngine.SphereCollider	method	ClosestPoint(UnityEngine.Vector3) : UnityEngine.Vector3	game
 UnityEngine.SphereCollider	method	ShapeBounds() : UnityEngine.Bounds	absent
-UnityEngine.SphereCollider	property	WorldRadius : float	absent
+UnityEngine.SphereCollider	property	WorldRadius : float { get; }	absent
 UnityEngine.SphereCollider	property	center : UnityEngine.Vector3	game
 UnityEngine.SphereCollider	property	radius : float	game
 UnityEngine.Sprite	type	class : UnityEngine.Object	game
 UnityEngine.Sprite	ctor	.ctor()	game
 UnityEngine.Time	type	static class	game
-UnityEngine.Time	field	static deltaTime : float	game
-UnityEngine.Time	field	static frameCount : int	game
-UnityEngine.Time	field	static realtimeSinceStartup : float	game
-UnityEngine.Time	field	static time : float	game
+UnityEngine.Time	method	static AdvanceForTest(float) : void	absent
+UnityEngine.Time	property	static deltaTime : float { get; }	game
+UnityEngine.Time	property	static frameCount : int { get; }	game
+UnityEngine.Time	property	static realtimeSinceStartup : float { get; }	game
+UnityEngine.Time	property	static time : float { get; }	game
 UnityEngine.Transform	type	class : UnityEngine.Component	game
 UnityEngine.Transform	ctor	.ctor()	game
-UnityEngine.Transform	field	m_children : List<UnityEngine.Transform>	absent
+UnityEngine.Transform	field	m_children : List<UnityEngine.Transform> { get; }	absent
 UnityEngine.Transform	field	m_parent : UnityEngine.Transform	absent
 UnityEngine.Transform	method	Detach() : void	absent
 UnityEngine.Transform	method	Find(string) : UnityEngine.Transform	game
@@ -1547,15 +1549,15 @@ UnityEngine.Transform	method	IsChildOf(UnityEngine.Transform) : bool	game
 UnityEngine.Transform	method	SetParent(UnityEngine.Transform) : void	game
 UnityEngine.Transform	method	SetParent(UnityEngine.Transform, bool) : void	game
 UnityEngine.Transform	method	TransformPoint(UnityEngine.Vector3) : UnityEngine.Vector3	game
-UnityEngine.Transform	property	childCount : int	game
+UnityEngine.Transform	property	childCount : int { get; }	game
 UnityEngine.Transform	property	eulerAngles : UnityEngine.Vector3	game
 UnityEngine.Transform	property	localPosition : UnityEngine.Vector3	game
 UnityEngine.Transform	property	localRotation : UnityEngine.Quaternion	game
 UnityEngine.Transform	property	localScale : UnityEngine.Vector3	game
-UnityEngine.Transform	property	lossyScale : UnityEngine.Vector3	game
+UnityEngine.Transform	property	lossyScale : UnityEngine.Vector3 { get; }	game
 UnityEngine.Transform	property	parent : UnityEngine.Transform	game
 UnityEngine.Transform	property	position : UnityEngine.Vector3	game
-UnityEngine.Transform	property	root : UnityEngine.Transform	game
+UnityEngine.Transform	property	root : UnityEngine.Transform { get; }	game
 UnityEngine.Transform	property	rotation : UnityEngine.Quaternion	game
 UnityEngine.UnityException	type	class : Exception	game
 UnityEngine.UnityException	ctor	.ctor()	game
@@ -1582,9 +1584,9 @@ UnityEngine.Vector2	method	static op_Multiply(UnityEngine.Vector2, float) : Unit
 UnityEngine.Vector2	method	static op_Multiply(float, UnityEngine.Vector2) : UnityEngine.Vector2	game
 UnityEngine.Vector2	method	static op_Subtraction(UnityEngine.Vector2, UnityEngine.Vector2) : UnityEngine.Vector2	game
 UnityEngine.Vector2	method	static op_UnaryNegation(UnityEngine.Vector2) : UnityEngine.Vector2	game
-UnityEngine.Vector2	property	magnitude : float	game
-UnityEngine.Vector2	property	normalized : UnityEngine.Vector2	game
-UnityEngine.Vector2	property	sqrMagnitude : float	game
+UnityEngine.Vector2	property	magnitude : float { get; }	game
+UnityEngine.Vector2	property	normalized : UnityEngine.Vector2 { get; }	game
+UnityEngine.Vector2	property	sqrMagnitude : float { get; }	game
 UnityEngine.Vector2Int	type	struct	game
 UnityEngine.Vector2Int	ctor	.ctor(int, int)	game
 UnityEngine.Vector2Int	field	x : int	game
@@ -1601,7 +1603,7 @@ UnityEngine.Vector3	method	static SqrMagnitude(UnityEngine.Vector3) : float	game
 UnityEngine.Vector3	method	static op_Addition(UnityEngine.Vector3, UnityEngine.Vector3) : UnityEngine.Vector3	game
 UnityEngine.Vector3	method	static op_Multiply(UnityEngine.Vector3, float) : UnityEngine.Vector3	game
 UnityEngine.Vector3	method	static op_Subtraction(UnityEngine.Vector3, UnityEngine.Vector3) : UnityEngine.Vector3	game
-UnityEngine.Vector3	property	static zero : UnityEngine.Vector3	game
+UnityEngine.Vector3	property	static zero : UnityEngine.Vector3 { get; }	game
 UnityEngine.VectorMath	type	static class	absent
 UnityEngine.VectorMath	method	static Abs(UnityEngine.Vector3) : UnityEngine.Vector3	absent
 UnityEngine.VectorMath	method	static Max(UnityEngine.Vector3, UnityEngine.Vector3) : UnityEngine.Vector3	absent
@@ -1612,13 +1614,13 @@ UnityEngine.WaitForEndOfFrame	type	class : UnityEngine.YieldInstruction	game
 UnityEngine.WaitForEndOfFrame	ctor	.ctor()	game
 UnityEngine.WaitForSeconds	type	class : UnityEngine.YieldInstruction	game
 UnityEngine.WaitForSeconds	ctor	.ctor(float)	game
-UnityEngine.WaitForSeconds	field	m_seconds : float	absent
+UnityEngine.WaitForSeconds	field	m_seconds : float { get; }	absent
 UnityEngine.WaitUntil	type	class : UnityEngine.CustomYieldInstruction	game
 UnityEngine.WaitUntil	ctor	.ctor(Func<bool>)	game
-UnityEngine.WaitUntil	property	keepWaiting : bool	game
+UnityEngine.WaitUntil	property	keepWaiting : bool { get; }	game
 UnityEngine.WaitWhile	type	class : UnityEngine.CustomYieldInstruction	game
 UnityEngine.WaitWhile	ctor	.ctor(Func<bool>)	game
-UnityEngine.WaitWhile	property	keepWaiting : bool	game
+UnityEngine.WaitWhile	property	keepWaiting : bool { get; }	game
 UnityEngine.YieldInstruction	type	class	game
 UnityEngine.YieldInstruction	ctor	.ctor()	game
 Utils	type	static class	game
@@ -1659,8 +1661,8 @@ Utils	method	static SmoothStep(float, float, float) : float	game
 Utils	method	static YawFromDirection(UnityEngine.Vector3) : float	game
 Utils.ChildHandler	type	delegate	game
 Utils.IterativeSearchType	type	enum	game
-Utils.IterativeSearchType	field	static BreadthFirst : Utils.IterativeSearchType	game
-Utils.IterativeSearchType	field	static DepthFirst : Utils.IterativeSearchType	game
+Utils.IterativeSearchType	field	static BreadthFirst : Utils.IterativeSearchType { get; }	game
+Utils.IterativeSearchType	field	static DepthFirst : Utils.IterativeSearchType { get; }	game
 Vector2i	type	struct	game
 Vector2i	ctor	.ctor(int, int)	game
 Vector2i	field	x : int	game
@@ -1692,8 +1694,7 @@ WeightedChoice	method	static Roll(IReadOnlyList<float>, float) : int	absent
 WeightedChoice	method	static Sum(IEnumerable<float>) : float	absent
 WorldGenerator	type	class	game
 WorldGenerator	ctor	.ctor()	differs	.ctor(World)
-WorldGenerator	field	static WaterLevel : float	absent
-WorldGenerator	field	static instance : WorldGenerator	game
+WorldGenerator	field	static WaterLevel : float { get; }	absent
 WorldGenerator	method	GetBaseHeight(float, float, bool) : float	game
 WorldGenerator	method	GetBiome(float, float, float, bool) : Heightmap.Biome	game
 WorldGenerator	method	GetBiomeHeight(Heightmap.Biome, float, float, out UnityEngine.Color, bool, bool) : float	game
@@ -1701,6 +1702,7 @@ WorldGenerator	method	GetHeight(float, float) : float	game
 WorldGenerator	method	GetRiverWeight(float, float, out float, out float) : void	game
 WorldGenerator	method	GetSeed() : int	game
 WorldGenerator	method	static WorldAngle(float, float) : float	game
+WorldGenerator	property	static instance : WorldGenerator { get; }	game
 ZDO	type	class	game
 ZDO	ctor	.ctor(UnityEngine.Vector3, int)	differs	.ctor()
 ZDO	field	Persistent : bool	game
@@ -1780,12 +1782,12 @@ ZDO	method	SetPosition(UnityEngine.Vector3) : void	game
 ZDO	method	SetPrefab(int) : void	game
 ZDO	method	SetRotation(UnityEngine.Quaternion) : void	game
 ZDO.SavedWorld	type	enum	absent
-ZDO.SavedWorld	field	static BeforeChunkedSave : ZDO.SavedWorld	absent
-ZDO.SavedWorld	field	static BeforeNewSaveFormat : ZDO.SavedWorld	absent
-ZDO.SavedWorld	field	static Current : ZDO.SavedWorld	absent
+ZDO.SavedWorld	field	static BeforeChunkedSave : ZDO.SavedWorld { get; }	absent
+ZDO.SavedWorld	field	static BeforeNewSaveFormat : ZDO.SavedWorld { get; }	absent
+ZDO.SavedWorld	field	static Current : ZDO.SavedWorld { get; }	absent
 ZDOID	type	struct	game
 ZDOID	ctor	.ctor(long, uint)	game
-ZDOID	field	UserID : long	game
+ZDOID	field	UserID : long { get; }	game
 ZDOID	method	Equals(ZDOID) : bool	game
 ZDOID	method	Equals(object) : bool	game
 ZDOID	method	GetHashCode() : int	game
@@ -1793,14 +1795,13 @@ ZDOID	method	IsNone() : bool	game
 ZDOID	method	ToString() : string	game
 ZDOID	method	static op_Equality(ZDOID, ZDOID) : bool	game
 ZDOID	method	static op_Inequality(ZDOID, ZDOID) : bool	game
-ZDOID	property	ID : uint	game
-ZDOID	property	static None : ZDOID	game
+ZDOID	property	ID : uint { get; }	game
+ZDOID	property	static None : ZDOID { get; }	game
 ZDOMan	type	class	game
 ZDOMan	ctor	.ctor()	differs	.ctor(int)
-ZDOMan	field	DestroyQueue : List<ZDO>	absent
-ZDOMan	field	Zdos : List<ZDO>	absent
-ZDOMan	field	m_sessionID : long	game
-ZDOMan	field	static instance : ZDOMan	game
+ZDOMan	field	DestroyQueue : List<ZDO> { get; }	absent
+ZDOMan	field	Zdos : List<ZDO> { get; }	absent
+ZDOMan	field	m_sessionID : long { get; }	game
 ZDOMan	method	CountWithPrefab(string) : int	absent
 ZDOMan	method	CreateNewZDO(UnityEngine.Vector3, int) : ZDO	game
 ZDOMan	method	DestroyZDO(ZDO) : void	game
@@ -1811,20 +1812,21 @@ ZDOMan	method	ProcessDestroyed() : int	absent
 ZDOMan	method	RoundTripThroughSave(ZDO.SavedWorld) : int	absent
 ZDOMan	method	static DefaultSessionOnlyHashes() : HashSet<int>	absent
 ZDOMan	method	static GetSessionID() : long	game
-ZDOMan	property	SessionOnlyHashes : HashSet<int>	absent
-ZDOMan	property	m_objectsByID : Dictionary<ZDOID, ZDO>	game
+ZDOMan	property	SessionOnlyHashes : HashSet<int> { get; }	absent
+ZDOMan	property	m_objectsByID : Dictionary<ZDOID, ZDO> { get; }	game
+ZDOMan	property	static instance : ZDOMan { get; }	game
 ZDOVars	type	static class	game
-ZDOVars	field	static s_TCData : int	game
-ZDOVars	field	static s_addedDefaultItems : int	game
-ZDOVars	field	static s_creator : int	game
-ZDOVars	field	static s_enabled : int	game
-ZDOVars	field	static s_location : int	game
-ZDOVars	field	static s_picked : int	game
-ZDOVars	field	static s_playerID : int	game
-ZDOVars	field	static s_playerName : int	game
-ZDOVars	field	static s_scaleHash : int	game
-ZDOVars	field	static s_scaleScalarHash : int	game
-ZDOVars	field	static s_terrainModifierTimeCreated : int	game
+ZDOVars	field	static s_TCData : int { get; }	game
+ZDOVars	field	static s_addedDefaultItems : int { get; }	game
+ZDOVars	field	static s_creator : int { get; }	game
+ZDOVars	field	static s_enabled : int { get; }	game
+ZDOVars	field	static s_location : int { get; }	game
+ZDOVars	field	static s_picked : int { get; }	game
+ZDOVars	field	static s_playerID : int { get; }	game
+ZDOVars	field	static s_playerName : int { get; }	game
+ZDOVars	field	static s_scaleHash : int { get; }	game
+ZDOVars	field	static s_scaleScalarHash : int { get; }	game
+ZDOVars	field	static s_terrainModifierTimeCreated : int { get; }	game
 ZInput	type	class	game
 ZInput	ctor	.ctor()	game
 ZInput	field	UsingGamepad : bool	absent
@@ -1832,8 +1834,8 @@ ZInput	method	GetBoundKeyString(string, bool) : string	game
 ZInput	method	SetBinding(string, string) : void	absent
 ZInput	method	static IsGamepadActive() : bool	game
 ZInput	property	static Current : ZInput	absent
-ZInput	property	static GamepadActive : bool	game
-ZInput	property	static instance : ZInput	game
+ZInput	property	static GamepadActive : bool { get; }	game
+ZInput	property	static instance : ZInput { get; }	game
 ZLog	type	class	game
 ZLog	ctor	.ctor()	game
 ZLog	method	static Log(object) : void	game
@@ -1844,11 +1846,11 @@ ZNet	ctor	.ctor()	game
 ZNet	field	Dedicated : bool	absent
 ZNet	field	NetworkVersion : uint	absent
 ZNet	field	OnlineBackend : OnlineBackendType	absent
-ZNet	field	Peers : Dictionary<long, ZNetPeer>	absent
+ZNet	field	Peers : Dictionary<long, ZNetPeer> { get; }	absent
 ZNet	field	PlayFabId : string	absent
 ZNet	field	PlayerName : string	absent
 ZNet	field	RefusePassword : bool	absent
-ZNet	field	RemoteCommands : List<string>	absent
+ZNet	field	RemoteCommands : List<string> { get; }	absent
 ZNet	field	SaveCalls : int	absent
 ZNet	field	Server : bool	absent
 ZNet	field	Status : ZNet.ConnectionStatus	absent
@@ -1857,7 +1859,6 @@ ZNet	field	VersionString : string	absent
 ZNet	field	m_adminList : SyncedList	game
 ZNet	field	m_bannedList : SyncedList	game
 ZNet	field	m_permittedList : SyncedList	game
-ZNet	field	static instance : ZNet	game
 ZNet	field	static m_loadError : bool	game
 ZNet	method	Disconnect(ZNetPeer) : void	game
 ZNet	method	GetPeer(ZRpc) : ZNetPeer	game
@@ -1885,22 +1886,23 @@ ZNet	method	Update() : void	game
 ZNet	method	UpdatePeers(float) : void	game
 ZNet	method	static GetConnectionStatus() : ZNet.ConnectionStatus	game
 ZNet	method	static GetUID() : long	game
-ZNet	property	Banned : List<string>	game
+ZNet	property	Banned : List<string> { get; }	game
+ZNet	property	static instance : ZNet { get; }	game
 ZNet	property	static m_onlineBackend : OnlineBackendType	game
 ZNet.ConnectionStatus	type	enum	game
-ZNet.ConnectionStatus	field	static Connected : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static Connecting : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorAlreadyConnected : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorBanned : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorConnectFailed : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorCrossplayPrivilege : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorDisconnected : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorFull : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorKicked : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorPassword : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorPlatformExcluded : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static ErrorVersion : ZNet.ConnectionStatus	game
-ZNet.ConnectionStatus	field	static None : ZNet.ConnectionStatus	game
+ZNet.ConnectionStatus	field	static Connected : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static Connecting : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorAlreadyConnected : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorBanned : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorConnectFailed : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorCrossplayPrivilege : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorDisconnected : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorFull : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorKicked : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorPassword : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorPlatformExcluded : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static ErrorVersion : ZNet.ConnectionStatus { get; }	game
+ZNet.ConnectionStatus	field	static None : ZNet.ConnectionStatus { get; }	game
 ZNetPeer	type	class	game
 ZNetPeer	ctor	.ctor()	differs	.ctor(ISocket, bool)
 ZNetPeer	ctor	.ctor(ISocket, bool)	game
@@ -1917,15 +1919,14 @@ ZNetPeer	method	Dispose() : void	game
 ZNetPeer	method	IsReady() : bool	game
 ZNetScene	type	class : UnityEngine.MonoBehaviour	game
 ZNetScene	ctor	.ctor()	game
-ZNetScene	field	EarlyLookups : List<string>	absent
-ZNetScene	field	Live : List<UnityEngine.GameObject>	absent
-ZNetScene	field	NotYetRegistered : HashSet<int>	absent
-ZNetScene	field	Prefabs : Dictionary<string, UnityEngine.GameObject>	absent
-ZNetScene	field	m_namedPrefabs : Dictionary<int, UnityEngine.GameObject>	game
+ZNetScene	field	EarlyLookups : List<string> { get; }	absent
+ZNetScene	field	Live : List<UnityEngine.GameObject> { get; }	absent
+ZNetScene	field	NotYetRegistered : HashSet<int> { get; }	absent
+ZNetScene	field	Prefabs : Dictionary<string, UnityEngine.GameObject> { get; }	absent
+ZNetScene	field	m_namedPrefabs : Dictionary<int, UnityEngine.GameObject> { get; }	game
 ZNetScene	field	m_nonNetViewPrefabs : List<UnityEngine.GameObject>	game
 ZNetScene	field	m_prefabs : List<UnityEngine.GameObject>	game
 ZNetScene	field	static AwakePostfix : Action<ZNetScene>	absent
-ZNetScene	field	static instance : ZNetScene	game
 ZNetScene	method	AddPrefab(string, float) : UnityEngine.GameObject	absent
 ZNetScene	method	Awake() : void	game
 ZNetScene	method	Destroy(UnityEngine.GameObject) : void	game
@@ -1938,6 +1939,7 @@ ZNetScene	method	GetPrefabHash(UnityEngine.GameObject) : int	game
 ZNetScene	method	GetPrefabNames() : List<string>	game
 ZNetScene	method	HasPrefab(int) : bool	game
 ZNetScene	method	MarkNotYetRegistered(params string[]) : void	absent
+ZNetScene	property	static instance : ZNetScene { get; }	game
 ZNetView	type	class : UnityEngine.MonoBehaviour	game
 ZNetView	ctor	.ctor()	game
 ZNetView	ctor	.ctor(ZDO)	differs	.ctor()
@@ -1970,7 +1972,7 @@ ZNetView	method	Unregister(string) : void	game
 ZNetView	method	static Find(ZDO) : ZNetView	absent
 ZNetView	method	static FinishGhostInit() : void	game
 ZNetView	method	static StartGhostInit() : void	game
-ZNetView	property	static GhostInit : bool	absent
+ZNetView	property	static GhostInit : bool { get; }	absent
 ZPackage	type	class	game
 ZPackage	ctor	.ctor()	game
 ZPackage	ctor	.ctor(byte[])	game
@@ -2037,17 +2039,16 @@ ZPackage	method	WriteNumItems(int) : void	game
 ZPackage	method	WriteSmallRotation(UnityEngine.Vector3) : void	game
 ZPlayFabSocket	type	class : SocketDouble	game
 ZPlayFabSocket	ctor	.ctor(string, string)	differs	.ctor() | .ctor(PlayFab.Party.PlayFabPlayer) | .ctor(string, Action<PlayFabMatchmakingServerData>)
-ZPlayFabSocket	field	m_remotePlayerId : string	game
+ZPlayFabSocket	field	m_remotePlayerId : string { get; }	game
 ZPlayFabSocket	method	Flush() : bool	game
 ZPlayFabSocket	method	GetEndPointString() : string	game
 ZPlayFabSocket	method	GetHostName() : string	game
 ZRoutedRpc	type	class	game
 ZRoutedRpc	ctor	.ctor()	differs	.ctor(bool)
-ZRoutedRpc	field	Dropped : List<ValueTuple<long, ZDOID, string, string>>	absent
-ZRoutedRpc	field	Invoked : List<ValueTuple<long, string, object[]>>	absent
-ZRoutedRpc	field	Sent : List<ValueTuple<long, ZRoutedRpc.RoutedRPCData>>	absent
-ZRoutedRpc	field	static Everybody : long	game
-ZRoutedRpc	field	static instance : ZRoutedRpc	game
+ZRoutedRpc	field	Dropped : List<ValueTuple<long, ZDOID, string, string>> { get; }	absent
+ZRoutedRpc	field	Invoked : List<ValueTuple<long, string, object[]>> { get; }	absent
+ZRoutedRpc	field	Sent : List<ValueTuple<long, ZRoutedRpc.RoutedRPCData>> { get; }	absent
+ZRoutedRpc	field	static Everybody : long { get; }	game
 ZRoutedRpc	method	Deliver(long, string, params object[]) : void	absent
 ZRoutedRpc	method	GetServerPeerID() : long	game
 ZRoutedRpc	method	InvokeRoutedRPC(long, ZDOID, string, params object[]) : void	game
@@ -2068,7 +2069,8 @@ ZRoutedRpc	method	static Call(Delegate, ZRoutedRpc.RoutedRPCData, string) : void
 ZRoutedRpc	method	static IsReadable(Type) : bool	absent
 ZRoutedRpc	method	static ReadArgument(ZPackage, Type) : object	absent
 ZRoutedRpc	method	static SerializeArguments(string, object[], ZPackage, List<Type>) : void	absent
-ZRoutedRpc	property	PeerId : long	absent
+ZRoutedRpc	property	PeerId : long { get; }	absent
+ZRoutedRpc	property	static instance : ZRoutedRpc { get; }	game
 ZRoutedRpc.RoutedRPCData	type	class	game
 ZRoutedRpc.RoutedRPCData	ctor	.ctor()	game
 ZRoutedRpc.RoutedRPCData	field	ArgumentTypes : List<Type>	absent
@@ -2083,9 +2085,9 @@ ZRoutedRpc.RoutedRPCData	method	Deserialize(ZPackage) : void	game
 ZRoutedRpc.RoutedRPCData	method	Serialize(ZPackage) : void	game
 ZRpc	type	class	game
 ZRpc	ctor	.ctor(ISocket)	game
-ZRpc	field	Dropped : List<int>	absent
-ZRpc	field	Exceptions : List<Exception>	absent
-ZRpc	field	Invoked : List<ValueTuple<string, object[]>>	absent
+ZRpc	field	Dropped : List<int> { get; }	absent
+ZRpc	field	Exceptions : List<Exception> { get; }	absent
+ZRpc	field	Invoked : List<ValueTuple<string, object[]>> { get; }	absent
 ZRpc	method	Deliver(string, params object[]) : ZRpc.ErrorCode	absent
 ZRpc	method	Dispose() : void	game
 ZRpc	method	GetSocket() : ISocket	game
@@ -2101,9 +2103,9 @@ ZRpc	method	Unregister(string) : void	game
 ZRpc	method	Update(float) : ZRpc.ErrorCode	game
 ZRpc	method	static Serialize(object[], ref ZPackage) : void	game
 ZRpc.ErrorCode	type	enum	game
-ZRpc.ErrorCode	field	static Disconnected : ZRpc.ErrorCode	game
-ZRpc.ErrorCode	field	static IncompatibleVersion : ZRpc.ErrorCode	game
-ZRpc.ErrorCode	field	static Success : ZRpc.ErrorCode	game
+ZRpc.ErrorCode	field	static Disconnected : ZRpc.ErrorCode { get; }	game
+ZRpc.ErrorCode	field	static IncompatibleVersion : ZRpc.ErrorCode { get; }	game
+ZRpc.ErrorCode	field	static Success : ZRpc.ErrorCode { get; }	game
 ZRpc.RpcMethod	type	class	game
 ZRpc.RpcMethod.Method	type	delegate	game
 ZRpc.RpcMethod<T, U, V, B>	type	class	game
@@ -2116,17 +2118,16 @@ ZSteamSocket	method	GetPeerID() : Steamworks.CSteamID	game
 ZoneSystem	type	class : UnityEngine.MonoBehaviour	game
 ZoneSystem	ctor	.ctor()	game
 ZoneSystem	event	GenerateLocationsCompleted : Action	game
-ZoneSystem	field	Generated : HashSet<Vector2s>	absent
+ZoneSystem	field	Generated : HashSet<Vector2s> { get; }	absent
 ZoneSystem	field	WorldStartingGlobalKeys : List<string>	absent
-ZoneSystem	field	m_globalKeys : HashSet<string>	game
+ZoneSystem	field	m_globalKeys : HashSet<string> { get; }	game
 ZoneSystem	field	m_globalKeysEnums : HashSet<GlobalKeys>	game
 ZoneSystem	field	m_globalKeysValues : Dictionary<string, string>	game
 ZoneSystem	field	m_locationInstances : Dictionary<Vector2s, ZoneSystem.LocationInstance>	game
 ZoneSystem	field	m_locations : List<ZoneSystem.ZoneLocation>	game
-ZoneSystem	field	m_locationsByHash : Dictionary<int, ZoneSystem.ZoneLocation>	game
+ZoneSystem	field	m_locationsByHash : Dictionary<int, ZoneSystem.ZoneLocation> { get; }	game
 ZoneSystem	field	m_waterLevel : float	game
-ZoneSystem	field	static ZoneSize : float	absent
-ZoneSystem	field	static instance : ZoneSystem	game
+ZoneSystem	field	static ZoneSize : float { get; }	absent
 ZoneSystem	method	Awake() : void	game
 ZoneSystem	method	GenerateLocationsIfNeeded() : void	game
 ZoneSystem	method	GetGlobalKey(GlobalKeys) : bool	game
@@ -2165,11 +2166,12 @@ ZoneSystem	method	static IndexToSector(uint) : Vector2s	game
 ZoneSystem	method	static SectorToIndex(Vector2s) : ZoneSystem.SectorIndex	game
 ZoneSystem	method	static SectorToIndex(int, int) : ZoneSystem.SectorIndex	game
 ZoneSystem	property	LocationsGenerated : bool	game
-ZoneSystem	property	Started : bool	absent
+ZoneSystem	property	Started : bool { get; }	absent
+ZoneSystem	property	static instance : ZoneSystem { get; }	game
 ZoneSystem.ClearArea	type	class	game
 ZoneSystem.ClearArea	ctor	.ctor(UnityEngine.Vector3, float)	game
-ZoneSystem.ClearArea	field	m_center : UnityEngine.Vector3	game
-ZoneSystem.ClearArea	field	m_radius : float	game
+ZoneSystem.ClearArea	field	m_center : UnityEngine.Vector3 { get; }	game
+ZoneSystem.ClearArea	field	m_radius : float { get; }	game
 ZoneSystem.LocationInstance	type	struct	game
 ZoneSystem.LocationInstance	field	m_location : ZoneSystem.ZoneLocation	game
 ZoneSystem.LocationInstance	field	m_placed : bool	game
@@ -2182,9 +2184,9 @@ ZoneSystem.SectorIndex	method	GetHashCode() : int	game
 ZoneSystem.SectorIndex	method	static op_Equality(ZoneSystem.SectorIndex, ZoneSystem.SectorIndex) : bool	game
 ZoneSystem.SectorIndex	method	static op_Inequality(ZoneSystem.SectorIndex, ZoneSystem.SectorIndex) : bool	game
 ZoneSystem.SpawnMode	type	enum	game
-ZoneSystem.SpawnMode	field	static Client : ZoneSystem.SpawnMode	game
-ZoneSystem.SpawnMode	field	static Full : ZoneSystem.SpawnMode	game
-ZoneSystem.SpawnMode	field	static Ghost : ZoneSystem.SpawnMode	game
+ZoneSystem.SpawnMode	field	static Client : ZoneSystem.SpawnMode { get; }	game
+ZoneSystem.SpawnMode	field	static Full : ZoneSystem.SpawnMode { get; }	game
+ZoneSystem.SpawnMode	field	static Ghost : ZoneSystem.SpawnMode { get; }	game
 ZoneSystem.ZoneLocation	type	class	game
 ZoneSystem.ZoneLocation	ctor	.ctor()	game
 ZoneSystem.ZoneLocation	field	m_biome : Heightmap.Biome	game
@@ -2226,16 +2228,16 @@ ZoneSystem.ZoneLocation	field	m_surroundCheckDistance : float	game
 ZoneSystem.ZoneLocation	field	m_surroundCheckLayers : int	game
 ZoneSystem.ZoneLocation	field	m_surroundCheckVegetation : bool	game
 ZoneSystem.ZoneLocation	field	m_unique : bool	game
-ZoneSystem.ZoneLocation	field	static AltitudeZero : float	absent
+ZoneSystem.ZoneLocation	field	static AltitudeZero : float { get; }	absent
 ZoneSystem.ZoneLocation	method	CheckPlacement(float, float, WorldGenerator, float) : ZoneSystem.ZoneLocation.Placement	absent
 ZoneSystem.ZoneLocation	method	IsAltitudeAllowed(float) : bool	absent
 ZoneSystem.ZoneLocation	method	static AltitudeAboveWater(float) : float	absent
 ZoneSystem.ZoneLocation	method	static SlopeRotationYaw(UnityEngine.Vector3) : float	absent
-ZoneSystem.ZoneLocation	property	Hash : int	game
+ZoneSystem.ZoneLocation	property	Hash : int { get; }	game
 ZoneSystem.ZoneLocation.Placement	type	enum	absent
-ZoneSystem.ZoneLocation.Placement	field	static Accepted : ZoneSystem.ZoneLocation.Placement	absent
-ZoneSystem.ZoneLocation.Placement	field	static Altitude : ZoneSystem.ZoneLocation.Placement	absent
-ZoneSystem.ZoneLocation.Placement	field	static Biome : ZoneSystem.ZoneLocation.Placement	absent
-ZoneSystem.ZoneLocation.Placement	field	static CenterDistance : ZoneSystem.ZoneLocation.Placement	absent
-ZoneSystem.ZoneLocation.Placement	field	static Distance : ZoneSystem.ZoneLocation.Placement	absent
-ZoneSystem.ZoneLocation.Placement	field	static TerrainDelta : ZoneSystem.ZoneLocation.Placement	absent
+ZoneSystem.ZoneLocation.Placement	field	static Accepted : ZoneSystem.ZoneLocation.Placement { get; }	absent
+ZoneSystem.ZoneLocation.Placement	field	static Altitude : ZoneSystem.ZoneLocation.Placement { get; }	absent
+ZoneSystem.ZoneLocation.Placement	field	static Biome : ZoneSystem.ZoneLocation.Placement { get; }	absent
+ZoneSystem.ZoneLocation.Placement	field	static CenterDistance : ZoneSystem.ZoneLocation.Placement { get; }	absent
+ZoneSystem.ZoneLocation.Placement	field	static Distance : ZoneSystem.ZoneLocation.Placement { get; }	absent
+ZoneSystem.ZoneLocation.Placement	field	static TerrainDelta : ZoneSystem.ZoneLocation.Placement { get; }	absent

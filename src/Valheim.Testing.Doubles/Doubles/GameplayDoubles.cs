@@ -191,14 +191,14 @@ public partial class HeightmapBuilder
     internal static HeightmapBuilder? m_instance;
     private static readonly HeightmapBuilder s_disposed = new();
     /// <summary>
-    /// The world's builder, made on first use as the game's. Setting it installs a builder a test prepared; setting null
-    /// leaves the world without one, as the game's after its builder is disposed, until a builder is set again.
-    /// <c>ValheimWorldScope</c> restores it.
+    /// The world's builder, made on first use as the game's. A test installs a prepared builder through
+    /// <c>ValheimWorldScope.WithHeightmapBuilder</c>; passing null there models disposal until another builder is installed.
+    /// The scope restores the earlier builder.
     /// </summary>
     public static HeightmapBuilder? instance
     {
         get => ReferenceEquals(m_instance, s_disposed) ? null : m_instance ??= new HeightmapBuilder();
-        set => m_instance = value ?? s_disposed;
+        private set => m_instance = value ?? s_disposed;
     }
     private readonly List<HMBuildData> m_toBuild = new();
     private readonly List<HMBuildData> m_ready = new();

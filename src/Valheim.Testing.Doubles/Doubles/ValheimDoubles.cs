@@ -133,7 +133,7 @@ public partial class Heightmap
     /// <summary>The generated build this heightmap was made from (the game's private field); null until a test sets one.</summary>
     public HeightmapBuilder.HMBuildData? m_buildData;
     /// <summary>The loaded zone heightmaps, as the game's own list. <c>ValheimWorldScope.RegisterHeightmap</c> loads one per zone.</summary>
-    public static System.Collections.Generic.List<Heightmap> s_heightmaps = new();
+    public static System.Collections.Generic.List<Heightmap> s_heightmaps { get; private set; } = new();
     /// <summary>
     /// A single-zone shorthand over <see cref="s_heightmaps"/>: the heightmap loaded last; setting it leaves that one
     /// heightmap loaded (or none).
@@ -144,7 +144,7 @@ public partial class Heightmap
         set => s_heightmaps = value == null ? new() : new() { value };
     }
 
-    public UnityEngine.Transform transform = new();
+    public readonly UnityEngine.Transform transform = new();
     public int m_width = 64;
     public float m_scale = 1f;
     [TestOnly] public TerrainComp? m_terrainComp;
@@ -315,7 +315,7 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
 /// </summary>
 public partial struct ZDOID : System.IEquatable<ZDOID>
 {
-    public long UserID;
+    public readonly long UserID;
     public uint ID { get; private set; }
     public ZDOID(long userID, uint id) { UserID = userID; ID = id; }
     /// <summary>No object; what a peer's character id is before it spawns.</summary>
@@ -371,9 +371,9 @@ public partial class ZDO
 public partial class ZDOMan
 {
     [TestOnly] public ZDOMan() { }
-    public static ZDOMan? instance;
+    public static ZDOMan? instance { get; private set; }
 
-    public long m_sessionID = 1;
+    public readonly long m_sessionID = 1;
     [TestOnly] public readonly System.Collections.Generic.List<ZDO> Zdos = new();
     /// <summary>ZDOs destroyed but not yet removed: the game queues destruction, so they stay visible until processed.</summary>
     [TestOnly] public readonly System.Collections.Generic.List<ZDO> DestroyQueue = new();
@@ -607,7 +607,7 @@ public static partial class ZDOVars
 public partial class WorldGenerator
 {
     [TestOnly] public WorldGenerator() { }
-    public static WorldGenerator? instance;
+    public static WorldGenerator? instance { get; private set; }
 
     /// <summary>The game's own formula (1.0): the 20-lobed wobble on the biome rings.</summary>
     public static float WorldAngle(float wx, float wy) =>
@@ -678,13 +678,13 @@ public partial class ZoneSystem : UnityEngine.MonoBehaviour
     /// <summary>The sector an index stands for, as the game's.</summary>
     public static Vector2s IndexToSector(uint index) => new((int)(index % 512 - 256), (int)(index / 512 - 256));
 
-    public static ZoneSystem? instance;
+    public static ZoneSystem? instance { get; private set; }
 
     public enum SpawnMode { Full, Client, Ghost }
     public partial class ClearArea
     {
-        public UnityEngine.Vector3 m_center;
-        public float m_radius;
+        public readonly UnityEngine.Vector3 m_center;
+        public readonly float m_radius;
         public ClearArea(UnityEngine.Vector3 center, float radius) { m_center = center; m_radius = radius; }
     }
     /// <summary>Zones the world has generated; a test adds the ones it needs.</summary>
@@ -716,7 +716,7 @@ public partial class ZoneSystem : UnityEngine.MonoBehaviour
     /// <summary>The world's location list, which is what places buildings.</summary>
     public System.Collections.Generic.List<ZoneLocation> m_locations = new();
     /// <summary>The same list by prefab hash (private in the game), which is how a proxy finds its template.</summary>
-    public System.Collections.Generic.Dictionary<int, ZoneLocation> m_locationsByHash = new();
+    public readonly System.Collections.Generic.Dictionary<int, ZoneLocation> m_locationsByHash = new();
 
     // The generation methods mods hook, with the game's 1.0.16 signatures (several are private there). Their bodies do
     // nothing: what these doubles cannot establish is when Harmony runs a hook, which only an in-game check shows.

@@ -115,7 +115,7 @@ namespace Valheim.Testing.Doubles
         private readonly OnlineBackendType _backend = ZNet.instance?.OnlineBackend ?? default;
         private bool _ownsHeightmaps, _disposed;
 
-        public ValheimWorldScope WithWorld(WorldGenerator world) { WorldGenerator.instance = world; return this; }
+        public ValheimWorldScope WithWorld(WorldGenerator world) { _statics.And(() => WorldGenerator.instance, world); return this; }
         public ValheimWorldScope WithTerrain(ITerrain terrain) => WithWorld(new TerrainWorld(terrain));
         /// <summary>
         /// The order the Unity doubles call behaviours and objects where Unity promises none (restored on dispose): see
@@ -128,12 +128,16 @@ namespace Valheim.Testing.Doubles
             return this;
         }
         /// <summary>A new, empty ZDOMan (this session's id is 1).</summary>
-        public ValheimWorldScope WithZdos() { ZDOMan.instance = new ZDOMan(); return this; }
-        public ValheimWorldScope WithZoneSystem() { ZoneSystem.instance = new ZoneSystem(); return this; }
+        public ValheimWorldScope WithZdos() { _statics.And(() => ZDOMan.instance, new ZDOMan()); return this; }
+        /// <summary>Removes the ZDO manager for a test of code that runs before world loading.</summary>
+        public ValheimWorldScope WithoutZdos() { _statics.And(() => ZDOMan.instance, (ZDOMan?)null); return this; }
+        public ValheimWorldScope WithZoneSystem() { _statics.And(() => ZoneSystem.instance, new ZoneSystem()); return this; }
+        /// <summary>Installs or removes a prepared heightmap builder for one test.</summary>
+        public ValheimWorldScope WithHeightmapBuilder(HeightmapBuilder? builder) { _statics.And(() => HeightmapBuilder.instance, builder); return this; }
         /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>), and no GameObjects, Unity components or pending destroys yet for FindObjectsByType, RunFrame and EndOfFrame.</summary>
         public ValheimWorldScope WithScene()
         {
-            ZNetScene.instance = new ZNetScene();
+            _statics.And(() => ZNetScene.instance, new ZNetScene());
             EmptyUnityScene();
             return this;
         }
@@ -146,7 +150,9 @@ namespace Valheim.Testing.Doubles
         /// <summary>A new <c>ZNet</c> with no peers, as the server or a client, a new <c>ZRoutedRpc</c> and a new Jotunn <c>NetworkManager</c>.</summary>
         public ValheimWorldScope WithNetwork(bool server = true)
         {
-            ZNet.instance = new ZNet { Server = server }; ZRoutedRpc.instance = new ZRoutedRpc(); Jotunn.Managers.NetworkManager.Instance = new Jotunn.Managers.NetworkManager();
+            _statics.And(() => ZNet.instance, new ZNet { Server = server });
+            _statics.And(() => ZRoutedRpc.instance, new ZRoutedRpc());
+            _statics.And(() => Jotunn.Managers.NetworkManager.Instance, new Jotunn.Managers.NetworkManager());
             return this;
         }
         /// <summary>No console commands yet: the mod's registration in this test fills a fresh table.</summary>
@@ -167,7 +173,7 @@ namespace Valheim.Testing.Doubles
         /// </summary>
         public global::Heightmap RegisterHeightmap(Vector2s zone, int width = 64, bool withCompiler = true)
         {
-            if (!_ownsHeightmaps) { global::Heightmap.s_heightmaps = new(global::Heightmap.s_heightmaps); _ownsHeightmaps = true; }
+            if (!_ownsHeightmaps) { _statics.And(() => global::Heightmap.s_heightmaps, new(global::Heightmap.s_heightmaps)); _ownsHeightmaps = true; }
             var hm = global::Heightmap.CreateForZone(zone, width, withCompiler);
             UnloadHeightmap(zone);
             global::Heightmap.s_heightmaps.Add(hm);
@@ -176,7 +182,7 @@ namespace Valheim.Testing.Doubles
         /// <summary>Unloads the zone's heightmap, as the game does when the zone leaves the active area.</summary>
         public void UnloadHeightmap(Vector2s zone)
         {
-            if (!_ownsHeightmaps) { global::Heightmap.s_heightmaps = new(global::Heightmap.s_heightmaps); _ownsHeightmaps = true; }
+            if (!_ownsHeightmaps) { _statics.And(() => global::Heightmap.s_heightmaps, new(global::Heightmap.s_heightmaps)); _ownsHeightmaps = true; }
             var centre = ZoneSystem.GetZonePos(zone);
             global::Heightmap.s_heightmaps.RemoveAll(h => h.transform.position.x == centre.x && h.transform.position.z == centre.z);
         }

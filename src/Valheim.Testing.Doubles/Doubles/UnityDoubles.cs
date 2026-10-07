@@ -387,7 +387,6 @@ public partial class Component : Object
     public GameObject gameObject
     {
         get { ThrowIfDestroyed(); return m_gameObject!; }
-        set => m_gameObject = value;
     }
 
     public T GetComponent<T>() where T : class
@@ -454,5 +453,5 @@ public partial class GameObject : Object
     }
 }
 
-/// <summary>Shim for UnityEngine.Time: the clock mod code reads; tests set it.</summary>
-public static partial class Time { public static float realtimeSinceStartup; }
+/// <summary>Shim for UnityEngine.Time: the clock mod code reads; tests advance it with Object.RunFrame.</summary>
+public static partial class Time { public static float realtimeSinceStartup { get; private set; } }

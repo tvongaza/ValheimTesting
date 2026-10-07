@@ -112,11 +112,11 @@ public sealed class SecondConsumerTests : IDisposable
     {
         var world = new SyntheticWorldLike();
         var builder = new HeightmapBuilder();
-        HeightmapBuilder.instance = builder;
+        _scope.WithHeightmapBuilder(builder);
         Assert.Same(builder, HeightmapBuilder.instance);
-        HeightmapBuilder.instance = null;
+        _scope.WithHeightmapBuilder(null);
         Assert.Null(HeightmapBuilder.instance); // As the game's after its builder is disposed.
-        HeightmapBuilder.instance = builder;
+        _scope.WithHeightmapBuilder(builder);
 
         Assert.False(builder.IsTerrainReady(Vector3.zero, 4, 1f, false, world));
         builder.MakeReady(new Vector3(64, 0, 0), 4, 1f, false, world);

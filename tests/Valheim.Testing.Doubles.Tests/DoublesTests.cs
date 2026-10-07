@@ -19,11 +19,11 @@ public partial class Heightmap
 public sealed class DoublesTests : IDisposable
 {
     private sealed class Slope : WorldGenerator { public override float GetHeight(float wx, float wy) => 40f + wx * 0.1f; }
-    public DoublesTests() { ZDOMan.instance = new ZDOMan(); ZNetScene.instance = new ZNetScene(); ZoneSystem.instance = new ZoneSystem(); }
+    private readonly Valheim.Testing.Doubles.ValheimWorldScope _world = new Valheim.Testing.Doubles.ValheimWorldScope().WithZdos().WithScene().WithZoneSystem();
     public void Dispose()
     {
         UnityEngine.Object.EndOfFrame();
-        ZDOMan.instance = null; ZNetScene.instance = null; ZoneSystem.instance = null; WorldGenerator.instance = null;
+        _world.Dispose();
         Heightmap.Registered = null; Heightmap.TestBaseHeight = null; Heightmap.TestTerrainPass = null;
     }
     private static List<ZDO> InZone(Vector2s zone) { var found = new List<ZDO>(); ZDOMan.instance!.FindObjects(zone, found, new HashSet<ZoneSystem.SectorIndex>()); return found; }
@@ -200,7 +200,7 @@ public sealed class DoublesTests : IDisposable
     }
     [Fact] public void RebuildUsesTheGeneratorThenTheModsHooksAndClampsCompilerDeltas()
     {
-        WorldGenerator.instance = new Slope();
+        _world.WithWorld(new Slope());
         var hm = Heightmap.CreateForZone(new Vector2s(1, 0), width: 4);
         hm.RebuildTerrain();
         Assert.Equal(40f + (64f - 32f) * 0.1f, hm.LastRenderedHeights![0], 3);
@@ -319,15 +319,10 @@ public sealed class DoublesTests : IDisposable
     [Fact] public void AScopeRestoresTheOriginalNetworkAfterAFailingTest()
     {
         var net = new ZNet { Server = true }; net.Peers.Add(3, new ZNetPeer()); var rpc = new ZRoutedRpc();
-        var (priorNet, priorRpc) = (ZNet.instance, ZRoutedRpc.instance);
-        ZNet.instance = net; ZRoutedRpc.instance = rpc;
-        try
-        {
-            Assert.Throws<InvalidOperationException>(FailInsideTheScope);
-            Assert.Same(net, ZNet.instance); Assert.Same(rpc, ZRoutedRpc.instance);
-            Assert.True(net.IsServer()); Assert.Equal(new[] { 3L }, net.Peers.Keys);
-        }
-        finally { ZNet.instance = priorNet; ZRoutedRpc.instance = priorRpc; }
+        using var installed = Valheim.Testing.StaticOverride.Set(() => ZNet.instance, net).And(() => ZRoutedRpc.instance, rpc);
+        Assert.Throws<InvalidOperationException>(FailInsideTheScope);
+        Assert.Same(net, ZNet.instance); Assert.Same(rpc, ZRoutedRpc.instance);
+        Assert.True(net.IsServer()); Assert.Equal(new[] { 3L }, net.Peers.Keys);
 
         void FailInsideTheScope()
         {
@@ -460,7 +455,7 @@ public sealed class DoublesTests : IDisposable
     [Fact] public void WithoutAZdoManThisPeerIsOneIdForZNetAndRoutedRpcs()
     {
         using var scope = new Valheim.Testing.Doubles.ValheimWorldScope().WithNetwork();
-        ZDOMan.instance = null; // network only, no ZDOs (restored on dispose)
+        scope.WithoutZdos(); // network only, no ZDOs (restored on dispose)
         ZNet.instance.Peers.Add(12, new ZNetPeer { m_uid = 12, Ready = true });
         var got = new List<long>();
         ZRoutedRpc.instance.Register("Mod_Self", sender => got.Add(sender));

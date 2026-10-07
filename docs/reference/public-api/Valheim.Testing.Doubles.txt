@@ -471,8 +471,7 @@ class Heightmap
   field System.Int32 m_width
   field System.Single m_scale
   field TerrainComp m_terrainComp
-  field UnityEngine.Transform transform
-  field static System.Collections.Generic.List`1<Heightmap> s_heightmaps
+  field readonly UnityEngine.Transform transform
   field static UnityEngine.Color m_paintMaskClearVegetation
   field static UnityEngine.Color m_paintMaskCultivated
   field static UnityEngine.Color m_paintMaskDeepSnow
@@ -492,6 +491,7 @@ class Heightmap
   method static Heightmap FindHeightmap(UnityEngine.Vector3 point)
   method static System.Collections.Generic.List`1<Heightmap> GetAllHeightmaps()
   property static Heightmap Registered { get; set; }
+  property static System.Collections.Generic.List`1<Heightmap> s_heightmaps { get; }
 enum Heightmap/Biome
   field const Heightmap/Biome AshLands = 32
   field const Heightmap/Biome BlackForest = 8
@@ -516,7 +516,7 @@ class HeightmapBuilder
   property System.Int32 QueuedCount { get; }
   property System.Int32 ReadyCount { get; }
   property System.Int32 SyncRequests { get; }
-  property static HeightmapBuilder instance { get; set; }
+  property static HeightmapBuilder instance { get; }
 class HeightmapBuilder/HMBuildData
   field System.Boolean m_distantLod
   field System.Boolean m_menu
@@ -696,18 +696,18 @@ class ItemDrop/ItemData/SharedData
 sealed class Jotunn.Entities.CustomRPC
   field Jotunn.Managers.NetworkManager/CoroutineHandler Client
   field Jotunn.Managers.NetworkManager/CoroutineHandler Server
-  field System.String Name
   field readonly System.Collections.Generic.List`1<System.ValueTuple`2<System.Int64,ZPackage>> Sent
-  method System.Void .ctor()
+  field readonly System.String Name
+  method System.Void .ctor(System.String name)
   method System.Void Initiate()
   method System.Void SendPackage(System.Collections.Generic.List`1<ZNetPeer> peers, ZPackage package)
   method System.Void SendPackage(System.Int64 peer, ZPackage package)
 sealed class Jotunn.Managers.NetworkManager
   field Jotunn.Entities.CustomRPC Rpc
   field readonly System.Collections.Generic.Dictionary`2<System.String,Jotunn.Entities.CustomRPC> Rpcs
-  field static Jotunn.Managers.NetworkManager Instance
   method Jotunn.Entities.CustomRPC AddRPC(System.String name, Jotunn.Managers.NetworkManager/CoroutineHandler server, Jotunn.Managers.NetworkManager/CoroutineHandler client)
   method System.Void .ctor()
+  property static Jotunn.Managers.NetworkManager Instance { get; }
 delegate Jotunn.Managers.NetworkManager/CoroutineHandler
   method System.Void .ctor(System.Object object, System.IntPtr method)
   method virtual System.Collections.IEnumerator EndInvoke(System.IAsyncResult result)
@@ -824,8 +824,8 @@ static class PlatformPrefs
   method static System.Void SetInt(System.String name, System.Int32 value)
   method static System.Void SetString(System.String name, System.String value)
 sealed class Player
-  field UnityEngine.Transform transform
   field ZNetView m_nview
+  field readonly UnityEngine.Transform transform
   field static Player m_localPlayer
   method System.Boolean IsOwner()
   method System.Int64 GetPlayerID()
@@ -1241,7 +1241,7 @@ class UnityEngine.Component : UnityEngine.Object
   method T[] GetComponentsInChildren<T>(System.Boolean includeInactive = false)
   method UnityEngine.Component GetComponent(System.Type type)
   property System.String tag { get; set; }
-  property UnityEngine.GameObject gameObject { get; set; }
+  property UnityEngine.GameObject gameObject { get; }
   property UnityEngine.Transform transform { get; }
 sealed class UnityEngine.Coroutine : UnityEngine.YieldInstruction
 abstract class UnityEngine.CustomYieldInstruction : System.Collections.IEnumerator
@@ -1477,10 +1477,10 @@ class UnityEngine.SphereCollider : UnityEngine.Collider
 class UnityEngine.Sprite : UnityEngine.Object
   method System.Void .ctor()
 static class UnityEngine.Time
-  field static System.Int32 frameCount
-  field static System.Single deltaTime
-  field static System.Single realtimeSinceStartup
-  field static System.Single time
+  property static System.Int32 frameCount { get; }
+  property static System.Single deltaTime { get; }
+  property static System.Single realtimeSinceStartup { get; }
+  property static System.Single time { get; }
 class UnityEngine.Transform : UnityEngine.Component, System.Collections.IEnumerable
   method System.Boolean IsChildOf(UnityEngine.Transform parent)
   method System.Collections.IEnumerator GetEnumerator()
@@ -1647,6 +1647,7 @@ sealed class Valheim.Testing.Doubles.ValheimWorldScope : System.IDisposable
   method Valheim.Testing.Doubles.ValheimWorldScope WithCheats()
   method Valheim.Testing.Doubles.ValheimWorldScope WithCommands()
   method Valheim.Testing.Doubles.ValheimWorldScope WithConfigFiles()
+  method Valheim.Testing.Doubles.ValheimWorldScope WithHeightmapBuilder(HeightmapBuilder builder)
   method Valheim.Testing.Doubles.ValheimWorldScope WithNetwork(System.Boolean server = true)
   method Valheim.Testing.Doubles.ValheimWorldScope WithScene()
   method Valheim.Testing.Doubles.ValheimWorldScope WithTerrain(Valheim.Testing.ITerrain terrain)
@@ -1655,6 +1656,7 @@ sealed class Valheim.Testing.Doubles.ValheimWorldScope : System.IDisposable
   method Valheim.Testing.Doubles.ValheimWorldScope WithWorld(WorldGenerator world)
   method Valheim.Testing.Doubles.ValheimWorldScope WithZdos()
   method Valheim.Testing.Doubles.ValheimWorldScope WithZoneSystem()
+  method Valheim.Testing.Doubles.ValheimWorldScope WithoutZdos()
   property Player PreviewPlayer { get; }
 struct Vector2i : System.IEquatable`1<Vector2i>
   field System.Int32 x
@@ -1684,7 +1686,6 @@ class WearNTear : UnityEngine.MonoBehaviour
   method System.Void .ctor()
 class WorldGenerator
   field const System.Single WaterLevel = 30
-  field static WorldGenerator instance
   method System.Void .ctor()
   method static System.Single WorldAngle(System.Single wx, System.Single wy)
   method virtual Heightmap/Biome GetBiome(System.Single wx, System.Single wy, System.Single oceanLevel = 0.02, System.Boolean waterAlwaysOcean = false)
@@ -1693,6 +1694,7 @@ class WorldGenerator
   method virtual System.Single GetBiomeHeight(Heightmap/Biome biome, System.Single wx, System.Single wy, out UnityEngine.Color& mask, System.Boolean preGeneration = false, System.Boolean riverPreDN = true)
   method virtual System.Single GetHeight(System.Single wx, System.Single wy)
   method virtual System.Void GetRiverWeight(System.Single wx, System.Single wy, out System.Single& weight, out System.Single& width)
+  property static WorldGenerator instance { get; }
 class ZDO
   field System.Boolean Persistent
   field ZDOID m_uid
@@ -1774,7 +1776,7 @@ enum ZDO/SavedWorld
   field const ZDO/SavedWorld BeforeNewSaveFormat = 2
   field const ZDO/SavedWorld Current = 0
 struct ZDOID : System.IEquatable`1<ZDOID>
-  field System.Int64 UserID
+  field readonly System.Int64 UserID
   method System.Boolean Equals(ZDOID other)
   method System.Boolean IsNone()
   method System.Void .ctor(System.Int64 userID, System.UInt32 id)
@@ -1786,10 +1788,9 @@ struct ZDOID : System.IEquatable`1<ZDOID>
   property System.UInt32 ID { get; }
   property static ZDOID None { get; }
 class ZDOMan
-  field System.Int64 m_sessionID
   field readonly System.Collections.Generic.List`1<ZDO> DestroyQueue
   field readonly System.Collections.Generic.List`1<ZDO> Zdos
-  field static ZDOMan instance
+  field readonly System.Int64 m_sessionID
   method System.Boolean GetAllZDOsWithPrefabIterative(System.String prefab, System.Collections.Generic.List`1<ZDO> zdos, System.Int32& index)
   method System.Int32 CountWithPrefab(System.String prefab)
   method System.Int32 ProcessDestroyed()
@@ -1803,6 +1804,7 @@ class ZDOMan
   method static System.Int64 GetSessionID()
   property System.Collections.Generic.Dictionary`2<ZDOID,ZDO> m_objectsByID { get; }
   property System.Collections.Generic.HashSet`1<System.Int32> SessionOnlyHashes { get; }
+  property static ZDOMan instance { get; }
 static class ZDOVars
   field static readonly System.Int32 s_TCData
   field static readonly System.Int32 s_addedDefaultItems
@@ -1846,7 +1848,6 @@ sealed class ZNet : UnityEngine.MonoBehaviour
   field readonly System.Collections.Generic.Dictionary`2<System.Int64,ZNetPeer> Peers
   field readonly System.Collections.Generic.List`1<System.String> RemoteCommands
   field static System.Boolean m_loadError
-  field static ZNet instance
   method System.Boolean IsAdmin(System.String hostName)
   method System.Boolean IsAllowed(System.String hostName, System.String playerName)
   method System.Boolean IsConnected(System.Int64 uid)
@@ -1876,6 +1877,7 @@ sealed class ZNet : UnityEngine.MonoBehaviour
   method static ZNet/ConnectionStatus GetConnectionStatus()
   property System.Collections.Generic.List`1<System.String> Banned { get; }
   property static OnlineBackendType m_onlineBackend { get; set; }
+  property static ZNet instance { get; }
 enum ZNet/ConnectionStatus
   field const ZNet/ConnectionStatus Connected = 2
   field const ZNet/ConnectionStatus Connecting = 1
@@ -1913,7 +1915,6 @@ class ZNetScene : UnityEngine.MonoBehaviour
   field readonly System.Collections.Generic.List`1<System.String> EarlyLookups
   field readonly System.Collections.Generic.List`1<UnityEngine.GameObject> Live
   field static System.Action`1<ZNetScene> AwakePostfix
-  field static ZNetScene instance
   method System.Boolean HasPrefab(System.Int32 hash)
   method System.Collections.Generic.List`1<System.String> GetPrefabNames()
   method System.Collections.Generic.List`1<System.ValueTuple`2<System.Int32,System.String[]>> FindDuplicateHashes()
@@ -1927,6 +1928,7 @@ class ZNetScene : UnityEngine.MonoBehaviour
   method UnityEngine.GameObject GetPrefab(System.Int32 hash)
   method UnityEngine.GameObject GetPrefab(System.String name)
   method ZNetView FindInstance(ZDO zdo)
+  property static ZNetScene instance { get; }
 class ZNetView : UnityEngine.MonoBehaviour
   field System.Boolean m_persistent
   field System.Boolean m_syncInitialScale
@@ -2033,7 +2035,6 @@ sealed class ZRoutedRpc
   field readonly System.Collections.Generic.List`1<System.ValueTuple`2<System.Int64,ZRoutedRpc/RoutedRPCData>> Sent
   field readonly System.Collections.Generic.List`1<System.ValueTuple`3<System.Int64,System.String,System.Object[]>> Invoked
   field readonly System.Collections.Generic.List`1<System.ValueTuple`4<System.Int64,ZDOID,System.String,System.String>> Dropped
-  field static ZRoutedRpc instance
   method System.Boolean IsRegistered(System.String name)
   method System.Int64 GetServerPeerID()
   method System.Void .ctor()
@@ -2051,6 +2052,7 @@ sealed class ZRoutedRpc
   method System.Void Register<T>(System.String name, System.Action`2<System.Int64,T> handler)
   method System.Void SetUID(System.Int64 uid)
   property System.Int64 PeerId { get; }
+  property static ZRoutedRpc instance { get; }
 sealed class ZRoutedRpc/RoutedRPCData
   field System.Int32 m_methodHash
   field System.Int64 m_msgID
@@ -2104,7 +2106,6 @@ class ZSteamSocket : SocketDouble
   method virtual System.String GetHostName()
 class ZoneSystem : UnityEngine.MonoBehaviour
   event System.Action GenerateLocationsCompleted
-  field System.Collections.Generic.Dictionary`2<System.Int32,ZoneSystem/ZoneLocation> m_locationsByHash
   field System.Collections.Generic.Dictionary`2<System.String,System.String> m_globalKeysValues
   field System.Collections.Generic.Dictionary`2<Vector2s,ZoneSystem/LocationInstance> m_locationInstances
   field System.Collections.Generic.HashSet`1<GlobalKeys> m_globalKeysEnums
@@ -2112,9 +2113,9 @@ class ZoneSystem : UnityEngine.MonoBehaviour
   field System.Collections.Generic.List`1<ZoneSystem/ZoneLocation> m_locations
   field System.Single m_waterLevel
   field const System.Single ZoneSize = 64
+  field readonly System.Collections.Generic.Dictionary`2<System.Int32,ZoneSystem/ZoneLocation> m_locationsByHash
   field readonly System.Collections.Generic.HashSet`1<System.String> m_globalKeys
   field readonly System.Collections.Generic.HashSet`1<Vector2s> Generated
-  field static ZoneSystem instance
   method System.Boolean GetGlobalKey(GlobalKeys key)
   method System.Boolean GetGlobalKey(GlobalKeys key, out System.Single& value)
   method System.Boolean GetGlobalKey(GlobalKeys key, out System.String& value)
@@ -2155,9 +2156,10 @@ class ZoneSystem : UnityEngine.MonoBehaviour
   method static ZoneSystem/SectorIndex SectorToIndex(Vector2s sector)
   property System.Boolean LocationsGenerated { get; set; }
   property System.Boolean Started { get; }
+  property static ZoneSystem instance { get; }
 class ZoneSystem/ClearArea
-  field System.Single m_radius
-  field UnityEngine.Vector3 m_center
+  field readonly System.Single m_radius
+  field readonly UnityEngine.Vector3 m_center
   method System.Void .ctor(UnityEngine.Vector3 center, System.Single radius)
 struct ZoneSystem/LocationInstance
   field System.Boolean m_placed

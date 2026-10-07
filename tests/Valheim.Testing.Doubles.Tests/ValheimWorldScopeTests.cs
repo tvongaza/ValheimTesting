@@ -142,17 +142,16 @@ public sealed class ValheimWorldScopeTests
         var world = new PlaneWorld();
         var scope = new ValheimWorldScope().WithScene();
         scope.Dispose();
-        var outerWorld = WorldGenerator.instance;
         var queued = new UnityEngine.GameObject("queued after the scope");
         try
         {
-            WorldGenerator.instance = world;
+            using var installed = Valheim.Testing.StaticOverride.Set(() => WorldGenerator.instance, world);
             UnityEngine.Object.Destroy(queued);
             scope.Dispose();
             Assert.Same(world, WorldGenerator.instance);   // not put back a second time
             Assert.False(queued.Destroyed);                // and no second end of frame
         }
-        finally { UnityEngine.Object.EndOfFrame(); WorldGenerator.instance = outerWorld; }
+        finally { UnityEngine.Object.EndOfFrame(); }
     }
 
     // A test that never disposes its scope leaves its pending destroys behind; a scene of its own (WithScene) does not see
