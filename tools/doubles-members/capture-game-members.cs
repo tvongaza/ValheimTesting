@@ -54,19 +54,21 @@ List<(string Kind, string Signature)> GameMembers(Type type)
         foreach (var m in MemberIndex.Members(t, visibleOnly: false))
         {
             if (t != type && m is ConstructorInfo) continue;
-            try { list.Add((Group(MemberIndex.Kind(m)), MemberIndex.Signature(m))); } catch (FileNotFoundException) { unreadable++; }
+            try { list.Add((Group(MemberIndex.Kind(m)), MemberIndex.Signature(m, anySetter: true))); } catch (FileNotFoundException) { unreadable++; }
         }
     return memberCache[type] = list;
 }
 static string Group(string kind) => kind is "field" or "property" ? "value" : kind;
+static string Bare(string signature) => signature.EndsWith(MemberIndex.ReadOnly, StringComparison.Ordinal) ? signature[..^MemberIndex.ReadOnly.Length] : signature;
 // A static class and a sealed class of statics (Unity's Time, Debug) read the same to mod code.
 static string KindWord(string description) => description.Split(" : ")[0].Replace("static class", "class");
 
 string indexPath = Path.Combine(root, "docs/packages/Valheim.Testing.Doubles.members.txt");
 var output = new List<string>
 {
-    "# The game's verdict on each line of docs/packages/Valheim.Testing.Doubles.members.txt: game (the game has this signature),",
-    "# differs (the game has the name with the signatures in the last column) or absent. Written by",
+    "# The game's verdict on each line of docs/packages/Valheim.Testing.Doubles.members.txt: game (the game has this signature,",
+    "# or a read-only double of a writable member), differs (the game has the name with the signatures in the last column,",
+    "# including a writable double of a member the game has \"{ get; }\") or absent. Written by",
     "# tools/doubles-members/capture-game-members.cs from metadata; MemberIndexTests reads it. Inputs:",
     "# game assembly_valheim.dll sha256 " + Sha256(game) + " (" + Path.GetFileName(Path.GetDirectoryName(managed)) + ")",
     "# game version " + GameVersion(game),
@@ -92,7 +94,16 @@ foreach (string line in File.ReadAllLines(indexPath))
     else
     {
         var members = GameMembers(gameType);
+        string bare = Bare(signature);
         if (members.Contains((Group(kind), signature))) verdict = "game";
+        // Writability (#325): a read-only double of a writable game member is narrower, and code that assigns it already
+        // fails to compile against the doubles, so it reads "game"; a writable double of a read-only member differs.
+        else if (signature.EndsWith(MemberIndex.ReadOnly, StringComparison.Ordinal) && members.Contains((Group(kind), bare))) verdict = "game";
+        else if (Group(kind) == "value" && members.Contains((Group(kind), bare + MemberIndex.ReadOnly)))
+        {
+            verdict = "differs";
+            detail = bare + MemberIndex.ReadOnly;
+        }
         else
         {
             string name = MemberIndex.NameOf(signature);
