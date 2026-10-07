@@ -1,5 +1,5 @@
 # Bytes written by the game's own ZPackage and ZRpc for each case in ZPackageCases.cs (tests/Valheim.Testing.Doubles.GameCapture).
-# game 1.0.16, runtime 4.0.30319.42000, Microsoft Windows NT 10.0.26200.0
+# game 1.0.17, runtime 4.0.30319.42000, Microsoft Windows NT 10.0.26200.0
 exact	int 1	01-00-00-00
 exact	int -1	FF-FF-FF-FF
 exact	int min	00-00-00-80

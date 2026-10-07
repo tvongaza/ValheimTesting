@@ -67,7 +67,7 @@ public sealed class HandshakeTests
         Assert.Equal(3, (int)client.Status);
         Assert.Equal(("Error", 3), (refused.m_rpc.Invoked.Last().Method, (int)refused.m_rpc.Invoked.Last().Args[0]));
         Assert.False(refused.IsReady());
-        Assert.Contains(log, l => l.StartsWith("Peer " + ClientSteamId + " has incompatible version, mine:1.0.16 (network version 40)   remote 1.0.16 (network version 39)"));
+        Assert.Contains(log, l => l.StartsWith($"Peer {ClientSteamId} has incompatible version, mine:{DoubledGame.Version} (network version 40)   remote {DoubledGame.Version} (network version 39)"));
 
         var second = new ZNet { Server = false, Uid = 3 };
         var (joined, _) = ConnectSteam(server, second, clientId: 76561198000000003);
