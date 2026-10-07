@@ -27,6 +27,8 @@ internal interface IHostedRunHooks
     ClientSession LaunchLocalMac(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation, Action<IOwnedProcess>? processStarted);
     /// <summary>The run's Ctrl+C owner, and whether the run owns (and disposes) it.</summary>
     RunCancellation Cancellation(out bool owned);
+    /// <summary>The shipped loader for an actor's install that names none (<see cref="ShippedLoader.OnHostAsync(string, IGameHost, HostProfile, string, TimeSpan, CancellationToken)"/>), or null.</summary>
+    Task<ShippedLoader.Choice?> ShippedLoaderAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation);
 }
 
 /// <summary>The real hosted-run hooks: ssh and local hosts, CLI sockets, the pool's leases, this machine's session.</summary>
@@ -46,4 +48,6 @@ internal sealed class HostedRunHooks : IHostedRunHooks
     public ClientSession LaunchLocalMac(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation, Action<IOwnedProcess>? processStarted) =>
         ClientSession.Launch(plan, output, account, cancellation, processStarted);
     public RunCancellation Cancellation(out bool owned) { owned = true; return new RunCancellation(); }
+    public Task<ShippedLoader.Choice?> ShippedLoaderAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation) =>
+        ShippedLoader.OnHostAsync(actor, host, profile, install, timeout, cancellation);
 }
