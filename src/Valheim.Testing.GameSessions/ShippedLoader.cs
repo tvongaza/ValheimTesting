@@ -16,6 +16,9 @@ internal static class ShippedLoader
     /// <summary>Why the loader was chosen for an actor, and the captured package manifest it uses.</summary>
     internal sealed record Choice(string Manifest, string Reason);
 
+    /// <summary>The choice for an actor's install on its host (<see cref="OnHostAsync(string, IGameHost, HostProfile, string, TimeSpan, CancellationToken)"/> in a real run).</summary>
+    internal delegate Task<Choice?> Rule(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation);
+
     /// <summary>
     /// The shipped package for <paramref name="actor"/>'s <paramref name="install"/> when its Doorstop pair does not match,
     /// printed; null when the pair matches, the install is not a Windows Doorstop install, or this build carries no package
@@ -37,7 +40,12 @@ internal static class ShippedLoader
     internal static string? OutdatedCore(string install)
     {
         if (Directory.Exists(Path.Combine(install, GameLaunch.ClientMacBundle)) || File.Exists(Path.Combine(install, GameLaunch.ServerMacExecutable))) return null;
-        string library = Path.Combine(install, InstallPins.CoreDirectory, "BepInEx.dll");
+        return OutdatedLibrary(Path.Combine(install, InstallPins.CoreDirectory, "BepInEx.dll"));
+    }
+
+    // Why the BepInEx core library at this path is too old to keep, or null (new enough, not v5, missing or unreadable).
+    private static string? OutdatedLibrary(string library)
+    {
         if (!File.Exists(library)) return null;
         Version? version;
         try { version = System.Reflection.AssemblyName.GetAssemblyName(library).Version; }
@@ -47,9 +55,49 @@ internal static class ShippedLoader
             "(BepInEx/BepInEx#755, fixed by #1264 in 5.4.23.5)";
     }
 
-    internal static Choice? Instead(string actor, string install, Func<(Stream Zip, LoaderPin Pin)?> shipped, string dataRoot)
+    internal static Choice? Instead(string actor, string install, Func<(Stream Zip, LoaderPin Pin)?> shipped, string dataRoot) =>
+        Decide(actor, install, BepInExLoaderPackage.DoorstopMismatch(install), OutdatedCore(install), shipped, dataRoot);
+
+    /// <summary>
+    /// The same choice for an actor's <paramref name="install"/> on <paramref name="host"/> (#438): an install on this machine is read
+    /// in place, one on another host through that host's shell (its BepInEx core library, and on Windows its Doorstop proxy and
+    /// configuration, each a bounded read; nothing is written there). A macOS host keeps its own loader. A campaign's host
+    /// checks call it for every actor that names no loader package, so a session's server and clients get what server-load gets.
+    /// </summary>
+    internal static Task<Choice?> OnHostAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation) =>
+        OnHostAsync(actor, host, profile, install, timeout, cancellation, Shipped, CliBundle.DataRoot);
+
+    internal static async Task<Choice?> OnHostAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation,
+        Func<(Stream Zip, LoaderPin Pin)?> shipped, string dataRoot)
     {
-        string? mismatch = BepInExLoaderPackage.DoorstopMismatch(install), outdated = OutdatedCore(install);
+        if (profile.Kind == "local") return Instead(actor, install, shipped, dataRoot);
+        if (profile.Platform == "macos") return null;
+        string? outdated = null, mismatch = null;
+        byte[]? core = await HostClientPreflight.Read(host, HostPath.Join(install, "BepInEx/core/BepInEx.dll"), timeout, cancellation).ConfigureAwait(false);
+        if (core != null)
+        {
+            // An assembly's version is read from a file: the copy goes to a temporary one, removed at once.
+            string copy = Path.Combine(Path.GetTempPath(), "vt-bepinex-" + Guid.NewGuid().ToString("N") + ".dll");
+            try { File.WriteAllBytes(copy, core); outdated = OutdatedLibrary(copy); }
+            finally { try { File.Delete(copy); } catch (IOException) { } catch (UnauthorizedAccessException) { } } // a temp file left behind decides nothing
+        }
+        if (profile.Platform == "windows")
+        {
+            byte[]? proxy = await HostClientPreflight.Read(host, HostPath.Join(install, BepInExLoader.WindowsProxy), timeout, cancellation).ConfigureAwait(false);
+            byte[]? config = proxy == null ? null : await HostClientPreflight.Read(host, HostPath.Join(install, BepInExLoader.WindowsConfig), timeout, cancellation).ConfigureAwait(false);
+            // As DoorstopMismatch on this machine: only a pair from different Doorstop versions is a mismatch; any other loader
+            // fault is the host checks' own refusal.
+            if (proxy != null && config != null)
+                try { BepInExLoader.RequireWindowsLoader(proxy, System.Text.Encoding.UTF8.GetString(config), install, "install"); }
+                catch (DoorstopPairingException pairing) { mismatch = pairing.Message; }
+                catch (Exception error) when (error is InvalidOperationException or IOException) { }
+        }
+        return Decide(actor, $"{host.Name}:{install}", mismatch, outdated, shipped, dataRoot);
+    }
+
+    // The choice from what the install showed: its Doorstop pair's mismatch and its core's age (null when fine), printed.
+    private static Choice? Decide(string actor, string install, string? mismatch, string? outdated, Func<(Stream Zip, LoaderPin Pin)?> shipped, string dataRoot)
+    {
         if (mismatch == null && outdated == null) return null;
         var found = shipped();
         if (found is not { } pack) return null;

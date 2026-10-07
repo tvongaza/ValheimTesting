@@ -27,7 +27,7 @@ public sealed class ShippedLoaderTests : IDisposable
     }
 
     // A BepInExPack-shaped zip: Thunderstore metadata at the top, the game files under the pack's folder.
-    private static byte[] Pack(params (string Name, string Text)[] extra)
+    internal static byte[] Pack(params (string Name, string Text)[] extra)
     {
         using var buffer = new MemoryStream();
         using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
@@ -49,7 +49,7 @@ public sealed class ShippedLoaderTests : IDisposable
         return buffer.ToArray();
     }
 
-    private static ShippedLoader.LoaderPin Pin(byte[] zip) =>
+    internal static ShippedLoader.LoaderPin Pin(byte[] zip) =>
         new("BepInExPack_Valheim", "5.4.2351", Convert.ToHexStringLower(SHA256.HashData(zip)), "BepInExPack_Valheim");
 
     [Fact] public void OnlyAMismatchedOrUnrecognisedDoorstopPairIsTheShippedLoadersCase()
@@ -145,7 +145,7 @@ public sealed class ShippedLoaderTests : IDisposable
     }
 
     // A real BepInEx.dll of that assembly version in the install's core (the fakes above are text, which reads as unknown).
-    private static string WithCore(string install, Version version)
+    internal static string WithCore(string install, Version version)
     {
         var builder = new System.Reflection.Emit.PersistedAssemblyBuilder(new System.Reflection.AssemblyName("BepInEx") { Version = version }, typeof(object).Assembly);
         builder.DefineDynamicModule("BepInEx.dll");
@@ -210,5 +210,52 @@ public sealed class ShippedLoaderTests : IDisposable
         Assert.Equal(1, asked); // a coherent install never opens the shipped pack
         // A build that carries no pack leaves the mismatch to the preflight's own refusal.
         Assert.Null(ShippedLoader.Instead("client", Install("gale2", "MZ target_assembly", Doorstop3), () => null, data));
+    }
+
+    // #438: an install on another host gets the same choice, from its BepInEx core and Doorstop pair read through that host's shell
+    // (nothing written there); the reason names the host. A macOS host keeps its own loader without a read, and an install on
+    // this machine is read in place.
+    [Fact] public async Task AnInstallOnAnotherHostIsJudgedFromItsFilesThere()
+    {
+        byte[] zip = Pack();
+        string data = Path.Combine(_root, "data");
+        var windows = new HostProfile { Kind = "ssh", Platform = "windows" };
+        Task<ShippedLoader.Choice?> On(FakeServerHost host, HostProfile profile, string install) =>
+            ShippedLoader.OnHostAsync("server", host, profile, install, TimeSpan.FromSeconds(5), CancellationToken.None, () => (new MemoryStream(zip), Pin(zip)), data);
+        FakeServerHost Host(string name, Version core, string config)
+        {
+            var host = new FakeServerHost(name, Path.Combine(_root, name), windows: true);
+            string install = host.Local(@"C:\game\server");
+            Directory.CreateDirectory(install);
+            foreach (string file in Directory.GetFiles(WithCore(Install(name + "-source", "MZ target_assembly", config), core), "*", SearchOption.AllDirectories))
+            {
+                string target = Path.Combine(install, Path.GetRelativePath(Path.Combine(_root, name + "-source"), file));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target);
+            }
+            return host;
+        }
+
+        var old = Host("old", new Version(5, 4, 22, 0), Doorstop4);
+        string before = Convert.ToHexString(File.ReadAllBytes(old.Local(@"C:\game\server\BepInEx\core\BepInEx.dll")));
+        var choice = await On(old, windows, @"C:\game\server");
+        Assert.NotNull(choice);
+        Assert.Contains(@"old:C:\game\server's BepInEx 5.4.22.0 is older than 5.4.23.5", choice!.Reason);
+        Assert.Equal("BepInExPack_Valheim", BepInExLoaderPackage.Read(choice.Manifest).Name);
+        Assert.Equal(before, Convert.ToHexString(File.ReadAllBytes(old.Local(@"C:\game\server\BepInEx\core\BepInEx.dll"))));
+        Assert.All(old.Scripts, script => Assert.Equal("preflight-read", script)); // reads only
+
+        var gale = Host("gale", new Version(5, 4, 23, 5), Doorstop3);
+        Assert.Contains("Doorstop proxy and configuration do not match", (await On(gale, windows, @"C:\game\server"))!.Reason);
+        Assert.Null(await On(Host("current", new Version(5, 4, 23, 5), Doorstop4), windows, @"C:\game\server"));
+        // A Linux host has no Doorstop pair to compare; its core's age still decides.
+        Assert.NotNull(await On(Host("linux", new Version(5, 4, 22, 0), Doorstop4), new HostProfile { Kind = "ssh", Platform = "linux" }, @"C:\game\server"));
+        var mac = Host("mac", new Version(5, 4, 22, 0), Doorstop4);
+        Assert.Null(await On(mac, new HostProfile { Kind = "ssh", Platform = "macos" }, @"C:\game\server"));
+        Assert.Empty(mac.Scripts);
+        // This machine: read in place, the same as server-load's choice.
+        string local = WithCore(Install("local-old", "MZ target_assembly", Doorstop4), new Version(5, 4, 22, 0));
+        var here = await On(new FakeServerHost("unused", Path.Combine(_root, "unused"), windows: true), new HostProfile { Kind = "local", Platform = "windows" }, local);
+        Assert.Contains(local + "'s BepInEx 5.4.22.0 is older", here!.Reason);
     }
 }

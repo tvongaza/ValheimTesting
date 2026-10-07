@@ -267,12 +267,25 @@ public static class HostedCampaignPreparation
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
     {
         var inspection = InspectInputs(manifestFile);
-        return (await InspectHostsAsync(inspection, timeout, hostFactory, cancellation).ConfigureAwait(false)).Report;
+        // Real hosts get the real shipped-loader rule; a caller's own hosts (tests) are read as they are.
+        return (await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, hostFactory == null ? ShippedLoader.OnHostAsync : null).ConfigureAwait(false)).Report;
     }
 
     private sealed record HostInspection(CampaignPreflightReport Report,
         IReadOnlyDictionary<string, string> ObservedSteamIds, IReadOnlyDictionary<string, HostListing> SourceListings,
-        IReadOnlyDictionary<string, CharacterDirectories> CharacterDirectories);
+        IReadOnlyDictionary<string, CharacterDirectories> CharacterDirectories)
+    {
+        /// <summary>The shipped loader each actor that named none takes (#438), with why; its role's input already names it.</summary>
+        public IReadOnlyDictionary<string, ShippedLoader.Choice> Loaders { get; init; } = new Dictionary<string, ShippedLoader.Choice>();
+    }
+
+    // The role's input with this loader package, a copy when it differs: the caller's declaration is never changed.
+    private static HostedCampaignRole WithLoader(HostedCampaignRole input, string? loaderPackage) => loaderPackage == input.LoaderPackage ? input : new HostedCampaignRole
+    {
+        DependencyLock = input.DependencyLock, EnvironmentCandidates = input.EnvironmentCandidates,
+        DifferentHostFrom = input.DifferentHostFrom, LoaderPackage = loaderPackage,
+        Files = input.Files, Character = input.Character,
+    };
 
     // Every host check reports a refusal under its own input and goes on; only an unexpected exception type still escapes.
     // One list for all of them: a probe's new refusal type (a loader package for another platform, a host that cannot
@@ -370,7 +383,7 @@ public static class HostedCampaignPreparation
     }
 
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
+        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, ShippedLoader.Rule? shippedLoader = null)
     {
         if (inspection.Inputs == null) return new HostInspection(inspection.Report,
             new Dictionary<string, string>(), new Dictionary<string, HostListing>(), new Dictionary<string, CharacterDirectories>());
@@ -379,6 +392,7 @@ public static class HostedCampaignPreparation
         var observedSteamIds = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var sourceListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var characterDirectories = new ConcurrentDictionary<string, CharacterDirectories>(StringComparer.Ordinal);
+        var loaders = new ConcurrentDictionary<string, ShippedLoader.Choice>(StringComparer.Ordinal);
         // The run journal of every host the campaign touches (#257): no other run is going there or left something it owns.
         var owners = await InspectJournalsAsync(inputs, failures, timeout, hostFactory, cancellation).ConfigureAwait(false);
         var hostChecks = inputs.Roles.GroupBy(role => role.Role.Host, StringComparer.Ordinal).Select(async group =>
@@ -437,7 +451,15 @@ public static class HostedCampaignPreparation
                 {
                     try
                     {
-                        var loader = item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage);
+                        // An actor that names no loader package takes the shipped one where its install needs it, as server-load's do (#438).
+                        string? loaderPackage = item.Input.LoaderPackage;
+                        if (loaderPackage == null && shippedLoader != null &&
+                            await shippedLoader(item.Name, host, inputs.Profile.Hosts[group.Key], item.Role.Install, timeout, cancellation).ConfigureAwait(false) is { } choice)
+                        {
+                            loaders[item.Name] = choice;
+                            loaderPackage = choice.Manifest;
+                        }
+                        var loader = loaderPackage == null ? null : BepInExLoaderPackage.Read(loaderPackage);
                         sourceListings[item.Name] = await HostedRuntimeStage.InspectSourceAsync(host,
                             item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
                             item.Role.Install, loader, timeout, cancellation).ConfigureAwait(false);
@@ -492,11 +514,15 @@ public static class HostedCampaignPreparation
         foreach (var shared in observedSteamIds.GroupBy(account => account.Value, StringComparer.Ordinal).Where(group => group.Count() > 1))
             failures.Add(new("clients", "Steam identities", "Clients " + string.Join(", ", shared.Select(account => account.Key).Order(StringComparer.Ordinal)) +
                 " use the same signed-in Steam account; choose different client environments before launch."));
+        // The roles' inputs name the chosen loader from here, so preparation applies it like one the campaign named.
+        for (int i = 0; i < inputs.Roles.Count; i++)
+            if (loaders.TryGetValue(inputs.Roles[i].Name, out var chosen))
+                inputs.Roles[i] = (inputs.Roles[i].Name, inputs.Roles[i].Role, WithLoader(inputs.Roles[i].Input, chosen.Manifest));
         var actors = inspection.Report.Actors.Select(actor => characterDirectories.TryGetValue(actor.Name, out var directories)
             ? actor with { CharactersDirectory = directories.Characters, SteamUserDataDirectory = directories.UserData } : actor).ToArray();
         return new HostInspection(new CampaignPreflightReport(failures.OrderBy(problem => problem.Actor, StringComparer.Ordinal)
             .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = actors, Detected = inspection.Report.Detected },
-            observedSteamIds, sourceListings, characterDirectories);
+            observedSteamIds, sourceListings, characterDirectories) { Loaders = loaders };
     }
 
     /// <summary>The BepInEx plugins among a role's selected files, by GUID, with each DLL's MD5.</summary>
@@ -702,17 +728,8 @@ public static class HostedCampaignPreparation
         var report = new CampaignPreflightReport(problems) { Actors = actors, Detected = detected };
         if (profile == null || (manifest.Server != null) != (profile.Server != null) || !manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))
             return new Inspection(null, report);
-        HostedCampaignRole RoleInput(string name, HostedCampaignRole input)
-        {
-            string? loaderPackage = resolved?.LoaderPackages.GetValueOrDefault(name) ?? input.LoaderPackage;
-            if (loaderPackage == input.LoaderPackage) return input;
-            return new HostedCampaignRole
-            {
-                DependencyLock = input.DependencyLock, EnvironmentCandidates = input.EnvironmentCandidates,
-                DifferentHostFrom = input.DifferentHostFrom, LoaderPackage = loaderPackage,
-                Files = input.Files, Character = input.Character,
-            };
-        }
+        HostedCampaignRole RoleInput(string name, HostedCampaignRole input) =>
+            WithLoader(input, resolved?.LoaderPackages.GetValueOrDefault(name) ?? input.LoaderPackage);
         var roles = new List<(string Name, GameRole Role, HostedCampaignRole Input)>();
         if (manifest.Server != null) roles.Add(("server", profile.Server!, RoleInput("server", manifest.Server)));
         roles.AddRange(profile.Clients.Select(client => (client.Key, client.Value,
@@ -767,10 +784,12 @@ public static class HostedCampaignPreparation
     /// <remarks>A failed preparation removes what it made before it throws; <paramref name="cleanupStep"/> (the runner's report, as a
     /// Cleanup step) records that removal, so the result and the journal's <c>run-ended</c> judge the same cleanup (#424).</remarks>
     internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, string? runId = null, Func<string, Func<Task>, Task>? cleanupStep = null)
+        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, string? runId = null, Func<string, Func<Task>, Task>? cleanupStep = null,
+        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null)
     {
         inspection.Report.RequireReady();
-        var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation).ConfigureAwait(false);
+        var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader).ConfigureAwait(false);
+        foreach (var (actor, choice) in readiness.Loaders.OrderBy(pair => pair.Key, StringComparer.Ordinal)) loaderChosen?.Invoke(actor, choice.Reason);
         readiness.Report.RequireReady();
         var inputs = inspection.Inputs!;
         var (manifest, profile, roles, selections, characters) = inputs;

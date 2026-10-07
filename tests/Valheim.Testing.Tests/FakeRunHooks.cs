@@ -22,6 +22,8 @@ internal sealed class FakeRunHooks : IHostedRunHooks
     public Func<ClientRunPlan, string, SteamAccountHold?, CancellationToken, Action<IOwnedProcess>?, ClientSession>? LocalMacLaunch { get; init; }
     /// <summary>The run's Ctrl+C owner, which the test keeps (the run does not dispose it).</summary>
     public RunCancellation? Cancellation { get; init; }
+    /// <summary>The shipped-loader rule for the run's actors (#438); none by default, so a test's installs keep their own loader.</summary>
+    public Func<string, IGameHost, HostProfile, string, Task<ShippedLoader.Choice?>>? ShippedLoader { get; init; }
 
     IGameHost IHostedRunHooks.CreateHost(ResolvedEnvironment environment, string name) => Host?.Invoke(name) ?? Real.CreateHost(environment, name);
     IGameTransport IHostedRunHooks.Connect(string address, int port) => Connect?.Invoke(port) ?? Real.Connect(address, port);
@@ -32,7 +34,9 @@ internal sealed class FakeRunHooks : IHostedRunHooks
     void IHostedRunHooks.RequireMacGui() { if (RequireMacGui != null) RequireMacGui(); else Real.RequireMacGui(); }
     ClientSession IHostedRunHooks.LaunchLocalMac(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation, Action<IOwnedProcess>? processStarted) =>
         LocalMacLaunch != null ? LocalMacLaunch(plan, output, account, cancellation, processStarted) : Real.LaunchLocalMac(plan, output, account, cancellation, processStarted);
-    RunCancellation IHostedRunHooks.Cancellation(out bool owned)
+    Task<ShippedLoader.Choice?> IHostedRunHooks.ShippedLoaderAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation) =>
+        ShippedLoader?.Invoke(actor, host, profile, install) ?? Task.FromResult<ShippedLoader.Choice?>(null);
+        RunCancellation IHostedRunHooks.Cancellation(out bool owned)
     {
         if (Cancellation == null) return Real.Cancellation(out owned);
         owned = false;

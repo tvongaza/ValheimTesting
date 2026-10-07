@@ -495,6 +495,83 @@ public sealed class NativeDependencyResolverTests : IDisposable
     // RunCampaignAsync: one report from the campaign's preflight through the run to retiring the prepared install, with the
     // prepared environment in memory (no profile.json, plan.json or campaign-times.json); a plan that disagrees with the
     // campaign is refused in Preflight before any host is contacted.
+    // #438: a session's actor that names no loader package, whose install on another host has BepInEx before 5.4.23.5, runs its
+    // disposable copy on the shipped BepInExPack, as server-load's do: the choice is printed and recorded (<actor>LoaderShipped)
+    // and the source install is unchanged. Negative control: with the rule off the copy keeps the install's own BepInEx.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASessionActorWithAnOldBepInExOnAnotherHostRunsOnTheShippedLoader(bool rule)
+    {
+        string tag = rule ? "shipped" : "own";
+        string serverDll = _rig.Write($"loader-{tag}/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
+        var resolved = NativeDependencyResolver.Resolve(Request(serverDll));
+        Assert.True(resolved.Ready, string.Join("; ", resolved.Gaps.Select(gap => gap.Reason)));
+        string serverLock = Path.Combine(_rig.Root, $"loader-{tag}-lock.json");
+        resolved.Write(serverLock);
+        string world = Path.Combine(_rig.Root, $"loader-{tag}-world");
+        FakeInstalls.World(world);
+        var server = new FakeOwnedServer("test.mod", saveRoot: @"C:\runs\run-test\world");
+        var host = new FakeServerHost("pc", Path.Combine(_rig.Root, $"loader-{tag}-pc"), server, windows: true);
+        string source = host.Local(@"C:\game\source");
+        FakeInstalls.Server(source);
+        File.WriteAllText(Path.Combine(source, GameLaunch.ServerWindowsExecutable), "server");
+        File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
+        File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        ShippedLoaderTests.WithCore(source, new Version(5, 4, 22, 0));
+        byte[] sourceCore = File.ReadAllBytes(Path.Combine(source, "BepInEx", "core", "BepInEx.dll"));
+        string inventory = Path.Combine(_rig.Root, $"loader-{tag}-inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\campaign.lock", destination = "test@pc" } },
+            environments = new[] { new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 } },
+        }));
+        string manifest = Path.Combine(_rig.Root, $"loader-{tag}.json");
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new
+        {
+            inventory, world, join = "test-server.example:2456",
+            server = new { dependencyLock = serverLock }, clients = new Dictionary<string, object>(),
+        }));
+        byte[] zip = ShippedLoaderTests.Pack();
+        byte[]? copiedCore = null;
+        host.AfterApply = runtime => copiedCore = File.ReadAllBytes(Path.Combine(runtime, "BepInEx", "core", "BepInEx.dll"));
+        var options = new PinnedServerRunOptions<SitePlan>
+        {
+            Name = "loader-" + tag, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
+            Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
+            Scenario = (_, _) => Task.CompletedTask,
+            Hooks = new FakeRunHooks
+            {
+                Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test",
+                ShippedLoader = rule ? (actor, on, profile, install) => ShippedLoader.OnHostAsync(actor, on, profile, install, TimeSpan.FromSeconds(30), CancellationToken.None,
+                    () => (new MemoryStream(zip), ShippedLoaderTests.Pin(zip)), Path.Combine(_rig.Root, "loader-data")) : null,
+            },
+        };
+        var plan = new SitePlan
+        {
+            Scenario = "smoke", Port = 5577,
+            Arguments = ["-batchmode", "-nographics", "-savedir", "{world}", "-port", "2456", "-password", "secret", "-logFile", "{runtime}/toolkit-unity.log"],
+            Pins = new() { ["example.server"] = "<md5 of the server's plugin>" },
+        };
+        string output = Path.Combine(_rig.Root, $"loader-{tag}-out");
+        int exit = await PinnedServerRun.RunCampaignAsync(manifest, plan, _ => new Dictionary<string, ClientRunPlan>(), output, options);
+        var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
+        Assert.True(exit == 0, result.ToString());
+        var provenance = result.GetProperty("Provenance");
+        Assert.NotNull(copiedCore);
+        Assert.Equal(sourceCore, File.ReadAllBytes(Path.Combine(source, "BepInEx", "core", "BepInEx.dll"))); // the install is never changed
+        if (rule)
+        {
+            Assert.Contains(@"pc:C:\game\source's BepInEx 5.4.22.0 is older than 5.4.23.5", provenance.GetProperty("serverLoaderShipped").GetString());
+            Assert.Equal("core", System.Text.Encoding.UTF8.GetString(copiedCore!)); // the shipped pack's core
+        }
+        else
+        {
+            Assert.False(provenance.TryGetProperty("serverLoaderShipped", out _));
+            Assert.Equal(sourceCore, copiedCore);
+        }
+    }
+
     [Fact] public async Task CampaignRunPreparesRunsAndRetiresInOneReportAndRefusesADisagreeingPlanFirst()
     {
         string serverDll = _rig.Write("run-campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
