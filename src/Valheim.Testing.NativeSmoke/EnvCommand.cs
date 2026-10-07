@@ -13,7 +13,12 @@ internal static class EnvCommand
         "valheim-test env recover|teardown --run ID [--inventory FILE] [--json] | valheim-test env teardown --copy PATH [--inventory FILE] | " +
         "valheim-test env teardown --run ID --machine-gone [--inventory FILE]";
 
-    public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
+    public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null) =>
+        await RunAsync(args, output, error, PackagedApp.Refusal).ConfigureAwait(false);
+
+    // packagedRefusal: why this process cannot run valheim-test because it is inside a Windows package (#406), or null; tests
+    // pass one, a real run asks Windows (PackagedApp).
+    internal static async Task<int> RunAsync(string[] args, TextWriter? output, TextWriter? error, Func<string?> packagedRefusal)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -28,7 +33,7 @@ internal static class EnvCommand
             error.WriteLine("Usage: " + Usage + (session ? ". A session's check is valheim-test session check SESSION [--hosts] [--json]." : ""));
             return 2;
         }
-        return await Inventory(inventoryFile, args[0] == "preflight", json, output, error).ConfigureAwait(false);
+        return await Inventory(inventoryFile, args[0] == "preflight", json, output, error, packagedRefusal).ConfigureAwait(false);
     }
 
     // The value after a single option, removed from rest; a missing value (or another option in its place) leaves the option
@@ -44,8 +49,9 @@ internal static class EnvCommand
 
     // No session: what the inventory holds (this machine, or the file with its local environments filled in). list shows it and
     // gives no verdict; preflight shows the same and says whether a one-off can run on it: a server and a client, and no run of
-    // another process going on this machine or left unrecovered by its journal (#257).
-    private static async Task<int> Inventory(string? file, bool preflight, bool json, TextWriter output, TextWriter error)
+    // another process going on this machine or left unrecovered by its journal (#257), and this process not inside a Windows
+    // package (#406).
+    private static async Task<int> Inventory(string? file, bool preflight, bool json, TextWriter output, TextWriter error, Func<string?> packagedRefusal)
     {
         EnvironmentInventory inventory;
         try { inventory = EnvironmentInventory.Read(file == null ? null : Path.GetFullPath(file)); }
@@ -55,7 +61,14 @@ internal static class EnvCommand
             return 3;
         }
         var missingRoles = new[] { "server", "client" }.Where(role => !inventory.Environments.Any(recipe => recipe.Roles.Contains(role))).ToArray();
-        var problems = preflight ? await inventory.LocalJournalProblemsAsync().ConfigureAwait(false) : [];
+        string? packaged = null;
+        if (preflight)
+            try { packaged = packagedRefusal(); }
+            catch (InvalidOperationException unread) { packaged = unread.Message; } // an identity Windows would not report refuses too
+        IReadOnlyList<CampaignPreflightProblem> problems = preflight
+            ? [.. packaged == null ? [] : new[] { new CampaignPreflightProblem("this-machine", "packaged app", packaged) },
+               .. await inventory.LocalJournalProblemsAsync().ConfigureAwait(false)]
+            : [];
         bool ready = missingRoles.Length == 0 && problems.Count == 0;
         if (json)
         {
@@ -76,8 +89,10 @@ internal static class EnvCommand
         if (!preflight) return 0;
         foreach (var problem in problems) output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
         output.WriteLine(missingRoles.Length != 0 ? "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment."
+            : packaged != null ? "REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal."
             : problems.Count != 0 ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
             : "ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered. " +
+              (OperatingSystem.IsWindows() ? "This process is not inside a packaged app. " : "") +
               "A session's inputs and host readiness are checked by valheim-test session check SESSION [--hosts].");
         return ready ? 0 : 3;
     }
