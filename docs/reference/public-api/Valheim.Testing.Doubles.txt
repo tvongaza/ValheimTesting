@@ -831,7 +831,7 @@ sealed class Player
   method System.Int64 GetPlayerID()
   method System.String GetPlayerName()
   method System.Void .ctor()
-  method System.Void OnSpawned()
+  method System.Void OnSpawned(System.Boolean spawnValkyrie)
   method ZDOID GetZDOID()
   method static System.Collections.Generic.List`1<Player> GetAllPlayers()
 class RandomObject : UnityEngine.MonoBehaviour
@@ -933,6 +933,27 @@ abstract class SocketDouble : ISocket, System.IDisposable
   method virtual System.Void Close()
   method virtual System.Void VersionMatch()
   protected method System.Void .ctor()
+enum SoftReferenceableAssets.LoadResult
+  field const SoftReferenceableAssets.LoadResult Aborted = 2
+  field const SoftReferenceableAssets.LoadResult Failed = 1
+  field const SoftReferenceableAssets.LoadResult Succeeded = 0
+struct SoftReferenceableAssets.SoftReference`1 : System.IEquatable`1<SoftReferenceableAssets.SoftReference`1<T>>
+  method SoftReferenceableAssets.LoadResult Load()
+  method System.Boolean Equals(SoftReferenceableAssets.SoftReference`1<T> other)
+  method System.Void .ctor(System.String name, T asset = null)
+  method System.Void HoldReference()
+  method System.Void Release()
+  method static System.Boolean op_Equality(SoftReferenceableAssets.SoftReference`1<T> left, SoftReferenceableAssets.SoftReference`1<T> right)
+  method static System.Boolean op_Inequality(SoftReferenceableAssets.SoftReference`1<T> left, SoftReferenceableAssets.SoftReference`1<T> right)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+  property System.Boolean IsLoaded { get; }
+  property System.Boolean IsLoading { get; }
+  property System.Boolean IsValid { get; }
+  property System.Int32 References { get; }
+  property System.String Name { get; }
+  property T Asset { get; }
 class SpawnArea : UnityEngine.MonoBehaviour
   field System.Boolean m_onGroundOnly
   field System.Boolean m_setPatrolSpawnPoint
@@ -1038,9 +1059,9 @@ class Terminal/ConsoleCommand
   field System.String Command
   field System.String Description
   method System.Boolean IsValid(Terminal context, System.Boolean skipAllowedCheck = false)
-  method System.Object RunAction(Terminal/ConsoleEventArgs args)
   method System.Void .ctor(System.String command, System.String description, Terminal/ConsoleEvent action, System.Boolean isCheat = false, System.Boolean isNetwork = false, System.Boolean onlyServer = false, System.Boolean isSecret = false, System.Boolean allowInDevBuild = false, System.Boolean hideBehindDevCommands = false, Terminal/ConsoleOptionsFetcher optionsFetcher = null, System.Boolean alwaysRefreshTabOptions = false, System.Boolean remoteCommand = false, System.Boolean onlyAdmin = false)
   method System.Void .ctor(System.String command, System.String description, Terminal/ConsoleEventFailable action, System.Boolean isCheat = false, System.Boolean isNetwork = false, System.Boolean onlyServer = false, System.Boolean isSecret = false, System.Boolean allowInDevBuild = false, System.Boolean hideBehindDevCommands = false, Terminal/ConsoleOptionsFetcher optionsFetcher = null, System.Boolean alwaysRefreshTabOptions = false, System.Boolean remoteCommand = false, System.Boolean onlyAdmin = false)
+  method System.Void RunAction(Terminal/ConsoleEventArgs args)
 delegate Terminal/ConsoleEvent
   method System.Void .ctor(System.Object object, System.IntPtr method)
   method virtual System.IAsyncResult BeginInvoke(Terminal/ConsoleEventArgs args, System.AsyncCallback callback, System.Object object)
@@ -1084,7 +1105,7 @@ class TerrainComp
   field const System.String PrefabName = "_TerrainCompiler"
   method System.Boolean Load()
   method System.Void .ctor(Heightmap hmap, System.Int32 width)
-  method System.Void Save()
+  method System.Void Save(System.Boolean paintOnly = false)
   method static TerrainComp FindTerrainCompiler(UnityEngine.Vector3 pos)
 class TerrainModifier : UnityEngine.MonoBehaviour
   field System.Boolean m_level
@@ -1375,12 +1396,12 @@ class UnityEngine.Object
   method static T Instantiate<T>(T original)
   method static T Instantiate<T>(T original, UnityEngine.Transform parent)
   method static T Instantiate<T>(T original, UnityEngine.Transform parent, System.Boolean instantiateInWorldSpace)
+  method static T Instantiate<T>(T original, UnityEngine.Vector3 position, UnityEngine.Quaternion rotation)
+  method static T Instantiate<T>(T original, UnityEngine.Vector3 position, UnityEngine.Quaternion rotation, UnityEngine.Transform parent)
   method static T[] FindObjectsByType<T>(UnityEngine.FindObjectsInactive findObjectsInactive, UnityEngine.FindObjectsSortMode sortMode)
   method static T[] FindObjectsByType<T>(UnityEngine.FindObjectsSortMode sortMode)
   method static T[] FindObjectsOfType<T>()
   method static T[] FindObjectsOfType<T>(System.Boolean includeInactive)
-  method static UnityEngine.GameObject Instantiate(UnityEngine.GameObject original, UnityEngine.Vector3 position, UnityEngine.Quaternion rotation)
-  method static UnityEngine.GameObject Instantiate(UnityEngine.GameObject original, UnityEngine.Vector3 position, UnityEngine.Quaternion rotation, UnityEngine.Transform parent)
   method virtual System.Boolean Equals(System.Object other)
   method virtual System.Int32 GetHashCode()
   property System.Boolean Destroyed { get; }
@@ -1601,7 +1622,7 @@ sealed class Valheim.Testing.Doubles.TerrainSnapshot
   method static Valheim.Testing.Doubles.TerrainSnapshot Of(TerrainComp compiler)
 class Valheim.Testing.Doubles.TerrainWorld : WorldGenerator
   method System.Void .ctor(Valheim.Testing.ITerrain terrain)
-  method virtual Heightmap/Biome GetBiome(System.Single x, System.Single z)
+  method virtual Heightmap/Biome GetBiome(System.Single x, System.Single z, System.Single oceanLevel = 0.02, System.Boolean waterAlwaysOcean = false)
   method virtual System.Single GetHeight(System.Single x, System.Single z)
   method virtual System.Void GetRiverWeight(System.Single x, System.Single z, out System.Single& weight, out System.Single& width)
   property Valheim.Testing.ITerrain Terrain { get; }
@@ -1666,10 +1687,10 @@ class WorldGenerator
   field static WorldGenerator instance
   method System.Void .ctor()
   method static System.Single WorldAngle(System.Single wx, System.Single wy)
-  method virtual Heightmap/Biome GetBiome(System.Single wx, System.Single wy)
+  method virtual Heightmap/Biome GetBiome(System.Single wx, System.Single wy, System.Single oceanLevel = 0.02, System.Boolean waterAlwaysOcean = false)
   method virtual System.Int32 GetSeed()
   method virtual System.Single GetBaseHeight(System.Single wx, System.Single wy, System.Boolean menuTerrain)
-  method virtual System.Single GetBiomeHeight(Heightmap/Biome biome, System.Single wx, System.Single wy, out UnityEngine.Color& mask)
+  method virtual System.Single GetBiomeHeight(Heightmap/Biome biome, System.Single wx, System.Single wy, out UnityEngine.Color& mask, System.Boolean preGeneration = false, System.Boolean riverPreDN = true)
   method virtual System.Single GetHeight(System.Single wx, System.Single wy)
   method virtual System.Void GetRiverWeight(System.Single wx, System.Single wy, out System.Single& weight, out System.Single& width)
 class ZDO
@@ -1753,7 +1774,6 @@ enum ZDO/SavedWorld
   field const ZDO/SavedWorld BeforeNewSaveFormat = 2
   field const ZDO/SavedWorld Current = 0
 struct ZDOID : System.IEquatable`1<ZDOID>
-  field System.Int64 ID
   field System.Int64 UserID
   method System.Boolean Equals(ZDOID other)
   method System.Boolean IsNone()
@@ -1763,6 +1783,7 @@ struct ZDOID : System.IEquatable`1<ZDOID>
   method virtual System.Boolean Equals(System.Object obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+  property System.UInt32 ID { get; }
   property static ZDOID None { get; }
 class ZDOMan
   field System.Int64 m_sessionID
@@ -1795,11 +1816,12 @@ static class ZDOVars
   field static readonly System.Int32 s_scaleScalarHash
   field static readonly System.Int32 s_terrainModifierTimeCreated
 class ZInput
-  field System.Boolean GamepadActive
+  field System.Boolean UsingGamepad
   method System.String GetBoundKeyString(System.String name, System.Boolean emptyStringOnMissing = false)
   method System.Void .ctor()
   method System.Void SetBinding(System.String name, System.String key)
   method static System.Boolean IsGamepadActive()
+  property static System.Boolean GamepadActive { get; }
   property static ZInput instance { get; }
 class ZLog
   method System.Void .ctor()
@@ -2087,7 +2109,6 @@ class ZoneSystem : UnityEngine.MonoBehaviour
   field System.Collections.Generic.Dictionary`2<Vector2s,ZoneSystem/LocationInstance> m_locationInstances
   field System.Collections.Generic.HashSet`1<GlobalKeys> m_globalKeysEnums
   field System.Collections.Generic.List`1<System.String> WorldStartingGlobalKeys
-  field System.Collections.Generic.List`1<ZoneSystem/LocationInstance> Locations
   field System.Collections.Generic.List`1<ZoneSystem/ZoneLocation> m_locations
   field System.Single m_waterLevel
   field const System.Single ZoneSize = 64
@@ -2103,9 +2124,9 @@ class ZoneSystem : UnityEngine.MonoBehaviour
   method System.Boolean GlobalKeyRemove(System.String keyStr, System.Boolean canSaveToServerOptionKeys = true)
   method System.Boolean IsZoneGenerated(Vector2s zone)
   method System.Boolean SpawnZone(Vector2s zoneID, ZoneSystem/SpawnMode mode, out UnityEngine.GameObject& root)
+  method System.Collections.Generic.Dictionary`2/ValueCollection<Vector2s,ZoneSystem/LocationInstance> GetLocationList()
   method System.Collections.Generic.List`1<System.String> GetGlobalKeys()
   method System.Collections.Generic.List`1<System.String> SaveGlobalKeys()
-  method System.Collections.Generic.List`1<ZoneSystem/LocationInstance> GetLocationList()
   method System.Void .ctor()
   method System.Void Awake()
   method System.Void GenerateLocationsIfNeeded()
@@ -2129,6 +2150,9 @@ class ZoneSystem : UnityEngine.MonoBehaviour
   method static System.String GetKeyValue(System.String key, out System.String& value, out GlobalKeys& gk)
   method static UnityEngine.Vector3 GetZonePos(Vector2s id)
   method static Vector2s GetZone(UnityEngine.Vector3 point)
+  method static Vector2s IndexToSector(System.UInt32 index)
+  method static ZoneSystem/SectorIndex SectorToIndex(System.Int32 sectorX, System.Int32 sectorY)
+  method static ZoneSystem/SectorIndex SectorToIndex(Vector2s sector)
   property System.Boolean LocationsGenerated { get; set; }
   property System.Boolean Started { get; }
 class ZoneSystem/ClearArea
@@ -2139,10 +2163,11 @@ struct ZoneSystem/LocationInstance
   field System.Boolean m_placed
   field UnityEngine.Vector3 m_position
   field ZoneSystem/ZoneLocation m_location
-struct ZoneSystem/SectorIndex : System.IEquatable`1<ZoneSystem/SectorIndex>
-  field readonly Vector2s Sector
-  method System.Boolean Equals(ZoneSystem/SectorIndex other)
-  method System.Void .ctor(Vector2s sector)
+struct ZoneSystem/SectorIndex
+  field System.UInt32 Sector
+  method System.Void .ctor(System.UInt32 sector)
+  method static System.Boolean op_Equality(ZoneSystem/SectorIndex s1, ZoneSystem/SectorIndex s2)
+  method static System.Boolean op_Inequality(ZoneSystem/SectorIndex s1, ZoneSystem/SectorIndex s2)
   method virtual System.Boolean Equals(System.Object o)
   method virtual System.Int32 GetHashCode()
 enum ZoneSystem/SpawnMode
@@ -2152,6 +2177,7 @@ enum ZoneSystem/SpawnMode
 class ZoneSystem/ZoneLocation
   field Heightmap/Biome m_biome
   field Heightmap/BiomeArea m_biomeArea
+  field SoftReferenceableAssets.SoftReference`1<UnityEngine.GameObject> m_prefab
   field System.Boolean m_centerFirst
   field System.Boolean m_clearArea
   field System.Boolean m_enable
@@ -2188,7 +2214,6 @@ class ZoneSystem/ZoneLocation
   field System.String m_groupMax
   field System.String m_name
   field System.String m_prefabName
-  field ZoneSystem/ZoneLocation/PrefabEntry m_prefab
   field const System.Single AltitudeZero = 30
   method System.Boolean IsAltitudeAllowed(System.Single groundHeight)
   method System.Void .ctor()
@@ -2203,12 +2228,3 @@ enum ZoneSystem/ZoneLocation/Placement
   field const ZoneSystem/ZoneLocation/Placement CenterDistance = 4
   field const ZoneSystem/ZoneLocation/Placement Distance = 1
   field const ZoneSystem/ZoneLocation/Placement TerrainDelta = 5
-class ZoneSystem/ZoneLocation/PrefabEntry
-  field System.String Name
-  method System.Void .ctor()
-  method System.Void Load()
-  method System.Void Release()
-  property System.Boolean IsLoaded { get; }
-  property System.Boolean IsValid { get; }
-  property System.Int32 References { get; }
-  property UnityEngine.GameObject Asset { get; set; }

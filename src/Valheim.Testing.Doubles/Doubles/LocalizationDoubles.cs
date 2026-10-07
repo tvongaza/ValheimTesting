@@ -120,7 +120,7 @@ public partial class Localization
 /// <summary>
 /// The game's input bindings, as text: a test declares a button and the key shown for it (<see cref="SetBinding"/>). An
 /// unknown button reads "MISSING BUTTON DEF", a button with no key "MISSING KEY BINDING", as in the game (or an empty
-/// string when asked to). <see cref="GamepadActive"/> stands for a gamepad being in use.
+/// string when asked to). <see cref="UsingGamepad"/> stands for a gamepad being in use.
 /// </summary>
 public partial class ZInput
 {
@@ -128,8 +128,9 @@ public partial class ZInput
     public static ZInput instance => m_instance ??= new ZInput();
     internal static ZInput? Current { get => m_instance; set => m_instance = value; }
     private readonly Dictionary<string, string?> m_buttons = new();
-    /// <summary>Whether a gamepad is the active input.</summary>
-    [TestOnly] public bool GamepadActive;
+    /// <summary>Whether a gamepad is the active input, which the game reads from its last input source.</summary>
+    [TestOnly] public bool UsingGamepad;
+    public static bool GamepadActive => m_instance?.UsingGamepad ?? false;
 
     /// <summary>Declares a button and the key text shown for it; null or empty declares it unbound.</summary>
     [TestOnly] public void SetBinding(string name, string? key) => m_buttons[name] = key;
@@ -139,7 +140,7 @@ public partial class ZInput
         if (string.IsNullOrEmpty(key)) return emptyStringOnMissing ? "" : "MISSING KEY BINDING \"" + name + "\"";
         return key!;
     }
-    public static bool IsGamepadActive() => m_instance?.GamepadActive ?? false;
+    public static bool IsGamepadActive() => GamepadActive;
 }
 
 /// <summary>

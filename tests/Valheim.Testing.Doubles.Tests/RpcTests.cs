@@ -71,7 +71,7 @@ public sealed class RpcTests
         Assert.Equal((sbyte)-1, pkg.ReadSByte()); Assert.Equal('é', pkg.ReadChar()); Assert.True(pkg.ReadBool());
         Assert.Equal(1.5f, pkg.ReadSingle()); Assert.Equal(1.0, pkg.ReadDouble()); Assert.Equal("hé", pkg.ReadString());
         Assert.Equal(new byte[] { 1, 2 }, pkg.ReadByteArray()); Assert.Equal("inner", pkg.ReadPackage().ReadString());
-        var id = pkg.ReadZDOID(); Assert.Equal((2L, 3L), (id.UserID, id.ID));
+        var id = pkg.ReadZDOID(); Assert.Equal((2L, 3u), (id.UserID, id.ID));
         var v = pkg.ReadVector3(); Assert.Equal((1f, 2f, 3f), (v.x, v.y, v.z));
         var q = pkg.ReadQuaternion(); Assert.Equal((0.5f, 0.5f, 0.5f, 0.5f), (q.x, q.y, q.z, q.w));
         Assert.Equal(new Vector2i(1, -1), pkg.ReadVector2i()); Assert.Equal(new Vector2s(1, -1), pkg.ReadVector2s());

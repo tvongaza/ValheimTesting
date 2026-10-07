@@ -57,7 +57,7 @@ public partial class Terminal
         {
             if (command.IsValid(this, skipAllowedCheck))
             {
-                if (command.RunAction(args) is string failure) AddString("Error executing command: " + failure);
+                command.RunAction(args);
             }
             else if (command.RemoteCommand && ZNet.instance != null && !ZNet.instance.IsServer()) ZNet.instance.RemoteCommand(text);
             else if (!silentFail) AddString("'" + args[0] + "' is not valid in the current context.");
@@ -129,15 +129,18 @@ public partial class Terminal
             && (!OnlyServer || (ZNet.instance != null && ZNet.instance.IsServer()));
 
         /// <summary>
-        /// Runs the action; a failable action's non-true result is its failure message. A cheat command (other than
-        /// <c>confirmcheats</c>) prints <see cref="ConfirmCheat"/> and does nothing until cheats are acknowledged, as in the game.
+        /// Runs the action, as the game does: a failable action that returns false prints the game's "Check parameters and
+        /// context" error, and one that returns a string prints it as the error (both without the game's colour tags and
+        /// its command-and-description line); any other result prints nothing. A cheat command (other than
+        /// <c>confirmcheats</c>) prints <see cref="ConfirmCheat"/> and does nothing until cheats are acknowledged.
         /// </summary>
-        [TestOnly] public object? RunAction(ConsoleEventArgs args)
+        public void RunAction(ConsoleEventArgs args)
         {
-            if (IsCheat && !Achievements.IsCheatedAtAll() && args[0].ToLowerInvariant() != "confirmcheats") { args.Context.AddString(ConfirmCheat); return true; }
-            if (_action != null) { _action(args); return true; }
+            if (IsCheat && !Achievements.IsCheatedAtAll() && args[0].ToLowerInvariant() != "confirmcheats") { args.Context.AddString(ConfirmCheat); return; }
+            if (_action != null) { _action(args); return; }
             object? result = _actionFailable!(args);
-            return result is true ? (object)true : result?.ToString();
+            if (result is false) args.Context.AddString("Error executing command. Check parameters and context.");
+            if (result is string failure) args.Context.AddString("Error executing command: " + failure);
         }
     }
 }

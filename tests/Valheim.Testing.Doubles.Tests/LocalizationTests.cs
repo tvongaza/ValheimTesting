@@ -41,7 +41,8 @@ public sealed class LocalizationTests : IDisposable
         ZInput.instance.SetBinding("Block", null);
         Assert.Equal("MISSING KEY BINDING \"Block\"", l.Localize("$KEY_Block"));
         ZInput.instance.SetBinding("JoyUse", "$button_a"); l.AddWord("button_a", "A");
-        ZInput.instance.GamepadActive = true;
+        ZInput.instance.UsingGamepad = true;
+        Assert.True(ZInput.GamepadActive && ZInput.IsGamepadActive()); // static, as the game's
         Assert.Equal("[A] take", l.Localize("[$KEY_Use] take")); // the gamepad binding first, its $word translated
     }
 

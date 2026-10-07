@@ -204,6 +204,12 @@ public sealed class UnityComponentTests : IDisposable
         copied.Entries[0].Count = 1; Assert.Equal(5, holder.Entries[0].Count);
         var component = Object.Instantiate(holder); // a component copies its whole object
         Assert.NotSame(chest, component.gameObject); Assert.Equal("chest", component.gameObject.name);
+        // The game's generic Instantiate<T>(T, position, rotation[, parent]) places a component's copied object.
+        var placed = Object.Instantiate(holder, new Vector3(0, 5, 0), Quaternion.identity);
+        Assert.NotSame(holder, placed); Assert.Equal(new Vector3(0, 5, 0), placed.transform.position);
+        var parent = new GameObject("parent"); parent.transform.position = new Vector3(100, 0, 0);
+        var child = Object.Instantiate(holder, new Vector3(3, 0, 0), Quaternion.identity, parent.transform);
+        Assert.Same(parent.transform, child.transform.parent); Assert.Equal(new Vector3(3, 0, 0), child.transform.position);
     }
 
     // [NonSerialized] excludes a field even when it is public or has [SerializeField], at the top and inside a copied class;

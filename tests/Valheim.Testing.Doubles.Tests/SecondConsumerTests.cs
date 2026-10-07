@@ -239,9 +239,25 @@ public sealed class SecondConsumerTests : IDisposable
         Assert.Equal(7, typeof(ZoneSystem).GetMethod(nameof(ZoneSystem.PlaceLocations))!.GetParameters().Length);
         Assert.Equal(7, typeof(ZoneSystem).GetMethod(nameof(ZoneSystem.SpawnLocation))!.GetParameters().Length);
         Assert.Equal(new[] { typeof(bool), typeof(bool), typeof(bool) }, typeof(ZNet).GetMethod(nameof(ZNet.Save))!.GetParameters().Select(p => p.ParameterType));
-        var entry = new ZoneSystem.ZoneLocation.PrefabEntry { Name = "Runestone", Asset = new GameObject("Runestone") };
-        entry.Load(); Assert.True(entry.IsLoaded);
-        entry.Release(); Assert.False(entry.IsLoaded);
+    }
+
+    // ZoneLocation.m_prefab is the game's SoftReference<GameObject> struct: copies share one reference count, as the game's
+    // copies share their asset's count in its loader, and a handle with no asset is invalid and fails to load.
+    [Fact] public void ALocationsTemplateIsASoftReferenceWhoseCopiesShareTheCount()
+    {
+        var location = new ZoneSystem.ZoneLocation { m_prefab = new SoftReferenceableAssets.SoftReference<GameObject>("Runestone", new GameObject("Runestone")) };
+        var copy = location.m_prefab;
+        Assert.Equal(SoftReferenceableAssets.LoadResult.Succeeded, copy.Load());
+        Assert.True(location.m_prefab.IsLoaded); Assert.Equal(1, location.m_prefab.References);
+        location.m_prefab.Release(); Assert.False(copy.IsLoaded);
+        Assert.Equal("Runestone".GetStableHashCode(), location.Hash);
+
+        var named = new SoftReferenceableAssets.SoftReference<GameObject>("Dolmen"); // no template: valid, loads, Asset null
+        Assert.Equal(SoftReferenceableAssets.LoadResult.Succeeded, named.Load()); Assert.True(named.IsLoaded); Assert.Null(named.Asset);
+
+        var none = new ZoneSystem.ZoneLocation().m_prefab;
+        Assert.False(none.IsValid); Assert.Null(none.Name);
+        Assert.Equal(SoftReferenceableAssets.LoadResult.Failed, none.Load()); Assert.False(none.IsLoaded);
     }
 
     [Fact] public void LocationPiecesHaveTheGamesDefaults()

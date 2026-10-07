@@ -126,13 +126,13 @@ public sealed class MemberIndexTests
         var problems = Disagreements(new[]
         {
             "ZNet\tfield\tPeers : Dictionary<long, ZNetPeer>\tgame",
-            "ZDOID\tfield\tID : long\tgame",
+            "UnityEngine.GameObject\tmethod\tAddComponent<T>(Action<T>) : T\tgame",
             "ZNet\tmethod\tstatic GetUID() : long\ttest-only",
             "ZNet\tmethod\tNotAGameMethod() : void\ttest-only",
         }, verdicts);
         Assert.Collection(problems,
             p => Assert.StartsWith("the game has no such member", p),
-            p => Assert.StartsWith("the game's signature differs (ID : uint)", p),
+            p => Assert.StartsWith("the game's signature differs (AddComponent(Type)", p),
             p => Assert.StartsWith("the game has it, so it must not be [TestOnly]", p),
             p => Assert.StartsWith("not in the game capture", p));
     }

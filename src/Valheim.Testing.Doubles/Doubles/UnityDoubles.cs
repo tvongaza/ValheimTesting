@@ -301,8 +301,6 @@ public partial class Object
     }
     private Object NameHolder => this is Component { m_gameObject: { } owner } ? owner : this;
 
-    [TestOnly] public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation) => original.Clone(position, rotation);
-
     /// <summary>Queues the object; it is destroyed when the test calls <see cref="EndOfFrame"/>, as Unity destroys at the end of the frame.</summary>
     public static void Destroy(Object? obj)
     {

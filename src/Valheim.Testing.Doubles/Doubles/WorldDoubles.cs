@@ -29,7 +29,7 @@ namespace Valheim.Testing.Doubles
         public TerrainWorld(ITerrain terrain) => Terrain = terrain;
         public override float GetHeight(float x, float z) => Terrain.GetHeight(x, z);
         public override void GetRiverWeight(float x, float z, out float weight, out float width) => Terrain.GetRiverWeight(x, z, out weight, out width);
-        public override Heightmap.Biome GetBiome(float x, float z) => Terrain.GetBiome(x, z) switch
+        public override Heightmap.Biome GetBiome(float x, float z, float oceanLevel = 0.02f, bool waterAlwaysOcean = false) => Terrain.GetBiome(x, z) switch
         {
             TerrainBiome.Meadows => Heightmap.Biome.Meadows,
             TerrainBiome.BlackForest => Heightmap.Biome.BlackForest,

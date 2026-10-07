@@ -139,31 +139,31 @@ namespace UnityEngine
         public static T Instantiate<T>(T original, Transform parent) where T : Object => (T)CloneObject(original, parent, false);
         /// <summary>A copy under <paramref name="parent"/>; with <paramref name="instantiateInWorldSpace"/> it keeps the original's world position.</summary>
         public static T Instantiate<T>(T original, Transform parent, bool instantiateInWorldSpace) where T : Object => (T)CloneObject(original, parent, instantiateInWorldSpace);
-        [TestOnly] public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation, Transform parent)
-        {
-            s_unityPendingParent = parent; s_unityPendingWorldStays = true;
-            try { return original.Clone(position, rotation); }
-            finally { s_unityPendingParent = null; }
-        }
+        /// <summary>A copy placed at <paramref name="position"/> and <paramref name="rotation"/>; a component's copy is its copied object's, placed so.</summary>
+        public static T Instantiate<T>(T original, Vector3 position, Quaternion rotation) where T : Object => (T)CloneObject(original, null, false, position, rotation);
+        /// <summary>A copy under <paramref name="parent"/> at the world <paramref name="position"/> and <paramref name="rotation"/>.</summary>
+        public static T Instantiate<T>(T original, Vector3 position, Quaternion rotation, Transform parent) where T : Object => (T)CloneObject(original, parent, true, position, rotation);
 
         [ThreadStatic] internal static Transform? s_unityPendingParent;
         [ThreadStatic] internal static bool s_unityPendingWorldStays;
         [ThreadStatic] internal static Dictionary<Object, Object>? s_unityLastCloneMap;
 
-        private static Object CloneObject(Object original, Transform? parent, bool worldStays)
+        // A GameObject is copied with its components and children (at the given place, else the original's); a component's
+        // whole object is copied and the copy's matching component returned; any other object is a copy of its fields.
+        private static Object CloneObject(Object original, Transform? parent, bool worldStays, Vector3? position = null, Quaternion? rotation = null)
         {
             if (original is null) throw new ArgumentNullException(nameof(original));
             original.ThrowIfDestroyed();
             if (original is GameObject go)
             {
                 s_unityPendingParent = parent; s_unityPendingWorldStays = worldStays;
-                try { return go.Clone(go.Position, go.Rotation); }
+                try { return go.Clone(position ?? go.Position, rotation ?? go.Rotation); }
                 finally { s_unityPendingParent = null; }
             }
             if (original is Component component)
             {
                 var owner = component.m_gameObject ?? throw new ArgumentException("The component is on no GameObject; Unity copies a component's whole object.", nameof(original));
-                Instantiate(owner, parent!, worldStays);
+                CloneObject(owner, parent, worldStays, position, rotation);
                 return s_unityLastCloneMap![component];
             }
             return original.CopyForInstantiate();

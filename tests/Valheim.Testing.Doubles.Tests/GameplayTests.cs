@@ -93,8 +93,8 @@ public sealed class GameplayTests : IDisposable
 
     private sealed class SplitWorld : WorldGenerator
     {
-        public override Heightmap.Biome GetBiome(float wx, float wy) => wx < 0 ? Heightmap.Biome.Meadows : Heightmap.Biome.Mountain;
-        public override float GetBiomeHeight(Heightmap.Biome biome, float wx, float wy, out Color mask) { mask = default; return biome == Heightmap.Biome.Meadows ? 10f : 50f; }
+        public override Heightmap.Biome GetBiome(float wx, float wy, float oceanLevel = 0.02f, bool waterAlwaysOcean = false) => wx < 0 ? Heightmap.Biome.Meadows : Heightmap.Biome.Mountain;
+        public override float GetBiomeHeight(Heightmap.Biome biome, float wx, float wy, out Color mask, bool preGeneration = false, bool riverPreDN = true) { mask = default; return biome == Heightmap.Biome.Meadows ? 10f : 50f; }
     }
     [Fact] public void HeightsBlendAcrossCornerBiomesAndADistantLodSmoothsSteps()
     {

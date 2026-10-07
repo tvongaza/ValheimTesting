@@ -58,7 +58,7 @@ public sealed partial class Player
 {
     public static Player? m_localPlayer;
     public UnityEngine.Transform transform = new();
-    [TestOnly] public void OnSpawned() { }
+    public void OnSpawned(bool spawnValkyrie) { }
 }
 /// <summary>A value a mod writes into an RPC's package itself, as the game's interface.</summary>
 public partial interface ISerializableParameter
@@ -203,7 +203,7 @@ public sealed partial class ZRoutedRpc
         var zdo = zdos.GetZDO(data.m_targetZDO);
         var view = zdo == null ? null : ZNetView.Find(zdo);
         if (view == null) { Dropped.Add((data.m_senderPeerID, data.m_targetZDO, data.Method, zdo == null ? "no such ZDO" : "no live object")); return; }
-        if (!view.m_functions.ContainsKey(data.m_methodHash)) Dropped.Add((data.m_senderPeerID, data.m_targetZDO, data.Method, "not registered on the object"));
+        if (!view.Handles(data.m_methodHash)) Dropped.Add((data.m_senderPeerID, data.m_targetZDO, data.Method, "not registered on the object"));
         view.HandleRoutedRPC(data);
     }
 
@@ -360,7 +360,8 @@ public partial class ZNetView
 {
     /// <summary>Everyone, as the game's target for a broadcast to an object.</summary>
     public static long Everybody = 0L;
-    internal readonly Dictionary<int, (string Name, Delegate Handler)> m_functions = new();
+    // Private, as in the game (where it holds RoutedMethodBase wrappers); ZRoutedRpc asks through Handles.
+    private readonly Dictionary<int, (string Name, Delegate Handler)> m_functions = new();
 
     public void Register(string name, Action<long> f) => Add(name, f);
     public void Register<T>(string name, Action<long, T> f) => Add(name, f);
@@ -372,6 +373,7 @@ public partial class ZNetView
     public void Unregister(string name) => m_functions.Remove(name.GetStableHashCode());
     /// <summary>Whether this object registered a handler under the name.</summary>
     [TestOnly] public bool IsRegistered(string name) => m_functions.ContainsKey(name.GetStableHashCode());
+    internal bool Handles(int methodHash) => m_functions.ContainsKey(methodHash);
     private void Add(string name, Delegate handler) => ZRoutedRpc.AddHandler(m_functions, name, handler, "ZNetView");
 
     /// <summary>Runs this object's handler for the call, or logs "Failed to find rpc method" with its hash, as the game does.</summary>
@@ -459,11 +461,7 @@ public sealed partial class ZPackage
     public void Write(double data) => m_writer.Write(data);
     public void Write(string data) => m_writer.Write(data);
     /// <summary>The creator's session id (long), then the object's number (uint), as the game writes a ZDOID.</summary>
-    public void Write(ZDOID id)
-    {
-        if (id.ID < 0 || id.ID > uint.MaxValue) throw new ArgumentOutOfRangeException(nameof(id), id.ID, "The game's ZDOID number is a uint.");
-        m_writer.Write(id.UserID); m_writer.Write((uint)id.ID);
-    }
+    public void Write(ZDOID id) { m_writer.Write(id.UserID); m_writer.Write(id.ID); }
     public void Write(UnityEngine.Vector3 v3) { m_writer.Write(v3.x); m_writer.Write(v3.y); m_writer.Write(v3.z); }
     /// <summary>Euler angles in half-degree steps: two bytes for a yaw-only rotation, else four, as the game packs them.</summary>
     public void WriteSmallRotation(UnityEngine.Vector3 v3)
