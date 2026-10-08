@@ -50,6 +50,9 @@ public sealed class OwnedCliCommandTests
             Assert.Equal(3, commands.Count); // initial strict check, per-command strict check, one command
             Assert.All(commands.Take(2), command => Assert.StartsWith("cli_expect --strict ", command));
             Assert.Equal("cli_manifest", commands[2]);
+            string log = Assert.Single(Directory.GetFiles(evidence, "owned-cli-command-*.jsonl"));
+            Assert.Contains("cli_manifest", File.ReadAllText(log));
+            Assert.Contains(log, output.ToString());
         }
         finally
         {

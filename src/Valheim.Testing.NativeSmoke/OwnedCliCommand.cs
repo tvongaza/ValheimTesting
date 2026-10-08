@@ -4,7 +4,7 @@ using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
-/// <summary>One strictly pinned command to the exact Windows client a concurrent one-shot run owns.</summary>
+/// <summary>One strictly pinned, recorded command to the exact Windows client a concurrent one-shot run owns.</summary>
 internal static class OwnedCliCommand
 {
     internal const string Usage = "valheim-test cli --evidence RUN_EVIDENCE --phase menu|world --command TEXT [--timeout-seconds 1..15] " +
@@ -46,11 +46,16 @@ internal static class OwnedCliCommand
             string pins = values.TryGetValue("--expect-strict", out string? supplied) ? supplied :
                 Path.Combine(evidence, values["--phase"] == "menu" ? OwnedClientCommandLease.MenuPins : OwnedClientCommandLease.WorldPins);
             string expected = StrictExpectations.Load(pins);
-            using var actor = new GameActor("owned diagnostic client", new CliTransport("127.0.0.1", lease.Port))
+            // A separate invocation is outside the runner's connection log. Open its own create-new record before
+            // any pin check or game command, so a mutating diagnostic cannot succeed without private evidence.
+            string commandLog = Path.Combine(evidence, "owned-cli-command-" + Guid.NewGuid().ToString("N") + ".jsonl");
+            using var actor = new GameActor("owned diagnostic client",
+                new RecordingTransport(new CliTransport("127.0.0.1", lease.Port), commandLog))
             { CommandTimeout = TimeSpan.FromSeconds(values.TryGetValue("--timeout-seconds", out string? limit) ? int.Parse(limit, CultureInfo.InvariantCulture) : 5) };
             actor.VerifyEnvironment(expected);
             var reply = actor.Execute(values["--command"], requireAccepted: false); // One command, never retried.
             foreach (string line in reply.Output) output.WriteLine(line);
+            output.WriteLine("Private command evidence: " + commandLog);
             if (reply.Accepted) return 0;
             error.WriteLine("REFUSED: ValheimCLI completed but did not accept the command: " + (reply.Refusal ?? reply.ErrorCode ?? reply.Message ?? "no accepted reply"));
             return 1;

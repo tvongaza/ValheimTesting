@@ -63,6 +63,23 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(1, process.Stops);
     }
 
+    [Fact] public void AWorldRoundThatWasUnpinnedKeepsProcessEvidenceWithoutAGameCommand()
+    {
+        var process = new FakeOwnedProcess(99);
+        var transport = new ScriptedTransport();
+        GameActor? diagnosticActor = null;
+        using (var session = ClientSession.Launch(Plan(), _output, () => process, () => transport,
+            (_, _) => Task.CompletedTask, default, null, null,
+            failureEvidence: (_, actor, _) => diagnosticActor = actor))
+        {
+            session.Actor.VerifyEnvironment(EnvironmentPinning.None);
+            session.CaptureFailure();
+        }
+        Assert.Null(diagnosticActor);
+        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal));
+        Assert.Equal(1, process.Stops);
+    }
+
     [Fact] public void AFailureSnapshotRequiresTheExactOwnedProcessAndKeepsLogTails()
     {
         using var current = System.Diagnostics.Process.GetCurrentProcess();
@@ -90,6 +107,12 @@ public sealed class ClientSessionTests : IDisposable
         ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), actor, plan, refused);
         Assert.Contains("CLI refused", File.ReadAllText(Path.Combine(refused, "client-failure-diagnostic.json")));
         Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal)));
+
+        actor.VerifyEnvironment(EnvironmentPinning.None);
+        string unpinned = Path.Combine(_output, "unpinned");
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), actor, plan, unpinned);
+        Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal)));
+        Assert.Contains("not attempted", File.ReadAllText(Path.Combine(unpinned, "client-failure-diagnostic.json")));
     }
 
     private sealed class ExactProcess(int id, string start) : IOwnedProcess, IClientProcessIdentity

@@ -33,7 +33,7 @@ internal static class ClientFailureEvidence
                     facts["responding"] = Try(() => process.Responding);
                     if (!process.HasExited)
                     {
-                        if (actor != null) facts["screenshot"] = Screenshot(actor, output);
+                        if (actor?.Pinned == true) facts["screenshot"] = Screenshot(actor, output);
                         else BootstrapStatus(plan, facts);
                     }
                 }

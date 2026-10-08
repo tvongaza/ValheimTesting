@@ -60,7 +60,9 @@ public sealed class ClientSession : IDisposable
     {
         if (_failureCaptured || _process == null || _output == null || _failureEvidence == null) return;
         _failureCaptured = true;
-        TryCaptureFailure(_failureEvidence, _process, Actor, _output);
+        // A later round can explicitly unpin an otherwise successfully opened client. Its process and logs
+        // remain useful evidence, but diagnostics may not send a game command without strict expectations.
+        TryCaptureFailure(_failureEvidence, _process, Actor.Pinned ? Actor : null, _output);
     }
 
     private static void TryCaptureFailure(Action<IOwnedProcess, GameActor?, string>? capture, IOwnedProcess process, GameActor? actor, string output)
