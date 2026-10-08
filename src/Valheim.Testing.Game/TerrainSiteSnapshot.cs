@@ -18,7 +18,7 @@ public sealed record TerrainSiteDelta(TerrainSitePoint Point, double GroundHeigh
 
 /// <summary>
 /// Captures the loaded client ground, terrain collider and paint. A dedicated server can also be supplied to verify
-/// the same world and area readiness, but paint and collider observations always come from the client. Every command
+/// the same world, but only a client with a local player can report site-area readiness. Every command
 /// and its exact reply is retained so a test report can be audited without trusting only the parsed values. A snapshot
 /// is the probes' readings without expectations.
 /// </summary>
@@ -48,9 +48,9 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
         if (server is not null) SiteObservation.CheckWorld(server, worldUid, "server");
         var layers = client.RequireCapabilities(Layers); // One listing.
         Capability ground = layers[0], surface = layers[1], paint = layers[2];
-        // Point by point, the client's area then the server's.
-        SiteObservation.WaitAreasReady([.. points.SelectMany(point => server is null ? [(client, "client", point.X, point.Z)]
-            : new[] { (client, "client", point.X, point.Z), (server, "server", point.X, point.Z) })], readinessTimeout, commands, cancellation);
+        // Dedicated servers hold ghost zones around peers, not a loaded local site. Their IsAreaReady remains false
+        // even when the joined client's terrain is ready, so readiness is established by that client only.
+        SiteObservation.WaitAreasReady([.. points.Select(point => (client, "client", point.X, point.Z))], readinessTimeout, commands, cancellation);
         var readings = new List<TerrainSiteReading>(points.Count);
         foreach (var point in points)
         {

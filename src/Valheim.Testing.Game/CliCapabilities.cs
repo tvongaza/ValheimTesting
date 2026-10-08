@@ -22,14 +22,20 @@ public static class CliCapabilities
     /// </summary>
     public static readonly IReadOnlyList<string> Toolkit = Array.AsReadOnly(HostedRounds
         .Concat(["valheim.session/join", TeleportSignals, "valheim.world/player-support-wait", "valheim.world/player-support",
-            "valheim.world/terrain", "valheim.world/terrain-surface", "valheim.world/terrain-paint", "valheim.world/terrain-grid"])
+            "valheim.world/terrain", "valheim.world/terrain-surface", "valheim.world/terrain-paint", "valheim.world/terrain-grid",
+            "valheim.observe/zones", "valheim.observe/harmony", "valheim.observe/content-census",
+            "valheim.observe/dungeon-rooms", "valheim.observe/unresolved-prefabs", "valheim.observe/globalkeys",
+            "valheim.observe/config", "valheim.observe/custom-data", "valheim.observe/review-begin",
+            "valheim.observe/review-restore", "valheim.observe/review-mist-off", "valheim.observe/review-clutter-off",
+            "valheim.observe/review-clip-frames"])
         .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
 
-    // The packs that register ValheimCLI's own extensions (valheimCLI's Packs/Standard and Packs/WorldTools).
+    // The packs that register ValheimCLI's own extensions.
     private static readonly Dictionary<string, string> Packs = new(StringComparer.Ordinal)
     {
         ["valheim.session"] = "the Standard pack (Valheim.Cli.Standard.dll, plugin valheimCLI.standard)",
         ["valheim.world"] = "the World Tools pack (Valheim.Cli.WorldTools.dll, plugin valheimCLI.worldtools)",
+        ["valheim.observe"] = "the Observe pack (Valheim.Cli.Observe.dll, plugin valheimCLI.observe)",
     };
 
     /// <summary>Only these owners belong to ValheimCLI's own pack manifest. A mod adapter's

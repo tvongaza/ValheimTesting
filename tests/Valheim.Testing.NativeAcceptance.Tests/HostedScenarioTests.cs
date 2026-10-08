@@ -98,8 +98,8 @@ public sealed class HostedScenarioTests : IDisposable
                 return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"))
-            .Extension("acceptancemod.testing", "harmony", _ => TestWorld.ModCensus())
-            .Extension("acceptancemod.testing", "config", args => new
+            .Extension("valheim.observe", "harmony", _ => TestWorld.ModCensus())
+            .Extension("valheim.observe", "config", args => new
             {
                 source = "bepinex-config", complete = true, guid = Uri.UnescapeDataString(args[0]), section = "Server", key = "Greeting", server = true,
                 installed = true, found = true, type = "System.String", value = _greeting, defaultValue = "hello",

@@ -13,10 +13,10 @@ public sealed class MarkerPlan : ServerRunPlan
     public const string ScenarioName = "dry-site-lifecycle";
     public const string ModPlugin = "example.examplemod", AdapterPlugin = "example.examplemod.testadapter";
     public const string SessionTokenVariable = "EXAMPLEMOD_TEST_SESSION_TOKEN";
-    /// <summary>ExampleMod as the runner sees it: its adapter's session and Harmony capabilities and the patch it declares.</summary>
+    /// <summary>ExampleMod as the runner sees it: its adapter's session, the Observe pack's Harmony capability, and the patch it declares.</summary>
     public static readonly ModDeclaration Mod = new("examplemod.testing/session", SessionTokenVariable)
     {
-        HarmonyCapability = "examplemod.testing/harmony", Owner = ModPlugin, Patches = MarkerScenario.Patches,
+        HarmonyCapability = "valheim.observe/harmony", Owner = ModPlugin, Patches = MarkerScenario.Patches,
     };
     // The mod's rule inputs (see ModWithTests' DrySiteRule): the sea at 30 m, 1.5 m of clearance.
     public const float WaterLevel = 30f, Clearance = 1.5f;

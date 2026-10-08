@@ -43,7 +43,7 @@ public sealed record SavedDungeon(string Prefab, string Uid, float X, float Y, f
 }
 
 /// <summary>
-/// Reads a dungeon's saved rooms through an adapter's <c>DungeonRooms.Command()</c> (Valheim.Testing.Adapter) on the
+/// Reads a dungeon's saved rooms through ValheimCLI's <c>valheim.observe/dungeon-rooms</c> on the
 /// server, and checks that every room lies inside its location's zone. In Valheim 1.0.16 the game gives a dungeon interior
 /// its environment with a 64 m wide box centred on the location's zone (5000 m above the location), so the part of a room
 /// outside that zone loses the interior environment; the generator itself keeps rooms inside the zone of its own position.

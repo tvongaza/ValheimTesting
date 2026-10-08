@@ -1,3 +1,4 @@
+using valheim_cli.Testing;
 namespace Valheim.Testing.Game;
 
 /// <summary>
@@ -38,7 +39,7 @@ internal static class OwnedClientPreflight
         if (!File.Exists(Path.Combine(install, preloader)))
             missing.Add($"BepInEx ({Slash(preloader)} is not there)");
         if (!Directory.Exists(install) || !InstalledDlls(install).Any(dll => Path.GetFileName(dll).Equals("valheimCLI.dll", StringComparison.OrdinalIgnoreCase)
-                || CliAssembly.Plugins(dll)?.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) == true))
+                || CliBuildManifest.Plugins(dll)?.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) == true))
             missing.Add($"ValheimCLI (no valheimCLI.dll, nor a plugin declaring valheimCLI.valheimCLI, in {Slash(Plugins)} or {Slash(Scripts)})");
         if (missing.Count != 0)
             throw new InvalidOperationException($"The client runs in place, so nothing is staged into {install}, and it lacks {string.Join(" and ", missing)}. " +

@@ -36,7 +36,7 @@ public static class ReviewCaptureScenario
         return new ReviewCapturePlan(id,
             new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
             capture.Weather, capture.TimeOfDay, capture.CameraDistance, capture.CameraHeight,
-            "acceptancemod.testing", Path.Combine(output, "capture-host-" + id),
+            Path.Combine(output, "capture-host-" + id),
             Path.Combine(output, "review-" + id), plan.WorldUid, capture.GameBuild,
             client.Pins, capture.MistOff, capture.ClutterOff, capture.Supersize, capture.CameraAzimuthDegrees);
     });

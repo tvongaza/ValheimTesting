@@ -8,10 +8,10 @@ namespace ExampleMod.TestAdapter;
 
 /// <summary>
 /// The example's test adapter, installed only in test runtimes. It serves the toolkit's owned-session identity
-/// (<c>examplemod.testing/session</c>), which the runner uses to prove it talks to the server it started, and the census of
-/// applied Harmony patches (<c>examplemod.testing/harmony</c>), which checks the mod's declared patches. The scenario drives
-/// the mod through its own console command. A mod that needs a test-only action or observation adds it here as another
-/// extension command (the toolkit's adapter package has many: zones, custom data, global keys, config, content census).
+/// (<c>examplemod.testing/session</c>), which proves the runner talks to its own server. ValheimCLI's optional
+/// Observe pack owns <c>valheim.observe/harmony</c>, which checks the mod's declared patches. The scenario drives
+/// the mod through its own console command. A mod that needs a test-only action or observation adds it here as
+/// another extension command; generic game observations belong in ValheimCLI.
 /// <para>
 /// The adapter never references ExampleMod's types and depends on it only softly, so it also loads where the mod is absent.
 /// </para>
@@ -27,7 +27,6 @@ public sealed class Plugin : BaseUnityPlugin
 
     // The session is complete once the world is up and the mod itself is loaded.
     private IEnumerator Start() => TestExtension.Register("examplemod.testing", "0.1.0", TokenVariable,
-        () => Chainloader.PluginInfos.ContainsKey("example.examplemod"), registration => _registration = registration, Logger.LogError,
-        HarmonyCensus.Command());
+        () => Chainloader.PluginInfos.ContainsKey("example.examplemod"), registration => _registration = registration, Logger.LogError);
     private void OnDestroy() => _registration?.Dispose();
 }

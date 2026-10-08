@@ -110,7 +110,7 @@ public sealed partial class AcceptancePlan : LifecyclePlan
                 break;
             case VanillaClientScenario:
                 client.Validate(ModPlugin); // The claim is what a client without AcceptanceMod sees; it still needs the adapter.
-                RequirePin(client, AdapterPlugin, Pins[AdapterPlugin], "client", "the vanilla client reads its census through the server's adapter build");
+                RequirePin(client, AdapterPlugin, Pins[AdapterPlugin], "client", "the fixture client uses its own test adapter for marker assertions; generic censuses use ValheimCLI Observe");
                 break;
             case ContentCensusScenario:
                 // The client's registries are its own: the census needs the server's AcceptanceMod build there too.

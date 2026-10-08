@@ -175,6 +175,12 @@ public sealed class CliBundleTests : IDisposable
         string commit = pin.RootElement.GetProperty("commit").GetString()!;
         Assert.Equal(Path.Combine(data, "cli", commit, CliBundle.ManifestFile), pinned.Manifest);
         Assert.StartsWith($"the pinned {commit[..7]} bundle", pinned.Origin);
-        Assert.NotEmpty(CliCapabilityManifest.Read(pinned.Manifest).Files);
+        var capabilities = CliCapabilityManifest.Read(pinned.Manifest).Capabilities;
+        Assert.NotEmpty(capabilities);
+        // The release workflow runs this suite before publishing any packages. A toolkit change that starts using a
+        // command from a newer ValheimCLI pack must re-pin the shipped bundle first, not discover the mismatch in game.
+        var missing = CliCapabilities.Toolkit.Where(path => !capabilities.TryGetValue(path, out int version) || version != 1).ToArray();
+        Assert.True(missing.Length == 0, "The pinned ValheimCLI bundle lacks schema-1 commands required by this toolkit: " +
+            string.Join(", ", missing));
     }
 }

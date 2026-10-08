@@ -18,7 +18,7 @@ public static class Scenario
     /// <summary>The hosted rounds; between two, the world is saved with confirmation and hosted again in the same process.</summary>
     public static readonly string[] Rounds = ["first"];
     /// <summary>The ValheimCLI extension commands the steps use, beyond the hosted rounds' own: checked live once the client answers.</summary>
-    public static readonly string[] Capabilities = ["examplemod.testing/harmony"];
+    public static readonly string[] Capabilities = ["valheim.observe/harmony"];
 
     private const string Mod = "example.examplemod", Marker = "wood_pole2";
     private static readonly DeclaredPatch[] Patches = [new("Terminal::InitTerminal", "postfix", "ExampleMod.Plugin+RegisterCommands::Postfix")];
@@ -32,7 +32,7 @@ public static class Scenario
         var host = round.Server; // A host is the server of its world and the client at once.
         double x = 0, z = 0;
         round.Step("the mod's Harmony patches are applied", () =>
-            HarmonyCensus.Read(host, "examplemod.testing/harmony", Mod).Check(Mod, Patches).RequireApplied());
+            HarmonyCensus.Read(host, "valheim.observe/harmony", Mod).Check(Mod, Patches).RequireApplied());
         round.Step("record where the host stands", () =>
         {
             var reply = host.Execute("cli_player_state");

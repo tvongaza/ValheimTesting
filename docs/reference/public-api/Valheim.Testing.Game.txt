@@ -2237,7 +2237,6 @@ sealed class Valheim.Testing.Game.ZoneCycle
   method Valheim.Testing.Game.ZoneCycleResult Run(Valheim.Testing.Game.GameActor server, Valheim.Testing.Game.GameActor client, System.Threading.CancellationToken cancellation = null)
   method static System.Int32 RingsToLeave(Valheim.Testing.Game.SimulationRange range)
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.ZoneId> Zones { get; init; }
-  property System.String Capability { get; init; }
   property System.TimeSpan Interval { get; init; }
   property System.TimeSpan StepTimeout { get; init; }
   property Valheim.Testing.Game.HeightExpectation Away { get; init; }
@@ -2295,14 +2294,15 @@ sealed class Valheim.Testing.Game.ZoneReading : System.IEquatable`1<Valheim.Test
   property Valheim.Testing.Game.ZoneId Reference { get; init; }
 [result shape] sealed class Valheim.Testing.Game.ZoneState : System.IEquatable`1<Valheim.Testing.Game.ZoneState>
   method System.Boolean Equals(Valheim.Testing.Game.ZoneState other)
-  method System.Void .ctor(Valheim.Testing.Game.ZoneId Zone, System.Boolean TerrainLoaded, System.Int32 Instances, System.Int32 NearInstances, System.Int32 Saved, System.Int32 WithoutInstance)
-  method System.Void Deconstruct(out Valheim.Testing.Game.ZoneId& Zone, out System.Boolean& TerrainLoaded, out System.Int32& Instances, out System.Int32& NearInstances, out System.Int32& Saved, out System.Int32& WithoutInstance)
+  method System.Void .ctor(Valheim.Testing.Game.ZoneId Zone, System.Boolean TerrainLoaded, System.Boolean AreaReady, System.Int32 Instances, System.Int32 NearInstances, System.Int32 Saved, System.Int32 WithoutInstance)
+  method System.Void Deconstruct(out Valheim.Testing.Game.ZoneId& Zone, out System.Boolean& TerrainLoaded, out System.Boolean& AreaReady, out System.Int32& Instances, out System.Int32& NearInstances, out System.Int32& Saved, out System.Int32& WithoutInstance)
   method Valheim.Testing.Game.ZoneState <Clone>$()
   method static System.Boolean op_Equality(Valheim.Testing.Game.ZoneState left, Valheim.Testing.Game.ZoneState right)
   method static System.Boolean op_Inequality(Valheim.Testing.Game.ZoneState left, Valheim.Testing.Game.ZoneState right)
   method virtual System.Boolean Equals(System.Object obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+  property System.Boolean AreaReady { get; init; }
   property System.Boolean Loaded { get; }
   property System.Boolean TerrainLoaded { get; init; }
   property System.Boolean Unloaded { get; }

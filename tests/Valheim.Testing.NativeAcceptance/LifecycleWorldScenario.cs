@@ -39,7 +39,7 @@ public static class LifecycleWorldScenario
         var timeout = TimeSpan.FromSeconds(client.ArrivalSeconds);
         var zoneCycle = new ZoneCycle
         {
-            Capability = Capabilities.Zones, Zones = AcceptancePlan.MarkerZones(plan.DrySite), Away = CampaignSteps.At(plan.Away!), Back = CampaignSteps.At(plan.Arrival),
+            Zones = AcceptancePlan.MarkerZones(plan.DrySite), Away = CampaignSteps.At(plan.Away!), Back = CampaignSteps.At(plan.Arrival),
             StepTimeout = timeout, Interval = session.Interval,
         };
         var logout = new LogoutCycle

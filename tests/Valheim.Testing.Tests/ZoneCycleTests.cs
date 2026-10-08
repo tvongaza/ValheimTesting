@@ -47,7 +47,7 @@ public sealed class ZoneCycleTests : IDisposable
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => Support())
             .ArrivalSignals(Support)
-            .Extension("mymod.testing", "zones", Zones)
+            .Extension("valheim.observe", "zones", Zones)
             .Extension("mymod.testing", "marker", _ => new { source = "marker", complete = true, saved = SavedMarker, field = FieldMarker });
 
         private object Support() => new
@@ -67,7 +67,7 @@ public sealed class ZoneCycleTests : IDisposable
                 int instances = zone.Rings(_shown) <= range.Total ? 3 : zone == Stuck ? 1 : 0;
                 // The game recreates a zone's objects from its saved data: a component field starts empty.
                 if (instances == 0 && zone == ZoneId.Of(Home.X, Home.Z)) FieldMarker = "";
-                return new { x = zone.X, z = zone.Z, terrainLoaded = loaded, instances, nearInstances = loaded ? 2 : 0, saved = 3, withoutInstance = loaded ? 0 : 3 };
+                return new { x = zone.X, z = zone.Z, terrainLoaded = loaded, areaReady = loaded, instances, nearInstances = loaded ? 2 : 0, saved = 3, withoutInstance = loaded ? 0 : 3 };
             }).ToArray();
             // The client's reference position follows its player at once; only the zones lag behind.
             var reference = ZoneId.Of(X, Z);
@@ -77,7 +77,7 @@ public sealed class ZoneCycleTests : IDisposable
 
     private static ZoneCycle Cycle(HeightExpectation? away = null, TimeSpan? timeout = null) => new()
     {
-        Capability = "mymod.testing/zones", Zones = Site, Away = away ?? FarAway, Back = Home,
+        Zones = Site, Away = away ?? FarAway, Back = Home,
         StepTimeout = timeout ?? TimeSpan.FromSeconds(10), Interval = TimeSpan.FromMilliseconds(10),
     };
 
@@ -141,7 +141,7 @@ public sealed class ZoneCycleTests : IDisposable
         using var server = world.Server().Actor("server"); using var client = world.Client().Actor("client");
         var error = Assert.Throws<WaitTimeoutException>(() => Cycle(timeout: TimeSpan.FromSeconds(2)).Run(server, client));
         Assert.Contains("the client to unload zone(s)", error.Message);
-        Assert.Contains("still loaded: zone 2,0: terrain not loaded, 1 instance(s)", error.Message);
+        Assert.Contains("still loaded: zone 2,0: area not ready, terrain not loaded, 1 instance(s)", error.Message);
         Assert.DoesNotContain("zone 1,-1:", error.Message);
         Assert.Equal(new[] { "420,-40" }, world.Teleports); // Never repeated, never returned.
     }
@@ -225,9 +225,12 @@ public sealed class ZoneCycleTests : IDisposable
 
     [Fact] public void AReadingWithoutARequestedZoneIsRefused()
     {
-        var data = JsonDocument.Parse("""{"source":"zone-presence","complete":true,"reference":{"x":0,"z":0},"simulation":{"near":2,"far":2,"classic":true},"zones":[{"x":0,"z":0,"terrainLoaded":true,"instances":1,"nearInstances":1,"saved":1,"withoutInstance":0}]}""").RootElement;
+        var data = JsonDocument.Parse("""{"source":"zone-presence","complete":true,"reference":{"x":0,"z":0},"simulation":{"near":2,"far":2,"classic":true},"zones":[{"x":0,"z":0,"terrainLoaded":true,"areaReady":true,"instances":1,"nearInstances":1,"saved":1,"withoutInstance":0}]}""").RootElement;
         Assert.Single(ZoneReading.Parse(data, [new ZoneId(0, 0)]).Zones);
+        Assert.True(ZoneReading.Parse(data, [new ZoneId(0, 0)]).Zones[0].AreaReady);
         Assert.Contains("not the zones asked for", Assert.Throws<InvalidOperationException>(() => ZoneReading.Parse(data, [new ZoneId(0, 0), new ZoneId(1, 0)])).Message);
+        var missingReadiness = JsonDocument.Parse(data.GetRawText().Replace("\"areaReady\":true,", "", StringComparison.Ordinal)).RootElement;
+        Assert.Throws<KeyNotFoundException>(() => ZoneReading.Parse(missingReadiness, [new ZoneId(0, 0)]));
         var incomplete = JsonDocument.Parse("""{"source":"zone-presence","complete":false}""").RootElement;
         Assert.Throws<InvalidOperationException>(() => ZoneReading.Parse(incomplete, [new ZoneId(0, 0)]));
     }
@@ -237,7 +240,7 @@ public sealed class ZoneCycleTests : IDisposable
         var world = new World();
         using var server = world.Server().Actor("server"); using var client = world.Client().Actor("client");
         ZoneCycle With(IReadOnlyList<ZoneId> zones, TimeSpan timeout) => new()
-        { Capability = "mymod.testing/zones", Zones = zones, Away = FarAway, Back = Home, StepTimeout = timeout };
+        { Zones = zones, Away = FarAway, Back = Home, StepTimeout = timeout };
         Assert.Throws<ArgumentException>(() => With([], TimeSpan.FromSeconds(1)).Run(server, client));
         Assert.Throws<ArgumentException>(() => With([new ZoneId(2, -1), new ZoneId(2, -1)], TimeSpan.FromSeconds(1)).Run(server, client));
         Assert.Throws<ArgumentException>(() => With(Site, TimeSpan.Zero).Run(server, client));

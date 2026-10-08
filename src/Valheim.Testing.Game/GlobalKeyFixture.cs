@@ -13,9 +13,7 @@ public sealed record GlobalKeyDifference(IReadOnlyList<string> MissingOnClient, 
 
 /// <summary>
 /// Puts a world into a known progression state: sets and removes global keys (boss progress, events, world modifiers) on
-/// the server and waits until a joined client reports the same set, through an adapter's <c>GlobalKeyCommands</c>
-/// (Valheim.Testing.Adapter): <c>GlobalKeyCommands.List()</c> on both sides and <c>GlobalKeyCommands.Change(...)</c> on the
-/// server. In Valheim 1.0.16 the server sends its whole list to every client after each change and the client replaces
+/// the server and waits until a joined client reports the same set, through ValheimCLI's read-only <c>valheim.observe/globalkeys</c> on both sides and the Adapter package's guarded <c>GlobalKeyCommands.Change</c> fixture command on the server. In Valheim 1.0.16 the server sends its whole list to every client after each change and the client replaces
 /// its own list with it, so the client's set must equal the server's exactly. Keys are lower case, <c>name</c> or
 /// <c>name value</c>. Each change is issued once; only the read-only lists are re-read. ValheimCLI's
 /// <c>cli_check_global_key</c> answers for one key at a time, so it cannot show a key the client has and the server does
@@ -25,7 +23,7 @@ public static class GlobalKeyFixture
 {
     public const string Source = "global-keys", ChangeSource = "global-key-change";
 
-    /// <summary>The keys <paramref name="actor"/>'s process holds, read through <paramref name="listPath"/> (for example <c>mymod.testing/globalkeys</c>).</summary>
+    /// <summary>The keys <paramref name="actor"/>'s process holds, read through <paramref name="listPath"/> (for example <c>valheim.observe/globalkeys</c>).</summary>
     public static IReadOnlyList<string> Read(GameActor actor, string listPath)
     {
         ArgumentNullException.ThrowIfNull(actor);

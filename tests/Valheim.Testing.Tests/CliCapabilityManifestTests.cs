@@ -20,6 +20,10 @@ public sealed class CliCapabilityManifestTests : IDisposable
     {
         Assert.Equal(new[]
         {
+            "valheim.observe/config", "valheim.observe/content-census", "valheim.observe/custom-data", "valheim.observe/dungeon-rooms",
+            "valheim.observe/globalkeys", "valheim.observe/harmony", "valheim.observe/review-begin", "valheim.observe/review-clip-frames",
+            "valheim.observe/review-clutter-off", "valheim.observe/review-mist-off", "valheim.observe/review-restore",
+            "valheim.observe/unresolved-prefabs", "valheim.observe/zones",
             "valheim.session/join", "valheim.session/leave", "valheim.session/save", "valheim.session/state",
             "valheim.session/teleport-signals", "valheim.world/player-support", "valheim.world/player-support-wait",
             "valheim.world/terrain", "valheim.world/terrain-grid", "valheim.world/terrain-paint", "valheim.world/terrain-surface"
@@ -29,6 +33,19 @@ public sealed class CliCapabilityManifestTests : IDisposable
     }
 
     // ---- the generator: what each DLL registers, read from its metadata and IL ----
+
+    [Fact] public void ForkGeneratedManifestIsTheRuntimeManifestContract()
+    {
+        var builds = new Builds(OptimizationLevel.Release);
+        var files = Write(builds, "fork-contract", (Core, builds.Core), (Standard, builds.Standard), (WorldTools, builds.WorldTools));
+        string output = Path.Combine(_root, "fork-contract.json");
+        valheim_cli.Testing.CliBuildManifest.Write("fork-contract", files, output);
+        var fromFork = CliCapabilityManifest.Read(output);
+        var fromFacade = CliCapabilityManifest.Generate("fork-contract", files);
+        Assert.Equal(fromFacade.Files.Select(file => file.File), fromFork.Files.Select(file => file.File));
+        Assert.Equal(fromFacade.Files.Select(file => file.Sha256), fromFork.Files.Select(file => file.Sha256));
+        Assert.Equal(fromFacade.Capabilities.OrderBy(entry => entry.Key), fromFork.Capabilities.OrderBy(entry => entry.Key));
+    }
 
     [Theory]
     [InlineData(OptimizationLevel.Release)]

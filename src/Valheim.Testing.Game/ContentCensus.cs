@@ -224,7 +224,7 @@ public sealed record ObservedPiece(string Name, int Hash, string Tool, string Ta
 public sealed record CensusCollision(string Registry, int Hash, IReadOnlyList<string> Names, string? Indexed);
 
 /// <summary>
-/// One process's content census (the adapter's <c>ContentCensus.Command()</c> in Valheim.Testing.Adapter): which side it
+/// One process's content census (ValheimCLI's <c>valheim.observe/content-census</c>): which side it
 /// reports being, its owner plugin's build, the whole registries' sizes, and the registered content in scope with
 /// every shared hash. An older adapter may omit <see cref="StatusEffects"/> or <see cref="Pieces"/>; those checks then
 /// report unsupported, never missing or present. Read with <see cref="ContentCensus.Read"/>.
@@ -298,7 +298,7 @@ public static class ContentCensus
     public const string Source = "content-census";
 
     /// <summary>
-    /// One complete census through <paramref name="capabilityPath"/> (for example <c>mymod.testing/content-census</c>), for
+    /// One complete census through <paramref name="capabilityPath"/> (for example <c>valheim.observe/content-census</c>), for
     /// the owner and scope of <paramref name="expectations"/>. A census that is not ready (no world, registries not
     /// populated, a client's player not spawned), an empty registry, a reply for another owner or scope, or any malformed
     /// reply throws: none of them is an empty census.

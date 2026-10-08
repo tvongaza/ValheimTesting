@@ -6,7 +6,7 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>A short, opt-in world-only motion sample. Output is a directory of hashed PNG frames for human inspection, never a verdict.</summary>
-public sealed record ReviewClipPlan(string Id, string ExtensionId, string HostDirectory, string EvidenceDirectory,
+public sealed record ReviewClipPlan(string Id, string HostDirectory, string EvidenceDirectory,
     string WorldUid, string GameBuild, IReadOnlyDictionary<string, string> PluginPins,
     int Width = 320, int Height = 180, int FramesPerSecond = 5, int Frames = 15);
 
@@ -51,11 +51,11 @@ public static class ReviewClip
         var state = new SessionControl(client).Read();
         if (!state.WorldReady || !state.PlayerReady || state.Dedicated || state.WorldUid != plan.WorldUid)
             throw new InvalidOperationException("The pinned client has not entered the declared review world with a ready player.");
-        var begin = client.RequireCapability(plan.ExtensionId + "/review-begin");
-        var clip = client.RequireCapability(plan.ExtensionId + "/review-clip-frames");
-        var restore = client.RequireCapability(plan.ExtensionId + "/review-restore");
+        var begin = client.RequireCapability("valheim.observe/review-begin");
+        var clip = client.RequireCapability("valheim.observe/review-clip-frames");
+        var restore = client.RequireCapability("valheim.observe/review-restore");
         if (!begin.ReadOnly || clip.ReadOnly || restore.ReadOnly)
-            throw new InvalidOperationException("The review adapter's capture access modes are wrong.");
+            throw new InvalidOperationException("The Observe pack's capture access modes are wrong.");
         string hostFrames = plan.HostDirectory.TrimEnd('\\', '/') + (clientHostSeparator(plan.HostDirectory)) + plan.Id + "-frames";
         Exception? failure = null;
         ReviewClipReceipt? receipt = null;
@@ -156,7 +156,6 @@ public static class ReviewClip
     private static void Validate(ReviewClipPlan plan)
     {
         if (!ReviewLease.ValidId(plan.Id) ||
-            !Regex.IsMatch(plan.ExtensionId ?? "", "^[A-Za-z0-9_.-]+$", RegexOptions.CultureInvariant) ||
             plan.Width is < 160 or > 640 || plan.Height is < 90 or > 360 ||
             plan.FramesPerSecond is < 2 or > 10 || plan.Frames is < 2 or > 60 || plan.Frames > plan.FramesPerSecond * 10 ||
             !Path.IsPathFullyQualified(plan.EvidenceDirectory) || plan.PluginPins == null || plan.PluginPins.Count == 0 ||

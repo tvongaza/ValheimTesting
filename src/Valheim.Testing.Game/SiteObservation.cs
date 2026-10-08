@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using valheim_cli.Testing;
 
 namespace Valheim.Testing.Game;
@@ -14,7 +13,6 @@ public sealed record ObservedCommand(string Role, string Command, DateTimeOffset
 /// </summary>
 internal static class SiteObservation
 {
-    private static readonly Regex Area = new(@"^OK: AREA_READY (?<x>-?\d+\.\d),(?<z>-?\d+\.\d) ready=(?<ready>True|False) zone=-?\d+,-?\d+ loaded=(?<loaded>True|False) objects=\d+ without_instance=(?<missing>\d+)$", RegexOptions.CultureInvariant);
 
     /// <summary>The actor is ready in <paramref name="worldUid"/>; a client has a ready player, a server hosts the world.</summary>
     internal static void CheckWorld(GameActor actor, string worldUid, string role)
@@ -39,24 +37,15 @@ internal static class SiteObservation
         return lines;
     }
 
-    /// <summary>Exactly one line, matching <paramref name="pattern"/>, naming the point <paramref name="x"/>,<paramref name="z"/>.</summary>
-    internal static Match One(IReadOnlyList<string> lines, Regex pattern, int x, int z)
-    {
-        if (lines.Count != 1) throw new InvalidOperationException("Expected exactly one complete reply line.");
-        var match = pattern.Match(lines[0]);
-        if (!match.Success || Number(match.Groups["x"].Value) != x || Number(match.Groups["z"].Value) != z)
-            throw new InvalidOperationException($"Incomplete reply or wrong coordinates at {x},{z}: {lines[0]}");
-        return match;
-    }
-
     /// <summary>
-    /// Waits until each area, in order, is ready and loaded with every saved object instantiated (<c>cli_area_ready</c>),
+    /// Waits until each area, in order, is ready and loaded with every saved object instantiated (<c>valheim.observe/zones</c>),
     /// within one deadline for them all. The game raises no event for a loaded area, so the pending area is re-read every
     /// 100 ms (<see cref="ObservedWait"/>); a ready area is not read again.
     /// </summary>
     internal static void WaitAreasReady(IReadOnlyList<(GameActor Actor, string Role, int X, int Z)> areas, TimeSpan timeout,
         List<ObservedCommand> commands, CancellationToken cancellation)
     {
+        var capabilities = areas.Select(area => area.Actor.RequireCapability("valheim.observe/zones")).ToArray();
         int next = 0;
         string last = "no area reply";
         ObservedWait.Until(areas.Count == 1 ? $"the {areas[0].Role}'s area at {areas[0].X},{areas[0].Z} ready" : "every site point's area ready", () =>
@@ -64,10 +53,11 @@ internal static class SiteObservation
                 for (; next < areas.Count; next++)
                 {
                     var (actor, role, x, z) = areas[next];
-                    var reply = Lines(actor, role, $"cli_area_ready {x} {z} 0", commands);
-                    last = $"{role} area at {x},{z}: {string.Join(" | ", reply)}";
-                    var match = One(reply, Area, x, z);
-                    if (match.Groups["ready"].Value != "True" || match.Groups["loaded"].Value != "True" || match.Groups["missing"].Value != "0") break;
+                    ZoneId zone = ZoneId.Of(x, z);
+                    var observation = Observe(actor, role, capabilities[next], commands, zone.ToString());
+                    var state = ZoneReading.Parse(observation.Data, [zone]).Zones[0];
+                    last = $"{role} area at {x},{z}: {state}";
+                    if (!state.AreaReady || !state.Loaded) break;
                 }
                 return next;
             }, ready => ready == areas.Count, timeout, TimeSpan.FromMilliseconds(100), cancellation, describe: _ => last);
@@ -98,10 +88,4 @@ internal static class SiteObservation
         TerrainProbe.Height(Observe(actor, role, actor.RequireCapability("valheim.world/terrain"), commands,
             x.ToString(CultureInfo.InvariantCulture), z.ToString(CultureInfo.InvariantCulture), "loaded-ground"), x, z, "loaded-ground");
 
-    internal static double Number(string text)
-    {
-        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) || !double.IsFinite(value))
-            throw new InvalidOperationException("Reply contains a non-finite number.");
-        return value;
-    }
 }

@@ -9,7 +9,7 @@ public sealed class ReviewClipTests
     private const string PngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAKAAAABaCAIAAACwpMoFAAAAQElEQVR4nO3BAQ0AAADCoPdPbQ8HFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8GOpGgABimw4TgAAAABJRU5ErkJggg==";
     private static readonly byte[] Png = Convert.FromBase64String(PngBase64);
     private static readonly string PngHash = Convert.ToHexString(SHA256.HashData(Png)).ToLowerInvariant();
-    private static ReviewClipPlan Plan(string output) => new("motion-1", "mymod.testing", @"C:\test-runs\motion-1", output,
+    private static ReviewClipPlan Plan(string output) => new("motion-1", @"C:\test-runs\motion-1", output,
         "1716468958", "Valheim 1.0.16", new Dictionary<string, string> { ["example.mymod"] = "exact-pin" }, 160, 90, 2, 2);
 
     private static (ScriptedTransport Transport, GameActor Actor) Client(bool ready = true,
@@ -21,11 +21,11 @@ public sealed class ReviewClipTests
                 worldPresent = true, worldReady = ready, server = false, dedicated = false, localPlayer = ready,
                 playerReady = ready, saving = false, loadError = false, connectionStatus = ready ? "Connected" : "None"
             })
-            .Extension("mymod.testing", "review-begin", _ => new { source = "review-state", complete = true, id = "motion-1", state = "begun" })
-            .Extension("mymod.testing", "review-clip-frames", clip ?? (args => new {
+            .Extension("valheim.observe", "review-begin", _ => new { source = "review-state", complete = true, id = "motion-1", state = "begun" })
+            .Extension("valheim.observe", "review-clip-frames", clip ?? (args => new {
                 source = "scene-only-frames", complete = true, id = args[0], directory = args[1], width = 160, height = 90, frames = 2
             }), readOnly: false)
-            .Extension("mymod.testing", "review-restore", restore ?? (_ => new {
+            .Extension("valheim.observe", "review-restore", restore ?? (_ => new {
                 source = "review-state", complete = true, id = "motion-1", state = "restored"
             }), readOnly: false);
         return (transport, transport.Actor(expectations: "cli_expect worlduid=1716468958"));
@@ -65,7 +65,7 @@ public sealed class ReviewClipTests
                 Assert.Contains("\"visualVerdict\": \"not asserted\"", metadata);
                 Assert.Contains(receipt.ManifestSha256, metadata);
                 Assert.Equal(new EvidenceReference("review-clip", "motion-1", "1716468958", receipt.MetadataPath, FileHash.Sha256(receipt.MetadataPath)), receipt.Evidence);
-                Assert.Equal("cli_extension mymod.testing/review-restore motion-1", transport.Commands.Last());
+                Assert.Equal("cli_extension valheim.observe/review-restore motion-1", transport.Commands.Last());
             }
         }
         finally { if (Directory.Exists(output)) Directory.Delete(output, true); }
@@ -94,7 +94,7 @@ public sealed class ReviewClipTests
                 (_, local, _) => { Directory.CreateDirectory(local); throw new IOException("transfer failed"); }, CancellationToken.None));
             Assert.False(Directory.Exists(output));
             Assert.Empty(Directory.GetDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".partial-*"));
-            Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
+            Assert.Equal(1, transport.Count("cli_extension valheim.observe/review-restore"));
         }
     }
 
@@ -111,7 +111,7 @@ public sealed class ReviewClipTests
         {
             Assert.ThrowsAny<OperationCanceledException>(() => ReviewClip.CaptureCore(client, Plan(output), Fetch, cancel.Token));
             Assert.False(Directory.Exists(output));
-            Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
+            Assert.Equal(1, transport.Count("cli_extension valheim.observe/review-restore"));
         }
     }
 
@@ -132,7 +132,7 @@ public sealed class ReviewClipTests
             Assert.ThrowsAny<OperationCanceledException>(() => ReviewClip.CaptureCore(client, Plan(output), Transfer, cancel.Token));
             Assert.False(Directory.Exists(output));
             Assert.Empty(Directory.GetDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".partial-*"));
-            Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
+            Assert.Equal(1, transport.Count("cli_extension valheim.observe/review-restore"));
         }
     }
 
@@ -146,7 +146,7 @@ public sealed class ReviewClipTests
             // The actor was verified before the drift. Its pin check before the frame command must still refuse it.
             bool refused = false;
             transport.OnPrefix("cli_expect ", _ => {
-                if (!refused && transport.Count("cli_extension mymod.testing/review-begin") > 0)
+                if (!refused && transport.Count("cli_extension valheim.observe/review-begin") > 0)
                 { refused = true; return ScriptedTransport.Failed("MISMATCH worlduid: wrong fixture"); }
                 return ScriptedTransport.Ok("OK: EXPECT");
             });
@@ -154,7 +154,7 @@ public sealed class ReviewClipTests
             var error = Assert.Throws<AggregateException>(() => ReviewClip.CaptureCore(client, Plan(output), Fetch, CancellationToken.None));
             Assert.All(error.InnerExceptions, inner => Assert.IsType<InvalidOperationException>(inner));
             Assert.True(refused);
-            Assert.Equal(0, transport.Count("cli_extension mymod.testing/review-clip-frames"));
+            Assert.Equal(0, transport.Count("cli_extension valheim.observe/review-clip-frames"));
             Assert.False(Directory.Exists(output));
         }
     }
@@ -178,7 +178,7 @@ public sealed class ReviewClipTests
             Assert.Contains("game-side digest", error.Message);
             Assert.False(Directory.Exists(output));
             Assert.Empty(Directory.GetDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".partial-*"));
-            Assert.Equal(1, transport.Count("cli_extension mymod.testing/review-restore"));
+            Assert.Equal(1, transport.Count("cli_extension valheim.observe/review-restore"));
         }
     }
 }

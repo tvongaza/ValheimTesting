@@ -10,8 +10,13 @@ public sealed class TerrainSiteSnapshotTests
     private static object Ground(IReadOnlyList<string> a) => new { source = a[2], complete = true, x = float.Parse(a[0]), z = float.Parse(a[1]), height = 42.125f, units = "metres" };
     private static object Surface(IReadOnlyList<string> a) => new { source = "loaded-terrain-surface", complete = true, x = float.Parse(a[0]), z = float.Parse(a[1]), height = 42.125f, colliderHeight = 42.0f, units = "metres" };
     private static object Paint(IReadOnlyList<string> a) => new { source = "loaded-terrain-paint", complete = true, x = float.Parse(a[0]), z = float.Parse(a[1]), units = "rgba01", r = .25f, g = 0f, b = .5f, a = 1f };
+    private static object Area(bool ready = true) => new { source = "zone-presence", complete = true,
+        reference = new { x = 0, z = 0 }, simulation = new { near = 2, far = 2, classic = true },
+        zones = new[] { new { x = 0, z = 0, terrainLoaded = ready, areaReady = ready, instances = ready ? 2 : 0,
+            nearInstances = ready ? 2 : 0, saved = 2, withoutInstance = ready ? 0 : 2 } } };
     private static ScriptedTransport Transport(string world = "7", bool server = false, Func<string>? worldSupplier = null,
-        Func<IReadOnlyList<string>, object>? ground = null, Func<IReadOnlyList<string>, object>? surface = null, Func<IReadOnlyList<string>, object>? paint = null) => new ScriptedTransport()
+        Func<IReadOnlyList<string>, object>? ground = null, Func<IReadOnlyList<string>, object>? surface = null, Func<IReadOnlyList<string>, object>? paint = null,
+        bool areaReady = true, Func<object>? area = null) => new ScriptedTransport()
         .Extension("valheim.session", "state", _ => new
         {
             source = "session-state", complete = true, phase = "world-present", worldUid = worldSupplier?.Invoke() ?? world, worldPresent = true,
@@ -21,21 +26,21 @@ public sealed class TerrainSiteSnapshotTests
         .Extension("valheim.world", "terrain", ground ?? Ground)
         .Extension("valheim.world", "terrain-surface", surface ?? Surface)
         .Extension("valheim.world", "terrain-paint", paint ?? Paint)
-        .On("cli_area_ready 16 -8 0", _ => ScriptedTransport.Ok("OK: AREA_READY 16.0,-8.0 ready=True zone=0,0 loaded=True objects=2 without_instance=0"));
+        .Extension("valheim.observe", "zones", _ => area?.Invoke() ?? Area(areaReady));
     private const string GroundCommand = "cli_extension valheim.world/terrain 16 -8 loaded-ground";
 
     [Fact] public void CaptureUsesClientForLoadedLayersAndVerifiesBothActors()
     {
-        var clientTransport = Transport(); var serverTransport = Transport(server: true);
+        var clientTransport = Transport(); var serverTransport = Transport(server: true, areaReady: false);
         using var client = clientTransport.Actor("client", "cli_expect --strict worlduid=7");
         using var server = serverTransport.Actor("server", "cli_expect --strict worlduid=7");
         var snapshot = TerrainSiteSnapshot.Capture(client, "cave entrance", "7", [Point], TimeSpan.FromSeconds(1), server);
         Assert.Equal(new TerrainSiteReading(Point, 42.125f, 42.0f, .25f, 0f, .5f, 1f), snapshot.Readings[0]);
-        Assert.Equal(5, snapshot.Commands.Count);
-        Assert.Single(snapshot.Commands.Where(x => x.Role == "server"));
-        Assert.Equal(new[] { "cli_area_ready 16 -8 0", GroundCommand, "cli_extension valheim.world/terrain-surface 16 -8", "cli_extension valheim.world/terrain-paint 16 -8" },
+        Assert.Equal(4, snapshot.Commands.Count);
+        Assert.DoesNotContain(snapshot.Commands, x => x.Role == "server");
+        Assert.Equal(new[] { "cli_extension valheim.observe/zones 0,0", GroundCommand, "cli_extension valheim.world/terrain-surface 16 -8", "cli_extension valheim.world/terrain-paint 16 -8" },
             snapshot.Commands.Where(x => x.Role == "client").Select(x => x.Command).ToArray());
-        Assert.Contains("\"colliderHeight\":42", snapshot.Commands[3].Reply[0]);
+        Assert.Contains("\"colliderHeight\":42", snapshot.Commands[2].Reply[0]);
         Assert.DoesNotContain(serverTransport.Commands, x => x.StartsWith("cli_extension valheim.world/", StringComparison.Ordinal));
         Assert.All(snapshot.Commands, x => Assert.NotEmpty(x.Reply));
         Assert.All(clientTransport.Commands.Where(x => x.StartsWith("cli_", StringComparison.Ordinal) && x != "cli_extensions" && !x.StartsWith("cli_expect")),
@@ -46,7 +51,7 @@ public sealed class TerrainSiteSnapshotTests
     {
         var transport = Transport("8"); using var actor = transport.Actor();
         Assert.Throws<InvalidOperationException>(() => TerrainSiteSnapshot.Capture(actor, "site", "7", [Point], TimeSpan.FromSeconds(1)));
-        Assert.DoesNotContain(transport.Commands, x => x.StartsWith("cli_area_ready"));
+        Assert.DoesNotContain(transport.Commands, x => x.StartsWith("cli_extension valheim.observe/zones"));
     }
 
     [Fact] public void WorldChangingDuringCaptureRefusesStaleEvidence()
@@ -63,7 +68,7 @@ public sealed class TerrainSiteSnapshotTests
         var transport = Transport(); using var actor = transport.Actor();
         actor.VerifyEnvironment(EnvironmentPinning.None);
         Assert.Throws<InvalidOperationException>(() => TerrainSiteSnapshot.Capture(actor, "site", "7", [Point], TimeSpan.FromSeconds(1)));
-        Assert.Equal(0, transport.Count("cli_area_ready"));
+        Assert.Equal(0, transport.Count("cli_extension valheim.observe/zones"));
     }
 
     public static TheoryData<string> BadReplies => new() { "ground incomplete", "ground other point", "ground other layer", "surface incomplete", "surface units",
@@ -105,11 +110,21 @@ public sealed class TerrainSiteSnapshotTests
 
     [Fact] public void ReadinessTimeoutIncludesLastReplyAndDoesNotSampleTerrain()
     {
-        var transport = Transport().On("cli_area_ready 16 -8 0", _ => ScriptedTransport.Ok(
-            "OK: AREA_READY 16.0,-8.0 ready=False zone=0,0 loaded=False objects=0 without_instance=0"));
+        var transport = Transport(areaReady: false);
         using var actor = transport.Actor();
         var error = Assert.Throws<WaitTimeoutException>(() => TerrainSiteSnapshot.Capture(actor, "site", "7", [Point], TimeSpan.FromMilliseconds(1)));
-        Assert.Contains("ready=False", error.Message);
+        Assert.Contains("not ready", error.Message);
+        Assert.Equal(0, transport.Count(GroundCommand));
+    }
+
+    [Fact] public void ReadinessFromAnotherZoneCannotApproveTheSite()
+    {
+        var transport = Transport(area: () => new { source = "zone-presence", complete = true,
+            reference = new { x = 0, z = 0 }, simulation = new { near = 2, far = 2, classic = true },
+            zones = new[] { new { x = 1, z = 0, terrainLoaded = true, areaReady = true,
+                instances = 2, nearInstances = 2, saved = 2, withoutInstance = 0 } } });
+        using var actor = transport.Actor();
+        Assert.Throws<InvalidOperationException>(() => TerrainSiteSnapshot.Capture(actor, "site", "7", [Point], TimeSpan.FromSeconds(1)));
         Assert.Equal(0, transport.Count(GroundCommand));
     }
 
