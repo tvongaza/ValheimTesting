@@ -117,7 +117,7 @@ public static class PlayerPlacement
                 {
                     return new GameWait<Observation>(null, error.Message);
                 }
-            }, TimeSpan.FromMilliseconds(300)); // The game requires a continuous 250 ms supported hold.
+            }, TimeSpan.FromSeconds(1)); // Leave room for the game's continuous 250 ms hold after request/frame latency.
         RefuseFlying(landed);
         if (!SurfaceProbe.Supported(landed, point))
             throw new InvalidOperationException($"The player did not settle at ({point.X}, {point.Height}, {point.Z}); the client's wait ended with: {landed.Data.GetRawText()}. The teleport was not repeated.");

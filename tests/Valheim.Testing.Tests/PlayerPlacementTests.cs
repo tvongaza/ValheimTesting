@@ -241,11 +241,11 @@ public class PlayerPlacementTests
             .ToArray();
         Assert.Equal(count, seconds.Length);
         Assert.Equal(new[] { 5d, 5d, 2.5d }, seconds);
-        if (phase == "support") Assert.All(seconds, value => Assert.True(value >= .3, "A support slice must allow the 250 ms hold"));
+        if (phase == "support") Assert.All(seconds, value => Assert.True(value >= 1, "A support slice must allow the 250 ms hold and request latency"));
     }
 
     [Fact]
-    public void SupportDoesNotRestartAnImpossibleSubHoldTail()
+    public void SupportDoesNotRestartAShortTail()
     {
         TimeSpan elapsed = TimeSpan.Zero;
         var (serverTransport, clientTransport) = SignalTransports(supportWait: command =>
@@ -256,7 +256,7 @@ public class PlayerPlacementTests
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
 
         var error = Assert.Throws<TimeoutException>(() => PlayerPlacement.ArriveCore(server, client, Point,
-            TimeSpan.FromSeconds(10.2), default, skipIntro: false, loadedGround: false, () => elapsed));
+            TimeSpan.FromSeconds(10.75), default, skipIntro: false, loadedGround: false, () => elapsed));
         Assert.Contains("still settling", error.Message);
         Assert.Equal(2, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
