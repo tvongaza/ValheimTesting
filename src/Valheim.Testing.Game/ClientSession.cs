@@ -281,6 +281,7 @@ public sealed class ClientSession : IDisposable
         var deadline = TimeSpan.FromSeconds(plan.StartSeconds);
         var process = start();
         GameActor? actor = null;
+        bool pinsVerified = false;
         try
         {
             File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["install"] = plan.Install, ["architecture"] = GameLaunch.PlanName(architecture) }, plan.Pinned)));
@@ -303,13 +304,15 @@ public sealed class ClientSession : IDisposable
             actor.VerifyEnvironment(plan.MenuExpectations);
             if (plan.Capabilities.Any())
                 CliCapabilities.Require(actor, plan.Capabilities); // Live, after any static manifest check.
+            pinsVerified = true;
             return new ClientSession(actor, process, logs, architecture, output, failureEvidence).Using(account);
         }
         catch (Exception error)
         {
             // Stopping keeps the logs beside the evidence; the caller lists them for the scan even though no session opened.
             if (logs is { Count: > 0 }) error.Data[KeptLogsKey] = logs;
-            TryCaptureFailure(failureEvidence, process, actor, output);
+            // A client whose pins or capabilities failed verification must not receive a diagnostic game command.
+            TryCaptureFailure(failureEvidence, process, pinsVerified ? actor : null, output);
             actor?.Dispose();
             try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
             throw;

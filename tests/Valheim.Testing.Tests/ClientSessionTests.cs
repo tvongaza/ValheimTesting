@@ -18,6 +18,23 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(1, process.Stops);
     }
 
+    [Fact] public void FailedPinVerificationCannotSendADiagnosticGameCommand()
+    {
+        var process = new FakeOwnedProcess(99);
+        var transport = new ScriptedTransport { PinsHold = false };
+        bool capturedWhileRunning = false;
+        Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(Plan(), _output, () => process,
+            () => transport, (_, _) => Task.CompletedTask, default, null, null,
+            failureEvidence: (_, actor, _) =>
+            {
+                capturedWhileRunning = process.Stops == 0;
+                Assert.Null(actor); // Capture process facts and log tails only; no screenshot or other game command.
+            }));
+        Assert.True(capturedWhileRunning);
+        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal));
+        Assert.Equal(1, process.Stops);
+    }
+
     [Fact] public void AFailedWorldRoundCapturesEvidenceOnlyOnceBeforeStopping()
     {
         var process = new FakeOwnedProcess(99);
