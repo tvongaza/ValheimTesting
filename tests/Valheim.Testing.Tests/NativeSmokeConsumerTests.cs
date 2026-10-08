@@ -1,4 +1,6 @@
 using Valheim.Testing.Game;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
@@ -69,6 +71,39 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         string source = File.ReadAllText(Path.Combine(_root, "Program.cs"));
         Assert.Contains(server ? "PinnedServerRun.MainAsync" : "TargetedRegression.Read", source);
         if (server) Assert.Contains("PinnedServerRun.RunCampaignAsync", source); // a server-load run off a Mac is a campaign
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GeneratedConsumerCompilesAgainstTheGamePackagesItReferences(bool server)
+    {
+        SmokeProject.Write(_root, server);
+        string source = File.ReadAllText(Path.Combine(_root, "Program.cs"));
+        string[] platform = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
+        string[] packages = [typeof(TargetedRegression).Assembly.Location, typeof(PinnedServerRun).Assembly.Location,
+            System.Reflection.Assembly.Load("Valheim.Cli.Testing").Location];
+        var references = platform.Concat(packages).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        // Match the generated project's ImplicitUsings=enable rather than compiling its Program.cs in isolation.
+        const string implicitUsings = "global using System; global using System.Collections.Generic; global using System.IO; " +
+            "global using System.Linq; global using System.Threading; global using System.Threading.Tasks;";
+        var compilation = CSharpCompilation.Create("GeneratedSmokeConsumer",
+            [CSharpSyntaxTree.ParseText(implicitUsings), CSharpSyntaxTree.ParseText(source)], references,
+            new CSharpCompilationOptions(OutputKind.ConsoleApplication, nullableContextOptions: NullableContextOptions.Enable));
+        Assert.Empty(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+    }
+
+    [Fact]
+    public void CandidateConsumerMapsTestingPackagesToItsLocalFeed()
+    {
+        string feed = Path.Combine(_root, "candidate-packages");
+        SmokeProject.Write(_root, server: true, candidateFeed: feed);
+        string config = File.ReadAllText(Path.Combine(_root, "NuGet.Config"));
+        Assert.Contains($"value=\"{feed}\"", config);
+        Assert.Contains("<package pattern=\"Valheim.Testing\"/>", config);
+        Assert.Contains("<package pattern=\"Valheim.Testing.*\"/>", config);
+        Assert.Contains("<package pattern=\"*\"/>", config);
     }
 
     // The tests exercise the tool's own build through InternalsVisibleTo, not a second compile of its sources into this

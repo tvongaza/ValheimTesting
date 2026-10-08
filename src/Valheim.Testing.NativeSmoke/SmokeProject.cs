@@ -1,10 +1,11 @@
 using System.Diagnostics;
+using System.Security;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// <c>valheim-test init</c>: an editable native scenario, the only thing this tool builds. Prove it builds from NuGet.org
-/// alone before copying it into the output: a source checkout or a stale global NuGet cache cannot stand in for a release.
+/// (or CI's exact local candidate feed) before copying it into the output: a stale global NuGet cache cannot stand in.
 /// <c>start</c> and <c>server-load</c> never build it; they run from this tool's own assemblies, offline.
 /// </summary>
 internal static class SmokeProject
@@ -42,15 +43,25 @@ internal static class SmokeProject
     {
         bool server = args.Length > 0 && args[0] == "server";
         string[] rest = server ? args[1..] : args;
-        if (rest is not ["--output", var path] || string.IsNullOrWhiteSpace(path))
+        string? candidateFeed = rest is ["--candidate-feed", var feed, "--output", _] ? Path.GetFullPath(feed) : null;
+        string? path = rest is ["--output", var ordinary] ? ordinary
+            : rest is ["--candidate-feed", _, "--output", var candidate] ? candidate : null;
+        if (string.IsNullOrWhiteSpace(path))
         {
-            Console.Error.WriteLine("Usage: valheim-test init [server] --output NEW_DIR");
+            Console.Error.WriteLine("Usage: valheim-test init [server] [--candidate-feed LOCAL_PACKAGE_DIR] --output NEW_DIR");
             return 2;
         }
         string output = Path.GetFullPath(path);
-        if (Refusal(server) is { } refusal)
+        if (candidateFeed == null && Refusal(server) is { } refusal)
         {
             Console.Error.WriteLine("REFUSED: " + refusal);
+            return 3;
+        }
+        if (candidateFeed != null && (!Directory.Exists(candidateFeed) || Restored(server).Any(item =>
+                !item.Version.Contains("-candidate.", StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(Path.Combine(candidateFeed, $"{item.Package}.{item.Version}.nupkg")))))
+        {
+            Console.Error.WriteLine("REFUSED: --candidate-feed needs this tool's exact candidate Game and GameSessions packages in an existing local feed.");
             return 3;
         }
         if (Path.Exists(output))
@@ -64,9 +75,10 @@ internal static class SmokeProject
         try
         {
             Directory.CreateDirectory(output);
-            await CreateAsync(output, server, cancel.Token);
+            await CreateAsync(output, server, candidateFeed, cancel.Token);
             Console.WriteLine("READY: editable consumer in " + Path.Combine(output, "consumer") +
-                "; Valheim.Testing.Game " + GameVersion + (server ? " and Valheim.Testing.GameSessions " + GameSessionsVersion : "") + " restored and built from NuGet.org only.");
+                "; Valheim.Testing.Game " + GameVersion + (server ? " and Valheim.Testing.GameSessions " + GameSessionsVersion : "") +
+                (candidateFeed == null ? " restored and built from NuGet.org only." : " restored and built from the local candidate feed."));
             return 0;
         }
         catch (Exception failure) when (failure is IOException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException)
@@ -78,18 +90,18 @@ internal static class SmokeProject
         finally { Console.CancelKeyPress -= onCancel; }
     }
 
-    private static async Task CreateAsync(string output, bool server, CancellationToken cancellation)
+    private static async Task CreateAsync(string output, bool server, string? candidateFeed, CancellationToken cancellation)
     {
         string stage = Path.Combine(Path.GetTempPath(), "valheimtesting-smoke-project-" + Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(stage);
-            Write(stage, server);
+            Write(stage, server, candidateFeed);
             string packages = Path.Combine(stage, "packages"), httpCache = Path.Combine(stage, "http-cache");
             Directory.CreateDirectory(packages);
             Directory.CreateDirectory(httpCache);
-            await RunDotnetAsync(server, stage, packages, httpCache, cancellation, "restore", "SmokeCheck.csproj", "--configfile", "NuGet.Config");
-            await RunDotnetAsync(server, stage, packages, httpCache, cancellation, "build", "SmokeCheck.csproj", "-c", "Release", "--no-restore");
+            await RunDotnetAsync(server, stage, packages, httpCache, candidateFeed, cancellation, "restore", "SmokeCheck.csproj", "--configfile", "NuGet.Config");
+            await RunDotnetAsync(server, stage, packages, httpCache, candidateFeed, cancellation, "build", "SmokeCheck.csproj", "-c", "Release", "--no-restore");
             string project = Path.Combine(output, "consumer");
             Directory.CreateDirectory(project);
             foreach (string file in new[] { "SmokeCheck.csproj", "Program.cs", "NuGet.Config", "README.md" })
@@ -101,7 +113,7 @@ internal static class SmokeProject
         }
     }
 
-    internal static void Write(string directory, bool server)
+    internal static void Write(string directory, bool server, string? candidateFeed = null)
     {
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "SmokeCheck.csproj"), $$"""
@@ -110,13 +122,15 @@ internal static class SmokeProject
               <ItemGroup><PackageReference Include="Valheim.Testing.Game" Version="[{{GameVersion}}]" />{{(server ? $"<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[{GameSessionsVersion}]\" />" : "")}}</ItemGroup>
             </Project>
             """);
-        File.WriteAllText(Path.Combine(directory, "NuGet.Config"), $"<configuration><packageSources><clear/><add key=\"nuget.org\" value=\"{Feed}\"/></packageSources></configuration>\n");
-        File.WriteAllText(Path.Combine(directory, "Program.cs"), server ? """
+        File.WriteAllText(Path.Combine(directory, "NuGet.Config"), candidateFeed == null
+            ? $"<configuration><packageSources><clear/><add key=\"nuget.org\" value=\"{Feed}\"/></packageSources></configuration>\n"
+            : $"<configuration><packageSources><clear/><add key=\"local-preview\" value=\"{SecurityElement.Escape(candidateFeed)}\"/><add key=\"nuget.org\" value=\"{Feed}\"/></packageSources><packageSourceMapping><packageSource key=\"local-preview\"><package pattern=\"Valheim.Testing\"/><package pattern=\"Valheim.Testing.*\"/></packageSource><packageSource key=\"nuget.org\"><package pattern=\"*\"/></packageSource></packageSourceMapping></configuration>\n");
+        File.WriteAllText(Path.Combine(directory, "Program.cs"), server ? $$"""
             using valheimCLI;
             using Valheim.Testing.Game;
             using Valheim.Testing.GameSessions;
 
-            // Run this with the campaign.json valheim-test server-load wrote (plan.json and client-plan.json beside it), or on a
+            // Run this with the campaign.json valheim-test server-load wrote (plan.json and client-plan.json beside it).
             // Supply a new result directory for each campaign run.
             if (args is not [var runFile, var resultDirectory])
             {
@@ -129,10 +143,10 @@ internal static class SmokeProject
                 ReadPlan = path =>
                 {
                     var plan = ServerRunPlan.Read<ServerRunPlan>(path);
-                    plan.ValidateServerPlan(plan.Pins.Keys.Where(key => key != "worlduid"), SmokeSessionContract.SessionTokenVariable);
+                    plan.ValidateServerPlan(plan.Pins.Keys.Where(key => key != "worlduid"), "{{SmokeSessionContract.SessionTokenVariable}}");
                     return plan;
                 },
-                Mod = new(SmokeSessionContract.SessionCapability, SmokeSessionContract.SessionTokenVariable),
+                Mod = new("{{SmokeSessionContract.SessionCapability}}", "{{SmokeSessionContract.SessionTokenVariable}}"),
                 Scenario = (session, plan) =>
                 {
                     var server = session.Server!.Game;
@@ -156,7 +170,10 @@ internal static class SmokeProject
             {
                 clients["client"] = System.Text.Json.JsonSerializer.Deserialize<ClientRunPlan>(File.ReadAllText(clientFile))!;
                 // The clean client joins with the server's password, passed only through the environment.
-                Environment.SetEnvironmentVariable(SmokeSessionContract.PasswordVariable, serverPlan.Arguments[serverPlan.Arguments.IndexOf("-password") + 1]);
+                int passwordIndex = serverPlan.Arguments.ToList().IndexOf("-password");
+                if (passwordIndex < 0 || passwordIndex + 1 >= serverPlan.Arguments.Length)
+                    throw new InvalidDataException("The server plan has no join password argument.");
+                Environment.SetEnvironmentVariable("{{SmokeSessionContract.PasswordVariable}}", serverPlan.Arguments[passwordIndex + 1]);
             }
             return await PinnedServerRun.RunCampaignAsync(runFile, serverPlan, _ => clients, resultDirectory, options);
             """ : """
@@ -198,7 +215,7 @@ internal static class SmokeProject
             """);
     }
 
-    private static async Task RunDotnetAsync(bool server, string directory, string packages, string httpCache, CancellationToken cancellation,
+    private static async Task RunDotnetAsync(bool server, string directory, string packages, string httpCache, string? candidateFeed, CancellationToken cancellation,
         params string[] args)
     {
         var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, UseShellExecute = false,
@@ -222,15 +239,15 @@ internal static class SmokeProject
         if (process.ExitCode != 0 && args[0] == "restore" && System.Text.RegularExpressions.Regex.IsMatch(output, @"\bNU110[123]\b"))
             throw new InvalidOperationException($"NuGet.org does not serve {string.Join(" and ", Restored(server).Select(item => item.Package + " " + item.Version))}, the {(server ? "versions" : "version")} this tool runs; a tool built from a source checkout ahead of the last release cannot create a consumer. Use a released valheim-test. ({output.Trim()})");
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"The generated consumer did not {args[0]} from NuGet.org (exit {process.ExitCode}): {output.Trim()}");
+            throw new InvalidOperationException($"The generated consumer did not {args[0]} from {(candidateFeed == null ? "NuGet.org" : "the local candidate feed")} (exit {process.ExitCode}): {output.Trim()}");
         if (args[0] == "restore")
-            foreach (var (package, version) in Restored(server)) RequireFromNuGet(packages, package, version);
+            foreach (var (package, version) in Restored(server)) RequireFromSource(packages, package, version, candidateFeed ?? Feed);
     }
 
-    private static void RequireFromNuGet(string packages, string package, string version)
+    private static void RequireFromSource(string packages, string package, string version, string source)
     {
         string metadata = Path.Combine(packages, package.ToLowerInvariant(), version.ToLowerInvariant(), ".nupkg.metadata");
-        if (!File.Exists(metadata) || !File.ReadAllText(metadata).Contains(Feed, StringComparison.Ordinal))
-            throw new InvalidOperationException($"The generated consumer did not restore {package} from NuGet.org; its source metadata is absent or different.");
+        if (!File.Exists(metadata) || !File.ReadAllText(metadata).Contains(source, StringComparison.Ordinal))
+            throw new InvalidOperationException($"The generated consumer did not restore {package} from {source}; its source metadata is absent or different.");
     }
 }

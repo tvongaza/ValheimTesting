@@ -208,25 +208,23 @@ try
     string library = Directory.GetFiles(Path.Combine(bindingsTools, ".store"), "Valheim.Testing.Bindings.dll", SearchOption.AllDirectories).Single();
     Run(env, work, exe, library, "--game-dir", Path.GetDirectoryName(library)!, "--only", "Mono.Cecil", "--require", "Mono.Cecil");
 
-    // The installed native-smoke tool works without a repository checkout. Its init creates and builds an editable
-    // consumer of its own pinned Game package from NuGet.org, which a local build cannot vouch for.
+    // The installed native-smoke tool works without a repository checkout. Before publication, build both generated
+    // consumers against the exact candidate packages; after publication, build them from NuGet.org alone.
     string smokeTools = Path.Combine(work, "smoke-tools");
     Run(env, work, "dotnet", "tool", "install", "Valheim.Testing.NativeSmoke", "--version", manifest["Valheim.Testing.NativeSmoke"],
         "--tool-path", smokeTools, "--configfile", toolConfig);
     string smoke = Path.Combine(smokeTools, OperatingSystem.IsWindows() ? "valheim-test.exe" : "valheim-test");
     Run(env, work, smoke, "help");
-    if (!local)
-    {
-        string smokeOutput = Path.Combine(work, "smoke-consumer");
-        Run(env, work, smoke, "init", "--output", smokeOutput);
-        if (!File.Exists(Path.Combine(smokeOutput, "consumer", "SmokeCheck.csproj")))
-            throw new InvalidOperationException("The installed native-smoke tool wrote no editable consumer.");
-        // The server consumer runs a session: it also restores Valheim.Testing.GameSessions, on exactly that Game.
-        string serverOutput = Path.Combine(work, "smoke-server-consumer");
-        Run(env, work, smoke, "init", "server", "--output", serverOutput);
-        if (!File.ReadAllText(Path.Combine(serverOutput, "consumer", "SmokeCheck.csproj")).Contains("Valheim.Testing.GameSessions", StringComparison.Ordinal))
-            throw new InvalidOperationException("The installed native-smoke tool's server consumer does not reference Valheim.Testing.GameSessions.");
-    }
+    string[] initFeed = local ? ["--candidate-feed", localFeed] : [];
+    string smokeOutput = Path.Combine(work, "smoke-consumer");
+    Run(env, work, smoke, ["init", .. initFeed, "--output", smokeOutput]);
+    if (!File.Exists(Path.Combine(smokeOutput, "consumer", "SmokeCheck.csproj")))
+        throw new InvalidOperationException("The installed native-smoke tool wrote no editable consumer.");
+    // The server consumer runs a session: it also restores Valheim.Testing.GameSessions, on exactly that Game.
+    string serverOutput = Path.Combine(work, "smoke-server-consumer");
+    Run(env, work, smoke, ["init", "server", .. initFeed, "--output", serverOutput]);
+    if (!File.ReadAllText(Path.Combine(serverOutput, "consumer", "SmokeCheck.csproj")).Contains("Valheim.Testing.GameSessions", StringComparison.Ordinal))
+        throw new InvalidOperationException("The installed native-smoke tool's server consumer does not reference Valheim.Testing.GameSessions.");
 
     // Every Valheim.Testing* package restored came from the feed at the manifest version, and nothing else.
     var restored = Directory.GetDirectories(cache, "valheim.testing*")
