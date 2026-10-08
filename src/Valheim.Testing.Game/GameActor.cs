@@ -205,20 +205,31 @@ public sealed class GameActor : IDisposable
         if (!reply.Ok && reply.Output.Count(x => x.StartsWith("EXTENSION_RESULT ", StringComparison.Ordinal)) == 1)
         {
             using var failed = ParseLine(reply, "EXTENSION_RESULT ");
-            if (failed.RootElement.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False) throw ExtensionFailed(command, failed.RootElement);
+            if (failed.RootElement.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False) throw ExtensionFailed(command, failed.RootElement, reply);
         }
         RequireSuccess(reply);
         using var document = ParseLine(reply, "EXTENSION_RESULT "); var root = document.RootElement;
-        if (!root.GetProperty("ok").GetBoolean()) throw ExtensionFailed(command, root);
+        if (!root.GetProperty("ok").GetBoolean()) throw ExtensionFailed(command, root, reply);
         if (root.GetProperty("schemaVersion").GetInt32() != command.SchemaVersion || root.GetProperty("instance").GetString() != command.Instance ||
             root.GetProperty("extension").GetString() != command.Path.Split('/')[0]) throw new InvalidOperationException("Extension changed; explicitly rediscover capabilities after reload.");
         return root.GetProperty("data").Clone();
     }
-    private static InvalidOperationException ExtensionFailed(Capability command, JsonElement result)
+    private static InvalidOperationException ExtensionFailed(Capability command, JsonElement result, CommandResult reply)
     {
         static string? Text(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-        return new InvalidOperationException($"{command.Path} failed: {Text(result, "code") ?? "no code"}: {Text(result, "message") ?? "no message"}");
+        string? code = Text(result, "code"), message = Text(result, "message");
+        var error = new InvalidOperationException($"{command.Path} failed: {code ?? "no code"}: {message ?? "no message"}");
+        // Keep the existing exception type while giving internal callers a structured way to identify a game wait
+        // expiry. Never classify it by translated or changing message text.
+        error.Data["extension.path"] = command.Path;
+        error.Data["extension.code"] = code;
+        error.Data["transport.errorCode"] = reply.ErrorCode;
+        return error;
     }
+    internal static bool IsExtensionFailure(InvalidOperationException error, string path, string code, string transportCode) =>
+        error.Data["extension.path"] is string actualPath && actualPath == path &&
+        error.Data["extension.code"] is string actualCode && actualCode == code &&
+        error.Data["transport.errorCode"] is string actualTransportCode && actualTransportCode == transportCode;
     public Observation Observe(Capability command, params string[] arguments) => Observe(command, null, arguments);
     /// <summary><see cref="Observe(Capability, string[])"/>, handing the complete reply lines to <paramref name="replied"/> before judging them.</summary>
     internal Observation Observe(Capability command, Action<IReadOnlyList<string>>? replied, string[] arguments)
