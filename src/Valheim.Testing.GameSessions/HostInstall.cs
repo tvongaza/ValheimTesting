@@ -24,7 +24,7 @@ public sealed class HostListing
     public string Root { get; }
     /// <summary>Relative path (<c>/</c> separators) to lower-case SHA256.</summary>
     public IReadOnlyDictionary<string, string> Files { get; }
-    /// <summary>Bash hosts: which of <c>valheim_server.x86_64</c> and <c>valheim.x86_64</c> at the root the user may execute.</summary>
+    /// <summary>Bash hosts: which dedicated-server or client executables the user may execute, including <c>valheim_server/Valheim</c> on macOS.</summary>
     public IReadOnlyList<string> Executables { get; }
     /// <summary>Paths compare ignoring case on a Windows (PowerShell) host.</summary>
     internal StringComparer Names => Shell == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -39,7 +39,7 @@ public static class HostInstall
 {
     private static readonly Regex Sha256Line = new(@"^(\\?)([0-9a-f]{64}) [ *]\./(.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex FileLine = new(@"^VT-FILE ([0-9a-f]{64}) ([A-Za-z0-9+/=]+)$", RegexOptions.CultureInvariant);
-    private static readonly Regex GameAssembly = new(@"^(?<managed>[^/]+_Data/Managed|[^/]+\.app/Contents/Resources/Data/Managed)/assembly_valheim\.dll$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex GameAssembly = new(@"^(?<managed>[^/]+_Data/Managed|[^/]+\.app/Contents/Resources/Data/Managed|valheim_server/Data/Managed)/assembly_valheim\.dll$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     /// <summary>
     /// Hashes every regular file under <paramref name="root"/> on the host (links are refused, as <see cref="WorldFixture"/>
@@ -126,7 +126,8 @@ public static class HostInstall
         RequireHostPath(host, destination, nameof(destination));
         foreach (string name in skip)
             if (name.Length == 0 || name is "." or ".." || name.IndexOfAny(['/', '\\', '\n', '\r']) >= 0) throw new ArgumentException($"'{name}' is not a directory name.", nameof(skip));
-        var result = (await host.RunAsync(HostInstallScripts.CopyFor(host.Shell.Kind), new Dictionary<string, string>
+        var copy = host.Kind == GameHostKind.Local && OperatingSystem.IsMacOS() ? HostInstallScripts.MacCopy : HostInstallScripts.CopyFor(host.Shell.Kind);
+        var result = (await host.RunAsync(copy, new Dictionary<string, string>
             { ["source"] = source, ["dest"] = destination, ["skip"] = string.Join('\n', skip) }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Copying {source} to {destination} on {host.Name}");
         switch (InteractiveClient.Line(result.Stdout, "VT-COPY "))
@@ -180,7 +181,7 @@ public static class HostInstall
 
     /// <summary>What a listing for <see cref="Pins"/> needs to cover: the game's Managed folder, the loader files and <c>BepInEx/patchers</c>.</summary>
     internal static readonly string[] PinPaths =
-        ["*_Data/Managed", "*.app/Contents/Resources/Data/Managed", .. InstallPins.LoaderRootFiles, .. InstallPins.LoaderFolders, "BepInEx/patchers"];
+        ["*_Data/Managed", "*.app/Contents/Resources/Data/Managed", "valheim_server/Data/Managed", .. InstallPins.LoaderRootFiles, .. InstallPins.LoaderFolders, "BepInEx/patchers"];
 
     /// <summary>The <see cref="InstallPins"/> of a listing that covers <see cref="PinPaths"/>.</summary>
     public static InstallPins Pins(HostListing listing) => Pins(listing, out _);
@@ -189,7 +190,7 @@ public static class HostInstall
     {
         var assemblies = listing.Files.Keys.Select(key => GameAssembly.Match(key)).Where(match => match.Success).Select(match => match.Groups["managed"].Value).Order(StringComparer.Ordinal).ToList();
         if (assemblies.Count == 0)
-            throw new FileNotFoundException($"No game assembly ({InstallPins.GameAssemblyName} in a *_Data/Managed folder) under {listing.Root} on {listing.HostName}.");
+            throw new FileNotFoundException($"No game assembly ({InstallPins.GameAssemblyName} in a *_Data/Managed, macOS client or macOS dedicated-server Managed folder) under {listing.Root} on {listing.HostName}.");
         if (assemblies.Count > 1) throw new InvalidOperationException($"More than one game assembly under {listing.Root} on {listing.HostName}: {string.Join(", ", assemblies)}; refusing to guess which runs.");
         managed = assemblies[0];
         string prefix = managed + "/";
@@ -229,9 +230,13 @@ public static class HostInstall
     public static ServerPlatform DetectServer(HostListing listing)
     {
         bool windows = listing.Files.ContainsKey(GameLaunch.ServerWindowsExecutable), linux = listing.Files.ContainsKey(GameLaunch.ServerLinuxExecutable);
-        if (windows && linux) throw new InvalidOperationException($"The runtime on {listing.HostName} contains both {GameLaunch.ServerWindowsExecutable} and {GameLaunch.ServerLinuxExecutable}; refusing to guess its platform.");
-        if (windows || linux) return windows ? ServerPlatform.Windows : ServerPlatform.Linux;
-        throw new FileNotFoundException($"The runtime at {listing.Root} on {listing.HostName} contains neither {GameLaunch.ServerWindowsExecutable} nor {GameLaunch.ServerLinuxExecutable}.");
+        bool mac = listing.Files.ContainsKey(GameLaunch.ServerMacExecutable) && listing.Files.Keys.Any(path => path.StartsWith("valheim_server/Data/", StringComparison.Ordinal));
+        if ((windows ? 1 : 0) + (linux ? 1 : 0) + (mac ? 1 : 0) > 1)
+            throw new InvalidOperationException($"The runtime on {listing.HostName} contains more than one dedicated-server platform; refusing to guess.");
+        if (windows) return ServerPlatform.Windows;
+        if (linux) return ServerPlatform.Linux;
+        if (mac) return ServerPlatform.MacOS;
+        throw new FileNotFoundException($"The runtime at {listing.Root} on {listing.HostName} contains no complete Windows, Linux or macOS dedicated server.");
     }
 
     internal static void RequireHostPath(IGameHost host, string path, string name)
@@ -286,7 +291,7 @@ internal static class HostInstallScripts
             if [ -n "$links" ]; then echo "VT-LIST links"; printf '%s\n' "$links"; exit 0; fi
             find "${roots[@]}" -type f -exec "${hasher[@]}" {} + || exit 3
         fi
-        for e in valheim_server.x86_64 valheim.x86_64; do if [ -f "$e" ] && [ -x "$e" ]; then echo "VT-EXEC $e"; fi; done
+        for e in valheim_server.x86_64 valheim.x86_64 valheim_server/Valheim; do if [ -f "$e" ] && [ -x "$e" ]; then echo "VT-EXEC $e"; fi; done
         echo "VT-LIST done"
         """.ReplaceLineEndings("\n");
 
@@ -361,6 +366,21 @@ internal static class HostInstallScripts
             done
         fi
         echo "VT-COPY copied"
+        """.ReplaceLineEndings("\n");
+
+    // macOS cp -a can fail while copying protected extended attributes from a Steam install. The runtime
+    // contract pins file bytes and execute modes, not quarantine metadata; ditto copies those without xattrs.
+    public static readonly string MacCopy = """
+        set -u
+        if [ ! -d "$source" ]; then echo 'VT-COPY missing'; exit 0; fi
+        if [ -e "$dest" ]; then echo 'VT-COPY exists'; exit 0; fi
+        mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" || exit 3
+        shopt -s nullglob dotglob
+        for entry in "$source"/*; do
+            if printf '%s\n' "$skip" | grep -Fqx -- "${entry##*/}"; then continue; fi
+            if ! ditto --noextattr --noqtn "$entry" "$dest/${entry##*/}"; then rm -rf -- "$dest"; exit 3; fi
+        done
+        echo 'VT-COPY copied'
         """.ReplaceLineEndings("\n");
 
     // Variables: source, dest, skip (as the bash copy's; names compare ignoring case). The source may be a game install; only a

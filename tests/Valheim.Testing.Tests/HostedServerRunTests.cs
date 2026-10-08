@@ -197,19 +197,6 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.True(Directory.Exists(host.Local(RunDirectory + "/runtime")));
         Assert.Contains("kept on request", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
     }
-    [Fact] public async Task AStagedRuntimeCannotStandInForAHostCopy()
-    {
-        var server = NewServer(); var host = NewHost(server);
-        var (plan, profile) = Write(host);
-        using var staged = WorldFixture.Copy(host.Local(Install), Path.Combine(_root, "staged"), WorldFixture.Manifest(host.Local(Install)));
-        var options = Options(host, server);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], new PinnedServerRunOptions<ServerRunPlan>
-        {
-            Name = options.Name, ReadPlan = options.ReadPlan, Mod = options.Mod,
-            Scenario = options.Scenario, Hooks = options.Hooks, StagedRuntime = staged,
-        }));
-        Assert.DoesNotContain(host.Runs, run => run.Script == "copy");
-    }
     [Fact] public async Task ARemoteRunCopiesAndVerifiesOnTheHostReachesTheCliThroughTheTunnelAndStopsOnlyItsServer()
     {
         var server = NewServer(); var host = NewHost(server);

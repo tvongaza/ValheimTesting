@@ -77,8 +77,9 @@ internal static class HostedRuntimeStage
           BEGIN { n=split(roots, root, "\034") }
           { line=$0; sub(/^[[:space:]]+/, "", line); pid=line; sub(/[[:space:]].*$/, "", pid); path=line; sub(/^[0-9]+[[:space:]]+/, "", path);
             name=path; sub(/^.*\//, "", name); hit=0;
+            macServer=(name=="Valheim" && path ~ /\/valheim_server\/Valheim$/);
             game=(name=="Valheim" || name=="valheim.x86_64" || index(name,"valheim_server")==1);
-            if (client=="true" && (name=="Valheim" || name=="valheim.x86_64")) hit=1;
+            if (client=="true" && ((name=="Valheim" && !macServer) || name=="valheim.x86_64")) hit=1;
             for (i=1; i<=n; i++) if (game && root[i]!="") { if (index(path,root[i] "/")==1) hit=1; if (index(path,"/")!=1) unknown=1 }
             if (hit) busy=busy (busy=="" ? "" : ",") pid }
           END { if (unknown) print "VT-GAME unknown"; else if (busy!="") print "VT-GAME busy " busy; else print "VT-GAME idle" }'; then :; else exit 4; fi
@@ -125,7 +126,14 @@ internal static class HostedRuntimeStage
             if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
                 throw new InvalidOperationException($"The client install on {host.Name} does not match its host platform.");
         }
-        var platform = host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
+        var platform = kind == HostedRuntimeKind.Server
+            ? HostInstall.DetectServer(sourceListing) switch
+            {
+                ServerPlatform.Windows => ClientPlatform.Windows,
+                ServerPlatform.MacOS => ClientPlatform.MacOS,
+                _ => ClientPlatform.Linux,
+            }
+            : host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
             : sourceListing.Files.ContainsKey("Valheim.app/Contents/MacOS/Valheim") ? ClientPlatform.MacOS : ClientPlatform.Linux;
         // A reviewed package replaces the copied loader, so it, not the source, must be this platform's complete loader.
         if (loaderPackage != null) loaderPackage.RequireFor(platform, $"reviewed loader package for {host.Name}");

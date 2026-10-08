@@ -12,14 +12,13 @@ using Valheim.Testing.GameSessions;
 /// clean client's join with the mod absent. The actors come from the environment inventory (this machine with no file):
 /// its first server and first client environment, the packaged smoke world and the packaged disposable character, run as
 /// a campaign whose derived <c>campaign.json</c> is written into the output. Nothing has to be written by hand.
-/// On macOS the campaign runner has no dedicated server yet, so a Mac keeps the staged local copies (<see cref="RunStagedAsync"/>).
 /// </summary>
 internal static class ServerLoad
 {
     internal const string Usage = "valheim-test server-load --mod DLL [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
         "[--server-env NAME] [--client-env NAME] [--server-only] [--join HOST:PORT] [--preflight-only] [--loader-package FILE] [--client-loader-package FILE] " +
         "[--adapter DLL] [--cli-manifest FILE --cli-files DIR] [--search-root DIR ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
-        "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON] [--steam-userdata DIR (macOS only)]";
+        "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
     private static readonly string[] Session = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"];
 
     /// <summary>The parsed command line: single options, repeatable inputs and switches.</summary>
@@ -36,12 +35,10 @@ internal static class ServerLoad
         public bool ServerOnly => Switches.Contains("--server-only");
     }
 
-    /// <summary>Test seams: the host preflight, the campaign run and the macOS staged run, in place of the real ones.</summary>
+    /// <summary>Test seams: the host preflight and campaign run in place of the real ones.</summary>
     internal sealed record Seams(
         Func<string, Task<CampaignPreflightReport>>? Inspect = null,
         Func<string, ServerRunPlan, Func<ServerRunPlan, IReadOnlyDictionary<string, ClientRunPlan>>, string, PinnedServerRunOptions<ServerRunPlan>, Task<int>>? Campaign = null,
-        Func<string[], PinnedServerRunOptions<ServerRunPlan>, Task<int>>? Staged = null,
-        bool? MacOS = null,
         // The shipped-loader decision reads the real install on this machine, so it is on only for a real run (no seams)
         // and for a test that passes one.
         Func<string, string, ShippedLoader.Choice?>? Loader = null);
@@ -64,15 +61,6 @@ internal static class ServerLoad
         try
         {
             output = Output(parsed!);
-            if (seams.MacOS ?? OperatingSystem.IsMacOS())
-            {
-                foreach (string option in new[] { "--inventory", "--server-env", "--client-env", "--join", "--preflight-only" })
-                    if (parsed!.Options.ContainsKey(option) || parsed.Switches.Contains(option))
-                        throw new ArgumentException(option + " needs the campaign runner, which has no macOS dedicated server yet; on a Mac, server-load stages local copies.");
-                return await RunStagedAsync(parsed!, output, clock, seams.Staged ?? PinnedServerRun.MainAsync, state, cancel.Token).ConfigureAwait(false);
-            }
-            if (parsed!.Options.ContainsKey("--steam-userdata"))
-                throw new ArgumentException("--steam-userdata is for a Mac's staged client; a campaign client's userdata is resolved on its own host.");
             return await RunCampaignAsync(parsed!, output, clock, seams, state, cancel.Token).ConfigureAwait(false);
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or JsonException or OperationCanceledException)
@@ -313,10 +301,13 @@ internal static class ServerLoad
         var plan = new ServerRunPlan
         {
             Scenario = "native-smoke-server-load",
-            Executable = ServerRunPlan.ExecutableFor(choice.Inventory.Hosts[server.Host].Platform == "windows" ? ServerPlatform.Windows : ServerPlatform.Linux),
+            Executable = ServerRunPlan.ExecutableFor(choice.Inventory.Hosts[server.Host].Platform switch
+            {
+                "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux,
+            }),
             Arguments = ["-batchmode", "-nographics", "-name", DefaultSmokeWorld.Name, "-port", server.GamePort.ToString(CultureInfo.InvariantCulture),
                 "-world", DefaultSmokeWorld.Name, "-password", password, "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"],
-            Environment = new Dictionary<string, string> { [NativeServerRuntime.SelectedGuidsVariable] = string.Join(";", selectedGuids) },
+            Environment = new Dictionary<string, string> { [SmokeSessionContract.SelectedGuidsVariable] = string.Join(";", selectedGuids) },
             Port = server.CliPort,
             QuitSeconds = 20, // a disposable load smoke: no save-on-quit or crossplay retirement is asserted
         };
@@ -324,7 +315,7 @@ internal static class ServerLoad
             plan.LogScan[LogScanner.UnknownError] = new LogClassification { Expected = [expectedError], Reason = parsed.Options["--expected-log-reason"] };
         ClientRunPlan? clientPlan = choice.Client == null ? null : new ClientRunPlan
         {
-            Mode = "owned", PasswordVariable = NativeCleanClientRuntime.PasswordVariable, Capabilities = [.. Session],
+            Mode = "owned", PasswordVariable = SmokeSessionContract.PasswordVariable, Capabilities = [.. Session],
             // The clean client loads none of the server's plugins.
             Pins = serverGuids.ToDictionary(guid => guid, _ => "absent", StringComparer.Ordinal),
         };
@@ -351,8 +342,8 @@ internal static class ServerLoad
         Console.WriteLine($"PREFLIGHT PASSED: the derived campaign is {campaignFile}");
         if (parsed.Switches.Contains("--preflight-only")) return 0;
 
-        string? previousPassword = Environment.GetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable);
-        if (clientPlan != null) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, password);
+        string? previousPassword = Environment.GetEnvironmentVariable(SmokeSessionContract.PasswordVariable);
+        if (clientPlan != null) Environment.SetEnvironmentVariable(SmokeSessionContract.PasswordVariable, password);
         int result;
         try
         {
@@ -362,7 +353,7 @@ internal static class ServerLoad
                 {
                     Name = "native-smoke-server-load",
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),
-                    Mod = new(NativeServerRuntime.SessionCapability, NativeServerRuntime.SessionTokenVariable),
+                    Mod = new(SmokeSessionContract.SessionCapability, SmokeSessionContract.SessionTokenVariable),
                     Provenance = (_, record) =>
                     {
                         if (serverLoader != null) record["serverLoaderPackage"] = BepInExLoaderPackage.Read(serverLoader).Identity;
@@ -375,7 +366,7 @@ internal static class ServerLoad
         }
         finally
         {
-            if (clientPlan != null) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, previousPassword);
+            if (clientPlan != null) Environment.SetEnvironmentVariable(SmokeSessionContract.PasswordVariable, previousPassword);
         }
         Finish(result, parsed.Mods.Count, clientPlan != null, clock, output);
         return result;
@@ -415,129 +406,10 @@ internal static class ServerLoad
                 joined ? "Clean client joined with selected server mods absent." : "A clean-client join has not run (--server-only).") +
             $" Private evidence ({DiskSpace.Format(DiskSpace.DirectoryBytes(output))}) in {output}");
 
-    /// <summary>
-    /// macOS: the campaign runner has no macOS dedicated server yet, so the server and client are staged as local copies and
-    /// run by the local pinned runner, as before the campaign route. The one remaining caller of
-    /// <see cref="NativeServerRuntime"/> and <see cref="NativeCleanClientRuntime"/>; it goes when the hosted runner runs a Mac server.
-    /// </summary>
-    private static async Task<int> RunStagedAsync(Arguments parsed, string output, Stopwatch clock,
-        Func<string[], PinnedServerRunOptions<ServerRunPlan>, Task<int>> launch, RunState state, CancellationToken cancellation)
-    {
-        Console.WriteLine("path: staged local copies (macOS; the campaign runner has no macOS dedicated server yet)");
-        if (!parsed.Options.TryGetValue("--server", out string? serverOption))
-            throw new ArgumentException("On a Mac, give --server DIR: the macOS dedicated server install (Valheim Dedicated Server's macOS depot).");
-        string server = Path.GetFullPath(serverOption);
-        string? client = null;
-        if (!parsed.ServerOnly)
-        {
-            if (parsed.Options.TryGetValue("--client", out string? clientOption)) client = Path.GetFullPath(clientOption);
-            else
-            {
-                try { client = EnvironmentInventory.Read(null).Environments.FirstOrDefault(recipe => recipe.Roles.Contains("client"))?.Install; }
-                catch (ArgumentException) { }
-                if (client == null) throw new ArgumentException("No Valheim client install was found on this Mac. Give --client DIR, or --server-only to skip the client's join.");
-                Console.WriteLine($"client: {client} (detected: this machine; default; --server-only to skip)");
-            }
-        }
-        else Console.WriteLine("client: none (--server-only)");
-        var serverLoader = parsed.Options.TryGetValue("--loader-package", out string? serverLoaderFile) ? BepInExLoaderPackage.Read(serverLoaderFile) : null;
-        var clientLoader = parsed.Options.TryGetValue("--client-loader-package", out string? clientLoaderFile) ? BepInExLoaderPackage.Read(clientLoaderFile) : null;
-        string? adapter = parsed.Options.TryGetValue("--adapter", out string? adapterFile) ? Path.GetFullPath(adapterFile) : null;
-        var (cliManifest, cliFiles) = SmokeInputs.Cli(parsed.Options);
-        const int cliPort = 5688, gamePort = 2486, clientCliPort = 5689; // the inventory's own defaults
-        Console.WriteLine($"server: {server}; ValheimCLI port {cliPort}, game port {gamePort}" + (client == null ? "" : $"; client ValheimCLI port {clientCliPort}"));
-        string? steamUserdata = client != null ? SmokeInputs.SteamUserdata(parsed.Options) : null;
-        foreach (string path in new[] { server, cliFiles })
-            if (!Directory.Exists(path)) throw new DirectoryNotFoundException("A server or ValheimCLI directory is missing: " + path);
-        if (client != null && !Directory.Exists(steamUserdata))
-            throw new DirectoryNotFoundException("The clean client's Steam userdata directory is missing: " + steamUserdata);
-        string[] protectedRoots = new[] { server, cliFiles, client, steamUserdata, serverLoader?.Root, clientLoader?.Root }.OfType<string>().ToArray();
-        SmokeOutput.RefuseInside(output, protectedRoots);
-        state.OutputChecked = true;
-        SmokeOutput.RequireSpace(output, server, client);
-        foreach (string path in new[] { adapter, cliManifest }.OfType<string>().Concat(parsed.Mods.Select(Path.GetFullPath)))
-            if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
-        var request = new NativeDependencyRequest
-        {
-            Mods = parsed.Mods.Select(Path.GetFullPath).ToList(), SearchRoots = parsed.Roots.Select(Path.GetFullPath).ToList(),
-            GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(server))!,
-            BepInExCore = Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory),
-            CliManifest = cliManifest, CliFiles = cliFiles,
-            Capabilities = client != null ? [.. Session] : ["valheim.session/state"],
-            OptionalReferences = [.. parsed.Optional],
-        };
-        var dependencies = NativeDependencyResolver.Resolve(request);
-        Directory.CreateDirectory(output);
-        dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
-        if (!dependencies.Ready)
-            throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
-        adapter ??= await SmokeAdapter.BuildAsync(server, dependencies, output, cancellation, request.BepInExCore).ConfigureAwait(false);
-        string world = Path.Combine(output, "world-source");
-        DefaultSmokeWorld.PrepareServerSaveRoot(world);
-        state.Started = true; // from here the installs are copied
-        using var runtime = NativeServerRuntime.Prepare(server, Path.Combine(output, "staged-runtime"), dependencies, adapter,
-            cliPort, parsed.Configs.Select(Path.GetFullPath).ToList(), parsed.PluginFiles.Select(Path.GetFullPath).ToList(),
-            parsed.PluginDirectories.Select(Path.GetFullPath).ToList(), serverLoader);
-        using var clientRuntime = client != null
-            ? NativeCleanClientRuntime.Prepare(client, Path.Combine(output, "staged-client"), dependencies, clientCliPort, clientLoader)
-            : null;
-        string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
-        var plan = runtime.Plan(world, cliPort, gamePort, password);
-        var absentGuids = runtime.Pins.Keys.Except(clientRuntime?.CliPins.Keys ?? [], StringComparer.Ordinal)
-            .Where(guid => guid != NativeServerRuntime.SessionAdapterPluginGuid).Order(StringComparer.Ordinal).ToArray();
-        ClientRunPlan? clientPlan = clientRuntime?.Plan(clientCliPort, gamePort, absentGuids);
-        DisposableCharacterStore? character = clientRuntime == null ? null : DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
-        if (parsed.Options.TryGetValue("--expected-log-error", out string? expectedError))
-            plan.LogScan[LogScanner.UnknownError] = new LogClassification { Expected = [expectedError], Reason = parsed.Options["--expected-log-reason"] };
-        string planFile = Path.Combine(output, "plan.json");
-        File.WriteAllText(planFile, JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true }));
-        string? previousPassword = Environment.GetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable);
-        if (client != null) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, password);
-        int result;
-        try
-        {
-            result = await launch(["run", planFile, Path.Combine(output, "evidence")],
-                new PinnedServerRunOptions<ServerRunPlan>
-                {
-                    Name = "native-smoke-server-load",
-                    ReadPlan = path =>
-                    {
-                        var read = ServerRunPlan.Read<ServerRunPlan>(path);
-                        read.ValidateServerPlan(read.Pins.Keys.Where(key => key != "worlduid"), NativeServerRuntime.SessionTokenVariable);
-                        return read;
-                    },
-                    Mod = new(NativeServerRuntime.SessionCapability, NativeServerRuntime.SessionTokenVariable),
-                    StagedRuntime = runtime.Copy, // the run uses the staged copy itself: one server copy, not two
-
-                    Provenance = (_, record) =>
-                    {
-                        record["path"] = "staged local copies (macOS)";
-                        if (serverLoader != null) record["serverLoaderPackage"] = serverLoader.Identity;
-                        if (clientLoader != null) record["clientLoaderPackage"] = clientLoader.Identity;
-                    },
-                    Scenario = (session, _) =>
-                    {
-                        if (clientPlan == null) return Scenario(session, null, clock);
-                        string saves = HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(clientPlan.Install));
-                        using var stagedCharacter = DefaultSmokeCharacter.StageForRun(character!, Path.Combine(saves, "characters_local"), steamUserdata!);
-                        return Scenario(session, clientPlan, clock);
-                    },
-                }).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (client != null) Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, previousPassword);
-        }
-        // The run retired the staged server copy (or kept it, as its report says); the staged client is an input, recorded by hash.
-        clientRuntime?.Dispose(); runtime.Dispose();
-        Finish(result, parsed.Mods.Count, client != null, clock, output);
-        return result;
-    }
-
     private static readonly HashSet<string> Single = new(StringComparer.Ordinal)
     {
         "--output", "--inventory", "--server", "--client", "--server-env", "--client-env", "--join", "--adapter", "--cli-manifest", "--cli-files",
-        "--loader-package", "--client-loader-package", "--expected-log-error", "--expected-log-reason", "--steam-userdata",
+        "--loader-package", "--client-loader-package", "--expected-log-error", "--expected-log-reason",
     };
     private static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "--server-only", "--preflight-only" };
 
@@ -569,7 +441,6 @@ internal static class ServerLoad
         if (result.ServerOnly && (result.Options.ContainsKey("--client") || result.Options.ContainsKey("--client-env") ||
             result.Options.ContainsKey("--client-loader-package") || result.Options.ContainsKey("--join")))
         { error = "--server-only runs no client: leave out --client, --client-env, --client-loader-package and --join."; return false; }
-        if (result.ServerOnly && result.Options.ContainsKey("--steam-userdata")) { error = "--server-only runs no client: leave out --steam-userdata."; return false; }
         parsed = result;
         return true;
     }

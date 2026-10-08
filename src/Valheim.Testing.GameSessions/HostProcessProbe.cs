@@ -25,8 +25,9 @@ internal sealed record ProbedProcess(int Pid, ProbedState State, string? StartId
 /// <summary>
 /// Reads, without changing anything, whether processes a run journalled still run on a host: the process ID, its start
 /// identity (the same rule as the stop scripts: Windows <c>StartTime</c> as a UTC file time, Linux the start in clock ticks
-/// from <c>/proc/PID/stat</c>) and the SHA-256 of its command line (Windows <c>Win32_Process.CommandLine</c> as UTF-8, Linux the
-/// raw bytes of <c>/proc/PID/cmdline</c>). A recovery stops a process only when all three match its journal entry (#257 Q2).
+/// from <c>/proc/PID/stat</c>, or macOS the checksum of a C-locale <c>ps lstart</c> value) and the SHA-256 of its command line
+/// (Windows <c>Win32_Process.CommandLine</c> as UTF-8, Linux the raw bytes of <c>/proc/PID/cmdline</c>, or macOS the full
+/// <c>ps command</c> value). A recovery stops a process only when all three match its journal entry (#257 Q2).
 /// </summary>
 internal static class HostProcessProbe
 {
@@ -47,7 +48,8 @@ internal static class HostProcessProbe
         string list = string.Join(' ', processes.Distinct().Select(process => process.Pid.ToString(CultureInfo.InvariantCulture) + ":" + process.StartIdentity));
         var variables = new Dictionary<string, string> { ["processes"] = list };
         if (settle) variables["settle"] = "1";
-        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? Windows : Bash, variables, timeout, cancellation).ConfigureAwait(false))
+        var script = host.Shell.Kind == HostShellKind.PowerShell ? Windows : host.Kind == GameHostKind.Local && OperatingSystem.IsMacOS() ? Mac : Bash;
+        var result = (await host.RunAsync(script, variables, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Reading journalled processes on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-PROC-END") == null)
             throw new HostOperationException($"The process check on {host.Name} did not finish", result);
@@ -104,6 +106,41 @@ internal static class HostProcessProbe
         else text = string.Concat(arguments.Prepend(executable).Select(argument => argument + "\0"));
         return FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes(text));
     }
+
+    // macOS ps reports the executed Mach-O and its arguments separated by spaces, after /usr/bin/arch has exec'd it.
+    internal static string ExpectedMacCommandLineSha256(string executable, IReadOnlyList<string> arguments) =>
+        FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes(string.Join(' ', arguments.Prepend(executable))));
+
+    // A local Mac has no /proc. The C-locale ps start string, checksummed as a decimal token, distinguishes a reused PID;
+    // the full command line is separately hashed. An unreadable process is never reported as gone or safe to stop.
+    internal static readonly string Mac = """
+        set -u
+        for pair in $processes; do
+          id=${pair%%:*}; start=${pair#*:}; asked=${start:--}
+          state=$(LC_ALL=C ps -p "$id" -o stat= 2>/dev/null) || state=
+          if [ -z "$state" ]; then
+            if kill -0 "$id" 2>/dev/null; then echo "VT-PROC $id $asked unreadable - -"; else echo "VT-PROC $id $asked gone - -"; fi
+            continue
+          fi
+          case "$state" in Z*) echo "VT-PROC $id $asked gone - -"; continue ;; esac
+          begin=$(LC_ALL=C ps -ww -p "$id" -o lstart= 2>/dev/null) || begin=
+          if [ -z "$begin" ]; then echo "VT-PROC $id $asked unreadable - -"; continue; fi
+          identity=$(printf '%s' "$begin" | cksum | awk '{print $1}')
+          if [ -n "$start" ] && [ "$identity" != "$start" ]; then echo "VT-PROC $id $asked reused $identity -"; continue; fi
+          if [ -n "${settle:-}" ]; then
+            n=0
+            while [ "$n" -lt 50 ]; do
+              command=$(LC_ALL=C ps -ww -p "$id" -o command= 2>/dev/null) || command=
+              case "$command" in /usr/bin/arch\ *|arch\ *) sleep 0.1; n=$((n + 1)) ;; *) break ;; esac
+            done
+          fi
+          command=$(LC_ALL=C ps -ww -p "$id" -o command= 2>/dev/null) || command=
+          if [ -z "$command" ]; then echo "VT-PROC $id $asked unreadable $identity -"; continue; fi
+          hash=$(printf '%s' "$command" | shasum -a 256 | awk '{print $1}')
+          echo "VT-PROC $id $asked same $identity $hash"
+        done
+        echo VT-PROC-END
+        """;
 
     // Variables: processes (space-separated PID:START pairs; an empty START matches any), settle (optional). One line per pair:
     // VT-PROC <pid> <start asked or -> gone|reused|same|unreadable <start read or -> <sha256 or ->, then VT-PROC-END. With

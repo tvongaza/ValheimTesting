@@ -7,7 +7,9 @@ namespace Valheim.Testing.GameSessions;
 internal static class GameLaunchOnHost
 {
     /// <summary>The hash of the command line the started game has on its host (<see cref="HostProcessProbe.ExpectedCommandLineSha256"/>).</summary>
-    internal static string CommandLineSha256(this GameLaunch launch) => HostProcessProbe.ExpectedCommandLineSha256(launch.Platform == ClientPlatform.Windows, launch.Executable, launch.Arguments);
+    internal static string CommandLineSha256(this GameLaunch launch) => launch.Platform == ClientPlatform.MacOS
+        ? HostProcessProbe.ExpectedMacCommandLineSha256(launch.Executable, launch.Arguments)
+        : HostProcessProbe.ExpectedCommandLineSha256(launch.Platform == ClientPlatform.Windows, launch.Executable, launch.Arguments);
 
     /// <summary>
     /// The launch as the host start scripts read it: one line per item, <c>kind base64(UTF-8)</c>, in the order exe, dir, the

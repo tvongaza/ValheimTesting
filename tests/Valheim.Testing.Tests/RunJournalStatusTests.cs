@@ -382,6 +382,36 @@ public sealed class RunJournalStatusTests : IDisposable
         finally { try { System.Diagnostics.Process.GetProcessById(pid).Kill(); } catch (ArgumentException) { } }
     }
 
+    [Fact] public async Task MacProcessRecoveryRequiresItsStartAndCommandLineBeforeSignalling()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        const string executable = "/bin/sleep";
+        var startInfo = new System.Diagnostics.ProcessStartInfo(executable) { UseShellExecute = false };
+        startInfo.ArgumentList.Add("60");
+        using var process = System.Diagnostics.Process.Start(startInfo)!;
+        try
+        {
+            var host = new LocalGameHost("mac", HostShell.Bash);
+            var first = (await HostProcessProbe.ProbeAsync(host, [(process.Id, "")], TimeSpan.FromSeconds(10), settle: true))[(process.Id, "")];
+            Assert.Equal(ProbedState.Same, first.State);
+            Assert.Matches("^[0-9]+$", first.StartIdentity!);
+            Assert.Equal(HostProcessProbe.ExpectedMacCommandLineSha256(executable, ["60"]), first.CommandLineSha256);
+            var variables = new Dictionary<string, string>
+            {
+                ["game"] = process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["start"] = first.StartIdentity!, ["commandLine"] = new string('0', 64),
+            };
+            var refused = (await host.RunAsync(RunRecovery.MacStop, variables, TimeSpan.FromSeconds(10))).EnsureSuccess("refusing another command line");
+            Assert.Equal("unproven", InteractiveClient.Line(refused.Stdout, "VT-STOP "));
+            Assert.False(process.HasExited);
+            variables["commandLine"] = first.CommandLineSha256!;
+            var stopped = (await host.RunAsync(RunRecovery.MacStop, variables, TimeSpan.FromSeconds(35))).EnsureSuccess("stopping the proven process");
+            Assert.Equal("stopped", InteractiveClient.Line(stopped.Stdout, "VT-STOP "));
+            await process.WaitForExitAsync();
+        }
+        finally { if (!process.HasExited) process.Kill(); }
+    }
+
     // A host that cannot answer for a pid file, or for the process it names, leaves the launch unrecoverable.
     [Fact] public async Task APidFileOrItsProcessThatCannotBeCheckedLeavesTheLaunchUnrecoverable()
     {

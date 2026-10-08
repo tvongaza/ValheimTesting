@@ -37,6 +37,35 @@ internal static class RunRecovery
     /// <summary>The actor a recovery journals as on every host: its entries never make the recovering process the run's runner.</summary>
     public const string Actor = "recovery";
 
+    // A Mac server is started locally rather than by HostServer's Linux shell. Check all three journalled
+    // process facts again in the stop script, immediately before signalling; an unproven process is untouched.
+    internal static readonly string MacStop = """
+        set -u
+        current() {
+          state=$(LC_ALL=C ps -p "$game" -o stat= 2>/dev/null) || state=
+          case "$state" in ''|Z*) return 1 ;; esac
+          begin=$(LC_ALL=C ps -ww -p "$game" -o lstart= 2>/dev/null) || return 2
+          [ -n "$begin" ] || return 2
+          identity=$(printf '%s' "$begin" | cksum | awk '{print $1}')
+          [ "$identity" = "$start" ] || return 2
+          command=$(LC_ALL=C ps -ww -p "$game" -o command= 2>/dev/null) || return 2
+          [ -n "$command" ] || return 2
+          hash=$(printf '%s' "$command" | shasum -a 256 | awk '{print $1}')
+          [ "$hash" = "$commandLine" ] || return 2
+        }
+        current
+        case $? in 1) echo 'VT-STOP gone'; exit 0 ;; 0) ;; *) echo 'VT-STOP unproven'; exit 0 ;; esac
+        kill -INT "$game" 2>/dev/null || { echo 'VT-STOP unproven'; exit 0; }
+        n=0
+        while current && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+        if current; then
+          kill -KILL "$game" 2>/dev/null || { echo 'VT-STOP unproven'; exit 0; }
+          n=0
+          while current && [ "$n" -lt 200 ]; do sleep 0.1; n=$((n + 1)); done
+        fi
+        if current; then echo 'VT-STOP running'; else echo 'VT-STOP stopped'; fi
+        """;
+
     public static async Task<RecoveryReport> RecoverAsync(IReadOnlyDictionary<string, HostProfile> hosts, Func<string, IGameHost> hostFactory, string runId,
         bool teardown, TimeSpan timeout, CancellationToken cancellation = default, string? leaseHost = null, string? leaseDirectory = null)
     {
@@ -107,8 +136,28 @@ internal static class RunRecovery
                         continue;
                     }
                     string directory = process.Fields.GetValueOrDefault("bootDirectory") is { Length: > 0 } boot ? boot : process.Fields.GetValueOrDefault("launchDirectory") ?? "";
-                    var owned = new InteractiveClientProcess(host, host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows : ClientPlatform.Linux, pid, start, directory, null);
-                    var outcome = await owned.StopAsync(TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
+                    InteractiveStop outcome;
+                    if (host.Kind == GameHostKind.Local && OperatingSystem.IsMacOS())
+                    {
+                        var result = (await host.RunAsync(MacStop, new Dictionary<string, string>
+                        {
+                            ["game"] = pid.ToString(CultureInfo.InvariantCulture), ["start"] = start, ["commandLine"] = commandLine,
+                        }, TimeSpan.FromSeconds(45), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping Mac process {pid} on {host.Name}");
+                        outcome = InteractiveClient.Line(result.Stdout, "VT-STOP ") switch
+                        {
+                            "gone" => InteractiveStop.AlreadyGone,
+                            "stopped" => InteractiveStop.Stopped,
+                            _ => throw new HostOperationException($"Mac process {pid} could not be proven stopped", result),
+                        };
+                        var after = (await HostProcessProbe.ProbeAsync(host, [(pid, start)], timeout, cancellation).ConfigureAwait(false))[(pid, start)];
+                        if (after.State is not (ProbedState.Gone or ProbedState.Reused))
+                            throw new IOException($"Mac process {pid} is still {after.State} after the stop attempt; its world and runtime are kept.");
+                    }
+                    else
+                    {
+                        var owned = new InteractiveClientProcess(host, host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows : ClientPlatform.Linux, pid, start, directory, null);
+                        outcome = await owned.StopAsync(TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
+                    }
                     Step(group.Key, what, outcome == InteractiveStop.AlreadyGone ? "already gone" : "stopped");
                     await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false);
                     await SettleAdopted(process).ConfigureAwait(false);

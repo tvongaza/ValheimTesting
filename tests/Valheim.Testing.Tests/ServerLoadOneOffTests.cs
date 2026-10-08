@@ -13,12 +13,15 @@ public sealed class ServerLoadOneOffTests : IDisposable
 
     private static readonly CampaignPreflightReport Ready = new([]);
     private string Adapter() => _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
-        RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
+        RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
 
     // The rig's game plays the dedicated server install: its managed assemblies and BepInEx core resolve the mod.
     private string[] Arguments(string output, params string[] more)
     {
-        _rig.Write("game/valheim_server.exe", Encoding.UTF8.GetBytes("fake dedicated executable"));
+        _rig.Write("game/" + ServerRunPlan.ExecutableFor(HostProfile.CurrentPlatform switch
+        {
+            "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux,
+        }), Encoding.UTF8.GetBytes("fake dedicated executable"));
         return ["--server", _rig.Game, "--mod", _rig.Parent, "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
             "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", Adapter(), "--output", output, .. more];
     }
@@ -38,12 +41,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
         return machine;
     }
 
-    // A Mac keeps the staged path (the campaign runner has no macOS server); the campaign route runs on Windows and Linux.
-    private static bool CampaignRoute => !OperatingSystem.IsMacOS();
-
     [Fact] public async Task TheDefaultIsAServerAndOneCleanClientAsADerivedCampaign()
     {
-        if (!CampaignRoute) return;
         string output = Path.Combine(_rig.Root, "one-off");
         string? campaignFile = null; ServerRunPlan? plan = null; IReadOnlyDictionary<string, ClientRunPlan>? clients = null;
         int result;
@@ -92,7 +91,6 @@ public sealed class ServerLoadOneOffTests : IDisposable
     // No client install: refused with the reason and --server-only, never run without its client.
     [Fact] public async Task AClientThatCannotRunIsRefusedNeverDropped()
     {
-        if (!CampaignRoute) return;
         bool ran = false;
         string output = Path.Combine(_rig.Root, "no-client");
         int result = await ServerLoad.RunAsync(Arguments(output), new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
@@ -140,7 +138,6 @@ public sealed class ServerLoadOneOffTests : IDisposable
 
     [Fact] public async Task ServerOnlySkipsTheClientAndPreflightOnlyStopsBeforeTheRun()
     {
-        if (!CampaignRoute) return;
         bool ran = false;
         string output = Path.Combine(_rig.Root, "server-only");
         int result = await ServerLoad.RunAsync(Arguments(output, "--server-only", "--preflight-only"), new ServerLoad.Seams(
@@ -158,7 +155,6 @@ public sealed class ServerLoadOneOffTests : IDisposable
     // names that package, and an install that needs none is left to its own loader.
     [Fact] public async Task AShippedLoaderChosenForAnInstallBecomesItsRolesLoaderPackage()
     {
-        if (!CampaignRoute) return;
         string package = Path.Combine(_rig.Root, "shipped-loader.json");
         BepInExLoaderPackage.Capture(_rig.Game, "BepInExPack_Valheim", "5.4.2351").Write(package);
         var asked = new List<string>();
@@ -183,7 +179,6 @@ public sealed class ServerLoadOneOffTests : IDisposable
     // The server must be on this machine; a client elsewhere needs --join unless it can be inferred.
     [Fact] public void ARemoteServerIsRefusedAndARemoteClientNeedsAJoinAddress()
     {
-        if (!CampaignRoute) return; // a Mac's own server environment is refused as a macOS server first
         string file = Path.Combine(_rig.Root, "lab.json");
         bool windows = OperatingSystem.IsWindows();
         File.WriteAllText(file, JsonSerializer.Serialize(new
@@ -229,13 +224,11 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(Directory.Exists(server));
     }
 
-    // What the campaign route cannot use, or the staged path cannot do, is refused before anything is copied.
+    // Options from the removed Mac-only staged path are refused before anything is copied.
     [Fact] public async Task RouteSpecificOptionsAreRefused()
     {
         string output = Path.Combine(_rig.Root, "route");
-        Assert.Equal(3, await ServerLoad.RunAsync(Arguments(output + "-userdata", "--steam-userdata", _rig.Root), new ServerLoad.Seams(MacOS: false)));
-        Assert.Equal(3, await ServerLoad.RunAsync(Arguments(output + "-mac", "--server-only", "--preflight-only"), new ServerLoad.Seams(MacOS: true,
-            Staged: (_, _) => throw new InvalidOperationException("never launched"))));
+        Assert.Equal(2, await ServerLoad.RunAsync(Arguments(output + "-userdata", "--steam-userdata", _rig.Root)));
         Assert.Equal(3, await ServerLoadComparison.RunAsync(["--mod", "a.dll", "--mod", "b.dll", "--remove-mod", "b.dll", "--output", output + "-ab", "--preflight-only"],
             _ => throw new InvalidOperationException("no arm runs")));
     }
@@ -243,7 +236,6 @@ public sealed class ServerLoadOneOffTests : IDisposable
     // A server install without BepInEx is named as such, with the two ways to supply a loader, before resolution.
     [Fact] public async Task AServerWithoutBepInExIsRefusedPlainly()
     {
-        if (!CampaignRoute) return;
         string output = Path.Combine(_rig.Root, "no-bepinex");
         var args = Arguments(output, "--server-only");
         Directory.Delete(Path.Combine(_rig.Game, "BepInEx", "core"), recursive: true);
@@ -252,23 +244,25 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(File.Exists(Path.Combine(output, "dependencies.lock.json")));
     }
 
-    // A Mac stays on the staged local copies, says so, and refuses the campaign-only options.
-    [Fact] public async Task AMacKeepsTheStagedLocalPath()
+    // A Mac now writes and runs the same campaign as Windows and Linux, with the inventory's ports.
+    [Fact] public async Task AMacUsesTheHostedCampaign()
     {
+        if (!OperatingSystem.IsMacOS()) return;
         string output = Path.Combine(_rig.Root, "mac");
-        var launched = new List<string[]>();
-        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only"), new ServerLoad.Seams(MacOS: true,
-            Staged: (arguments, options) =>
+        string? campaign = null;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only"), new ServerLoad.Seams(
+            Inspect: _ => Task.FromResult(Ready),
+            Campaign: (file, plan, _, _, _) =>
             {
-                launched.Add(arguments);
-                Assert.NotNull(options.StagedRuntime);
+                campaign = file;
+                Assert.Equal(GameLaunch.ServerMacExecutable, plan.Executable);
+                Assert.Equal(5688, plan.Port);
                 return Task.FromResult(0);
             }));
         Assert.Equal(0, result);
-        Assert.Equal(Path.Combine(output, "plan.json"), Assert.Single(launched)[1]);
-        Assert.False(File.Exists(Path.Combine(output, "campaign.json")));
-        Assert.Equal(3, await ServerLoad.RunAsync(Arguments(Path.Combine(_rig.Root, "mac-inventory"), "--server-only", "--inventory", "f.json"),
-            new ServerLoad.Seams(MacOS: true, Staged: (_, _) => Task.FromResult(0))));
+        Assert.Equal(Path.Combine(output, "campaign.json"), campaign);
+        Assert.True(File.Exists(campaign));
+        Assert.False(Directory.Exists(Path.Combine(output, "staged-runtime")));
     }
 
     // start's client is the inventory's: this machine's Valheim, --game and --loader-package as its override, or a file's

@@ -53,8 +53,8 @@ public sealed class RunJournalTests : IDisposable
         Assert.Equal(Environment.ProcessId, JournalRunner.Current.Pid);
     }
 
-    // The process check through the host's own shell, on this test's process: Linux reads /proc and Windows the process and
-    // its CIM command line; a macOS host has neither and says so rather than guessing.
+    // The process check through the host's own shell, on this test's process: Linux reads /proc, Windows CIM,
+    // and macOS ps. All three prove start identity and command line before recovery may signal a process.
     [Fact] public async Task TheProcessCheckReadsStartIdentityAndCommandLineOrSaysItCannot()
     {
         var host = Host();
@@ -62,11 +62,6 @@ public sealed class RunJournalTests : IDisposable
         using var exited = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh") { ArgumentList = { OperatingSystem.IsWindows() ? "/c" : "-c", "exit 0" } })!;
         exited.WaitForExit();
         var first = await HostProcessProbe.ProbeAsync(host, [(self, ""), (exited.Id, "1")], TimeSpan.FromSeconds(60));
-        if (OperatingSystem.IsMacOS())
-        {
-            Assert.All(first.Values, probed => Assert.Equal(ProbedState.Unreadable, probed.State));
-            return;
-        }
         var probed = first[(self, "")];
         Assert.Equal(ProbedState.Same, probed.State);
         Assert.Matches("^[0-9]+$", probed.StartIdentity);

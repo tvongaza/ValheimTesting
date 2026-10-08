@@ -248,69 +248,6 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Contains("did not stop cleanly", Copy(result, "runtimeCopy"));
         stubborn.RefuseStop = false;
     }
-    // A runner that staged its own runtime copy (NativeSmoke) runs from it: one runtime copy, not two.
-    private (string Plan, WorldFixture Staged) StagedPlan()
-    {
-        string plan = WritePlan(linux: HostRunsLinux);
-        var staged = WorldFixture.Copy(Runtime, Path.Combine(_root, "staged"), WorldFixture.Manifest(Runtime));
-        Directory.CreateDirectory(Path.Combine(staged.DirectoryPath, "BepInEx", "plugins"));
-        File.WriteAllText(Path.Combine(staged.DirectoryPath, "BepInEx", "plugins", "staged.dll"), "staged by the runner");
-        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(plan))!;
-        json["runtime"] = new System.Text.Json.Nodes.JsonObject
-        {
-            ["source"] = staged.DirectoryPath,
-            ["sha256"] = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(WorldFixture.Manifest(staged.DirectoryPath))),
-        };
-        json["runtimePins"] = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(InstallPins.Of(staged.DirectoryPath)));
-        File.WriteAllText(plan, json.ToJsonString());
-        return (plan, staged);
-    }
-    private static PinnedServerRunOptions<ServerRunPlan> WithStaged(PinnedServerRunOptions<ServerRunPlan> options, WorldFixture staged) => new()
-    {
-        Name = options.Name, ReadPlan = options.ReadPlan, Mod = options.Mod,
-        Scenario = options.Scenario, SessionOverride = options.SessionOverride, StagedRuntime = staged,
-    };
-    [Fact] public async Task AStagedRuntimeIsRunInPlaceAndRetiredAgainstItsStagedState()
-    {
-        if (OperatingSystem.IsMacOS()) return;
-        var (plan, staged) = StagedPlan();
-        var options = WithStaged(Options(run =>
-        {
-            File.WriteAllText(Path.Combine(run.RuntimeDirectory, "toolkit-unity.log"), "written during the run");
-            return Task.CompletedTask;
-        }, new FakeOwnedServer("test.mod")), staged);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], options));
-        var result = Result();
-        var steps = result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()).ToList();
-        Assert.Contains("verify the staged runtime copy", steps); Assert.DoesNotContain("copy and verify pinned runtime", steps);
-        Assert.Equal(staged.DirectoryPath, Copy(result, "runtime"));
-        Assert.Single(Directory.GetDirectories(Output, "valheim-test-*")); // the world copy only: the runtime was not copied again
-        Assert.False(Directory.Exists(staged.DirectoryPath));
-        var changes = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "runtime-changes", "changes.json"))).RootElement;
-        Assert.Equal(new[] { "toolkit-unity.log" }, changes.GetProperty("Added").EnumerateArray().Select(e => e.GetString())); // not staged.dll
-        Assert.True(staged.Preserve);
-        staged.Dispose();
-    }
-    [Fact] public async Task AStagedRuntimeTheRunKeepsSurvivesItsCallersDispose()
-    {
-        if (OperatingSystem.IsMacOS()) return;
-        var (plan, staged) = StagedPlan();
-        var stubborn = new FakeOwnedServer("test.mod") { RefuseStop = true };
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], WithStaged(Options(server: stubborn), staged)));
-        staged.Dispose(); // the runner's own using block
-        Assert.True(Directory.Exists(staged.DirectoryPath));
-        Assert.Contains("did not stop cleanly", Copy(Result(), "runtimeCopy"));
-        stubborn.RefuseStop = false;
-    }
-    [Fact] public async Task AStagedRuntimeMustBeThePlansRuntime()
-    {
-        string plan = WritePlan(linux: HostRunsLinux);
-        using var other = WorldFixture.Copy(Runtime, Path.Combine(_root, "staged"), WorldFixture.Manifest(Runtime));
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], WithStaged(Options(), other)));
-        var step = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "verify the staged runtime copy");
-        Assert.Contains("is not the staged runtime copy", step.GetProperty("Error").GetString());
-        Assert.True(Directory.Exists(other.DirectoryPath));
-    }
     [Fact] public async Task AFullDriveIsRefusedBeforeAnythingIsCopied()
     {
         string plan = WritePlan(linux: HostRunsLinux);
