@@ -223,12 +223,14 @@ public class InteractiveClientTests
             {
                 string file = Path.Combine(root, index + ".ps1");
                 File.WriteAllText(file, scripts[index]);
-                using var process = Process.Start(new ProcessStartInfo("powershell.exe")
+                var start = new ProcessStartInfo("powershell.exe")
                 {
                     UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true,
                     ArgumentList = { "-NoProfile", "-NonInteractive", "-Command",
-                        "$t=$null;$e=$null;[System.Management.Automation.Language.Parser]::ParseFile($args[0],[ref]$t,[ref]$e)>$null;if($e.Count){$e|ForEach-Object Message;exit 1}", file },
-                })!;
+                        "$t=$null;$e=$null;[System.Management.Automation.Language.Parser]::ParseFile($env:VT_PARSE_FILE,[ref]$t,[ref]$e)>$null;if($e.Count){$e|ForEach-Object Message;exit 1}" },
+                };
+                start.Environment["VT_PARSE_FILE"] = file;
+                using var process = Process.Start(start)!;
                 Assert.True(process.WaitForExit(15000), "PowerShell parser did not finish.");
                 Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd() + process.StandardOutput.ReadToEnd());
             }
