@@ -33,6 +33,12 @@ public interface IOwnedProcess : IDisposable
     }
 }
 
+// A local client diagnostic may read process facts only after proving this is still the process the run launched.
+internal interface IClientProcessIdentity
+{
+    string StartFileTimeUtc { get; }
+}
+
 /// <summary>
 /// What an owned server's startup waits on instead of retrying connections. The process exit is always watched.
 /// Without <see cref="CliLog"/>, connecting falls back to bounded retries at the session's poll interval.
@@ -398,7 +404,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
 // Starts one direct executable (an owned server, or an owned client through ClientSession); launch scripts must exec/wait, never detach a child.
 // The PID handshake refuses a daemonized server. No process-name discovery/kill. A clean stop asks only this process to quit
 // (Quit); the kill fallback ends this process and its children.
-public sealed class DirectServerProcess : IOwnedProcess
+public sealed class DirectServerProcess : IOwnedProcess, IClientProcessIdentity
 {
     private readonly Process _process;
     // The profile's account and host lock still need a conservative exit answer after ClientSession disposes this handle.
@@ -406,7 +412,9 @@ public sealed class DirectServerProcess : IOwnedProcess
     private readonly Task _stdout, _stderr;
     private readonly string _logPrefix;
     private readonly string[] _gameLogs;
+    private readonly string _startFileTimeUtc;
     public int Id => _process.Id;
+    string IClientProcessIdentity.StartFileTimeUtc => _startFileTimeUtc;
     public bool HasExited
     {
         get
@@ -425,6 +433,7 @@ public sealed class DirectServerProcess : IOwnedProcess
         _logPrefix = logPrefix; _gameLogs = gameLogs;
         start.UseShellExecute = false; start.RedirectStandardOutput = true; start.RedirectStandardError = true;
         _process = Process.Start(start) ?? throw new IOException("Could not start the owned process.");
+        _startFileTimeUtc = _process.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
         _stdout = Capture(_process.StandardOutput, logPrefix + ".stdout.log");
         _stderr = Capture(_process.StandardError, logPrefix + ".stderr.log");
     }

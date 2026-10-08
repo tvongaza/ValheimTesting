@@ -9,11 +9,13 @@ if (args is ["help" or "--help"])
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
     Console.WriteLine(EnvCommand.Usage + " (list, preflight and status read only; recover and teardown clear what a run left)");
+    Console.WriteLine(OwnedCliCommand.Usage + " (one strictly pinned command to a running owned Windows client)");
     Console.WriteLine(SessionCommand.Usage + " (read only; --hosts adds the host checks)");
     return 0;
 }
 if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(args[1..]);
 if (args.Length != 0 && args[0] == "env") return await EnvCommand.RunAsync(args[1..]);
+if (args.Length != 0 && args[0] == "cli") return OwnedCliCommand.Run(args[1..]);
 if (args.Length != 0 && args[0] == "session") return await SessionCommand.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "start") args = args[1..];
 if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
