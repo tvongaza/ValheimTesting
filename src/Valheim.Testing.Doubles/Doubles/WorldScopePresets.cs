@@ -93,6 +93,7 @@ namespace Valheim.Testing.Doubles
         /// </summary>
         public ValheimWorldScope AtMainMenu()
         {
+            ThrowIfDisposed();
             EmptyUnityScene();
             _statics.And(() => ZNet.instance, null!); _statics.And(() => ZRoutedRpc.instance, null!);
             _statics.And(() => ZDOMan.instance, null); _statics.And(() => ZoneSystem.instance, null);

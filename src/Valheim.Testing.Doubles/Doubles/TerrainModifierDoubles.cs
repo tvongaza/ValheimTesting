@@ -196,6 +196,7 @@ namespace Valheim.Testing.Doubles
         /// <summary>No live terrain modifiers yet: the modifiers this test wakes join the cleared game-owned list.</summary>
         public ValheimWorldScope WithTerrainModifiers()
         {
+            ThrowIfDisposed();
             global::TerrainModifier.s_instances.Clear();
             global::TerrainModifier.s_needsSorting = false;
             return this;

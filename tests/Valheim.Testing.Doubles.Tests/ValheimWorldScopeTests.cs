@@ -157,6 +157,25 @@ public sealed class ValheimWorldScopeTests
         finally { UnityEngine.Object.EndOfFrame(); }
     }
 
+    [Fact] public void DisposedScopeRejectsDirectGlobalChanges()
+    {
+        var scope = new ValheimWorldScope();
+        scope.Dispose();
+        float time = UnityEngine.Time.time;
+        var modifiers = TerrainModifier.s_instances.ToArray();
+        var heightmaps = Heightmap.s_heightmaps.ToArray();
+        var players = Player.s_players.ToArray();
+        var objects = UnityEngine.Object.s_unityGameObjects;
+        Assert.Throws<ObjectDisposedException>(() => scope.WithClock(time + 1f));
+        Assert.Throws<ObjectDisposedException>(() => scope.WithTerrainModifiers());
+        Assert.Throws<ObjectDisposedException>(() => scope.AtMainMenu());
+        Assert.Equal(time, UnityEngine.Time.time);
+        Assert.Equal(modifiers, TerrainModifier.s_instances);
+        Assert.Equal(heightmaps, Heightmap.s_heightmaps);
+        Assert.Equal(players, Player.s_players);
+        Assert.Same(objects, UnityEngine.Object.s_unityGameObjects);
+    }
+
     [Fact] public void ReadonlyGameListsKeepTheirIdentityAndScopeRestoresTheirContents()
     {
         var heightmaps = Heightmap.GetAllHeightmaps();

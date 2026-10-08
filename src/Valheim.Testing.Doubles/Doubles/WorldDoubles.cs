@@ -117,6 +117,10 @@ namespace Valheim.Testing.Doubles
         private readonly List<global::TerrainModifier> _modifiers = new(global::TerrainModifier.s_instances);
         private readonly List<Player> _players = new(Player.s_players);
         private bool _disposed;
+        private void ThrowIfDisposed()
+        {
+            if (_disposed) throw new System.ObjectDisposedException(nameof(ValheimWorldScope));
+        }
 
         public ValheimWorldScope WithWorld(WorldGenerator world) { _statics.And(() => WorldGenerator.instance, world); return this; }
         public ValheimWorldScope WithTerrain(ITerrain terrain) => WithWorld(new TerrainWorld(terrain));
@@ -126,6 +130,7 @@ namespace Valheim.Testing.Doubles
         /// </summary>
         public ValheimWorldScope WithClock(float seconds)
         {
+            ThrowIfDisposed();
             if (float.IsNaN(seconds) || float.IsInfinity(seconds) || seconds < 0f)
                 throw new System.ArgumentOutOfRangeException(nameof(seconds), "Clock time must be a finite, non-negative number of seconds.");
             UnityEngine.Time.SetClockForTest(seconds);
