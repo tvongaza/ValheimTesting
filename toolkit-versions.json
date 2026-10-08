@@ -9,7 +9,7 @@
     "Valheim.Testing.Adapter": "0.1.0-preview.7",
     "Valheim.Testing.Bindings": "0.1.0-preview.2",
     "Valheim.Testing.Bindings.Tool": "0.1.0-preview.2",
-    "Valheim.Testing.NativeSmoke": "0.1.0-preview.14"
+    "Valheim.Testing.NativeSmoke": "0.1.0-preview.15"
   },
   "releasedCliCommit": "9e8ca679298e559e995ab5b04ef84b782b15a0ad"
 }
