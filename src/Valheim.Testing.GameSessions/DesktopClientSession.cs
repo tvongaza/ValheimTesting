@@ -86,7 +86,7 @@ internal static class DesktopClientSession
                 {
                     var process = InteractiveClient.StartAsync(host, launch, launchDirectory,
                         TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds)), cancellation: cancellation).GetAwaiter().GetResult();
-                    try { OwnedClientCommandLease.Write(output, process, plan); }
+                    try { OwnedClientCommandLease.Write(output, process.Id, process.StartIdentity, plan); }
                     catch
                     {
                         process.Stop(TimeSpan.FromSeconds(15)); // Never leave a launched client behind if its lease file cannot be kept.

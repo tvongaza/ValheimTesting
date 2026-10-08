@@ -307,6 +307,10 @@ public sealed class ClientSession : IDisposable
             if (plan.Capabilities.Any())
                 CliCapabilities.Require(actor, plan.Capabilities); // Live, after any static manifest check.
             pinsVerified = actor.Pinned;
+            // The local one-shot start path opens this session directly, without DesktopClientSession. Make its
+            // exact process and strict menu/world pins available to the separate valheim-test cli invocation too.
+            if (OperatingSystem.IsWindows() && pinsVerified && process is IClientProcessIdentity identity)
+                OwnedClientCommandLease.Write(output, process.Id, identity.StartFileTimeUtc, plan);
             return new ClientSession(actor, process, logs, architecture, output, failureEvidence).Using(account);
         }
         catch (Exception error)

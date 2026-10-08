@@ -1,7 +1,5 @@
 using System.Text.Json;
-using Valheim.Testing.Game;
-
-namespace Valheim.Testing.GameSessions;
+namespace Valheim.Testing.Game;
 
 // A short-lived pointer to one owned Windows desktop client. It is useful only while that exact process is alive;
 // a separate valheim-test invocation checks the start identity again before sending a strictly pinned command.
@@ -10,9 +8,6 @@ internal sealed record OwnedClientCommandLease(int Pid, string StartFileTimeUtc,
     internal const string FileName = "owned-cli.json";
     internal const string MenuPins = "owned-cli-menu.pins";
     internal const string WorldPins = "owned-cli-world.pins";
-
-    internal static void Write(string output, InteractiveClientProcess process, ClientRunPlan plan)
-        => Write(output, process.Id, process.StartIdentity, plan);
 
     internal static void Write(string output, int pid, string startFileTimeUtc, ClientRunPlan plan)
     {

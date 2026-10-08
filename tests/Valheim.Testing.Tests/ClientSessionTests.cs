@@ -125,6 +125,34 @@ public sealed class ClientSessionTests : IDisposable
         public void Dispose() { }
     }
 
+    private sealed class RunningIdentifiedProcess(int id, string start) : IOwnedProcess, IClientProcessIdentity
+    {
+        private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Id => id;
+        public string StartFileTimeUtc => start;
+        public bool HasExited { get; private set; }
+        public Task<int> WaitForExitAsync(CancellationToken cancellation) => _exited.Task;
+        public void Stop(TimeSpan timeout) { HasExited = true; _exited.TrySetResult(0); }
+        public void Dispose() { }
+    }
+
+    [Fact] public void LocalWindowsOwnedClientRecordsItsExactProcessAndStrictPinsForAPassthrough()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var process = new RunningIdentifiedProcess(99, "123456789");
+        var plan = Plan();
+        plan.HostWorld = new HostWorldPlan { WorldUid = "fixture-uid" };
+        using (ClientSession.Launch(plan, _output, () => process, () => new ScriptedTransport(),
+            (_, _) => Task.CompletedTask))
+        {
+            Assert.True(File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName)));
+            Assert.Contains("\"Pid\": 99", File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.FileName)));
+            Assert.Contains("my.mod=absent", File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.MenuPins)));
+            Assert.Contains("worlduid=fixture-uid", File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.WorldPins)));
+        }
+        Assert.True(process.HasExited);
+    }
+
     [Fact] public void AnOwnedClientReceivesItsDeclaredProcessVariable()
     {
         using var install = ClientLaunchTests.Install.For(ClientPlatform.Windows);
