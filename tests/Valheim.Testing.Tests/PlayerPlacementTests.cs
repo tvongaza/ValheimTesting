@@ -145,6 +145,7 @@ public class PlayerPlacementTests
         var (serverTransport, clientTransport) = SignalTransports();
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         Assert.Throws<OperationCanceledException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), cancel.Token));
+        Assert.Equal(0, clientTransport.Count("cli_extensions"));
         Assert.Equal(0, clientTransport.Count("cli_skip_intro"));
         Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
     }

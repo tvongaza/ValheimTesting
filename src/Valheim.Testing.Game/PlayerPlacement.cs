@@ -66,6 +66,7 @@ public static class PlayerPlacement
     {
         if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(600)) throw new ArgumentOutOfRangeException(nameof(timeout));
         TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
+        cancellation.ThrowIfCancellationRequested();
         // One listing; a missing pack is named before anything is sent.
         var capabilities = client.RequireCapabilities(loadedGround ? [.. ArrivalCapabilities, "valheim.world/terrain"] : ArrivalCapabilities);
         Capability support = capabilities[1], reading = capabilities[2];
