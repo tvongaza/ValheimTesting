@@ -2,7 +2,7 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The retire script itself, in bash on this machine (Linux only: a hosted server's host runs Linux, with GNU stat and du).
+// The retire script itself, in bash on this machine (Linux and macOS).
 public sealed class HostedRetireScriptTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("hosted-retire-").FullName;
@@ -12,7 +12,7 @@ public sealed class HostedRetireScriptTests : IDisposable
 
     [Fact] public async Task ItKeepsListedFilesWithinTheLimitsAndRemovesOnlyTheRunsRuntime()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
         string run = Path.Combine(_root, "runs", "run-x"), runtime = Path.Combine(run, "runtime"), keep = Path.Combine(run, "runtime-changes");
         Directory.CreateDirectory(Path.Combine(runtime, "sub"));
         File.WriteAllText(Path.Combine(runtime, "a.txt"), "kept");

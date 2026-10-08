@@ -9,7 +9,8 @@
                      this OS; on Linux ~/.steam/steam, the link Steam keeps to its install). The one property most
                      projects need.
       ValheimManaged the folder holding assembly_valheim.dll (default: found under ValheimPath: valheim_Data/Managed,
-                     Valheim.app/Contents/Resources/Data/Managed or valheim_server_Data/Managed)
+                     Valheim.app/Contents/Resources/Data/Managed, valheim_server_Data/Managed or
+                     valheim_server/Data/Managed)
       BepInExCore    the folder holding BepInEx.dll (default: ValheimPath/BepInEx/core)
       UseValheimCli  true in a project that compiles against ValheimCLI, such as a test adapter; it then needs
       CliDll         the ValheimCLI core (valheimCLI.dll) installed in the test runtime. There is deliberately no
@@ -35,6 +36,7 @@
     <ValheimManaged Condition="'$(ValheimManaged)' == '' And Exists('$(ValheimPath)/valheim_Data/Managed')">$(ValheimPath)/valheim_Data/Managed</ValheimManaged>
     <ValheimManaged Condition="'$(ValheimManaged)' == '' And Exists('$(ValheimPath)/Valheim.app/Contents/Resources/Data/Managed')">$(ValheimPath)/Valheim.app/Contents/Resources/Data/Managed</ValheimManaged>
     <ValheimManaged Condition="'$(ValheimManaged)' == '' And Exists('$(ValheimPath)/valheim_server_Data/Managed')">$(ValheimPath)/valheim_server_Data/Managed</ValheimManaged>
+    <ValheimManaged Condition="'$(ValheimManaged)' == '' And Exists('$(ValheimPath)/valheim_server/Data/Managed')">$(ValheimPath)/valheim_server/Data/Managed</ValheimManaged>
 
     <_BepInExCoreFrom>BepInExCore</_BepInExCoreFrom>
     <_BepInExCoreFrom Condition="'$(BepInExCore)' == ''">ValheimPath</_BepInExCoreFrom>
@@ -51,7 +53,7 @@
     <Error Condition="'@(ValheimReference)' != '' And '$(ValheimManaged)' == '' And !Exists('$(ValheimPath)')"
            Text="Valheim is not installed at '$(ValheimPath)' ($(_ValheimPathFrom)). Set ValheimPath to the game folder, with -p:ValheimPath=&lt;folder&gt; or the VALHEIM_PATH environment variable, or ValheimManaged to the folder holding assembly_valheim.dll." />
     <Error Condition="'@(ValheimReference)' != '' And '$(ValheimManaged)' == ''"
-           Text="'$(ValheimPath)' ($(_ValheimPathFrom)) has no valheim_Data/Managed, Valheim.app/Contents/Resources/Data/Managed or valheim_server_Data/Managed folder. Set ValheimPath to the game folder, or ValheimManaged to the folder holding assembly_valheim.dll." />
+           Text="'$(ValheimPath)' ($(_ValheimPathFrom)) has no valheim_Data/Managed, Valheim.app/Contents/Resources/Data/Managed, valheim_server_Data/Managed or valheim_server/Data/Managed folder. Set ValheimPath to the game folder, or ValheimManaged to the folder holding assembly_valheim.dll." />
 
     <ItemGroup>
       <_ValheimGameReference Include="@(ValheimReference)" Condition="'%(ValheimReference.File)' == ''" HintPath="$(ValheimManaged)/%(ValheimReference.Identity).dll" ValheimFolder="managed" />

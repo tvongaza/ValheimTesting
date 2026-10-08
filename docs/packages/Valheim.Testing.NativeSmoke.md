@@ -92,7 +92,7 @@ To isolate a load interaction, change `server-load` to `server-load-ab` and add 
 
 ## Your own assertions: init
 
-`valheim-test init --output NEW_DIR` creates the hosted consumer, for the `regression.json` a `start` run writes (with the `environments.json` beside it); `valheim-test init server --output NEW_DIR` creates the server consumer, for a `server-load` run's `campaign.json` (with the unbound `plan.json` and `client-plan.json` beside it; on a Mac, its `plan.json`). `init` is the only command that builds a project. It pins the `Valheim.Testing.Game` this tool runs, so the consumer reads the tool's files, and restores and builds it from NuGet.org alone. A tool built from a source checkout pins its unreleased Game version, which NuGet.org does not serve, so `init` refuses there; use a released tool.
+`valheim-test init --output NEW_DIR` creates the hosted consumer, for the `regression.json` a `start` run writes (with the `environments.json` beside it); `valheim-test init server --output NEW_DIR` creates the server consumer, for a `server-load` run's `campaign.json` (with the unbound `plan.json` and `client-plan.json` beside it). `init` is the only command that builds a project. It pins the `Valheim.Testing.Game` this tool runs, so the consumer reads the tool's files, and restores and builds it from NuGet.org alone. A tool built from a source checkout pins its unreleased Game version, which NuGet.org does not serve, so `init` refuses there; use a released tool.
 
 ## What runs left: env status, recover and teardown
 
@@ -106,7 +106,7 @@ The scenario itself is the mod's: it runs from the mod's own test project on the
 
 - **Shared machines.** A host runs one owned run at a time (its lock); every actor on a host gets its own ValheimCLI and game port, its own copy and its own disposable character. A client needs the desktop session of a signed-in Steam account, so one desktop session runs one client; two clients need two accounts, read from each host and refused when shared ([Steam account leases](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#steam-account-leases)). The toolkit never signs in to Steam: the right account signed in on each client host stays a person's step that `session check --hosts` reports.
 - **Hosted and read-only clients.** A client can host the world instead of a dedicated server, its peers joining it ([a hosting client in a session](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#a-hosting-client-in-a-session)); an attached client (one its operator started) is driven but never stopped, its install neither read nor changed, and it keeps devcommands only ([actors, fixtures and reports](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Game.md#actors-fixtures-and-reports)).
-- **macOS.** A Mac runs one client actor; the session runner has no macOS dedicated server, so `server-load` on a Mac stages local copies instead (it says so).
+- **macOS.** A Mac runs one client actor. A local Mac dedicated server uses the same hosted campaign path as Linux and Windows; remote Mac servers and Mac crossplay are not yet supported.
 
 ## What a result says
 

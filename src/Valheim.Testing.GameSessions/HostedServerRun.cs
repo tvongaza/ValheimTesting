@@ -198,11 +198,15 @@ internal sealed class HostedServerRun : IServerPlacement
     public Task ShipWorldAsync(ScenarioReport report, string localWorld, string output, CancellationToken cancellation) =>
         LocalMac ? report.StepAsync(StepPhase.Setup, "place the pinned world in the Mac's default worlds", () =>
         {
-            var manifest = WorldFixture.Manifest(localWorld);
-            var identity = WorldIdentity.Read(localWorld);
+            // A campaign's prepared server save root contains worlds_local; HostedWorldOnHost takes the
+            // contents of that folder, with the named world at its root.
+            string sourceWorlds = Directory.Exists(Path.Combine(localWorld, "worlds_local"))
+                ? Path.Combine(localWorld, "worlds_local") : localWorld;
+            var manifest = WorldFixture.Manifest(sourceWorlds);
+            var identity = WorldIdentity.Read(sourceWorlds);
             var fixture = new HostWorldPlan
             {
-                World = new PinnedDirectory { Source = localWorld, Sha256 = new Dictionary<string, string>(manifest, StringComparer.Ordinal) },
+                World = new PinnedDirectory { Source = sourceWorlds, Sha256 = new Dictionary<string, string>(manifest, StringComparer.Ordinal) },
                 WorldUid = identity.UidText,
             };
             var site = new HostedWorldOnHost.Site(Host, Role.Host, HostPath.Join(WorldDirectory, "worlds_local"),
@@ -761,13 +765,16 @@ internal static class HostedRunScripts
             if [ ! -f "$src" ] || [ -L "$src" ]; then printf 'VT-NOTKEPT %s -1\n' "$line"; continue; fi
             # Never through a linked directory inside the copy: the file's real path must be inside the copy too.
             case "$(readlink -f -- "$src")" in "$real"/*) ;; *) printf 'VT-NOTKEPT %s -1\n' "$line"; continue;; esac
-            size=$(stat -c %s -- "$src") || exit 3
+            if [ "$(uname)" = Darwin ]; then size=$(stat -f %z -- "$src") || exit 3
+            else size=$(stat -c %s -- "$src") || exit 3; fi
             if [ "$size" -gt "$perfile" ] || [ $((kept + size)) -gt "$total" ]; then printf 'VT-NOTKEPT %s %s\n' "$line" "$size"; continue; fi
             mkdir -p -- "$(dirname -- "$keep/$rel")" && cp -p -- "$src" "$keep/$rel" || exit 3
             kept=$((kept + size))
         done <<< "$files"
-        bytes=$(du -sb -- "$runtime") || exit 3
+        if [ "$(uname)" = Darwin ]; then bytes=$(du -sk -- "$runtime") || exit 3
+        else bytes=$(du -sb -- "$runtime") || exit 3; fi
         bytes=${bytes%%$'\t'*}
+        if [ "$(uname)" = Darwin ]; then bytes=$((bytes * 1024)); fi
         rm -rf -- "$runtime" || exit 3
         printf 'VT-RETIRED %s %s\n' "$bytes" "$kept"
         """.ReplaceLineEndings("\n");

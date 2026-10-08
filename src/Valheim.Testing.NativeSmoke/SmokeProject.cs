@@ -35,7 +35,7 @@ internal static class SmokeProject
     internal static void PrintHint(bool server)
     {
         if (Refusal(server) == null)
-            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "the run's campaign.json and the plan.json beside it, or a Mac run's plan.json" : "the run's regression.json")}; needs NuGet.org).");
+            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "the run's campaign.json and the plan.json beside it" : "the run's regression.json")}; needs NuGet.org).");
     }
 
     internal static async Task<int> InitAsync(string[] args)
@@ -117,7 +117,7 @@ internal static class SmokeProject
             using Valheim.Testing.GameSessions;
 
             // Run this with the campaign.json valheim-test server-load wrote (plan.json and client-plan.json beside it), or on a
-            // Mac with its plan.json. Supply a new result directory for each run.
+            // Supply a new result directory for each campaign run.
             if (args is not [var runFile, var resultDirectory])
             {
                 Console.Error.WriteLine("Usage: dotnet run -- RUN_OUTPUT/campaign.json NEW_RESULT_DIRECTORY");
