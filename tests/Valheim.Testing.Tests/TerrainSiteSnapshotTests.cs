@@ -31,16 +31,16 @@ public sealed class TerrainSiteSnapshotTests
 
     [Fact] public void CaptureUsesClientForLoadedLayersAndVerifiesBothActors()
     {
-        var clientTransport = Transport(); var serverTransport = Transport(server: true);
+        var clientTransport = Transport(); var serverTransport = Transport(server: true, areaReady: false);
         using var client = clientTransport.Actor("client", "cli_expect --strict worlduid=7");
         using var server = serverTransport.Actor("server", "cli_expect --strict worlduid=7");
         var snapshot = TerrainSiteSnapshot.Capture(client, "cave entrance", "7", [Point], TimeSpan.FromSeconds(1), server);
         Assert.Equal(new TerrainSiteReading(Point, 42.125f, 42.0f, .25f, 0f, .5f, 1f), snapshot.Readings[0]);
-        Assert.Equal(5, snapshot.Commands.Count);
-        Assert.Single(snapshot.Commands.Where(x => x.Role == "server"));
+        Assert.Equal(4, snapshot.Commands.Count);
+        Assert.DoesNotContain(snapshot.Commands, x => x.Role == "server");
         Assert.Equal(new[] { "cli_extension valheim.observe/zones 0,0", GroundCommand, "cli_extension valheim.world/terrain-surface 16 -8", "cli_extension valheim.world/terrain-paint 16 -8" },
             snapshot.Commands.Where(x => x.Role == "client").Select(x => x.Command).ToArray());
-        Assert.Contains("\"colliderHeight\":42", snapshot.Commands[3].Reply[0]);
+        Assert.Contains("\"colliderHeight\":42", snapshot.Commands[2].Reply[0]);
         Assert.DoesNotContain(serverTransport.Commands, x => x.StartsWith("cli_extension valheim.world/", StringComparison.Ordinal));
         Assert.All(snapshot.Commands, x => Assert.NotEmpty(x.Reply));
         Assert.All(clientTransport.Commands.Where(x => x.StartsWith("cli_", StringComparison.Ordinal) && x != "cli_extensions" && !x.StartsWith("cli_expect")),

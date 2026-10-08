@@ -1,6 +1,6 @@
 # Valheim.Testing.Adapter
 
-`Valheim.Testing.Adapter` is a source package compiled into a mod's **test-only** BepInEx adapter. It provides the mod's owned-session identity and small helpers for commands that actually depend on that mod. Production mods do not reference it. The released package version is in the [package table](../getting-started.md#package-versions-and-feeds).
+`Valheim.Testing.Adapter` is a source package compiled into a mod's **test-only** BepInEx adapter. It provides the mod's owned-session identity, a guarded global-key fixture change, and small helpers for mod-specific commands. Production mods do not reference it. The released package version is in the [package table](../getting-started.md#package-versions-and-feeds).
 
 Generic observations belong to ValheimCLI's optional **Observe pack** (`Valheim.Cli.Observe.dll`, plugin `valheimCLI.observe`). Install and pin that pack on each server or client that needs its commands. It provides `valheim.observe/harmony`, `content-census`, `zones`, `custom-data`, `globalkeys`, `config`, `unresolved-prefabs`, `dungeon-rooms`, and the `review-*` commands. The toolkit checks each capability against the pinned manifest before launch and against `cli_extensions` after launch. A mod's adapter does not register these commands. See the ValheimCLI fork's command-pack guide for the pack boundary; the repository's [release contract](../valheimcli-release-contract.md) records the exact fork and bundle used by each release.
 
@@ -27,6 +27,7 @@ ValheimCLI owns the game-side extension API: registration and instance tokens, c
 |---|---|
 | `TestExtension` | Register the session identity and mod-specific extension commands once the CLI API is ready. |
 | `FixtureGate` | Refuse a test-only mutation unless the owned process has the enabling variable and session token. |
+| `GlobalKeyCommands.Change` | Register the shared, gated server-side `globalkey set|remove` fixture command; pair it with Observe's read-only `globalkeys` listing. |
 | `Members` | Exact reflected lookup/call for private game members; missing or mistyped members throw. |
 | `SavedObjects.InZone` | Bounded census of saved objects in one zone for a mod-specific observation. |
 | `QuitLogFlush` | Preserve BepInEx lines emitted during a clean quit for the teardown log scan. |

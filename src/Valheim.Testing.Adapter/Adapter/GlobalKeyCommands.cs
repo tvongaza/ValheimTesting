@@ -1,14 +1,13 @@
-// AcceptanceMod's mutating fixture command. It belongs to this test adapter rather than the reusable
-// read-only Observe pack, and is installed only in test runtimes.
+// Source from Valheim.Testing.Adapter, compiled into a mod's test-only game-side adapter. A mutation
+// is guarded by the adapter's fixture gate; the optional Observe pack owns the read-only key list.
 #nullable enable
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using Valheim.Testing.Adapter;
 using valheimCLI.Extensions;
 
-namespace AcceptanceMod.Adapter
+namespace Valheim.Testing.Adapter
 {
     /// <summary>
     /// A fixture command that sets or removes a global key on the server. ValheimCLI's optional Observe pack owns the
