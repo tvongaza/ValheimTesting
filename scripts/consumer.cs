@@ -33,10 +33,12 @@ using System.Text.RegularExpressions;
 
 const string NuGetOrg = "https://api.nuget.org/v3/index.json";
 const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
-string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.GameSessions", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 string[] tools = ["Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
 string root = FindRoot();
+string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
+    .Select(Path.GetFileName).OfType<string>()
+    .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj"))).Order(StringComparer.Ordinal).ToArray();
 string? feed = null, candidate = null;
 int waitMinutes = 0;
 for (int i = 0; i < args.Length; i++)
@@ -141,7 +143,12 @@ try
             .Extension("valheim.session", "leave", _ => new { });
         using var actor = transport.Actor("published-consumer");
         CliCapabilities.Require(actor, CliCapabilities.HostedRounds);
-        try { CliCapabilities.Require(actor, CliCapabilities.HostedRounds.Append("valheim.world/terrain")); return 2; }
+        try
+        {
+            CliCapabilities.Require(actor, CliCapabilities.HostedRounds.Append("valheim.world/terrain"));
+            Console.Error.WriteLine("The incomplete World Tools pack was accepted without valheim.world/terrain.");
+            return 2;
+        }
         catch (InvalidOperationException error) when (error.Message.Contains("World Tools pack")) { }
         int listings = transport.Count("cli_extensions");
         int pinChecks = transport.Count("cli_expect");
@@ -150,7 +157,11 @@ try
         try { CliCapabilities.Require(actor, CliCapabilities.HostedRounds); }
         catch (InvalidOperationException) { refused = true; }
         // The failed pin check did not reach capability discovery.
-        if (!refused || transport.Count("cli_expect") != pinChecks + 1 || transport.Count("cli_extensions") != listings) return 3;
+        if (!refused || transport.Count("cli_expect") != pinChecks + 1 || transport.Count("cli_extensions") != listings)
+        {
+            Console.Error.WriteLine($"Strict-pin negative control failed: refused={refused}, cli_expect={transport.Count("cli_expect") - pinChecks} new call(s), cli_extensions={transport.Count("cli_extensions") - listings} new call(s).");
+            return 3;
+        }
         return 0;
         """);
     Run(env, app, "dotnet", "run", "--project", "Consumer.csproj", "-c", "Release");

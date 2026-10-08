@@ -22,8 +22,10 @@ for (int i = 0; i < args.Length; i++)
 }
 if (output == null) return Usage("--output is required");
 
-string[] packageIds = ["Valheim.Testing", "Valheim.Testing.Cli", "Valheim.Testing.Game", "Valheim.Testing.GameSessions",
-    "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
+string[] packageIds = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
+    .Select(Path.GetFileName).OfType<string>()
+    .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj")))
+    .Append("Valheim.Testing.Cli").Order(StringComparer.Ordinal).ToArray();
 using var cli = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "cli-dependency.json")));
 using var loader = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "loader-dependency.json")));
 string Cli(string name) => cli.RootElement.GetProperty(name).GetString() ?? throw new InvalidDataException("Missing CLI " + name);
@@ -44,7 +46,7 @@ foreach (string id in packageIds.Where(id => id != "Valheim.Testing.Cli"))
     versions[id] = XDocument.Load(project).Descendants("Version").Single().Value;
 }
 versions["Valheim.Testing.Cli"] = cliVersion;
-if (!packageIds.Order(StringComparer.Ordinal).SequenceEqual(versions.Keys)) throw new InvalidDataException("Package versions must name exactly all nine packages.");
+if (!packageIds.SequenceEqual(versions.Keys)) throw new InvalidDataException("Package versions must name every packable source project and the pinned CLI transport.");
 if (versions.Values.Any(version => version.Contains("-candidate", StringComparison.OrdinalIgnoreCase)))
     throw new InvalidDataException("A release contract cannot name candidate packages.");
 
@@ -55,9 +57,7 @@ foreach ((string id, string version) in versions)
 {
     string lower = id.ToLowerInvariant(), v = version.ToLowerInvariant();
     string url = $"https://api.nuget.org/v3-flatcontainer/{lower}/{v}/{lower}.{v}.nupkg";
-    using var response = await http.GetAsync(url);
-    if (!response.IsSuccessStatusCode) throw new InvalidDataException($"NuGet.org does not serve {id} {version}: HTTP {(int)response.StatusCode}.");
-    byte[] bytes = await response.Content.ReadAsByteArrayAsync();
+    byte[] bytes = await GetBytes(http, url);
     if (bytes.Length == 0) throw new InvalidDataException($"NuGet.org served an empty {id} {version} package.");
     string hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
     using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
@@ -91,13 +91,11 @@ static void RequireDependency(XDocument spec, string owner, string dependency, s
 RequireDependency(nuspecs["Valheim.Testing.Game"], "Valheim.Testing.Game", "Valheim.Testing.Cli", versions["Valheim.Testing.Cli"]);
 RequireDependency(nuspecs["Valheim.Testing.GameSessions"], "Valheim.Testing.GameSessions", "Valheim.Testing.Game", versions["Valheim.Testing.Game"]);
 
-string[] requiredPacks = CliCapabilities.HostedRounds.Concat(PlayerPlacement.ArrivalCapabilities).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+string[] requiredPacks = CliCapabilities.Toolkit.ToArray();
 // The manifest describes the bundle a disposable game will actually load. A matching transport commit alone would
 // not prove that its Standard and World Tools packs offer the commands the toolkit expects.
-using (var bundleReply = await http.GetAsync(cli.RootElement.GetProperty("bundle").GetProperty("url").GetString()))
 {
-    bundleReply.EnsureSuccessStatusCode();
-    byte[] bytes = await bundleReply.Content.ReadAsByteArrayAsync();
+    byte[] bytes = await GetBytes(http, cli.RootElement.GetProperty("bundle").GetProperty("url").GetString()!);
     if (!Convert.ToHexStringLower(SHA256.HashData(bytes)).Equals(bundleHash, StringComparison.OrdinalIgnoreCase))
         throw new InvalidDataException("The ValheimCLI plugin bundle differs from cli-dependency.json's SHA-256 pin.");
     using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
@@ -132,6 +130,7 @@ using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = 
     json.WriteStartObject();
     json.WriteNumber("schema", 1);
     json.WriteString("sourceCommit", sourceCommit);
+    json.WriteString("packageHashOf", "NuGet.org repository-signed .nupkg bytes; SHA256SUMS covers the unsigned files attached to the GitHub release");
     json.WriteStartObject("fork");
     json.WriteString("repository", Cli("repository"));
     json.WriteString("commit", forkCommit);
@@ -176,6 +175,29 @@ static int Usage(string error)
 {
     Console.Error.WriteLine("release-contract: " + error + ". Usage: dotnet run scripts/release-contract.cs -- --output FILE");
     return 2;
+}
+
+// Retry only transient transport failures. The consumer has already proved that every exact version is served;
+// a persistent 404 is a bad release input and must not be disguised as a slow package-index update.
+static async Task<byte[]> GetBytes(HttpClient http, string url)
+{
+    for (int attempt = 1; ; attempt++)
+    {
+        try
+        {
+            using var response = await http.GetAsync(url);
+            if (response.StatusCode == System.Net.HttpStatusCode.RequestTimeout ||
+                response.StatusCode == System.Net.HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
+                response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidDataException($"Release contract could not fetch {url}: HTTP {(int)response.StatusCode}.");
+            return await response.Content.ReadAsByteArrayAsync();
+        }
+        catch (Exception error) when (attempt < 4 && error is HttpRequestException or TaskCanceledException)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5 * attempt));
+        }
+    }
 }
 
 static string FindRoot()

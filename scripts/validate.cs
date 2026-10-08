@@ -53,7 +53,9 @@ Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no
 // Every package packs as <Version>-candidate.<hash of the package inputs> (pins.cs candidate, one owner of the identity):
 // different inputs never share a version in .packages. Packs of these packages under any other version are removed first; a
 // complete set already packed under this identity is kept rather than packed again, so one identity has one set of bytes.
-string[] packed = ["Valheim.Testing", "Valheim.Testing.Doubles", "Valheim.Testing.Game", "Valheim.Testing.GameSessions", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
+string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
+    .Select(Path.GetFileName).OfType<string>()
+    .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj"))).Order(StringComparer.Ordinal).ToArray();
 string candidate = Capture("dotnet", "run", "scripts/pins.cs", "--", "candidate").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
 if (!System.Text.RegularExpressions.Regex.IsMatch(candidate, "^candidate\\.h?[0-9a-f]{12}$")) throw new InvalidOperationException("pins.cs candidate printed no identity: " + candidate);
 Note("candidate identity: " + candidate);

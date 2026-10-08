@@ -1,7 +1,6 @@
 name: Publish packages
-# Builds Valheim.Testing, Valheim.Testing.Cli, Valheim.Testing.Game, Valheim.Testing.GameSessions, Valheim.Testing.Doubles, Valheim.Testing.Adapter, Valheim.Testing.Bindings
-# Valheim.Testing.Bindings.Tool and Valheim.Testing.NativeSmoke from this commit and publishes
-# them to NuGet.org with Trusted Publishing: no stored API key. GitHub issues a short-lived OIDC token,
+# Builds the packable Valheim.Testing projects under src/ and the pinned Valheim.Testing.Cli transport,
+# then publishes them to NuGet.org with Trusted Publishing: no stored API key. GitHub issues a short-lived OIDC token,
 # NuGet.org exchanges it for a one-hour key, and only the `release` environment (which requires a
 # maintainer's approval) can request one. Versions already on NuGet.org are skipped, so a release that
 # bumps one package leaves the others untouched.
@@ -50,8 +49,10 @@ jobs:
       - name: Pack release packages
         run: |
           mkdir -p release
-          for p in Valheim.Testing Valheim.Testing.Game Valheim.Testing.GameSessions Valheim.Testing.Doubles Valheim.Testing.Adapter Valheim.Testing.Bindings Valheim.Testing.Bindings.Tool Valheim.Testing.NativeSmoke; do
-            dotnet pack "src/$p/$p.csproj" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true -p:ValheimTestingRelease=true
+          for project in src/Valheim.Testing*/Valheim.Testing*.csproj; do
+            dir=$(dirname "$project")
+            test "$(basename "$dir").csproj" = "$(basename "$project")" || continue
+            dotnet pack "$project" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true -p:ValheimTestingRelease=true
           done
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
           (cd release && sha256sum *.nupkg)
@@ -96,11 +97,11 @@ jobs:
         id: login
         with:
           user: ${{ secrets.NUGET_USER }}
-      - name: Push, dependencies first
+      - name: Push every package
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          for f in release/Valheim.Testing.[0-9]*.nupkg release/Valheim.Testing.Cli.*.nupkg release/Valheim.Testing.Game.*.nupkg release/Valheim.Testing.GameSessions.*.nupkg release/Valheim.Testing.Doubles.*.nupkg release/Valheim.Testing.Adapter.*.nupkg release/Valheim.Testing.Bindings.[0-9]*.nupkg release/Valheim.Testing.Bindings.Tool.*.nupkg release/Valheim.Testing.NativeSmoke.*.nupkg; do
+          for f in release/*.nupkg; do
             dotnet nuget push "$f" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
   consumer:
@@ -163,7 +164,7 @@ jobs:
             cat dist/notes/packages.md
             echo
             echo "The new packages and their SHA-256 checksums are attached. Pin exact versions; see [package versions and feeds](https://github.com/$GITHUB_REPOSITORY/blob/main/docs/getting-started.md#package-versions-and-feeds)."
-            echo "The attached release-contract.json records the exact published bytes of all nine compatible packages, the ValheimCLI fork and required commands, and the shipped loader."
+            echo "The attached release-contract.json hashes NuGet.org's repository-signed bytes of every compatible package; SHA256SUMS hashes the unsigned package files attached here. It also records the ValheimCLI fork, required commands and shipped loader."
           } > dist/notes.md
           # Package IDs have no hyphen, so one in a file name is a prerelease version.
           prerelease=()

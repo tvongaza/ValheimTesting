@@ -15,6 +15,15 @@ public static class CliCapabilities
     public const string TeleportSignals = "valheim.session/teleport-signals";
     /// <summary>What <see cref="ClientRounds"/> uses on the host: its session state, a confirmed save and the leave to its menu.</summary>
     public static readonly IReadOnlyList<string> HostedRounds = ["valheim.session/state", "valheim.session/save", "valheim.session/leave"];
+    /// <summary>
+    /// Every schema-1 command supplied by ValheimCLI packs that this toolkit calls directly. A release checks the pinned
+    /// plugin bundle against this list, including optional observation paths, before recording its transport contract.
+    /// Mod adapters supply their own capabilities and are checked when a scenario runs.
+    /// </summary>
+    public static readonly IReadOnlyList<string> Toolkit = Array.AsReadOnly(HostedRounds
+        .Concat(["valheim.session/join", TeleportSignals, "valheim.world/player-support-wait", "valheim.world/player-support",
+            "valheim.world/terrain", "valheim.world/terrain-surface", "valheim.world/terrain-paint", "valheim.world/terrain-grid"])
+        .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
 
     // The packs that register ValheimCLI's own extensions (valheimCLI's Packs/Standard and Packs/WorldTools).
     private static readonly Dictionary<string, string> Packs = new(StringComparer.Ordinal)

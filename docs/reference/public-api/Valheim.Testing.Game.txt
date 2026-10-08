@@ -179,6 +179,7 @@ static class Valheim.Testing.Game.CliBundle
 static class Valheim.Testing.Game.CliCapabilities
   field const System.String TeleportSignals = "valheim.session/teleport-signals"
   field static readonly System.Collections.Generic.IReadOnlyList`1<System.String> HostedRounds
+  field static readonly System.Collections.Generic.IReadOnlyList`1<System.String> Toolkit
   method static System.Void Require(Valheim.Testing.Game.GameActor actor, System.Collections.Generic.IEnumerable`1<System.String> paths)
   method static System.Void Require(Valheim.Testing.Game.GameActor actor, params System.String[] paths)
 sealed class Valheim.Testing.Game.CliCapabilityManifest

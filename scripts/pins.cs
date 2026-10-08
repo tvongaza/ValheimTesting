@@ -72,9 +72,10 @@ const string Tool = "Valheim.Testing.NativeSmoke";
 // The pin a valheimCLI fork link at a full commit names: releasedCliCommit, the commit the released Cli was built from.
 const string CliCommit = "releasedCliCommit";
 Regex ForkLink = new(@"https://github\.com/tvongaza/valheimCLI/blob/(?<version>[0-9a-f]{40})/(?<path>[^#?)\s]+)(?:#(?<anchor>[^)\s]*))?", RegexOptions.IgnoreCase);
-string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.GameSessions", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
-
 string root = FindRoot();
+string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
+    .Select(Path.GetFileName).OfType<string>()
+    .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj"))).Order(StringComparer.Ordinal).ToArray();
 bool actions = Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true";
 
 string mode = args.Length > 0 ? args[0] : "";
