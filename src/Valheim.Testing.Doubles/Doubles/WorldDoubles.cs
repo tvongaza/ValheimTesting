@@ -73,9 +73,10 @@ namespace Valheim.Testing.Doubles
     /// commands, cheat gates, local player and player list; the registries' hooks, localization, input, preferences, config
     /// disk, heightmap builder, clock and the random generator <c>Random.InitState</c> installed, not its position in
     /// its sequence) plus the server and dedicated flags of the <c>ZNet</c> it found;
-    /// disposed, it ends the test's frame (<c>UnityEngine.Object.EndOfFrame</c>) and puts every one back, in reverse order,
-    /// each even when another fails, through <see cref="StaticOverride"/>. A second Dispose does nothing. It restores
-    /// references, not contents: nothing is deep-copied, so a test that mutates an object it did not install (adds a peer to
+    /// disposed, it ends the test's frame (<c>UnityEngine.Object.EndOfFrame</c>) and restores the statics through
+    /// <see cref="StaticOverride"/> in reverse order, each even when another fails. A second Dispose does nothing. It restores
+    /// references, except the game's three static readonly lists of heightmaps, terrain modifiers and players, whose
+    /// contents are restored in place. Other objects are not deep-copied, so a test that mutates one it did not install (adds a peer to
     /// the existing <c>ZNet</c>, a ZDO to the existing <c>ZDOMan</c>) leaves that change behind. Use the builder methods to
     /// install fresh, isolated objects instead (<see cref="WithZdos"/>, <see cref="WithScene"/>, <see cref="WithNetwork"/>,
     /// <see cref="WithCommands"/>, ...). A mod's own statics are the mod's to scope, with <see cref="StaticOverride"/>. The doubles
@@ -93,7 +94,6 @@ namespace Valheim.Testing.Doubles
             .AndKeep(() => ZRoutedRpc.instance).AndKeep(() => Jotunn.Managers.NetworkManager.Instance)
             .AndKeep(() => ObjectDB.m_instance).AndKeep(() => ObjectDB.AwakePostfix).AndKeep(() => ObjectDB.CopyOtherDBPostfix)
             .AndKeep(() => ZNetScene.AwakePostfix).AndKeep(() => HeightmapBuilder.m_instance)
-            .AndKeep(() => global::Heightmap.s_heightmaps).AndKeep(() => global::TerrainModifier.s_instances)
             .AndKeep(() => global::TerrainModifier.s_needsSorting).AndKeep(() => ZNetView.GhostInit)
             .AndKeep(() => ZNetView.m_useInitZDO).AndKeep(() => ZNetView.m_initZDO).AndKeep(() => ZNetView.m_forceDisableInit)
             .AndKeep(() => UnityEngine.Object.s_unityComponents).AndKeep(() => UnityEngine.Object.s_unityGameObjects)
@@ -105,7 +105,7 @@ namespace Valheim.Testing.Doubles
             .AndKeep(() => BepInEx.Configuration.ConfigFile.s_files).AndKeep(() => BepInEx.Paths.GameRootPath)
             .AndKeep(() => BepInEx.Paths.BepInExRootPath).AndKeep(() => BepInEx.Paths.ConfigPath).AndKeep(() => BepInEx.Paths.PluginPath)
             .AndKeep(() => Terminal.commands).AndKeep(() => Terminal.m_cheat).AndKeep(() => Achievements.CheatedAtAll)
-            .AndKeep(() => Player.m_localPlayer).AndKeep(() => Player.s_players)
+            .AndKeep(() => Player.m_localPlayer)
             .AndKeep(() => Localization.Current).AndKeep(() => Localization.OnLanguageChange).AndKeep(() => ZInput.Current)
             .AndKeep(() => PlatformPrefs.s_values).AndKeep(() => PlatformPrefs.Unavailable);
         // Instance state, not statics: the flags of the ZNet this scope found, which AsServer and the presets change, and
@@ -113,10 +113,29 @@ namespace Valheim.Testing.Doubles
         private readonly ZNet? _net = ZNet.instance;
         private readonly bool _server = ZNet.instance?.Server ?? false, _dedicated = ZNet.instance?.Dedicated ?? false;
         private readonly OnlineBackendType _backend = ZNet.instance?.OnlineBackend ?? default;
-        private bool _ownsHeightmaps, _disposed;
+        private readonly List<global::Heightmap> _heightmaps = new(global::Heightmap.s_heightmaps);
+        private readonly List<global::TerrainModifier> _modifiers = new(global::TerrainModifier.s_instances);
+        private readonly List<Player> _players = new(Player.s_players);
+        private bool _disposed;
+        private void ThrowIfDisposed()
+        {
+            if (_disposed) throw new System.ObjectDisposedException(nameof(ValheimWorldScope));
+        }
 
-        public ValheimWorldScope WithWorld(WorldGenerator world) { WorldGenerator.instance = world; return this; }
+        public ValheimWorldScope WithWorld(WorldGenerator world) { _statics.And(() => WorldGenerator.instance, world); return this; }
         public ValheimWorldScope WithTerrain(ITerrain terrain) => WithWorld(new TerrainWorld(terrain));
+        /// <summary>
+        /// Sets game and real time in seconds without running a frame or any behaviour's Update. The last frame length
+        /// becomes zero; the frame count is unchanged. The scope restores all four clock values on dispose.
+        /// </summary>
+        public ValheimWorldScope WithClock(float seconds)
+        {
+            ThrowIfDisposed();
+            if (float.IsNaN(seconds) || float.IsInfinity(seconds) || seconds < 0f)
+                throw new System.ArgumentOutOfRangeException(nameof(seconds), "Clock time must be a finite, non-negative number of seconds.");
+            UnityEngine.Time.SetClockForTest(seconds);
+            return this;
+        }
         /// <summary>
         /// The order the Unity doubles call behaviours and objects where Unity promises none (restored on dispose): see
         /// <see cref="UnityOrder"/>. Run a test that depends on two objects once in each order to find an order assumption.
@@ -128,12 +147,16 @@ namespace Valheim.Testing.Doubles
             return this;
         }
         /// <summary>A new, empty ZDOMan (this session's id is 1).</summary>
-        public ValheimWorldScope WithZdos() { ZDOMan.instance = new ZDOMan(); return this; }
-        public ValheimWorldScope WithZoneSystem() { ZoneSystem.instance = new ZoneSystem(); return this; }
+        public ValheimWorldScope WithZdos() { _statics.And(() => ZDOMan.instance, new ZDOMan()); return this; }
+        /// <summary>Removes the ZDO manager for a test of code that runs before world loading.</summary>
+        public ValheimWorldScope WithoutZdos() { _statics.And(() => ZDOMan.instance, (ZDOMan?)null); return this; }
+        public ValheimWorldScope WithZoneSystem() { _statics.And(() => ZoneSystem.instance, new ZoneSystem()); return this; }
+        /// <summary>Installs or removes a prepared heightmap builder for one test.</summary>
+        public ValheimWorldScope WithHeightmapBuilder(HeightmapBuilder? builder) { _statics.And(() => HeightmapBuilder.instance, builder); return this; }
         /// <summary>A scene with no prefabs yet (<see cref="ZNetScene.AddPrefab"/>), and no GameObjects, Unity components or pending destroys yet for FindObjectsByType, RunFrame and EndOfFrame.</summary>
         public ValheimWorldScope WithScene()
         {
-            ZNetScene.instance = new ZNetScene();
+            _statics.And(() => ZNetScene.instance, new ZNetScene());
             EmptyUnityScene();
             return this;
         }
@@ -146,7 +169,9 @@ namespace Valheim.Testing.Doubles
         /// <summary>A new <c>ZNet</c> with no peers, as the server or a client, a new <c>ZRoutedRpc</c> and a new Jotunn <c>NetworkManager</c>.</summary>
         public ValheimWorldScope WithNetwork(bool server = true)
         {
-            ZNet.instance = new ZNet { Server = server }; ZRoutedRpc.instance = new ZRoutedRpc(); Jotunn.Managers.NetworkManager.Instance = new Jotunn.Managers.NetworkManager();
+            _statics.And(() => ZNet.instance, new ZNet { Server = server });
+            _statics.And(() => ZRoutedRpc.instance, new ZRoutedRpc());
+            _statics.And(() => Jotunn.Managers.NetworkManager.Instance, new Jotunn.Managers.NetworkManager());
             return this;
         }
         /// <summary>No console commands yet: the mod's registration in this test fills a fresh table.</summary>
@@ -167,7 +192,6 @@ namespace Valheim.Testing.Doubles
         /// </summary>
         public global::Heightmap RegisterHeightmap(Vector2s zone, int width = 64, bool withCompiler = true)
         {
-            if (!_ownsHeightmaps) { global::Heightmap.s_heightmaps = new(global::Heightmap.s_heightmaps); _ownsHeightmaps = true; }
             var hm = global::Heightmap.CreateForZone(zone, width, withCompiler);
             UnloadHeightmap(zone);
             global::Heightmap.s_heightmaps.Add(hm);
@@ -176,7 +200,6 @@ namespace Valheim.Testing.Doubles
         /// <summary>Unloads the zone's heightmap, as the game does when the zone leaves the active area.</summary>
         public void UnloadHeightmap(Vector2s zone)
         {
-            if (!_ownsHeightmaps) { global::Heightmap.s_heightmaps = new(global::Heightmap.s_heightmaps); _ownsHeightmaps = true; }
             var centre = ZoneSystem.GetZonePos(zone);
             global::Heightmap.s_heightmaps.RemoveAll(h => h.transform.position.x == centre.x && h.transform.position.z == centre.z);
         }
@@ -193,13 +216,25 @@ namespace Valheim.Testing.Doubles
             try
             {
                 if (_net != null) { _net.Server = _server; _net.Dedicated = _dedicated; _net.OnlineBackend = _backend; }
-                _statics.Dispose();
+                try { _statics.Dispose(); }
+                finally
+                {
+                    RestoreList(global::Heightmap.s_heightmaps, _heightmaps);
+                    RestoreList(global::TerrainModifier.s_instances, _modifiers);
+                    RestoreList(Player.s_players, _players);
+                }
             }
             catch (System.Exception restore) when (frame != null)
             {
                 throw new System.AggregateException("Ending the test's frame failed, and so did restoring the statics.", frame, restore);
             }
             if (frame != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(frame).Throw();
+        }
+
+        private static void RestoreList<T>(List<T> current, List<T> snapshot)
+        {
+            current.Clear();
+            current.AddRange(snapshot);
         }
     }
 }

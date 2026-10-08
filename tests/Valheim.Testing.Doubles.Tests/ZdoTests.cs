@@ -124,7 +124,7 @@ public sealed class ZdoTests
         zdos.RoundTripThroughSave();
         Assert.Equal(2, zdo.GetInt(anim));
         Assert.Contains("support".GetStableHashCode(), zdos.SessionOnlyHashes);
-        using (new ValheimWorldScope()) { ZDOMan.instance = null; Assert.Throws<InvalidOperationException>(() => zdo.AddSessionHash(anim)); }
+        using (var scope = new ValheimWorldScope().WithoutZdos()) Assert.Throws<InvalidOperationException>(() => zdo.AddSessionHash(anim));
     }
 
     [Fact] public void TheFirstLoadOfAnOldWorldStripsLegacyKeysAndOldFormatEmptyValues()

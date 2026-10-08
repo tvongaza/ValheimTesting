@@ -53,7 +53,7 @@ public sealed class NetworkedComponentTests : IDisposable
     // As the game: ZNetView.Awake destroys a view that wakes outside a world.
     [Fact] public void AViewThatWakesWithoutAZdoManDestroysItself()
     {
-        ZDOMan.instance = null;
+        _scope.WithoutZdos();
         var go = new GameObject("early");
         var view = go.AddComponent<ZNetView>();
         Assert.False(view.IsValid()); Assert.False(view.Destroyed); // Destroy waits for the end of the frame

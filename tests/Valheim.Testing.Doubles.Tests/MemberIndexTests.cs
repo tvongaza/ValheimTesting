@@ -121,11 +121,11 @@ public sealed class MemberIndexTests
     [Fact] public void EachDisagreementIsReported()
     {
         var verdicts = Capture(out _);
-        Assert.Equal("absent", verdicts["ZNet\tfield\tPeers : Dictionary<long, ZNetPeer>"].Status);
-        Assert.Contains("ZNet\tfield\tPeers : Dictionary<long, ZNetPeer>\ttest-only", IndexLines());
+        Assert.Equal("absent", verdicts["ZNet\tfield\tPeers : Dictionary<long, ZNetPeer> { get; }"].Status);
+        Assert.Contains("ZNet\tfield\tPeers : Dictionary<long, ZNetPeer> { get; }\ttest-only", IndexLines());
         var problems = Disagreements(new[]
         {
-            "ZNet\tfield\tPeers : Dictionary<long, ZNetPeer>\tgame",
+            "ZNet\tfield\tPeers : Dictionary<long, ZNetPeer> { get; }\tgame",
             "UnityEngine.GameObject\tmethod\tAddComponent<T>(Action<T>) : T\tgame",
             "ZNet\tmethod\tstatic GetUID() : long\ttest-only",
             "ZNet\tmethod\tNotAGameMethod() : void\ttest-only",
@@ -135,6 +135,26 @@ public sealed class MemberIndexTests
             p => Assert.StartsWith("the game's signature differs (AddComponent(Type)", p),
             p => Assert.StartsWith("the game has it, so it must not be [TestOnly]", p),
             p => Assert.StartsWith("not in the game capture", p));
+    }
+
+    [Fact] public void WritableDoubleOfReadOnlyGameMemberIsAContractError()
+    {
+        var verdicts = new Dictionary<string, Verdict>(StringComparer.Ordinal)
+        {
+            ["Example\tfield\tValue : int"] = new("differs", "Value : int { get; }"),
+            ["Example\tfield\tValue : int { get; }"] = new("game", ""),
+        };
+        Assert.Single(Disagreements(new[] { "Example\tfield\tValue : int\tgame" }, verdicts));
+        Assert.Empty(Disagreements(new[] { "Example\tfield\tValue : int { get; }\tgame" }, verdicts));
+    }
+
+    [Fact] public void FixtureMembersExposeTheGamesReadOnlySurface()
+    {
+        Assert.EndsWith(MemberIndex.ReadOnly, MemberIndex.Signature(typeof(ZDOID).GetField(nameof(ZDOID.UserID))!));
+        Assert.EndsWith(MemberIndex.ReadOnly, MemberIndex.Signature(typeof(UnityEngine.Time).GetProperty(nameof(UnityEngine.Time.time))!));
+        Assert.EndsWith(MemberIndex.ReadOnly, MemberIndex.Signature(typeof(ZNet).GetProperty(nameof(ZNet.instance))!));
+        Assert.EndsWith(MemberIndex.ReadOnly, MemberIndex.Signature(typeof(UnityEngine.Component).GetProperty(nameof(UnityEngine.Component.gameObject))!));
+        Assert.DoesNotContain(MemberIndex.ReadOnly, MemberIndex.Signature(typeof(Heightmap).GetField(nameof(Heightmap.m_width))!));
     }
 }
 

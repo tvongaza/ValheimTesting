@@ -121,7 +121,7 @@ namespace UnityEngine
         [TestOnly] public static void RunFrame(float deltaTime = 0.02f)
         {
             if (!(deltaTime >= 0f) || float.IsInfinity(deltaTime)) throw new ArgumentOutOfRangeException(nameof(deltaTime));
-            Time.deltaTime = deltaTime; Time.time += deltaTime; Time.realtimeSinceStartup += deltaTime; Time.frameCount++;
+            Time.AdvanceForTest(deltaTime);
             var behaviours = new List<MonoBehaviour>();
             foreach (var component in UnityOrdered(s_unityComponents)) if (component is MonoBehaviour behaviour && !behaviour.Destroyed) behaviours.Add(behaviour);
             foreach (var behaviour in behaviours)
@@ -442,7 +442,7 @@ namespace UnityEngine
 
         /// <summary>The object's transform, made on first use. Throws once the object is destroyed.</summary>
         public Transform transform { get { ThrowIfDestroyed(); return OwnTransform; } }
-        internal Transform OwnTransform => m_transform ??= new Transform { gameObject = this };
+        internal Transform OwnTransform => m_transform ??= new Transform { m_gameObject = this };
         /// <summary>The world position (the transform's).</summary>
         [TestOnly] public Vector3 Position { get => OwnTransform.position; set => OwnTransform.position = value; }
         /// <summary>The rotation (the transform's).</summary>
@@ -755,11 +755,19 @@ namespace UnityEngine
     public static partial class Time
     {
         /// <summary>Game time in seconds; <see cref="Object.RunFrame"/> advances it.</summary>
-        public static float time;
+        public static float time { get; private set; }
         /// <summary>The last frame's length in seconds.</summary>
-        public static float deltaTime;
+        public static float deltaTime { get; private set; }
         /// <summary>Frames run so far.</summary>
-        public static int frameCount;
+        public static int frameCount { get; private set; }
+        [TestOnly] internal static void AdvanceForTest(float step)
+        {
+            deltaTime = step; time += step; realtimeSinceStartup += step; frameCount++;
+        }
+        [TestOnly] internal static void SetClockForTest(float seconds)
+        {
+            time = seconds; realtimeSinceStartup = seconds; deltaTime = 0f;
+        }
     }
 
     /// <summary>Unity's log. Lines go to the log capture (<c>ManualLogSource.Captured</c>) and the console.</summary>

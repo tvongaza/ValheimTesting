@@ -29,7 +29,7 @@ public sealed class ValheimWorldScopeTests
         ["UnityEngine.Object.s_unityLastCloneMap"] = "[ThreadStatic] plumbing read right after one Instantiate call",
     };
 
-    // Readonly statics cannot be put back, only cleared; each one that holds objects says why it may outlive a test.
+    // Readonly statics keep their identity; these three lists have their contents restored by ValheimWorldScope.
     private static readonly Dictionary<string, string> SharedReadonly = new(StringComparer.Ordinal)
     {
         ["BepInEx.Configuration.ConfigDefinition.s_invalid"] = "constant table",
@@ -37,12 +37,15 @@ public sealed class ValheimWorldScopeTests
         ["BepInEx.Configuration.TomlTypeConverter.s_escapes"] = "constant table",
         ["BepInEx.Logging.Logger.Internal"] = "BepInEx's own log source; its lines go to the scoped capture",
         ["DropTable.s_sharedItems"] = "the game's shared result list, cleared by every GetDropListItems",
+        ["Heightmap.s_heightmaps"] = "game-owned list identity; ValheimWorldScope restores its contents in place",
         ["HarmonyLib.Harmony.s_patches"] = "Harmony's patches are process-wide, as the real Harmony's; a test unpatches what it patched (UnpatchSelf)",
         ["HarmonyLib.HarmonyMethod.s_fields"] = "reflection cache",
         ["HeightmapBuilder.s_disposed"] = "marker object for a disposed builder",
         ["Localization.s_endChars"] = "constant table",
+        ["Player.s_players"] = "game-owned list identity; ValheimWorldScope restores its contents in place",
         ["Splatform.PlatformUserID.s_displayPrefixesToPlatform"] = "constant table",
         ["Splatform.PlatformUserID.s_platformToDisplayPrefixes"] = "constant table",
+        ["TerrainModifier.s_instances"] = "game-owned list identity; ValheimWorldScope restores its contents in place",
         ["UnityEngine.MonoBehaviour.s_messages"] = "reflection cache",
         ["Utils.s_nameEnds"] = "constant table",
         ["ZDO.LegacyKeys"] = "constant table",
@@ -142,17 +145,104 @@ public sealed class ValheimWorldScopeTests
         var world = new PlaneWorld();
         var scope = new ValheimWorldScope().WithScene();
         scope.Dispose();
-        var outerWorld = WorldGenerator.instance;
         var queued = new UnityEngine.GameObject("queued after the scope");
         try
         {
-            WorldGenerator.instance = world;
+            using var installed = Valheim.Testing.StaticOverride.Set(() => WorldGenerator.instance, world);
             UnityEngine.Object.Destroy(queued);
             scope.Dispose();
             Assert.Same(world, WorldGenerator.instance);   // not put back a second time
             Assert.False(queued.Destroyed);                // and no second end of frame
         }
-        finally { UnityEngine.Object.EndOfFrame(); WorldGenerator.instance = outerWorld; }
+        finally { UnityEngine.Object.EndOfFrame(); }
+    }
+
+    [Fact] public void DisposedScopeRejectsDirectGlobalChanges()
+    {
+        var scope = new ValheimWorldScope();
+        scope.Dispose();
+        float time = UnityEngine.Time.time;
+        var modifiers = TerrainModifier.s_instances.ToArray();
+        var heightmaps = Heightmap.s_heightmaps.ToArray();
+        var players = Player.s_players.ToArray();
+        var objects = UnityEngine.Object.s_unityGameObjects;
+        Assert.Throws<ObjectDisposedException>(() => scope.WithClock(time + 1f));
+        Assert.Throws<ObjectDisposedException>(() => scope.WithTerrainModifiers());
+        Assert.Throws<ObjectDisposedException>(() => scope.AtMainMenu());
+        Assert.Equal(time, UnityEngine.Time.time);
+        Assert.Equal(modifiers, TerrainModifier.s_instances);
+        Assert.Equal(heightmaps, Heightmap.s_heightmaps);
+        Assert.Equal(players, Player.s_players);
+        Assert.Same(objects, UnityEngine.Object.s_unityGameObjects);
+    }
+
+    [Fact] public void ReadonlyGameListsKeepTheirIdentityAndScopeRestoresTheirContents()
+    {
+        var heightmaps = Heightmap.GetAllHeightmaps();
+        var players = Player.GetAllPlayers();
+        var modifiers = TerrainModifier.s_instances;
+        var oldHeightmaps = heightmaps.ToArray();
+        var oldPlayers = players.ToArray();
+        var oldModifiers = modifiers.ToArray();
+        foreach (var type in new[] { typeof(Heightmap), typeof(Player), typeof(TerrainModifier) })
+        {
+            string name = type == typeof(Heightmap) ? "s_heightmaps" : type == typeof(Player) ? "s_players" : "s_instances";
+            Assert.True(type.GetField(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!.IsInitOnly);
+        }
+        using (var outer = new ValheimWorldScope().AsHost())
+        {
+            Assert.Same(heightmaps, Heightmap.GetAllHeightmaps());
+            Assert.Same(players, Player.GetAllPlayers());
+            Assert.Same(modifiers, TerrainModifier.s_instances);
+            var heightmap = outer.RegisterHeightmap(new Vector2s(0, 0));
+            var player = Player.m_localPlayer;
+            var modifier = new TerrainModifier();
+            modifiers.Add(modifier);
+            using (new ValheimWorldScope().AtMainMenu().WithTerrainModifiers())
+            {
+                Assert.Empty(heightmaps);
+                Assert.Single(players);
+                Assert.Empty(modifiers);
+            }
+            Assert.Contains(heightmap, heightmaps);
+            Assert.Contains(player, players);
+            Assert.Contains(modifier, modifiers);
+        }
+        Assert.Same(heightmaps, Heightmap.GetAllHeightmaps());
+        Assert.Same(players, Player.GetAllPlayers());
+        Assert.Same(modifiers, TerrainModifier.s_instances);
+        Assert.Equal(oldHeightmaps, heightmaps);
+        Assert.Equal(oldPlayers, players);
+        Assert.Equal(oldModifiers, modifiers);
+    }
+
+    public sealed class ClockWatcher : UnityEngine.MonoBehaviour
+    {
+        public int Updates;
+        private void Update() => Updates++;
+    }
+
+    [Fact] public void ClockCanBeSetWithoutRunningBehavioursOrAdvancingAFrame()
+    {
+        float time = UnityEngine.Time.time, real = UnityEngine.Time.realtimeSinceStartup, delta = UnityEngine.Time.deltaTime;
+        int frames = UnityEngine.Time.frameCount;
+        using (var scope = new ValheimWorldScope().WithScene())
+        {
+            var watcher = new UnityEngine.GameObject("clock watcher").AddComponent<ClockWatcher>();
+            scope.WithClock(120f);
+            Assert.Equal(120f, UnityEngine.Time.time);
+            Assert.Equal(120f, UnityEngine.Time.realtimeSinceStartup);
+            Assert.Equal(0f, UnityEngine.Time.deltaTime);
+            Assert.Equal(frames, UnityEngine.Time.frameCount);
+            Assert.Equal(0, watcher.Updates);
+            Assert.Throws<ArgumentOutOfRangeException>(() => scope.WithClock(float.NaN));
+            Assert.Throws<ArgumentOutOfRangeException>(() => scope.WithClock(-1f));
+            Assert.Equal(120f, UnityEngine.Time.time);
+        }
+        Assert.Equal(time, UnityEngine.Time.time);
+        Assert.Equal(real, UnityEngine.Time.realtimeSinceStartup);
+        Assert.Equal(delta, UnityEngine.Time.deltaTime);
+        Assert.Equal(frames, UnityEngine.Time.frameCount);
     }
 
     // A test that never disposes its scope leaves its pending destroys behind; a scene of its own (WithScene) does not see

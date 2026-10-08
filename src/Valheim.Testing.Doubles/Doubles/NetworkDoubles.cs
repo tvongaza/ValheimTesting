@@ -30,7 +30,7 @@ public sealed partial class ZNetPeer
 /// <summary>ZNet is a MonoBehaviour, as in the game (mods start coroutines on it); built with <c>new</c>, it is on no object and gets no messages.</summary>
 public sealed partial class ZNet : UnityEngine.MonoBehaviour
 {
-    public static ZNet instance = new();
+    public static ZNet instance { get; private set; } = new();
     /// <summary>Set when loading the world failed; the game then refuses to save over it.</summary>
     public static bool m_loadError;
     /// <summary>How many times <see cref="Save"/> ran: the game's world save is not modelled, its call is.</summary>
@@ -57,7 +57,7 @@ public sealed partial class ZNet : UnityEngine.MonoBehaviour
 public sealed partial class Player
 {
     public static Player? m_localPlayer;
-    public UnityEngine.Transform transform = new();
+    public readonly UnityEngine.Transform transform = new();
     public void OnSpawned(bool spawnValkyrie) { }
 }
 /// <summary>A value a mod writes into an RPC's package itself, as the game's interface.</summary>
@@ -107,7 +107,7 @@ public sealed partial class ZRoutedRpc
         }
     }
 
-    public static ZRoutedRpc instance = new();
+    public static ZRoutedRpc instance { get; private set; } = new();
     /// <summary>Everyone, as the game's target for a broadcast.</summary>
     public const long Everybody = 0L;
     private const int SteamMessageLimit = 512 * 1024;

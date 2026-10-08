@@ -17,7 +17,7 @@ public partial class WearNTear : UnityEngine.MonoBehaviour { public float m_heal
 /// <summary>Shim for ZNetScene: registered prefabs and the live networked objects. The registry by name hash is in RegistryDoubles.cs.</summary>
 public partial class ZNetScene
 {
-    public static ZNetScene? instance;
+    public static ZNetScene? instance { get; private set; }
     /// <summary>The prefabs <see cref="AddPrefab"/> made, by name.</summary>
     [TestOnly] public readonly Dictionary<string, UnityEngine.GameObject> Prefabs = new();
     [TestOnly] public readonly List<UnityEngine.GameObject> Live = new();

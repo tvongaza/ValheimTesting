@@ -76,22 +76,29 @@ public static class MemberIndex
         _ => "type",
     };
 
+    /// <summary>What a value member's signature ends with when code cannot assign it (#325).</summary>
+    public const string ReadOnly = " { get; }";
+
     /// <summary>
-    /// The member's signature: name, parameter types and value type. Fields and properties both read <c>name : Type</c>, so
-    /// writability is not compared: a writable field the game has as a get-only property still reads "game".
+    /// The member's signature: name, parameter types and value type. Fields and properties both read <c>name : Type</c>,
+    /// followed by <see cref="ReadOnly"/> when the value cannot be assigned: a const or readonly field, or a property with no
+    /// setter. On the doubles' side (<paramref name="anySetter"/> false) a private setter does not count, since the doubles
+    /// compile into the mod's tests where it is unreachable; on the game's side any setter counts, because a mod built
+    /// against the publicized game reaches private ones.
     /// </summary>
-    public static string Signature(MemberInfo member)
+    public static string Signature(MemberInfo member, bool anySetter = false)
     {
         switch (member)
         {
-            case FieldInfo f: return (f.IsStatic ? "static " : "") + f.Name + " : " + Show(f.FieldType);
+            case FieldInfo f: return (f.IsStatic ? "static " : "") + f.Name + " : " + Show(f.FieldType) + (f.IsInitOnly || f.IsLiteral ? ReadOnly : "");
             case PropertyInfo p:
             {
                 var get = p.GetGetMethod(true); var set = p.GetSetMethod(true);
                 bool isStatic = (get ?? set)!.IsStatic;
                 var index = p.GetIndexParameters();
                 string name = index.Length == 0 ? p.Name : "this[" + string.Join(", ", index.Select(Parameter)) + "]";
-                return (isStatic ? "static " : "") + name + " : " + Show(p.PropertyType);
+                bool writable = set != null && (anySetter || Visible(set));
+                return (isStatic ? "static " : "") + name + " : " + Show(p.PropertyType) + (writable ? "" : ReadOnly);
             }
             case ConstructorInfo c: return ".ctor(" + string.Join(", ", c.GetParameters().Select(Parameter)) + ")";
             case MethodInfo m:
