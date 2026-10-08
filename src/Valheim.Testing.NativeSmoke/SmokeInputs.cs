@@ -72,7 +72,7 @@ internal static class SmokeInputs
     /// so a test leaves it out).
     /// </summary>
     internal static (EnvironmentInventory Inventory, EnvironmentRecipe Client, ShippedLoader.Choice? ShippedLoader) Client(IReadOnlyDictionary<string, string> options, string output,
-        Func<string, string, ShippedLoader.Choice?>? shippedLoader = null)
+        Func<string, string, ShippedLoader.Choice?>? shippedLoader = null, Action? requireMacGui = null)
     {
         string? file = options.TryGetValue("--inventory", out string? named) ? Path.GetFullPath(named) : null;
         bool overrides = options.ContainsKey("--game") || options.ContainsKey("--loader-package");
@@ -103,6 +103,10 @@ internal static class SmokeInputs
                 : "The inventory has no client environment. " + string.Join(" ", inventory.Missing) + " Give --game DIR.");
         if (inventory.Hosts[client.Host].Kind != "local")
             throw new ArgumentException($"Client environment {client.Name} is on {client.Host}, not this machine. start runs its client here; name a client environment on this machine with --client-env.");
+        // Refuse a locked or non-console Mac before creating run evidence or a disposable install.
+        // The optional probe lets every test host prove the refusal order without an actual GUI session.
+        if (requireMacGui != null) requireMacGui();
+        else if (OperatingSystem.IsMacOS()) MacGuiSession.Require();
         // An install whose own Doorstop pair does not match takes the shipped BepInExPack in its disposable copy (one printed line).
         var shipped = client.LoaderPackage == null ? shippedLoader?.Invoke("client", client.Install) : null;
         if (shipped != null) client.LoaderPackage = shipped.Manifest;

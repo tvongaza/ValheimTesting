@@ -271,14 +271,16 @@ public sealed class ServerLoadOneOffTests : IDisposable
     {
         string output = Path.Combine(_rig.Root, "start");
         string game;
+        bool checkedGui = false;
         using (EnvironmentInventory.UseMachine(WithValheim(out game)))
         {
-            var (_, client, _) = SmokeInputs.Client(new Dictionary<string, string>(), output);
+            var (_, client, _) = SmokeInputs.Client(new Dictionary<string, string>(), output, requireMacGui: () => checkedGui = true);
             Assert.Equal(("local-client", game), (client.Name, client.Install));
             Assert.EndsWith("userdata", SmokeInputs.SteamUserdata(new Dictionary<string, string>()));
         }
+        Assert.True(checkedGui);
         Assert.Equal(game, EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments.Single().Install);
-        var (_, overridden, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--game"] = _rig.Game }, Path.Combine(_rig.Root, "start-game"));
+        var (_, overridden, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--game"] = _rig.Game }, Path.Combine(_rig.Root, "start-game"), requireMacGui: () => { });
         Assert.Equal(_rig.Game, overridden.Install);
 
         // A file with two clients here and one elsewhere: --client-env picks, and only that one is recorded.
@@ -297,7 +299,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("not this machine", Assert.Throws<ArgumentException>(() =>
             SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file }, Path.Combine(_rig.Root, "start-remote"))).Message);
         string chosen = Path.Combine(_rig.Root, "start-alt");
-        var (_, alt, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen);
+        var (_, alt, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen, requireMacGui: () => { });
         Assert.Equal(5702, alt.CliPort);
         var recorded = EnvironmentInventory.Read(Path.Combine(chosen, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform));
         Assert.Equal(("alt", 5702), (recorded.Environments.Single().Name, recorded.Environments.Single().CliPort));
@@ -306,5 +308,18 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("--inventory", Assert.Throws<ArgumentException>(() => SmokeInputs.Client(
             new Dictionary<string, string> { ["--game"] = _rig.Game, ["--inventory"] = "f.json" }, Path.Combine(_rig.Root, "both"))).Message);
         Assert.Contains("--steam-userdata", Assert.Throws<DirectoryNotFoundException>(() => SmokeInputs.SteamUserdata(new Dictionary<string, string>())).Message);
+    }
+
+    [Fact] public void StartRefusesAnUnavailableGuiBeforeRecordingOrInspectingTheLoader()
+    {
+        string output = Path.Combine(_rig.Root, "locked-mac-start");
+        bool inspectedLoader = false;
+        var failure = Assert.Throws<InvalidOperationException>(() => SmokeInputs.Client(
+            new Dictionary<string, string> { ["--game"] = _rig.Game }, output,
+            shippedLoader: (_, _) => { inspectedLoader = true; return null; },
+            requireMacGui: () => throw new InvalidOperationException("The macOS console session is locked or unavailable")));
+        Assert.Contains("macOS console session is locked", failure.Message);
+        Assert.False(inspectedLoader);
+        Assert.False(Directory.Exists(output));
     }
 }
