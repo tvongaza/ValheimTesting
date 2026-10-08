@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security;
+using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
@@ -244,10 +245,30 @@ internal static class SmokeProject
             foreach (var (package, version) in Restored(server)) RequireFromSource(packages, package, version, candidateFeed ?? Feed);
     }
 
-    private static void RequireFromSource(string packages, string package, string version, string source)
+    internal static void RequireFromSource(string packages, string package, string version, string source)
     {
         string metadata = Path.Combine(packages, package.ToLowerInvariant(), version.ToLowerInvariant(), ".nupkg.metadata");
-        if (!File.Exists(metadata) || !File.ReadAllText(metadata).Contains(source, StringComparison.Ordinal))
+        if (!File.Exists(metadata) || !MetadataSourceMatches(File.ReadAllText(metadata), source))
             throw new InvalidOperationException($"The generated consumer did not restore {package} from {source}; its source metadata is absent or different.");
+    }
+
+    private static bool MetadataSourceMatches(string metadata, string expected)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(metadata);
+            if (!json.RootElement.TryGetProperty("source", out var property) || property.ValueKind != JsonValueKind.String)
+                return false;
+            string? actual = property.GetString();
+            if (actual == null) return false;
+            if (expected.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                return string.Equals(actual, expected, StringComparison.Ordinal);
+            return string.Equals(Path.GetFullPath(actual), Path.GetFullPath(expected),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception error) when (error is JsonException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
     }
 }

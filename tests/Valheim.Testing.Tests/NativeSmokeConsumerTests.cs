@@ -106,6 +106,20 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         Assert.Contains("<package pattern=\"*\"/>", config);
     }
 
+    [Fact]
+    public void CandidateRestoreReadsTheDecodedNuGetMetadataSource()
+    {
+        string packages = Path.Combine(_root, "packages");
+        string metadataDirectory = Path.Combine(packages, "valheim.testing.game", "0.1.0-preview.51");
+        Directory.CreateDirectory(metadataDirectory);
+        string feed = Path.Combine(_root, "candidate-packages");
+        File.WriteAllText(Path.Combine(metadataDirectory, ".nupkg.metadata"),
+            System.Text.Json.JsonSerializer.Serialize(new { version = 2, source = feed }));
+        SmokeProject.RequireFromSource(packages, "Valheim.Testing.Game", "0.1.0-preview.51", feed);
+        Assert.Throws<InvalidOperationException>(() =>
+            SmokeProject.RequireFromSource(packages, "Valheim.Testing.Game", "0.1.0-preview.51", Path.Combine(_root, "different-feed")));
+    }
+
     // The tests exercise the tool's own build through InternalsVisibleTo, not a second compile of its sources into this
     // assembly; nothing is public only for the tests.
     [Fact]
