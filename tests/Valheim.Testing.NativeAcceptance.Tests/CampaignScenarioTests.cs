@@ -326,8 +326,8 @@ public sealed class CampaignScenarioTests : IDisposable
             Assert.True(Evidence($"{round}-content-census.json"));
         }
         // Each side's census through its own actor, once per round; the report records which side said what.
-        Assert.Equal(2, ServerCount("cli_extension acceptancemod.testing/content-census"));
-        Assert.Equal(2, ClientCount("cli_extension acceptancemod.testing/content-census"));
+        Assert.Equal(2, ServerCount("cli_extension valheim.observe/content-census"));
+        Assert.Equal(2, ClientCount("cli_extension valheim.observe/content-census"));
         using var evidence = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(_world.Output, "first-content-census.json")));
         Assert.Equal("server", evidence.RootElement.GetProperty("server").GetProperty("Side").GetString());
         Assert.Equal("client", evidence.RootElement.GetProperty("client").GetProperty("Side").GetString());

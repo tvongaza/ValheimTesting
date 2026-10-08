@@ -5,14 +5,18 @@ using Xunit;
 
 public sealed class AreaObjectSnapshotTests
 {
-    private static ScriptedTransport Transport(bool server, Func<string>? world = null) => new ScriptedTransport()
+    private static object Area(bool ready = true) => new { source = "zone-presence", complete = true,
+        reference = new { x = 0, z = 0 }, simulation = new { near = 2, far = 2, classic = true },
+        zones = new[] { new { x = 0, z = 0, terrainLoaded = ready, areaReady = ready, instances = ready ? 2 : 0,
+            nearInstances = ready ? 2 : 0, saved = 2, withoutInstance = ready ? 0 : 2 } } };
+    private static ScriptedTransport Transport(bool server, Func<string>? world = null, bool areaReady = true) => new ScriptedTransport()
         .Extension("valheim.session", "state", _ => new
         {
             source = "session-state", complete = true, phase = "world-present", worldUid = world?.Invoke() ?? "7", worldPresent = true,
             worldReady = true, server, dedicated = server, localPlayer = !server, playerReady = !server,
             saving = false, loadError = false, connectionStatus = "Connected"
         })
-        .On("cli_area_ready 16 -8 0", _ => ScriptedTransport.Ok("OK: AREA_READY 16.0,-8.0 ready=True zone=0,0 loaded=True objects=2 without_instance=0"))
+        .Extension("valheim.observe", "zones", _ => Area(areaReady))
         .On("cli_zdos_at 16 -8 8", _ => ScriptedTransport.Ok(
             "ZDO chest_wood id=1:2 pos=16.000,42.000,-8.000 rot=0.00,0.00,0.00 quat=0,0,0,1 scale=- persistent=True owner=0",
             "OK: ZDOS_AT 16.0,-8.0 r=8.0 zones=1 objects=1"))
@@ -116,11 +120,10 @@ public sealed class AreaObjectSnapshotTests
     [Fact] public void AreaMustLoadBeforeAnyObjectCensus()
     {
         var st = Transport(true);
-        var ct = Transport(false).On("cli_area_ready 16 -8 0", _ => ScriptedTransport.Ok(
-            "OK: AREA_READY 16.0,-8.0 ready=False zone=0,0 loaded=False objects=1 without_instance=1"));
+        var ct = Transport(false, areaReady: false);
         using var server = st.Actor(); using var client = ct.Actor();
         var error = Assert.Throws<WaitTimeoutException>(() => AreaObjectSnapshot.Capture(server, client, "site", "7", 16, -8, 8, TimeSpan.FromMilliseconds(1)));
-        Assert.Contains("ready=False", error.Message);
+        Assert.Contains("not ready", error.Message);
         Assert.Equal(0, st.Count("cli_zdos_at"));
     }
 

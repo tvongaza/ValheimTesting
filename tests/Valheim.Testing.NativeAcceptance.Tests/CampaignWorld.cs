@@ -188,16 +188,16 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
             .On("cli_multiplayer_identity", _ => ScriptedTransport.Ok(
                 $"OK: steamId=0, playFabLoginState=LoggedIn, playFabId={PlayFabId}, backend={(Crossplay ? "PlayFab" : "Steamworks")}, gameState=World, connectionStatus=Connected, isServer=True, isOpenServer=True, server=fake"))
             .Extension("acceptancemod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = true })
-            .Extension("acceptancemod.testing", "harmony", args => args.Count == 1 && args[0] != AcceptancePlan.ModPlugin ? ControlCensus(args[0]) : TestWorld.ModCensus())
-            .Extension("acceptancemod.testing", "globalkeys", _ => new { source = "global-keys", complete = true, server = true, keys = _keys.Order(StringComparer.Ordinal).ToArray() })
+            .Extension("valheim.observe", "harmony", args => args.Count == 1 && args[0] != AcceptancePlan.ModPlugin ? ControlCensus(args[0]) : TestWorld.ModCensus())
+            .Extension("valheim.observe", "globalkeys", _ => new { source = "global-keys", complete = true, server = true, keys = _keys.Order(StringComparer.Ordinal).ToArray() })
             .Extension("acceptancemod.testing", "globalkey", args =>
             {
                 if (args[0] == "set") _keys.Add(args[1]); else _keys.RemoveAll(k => k == args[1] || k.StartsWith(args[1] + " ", StringComparison.Ordinal));
                 return new { source = "global-key-change", complete = true, action = args[0], name = args[1], value = (string?)null, keys = _keys.ToArray() };
             }, readOnly: false)
-            .Extension("acceptancemod.testing", "config", args => Config(args, server: true, installed: true, _serverGreeting))
-            .Extension("acceptancemod.testing", "dungeon-rooms", _ => Dungeons())
-            .Extension("acceptancemod.testing", "content-census", args => ContentCensusReply(args, server: true));
+            .Extension("valheim.observe", "config", args => Config(args, server: true, installed: true, _serverGreeting))
+            .Extension("valheim.observe", "dungeon-rooms", _ => Dungeons())
+            .Extension("valheim.observe", "content-census", args => ContentCensusReply(args, server: true));
         Servers.Add(transport);
         return transport.Actor("server", "cli_expect worlduid=" + WorldUid);
     }
@@ -274,7 +274,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
                 lines.Add($"OK: NEARBY_PREFABS radius=8.0 count={lines.Count}");
                 return ScriptedTransport.Ok([.. lines]);
             })
-            .Extension("acceptancemod.testing", "zones", Zones)
+            .Extension("valheim.observe", "zones", Zones)
             .Extension("acceptancemod.testing", "markers", args =>
             {
                 float x = F(args[0]), z = F(args[1]), radius = F(args[2]);
@@ -293,7 +293,7 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
                 var markers = _markers.Where(m => Near(m.X, m.Z, F(args[0]), F(args[1]), 1.5f) && Loaded(m.X, m.Z)).ToArray();
                 return new { source = "field-only-state", complete = true, markers = markers.Length, values = markers.Select(_ => _field).ToArray() };
             })
-            .Extension("acceptancemod.testing", "custom-data", args => !_joined ? new { source = "local-player-custom-data", complete = false } : (object)new
+            .Extension("valheim.observe", "custom-data", args => !_joined ? new { source = "local-player-custom-data", complete = false } : (object)new
             {
                 source = "local-player-custom-data", complete = true, prefix = args.Count == 1 ? args[0] : null, character = "Tester", profileFile = "tester",
                 fileSource = CloudCharacter ? "Cloud" : "Local", profilePath = ProfileFile,
@@ -306,10 +306,10 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
                 _live[LifecycleWorldScenario.NoteKey] = command.Split(' ')[1];
                 return ScriptedTransport.Ok("OK: note " + command.Split(' ')[1]);
             })
-            .Extension("acceptancemod.testing", "globalkeys", _ => new { source = "global-keys", complete = true, server = false, keys = (_joined ? _keys : new List<string>()).Order(StringComparer.Ordinal).ToArray() })
-            .Extension("acceptancemod.testing", "config", args => Config(args, server: false, installed: ClientHasMod, _clientGreeting))
-            .Extension("acceptancemod.testing", "content-census", args => ContentCensusReply(args, server: false))
-            .Extension("acceptancemod.testing", "unresolved-prefabs", args =>
+            .Extension("valheim.observe", "globalkeys", _ => new { source = "global-keys", complete = true, server = false, keys = (_joined ? _keys : new List<string>()).Order(StringComparer.Ordinal).ToArray() })
+            .Extension("valheim.observe", "config", args => Config(args, server: false, installed: ClientHasMod, _clientGreeting))
+            .Extension("valheim.observe", "content-census", args => ContentCensusReply(args, server: false))
+            .Extension("valheim.observe", "unresolved-prefabs", args =>
             {
                 float radius = F(args[0]);
                 var near = _controlObjects.Where(o => Near(o.X, o.Z, _x, _z, radius) && Loaded(o.X, o.Z)).ToArray();
@@ -362,12 +362,12 @@ internal sealed class CampaignWorld : IOwnedServer, IDisposable
             // The game recreates a zone's objects from their saved data: a component field starts empty.
             if (!instances && !KeepFieldAcrossReload && _markers.Any(m => ZoneId.Of(m.X, m.Z) == zone)) _field = null;
             int saved = _markers.Count(m => ZoneId.Of(m.X, m.Z) == zone);
-            return new { x = zone.X, z = zone.Z, terrainLoaded = loaded, instances = instances ? saved + 2 : 0, nearInstances = loaded ? saved + 1 : 0, saved, withoutInstance = loaded ? 0 : saved };
+            return new { x = zone.X, z = zone.Z, terrainLoaded = loaded, areaReady = loaded, instances = instances ? saved + 2 : 0, nearInstances = loaded ? saved + 1 : 0, saved, withoutInstance = loaded ? 0 : saved };
         }).ToArray();
         return new { source = "zone-presence", complete = _joined, reference = new { x = PlayerZone.X, z = PlayerZone.Z }, simulation = new { near = 2, far = 2, classic = true }, zones };
     }
 
-    // The adapter's content census of a process with AcceptanceMod (or, on a client without it, of the game's content only).
+    // The Observe pack's content census of a process with AcceptanceMod (or, on a client without it, of the game's content only).
     private object ContentCensusReply(IReadOnlyList<string> args, bool server)
     {
         bool installed = server || ClientHasMod;

@@ -21,13 +21,13 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 | The feature and its command (`ExampleMod/Plugin.cs`) | The owned server lifecycle: copies, startup events, identity handshake, restart, teardown, report (`PinnedServerRun`, `GameSession`, `ServerActor`) |
 | The plan fields and their rules (`MarkerPlan.cs`): which site is dry, which is wet, where the player stands | The client section and its rules (`ClientRunPlan`), and owned or attached clients (`ClientSession`) |
 | The expectations and the scenario (`MarkerScenario.cs`): one marker here, none there, still there after a restart | Session steps (join, leave, readiness, protection once the world is ready), player placement, strict pins (`GameActor`), the client rounds (`ClientRounds`) |
-| A test adapter serving the owned-session identity and the Harmony census (`ExampleMod.TestAdapter`) | The adapter's registration, identity capability and census command ([Valheim.Testing.Adapter](../../docs/packages/Valheim.Testing.Adapter.md), compiled into the adapter) |
+| A test adapter serving the owned-session identity (`ExampleMod.TestAdapter`) | The adapter's registration and identity capability ([Valheim.Testing.Adapter](../../docs/packages/Valheim.Testing.Adapter.md), compiled into the adapter) |
 | The patch it declares (`MarkerScenario.Patches`) | The census check at runtime-ready (`ModDeclaration`, `HarmonyCensus`): each declared patch applied, other owners on the same methods reported |
 | Its tests, scripted and native | The scripted fakes (`ScriptedTransport`, `FakeOwnedProcess`) and the session fixture to copy ([GameSessionFixture](ExampleMod.Tests/GameSessionFixture.cs)) |
 
 The scenario never protects the player itself: the session protects the joined player (god, ghost and debug mode, read back) as soon as the world is ready, so the join step fails if the game does not confirm it, and the player is never moved unprotected. Fly stays off; the arrival and marker checks measure a player standing on the ground.
 
-Observations use ValheimCLI's generic commands (`cli_zdos_at` on the server, `cli_prefabs_at` on the client). A mod that needs a test-only action or observation adds it to its adapter as another extension command; the adapter package has many ready ([Valheim.Testing.Adapter](../../docs/packages/Valheim.Testing.Adapter.md)).
+Observations use ValheimCLI's generic commands (`cli_zdos_at` on the server, `cli_prefabs_at` on the client). A mod that needs a test-only action or observation adds it to its adapter as another extension command; the Observe pack provides generic observations ([Valheim.Testing.Adapter](../../docs/packages/Valheim.Testing.Adapter.md)).
 
 ## Run the layers
 

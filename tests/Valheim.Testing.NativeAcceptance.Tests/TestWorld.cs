@@ -64,7 +64,7 @@ public sealed class TestWorld : IOwnedServer
             .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
             .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport"))
             .Extension("acceptancemod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = ++SessionReadings > ClosedReadings })
-            .Extension("acceptancemod.testing", "harmony", _ => Census());
+            .Extension("valheim.observe", "harmony", _ => Census());
         Servers.Add(transport);
         return transport.Actor("server", "cli_expect worlduid=" + WorldUid);
     }
@@ -159,4 +159,3 @@ public sealed class TestWorld : IOwnedServer
         return (float.Parse(words[first], CultureInfo.InvariantCulture), float.Parse(words[second ?? first + 1], CultureInfo.InvariantCulture));
     }
 }
-

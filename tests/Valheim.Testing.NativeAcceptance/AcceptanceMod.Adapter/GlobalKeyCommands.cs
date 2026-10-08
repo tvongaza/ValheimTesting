@@ -1,17 +1,18 @@
-// Source from the Valheim.Testing.Adapter package: compiled into a mod's game-side test adapter (a BepInEx plugin that
-// references ValheimCLI and the game). Not part of the mod itself; install the adapter only in test runtimes.
+// AcceptanceMod's mutating fixture command. It belongs to this test adapter rather than the reusable
+// read-only Observe pack, and is installed only in test runtimes.
 #nullable enable
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using Valheim.Testing.Adapter;
 using valheimCLI.Extensions;
 
-namespace Valheim.Testing.Adapter
+namespace AcceptanceMod.Adapter
 {
     /// <summary>
-    /// The world's global keys (boss progress, events, world modifiers) as this process holds them, and a fixture command
-    /// that sets or removes one on the server. In Valheim 1.0.16 a change goes to the server, which applies it and sends
+    /// A fixture command that sets or removes a global key on the server. ValheimCLI's optional Observe pack owns the
+    /// read-only key list. In Valheim 1.0.16 a change goes to the server, which applies it and sends
     /// its whole list to every client; each client replaces its own list with it. Keys are stored lower case, as
     /// <c>name</c> or <c>name value</c>. The runner's <c>GlobalKeyFixture</c> in Valheim.Testing.Game issues a change once
     /// and waits until a joined client lists the server's set.
@@ -24,14 +25,7 @@ namespace Valheim.Testing.Adapter
     /// </summary>
     public static class GlobalKeyCommands
     {
-        public const string Source = "global-keys", ChangeSource = "global-key-change";
-
-        /// <summary>
-        /// A read-only extension command <paramref name="name"/> (no arguments), on a server or a client with a loaded
-        /// world: <c>{source: "global-keys", complete: true, server, keys}</c>, the keys in ordinal order.
-        /// </summary>
-        public static ExtensionCommand List(string name = "globalkeys") =>
-            new ExtensionCommand(name, "List this process's global keys", ListKeys, readOnly: true, needsWorld: true);
+        public const string ChangeSource = "global-key-change";
 
         /// <summary>
         /// A mutating fixture command <paramref name="name"/> for the server: <c>set &lt;name&gt; [value]</c> or
@@ -47,22 +41,13 @@ namespace Valheim.Testing.Adapter
                 context => ChangeKey(context, enableVariable, tokenVariable), readOnly: false, role: ExtensionRole.Server, needsWorld: true);
         }
 
-        /// <summary>This process's global keys, in ordinal order.</summary>
-        public static List<string> Keys()
+        /// <summary>This process's global keys, in ordinal order for the change receipt.</summary>
+        private static List<string> Keys()
         {
             var system = ZoneSystem.instance ?? throw new InvalidOperationException("No ZoneSystem: load a world first.");
             var keys = system.GetGlobalKeys();
             keys.Sort(StringComparer.Ordinal);
             return keys;
-        }
-
-        private static IEnumerator ListKeys(ExtensionContext context)
-        {
-            if (context.Arguments.Count != 0) { context.Fail("usage", "takes no arguments"); yield break; }
-            context.Succeed(new Dictionary<string, object?>
-            {
-                ["source"] = Source, ["complete"] = true, ["server"] = ZNet.instance != null && ZNet.instance.IsServer(), ["keys"] = Keys(),
-            });
         }
 
         private static IEnumerator ChangeKey(ExtensionContext context, string enableVariable, string tokenVariable)

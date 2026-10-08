@@ -8,7 +8,7 @@ namespace Valheim.Testing.NativeAcceptance;
 /// (AcceptanceMod's <c>Content.cs</c>),
 /// and <see cref="ExpectationsResource"/> declares them for the server and the client. A client running the server's AcceptanceMod
 /// and adapter builds joins; in each round (<c>first</c>, and <c>after-restart</c>, when both processes have loaded a world
-/// again) the adapter's content census is read on the server and on the client, each through its own pinned actor, and
+/// again) the Observe pack's content census is read on the server and on the client, each through its own pinned actor, and
 /// reconciled: each side must report being that side, run the pinned AcceptanceMod build and hold every declared entry once, with
 /// the recipe's item, workbench and wood resolved by the game's own lookups, and nothing undeclared in scope. The census and
 /// its report are written to <c>{round}-content-census.json</c> before the check.

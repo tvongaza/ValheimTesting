@@ -455,7 +455,7 @@ To record a site's ground, collider and paint as evidence rather than assert on 
 
 ## Lifecycle steps: leave the area and log out
 
-Beyond save, restart and rejoin, two lifecycle events break mods: the game unloading a zone the player has left, and the character being written at logout. `ZoneCycle` and `LogoutCycle` drive each once from a joined, protected client, observe the event instead of waiting a fixed time, and leave the client joined for the mod's own re-observation. They read two read-only client observations the client's [test adapter](Valheim.Testing.Adapter.md#helpers-and-commands) registers: `ZonePresence.Command()` and `PlayerCustomData.Command()`. Both run inside a `ClientRounds` measurement, where each part becomes a `{round}: ...` step and the readings are written to `{round}-zone-cycle.json` or `{round}-logout.json`, whether the cycle passes or fails.
+Beyond save, restart and rejoin, two lifecycle events break mods: the game unloading a zone the player has left, and the character being written at logout. `ZoneCycle` and `LogoutCycle` drive each once from a joined, protected client, observe the event instead of waiting a fixed time, and leave the client joined for the mod's own re-observation. They read two read-only client observations from ValheimCLI's optional Observe pack: `valheim.observe/zones` and `valheim.observe/custom-data`. Both run inside a `ClientRounds` measurement, where each part becomes a `{round}: ...` step and the readings are written to `{round}-zone-cycle.json` or `{round}-logout.json`, whether the cycle passes or fails.
 
 **Leave the area and come back.** In 1.0.16 a client keeps a zone's objects while its player is within its simulation distance: every object within *near* rings of zones round the player's zone, distant objects (large trees, locations) up to *near + far* rings, and the zone's terrain within *near* rings, removed once it has been out of that range for 4 s and its last near object has gone. The graphics setting picks the distance (near 1 to 6, far 2; the default is near 2, far 2, square), and the server lowers a client's to its own. Leaving destroys each object's instance; returning recreates it from its saved data. So a value kept only in a component field is gone, and a component whose teardown throws shows up in the log scan as `nre-remove-objects`.
 
@@ -466,18 +466,16 @@ Beyond save, restart and rejoin, two lifecycle events break mods: the game unloa
 `LogoutCycle.Run` reads the custom data and requires every one of `Keys` set, a character the game saves `Local` and the plan's character. It hashes `<CharactersDirectory>/<profile file>.fch` (SHA256), which must be in a folder named `characters_local`, the game's local characters; a cloud character is refused. The client leaves to its menu (ValheimCLI's session leave, which issues the logout and replies once the menu is up), and the runner waits up to `WriteTimeout` for the file's hash to change, woken by file events and re-reading every `RereadInterval` for filesystems that raise none. Then the client joins again with the plan's character, protected, as `ClientRounds` joins, and every key must come back with its value. `LogoutResult.OldMatchesBefore` says whether the `.fch.old` backup is the file hashed before: one save replaced it, not several.
 
 ```csharp
-// The client's test adapter registers both observations next to its own commands:
-//   TestExtension.Register("mymod.testing", version, tokenVariable, () => MyMod.Ready, r => _registration = r, Logger.LogError,
-//       ZonePresence.Command(), PlayerCustomData.Command());
+// Pin ValheimCLI's Observe pack on the joined client; the mod adapter needs no zone or custom-data command.
 var zones = new ZoneCycle
 {
-    Capability = "mymod.testing/zones", Zones = ZoneId.Around(site.X, site.Z, 16),
+    Zones = ZoneId.Around(site.X, site.Z, 16),
     Away = new HeightExpectation(site.X + 640, site.Z, 31.2f), // declared dry ground ten zones away
     Back = site, StepTimeout = TimeSpan.FromSeconds(60),
 };
 var logout = new LogoutCycle
 {
-    Capability = "mymod.testing/custom-data", KeyPrefix = "mymod.", Keys = ["mymod.home"],
+    Capability = "valheim.observe/custom-data", KeyPrefix = "mymod.", Keys = ["mymod.home"],
     CharactersDirectory = Path.Combine(clientSaveRoot, "characters_local"), WriteTimeout = TimeSpan.FromSeconds(10),
 };
 rounds.Run(server, openClient, round =>
@@ -495,11 +493,11 @@ Limits: in CI both helpers are tested against scripted transports, with the nega
 
 ## World observations: global keys, synced config, vanilla clients, dungeon rooms
 
-Four adapter commands and their runner-side readers. The adapter commands are written against the Valheim 1.0.16 decompile, compile in CI (`tests/Valheim.Testing.Adapter.CompileCheck`) and have run on a 1.0.16 dedicated server with a joined client (see "Native run" below). The runner side is tested with scripted replies, including a negative control for each check.
+The runner reads generic observations from ValheimCLI's optional Observe pack. Only the fixture's guarded global-key mutation remains in the native acceptance adapter. The observations were previously implemented in the adapter and exercised on a 1.0.16 dedicated server with a joined client; the moved Observe pack still needs its own native check. The runner side is tested with scripted replies, including negative controls.
 
 For location authoring context, the wiki explains [altitude relative to sea level and terrain-modifier ordering](https://github.com/Valheim-Modding/Wiki/wiki/Creating-Locations). Those notes are not evidence for the room encoding, zone pairing or replication behavior measured here; the pinned 1.0.16 run and game-code checks below are.
 
-The adapter commands, each with the runner type that reads it, are in the [adapter's table](Valheim.Testing.Adapter.md#helpers-and-commands).
+Install and pin `Valheim.Cli.Observe.dll` on each actor that uses `valheim.observe/*` commands. The [adapter page](Valheim.Testing.Adapter.md) describes the remaining mod-specific boundary.
 
 ### Global keys
 
@@ -507,7 +505,7 @@ In 1.0.16 a key change goes to the server, which applies it and sends its whole 
 
 ### Synced config
 
-`SyncedConfig.Read(actor, "mymod.testing/config", guid, section, key)` reads the entry's current value in that process, as BepInEx would write it to the file (`true`, `5`, `1.5`), with its type and default. The observation reads the `ConfigEntry` itself on each side: how the mod syncs it (ServerSync embedded in the mod, Jötunn, its own RPC) is the mod's business, and a synced mod sets the client's entry. Sections and keys are percent-encoded on the way (`Server%20Settings`), because extension arguments are single tokens. `WaitForValue(client, ..., expected, timeout, interval)` waits for a value to arrive, for example after an admin change on the server; a plugin that is not loaded or an entry that does not exist fails at once, since that value can never arrive. `RequireSame(server, client)` compares both sides. Only entries in the plugin's own `Config` are found. Nothing here writes config.
+`SyncedConfig.Read(actor, "valheim.observe/config", guid, section, key)` reads the entry's current value in that process, as BepInEx would write it to the file (`true`, `5`, `1.5`), with its type and default. The observation reads the `ConfigEntry` itself on each side: how the mod syncs it (ServerSync embedded in the mod, Jötunn, its own RPC) is the mod's business, and a synced mod sets the client's entry. Sections and keys are percent-encoded on the way (`Server%20Settings`), because extension arguments are single tokens. `WaitForValue(client, ..., expected, timeout, interval)` waits for a value to arrive, for example after an admin change on the server; a plugin that is not loaded or an entry that does not exist fails at once, since that value can never arrive. `RequireSame(server, client)` compares both sides. Only entries in the plugin's own `Config` are found. Nothing here writes config.
 
 ### Vanilla clients
 
@@ -544,14 +542,14 @@ A registration double (#21) shows that a mod calls ObjectDB or ZNetScene; only t
 
 `owner` is the plugin GUID whose build must be pinned on each side. `scope` lists the mod's own name prefixes: every expected name starts with one, and only names in scope can be unexpected. An entry names the prefab, recipe, piece or effect object and its required `sides`. A recipe may declare the `item` it crafts, its `station` (a prefab name, or `none` for crafting by hand) and its `resources` (item prefab names). A piece must declare the `tool` whose `PieceTable` contains it; it may also declare its station and resources. A prefab existing in `ZNetScene` without the piece in that tool's table is **unresolved**, never present. Status effects resolve by `ObjectDB.GetStatusEffect(NameHash())`, with collisions detected across the full status-effect list. Optional dependencies left out are not checked. Unknown keys, duplicate declarations, invalid sides or names outside scope are refused. `ContentExpectations.Load(path)` reads the file.
 
-**Register the observation** in the test adapter on both sides: `ContentCensus.Command()` next to the others in `TestExtension.Register`. It is read-only and needs a loaded world. A census whose reply would exceed ValheimCLI's 256 KiB extension result (a large content mod, or a broad prefix) fails `result_too_large` naming the prefixes and how many entries of each kind it held; name fewer or narrower prefixes.
+**Install the optional Observe pack** on both server and client and require `valheim.observe/content-census`. It is read-only and needs a loaded world. A census whose reply would exceed ValheimCLI's 256 KiB extension result (a large content mod, or a broad prefix) fails `result_too_large` naming the prefixes and how many entries of each kind it held; name fewer or narrower prefixes.
 
 **Read and reconcile** each side through its own strictly pinned actor:
 
 ```csharp
 var expectations = ContentExpectations.Load("content-expectations.json");
-var server = ContentCensus.Read(serverActor, "mymod.testing/content-census", expectations);
-var client = ContentCensus.Read(clientActor, "mymod.testing/content-census", expectations);
+var server = ContentCensus.Read(serverActor, "valheim.observe/content-census", expectations);
+var client = ContentCensus.Read(clientActor, "valheim.observe/content-census", expectations);
 var report = ContentCensus.Reconcile(expectations,
     new SideObservation(CensusSide.Server, plan.Pins["example.mymod"], server),
     new SideObservation(CensusSide.Client, plan.Client.Pins["example.mymod"], client));
@@ -582,7 +580,7 @@ Limits: the runner side is tested against scripted replies and the adapter compi
 
 ## Harmony census
 
-The adapter's `HarmonyCensus.Command()` lists every patched method with each patch's owner, kind, priority, index, before/after and patch method, from HarmonyX's own record. A patch whose target method is missing is easy to miss. On the Valheim 1.0.16 Windows dedicated server (BepInEx 5.4.23.5, HarmonyX 2.9.0) the missing target leaves one `accesstools-not-found` warning (`AccessTools.DeclaredMethod: Could not find method ...`) in the server's BepInEx log. Then `PatchAll` throws "Undefined target method", as the modding wiki's troubleshooting logs show, and only Unity's own log (`-logFile`) records the exception. The [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md#native-campaign)'s control logs a line after `PatchAll`, and that line never appeared: the rest of that plugin's `Awake`, including its later patch classes, never runs, and the mod stays loaded half-patched. The teardown [log scan](#log-scan-at-teardown) fails on both lines by default, but only after the run; the census names the missing patch while the run goes on. `HarmonyCensus.Read(actor, "mymod.testing/harmony", owner).Check(owner, declared)` compares the census with the patches the mod declares (`new DeclaredPatch("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix")`; a target without a parameter list names every overload). `RequireApplied()` fails naming each declared patch that is not applied; other owners' patches on the same methods are reported beside it, never failed. `HarmonyCensus.OthersChanged(before, after, owner)` lists other owners' patches that a reload or unload removed or added. The toolkit's own reload path and adapter helpers never unpatch; an adapter that patches unpatches only its own Harmony ID (`harmony.UnpatchSelf()`), never `Harmony.UnpatchAll()`. [FullLifecycle](../../examples/FullLifecycle/README.md) checks its mod's patch first, and the [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md)'s `patchReload` plan section checks an unload in game: a script patching MyMod's method is loaded, replaced and removed through ScriptEngine, and `OthersChanged` stays empty each time (1.0.16 Windows server), while a control that also removes MyMod's ID is named. A mod that calls `Harmony.UnpatchAll()` removes ValheimCLI's patches as well: in that control no CLI command ran afterwards, so a run can lose its own transport, and the teardown scan's `harmony-unpatch-all` failure is what names it.
+ValheimCLI's optional Observe pack command `valheim.observe/harmony` lists every patched method with each patch's owner, kind, priority, index, before/after and patch method, from HarmonyX's own record. A patch whose target method is missing is easy to miss. On the Valheim 1.0.16 Windows dedicated server (BepInEx 5.4.23.5, HarmonyX 2.9.0) the missing target leaves one `accesstools-not-found` warning (`AccessTools.DeclaredMethod: Could not find method ...`) in the server's BepInEx log. Then `PatchAll` throws "Undefined target method", as the modding wiki's troubleshooting logs show, and only Unity's own log (`-logFile`) records the exception. The [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md#native-campaign)'s control logs a line after `PatchAll`, and that line never appeared: the rest of that plugin's `Awake`, including its later patch classes, never runs, and the mod stays loaded half-patched. The teardown [log scan](#log-scan-at-teardown) fails on both lines by default, but only after the run; the census names the missing patch while the run goes on. `HarmonyCensus.Read(actor, "valheim.observe/harmony", owner).Check(owner, declared)` compares the census with the patches the mod declares (`new DeclaredPatch("Terminal::InitTerminal", "postfix", "MyMod.Plugin+RegisterCommands::Postfix")`; a target without a parameter list names every overload). `RequireApplied()` fails naming each declared patch that is not applied; other owners' patches on the same methods are reported beside it, never failed. `HarmonyCensus.OthersChanged(before, after, owner)` lists other owners' patches that a reload or unload removed or added. The toolkit's own reload path and adapter helpers never unpatch; an adapter that patches unpatches only its own Harmony ID (`harmony.UnpatchSelf()`), never `Harmony.UnpatchAll()`. [FullLifecycle](../../examples/FullLifecycle/README.md) checks its mod's patch first, and the [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md)'s `patchReload` plan section checks an unload in game: a script patching MyMod's method is loaded, replaced and removed through ScriptEngine, and `OthersChanged` stays empty each time (1.0.16 Windows server), while a control that also removes MyMod's ID is named. A mod that calls `Harmony.UnpatchAll()` removes ValheimCLI's patches as well: in that control no CLI command ran afterwards, so a run can lose its own transport, and the teardown scan's `harmony-unpatch-all` failure is what names it.
 
 ## Test fakes
 

@@ -39,7 +39,7 @@ public sealed record UnresolvedPrefabScan(bool Complete, float X, float Z, float
 
 /// <summary>
 /// Reads the census of prefab hashes a process cannot resolve, through an adapter's <c>UnresolvedPrefabs.Command()</c>
-/// (Valheim.Testing.Adapter), around that process's reference position (the local player on a client). On a client without
+/// (ValheimCLI Observe pack), around that process's reference position (the local player on a client). On a client without
 /// a server-side mod, an object whose prefab only the mod registers is never created there: Valheim 1.0.16 logs "Missing
 /// prefab hash" and skips it. <see cref="VanillaClientCheck"/> runs it as a scenario step.
 /// </summary>

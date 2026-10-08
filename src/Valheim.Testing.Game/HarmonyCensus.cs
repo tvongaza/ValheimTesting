@@ -23,8 +23,7 @@ public sealed record DeclaredPatch(string Target, string Kind, string? Patch = n
 }
 
 /// <summary>
-/// The Harmony patches applied in the game, read from the adapter's census (<c>HarmonyCensus.Command()</c> in
-/// Valheim.Testing.Adapter). On the Valheim 1.0.16 Windows dedicated server (BepInEx 5.4.23.5, HarmonyX 2.9.0) a patch whose
+/// The Harmony patches applied in the game, read from ValheimCLI's optional <c>valheim.observe/harmony</c> command. On the Valheim 1.0.16 Windows dedicated server (BepInEx 5.4.23.5, HarmonyX 2.9.0) a patch whose
 /// target method is missing leaves an <c>accesstools-not-found</c> warning in BepInEx's log, and <c>PatchAll</c> throws, which
 /// only Unity's log records; the teardown log scan fails on both, but only after the run. A half-patched mod stays loaded
 /// and passes every test that does not ask; <see cref="Check"/> asks, by name, while the run goes on. The census is
@@ -40,7 +39,7 @@ public sealed class HarmonyCensus
     private HarmonyCensus(IReadOnlyList<string> methods, IReadOnlyList<AppliedPatch> patches) { Methods = methods; Patches = patches; }
 
     /// <summary>
-    /// Reads a complete census through <paramref name="capabilityPath"/> (for example <c>mymod.testing/harmony</c>). With
+    /// Reads a complete census through <paramref name="capabilityPath"/> (for example <c>valheim.observe/harmony</c>). With
     /// <paramref name="owner"/> the adapter lists only the methods that Harmony ID patches, with every owner's patches on
     /// them: enough for <see cref="Check"/> and smaller than a whole mod list's census.
     /// </summary>

@@ -449,8 +449,8 @@ static class Valheim.Testing.GameSessions.ReviewCapture
   method static Valheim.Testing.GameSessions.ReviewCaptureReceipt Capture(Valheim.Testing.Game.GameActor server, Valheim.Testing.Game.GameActor client, Valheim.Testing.GameSessions.IGameHost clientHost, Valheim.Testing.GameSessions.ReviewCapturePlan plan, System.TimeSpan arrivalTimeout, System.TimeSpan fetchTimeout, System.Threading.CancellationToken cancellation = null)
 sealed class Valheim.Testing.GameSessions.ReviewCapturePlan : System.IEquatable`1<Valheim.Testing.GameSessions.ReviewCapturePlan>
   method System.Boolean Equals(Valheim.Testing.GameSessions.ReviewCapturePlan other)
-  method System.Void .ctor(System.String Id, Valheim.Testing.Game.HeightExpectation Arrival, System.String Weather, System.Single TimeOfDay, System.Single CameraDistance, System.Single CameraHeight, System.String ExtensionId, System.String HostDirectory, System.String EvidenceDirectory, System.String WorldUid, System.String GameBuild, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> PluginPins, System.Boolean MistOff = true, System.Boolean ClutterOff = false, System.Int32 Supersize = 1, System.Single CameraAzimuthDegrees = 225)
-  method System.Void Deconstruct(out System.String& Id, out Valheim.Testing.Game.HeightExpectation& Arrival, out System.String& Weather, out System.Single& TimeOfDay, out System.Single& CameraDistance, out System.Single& CameraHeight, out System.String& ExtensionId, out System.String& HostDirectory, out System.String& EvidenceDirectory, out System.String& WorldUid, out System.String& GameBuild, out System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String>& PluginPins, out System.Boolean& MistOff, out System.Boolean& ClutterOff, out System.Int32& Supersize, out System.Single& CameraAzimuthDegrees)
+  method System.Void .ctor(System.String Id, Valheim.Testing.Game.HeightExpectation Arrival, System.String Weather, System.Single TimeOfDay, System.Single CameraDistance, System.Single CameraHeight, System.String HostDirectory, System.String EvidenceDirectory, System.String WorldUid, System.String GameBuild, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> PluginPins, System.Boolean MistOff = true, System.Boolean ClutterOff = false, System.Int32 Supersize = 1, System.Single CameraAzimuthDegrees = 225)
+  method System.Void Deconstruct(out System.String& Id, out Valheim.Testing.Game.HeightExpectation& Arrival, out System.String& Weather, out System.Single& TimeOfDay, out System.Single& CameraDistance, out System.Single& CameraHeight, out System.String& HostDirectory, out System.String& EvidenceDirectory, out System.String& WorldUid, out System.String& GameBuild, out System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String>& PluginPins, out System.Boolean& MistOff, out System.Boolean& ClutterOff, out System.Int32& Supersize, out System.Single& CameraAzimuthDegrees)
   method Valheim.Testing.GameSessions.ReviewCapturePlan <Clone>$()
   method static System.Boolean op_Equality(Valheim.Testing.GameSessions.ReviewCapturePlan left, Valheim.Testing.GameSessions.ReviewCapturePlan right)
   method static System.Boolean op_Inequality(Valheim.Testing.GameSessions.ReviewCapturePlan left, Valheim.Testing.GameSessions.ReviewCapturePlan right)
@@ -466,7 +466,6 @@ sealed class Valheim.Testing.GameSessions.ReviewCapturePlan : System.IEquatable`
   property System.Single CameraHeight { get; init; }
   property System.Single TimeOfDay { get; init; }
   property System.String EvidenceDirectory { get; init; }
-  property System.String ExtensionId { get; init; }
   property System.String GameBuild { get; init; }
   property System.String HostDirectory { get; init; }
   property System.String Id { get; init; }
@@ -492,8 +491,8 @@ static class Valheim.Testing.GameSessions.ReviewClip
   method static Valheim.Testing.GameSessions.ReviewClipReceipt Capture(Valheim.Testing.Game.GameActor client, Valheim.Testing.GameSessions.IGameHost clientHost, Valheim.Testing.GameSessions.ReviewClipPlan plan, System.TimeSpan fetchTimeout, System.Threading.CancellationToken cancellation = null)
 sealed class Valheim.Testing.GameSessions.ReviewClipPlan : System.IEquatable`1<Valheim.Testing.GameSessions.ReviewClipPlan>
   method System.Boolean Equals(Valheim.Testing.GameSessions.ReviewClipPlan other)
-  method System.Void .ctor(System.String Id, System.String ExtensionId, System.String HostDirectory, System.String EvidenceDirectory, System.String WorldUid, System.String GameBuild, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> PluginPins, System.Int32 Width = 320, System.Int32 Height = 180, System.Int32 FramesPerSecond = 5, System.Int32 Frames = 15)
-  method System.Void Deconstruct(out System.String& Id, out System.String& ExtensionId, out System.String& HostDirectory, out System.String& EvidenceDirectory, out System.String& WorldUid, out System.String& GameBuild, out System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String>& PluginPins, out System.Int32& Width, out System.Int32& Height, out System.Int32& FramesPerSecond, out System.Int32& Frames)
+  method System.Void .ctor(System.String Id, System.String HostDirectory, System.String EvidenceDirectory, System.String WorldUid, System.String GameBuild, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> PluginPins, System.Int32 Width = 320, System.Int32 Height = 180, System.Int32 FramesPerSecond = 5, System.Int32 Frames = 15)
+  method System.Void Deconstruct(out System.String& Id, out System.String& HostDirectory, out System.String& EvidenceDirectory, out System.String& WorldUid, out System.String& GameBuild, out System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String>& PluginPins, out System.Int32& Width, out System.Int32& Height, out System.Int32& FramesPerSecond, out System.Int32& Frames)
   method Valheim.Testing.GameSessions.ReviewClipPlan <Clone>$()
   method static System.Boolean op_Equality(Valheim.Testing.GameSessions.ReviewClipPlan left, Valheim.Testing.GameSessions.ReviewClipPlan right)
   method static System.Boolean op_Inequality(Valheim.Testing.GameSessions.ReviewClipPlan left, Valheim.Testing.GameSessions.ReviewClipPlan right)
@@ -506,7 +505,6 @@ sealed class Valheim.Testing.GameSessions.ReviewClipPlan : System.IEquatable`1<V
   property System.Int32 Height { get; init; }
   property System.Int32 Width { get; init; }
   property System.String EvidenceDirectory { get; init; }
-  property System.String ExtensionId { get; init; }
   property System.String GameBuild { get; init; }
   property System.String HostDirectory { get; init; }
   property System.String Id { get; init; }

@@ -16,7 +16,7 @@ public sealed record ConfigValue(string Guid, string Section, string Key, bool S
 
 /// <summary>
 /// Reads a plugin's live config entry on a server or a client through an adapter's <c>ConfigEntryCommand</c>
-/// (Valheim.Testing.Adapter), so a test can compare the value each side uses after a join or an admin change. The
+/// (ValheimCLI Observe pack), so a test can compare the value each side uses after a join or an admin change. The
 /// observation reads the <c>ConfigEntry</c> itself on each side; how the mod syncs it (ServerSync embedded in the mod,
 /// Jötunn, its own RPC) is the mod's business, and a synced mod sets the client's entry. Values compare as the text BepInEx
 /// would write to the file, whatever the entry's type. Nothing here writes config: the change under test is the mod's own
@@ -28,7 +28,7 @@ public static class SyncedConfig
 
     /// <summary>
     /// The entry <paramref name="section"/>/<paramref name="key"/> of plugin <paramref name="guid"/> in
-    /// <paramref name="actor"/>'s process, through <paramref name="capabilityPath"/> (for example <c>mymod.testing/config</c>).
+    /// <paramref name="actor"/>'s process, through <paramref name="capabilityPath"/> (for example <c>valheim.observe/config</c>).
     /// A reply about another entry, or an incomplete one, throws.
     /// </summary>
     public static ConfigValue Read(GameActor actor, string capabilityPath, string guid, string section, string key)

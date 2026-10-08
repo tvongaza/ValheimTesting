@@ -7,12 +7,12 @@ namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// One human-review screenshot at a declared site. The host directory must be a fresh, private directory belonging to
-/// this run; the local evidence directory must not exist. The review adapter provides the paired
+/// this run; the local evidence directory must not exist. ValheimCLI's Observe pack provides the paired
 /// <c>review-begin</c>/<c>review-restore</c> commands. Images are evidence for a person, never an automated pass.
 /// </summary>
 public sealed record ReviewCapturePlan(
     string Id, HeightExpectation Arrival, string Weather, float TimeOfDay, float CameraDistance, float CameraHeight,
-    string ExtensionId, string HostDirectory, string EvidenceDirectory, string WorldUid, string GameBuild,
+    string HostDirectory, string EvidenceDirectory, string WorldUid, string GameBuild,
     IReadOnlyDictionary<string, string> PluginPins, bool MistOff = true, bool ClutterOff = false, int Supersize = 1,
     float CameraAzimuthDegrees = 225);
 
@@ -30,7 +30,7 @@ public sealed record ReviewCaptureReceipt(string ImagePath, string MetadataPath,
 /// <summary>
 /// Makes a reproducible still view with a protected, arrived player. It restores the client's exact starting safety,
 /// weather, debug time, mist and camera mode on success or failure. A failed restore fails the capture even if a complete
-/// PNG was written. The adapter also restores on unload when the client is still alive.
+/// PNG was written. The Observe pack also restores on unload when the client is still alive.
 /// </summary>
 public static class ReviewCapture
 {
@@ -64,12 +64,12 @@ public static class ReviewCapture
         Validate(plan, shell);
         if (!server.Pinned || !client.Pinned) throw new InvalidOperationException("A review capture requires strict server and client pins.");
         string staging = ReviewLease.Stage(plan.EvidenceDirectory);
-        var begin = client.RequireCapability(plan.ExtensionId + "/review-begin");
-        var restore = client.RequireCapability(plan.ExtensionId + "/review-restore");
-        var mistOff = plan.MistOff ? client.RequireCapability(plan.ExtensionId + "/review-mist-off") : null;
-        var clutterOff = plan.ClutterOff ? client.RequireCapability(plan.ExtensionId + "/review-clutter-off") : null;
-        if (!begin.ReadOnly || restore.ReadOnly) throw new InvalidOperationException("The review adapter's begin/restore capabilities have the wrong access modes.");
-        if (mistOff?.ReadOnly == true || clutterOff?.ReadOnly == true) throw new InvalidOperationException("The review adapter's visual commands must be mutations.");
+        var begin = client.RequireCapability("valheim.observe/review-begin");
+        var restore = client.RequireCapability("valheim.observe/review-restore");
+        var mistOff = plan.MistOff ? client.RequireCapability("valheim.observe/review-mist-off") : null;
+        var clutterOff = plan.ClutterOff ? client.RequireCapability("valheim.observe/review-clutter-off") : null;
+        if (!begin.ReadOnly || restore.ReadOnly) throw new InvalidOperationException("The Observe pack's begin/restore capabilities have the wrong access modes.");
+        if (mistOff?.ReadOnly == true || clutterOff?.ReadOnly == true) throw new InvalidOperationException("The Observe pack's visual commands must be mutations.");
         string hostImage = plan.HostDirectory.TrimEnd('\\', '/') + (shell == HostShellKind.PowerShell ? "\\" : "/") + plan.Id + ".png";
         Exception? failure = null;
         ReviewCaptureReceipt? receipt = null;
@@ -144,14 +144,13 @@ public static class ReviewCapture
     }
 
     /// <summary>
-    /// The one rule for a capture plan: id, extension, weather, time, camera distance, height, azimuth, supersize, host and
+    /// The one rule for a capture plan: id, weather, time, camera distance, height, azimuth, supersize, host and
     /// evidence directories and provenance. <see cref="Capture"/> applies it first; call it to refuse a plan before launch.
     /// </summary>
     public static void Validate(ReviewCapturePlan plan, HostShellKind shell)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (!ReviewLease.ValidId(plan.Id)) throw new ArgumentException("Capture id must be 1-64 letters, digits or hyphens.");
-        if (!Regex.IsMatch(plan.ExtensionId ?? "", "^[A-Za-z0-9_.-]+$", RegexOptions.CultureInvariant)) throw new ArgumentException("Name the adapter extension id.");
         if (!Regex.IsMatch(plan.Weather ?? "", "^[A-Za-z0-9_]{1,64}$", RegexOptions.CultureInvariant)) throw new ArgumentException("Weather must be one named environment of at most 64 letters, digits or underscores.");
         if (!float.IsFinite(plan.TimeOfDay) || plan.TimeOfDay is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(plan.TimeOfDay));
         if (!float.IsFinite(plan.CameraDistance) || plan.CameraDistance is < 2 or > 100 || !float.IsFinite(plan.CameraHeight) || plan.CameraHeight is < 1 or > 100)

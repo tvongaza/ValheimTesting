@@ -6,10 +6,10 @@ namespace Valheim.Testing.NativeAcceptance;
 /// <summary>The test adapter's capabilities (AcceptanceMod.Adapter), by path.</summary>
 public static class Capabilities
 {
-    public const string Harmony = LifecyclePlan.HarmonyCapability, Zones = "acceptancemod.testing/zones", CustomData = "acceptancemod.testing/custom-data",
-        GlobalKeys = "acceptancemod.testing/globalkeys", GlobalKeyChange = "acceptancemod.testing/globalkey", Config = "acceptancemod.testing/config",
-        UnresolvedPrefabs = "acceptancemod.testing/unresolved-prefabs", DungeonRooms = "acceptancemod.testing/dungeon-rooms", Markers = "acceptancemod.testing/markers",
-        ContentCensus = "acceptancemod.testing/content-census";
+    public const string Harmony = LifecyclePlan.HarmonyCapability, Zones = "valheim.observe/zones", CustomData = "valheim.observe/custom-data",
+        GlobalKeys = "valheim.observe/globalkeys", GlobalKeyChange = "acceptancemod.testing/globalkey", Config = "valheim.observe/config",
+        UnresolvedPrefabs = "valheim.observe/unresolved-prefabs", DungeonRooms = "valheim.observe/dungeon-rooms", Markers = "acceptancemod.testing/markers",
+        ContentCensus = "valheim.observe/content-census";
     public const string MarkerOwner = "acceptancemod.testing/marker-owner", MarkerOwnerWait = "acceptancemod.testing/marker-owner-wait",
         MarkerOwnerClaim = "acceptancemod.testing/marker-owner-claim";
     /// <summary>The ghost-protection scenario's commands (AcceptanceMod.Adapter's AiWatch, #261).</summary>

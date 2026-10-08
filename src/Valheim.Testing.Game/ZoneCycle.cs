@@ -56,22 +56,23 @@ public sealed record SimulationRange(int Near, int Far, bool Classic)
 }
 
 /// <summary>One zone as the client holds it: its terrain, the object instances in it and the saved objects that have none.</summary>
+/// <param name="AreaReady">Whether the game considers this zone and its neighbouring saved objects ready.</param>
 /// <param name="Instances">Object instances whose position is in the zone, distant ones included.</param>
 /// <param name="NearInstances">Those not marked distant: while any is there, the game keeps the zone's terrain.</param>
 /// <param name="Saved">Saved objects of known prefabs that this client holds for the zone.</param>
 /// <param name="WithoutInstance">Of those, the ones not instantiated.</param>
 [ResultShape]
-public sealed record ZoneState(ZoneId Zone, bool TerrainLoaded, int Instances, int NearInstances, int Saved, int WithoutInstance)
+public sealed record ZoneState(ZoneId Zone, bool TerrainLoaded, bool AreaReady, int Instances, int NearInstances, int Saved, int WithoutInstance)
 {
     /// <summary>Nothing of the zone is in the scene: no terrain and no object instance, distant ones included.</summary>
     public bool Unloaded => !TerrainLoaded && Instances == 0;
     /// <summary>The terrain is loaded and every saved object of a known prefab has its instance.</summary>
     public bool Loaded => TerrainLoaded && WithoutInstance == 0;
-    public override string ToString() => $"zone {Zone}: terrain {(TerrainLoaded ? "loaded" : "not loaded")}, {Instances} instance(s) ({NearInstances} near), {WithoutInstance} of {Saved} saved object(s) without an instance";
+    public override string ToString() => $"zone {Zone}: area {(AreaReady ? "ready" : "not ready")}, terrain {(TerrainLoaded ? "loaded" : "not loaded")}, {Instances} instance(s) ({NearInstances} near), {WithoutInstance} of {Saved} saved object(s) without an instance";
 }
 
 /// <summary>
-/// One reading of the adapter's zone observation (<c>ZonePresence.Command()</c> in Valheim.Testing.Adapter): the zone of the
+/// One reading of ValheimCLI's <c>valheim.observe/zones</c> observation: the zone of the
 /// client's reference position (where its player is), its simulation distance, and the requested zones. <see cref="Data"/>
 /// is the reading as the adapter returned it, for evidence.
 /// </summary>
@@ -98,7 +99,7 @@ public sealed record ZoneReading(ZoneId Reference, SimulationRange Range, IReadO
         var parsed = new SimulationRange(range.GetProperty("near").GetInt32(), range.GetProperty("far").GetInt32(), range.GetProperty("classic").GetBoolean());
         if (parsed.Near < 0 || parsed.Far < 0) throw new InvalidOperationException("The zone reading reports a negative simulation distance.");
         var states = data.GetProperty("zones").EnumerateArray().Select(z => new ZoneState(new ZoneId(z.GetProperty("x").GetInt32(), z.GetProperty("z").GetInt32()),
-            z.GetProperty("terrainLoaded").GetBoolean(), z.GetProperty("instances").GetInt32(), z.GetProperty("nearInstances").GetInt32(),
+            z.GetProperty("terrainLoaded").GetBoolean(), z.GetProperty("areaReady").GetBoolean(), z.GetProperty("instances").GetInt32(), z.GetProperty("nearInstances").GetInt32(),
             z.GetProperty("saved").GetInt32(), z.GetProperty("withoutInstance").GetInt32())).ToArray();
         if (states.Length != zones.Count || !states.Select(s => s.Zone).OrderBy(z => (z.X, z.Z)).SequenceEqual(zones.OrderBy(z => (z.X, z.Z))))
             throw new InvalidOperationException($"The zone reading lists {string.Join(" ", states.Select(s => s.Zone))}, not the zones asked for ({string.Join(" ", zones)}).");
@@ -119,7 +120,7 @@ public sealed record ZoneCycleResult(ZoneReading Before, JsonElement AwayArrival
 /// left and recreates it from its saved data on return. A mod's object that keeps state only in a component field loses
 /// it here, and an object whose teardown throws shows up as <c>ZNetScene.RemoveObjects</c> errors in the client's log.
 /// <para>
-/// <see cref="Run(GameActor, GameActor, CancellationToken)"/> reads the <see cref="Zones"/> through the adapter's zone
+/// <see cref="Run(GameActor, GameActor, CancellationToken)"/> reads the <see cref="Zones"/> through the Observe pack's zone
 /// observation and requires them loaded, then has the protected player arrive at <see cref="Away"/>
 /// (<see cref="PlayerPlacement.Arrive"/>: one teleport by the server, arrival read on the client, never flying) and waits
 /// until the client holds nothing of those zones: no terrain and no object instance. Then the player arrives at
@@ -137,8 +138,7 @@ public sealed record ZoneCycleResult(ZoneReading Before, JsonElement AwayArrival
 /// </summary>
 public sealed class ZoneCycle
 {
-    /// <summary>The adapter's zone observation, for example <c>mymod.testing/zones</c>.</summary>
-    public required string Capability { get; init; }
+    private const string ZoneCapability = "valheim.observe/zones";
     /// <summary>The zones whose objects must unload and come back: 1 to 64, all different.</summary>
     public required IReadOnlyList<ZoneId> Zones { get; init; }
     /// <summary>Declared dry ground far enough away that the client unloads every zone of interest.</summary>
@@ -173,7 +173,7 @@ public sealed class ZoneCycle
         });
         try
         {
-            var capability = round.Client.RequireCapability(Capability);
+            var capability = round.Client.RequireCapability(ZoneCapability);
             round.Step("the zones of interest are loaded before leaving", () => before = Loaded(round.Client, capability));
             round.Step($"leave the area for ({Away.X}, {Away.Z})", () => away = Leave(round.Server, round.Client, before!, cancellation));
             round.Step("the client unloads the zones", () => { var (reading, took) = WaitFor(round.Client, capability, unload: true, cancellation); unloaded = reading; unloadTook = took; });
@@ -195,7 +195,7 @@ public sealed class ZoneCycle
         ArgumentNullException.ThrowIfNull(server);
         ArgumentNullException.ThrowIfNull(client);
         Validate();
-        var capability = client.RequireCapability(Capability);
+        var capability = client.RequireCapability(ZoneCapability);
         var before = Loaded(client, capability);
         var away = Leave(server, client, before, cancellation);
         var (unloaded, unloadTook) = WaitFor(client, capability, unload: true, cancellation);
@@ -248,7 +248,6 @@ public sealed class ZoneCycle
 
     private void Validate()
     {
-        if (string.IsNullOrWhiteSpace(Capability) || Capability.Split('/').Length != 2) throw new ArgumentException("Capability: name the adapter's zone observation, owner/name.");
         if (Zones is not { Count: >= 1 and <= 64 }) throw new ArgumentException("Zones: name 1 to 64 zones of interest.");
         if (Zones.Distinct().Count() != Zones.Count) throw new ArgumentException("Zones: each zone once.");
         if (Zones.Any(z => Math.Abs(z.X) > 255 || Math.Abs(z.Z) > 255)) throw new ArgumentException("Zones: outside the world (zone coordinates beyond ±255).");

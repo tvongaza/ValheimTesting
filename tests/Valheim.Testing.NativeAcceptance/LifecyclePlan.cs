@@ -13,7 +13,7 @@ namespace Valheim.Testing.NativeAcceptance;
 public class LifecyclePlan : ServerRunPlan
 {
     public const string SessionTokenVariable = "ACCEPTANCEMOD_TEST_SESSION_TOKEN";
-    /// <summary>AcceptanceMod as the runner sees it: its adapter's session and Harmony capabilities and the patches it declares.</summary>
+    /// <summary>AcceptanceMod as the runner sees it: its adapter's session and the Observe pack's Harmony capability and the patches it declares.</summary>
     public static readonly ModDeclaration Mod = new("acceptancemod.testing/session", SessionTokenVariable)
     {
         HarmonyCapability = HarmonyCapability, Owner = ModPlugin, Patches = DrySiteScenario.Patches,
@@ -22,8 +22,8 @@ public class LifecyclePlan : ServerRunPlan
     public const string LifecycleScenario = "dry-site-lifecycle", ServerScenario = "dry-site-server";
     public const string ModPlugin = "valheimtesting.acceptancemod";
     public const string AdapterPlugin = "valheimtesting.acceptancemod.adapter";
-    /// <summary>The test adapter's census of applied Harmony patches (<c>HarmonyCensus.Command()</c> in AcceptanceMod.Adapter).</summary>
-    public const string HarmonyCapability = "acceptancemod.testing/harmony";
+    /// <summary>ValheimCLI's Observe-pack census of applied Harmony patches.</summary>
+    public const string HarmonyCapability = "valheim.observe/harmony";
     // The mod's rule inputs (see ModWithTests' DrySiteRule): the sea at 30 m, 1.5 m of clearance.
     public const float WaterLevel = 30f, Clearance = 1.5f;
 

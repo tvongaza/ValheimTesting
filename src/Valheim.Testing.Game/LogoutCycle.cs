@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace Valheim.Testing.Game;
 
 /// <summary>
-/// The local player's custom data and profile, read through the adapter's <c>PlayerCustomData.Command()</c> (Valheim.Testing.Adapter).
+/// The local player's custom data and profile, read through ValheimCLI's <c>valheim.observe/custom-data</c>.
 /// <see cref="Character"/> is the profile's name, <see cref="ProfileFile"/> its file name without <c>.fch</c> and
 /// <see cref="FileSource"/> where the game saves it (<c>Local</c> or <c>Cloud</c>). <see cref="Data"/> is the reading as returned.
 /// </summary>
@@ -101,7 +101,7 @@ public sealed record LogoutResult(CustomDataReading Before, ProfileFileState Fil
 /// </summary>
 public sealed class LogoutCycle
 {
-    /// <summary>The adapter's custom data observation, for example <c>mymod.testing/custom-data</c>.</summary>
+    /// <summary>ValheimCLI's custom-data observation, for example <c>valheim.observe/custom-data</c>.</summary>
     public required string Capability { get; init; }
     /// <summary>The custom data keys that must come back: at least one, all set before the logout.</summary>
     public required IReadOnlyList<string> Keys { get; init; }

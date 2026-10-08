@@ -9,11 +9,10 @@ using valheimCLI.Extensions;
 namespace AcceptanceMod.Adapter;
 
 /// <summary>
-/// AcceptanceMod's test adapter. It serves the toolkit's owned-session identity (<c>acceptancemod.testing/session</c>), the census of
-/// applied Harmony patches (<c>acceptancemod.testing/harmony</c>), the toolkit's world observations (the registered-content census
-/// among them) and one global-key fixture
-/// command, and one observation of the mod's own (<see cref="MarkerObservation"/>). The scenarios drive the mod through
-/// its own console commands. A mod that needs a test-only action or observation adds it here as another extension command.
+/// AcceptanceMod's test adapter serves its owned-session identity (<c>acceptancemod.testing/session</c>),
+/// a guarded global-key fixture command and its own marker observation (<see cref="MarkerObservation"/>).
+/// Generic observations, including Harmony and content census, belong to ValheimCLI's Observe pack.
+/// The scenarios drive the mod through its own console commands.
 /// <para>
 /// The adapter never references AcceptanceMod's types and depends on it only softly, so it also loads on a client without AcceptanceMod:
 /// the vanilla-client scenario reads that client's unresolved prefabs through it.
@@ -44,20 +43,10 @@ public sealed class Plugin : BaseUnityPlugin
     // The session is complete once the world is up and the mod itself is loaded.
     private IEnumerator Start() => TestExtension.Register("acceptancemod.testing", "0.1.0", TokenVariable,
         () => Chainloader.PluginInfos.ContainsKey("valheimtesting.acceptancemod"), registration => _registration = registration, Logger.LogError,
-        HarmonyCensus.Command(),                                    // harmony [owner]: applied patches (#30)
-        ZonePresence.Command(),                                     // zones <x,z> ...: client, for ZoneCycle (#35)
-        PlayerCustomData.Command(),                                 // custom-data [prefix]: client, for LogoutCycle (#35)
-        GlobalKeyCommands.List(),                                   // globalkeys: either side (#23)
         GlobalKeyCommands.Change(FixturesVariable, TokenVariable),  // globalkey set|remove: server fixture command (#23)
-        ConfigEntryCommand.Command(),                               // config <guid> <section> <key>: either side (#20)
-        UnresolvedPrefabs.Command(),                                // unresolved-prefabs [radius]: a client without AcceptanceMod (#33)
-        DungeonRooms.Command(),                                     // dungeon-rooms <x> <z> [radius]: server (#24)
-        ContentCensus.Command(),                                    // content-census <owner> <prefix> ...: either side (#91)
-        ReviewState.BeginCommand(), ReviewState.MistOffCommand(), ReviewState.ClutterOffCommand(), ReviewState.RestoreCommand(), // owned visual-state lease (#78)
-        ReviewClipFrames.Command(),                                  // bounded, scene-only motion evidence (#212)
         MarkerObservation.Command(),                                // markers <x> <z> [radius]: the mod's own
         MarkerOwnership.SnapshotCommand(), MarkerOwnership.WaitCommand(), MarkerOwnership.ClaimCommand(),
         AiWatch.WatchCommand(), AiWatch.SpawnCommand(), AiWatch.RemoveCommand(), AiWatch.GhostCommand()); // ghost-protection (#261)
     private void OnApplicationQuit() => QuitLogFlush.Quitting("AcceptanceMod.Adapter OnApplicationQuit");
-    private void OnDestroy() { ReviewClipFrames.AbortOnUnload(); ReviewState.RestoreOnUnload(); _registration?.Dispose(); _ownershipPatch?.UnpatchSelf(); QuitLogFlush.Disable(); }
+    private void OnDestroy() { _registration?.Dispose(); _ownershipPatch?.UnpatchSelf(); QuitLogFlush.Disable(); }
 }
