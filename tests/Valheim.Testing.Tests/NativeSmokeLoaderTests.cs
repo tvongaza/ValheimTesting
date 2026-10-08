@@ -1,83 +1,12 @@
 using System.Text;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 public sealed class NativeSmokeLoaderTests : IDisposable
 {
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
-
-    [Fact]
-    public void UnmoddedSourceServerAndClientReceiveSeparatePinnedLoaders()
-    {
-        _rig.Write("game/valheim_server.exe", Encoding.UTF8.GetBytes("fake dedicated executable"));
-        var serverLoader = Package("server-loader");
-        var clientLoader = Package("client-loader");
-        File.AppendAllText(Path.Combine(clientLoader.Root, "BepInEx", "core", "BepInEx.dll"), "client build");
-        clientLoader = BepInExLoaderPackage.Capture(clientLoader.Root, "client-loader", "test");
-        Assert.NotEqual(serverLoader.Files["BepInEx/core/BepInEx.dll"], clientLoader.Files["BepInEx/core/BepInEx.dll"]);
-        Directory.Delete(Path.Combine(_rig.Game, "BepInEx"), recursive: true);
-        var source = WorldFixture.Manifest(_rig.Game);
-        var dependencies = Dependencies(serverLoader);
-        string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
-            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
-        string serverCopy, clientCopy;
-
-        using (var server = NativeServerRuntime.Prepare(_rig.Game, Path.Combine(_rig.Root, "server-copy"),
-                   dependencies, adapter, 5588, loaderPackage: serverLoader))
-        using (var client = NativeCleanClientRuntime.Prepare(_rig.Game, Path.Combine(_rig.Root, "client-copy"),
-                   dependencies, 5589, clientLoader))
-        {
-            serverCopy = server.RuntimeDirectory;
-            clientCopy = client.RuntimeDirectory;
-            Assert.Equal(serverLoader.Files["BepInEx/core/BepInEx.dll"],
-                FileHash.Sha256(Path.Combine(server.RuntimeDirectory, "BepInEx", "core", "BepInEx.dll")));
-            Assert.Equal(clientLoader.Files["BepInEx/core/BepInEx.dll"],
-                FileHash.Sha256(Path.Combine(client.RuntimeDirectory, "BepInEx", "core", "BepInEx.dll")));
-            foreach (var (runtime, loader) in new[] { (server.RuntimeDirectory, serverLoader), (client.RuntimeDirectory, clientLoader) })
-                Assert.Equal(loader.Files["BepInEx/config/BepInEx.cfg"],
-                    FileHash.Sha256(Path.Combine(runtime, "BepInEx", "config", "BepInEx.cfg")));
-            Assert.Equal("absent", client.Plan(5589, 2486, ["example.mod"]).Pins["example.mod"]);
-        }
-        Assert.Equal(source.OrderBy(item => item.Key), WorldFixture.Manifest(_rig.Game).OrderBy(item => item.Key));
-        Assert.False(Directory.Exists(serverCopy));
-        Assert.False(Directory.Exists(clientCopy));
-    }
-
-    [Fact]
-    public void ChangedLoaderPackageIsRefusedBeforeMakingACopy()
-    {
-        _rig.Write("game/valheim_server.exe", Encoding.UTF8.GetBytes("fake dedicated executable"));
-        var loader = Package("reviewed-loader");
-        var dependencies = Dependencies(loader);
-        string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
-            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
-        File.AppendAllText(Path.Combine(loader.Root, "BepInEx", "core", "BepInEx.dll"), "changed");
-        string serverOutput = Path.Combine(_rig.Root, "refused-server");
-        string clientOutput = Path.Combine(_rig.Root, "refused-client");
-        Assert.Contains("missing or changed", Assert.Throws<InvalidDataException>(() =>
-            NativeServerRuntime.Prepare(_rig.Game, serverOutput, dependencies, adapter, 5588,
-                loaderPackage: loader)).Message);
-        Assert.Contains("missing or changed", Assert.Throws<InvalidDataException>(() =>
-            NativeCleanClientRuntime.Prepare(_rig.Game, clientOutput, dependencies, 5589, loader)).Message);
-        Assert.False(Directory.Exists(serverOutput));
-        Assert.False(Directory.Exists(clientOutput));
-    }
-
-    [Fact]
-    public void ALoaderCapturedFromTheSourceInstallIsNotASeparatePackage()
-    {
-        _rig.Write("game/valheim_server.exe", Encoding.UTF8.GetBytes("fake dedicated executable"));
-        var loader = BepInExLoaderPackage.Capture(_rig.Game, "live-source", "test");
-        var dependencies = Dependencies(loader);
-        string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
-            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
-        string output = Path.Combine(_rig.Root, "refused-live-package");
-        Assert.Contains("outside the source server", Assert.Throws<InvalidOperationException>(() =>
-            NativeServerRuntime.Prepare(_rig.Game, output, dependencies, adapter, 5588,
-                loaderPackage: loader)).Message);
-        Assert.False(Directory.Exists(output));
-    }
 
     [Fact]
     public async Task RemovingOneModKeepsTheSameLoaderPackagesInBothArms()
@@ -90,7 +19,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         string partner = _rig.Write("partner/Partner.dll",
             RegressionRig.Assembly("Partner", new("example.partner")));
         string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
-            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
+            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
         var arms = new List<string[]>();
         int result = await ServerLoadComparison.RunAsync(
             ["--server", _rig.Game, "--mod", _rig.Parent, "--mod", partner,
@@ -117,23 +46,24 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         loader.Write(manifest);
         Directory.Delete(Path.Combine(_rig.Game, "BepInEx"), recursive: true);
         string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
-            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
+            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
         string output = Path.Combine(_rig.Root, "offline-run");
         var launched = new List<string[]>();
-        // The staged (macOS) path; the campaign route's equivalent is ServerLoadOneOffTests.
+        // The campaign path needs no generated consumer even when a reviewed loader package is selected.
         int result = await ServerLoad.RunAsync(
             ["--server", _rig.Game, "--mod", _rig.Parent, "--loader-package", manifest, "--server-only",
                 "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
                 "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", adapter, "--output", output],
-            new ServerLoad.Seams(MacOS: true, Staged: (arguments, options) =>
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(new CampaignPreflightReport([])),
+                Campaign: (campaign, _, _, _, _) =>
             {
-                launched.Add(arguments);
-                Assert.True(File.Exists(arguments[1]), "The plan is written before the launch.");
+                launched.Add([campaign]);
+                Assert.True(File.Exists(campaign), "The campaign is written before the launch.");
                 return Task.FromResult(0);
             }));
         Assert.Equal(0, result);
         Assert.Single(launched);
-        Assert.Equal(Path.Combine(output, "plan.json"), launched[0][1]);
+        Assert.Equal(Path.Combine(output, "campaign.json"), launched[0][0]);
         Assert.False(Directory.Exists(Path.Combine(output, "consumer")));
     }
 

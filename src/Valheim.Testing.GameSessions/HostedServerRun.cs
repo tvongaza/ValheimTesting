@@ -25,6 +25,8 @@ internal sealed class HostedServerRun : IServerPlacement
     private HostLock? _lock;
     private CliTunnel? _tunnel;
     private HostListing? _runtime;
+    private HostedWorld? _macWorld;
+    private MacServerLists? _macLists;
     private bool _serverMayRun;
     // A standalone run's own copies on the server host, journalled before their scripts run (#257): from then on teardown
     // removes them, even a partial one, or leaves them open in the journal for env recover.
@@ -42,7 +44,7 @@ internal sealed class HostedServerRun : IServerPlacement
         Prepared = preparedRuntime != null;
         RunDirectory = HostPath.Join(role.Runtime, runId);
         RuntimeDirectory = preparedRuntime ?? HostPath.Join(RunDirectory, "runtime");
-        WorldDirectory = HostPath.Join(RunDirectory, "world");
+        WorldDirectory = LocalMac ? HostedWorld.DefaultSaveDirectory(ClientPlatform.MacOS) : HostPath.Join(RunDirectory, "world");
         _clientActors = new CampaignClients(profile, runId, _owner, hooks, (role.Host, host), JournalAsync);
     }
 
@@ -78,6 +80,7 @@ internal sealed class HostedServerRun : IServerPlacement
     public ResolvedEnvironment Profile { get; }
     public GameRole Role { get; }
     public HostProfile HostProfile { get; }
+    private bool LocalMac => HostProfile is { Kind: "local", Platform: "macos" };
     public IGameHost Host { get; }
     public string RunId { get; }
     /// <summary>
@@ -109,15 +112,19 @@ internal sealed class HostedServerRun : IServerPlacement
     internal static string? Refusal(HostProfile hostProfile, GameRole role, ServerRunPlan plan)
     {
         if (!((hostProfile.Platform == "linux" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
+              (hostProfile.Platform == "macos" && hostProfile.Kind == "local" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
               (hostProfile.Platform == "windows" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.PowerShell)))
-            return $"it is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash or Windows/PowerShell.";
+            return $"it is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash, local macOS/bash or Windows/PowerShell.";
         if (hostProfile.Kind == "local" && hostProfile.Platform != HostProfile.CurrentPlatform)
             return $"it is a local {hostProfile.Platform} host, but this machine is {HostProfile.CurrentPlatform}.";
         // The plan's runtime names its platform by its server executable; a pinned manifest lists it.
         string? planned = plan.Executable == GameLaunch.ServerWindowsExecutable || plan.Runtime.Sha256.ContainsKey(GameLaunch.ServerWindowsExecutable) ? "windows"
-            : plan.Executable == GameLaunch.ServerLinuxExecutable || plan.Runtime.Sha256.ContainsKey(GameLaunch.ServerLinuxExecutable) ? "linux" : null;
+            : plan.Executable == GameLaunch.ServerLinuxExecutable || plan.Runtime.Sha256.ContainsKey(GameLaunch.ServerLinuxExecutable) ? "linux"
+            : plan.Executable == GameLaunch.ServerMacExecutable || plan.Runtime.Sha256.ContainsKey(GameLaunch.ServerMacExecutable) ? "macos" : null;
         if (planned != null && planned != hostProfile.Platform)
             return $"the plan's runtime is a {planned} server, but the host is {hostProfile.Platform}.";
+        if (hostProfile.Platform == "macos" && plan.Crossplay)
+            return "macOS crossplay's native library has no hosted preflight yet; omit -crossplay for a local smoke.";
         if (role.CliPort != plan.Port)
             return $"the plan's ValheimCLI port {plan.Port} is not its cliPort {role.CliPort}; the runtime's [Server] Port must be both.";
         // The game reads its arguments lowercased, so -Port names the game port too.
@@ -143,6 +150,13 @@ internal sealed class HostedServerRun : IServerPlacement
             await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, Quick, cancellation)).ConfigureAwait(false);
         await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         await NoteLockAsync(Host, Role.Host, _lock!, JournalEntry.LockHeld).ConfigureAwait(false);
+        if (LocalMac)
+            await report.StepAsync(StepPhase.Setup, "preserve the Mac server's user-level access lists", async () =>
+            {
+                _macLists = MacServerLists.Capture(WorldDirectory, Path.Combine(RunDirectory, "server-lists"));
+                await JournalAsync(Host, Role.Host, "server", _macLists.Captured(), cancellation).ConfigureAwait(false);
+                _macLists.Isolate();
+            }).ConfigureAwait(false);
         // Only an unpinned plan may leave out the manifest; the copy is then recorded as found.
         bool verified = pinned || plan.Runtime.Sha256.Count != 0;
         if (Prepared)
@@ -189,8 +203,27 @@ internal sealed class HostedServerRun : IServerPlacement
     }
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
-    public Task ShipWorldAsync(ScenarioReport report, string localWorld, CancellationToken cancellation) =>
-        report.StepAsync(StepPhase.Setup, "ship and verify the world copy on the server host", async () =>
+    public Task ShipWorldAsync(ScenarioReport report, string localWorld, string output, CancellationToken cancellation) =>
+        LocalMac ? report.StepAsync(StepPhase.Setup, "place the pinned world in the Mac's default worlds", () =>
+        {
+            // A campaign's prepared server save root contains worlds_local; HostedWorldOnHost takes the
+            // contents of that folder, with the named world at its root.
+            string sourceWorlds = Directory.Exists(Path.Combine(localWorld, "worlds_local"))
+                ? Path.Combine(localWorld, "worlds_local") : localWorld;
+            var manifest = WorldFixture.Manifest(sourceWorlds);
+            var identity = WorldIdentity.Read(sourceWorlds);
+            var fixture = new HostWorldPlan
+            {
+                World = new PinnedDirectory { Source = sourceWorlds, Sha256 = new Dictionary<string, string>(manifest, StringComparer.Ordinal) },
+                WorldUid = identity.UidText,
+            };
+            var site = new HostedWorldOnHost.Site(Host, Role.Host, HostPath.Join(WorldDirectory, "worlds_local"),
+                HostPath.Join(RunDirectory, "world-stage"), HostPath.Join(RunDirectory, "host-world"),
+                (entry, token) => JournalAsync(Host, Role.Host, "server", entry, token),
+                _ => _lock != null ? Task.CompletedTask : throw new InvalidOperationException("Take the Mac server host's lock before placing its world."));
+            _macWorld = HostedWorldOnHost.Place(site, fixture, Path.Combine(output, "mac-world-input"), pinned: true, cancellation);
+            return Task.CompletedTask;
+        }) : report.StepAsync(StepPhase.Setup, "ship and verify the world copy on the server host", async () =>
         {
             var manifest = WorldFixture.Manifest(localWorld);
             // Journalled before the ship, like the runtime copy: no journal line, no world copy on the host.
@@ -221,9 +254,10 @@ internal sealed class HostedServerRun : IServerPlacement
         {
             var platform = HostInstall.DetectServer(runtime);
             plan.CheckExecutable(platform);
-            ServerRunPlan.CheckLaunchHost(platform, Host.Shell.Kind == HostShellKind.PowerShell);
-            if (platform == ServerPlatform.Linux && !runtime.Executables.Contains(GameLaunch.ServerLinuxExecutable))
-                throw new InvalidOperationException($"{GameLaunch.ServerLinuxExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
+            ServerRunPlan.CheckLaunchHost(platform, HostProfile.Platform switch { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux });
+            string? unixExecutable = platform switch { ServerPlatform.Linux => GameLaunch.ServerLinuxExecutable, ServerPlatform.MacOS => GameLaunch.ServerMacExecutable, _ => null };
+            if (unixExecutable != null && !runtime.Executables.Contains(unixExecutable))
+                throw new InvalidOperationException($"{unixExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
         });
         report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers", () =>
             (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, "runtime")
@@ -250,11 +284,12 @@ internal sealed class HostedServerRun : IServerPlacement
 
     // The owned server's placement on the host (ServerActor owns the rest of the wiring): each boot through HostServer, its
     // log waited on in the host's log, ValheimCLI only through the tunnel.
-    ServerPlatform? IServerPlacement.Platform => Host.Shell.Kind == HostShellKind.PowerShell ? ServerPlatform.Windows : ServerPlatform.Linux;
+    ServerPlatform? IServerPlacement.Platform => LocalMac ? null : Host.Shell.Kind == HostShellKind.PowerShell ? ServerPlatform.Windows : ServerPlatform.Linux;
 
     ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, CancellationToken cancellation)
     {
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
+        if (LocalMac) return StartLocalMac(launch, local, bootDirectory, cancellation);
         HostServerProcess process;
         // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
         // With the command line the server will have, so its pid file alone proves it the run's (#257).
@@ -286,6 +321,54 @@ internal sealed class HostedServerRun : IServerPlacement
                     ("startIdentity", process.StartIdentity), ("commandLineSha256", commandLine), ("bootDirectory", bootDirectory),
                     ("taskLogon", process.TaskLogon ?? ""))).GetAwaiter().GetResult();
             });
+    }
+
+    // The macOS server is local to the runner. Its launch must come from GameLaunch.ToStartInfo: that path carries the
+    // native architecture and both DYLD variables through /usr/bin/arch, which a host-shell launch would strip.
+    private ServerBoot StartLocalMac(GameLaunch launch, string local, string bootDirectory, CancellationToken cancellation)
+    {
+        string expected = launch.CommandLineSha256();
+        JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
+            ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
+        Directory.CreateDirectory(local);
+        Directory.CreateDirectory(bootDirectory);
+        foreach (var (relative, index) in new[] { (BepInExLog, 0), (UnityLog, 1) })
+        {
+            string previous = Path.Combine(RuntimeDirectory, relative);
+            if (File.Exists(previous)) File.Move(previous, Path.Combine(bootDirectory, $"previous-{index}.log"));
+        }
+        string prefix = Path.Combine(local, "game");
+        DirectServerProcess? process = null;
+        try
+        {
+            process = new DirectServerProcess(launch.ToStartInfo(), prefix,
+                Path.Combine(RuntimeDirectory, BepInExLog), Path.Combine(RuntimeDirectory, UnityLog));
+            var found = HostProcessProbe.ProbeAsync(Host, [(process.Id, "")], Quick, cancellation, settle: true).GetAwaiter().GetResult()[(process.Id, "")];
+            if (found.State != ProbedState.Same || found.StartIdentity == null || found.CommandLineSha256 == null)
+                throw new IOException($"The Mac server process {process.Id} could not be identified for recovery ({found.State}).");
+            File.WriteAllText(Path.Combine(bootDirectory, "pid"), $"{process.Id} {found.StartIdentity}\n");
+            var logs = new[] { new RunLog("Mac BepInEx log", prefix + ".game-0.log", Required: true),
+                new RunLog("Mac Unity log", prefix + ".game-1.log"), new RunLog("Mac stdout", prefix + ".stdout.log") };
+            return new ServerBoot(process, logs,
+                new() { ["pid"] = process.Id, ["startIdentity"] = found.StartIdentity, ["host"] = Host.Name,
+                    ["bootDirectory"] = bootDirectory, ["startedUtc"] = DateTime.UtcNow, ["world"] = WorldDirectory },
+                () =>
+                {
+                    WarnUnexpectedCommandLine(Host, process.Id, expected, found.CommandLineSha256);
+                    NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted,
+                        ("pid", process.Id.ToString(CultureInfo.InvariantCulture)), ("startIdentity", found.StartIdentity),
+                        ("commandLineSha256", found.CommandLineSha256), ("bootDirectory", bootDirectory))).GetAwaiter().GetResult();
+                });
+        }
+        catch
+        {
+            if (process != null)
+            {
+                try { process.Stop(TimeSpan.FromSeconds(15)); process.Dispose(); }
+                catch (Exception error) { _serverMayRun = true; Console.Error.WriteLine($"Warning: the Mac server may still run: {error.Message}"); }
+            }
+            throw;
+        }
     }
 
     IGameTransport IServerPlacement.Connect() => Connect(Tunnel);
@@ -333,6 +416,30 @@ internal sealed class HostedServerRun : IServerPlacement
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         }
         bool worldFetched = false;
+        if (_macWorld != null)
+        {
+            if (serverStopped)
+            {
+                int before = failures.Count;
+                await Try("move the Mac server's world out of the user's worlds", () => { _macWorld.Collect(); return Task.CompletedTask; }).ConfigureAwait(false);
+                if (failures.Count != before) serverStopped = false; // keep the host lock and copy for env recover
+            }
+            else
+                await Try("keep the Mac server's world for recovery", () => throw new IOException("The server may still run; its world remains journalled under the host lock.")).ConfigureAwait(false);
+        }
+        if (_macLists != null)
+        {
+            if (serverStopped || !launched && !_serverMayRun)
+            {
+                int before = failures.Count;
+                await Try("restore the Mac server's user-level access lists", () => { _macLists.Restore(); return Task.CompletedTask; }).ConfigureAwait(false);
+                if (failures.Count == before)
+                    await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.MacListsRestored, ("backup", Path.Combine(RunDirectory, "server-lists")))).ConfigureAwait(false);
+                else serverStopped = false; // the lock and backup stay for env recover
+            }
+            else
+                await Try("keep the Mac server's access lists for recovery", () => throw new IOException("The server may still run; its access-list backup remains journalled under the host lock.")).ConfigureAwait(false);
+        }
         if (launched && _world >= WorldCopy.Shipped && serverStopped)
         {
             int before = failures.Count;
@@ -679,13 +786,16 @@ internal static class HostedRunScripts
             if [ ! -f "$src" ] || [ -L "$src" ]; then printf 'VT-NOTKEPT %s -1\n' "$line"; continue; fi
             # Never through a linked directory inside the copy: the file's real path must be inside the copy too.
             case "$(readlink -f -- "$src")" in "$real"/*) ;; *) printf 'VT-NOTKEPT %s -1\n' "$line"; continue;; esac
-            size=$(stat -c %s -- "$src") || exit 3
+            if [ "$(uname)" = Darwin ]; then size=$(stat -f %z -- "$src") || exit 3
+            else size=$(stat -c %s -- "$src") || exit 3; fi
             if [ "$size" -gt "$perfile" ] || [ $((kept + size)) -gt "$total" ]; then printf 'VT-NOTKEPT %s %s\n' "$line" "$size"; continue; fi
             mkdir -p -- "$(dirname -- "$keep/$rel")" && cp -p -- "$src" "$keep/$rel" || exit 3
             kept=$((kept + size))
         done <<< "$files"
-        bytes=$(du -sb -- "$runtime") || exit 3
+        if [ "$(uname)" = Darwin ]; then bytes=$(du -sk -- "$runtime") || exit 3
+        else bytes=$(du -sb -- "$runtime") || exit 3; fi
         bytes=${bytes%%$'\t'*}
+        if [ "$(uname)" = Darwin ]; then bytes=$((bytes * 1024)); fi
         rm -rf -- "$runtime" || exit 3
         printf 'VT-RETIRED %s %s\n' "$bytes" "$kept"
         """.ReplaceLineEndings("\n");

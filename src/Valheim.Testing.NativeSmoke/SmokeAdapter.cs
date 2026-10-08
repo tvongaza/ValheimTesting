@@ -66,7 +66,7 @@ internal static class SmokeAdapter
             string built = Path.Combine(stage, "bin", "Release", "net48", "NativeSmoke.SessionAdapter.dll");
             if (!File.Exists(built)) throw new IOException("The session adapter build succeeded but produced no DLL.");
             var metadata = PluginMetadata.Read(built);
-            if (metadata.Plugins.Count != 1 || metadata.Plugins[0].Guid != NativeServerRuntime.SessionAdapterPluginGuid)
+            if (metadata.Plugins.Count != 1 || metadata.Plugins[0].Guid != SmokeSessionContract.SessionAdapterPluginGuid)
                 throw new InvalidDataException("The built adapter does not declare the expected test-only plugin identity.");
             string project = Path.Combine(output, "adapter-source");
             Directory.CreateDirectory(project);

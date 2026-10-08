@@ -361,10 +361,9 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task");
     }
 
-    // A Mac hosts clients only: the inventory refuses a macOS server environment, local or remote, before any host check,
-    // so the macOS port check (netstat) never clears one (#435's preflight check for it was unreachable and is gone).
+    // A Mac dedicated server must be local: a remote Mac environment is refused before any host check.
     [Fact]
-    public async Task ADedicatedServerOnAMacIsRefusedByTheInventory()
+    public async Task ARemoteMacDedicatedServerIsRefusedByTheInventory()
     {
         string inventory = Write("mac-inventory.json", new
         {
@@ -382,7 +381,7 @@ public sealed class CampaignPreflightTests : IDisposable
         var host = new FakeServerHost("mac", Path.Combine(_root, "mirror"));
         var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
         Assert.False(report.Ready);
-        Assert.Contains(report.Problems, problem => problem.Input == "inventory" && problem.Message.Contains("macOS dedicated servers are not supported"));
+        Assert.Contains(report.Problems, problem => problem.Input == "inventory" && problem.Message.Contains("must run on this machine, not a remote host"));
         Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start" or "apply-stage" or "port");
     }
 

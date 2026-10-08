@@ -305,7 +305,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         // An owned client's install (ClientRunPlan.Preflight -> CliCapabilityManifest.Check).
         using (var install = Staged(builds, [.. files]))
             Assert.Contains(expected, Assert.Throws<InvalidOperationException>(() => PlanFor(install, manifestPath).Preflight(CliCapabilities.HostedRounds)).Message);
-        // A dependency lock (ApplyTo, ReadReady and NativeCleanClientRuntime.Prepare all ask RequireExactCliSet). A lock of the
+        // A dependency lock (ApplyTo and ReadReady both ask RequireExactCliSet). A lock of the
         // wrong count is refused for its count first; the others reach the one check.
         var dependencyLock = new NativeDependencyLock { CliManifest = manifest, CliFiles = paths.Select(path => new NativeDependencyFile(path, FileHash.Sha256(path), "test")).ToList() };
         string refusal = Assert.Throws<InvalidDataException>(dependencyLock.RequireExactCliSet).Message;

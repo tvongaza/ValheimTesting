@@ -35,7 +35,7 @@ internal static class SmokeProject
     internal static void PrintHint(bool server)
     {
         if (Refusal(server) == null)
-            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "the run's campaign.json and the plan.json beside it, or a Mac run's plan.json" : "the run's regression.json")}; needs NuGet.org).");
+            Console.WriteLine($"To extend this check with your own assertions: valheim-test init{(server ? " server" : "")} --output NEW_DIR (an editable consumer of {(server ? "the run's campaign.json and the plan.json beside it" : "the run's regression.json")}; needs NuGet.org).");
     }
 
     internal static async Task<int> InitAsync(string[] args)
@@ -117,10 +117,10 @@ internal static class SmokeProject
             using Valheim.Testing.GameSessions;
 
             // Run this with the campaign.json valheim-test server-load wrote (plan.json and client-plan.json beside it), or on a
-            // Mac with its plan.json. Supply a new result directory for each run.
+            // Supply a new result directory for each campaign run.
             if (args is not [var runFile, var resultDirectory])
             {
-                Console.Error.WriteLine("Usage: dotnet run -- RUN_OUTPUT/campaign.json NEW_RESULT_DIRECTORY (on a Mac: RUN_OUTPUT/plan.json)");
+                Console.Error.WriteLine("Usage: dotnet run -- RUN_OUTPUT/campaign.json NEW_RESULT_DIRECTORY");
                 return 2;
             }
             var options = new PinnedServerRunOptions<ServerRunPlan>
@@ -129,10 +129,10 @@ internal static class SmokeProject
                 ReadPlan = path =>
                 {
                     var plan = ServerRunPlan.Read<ServerRunPlan>(path);
-                    plan.ValidateServerPlan(plan.Pins.Keys.Where(key => key != "worlduid"), NativeServerRuntime.SessionTokenVariable);
+                    plan.ValidateServerPlan(plan.Pins.Keys.Where(key => key != "worlduid"), SmokeSessionContract.SessionTokenVariable);
                     return plan;
                 },
-                Mod = new(NativeServerRuntime.SessionCapability, NativeServerRuntime.SessionTokenVariable),
+                Mod = new(SmokeSessionContract.SessionCapability, SmokeSessionContract.SessionTokenVariable),
                 Scenario = (session, plan) =>
                 {
                     var server = session.Server!.Game;
@@ -156,7 +156,7 @@ internal static class SmokeProject
             {
                 clients["client"] = System.Text.Json.JsonSerializer.Deserialize<ClientRunPlan>(File.ReadAllText(clientFile))!;
                 // The clean client joins with the server's password, passed only through the environment.
-                Environment.SetEnvironmentVariable(NativeCleanClientRuntime.PasswordVariable, serverPlan.Arguments[serverPlan.Arguments.IndexOf("-password") + 1]);
+                Environment.SetEnvironmentVariable(SmokeSessionContract.PasswordVariable, serverPlan.Arguments[serverPlan.Arguments.IndexOf("-password") + 1]);
             }
             return await PinnedServerRun.RunCampaignAsync(runFile, serverPlan, _ => clients, resultDirectory, options);
             """ : """
@@ -186,7 +186,7 @@ internal static class SmokeProject
             This project restores `Valheim.Testing.Game` {{GameVersion}}{{(server ? $" and `Valheim.Testing.GameSessions` {GameSessionsVersion}" : "")}} from NuGet.org only: the versions the
             `valheim-test` that created it runs, so it reads that tool's files. Add your mod-specific observations in
             `Program.cs`, then run from this directory with the {{(server ? "campaign" : "regression")}}.json a
-            `valheim-test {{(server ? "server-load" : "start")}}` run wrote and a fresh result directory{{(server ? " (on a Mac, its plan.json)" : "")}}:
+            `valheim-test {{(server ? "server-load" : "start")}}` run wrote and a fresh result directory:
 
             ```sh
             dotnet run -c Release -- RUN_OUTPUT/{{(server ? "campaign" : "regression")}}.json RUN_OUTPUT/my-assertions-1

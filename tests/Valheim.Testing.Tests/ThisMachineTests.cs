@@ -150,7 +150,7 @@ public sealed class ThisMachineTests : IDisposable
         Assert.Contains("Valheim (Steam app 892970)", inventory.Message);
     }
 
-    // The station's case: a Linux host and a Mac. A Mac never gets a local dedicated server; Linux finds both through ~/.steam.
+    // A Linux host and a Mac both find their own dedicated server and client through Steam.
     [Fact] public void LinuxAndMacInstallsAreDetectedToo()
     {
         var linux = new FakeMachine("linux");
@@ -165,8 +165,20 @@ public sealed class ThisMachineTests : IDisposable
         mac.App("/Users/tester/Library/Application Support/Steam", "892970", "Valheim", "Valheim.app/Contents/MacOS/Valheim");
         mac.App("/Users/tester/Library/Application Support/Steam", "896660", "Valheim dedicated server", "valheim_server/Valheim");
         var macInventory = EnvironmentInventory.Read(null, mac);
-        Assert.Equal("local-client", Assert.Single(macInventory.Environments).Name);
-        Assert.Contains(macInventory.Missing, line => line.Contains("macOS dedicated server"));
+        Assert.Equal(["local-server", "local-client"], macInventory.Environments.Select(recipe => recipe.Name));
+        Assert.Equal("/Users/tester/Library/Application Support/Steam/steamapps/common/Valheim dedicated server", macInventory.Environments[0].Install);
+
+        if (OperatingSystem.IsMacOS())
+        {
+            var server = macInventory.Environments[0];
+            var role = new GameRole { Host = "local", Install = server.Install, Runtime = server.Runtime,
+                CliPort = server.CliPort, GamePort = server.GamePort };
+            var plan = new ServerRunPlan { Executable = GameLaunch.ServerMacExecutable, Port = role.CliPort,
+                Arguments = ["-batchmode", "-nographics", "-port", role.GamePort.ToString(System.Globalization.CultureInfo.InvariantCulture)] };
+            Assert.Null(HostedServerRun.Refusal(macInventory.Hosts["local"], role, plan));
+            plan.Crossplay = true;
+            Assert.Contains("macOS crossplay", HostedServerRun.Refusal(macInventory.Hosts["local"], role, plan));
+        }
     }
 
     // A file lists the environments to use: one on this machine needs only its name and role, and the file gains nothing else.

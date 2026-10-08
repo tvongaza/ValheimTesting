@@ -31,14 +31,6 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// server has started (<c>session.Server.Game</c>), with its report, output and cancellation.
     /// </summary>
     public required Func<GameSession, TPlan, Task> Scenario { get; init; }
-    /// <summary>
-    /// A runtime copy the runner already made and staged (<see cref="WorldFixture.Copy"/>, then its plugins), to run in place
-    /// of a second copy of it: the plan's runtime source must be this copy. The run verifies it against the plan's hashes,
-    /// runs the server from it and retires it at the end like its own copy, comparing against the staged state, so a run
-    /// needs room for one runtime, not two. The copy becomes the run's: the run sets its <see cref="WorldFixture.Preserve"/>, so
-    /// the caller's Dispose never removes one the run keeps. Not for a run on another host, whose runtime is copied there.
-    /// </summary>
-    public WorldFixture? StagedRuntime { get; init; }
     /// <summary>Test seam: the owned server's session (scripted) instead of launching the copied runtime.</summary>
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
@@ -628,7 +620,7 @@ public static class PinnedServerRun
                 hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId);
                 if (RunJournal.ThisProcess.RunId != hosted.RunId) { journalRun?.Dispose(); journalRun = RunJournal.UseRun(hosted.RunId); }
                 hosted.Record(report.Provenance);
-                platform = hosted.HostProfile.Platform == "windows" ? ServerPlatform.Windows : ServerPlatform.Linux;
+                platform = hosted.HostProfile.Platform switch { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux };
             }
             else
             {
@@ -636,7 +628,6 @@ public static class PinnedServerRun
                 platform = GameLaunch.DetectServer(plan.Runtime.Source); plan.CheckExecutable(platform);
                 if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, GameLaunch.LocalServerPlatform);
             }
-            if (hosted != null && options.StagedRuntime != null) throw new ArgumentException("A run on another host copies its runtime on the server host; a staged local runtime copy cannot stand in for it.");
             options.CheckPlan?.Invoke(plan);
             report.Provenance["planSha256"] = planHash();
             report.Provenance["scenario"] = plan.Scenario;
@@ -650,7 +641,7 @@ public static class PinnedServerRun
             // Before copying: a drive that fills part-way through a copy leaves a broken runtime behind.
             report.Step(StepPhase.Preflight, "enough free disk space for the copies", () =>
             {
-                long bytes = DiskSpace.DirectoryBytes(plan.World.Source) + (hosted == null && options.StagedRuntime == null ? DiskSpace.DirectoryBytes(plan.Runtime.Source) : 0);
+                long bytes = DiskSpace.DirectoryBytes(plan.World.Source) + (hosted == null ? DiskSpace.DirectoryBytes(plan.Runtime.Source) : 0);
                 if (DiskSpace.Require(output, bytes, hosted == null ? "this run's runtime and world copies" : "this run's world copy") is { } free)
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
@@ -660,22 +651,9 @@ public static class PinnedServerRun
             WorldFixture CopyOf(PinnedDirectory fixture) =>
                 Verified(fixture) ? WorldFixture.Copy(fixture.Source, output, fixture.Sha256) : WorldFixture.CopyAsFound(fixture.Source, output);
             if (hosted != null) await hosted.LockAndCopyRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
-            else if (options.StagedRuntime is { } staged)
-                report.Step(StepPhase.Setup, "verify the staged runtime copy", () =>
-                {
-                    var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-                    if (!Path.GetFullPath(plan.Runtime.Source).TrimEnd(Path.DirectorySeparatorChar).Equals(staged.DirectoryPath, comparison))
-                        throw new ArgumentException($"The plan's runtime source {plan.Runtime.Source} is not the staged runtime copy {staged.DirectoryPath}.");
-                    if (Verified(plan.Runtime)) WorldFixture.Verify(staged.DirectoryPath, plan.Runtime.Sha256);
-                    // The copy is the run's now: the caller's Dispose must not remove one the run keeps (its server may still run).
-                    staged.Preserve = true;
-                    // Its state now is what the run is compared against at the end, so what staging added is not counted as the run's.
-                    runtime = WorldFixture.Existing(staged.DirectoryPath, new Dictionary<string, string>(Verified(plan.Runtime) ? plan.Runtime.Sha256 : WorldFixture.Manifest(staged.DirectoryPath), StringComparer.Ordinal), madeIn: staged);
-                    runtime.Preserve = true;
-                });
             else report.Step(StepPhase.Setup, Verified(plan.Runtime) ? "copy and verify pinned runtime" : "copy unpinned runtime as found", () => { runtime = CopyOf(plan.Runtime); runtime.Preserve = true; });
             report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : "copy unpinned world as found", () => { world = CopyOf(plan.World); world.Preserve = true; });
-            if (hosted != null) await hosted.ShipWorldAsync(report, world!.DirectoryPath, cancellation.Token).ConfigureAwait(false);
+            if (hosted != null) await hosted.ShipWorldAsync(report, world!.DirectoryPath, output, cancellation.Token).ConfigureAwait(false);
             string runtimeDirectory = hosted?.RuntimeDirectory ?? runtime!.DirectoryPath, worldDirectory = hosted?.WorldDirectory ?? world!.DirectoryPath;
             report.Provenance["runtime"] = runtimeDirectory; report.Provenance["world"] = world!.DirectoryPath;
             if (hosted != null) report.Provenance["hostWorld"] = worldDirectory;

@@ -40,6 +40,17 @@ public sealed class GameReferencesBuildTests : IDisposable
         run.AssertSucceeded();
     }
 
+    [Fact]
+    public async Task FindsTheMacDedicatedServerLayout()
+    {
+        string game = _project.FakeGame("game", "valheim_server/Data/Managed");
+        _project.Write(usesTypesOf: GameReferencesProject.DefaultAssemblies);
+
+        BuildRun run = await _project.Build(new Dictionary<string, string?> { ["VALHEIM_PATH"] = game });
+
+        run.AssertSucceeded();
+    }
+
     [UnixFact]
     public async Task FindsTheSteamFolderUnderHome()
     {

@@ -153,17 +153,11 @@ public sealed class EnvironmentInventory
             : $"Steam: {steam.Root} (from {steam.RootRule}); libraries {string.Join(", ", steam.Libraries)}");
         string? game = Installed(machine, steam, SteamDetection.GameApp, windows ? GameLaunch.ClientWindowsExecutable
             : machine.Platform == "macos" ? GameLaunch.ClientMacBundle + "/Contents/MacOS/Valheim" : GameLaunch.ClientLinuxExecutable, "Valheim", out string? noGame);
-        string? server = null, noServer;
-        if (machine.Platform == "macos")
-            noServer = "No local dedicated server: the campaign runner does not run a macOS dedicated server. Add a Windows or Linux " +
-                "server environment, or run `valheim-test start` for a hosted local world.";
-        else
-        {
-            server = Installed(machine, steam, SteamDetection.DedicatedServerApp, windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable,
-                "Valheim Dedicated Server", out noServer);
-            if (noServer != null)
-                noServer += " Install Valheim Dedicated Server from Steam (it is free), add a server environment, or run `valheim-test start` for a hosted local world.";
-        }
+        string? server = Installed(machine, steam, SteamDetection.DedicatedServerApp,
+            windows ? GameLaunch.ServerWindowsExecutable : machine.Platform == "macos" ? GameLaunch.ServerMacExecutable : GameLaunch.ServerLinuxExecutable,
+            "Valheim Dedicated Server", out string? noServer);
+        if (noServer != null)
+            noServer += " Install Valheim Dedicated Server from Steam (it is free), add a server environment, or run `valheim-test start` for a hosted local world.";
         if (game != null) _detected.Add($"Valheim (Steam app {SteamDetection.GameApp}): {game}");
         if (server != null) _detected.Add($"Valheim Dedicated Server (Steam app {SteamDetection.DedicatedServerApp}): {server}");
         if (!fromFile)
@@ -267,8 +261,8 @@ public sealed class EnvironmentInventory
                 errors.Add($"Environment {recipe.Name} needs a gamePort only when it serves a world.");
             foreach (string role in recipe.Roles)
                 recipe.Role().Validate(role == "server" ? "server" : "client " + recipe.Name, host, errors);
-            if (recipe.Roles.Contains("server") && host.Platform == "macos")
-                errors.Add($"Environment {recipe.Name}: remote macOS dedicated servers are not supported by this campaign runner.");
+            if (recipe.Roles.Contains("server") && host.Platform == "macos" && host.Kind != "local")
+                errors.Add($"Environment {recipe.Name}: a macOS dedicated server must run on this machine, not a remote host.");
             if (recipe.LoaderPackage != null)
                 recipe.LoaderPackage = Path.GetFullPath(recipe.LoaderPackage, directory);
         }

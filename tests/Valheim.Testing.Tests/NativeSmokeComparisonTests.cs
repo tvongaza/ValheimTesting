@@ -107,7 +107,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
     private string[] Arguments(string output, string first, string second, bool searchRoot = true)
     {
         string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
-            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(NativeServerRuntime.SessionAdapterPluginGuid)));
+            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
         var args = new List<string>
         {
             "--server", _rig.Game, "--mod", first, "--mod", second, "--remove-mod", second,

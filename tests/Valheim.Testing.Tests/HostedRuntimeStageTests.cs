@@ -157,12 +157,76 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(changedRun, "runtime")));
     }
 
+    [Fact] public async Task MacShellPreparesADedicatedServerWithoutChangingItsSource()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var host = new LocalGameHost("local-mac-server", HostShell.Bash);
+        string source = Path.Combine(_root, "mac-server-source");
+        string executable = Path.Combine(source, "valheim_server", "Valheim");
+        string assembly = Path.Combine(source, "valheim_server", "Data", "Managed", InstallPins.GameAssemblyName);
+        string core = Path.Combine(source, "BepInEx", "core");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+        Directory.CreateDirectory(core);
+        File.WriteAllText(executable, "server");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        File.WriteAllText(assembly, "game assembly");
+        File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core");
+        File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "preloader");
+        FakeInstalls.MacLoader(source);
+        string selected = Path.Combine(_root, "mac-server-mod.dll");
+        File.WriteAllText(selected, "selected mod");
+        var before = WorldFixture.Manifest(source);
+        string run = Path.Combine(_root, "mac-server-run");
+
+        var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source,
+            Path.Combine(run, "runtime"), Path.Combine(run, "staging"),
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/mac-server-mod.dll")], TimeSpan.FromSeconds(30));
+
+        Assert.Equal(ServerPlatform.MacOS, HostInstall.DetectServer(listing));
+        Assert.Contains(GameLaunch.ServerMacExecutable, listing.Executables);
+        Assert.Equal(FileHash.Sha256(selected), listing.Files["BepInEx/plugins/mac-server-mod.dll"]);
+        Assert.Equal(before, WorldFixture.Manifest(source));
+        Assert.False(File.Exists(Path.Combine(source, "BepInEx", "plugins", "mac-server-mod.dll")));
+        Assert.False(Directory.Exists(Path.Combine(run, "staging")));
+    }
+
     // One disposable install per actor, prepared on a fake host (HostedRuntimeStage.PrepareAsync): a copy, the selected files, the loader.
     private string Mirror => Path.Combine(_root, "host");
     private static void StageLoader(string root)
     {
         File.WriteAllText(Path.Combine(root, "winhttp.dll"), "MZ target_assembly");
         File.WriteAllText(Path.Combine(root, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+    }
+
+    [Fact] public async Task MacDedicatedServerIsPinnedAndPreparedWithoutChangingItsSource()
+    {
+        var host = new FakeServerHost("mac-server", Mirror);
+        const string source = "/game/mac-server", runtime = "/runs/mac/runtime", staging = "/runs/mac/staging";
+        string install = host.Local(source);
+        string executable = Path.Combine(install, "valheim_server", "Valheim");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        File.WriteAllText(executable, "mac server");
+        string assembly = Path.Combine(install, "valheim_server", "Data", "Managed", InstallPins.GameAssemblyName);
+        Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+        File.WriteAllText(assembly, "mac game assembly");
+        FakeInstalls.MacLoader(install);
+        string core = Path.Combine(install, "BepInEx", "core");
+        Directory.CreateDirectory(core);
+        File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core");
+        File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "preloader");
+        string chosen = Path.Combine(_root, "chosen-mac.dll");
+        File.WriteAllText(chosen, "selected plugin");
+        var before = WorldFixture.Manifest(install);
+
+        var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen-mac.dll")], TimeSpan.FromSeconds(30));
+
+        Assert.Equal(ServerPlatform.MacOS, HostInstall.DetectServer(listing));
+        Assert.Equal(FileHash.Sha256(assembly), listing.Files["valheim_server/Data/Managed/assembly_valheim.dll"]);
+        Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/chosen-mac.dll"]);
+        Assert.Equal(before, WorldFixture.Manifest(install));
+        Assert.False(File.Exists(Path.Combine(install, "BepInEx", "plugins", "chosen-mac.dll")));
     }
 
 

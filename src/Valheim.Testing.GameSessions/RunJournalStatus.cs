@@ -114,6 +114,8 @@ internal static class RunJournalStatus
                         case JournalEntry.CopyDone: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copied, not retired"); break;
                         case JournalEntry.CopyKept: Open("copy " + Field("runtime"), "copy", Field("runtime"), "kept: " + Field("why"), kept: true); break;
                         case JournalEntry.CopyRetired: left.Remove("copy " + Field("runtime")); break;
+                        case JournalEntry.MacListsCaptured: Open("mac-lists " + Field("backup"), "mac-lists", Field("saveRoot"), "user access lists captured, not restored"); break;
+                        case JournalEntry.MacListsRestored: left.Remove("mac-lists " + Field("backup")); break;
                         case JournalEntry.CharacterIntended:
                             Open($"character {Field("fileName")}", "character", $"{Field("fileName")} in {Field("characters")}", "staging started, never finished"); break;
                         case JournalEntry.CharacterDone:
@@ -261,6 +263,7 @@ internal static class RunJournalStatus
                 {
                     ProbedState.Gone or ProbedState.Reused => null,
                     ProbedState.Unreadable => judged with { Status = "its state cannot be read on " + item.Host, Unrecoverable = true },
+                    ProbedState.Starting => judged with { Status = "its launch wrapper still runs; the game command line is not yet available", Unrecoverable = true },
                     _ when journalled.Length == 0 => judged with { Status = "still runs; its command line was not journalled, so only its ID and start time match", Unrecoverable = true },
                     _ when process.CommandLineSha256 == null => judged with { Status = "still runs; its command line cannot be read, so only its ID and start time match", Unrecoverable = true },
                     _ when !string.Equals(process.CommandLineSha256, journalled, StringComparison.OrdinalIgnoreCase) =>
@@ -341,6 +344,8 @@ internal static class RunJournalStatus
         if (!probed.TryGetValue((item.Host, file.Pid, file.StartIdentity ?? ""), out var process) || process.State == ProbedState.Unreadable)
             return judged with { Status = $"{where} names {named}, whose state cannot be read on {item.Host}", Unrecoverable = true };
         if (process.State is ProbedState.Gone or ProbedState.Reused) return null;
+        if (process.State == ProbedState.Starting)
+            return judged with { Status = $"{where} names {named}, whose launch wrapper still runs", Unrecoverable = true };
         if (file.StartIdentity == null)
             return judged with { Status = $"{where} names {named}, which runs, but no start identity, so it cannot be proven the launch's", Unrecoverable = true };
         string expected = item.Fields.GetValueOrDefault("expectedCommandLineSha256") ?? "";

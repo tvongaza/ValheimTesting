@@ -508,7 +508,7 @@ public class ResolvedEnvironmentTests
     [Theory]
     [InlineData("\"server\": {", "\"extra\": 1, \"server\": {", "'extra'")]
     [InlineData("\"host\": \"linux-box\"", "\"host\": \"nowhere\"", "not listed")]
-    [InlineData("\"platform\": \"linux\", \"shell\": \"bash\", \"destination\"", "\"platform\": \"macos\", \"shell\": \"bash\", \"destination\"", "a remote macOS server host is not supported yet")]
+    [InlineData("\"platform\": \"linux\", \"shell\": \"bash\", \"destination\"", "\"platform\": \"macos\", \"shell\": \"bash\", \"destination\"", "a macOS dedicated server must run on this machine")]
     [InlineData("\"host\": \"windows-pc\", \"install\": \"C:\\\\Games\\\\Valheim\", \"runtime\": \"D:/ValheimTesting/runs\", \"cliPort\": 5578",
                 "\"host\": \"linux-box\", \"install\": \"/opt/valheim/client\", \"runtime\": \"/srv/vt/client\", \"cliPort\": 5577", "same ValheimCLI port 5577 on host 'linux-box'")]
     [InlineData("\"lock\": \"/var/tmp/valheim-testing.lock\"", "\"lock\": \"var/tmp/lock\"", "lock must be an absolute path")]

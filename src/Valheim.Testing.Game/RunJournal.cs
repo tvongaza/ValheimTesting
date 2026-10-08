@@ -12,6 +12,7 @@ namespace Valheim.Testing.Game;
 internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, string> Fields)
 {
     public const string CopyIntended = "copy-intended", CopyDone = "copy-done", CopyRetired = "copy-retired", CopyKept = "copy-kept";
+    public const string MacListsCaptured = "mac-lists-captured", MacListsRestored = "mac-lists-restored";
     public const string CharacterIntended = "character-intended", CharacterDone = "character-done", CharacterRetired = "character-retired";
     public const string LockHeld = "lock-held", LockReleased = "lock-released";
     public const string ProcessIntended = "process-intended", ProcessStarted = "process-started", ProcessStopped = "process-stopped";

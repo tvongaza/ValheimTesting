@@ -32,7 +32,7 @@ Without either, the Steam folder of the operating system is tried: `C:\Program F
 | Property | Default | Meaning |
 |---|---|---|
 | `ValheimPath` | `VALHEIM_PATH`, else the Steam folder | The game folder. Usually the only one you set. |
-| `ValheimManaged` | the first of `valheim_Data/Managed`, `Valheim.app/Contents/Resources/Data/Managed`, `valheim_server_Data/Managed` under `ValheimPath` | The folder holding `assembly_valheim.dll`: a client on Windows or Linux, on macOS, or a dedicated server |
+| `ValheimManaged` | the first of `valheim_Data/Managed`, `Valheim.app/Contents/Resources/Data/Managed`, `valheim_server_Data/Managed`, `valheim_server/Data/Managed` under `ValheimPath` | The folder holding `assembly_valheim.dll`: a client on Windows or Linux, on macOS, or a dedicated server |
 | `BepInExCore` | `ValheimPath/BepInEx/core` | The folder holding `BepInEx.dll` |
 | `UseValheimCli` | not set | `true` in a project that compiles against ValheimCLI, such as a test adapter |
 | `CliDll` | none | With `UseValheimCli`: the ValheimCLI core (`valheimCLI.dll`) installed in the test runtime. There is deliberately no default, so an adapter compiles against the exact core it runs with |
