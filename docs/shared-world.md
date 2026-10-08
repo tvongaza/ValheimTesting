@@ -71,7 +71,7 @@ new TerrainRenderer(new TerrainArea(-512,-512,512,512), 2) { Coloring = TerrainC
     .Render(GridDumpTerrain.Load("world.csv")).WritePng("review.png");
 ```
 
-The output is a PNG written without a compression library: its image data uses uncompressed deflate blocks, so the bytes are identical on every platform and runtime for the same heights, at about three bytes per pixel. A terrain that refuses a coordinate fails the render; no pixel is painted in place of missing data. A picture of an input shows what the fixture declares, not what the game does. For the topographic review map (biome tints, rivers, a world-disc mask, location and route overlays), use ValheimCLI's [`examples/world-map.py`](https://github.com/tvongaza/valheimCLI/blob/8428b6906e395450481659150a2dd41228183724/examples/world-map.py), which reads the same dump CSV; this library keeps one palette and does not version a map style.
+The output is a PNG written without a compression library: its image data uses uncompressed deflate blocks, so the bytes are identical on every platform and runtime for the same heights, at about three bytes per pixel. A terrain that refuses a coordinate fails the render; no pixel is painted in place of missing data. A picture of an input shows what the fixture declares, not what the game does. For the topographic review map (biome tints, rivers, a world-disc mask, location and route overlays), use ValheimCLI's [`examples/world-map.py`](https://github.com/tvongaza/valheimCLI/blob/9e8ca679298e559e995ab5b04ef84b782b15a0ad/examples/world-map.py), which reads the same dump CSV; this library keeps one palette and does not version a map style.
 
 ## Compare two terrain sources
 
