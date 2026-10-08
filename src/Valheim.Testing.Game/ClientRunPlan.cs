@@ -1,3 +1,4 @@
+using valheim_cli.Testing;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using valheimCLI;
@@ -317,7 +318,7 @@ public sealed class ClientRunPlan
         {
             // The copy's loader may be the shipped one (a mismatched Doorstop pair) and its ValheimCLI is the staged set: both are
             // checked on the copy before its launch.
-            var kept = Pins.Where(pin => !CliAssembly.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+            var kept = Pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
             OwnedClientPreflight.Check(Install, kept, Pinned, HostWorld, hostWorldName);
             CheckCliManifest(capabilities);
             return null;

@@ -1,3 +1,4 @@
+using valheim_cli.Testing;
 using System.Globalization;
 using Valheim.Testing.Game;
 
@@ -148,7 +149,7 @@ internal sealed class LocalClientCopy
                 string relative = Path.GetRelativePath(source, file).Replace('\\', '/');
                 if (loader != null && loader.Files.Keys.Any(path => path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
                 if (folder is "plugins" or "scripts" && file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-                    && (names.Contains(Path.GetFileName(file)) || CliAssembly.Plugins(file)?.Any(CliAssembly.IsCliPlugin) == true))
+                    && (names.Contains(Path.GetFileName(file)) || CliBuildManifest.Plugins(file)?.Any(CliBuildManifest.IsCliPlugin) == true))
                 {
                     replaced.Add(relative);
                     continue;
@@ -180,7 +181,7 @@ internal sealed class LocalClientCopy
         if (plan.Pinned)
         {
             plan.InstallPins = HostInstall.Pins(listing);
-            var pins = plan.Pins.Where(pin => !CliAssembly.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+            var pins = plan.Pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
             foreach (var file in manifest.Files)
             {
                 string md5 = FileHash.Md5(Path.Combine(setFolder, file.File));

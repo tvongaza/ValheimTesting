@@ -1,8 +1,6 @@
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
-using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using valheim_cli.Testing;
 
 namespace Valheim.Testing.Game;
 
@@ -103,13 +101,8 @@ public sealed class CliCapabilityManifest
     {
         ArgumentNullException.ThrowIfNull(files);
         var manifest = new CliCapabilityManifest { Build = build };
-        foreach (string path in files)
-        {
-            if (!Path.IsPathFullyQualified(path) || !File.Exists(path)) throw new FileNotFoundException($"Give each DLL of the set by its full path; {path} is not a file.", path);
-            var plugins = CliAssembly.Plugins(path) ?? throw new InvalidDataException($"{path} is not a .NET assembly.");
-            if (plugins.Count == 0) throw new InvalidDataException($"{path} declares no [BepInPlugin]; list only the ValheimCLI core and its packs.");
-            manifest.Files.Add(new CliManifestFile { File = Path.GetFileName(path), Sha256 = FileHash.Sha256(path), Plugins = [.. plugins], Extensions = CliAssembly.Extensions(path) });
-        }
+        foreach (var file in CliBuildManifest.Generate(files))
+            manifest.Files.Add(new CliManifestFile { File = file.File, Sha256 = file.Sha256, Plugins = [.. file.Plugins], Extensions = file.Extensions });
         try { manifest.Validate(); }
         catch (ArgumentException error) { throw new InvalidDataException("These files do not make one set: " + error.Message, error); }
         if (listing != null) manifest.RequireListing(listing);
@@ -248,7 +241,7 @@ public sealed class CliCapabilityManifest
                 problems.Add(new(file, $"{Name(file)} is installed {exact.Count} times ({string.Join(", ", exact.Select(dll => dll.Shown))}); BepInEx loads one and skips the rest, so keep one", exact.Select(dll => dll.Path).ToList()));
             else if (exact.Count == 1)
             {
-                var declared = CliAssembly.Plugins(exact[0].Path) ?? [];
+                var declared = CliBuildManifest.Plugins(exact[0].Path) ?? [];
                 if (declared.Order(StringComparer.Ordinal).SequenceEqual(file.Plugins.Order(StringComparer.Ordinal), StringComparer.Ordinal))
                     located.Add(new(file, exact[0].Path));
                 else
@@ -263,7 +256,7 @@ public sealed class CliCapabilityManifest
         }
         foreach (var dll in candidates.Where(dll => othersLoad && !claimed.Contains(dll.Path)))
         {
-            var plugins = CliAssembly.Plugins(dll.Path) ?? [];
+            var plugins = CliBuildManifest.Plugins(dll.Path) ?? [];
             var file = Files.FirstOrDefault(candidate => SameFile(dll.Shown, candidate)) ?? Files.FirstOrDefault(candidate => candidate.Plugins.Intersect(plugins, StringComparer.Ordinal).Any());
             if (file == null) continue;
             string declares = plugins.Count == 0 ? "" : $", declaring {string.Join(", ", plugins)},";
@@ -304,167 +297,4 @@ public sealed record CliManifestCheck(string Build, IReadOnlyList<string> Files,
     /// <summary>One line for the report's provenance.</summary>
     public override string ToString() =>
         $"{Build}: {string.Join(", ", Files)}" + (Capabilities.Count == 0 ? "" : $"; provides {string.Join(", ", Capabilities)}");
-}
-
-/// <summary>
-/// Reads a ValheimCLI DLL's metadata without loading it (System.Reflection.Metadata): the plugin GUIDs its
-/// <c>[BepInEx.BepInPlugin]</c> attributes declare, and the extension registrations its IL makes.
-/// </summary>
-internal static class CliAssembly
-{
-    private const string ExtensionsNamespace = "valheimCLI.Extensions";
-
-    /// <summary>
-    /// Whether a plugin GUID is ValheimCLI's own: its core (<c>valheimCLI.valheimCLI</c>) or one of its packs
-    /// (<c>valheimCLI.standard</c>, <c>valheimCLI.worldtools</c>, ...). A disposable copy replaces every such plugin with the staged set.
-    /// </summary>
-    internal static bool IsCliPlugin(string guid) => guid.StartsWith("valheimCLI.", StringComparison.Ordinal);
-
-    /// <summary>The GUIDs of the assembly's <c>[BepInPlugin]</c> attributes; null when the file is not a .NET assembly.</summary>
-    internal static IReadOnlyList<string>? Plugins(string path)
-    {
-        try
-        {
-            using var stream = File.OpenRead(path);
-            using var pe = new PEReader(stream);
-            if (!pe.HasMetadata) return null;
-            var md = pe.GetMetadataReader();
-            var guids = new List<string>();
-            foreach (var type in md.TypeDefinitions)
-                foreach (var handle in md.GetTypeDefinition(type).GetCustomAttributes())
-                {
-                    var attribute = md.GetCustomAttribute(handle);
-                    if (Owner(md, attribute.Constructor) != ("BepInEx", "BepInPlugin")) continue;
-                    var value = md.GetBlobReader(attribute.Value);
-                    if (value.ReadUInt16() != 1) continue; // The custom attribute blob's prolog.
-                    if (value.ReadSerializedString() is { Length: > 0 } guid) guids.Add(guid);
-                }
-            return guids;
-        }
-        catch (Exception error) when (error is BadImageFormatException or InvalidOperationException) { return null; } // Not a .NET assembly.
-    }
-
-    /// <summary>The extensions the assembly's IL registers with literal names: owner, then command and result version.</summary>
-    internal static SortedDictionary<string, SortedDictionary<string, int>> Extensions(string path)
-    {
-        var found = new SortedDictionary<string, SortedDictionary<string, int>>(StringComparer.Ordinal);
-        using var stream = File.OpenRead(path);
-        using var pe = new PEReader(stream);
-        var md = pe.GetMetadataReader();
-        foreach (var handle in md.MethodDefinitions)
-        {
-            var method = md.GetMethodDefinition(handle);
-            if (method.RelativeVirtualAddress == 0) continue;
-            var code = Decode(md, pe.GetMethodBody(method.RelativeVirtualAddress).GetILReader());
-            for (int i = 0; i < code.Count; i++)
-            {
-                // A literal registration: ldstr id, ldstr version, ldc apiVersion, ldc count, newarr ExtensionCommand. Anything
-                // else (the core's own module host passes its id as an argument) is not claimed.
-                if (code[i].Op != Newarr || TypeOf(md, code[i].Token) != (ExtensionsNamespace, "ExtensionCommand")) continue;
-                if (i < 4 || code[i - 4].String is not { } owner || code[i - 3].String == null || code[i - 2].Int == null || code[i - 1].Int is not { } count) continue;
-                string where = $"{Path.GetFileName(path)} ({md.GetString(md.GetTypeDefinition(method.GetDeclaringType()).Name)}.{md.GetString(method.Name)}, {owner})";
-                var commands = new SortedDictionary<string, int>(StringComparer.Ordinal);
-                int boundary = i, j = i + 1;
-                for (; j < code.Count; j++)
-                {
-                    var (op, token) = (code[j].Op, code[j].Token);
-                    if (op == Newarr && TypeOf(md, token) == (ExtensionsNamespace, "ExtensionCommand")) throw Unknown(where, "a second command array before Register");
-                    var called = op is Newobj or Call or Callvirt ? Method(md, token) : null;
-                    if (op == Newobj && called is { } constructor && constructor.Owner == (ExtensionsNamespace, "ExtensionCommand") && constructor.Name == ".ctor")
-                    {
-                        if (constructor.Parameters != 7) throw Unknown(where, $"an ExtensionCommand constructor with {constructor.Parameters} parameters");
-                        string? name = code.Skip(boundary + 1).Take(j - boundary - 1).Select(instruction => instruction.String).FirstOrDefault(text => text != null);
-                        if (name == null || code[j - 1].Int is not { } version) throw Unknown(where, "a command without a literal name and result version");
-                        if (!commands.TryAdd(name, version)) throw Unknown(where, $"the command {name} twice");
-                        boundary = j;
-                    }
-                    else if (op is Call or Callvirt && called is { } register && register.Owner == (ExtensionsNamespace, "ExtensionRegistry") && register.Name == "Register") break;
-                }
-                if (j == code.Count) throw Unknown(where, "a command array that is never registered");
-                if (commands.Count != count) throw Unknown(where, $"{count} array elements but {commands.Count} commands read");
-                if (!found.TryAdd(owner, commands)) throw Unknown(where, "the owner registered twice");
-                i = j;
-            }
-        }
-        return found;
-    }
-
-    private static InvalidDataException Unknown(string where, string what) =>
-        new($"Cannot read the extension registration in {where} statically: {what}. Write its manifest entry from the build's own record instead.");
-
-    private const ushort Call = 0x28, Callvirt = 0x6F, Newobj = 0x73, Newarr = 0x8D, Ldstr = 0x72;
-    private readonly record struct Instruction(ushort Op, EntityHandle Token, string? String, int? Int);
-
-    // The method body's instructions, with string literals, int constants and member tokens; other operands skipped by size.
-    private static List<Instruction> Decode(MetadataReader md, BlobReader il)
-    {
-        var code = new List<Instruction>();
-        while (il.RemainingBytes > 0)
-        {
-            ushort op = il.ReadByte();
-            if (op == 0xFE) op = (ushort)(0xFE00 | il.ReadByte());
-            switch (op)
-            {
-                case >= 0x15 and <= 0x1E: code.Add(new(op, default, null, op - 0x16)); break; // ldc.i4.m1 .. ldc.i4.8
-                case 0x1F: code.Add(new(op, default, null, il.ReadSByte())); break; // ldc.i4.s
-                case 0x20: code.Add(new(op, default, null, il.ReadInt32())); break; // ldc.i4
-                case Ldstr: code.Add(new(op, default, md.GetUserString(MetadataTokens.UserStringHandle(il.ReadInt32() & 0xFFFFFF)), null)); break;
-                case Call or Callvirt or Newobj or Newarr or 0x27 or 0x29 or 0x70 or 0x71 or 0x74 or 0x75 or 0x79 or (>= 0x7B and <= 0x81) or 0x8C or 0x8F or 0xA3 or 0xA4 or 0xA5 or 0xC2 or 0xC6 or 0xD0
-                    or 0xFE06 or 0xFE07 or 0xFE15 or 0xFE16 or 0xFE1C:
-                    int token = il.ReadInt32();
-                    code.Add(new(op, (token >> 24) is 0x70 or 0x11 ? default : MetadataTokens.EntityHandle(token), null, null)); break;
-                case 0x45: int targets = il.ReadInt32(); il.Offset += 4 * targets; code.Add(new(op, default, null, null)); break; // switch
-                default:
-                    il.Offset += op switch
-                    {
-                        >= 0x0E and <= 0x13 or (>= 0x2B and <= 0x37) or 0xDE or 0xFE12 or 0xFE19 => 1,
-                        0x22 or (>= 0x38 and <= 0x44) or 0xDD => 4,
-                        0x21 or 0x23 => 8,
-                        >= 0xFE09 and <= 0xFE0E => 2,
-                        _ => 0,
-                    };
-                    code.Add(new(op, default, null, null)); break;
-            }
-        }
-        return code;
-    }
-
-    private static (string Namespace, string Name)? TypeOf(MetadataReader md, EntityHandle handle) => handle.Kind switch
-    {
-        HandleKind.TypeReference => (md.GetString(md.GetTypeReference((TypeReferenceHandle)handle).Namespace), md.GetString(md.GetTypeReference((TypeReferenceHandle)handle).Name)),
-        HandleKind.TypeDefinition => (md.GetString(md.GetTypeDefinition((TypeDefinitionHandle)handle).Namespace), md.GetString(md.GetTypeDefinition((TypeDefinitionHandle)handle).Name)),
-        _ => null,
-    };
-
-    private static (string, string)? Owner(MetadataReader md, EntityHandle constructor) => constructor.Kind switch
-    {
-        HandleKind.MemberReference => TypeOf(md, md.GetMemberReference((MemberReferenceHandle)constructor).Parent),
-        HandleKind.MethodDefinition => TypeOf(md, md.GetMethodDefinition((MethodDefinitionHandle)constructor).GetDeclaringType()),
-        _ => null,
-    };
-
-    private static ((string, string)? Owner, string Name, int Parameters)? Method(MetadataReader md, EntityHandle handle)
-    {
-        switch (handle.Kind)
-        {
-            case HandleKind.MemberReference:
-                var reference = md.GetMemberReference((MemberReferenceHandle)handle);
-                return (TypeOf(md, reference.Parent), md.GetString(reference.Name), Parameters(md, reference.Signature));
-            case HandleKind.MethodDefinition:
-                var definition = md.GetMethodDefinition((MethodDefinitionHandle)handle);
-                return (TypeOf(md, definition.GetDeclaringType()), md.GetString(definition.Name), Parameters(md, definition.Signature));
-            case HandleKind.MethodSpecification:
-                return Method(md, md.GetMethodSpecification((MethodSpecificationHandle)handle).Method);
-            default: return null;
-        }
-    }
-
-    private static int Parameters(MetadataReader md, BlobHandle signature)
-    {
-        var blob = md.GetBlobReader(signature);
-        var header = blob.ReadSignatureHeader();
-        if (header.Kind != SignatureKind.Method) return -1;
-        if (header.IsGeneric) blob.ReadCompressedInteger();
-        return blob.ReadCompressedInteger();
-    }
 }
