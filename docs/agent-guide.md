@@ -81,6 +81,19 @@ Terrain uses horizontal **x/z** and vertical **y**, in metres. Generator height,
 
 Assume a native ValheimCLI test may need cheat access, even for a read-only command the game classifies as a cheat. Use a staged, disposable local character and `cli_acknowledge_local_cheats` before those commands. This permanently marks that character's profile. Vanilla `confirmcheats` may execute on the dedicated server while leaving the joined client's local profile unmarked; do not infer client access from its server reply. Never acknowledge cheats on an attached or personal character. The [full-lifecycle example](../examples/FullLifecycle/README.md) shows the owned-client setup.
 
+## Diagnose an owned client that does not reach its menu or world
+
+Before a failed owned client is stopped, the local runner writes `client-failure-diagnostic.json` with its process session, window handle/title and responding state, plus the last 80 lines of its BepInEx and `Player.log` when readable. It first checks the process's exact start identity, so a reused PID is never inspected. A strictly pinned client gets one bounded `cli_screenshot` attempt; a blocked game thread, missing pin verification or cheat refusal is written as an explicit reason instead of being counted as a screenshot. A `cli_screenshot` command itself runs on Valheim's main thread and cannot diagnose a thread that is not servicing commands. Its screenshot is copied into the private evidence only if the game writes it before teardown.
+
+For an owned Windows one-shot run that is **still running**, a second terminal can send one diagnostic command without searching for a stray `valheim-cli` binary:
+
+```text
+valheim-test cli --evidence /path/to/run/evidence/smoke --phase menu --command "cli_manifest"
+valheim-test cli --evidence /path/to/run/evidence/smoke --phase world --command "cli_screenshot inspection"
+```
+
+The tool checks the recorded PID and exact start time, then verifies strict pins derived from the run's original plan before issuing one command. `world` is available when the owned plan names a hosted world; use `--expect-strict FILE` with an independently prepared pin file for other world states. A main-thread stall can make this command time out; `--timeout-seconds 1..15` bounds each command. This passthrough currently runs beside a Windows desktop client, not against arbitrary attached or remote games. Screenshot and other cheat commands still require the disposable character's cheat gate to be acknowledged; the passthrough never enables cheats itself. The run's evidence can include private paths and account data, so review it before sharing.
+
 ## Bounded paint/reload recipe
 
 1. Have the fixture owner prepare a small declared road/paint profile, preserving pre-write inputs and expected results. The observer does not write or load terrain. Use a stable saved paint baseline; an ungenerated zone's initial paint may not be a stable client-arrival expectation.

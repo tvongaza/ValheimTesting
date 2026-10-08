@@ -7,6 +7,71 @@ public sealed class ClientSessionTests : IDisposable
     private readonly string _output = Directory.CreateTempSubdirectory("client-session-").FullName;
     public void Dispose() => Directory.Delete(_output, recursive: true);
 
+    [Fact] public void FailedStartupCapturesEvidenceBeforeStoppingItsOwnedProcess()
+    {
+        var process = new FakeOwnedProcess(99);
+        bool capturedWhileRunning = false;
+        Assert.Throws<WaitTimeoutException>(() => ClientSession.Launch(Plan(), _output, () => process,
+            () => new ScriptedTransport(), (_, _) => throw new WaitTimeoutException("menu", TimeSpan.Zero, null),
+            default, null, null, failureEvidence: (_, _, _) => capturedWhileRunning = process.Stops == 0));
+        Assert.True(capturedWhileRunning);
+        Assert.Equal(1, process.Stops);
+    }
+
+    [Fact] public void AFailedWorldRoundCapturesEvidenceOnlyOnceBeforeStopping()
+    {
+        var process = new FakeOwnedProcess(99);
+        int captures = 0;
+        using (var session = ClientSession.Launch(Plan(), _output, () => process, () => new ScriptedTransport(),
+            (_, _) => Task.CompletedTask, default, null, null,
+            failureEvidence: (_, _, _) => { Assert.Equal(0, process.Stops); captures++; }))
+        {
+            session.CaptureFailure();
+            session.CaptureFailure();
+        }
+        Assert.Equal(1, captures);
+        Assert.Equal(1, process.Stops);
+    }
+
+    [Fact] public void AFailureSnapshotRequiresTheExactOwnedProcessAndKeepsLogTails()
+    {
+        using var current = System.Diagnostics.Process.GetCurrentProcess();
+        var plan = Plan(); plan.Install = _output; plan.Port = 1; // No unrelated CLI service is probed by this local-process fixture.
+        string log = Path.Combine(_output, "BepInEx", "LogOutput.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+        File.WriteAllText(log, new string('x', 512 * 1024));
+        File.AppendAllLines(log, Enumerable.Range(1, 100).Select(n => "log " + n));
+        string evidence = Path.Combine(_output, "failure");
+        string start = current.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), null, plan, evidence);
+        string[] tail = File.ReadAllLines(Path.Combine(evidence, "client-failure-bepinex-tail.log"));
+        Assert.Equal(80, tail.Length);
+        Assert.Equal("log 21", tail[0]);
+        Assert.Equal("log 100", tail[^1]);
+        Assert.Contains("same owned process", File.ReadAllText(Path.Combine(evidence, "client-failure-diagnostic.json")));
+
+        string mismatch = Path.Combine(_output, "mismatch");
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, "1"), null, plan, mismatch);
+        Assert.Contains("different launch", File.ReadAllText(Path.Combine(mismatch, "client-failure-diagnostic.json")));
+
+        var transport = new ScriptedTransport().OnPrefix("cli_screenshot ", _ => ScriptedTransport.Ok("That command is a cheat"));
+        using var actor = transport.Actor();
+        string refused = Path.Combine(_output, "cheat-refused");
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), actor, plan, refused);
+        Assert.Contains("CLI refused", File.ReadAllText(Path.Combine(refused, "client-failure-diagnostic.json")));
+        Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal)));
+    }
+
+    private sealed class ExactProcess(int id, string start) : IOwnedProcess, IClientProcessIdentity
+    {
+        public int Id => id;
+        public string StartFileTimeUtc => start;
+        public bool HasExited => false;
+        public Task<int> WaitForExitAsync(CancellationToken cancellation) => Task.FromResult(0);
+        public void Stop(TimeSpan timeout) { }
+        public void Dispose() { }
+    }
+
     [Fact] public void AnOwnedClientReceivesItsDeclaredProcessVariable()
     {
         using var install = ClientLaunchTests.Install.For(ClientPlatform.Windows);

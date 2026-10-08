@@ -82,9 +82,18 @@ internal static class DesktopClientSession
         try
         {
             var session = ClientSession.Launch(plan, output,
-                () => new HostedClientProcess(InteractiveClient.StartAsync(host, launch, launchDirectory,
-                    TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds)), cancellation: cancellation).GetAwaiter().GetResult(),
-                    host, plan.Install, tunnel, keptDirectory),
+                () =>
+                {
+                    var process = InteractiveClient.StartAsync(host, launch, launchDirectory,
+                        TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds)), cancellation: cancellation).GetAwaiter().GetResult();
+                    try { OwnedClientCommandLease.Write(output, process, plan); }
+                    catch
+                    {
+                        process.Stop(TimeSpan.FromSeconds(15)); // Never leave a launched client behind if its lease file cannot be kept.
+                        throw;
+                    }
+                    return new HostedClientProcess(process, host, plan.Install, tunnel, keptDirectory);
+                },
                 () => new CliTransport(tunnel.Address, tunnel.LocalPort),
                 async (left, token) =>
                 {
@@ -96,7 +105,8 @@ internal static class DesktopClientSession
                         left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
-                }, cancellation, null, keptLogs);
+                }, cancellation, null, keptLogs, failureEvidence: (process, actor, directory) =>
+                    ClientFailureEvidence.CaptureLocal(process, actor, plan, directory));
             foreach (var kept in session.Logs) logs.Add(kept);
             return session;
         }

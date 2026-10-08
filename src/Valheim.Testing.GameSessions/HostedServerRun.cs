@@ -554,10 +554,11 @@ internal sealed class ClientAccount(string client, SteamAccountHold hold, IGameH
 /// clean stop asks it to quit first),
 /// keeps its BepInEx log and Player.log in its launch directory, fetches that directory here and closes its CLI tunnel.
 /// </summary>
-internal sealed class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence) : IOwnedProcess
+internal sealed class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence) : IOwnedProcess, IClientProcessIdentity
 {
     private bool _kept;
     public int Id => process.Id;
+    string IClientProcessIdentity.StartFileTimeUtc => process.StartIdentity;
     public bool HasExited => process.HasExited;
     public Task<int> WaitForExitAsync(CancellationToken cancellation) => process.WaitForExitAsync(cancellation);
 

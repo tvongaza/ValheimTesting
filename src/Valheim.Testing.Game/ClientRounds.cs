@@ -160,6 +160,8 @@ public sealed class ClientRounds
         bool released = session == null || passed;
         Exception? teardown = null;
         if (session != null)
+        {
+            if (!passed && !Cancellation.IsCancellationRequested) session.CaptureFailure();
             try { Report.Step(StepPhase.Cleanup, session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); released |= session.Owned; }
             catch (Exception error) { teardown = error; }
             finally
@@ -171,6 +173,7 @@ public sealed class ClientRounds
                     if (session.Actor.BusyNote is { } note) Report.Provenance["clientBusyNote"] = note;
                 }
             }
+        }
         try { world.Release(released); }
         catch (Exception error) { teardown ??= error; }
         if (passed && teardown != null) ExceptionDispatchInfo.Capture(teardown).Throw();

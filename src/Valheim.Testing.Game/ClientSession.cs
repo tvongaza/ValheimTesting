@@ -18,6 +18,9 @@ namespace Valheim.Testing.Game;
 public sealed class ClientSession : IDisposable
 {
     private readonly IOwnedProcess? _process;
+    private readonly Action<IOwnedProcess, GameActor?, string>? _failureEvidence;
+    private readonly string? _output;
+    private bool _failureCaptured;
     private readonly object _stopping = new();
     private bool _disposed;
     public GameActor Actor { get; }
@@ -45,9 +48,30 @@ public sealed class ClientSession : IDisposable
     /// <summary>How the owned client ended once disposed; null before that, and for an attached client.</summary>
     public ProcessStop? Stopped { get; private set; }
 
-    private ClientSession(GameActor actor, IOwnedProcess? process, IReadOnlyList<RunLog>? logs = null, ClientArchitecture? architecture = null)
+    private ClientSession(GameActor actor, IOwnedProcess? process, IReadOnlyList<RunLog>? logs = null, ClientArchitecture? architecture = null,
+        string? output = null, Action<IOwnedProcess, GameActor?, string>? failureEvidence = null)
     {
         Actor = actor; _process = process; Logs = logs ?? []; Architecture = architecture;
+        _output = output; _failureEvidence = failureEvidence;
+    }
+
+    // A failed world-entry round calls this before disposing the client. Diagnostics must not hide its original error.
+    internal void CaptureFailure()
+    {
+        if (_failureCaptured || _process == null || _output == null || _failureEvidence == null) return;
+        _failureCaptured = true;
+        TryCaptureFailure(_failureEvidence, _process, Actor, _output);
+    }
+
+    private static void TryCaptureFailure(Action<IOwnedProcess, GameActor?, string>? capture, IOwnedProcess process, GameActor? actor, string output)
+    {
+        if (capture == null) return;
+        try { capture(process, actor, output); }
+        catch (Exception error)
+        {
+            try { File.WriteAllText(Path.Combine(output, "client-failure-diagnostic-error.txt"), error.ToString()); }
+            catch (Exception) { /* Teardown and the original failure take precedence over optional evidence. */ }
+        }
     }
 
     /// <summary><see cref="Launch(ClientRunPlan, string, CancellationToken)"/> or <see cref="Attach(ClientRunPlan, string, IGameTransport)"/>, as the plan's mode says.</summary>
@@ -204,7 +228,8 @@ public sealed class ClientSession : IDisposable
                 }, (left, token) => WatchLocalAsync(steamLog, left, token), () => Task.FromResult(SteamSeen()), SteamMessage), cancellation,
                 () => SteamSeen() ? SteamSessionLog.ExitHint(SteamMessage())
                     : cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog, Preloader("")) : null,
-                [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")], account);
+                [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")], account,
+                (process, actor, directory) => ClientFailureEvidence.CaptureLocal(process, actor, plan, directory));
             return session;
         }
         finally { cliLog?.Dispose(); steamLog?.Dispose(); }
@@ -245,7 +270,8 @@ public sealed class ClientSession : IDisposable
 
     // exitHint adds to an early exit's reason, for example that BepInEx never wrote its log.
     internal static ClientSession Launch(ClientRunPlan plan, string output, Func<IOwnedProcess> start, Func<IGameTransport> connect,
-        Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, ILeasedSteamAccount? account = null)
+        Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, ILeasedSteamAccount? account = null,
+        Action<IOwnedProcess, GameActor?, string>? failureEvidence = null)
     {
         if (plan.PasswordVariable is { } variable && Environment.GetEnvironmentVariable(variable) == null)
             throw new InvalidOperationException($"Set {variable} in this runner's environment; the launched client inherits it for the join.");
@@ -277,12 +303,13 @@ public sealed class ClientSession : IDisposable
             actor.VerifyEnvironment(plan.MenuExpectations);
             if (plan.Capabilities.Any())
                 CliCapabilities.Require(actor, plan.Capabilities); // Live, after any static manifest check.
-            return new ClientSession(actor, process, logs, architecture).Using(account);
+            return new ClientSession(actor, process, logs, architecture, output, failureEvidence).Using(account);
         }
         catch (Exception error)
         {
             // Stopping keeps the logs beside the evidence; the caller lists them for the scan even though no session opened.
             if (logs is { Count: > 0 }) error.Data[KeptLogsKey] = logs;
+            TryCaptureFailure(failureEvidence, process, actor, output);
             actor?.Dispose();
             try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
             throw;
