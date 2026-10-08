@@ -33,6 +33,8 @@ ValheimCLI owns the game-side extension API: registration and instance tokens, c
 
 `FixtureGate` and `Members` have unit tests; the source package also has a net48 compile check against declared game/Unity/CLI signatures. This does not prove that private reflected members exist in a new game build. A bounded native run is required for that boundary. The native acceptance suite exercises the session, saved-object and quit-log behavior.
 
+### The quit-log flush
+
 `QuitLogFlush.Enable()` belongs in the adapter's `Awake`; call `Quitting("<adapter> OnApplicationQuit")` from `OnApplicationQuit` and `Disable()` from `OnDestroy`. Do not arm it on a script reload: `OnDestroy` can run without the game quitting. The helper cannot preserve lines logged after managed code stops.
 
 The ValheimCLI extension API owns command roles, devcommands and mutation gates, cancellation, quiescence, result-size limits and `cli_extensions` discovery. This package does not grant client admin rights or bypass those gates. A mod-specific command validates its own arguments. Game-side commands can be installed in `BepInEx/plugins` or, with ScriptEngine configured to load them at startup, `BepInEx/scripts`; do not install the same plugin in both places.
