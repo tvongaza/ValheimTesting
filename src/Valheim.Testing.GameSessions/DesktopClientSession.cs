@@ -5,12 +5,14 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>
-/// Opens a disposable Windows client from a runner started over SSH. The client belongs to the signed-in desktop user,
-/// while the runner keeps ownership of its exact process and collects its logs on every exit path. The install and world
-/// are staged by the caller; this is only the placement of the already-pinned client.
+/// Opens a disposable Windows client. An SSH/session-0 runner starts it in the signed-in desktop through a temporary task;
+/// a runner already in that desktop uses the ordinary direct client path. Both retain exact process ownership and logs.
 /// </summary>
 internal static class DesktopClientSession
 {
+    // A Windows SSH process runs in session 0; an ordinary terminal already has the desktop token and needs no task.
+    internal static bool NeedsDesktopTask(int currentSessionId) => currentSessionId == 0;
+
     private static readonly AsyncLocal<Func<CancellationToken, Task>?> s_preflightForTest = new();
 
     // The NativeSmoke offline fixture has no interactive Windows desktop. Scope only that fixture's initial guard;
@@ -44,6 +46,8 @@ internal static class DesktopClientSession
         ArgumentNullException.ThrowIfNull(logs);
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("DesktopClientSession requires Windows.");
         if (!plan.Owned || plan.CopySource) throw new ArgumentException("Desktop launch needs a bound, owned disposable client plan.", nameof(plan));
+        if (!NeedsDesktopTask(Process.GetCurrentProcess().SessionId))
+            return ClientSession.Open(plan, output, logs, cancellation);
         plan.CheckOwnedInstall();
         var host = new LocalGameHost("this machine", HostShell.WindowsPowerShell);
         var quick = TimeSpan.FromSeconds(30);
