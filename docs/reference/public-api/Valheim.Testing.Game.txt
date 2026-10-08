@@ -452,7 +452,7 @@ static class Valheim.Testing.Game.DefaultSmokeWorld
   field const System.String Uid = "3010640879"
   method static Valheim.Testing.Game.WorldIdentity Prepare(System.String newRoot)
   method static Valheim.Testing.Game.WorldIdentity PrepareServerSaveRoot(System.String newRoot)
-sealed class Valheim.Testing.Game.DirectServerProcess : System.IDisposable, Valheim.Testing.Game.IOwnedProcess
+sealed class Valheim.Testing.Game.DirectServerProcess : System.IDisposable, Valheim.Testing.Game.IClientProcessIdentity, Valheim.Testing.Game.IOwnedProcess
   method System.Threading.Tasks.Task`1<System.Int32> WaitForExitAsync(System.Threading.CancellationToken cancellation)
   method System.Void .ctor(System.Diagnostics.ProcessStartInfo start, System.String logPrefix, params System.String[] gameLogs)
   method System.Void Dispose()
