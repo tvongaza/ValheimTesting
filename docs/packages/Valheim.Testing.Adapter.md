@@ -20,7 +20,7 @@ The session reports complete when the world is up and `modReady` returns true, a
 
 ## ValheimCLI's extension API
 
-ValheimCLI owns the game-side extension API: registration and instance tokens, command roles, the devcommands and joined-client rules, the mutation gate, cancellation, cleanup and quiescence probes, result limits and `cli_extensions` discovery. Its reference is ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/80fb6cefcc99d7737ec9f9b589eff4d16e2fc5e3/docs/testing-toolkit.md#extension-api-v1), at the commit the released `Valheim.Testing.Cli` was built from; this repository does not keep a copy. What the toolkit adds:
+ValheimCLI owns the game-side extension API: registration and instance tokens, command roles, the devcommands and joined-client rules, the mutation gate, cancellation, cleanup and quiescence probes, result limits and `cli_extensions` discovery. Its reference is ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/8428b6906e395450481659150a2dd41228183724/docs/testing-toolkit.md#extension-api-v1), at the commit the released `Valheim.Testing.Cli` was built from; this repository does not keep a copy. What the toolkit adds:
 
 - Keep the ValheimCLI core in `BepInEx/plugins` and only the test adapter in `BepInEx/scripts` (or both in `plugins`), and never load a second ValheimCLI assembly with the adapter.
 - Arguments are single tokens; an adapter validates its own grammar. The API is a contract, not a sandbox, and cannot roll back arbitrary terrain, spawn or save effects: tests serialize their own console mutations.
