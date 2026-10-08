@@ -9,12 +9,14 @@ if (args is ["help" or "--help"])
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
     Console.WriteLine(EnvCommand.Usage + " (list, preflight and status read only; recover and teardown clear what a run left)");
+    Console.WriteLine(ForegroundHold.FinishUsage + " (asks the live owner of a held run to finish and clean up)");
     Console.WriteLine(OwnedCliCommand.Usage + " (one strictly pinned command to a running owned Windows client)");
     Console.WriteLine(SessionCommand.Usage + " (read only; --hosts adds the host checks)");
     return 0;
 }
 if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(args[1..]);
 if (args.Length != 0 && args[0] == "env") return await EnvCommand.RunAsync(args[1..]);
+if (args.Length != 0 && args[0] == "finish") return ForegroundHold.FinishCommand(args[1..]);
 if (args.Length != 0 && args[0] == "cli") return OwnedCliCommand.Run(args[1..]);
 if (args.Length != 0 && args[0] == "session") return await SessionCommand.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "start") args = args[1..];
@@ -29,17 +31,23 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--join-seconds 10..900] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
 using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); };
+bool holdRequested = options!.ContainsKey("--hold");
+string? holdRunId = holdRequested ? RunJournal.NewRunId() : null;
+using var holdJournal = holdRunId == null ? null : RunJournal.UseRun(holdRunId);
 var elapsed = Stopwatch.StartNew();
 TargetedRegression? runner = null;
 ScenarioReport? lastArm = null; string? lastArmOutput = null;
 int exitCode = 3;
 string? outcome = null;
+bool journalClean = true;
+bool copyJournalled = false;
+bool copyDone = false;
 try
 {
     string output = Path.GetFullPath(options!["--output"]);
@@ -126,17 +134,56 @@ try
     inputs.Write(Path.Combine(output, "regression.json"));
     runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
     Console.WriteLine($"disposable install: {runner.Install}");
+    if (holdRunId != null)
+    {
+        if (Directory.Exists(runner.Install)) throw new IOException("The disposable install already exists: " + runner.Install);
+        RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyIntended,
+            ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", output)));
+        copyJournalled = true;
+    }
     bool passed = true;
     foreach (string arm in inputs.Mod.Arms.Keys)
     {
         string armOutput = Path.Combine(output, "evidence", arm);
+        LocalClientJournal? processJournal = null;
         var report = runner.Run(arm, armOutput, "selected plugin loads in a hosted fixture",
-            ["first"], _ => { }, cancel.Token, afterPinnedClientOpened: ready =>
+            ["first"], round =>
             {
+                if (holdRunId != null && arm == inputs.Mod.Arms.Keys.Last())
+                    round.Step("keep the owned client running until finish", () =>
+                        ForegroundHold.HoldAsync(holdRunId, armOutput, cancel.Token,
+                            [("client", processJournal?.Process ?? throw new InvalidOperationException("The owned client process was not recorded."))])
+                            .GetAwaiter().GetResult());
+            }, cancel.Token, afterPinnedClientOpened: ready =>
+            {
+                if (holdRunId != null) ready.Provenance["runId"] = holdRunId;
                 ready.Provenance["firstModLoadedSecondsFromCommand"] =
                     elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
                 if (shippedLoader != null) ready.Provenance["bepInExPackageShipped"] = shippedLoader.Reason;
-            }, openClient: OperatingSystem.IsWindows() ? DesktopClientSession.Open : null);
+            }, openClient: holdRunId == null ? (OperatingSystem.IsWindows() ? DesktopClientSession.Open : null)
+                : (plan, directory, logs, token) =>
+                {
+                    bool desktopTask = OperatingSystem.IsWindows() &&
+                        DesktopClientSession.NeedsDesktopTask(Process.GetCurrentProcess().SessionId);
+                    processJournal = new LocalClientJournal(plan, directory, desktopTask);
+                    return OperatingSystem.IsWindows()
+                        ? DesktopClientSession.Open(plan, directory, logs, token, processJournal.Begin, processJournal.Started)
+                        : ClientSession.Open(plan, directory, logs, token, processJournal.Begin, processJournal.Started);
+                }, afterStaged: () =>
+                {
+                    if (!copyJournalled || copyDone) return;
+                    RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyDone,
+                        ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression")));
+                    copyDone = true;
+                });
+        if (processJournal != null)
+            try { processJournal.Complete(); }
+            catch (Exception failure)
+            {
+                journalClean = false;
+                report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", failure);
+                report.Write(armOutput);
+            }
         lastArm = report; lastArmOutput = armOutput; // Only an arm whose report was written records the removal.
         passed &= report.Passed;
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.
@@ -151,14 +198,42 @@ catch (Exception failure) when (failure is ArgumentException or IOException or I
 }
 finally
 {
-    if (runner != null)
+    if (runner != null && !journalClean)
+    {
+        Console.Error.WriteLine("CLEANUP REFUSED: the owned client stop is unproven; the disposable install stays at " + runner.Install + ". Inspect valheim-test env status before recovery.");
+        if (lastArm != null && lastArmOutput != null)
+        {
+            lastArm.Provenance["disposableInstall"] = "kept: owned client stop unproven";
+            lastArm.Write(lastArmOutput);
+        }
+        exitCode = 1;
+    }
+    else if (runner != null)
         // With a run, its last arm's result.json records the removal as its Cleanup step; before any run there is no report.
-        try { if (lastArm != null) runner.Remove(lastArm, lastArmOutput!); else runner.Remove(); }
+        try
+        {
+            if (lastArm != null) runner.Remove(lastArm, lastArmOutput!); else runner.Remove();
+            if (copyJournalled)
+                RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyRetired,
+                    ("runtime", runner.Install), ("local", "true")));
+        }
         catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
+            journalClean = false;
             // A partially copied install may not yet have its ownership marker. Never delete it by path alone.
             Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + runner.Install);
             if (exitCode == 0) exitCode = 1;
+        }
+    if (holdRunId != null && journalClean)
+        try
+        {
+            RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.RunEnded,
+                ("state", exitCode == 0 ? "passed" : "failed"), ("cleanupVerified", "true")));
+        }
+        catch (Exception journalError) when (journalError is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine("CLEANUP UNVERIFIED: the run ended but its journal could not record that: " + journalError.Message);
+            exitCode = 1;
         }
 }
 if (outcome != null)
@@ -181,8 +256,12 @@ internal static class StartArguments
         roots = null;
         optionalReferences = null;
         error = "";
+        int holds = args.Count(arg => arg == "--hold");
+        if (holds > 1) { error = "Repeated option: --hold"; return false; }
+        args = args.Where(arg => arg != "--hold").ToArray();
         if (args.Length % 2 != 0) { error = "Every option needs one value."; return false; }
         var found = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (holds == 1) found.Add("--hold", "true");
         var selected = new List<string>();
         var searchRoots = new List<string>();
         var optional = new List<string>();

@@ -89,10 +89,15 @@ public sealed class ClientSession : IDisposable
     /// fails after the process started, so a client that never reached its menu is still scanned and listed in the result.
     /// </summary>
     public static ClientSession Open(ClientRunPlan plan, string output, ICollection<RunLog> logs, CancellationToken cancellation = default)
+        => Open(plan, output, logs, cancellation, null, null);
+
+    // The one-shot foreground holder journals the exact local process before it can be left running.
+    internal static ClientSession Open(ClientRunPlan plan, string output, ICollection<RunLog> logs, CancellationToken cancellation,
+        Action? processIntended, Action<IOwnedProcess>? processStarted)
     {
         ArgumentNullException.ThrowIfNull(logs);
         ClientSession session;
-        try { session = Open(plan, output, cancellation); }
+        try { session = plan.Owned ? Launch(plan, output, null, cancellation, processStarted, processIntended) : Attach(plan, output); }
         catch (Exception error)
         {
             foreach (var log in KeptLogs(error)) logs.Add(log);
@@ -167,7 +172,7 @@ public sealed class ClientSession : IDisposable
     // The profile owner records the exact process as soon as it exists. If startup then fails and its stop is unproven,
     // the Steam account lease remains held instead of being released while that client might still run.
     internal static ClientSession Launch(ClientRunPlan plan, string output, ILeasedSteamAccount? account, CancellationToken cancellation,
-        Action<IOwnedProcess>? processStarted)
+        Action<IOwnedProcess>? processStarted, Action? processIntended = null)
     {
         if (!plan.Owned) throw new ArgumentException("This plan's client is attached: its operator launches it.");
         // Never the user's install unless asked: an owned client runs from the disposable copy its copy owner made and bound.
@@ -214,8 +219,14 @@ public sealed class ClientSession : IDisposable
                         steamOffset = steamLog.Offset;
                     }
                     launched = DateTime.UtcNow;
+                    processIntended?.Invoke();
                     var process = new DirectServerProcess(start, prefix, log, playerLog) { Quit = QuitRequest.CloseWindow };
-                    processStarted?.Invoke(process);
+                    try { processStarted?.Invoke(process); }
+                    catch
+                    {
+                        try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
+                        throw;
+                    }
                     return process;
                 },
                 () => new CliTransport(plan.Host, plan.Port),

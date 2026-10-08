@@ -1,0 +1,70 @@
+using System.Globalization;
+using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
+
+/// <summary>The one-shot client's exact process joins the same run journal as its disposable world.</summary>
+internal sealed class LocalClientJournal(ClientRunPlan plan, string evidence, bool desktopTask, string? expectedCommandLineForTest = null,
+    Func<int, ProbedProcess>? processProbeForTest = null)
+{
+    private readonly string _launchDirectory = desktopTask ? Path.Combine(evidence, "desktop-launch") : evidence;
+    private readonly RunJournal _journal = RunJournal.ThisProcess;
+    private IOwnedProcess? _process;
+    private int _pid;
+    private string? _startIdentity;
+    private bool _intended;
+    private bool _started;
+    internal IOwnedProcess? Process => _process;
+
+    internal void Begin()
+    {
+        string expected = expectedCommandLineForTest ?? GameLaunch.ForClient(plan.Install, plan.LaunchArguments, plan.Environment,
+            hostPlatform: desktopTask ? ClientPlatform.Windows : null, architecture: plan.LaunchArchitecture,
+            secretVariables: desktopTask && plan.PasswordVariable is { } password ? [password] : null).CommandLineSha256();
+        _journal.AppendLocal("client", JournalEntry.Of(JournalEntry.ProcessIntended,
+            ("launchDirectory", _launchDirectory), ("expectedCommandLineSha256", expected)));
+        _intended = true;
+    }
+
+    internal void Started(IOwnedProcess process)
+    {
+        _process = process;
+        _pid = process.Id;
+        // A launch interrupted between the start and this probe can still be found by its pid file.
+        string pidFile = Path.Combine(_launchDirectory, "pid");
+        if (!File.Exists(pidFile)) File.WriteAllText(pidFile, _pid.ToString(CultureInfo.InvariantCulture));
+        var found = processProbeForTest != null ? processProbeForTest(_pid) : Probe(_pid);
+        if (found.State != ProbedState.Same || found.StartIdentity == null || found.CommandLineSha256 == null)
+            throw new InvalidOperationException($"Could not journal the owned client process {_pid} by ID, start time and command line ({found.State}); it will be stopped rather than held.");
+        _startIdentity = found.StartIdentity;
+        File.WriteAllText(pidFile, _pid.ToString(CultureInfo.InvariantCulture) + " " + _startIdentity);
+        _journal.AppendLocal("client", JournalEntry.Of(JournalEntry.ProcessStarted,
+            ("pid", _pid.ToString(CultureInfo.InvariantCulture)), ("startIdentity", _startIdentity),
+            ("commandLineSha256", found.CommandLineSha256), ("launchDirectory", _launchDirectory)));
+        _started = true;
+    }
+
+    private static ProbedProcess Probe(int pid)
+    {
+        var host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+        return HostProcessProbe.ProbeAsync(host, [(pid, "")], TimeSpan.FromSeconds(30), settle: true)
+            .GetAwaiter().GetResult()[(pid, "")];
+    }
+
+    internal void Complete()
+    {
+        if (_process != null)
+        {
+            if (!_process.HasExited) throw new InvalidOperationException("The held client's stop could not be proved; it remains in the run journal for env status/recover.");
+            if (_started)
+                _journal.AppendLocal("client", JournalEntry.Of(JournalEntry.ProcessStopped,
+                    ("pid", _pid.ToString(CultureInfo.InvariantCulture)), ("startIdentity", _startIdentity!)));
+            else if (_intended)
+                _journal.AppendLocal("client", JournalEntry.Of(JournalEntry.LaunchSettled,
+                    ("actor", "client"), ("directory", _launchDirectory)));
+        }
+        // A launch that failed before Started has no process handle here. Do not claim it is gone:
+        // env status/recover must inspect its pid file, or report that the interrupted launch needs attention.
+        if (_intended && _process == null)
+            throw new InvalidOperationException("The client launch did not return a process after its intent was journalled; inspect env status before reusing this host.");
+    }
+}

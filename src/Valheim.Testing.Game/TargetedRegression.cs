@@ -560,7 +560,7 @@ public sealed class TargetedRegression
     /// </summary>
     public ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure,
         CancellationToken cancellation = default, Action<ScenarioReport>? afterPinnedClientOpened = null) =>
-        Run(arm, output, scenario, rounds, measure, cancellation, afterPinnedClientOpened, null);
+        Run(arm, output, scenario, rounds, measure, cancellation, afterPinnedClientOpened, null, null);
 
     /// <summary>
     /// The same run with an owned-client placement supplied by the host layer. A Windows SSH runner can use a desktop task
@@ -569,7 +569,8 @@ public sealed class TargetedRegression
     /// </summary>
     internal ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure,
         CancellationToken cancellation, Action<ScenarioReport>? afterPinnedClientOpened,
-        Func<ClientRunPlan, string, ICollection<RunLog>, CancellationToken, ClientSession>? openClient)
+        Func<ClientRunPlan, string, ICollection<RunLog>, CancellationToken, ClientSession>? openClient,
+        Action? afterStaged)
     {
         ArgumentNullException.ThrowIfNull(measure);
         output = Path.GetFullPath(output);
@@ -594,6 +595,7 @@ public sealed class TargetedRegression
             }
             StagedArm? stagedArm = null;
             report.Step(StepPhase.Setup, $"stage arm {arm} from the allowlist and preflight it, before the game starts", () => stagedArm = Stage(arm));
+            afterStaged?.Invoke();
             var staged = stagedArm!;
             staged.Record(report.Provenance);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
@@ -660,10 +662,55 @@ public sealed class TargetedRegression
     /// <summary>Deletes the disposable install, only when it carries this tool's marker.</summary>
     public void Remove()
     {
-        string install = Path.GetFullPath(Install);
+        RemoveJournalledInstall(Install);
+    }
+
+    // Recovery has only the journalled path, not the regression recipe. Keep the same ownership
+    // check as normal removal and refuse an unmarked partial copy instead of deleting by name.
+    internal static void RemoveJournalledInstall(string path)
+    {
+        string install = Path.GetFullPath(path);
+        if (!Path.GetFileName(install).StartsWith("regression-", StringComparison.Ordinal) ||
+            Path.GetFileName(install).Length == "regression-".Length)
+            throw new InvalidDataException("A regression copy must have a regression-* directory name.");
         if (!Directory.Exists(install)) return;
         RequireOwned(install);
         Directory.Delete(install, recursive: true);
+    }
+
+    // A killed one-shot runner never got to collect its game logs. Recovery keeps them beside
+    // the run's evidence before deleting the exact marked copy, with idempotent retries.
+    internal static int RecoverJournalledInstall(string path, string evidenceRoot)
+    {
+        string install = Path.GetFullPath(path), evidence = Path.GetFullPath(evidenceRoot);
+        if (!Directory.Exists(install)) return 0;
+        if (!Directory.Exists(evidence) || RegressionInputs.Inside(evidence, install))
+            throw new InvalidDataException("The journalled evidence folder is missing or lies inside the disposable install.");
+        RequireOwned(install);
+        var logs = new List<(string Source, string Relative)>();
+        void Add(string source, string relative)
+        {
+            if (File.Exists(source) && (File.GetAttributes(source) & FileAttributes.ReparsePoint) == 0)
+                logs.Add((source, relative));
+        }
+        Add(Path.Combine(install, "BepInEx", "LogOutput.log"), Path.Combine("BepInEx", "LogOutput.log"));
+        Add(Path.Combine(install, "toolkit-unity.log"), "toolkit-unity.log");
+        foreach (string source in Directory.EnumerateFiles(install, "preloader_*.log", SearchOption.TopDirectoryOnly))
+            Add(source, Path.GetFileName(source));
+        string kept = Path.Combine(evidence, "recovered-game-logs");
+        foreach (var (source, relative) in logs)
+        {
+            string destination = Path.Combine(kept, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            if (File.Exists(destination))
+            {
+                if (FileHash.Sha256(source) != FileHash.Sha256(destination))
+                    throw new IOException("Recovery refuses to overwrite a different game log: " + destination);
+            }
+            else File.Copy(source, destination);
+        }
+        RemoveJournalledInstall(install);
+        return logs.Count;
     }
 
     internal static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

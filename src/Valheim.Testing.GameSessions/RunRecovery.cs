@@ -182,6 +182,15 @@ internal static class RunRecovery
             try
             {
                 string path = copy.What;
+                if (copy.Fields.GetValueOrDefault("copyKind") == "regression")
+                {
+                    if (!copy.Fields.TryGetValue("evidenceRoot", out string? evidence))
+                        throw new InvalidDataException("its journal names no evidence folder for game logs");
+                    int logs = TargetedRegression.RecoverJournalledInstall(path, evidence);
+                    Step(copy.Host, what, $"removed the journalled regression install; kept {logs} game log(s) in its evidence");
+                    await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"))).ConfigureAwait(false);
+                    continue;
+                }
                 if (!Directory.Exists(path)) { Step(copy.Host, what, "already gone"); await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"))).ConfigureAwait(false); continue; }
                 if (!OwnedCopies.IsCopyName(path)) throw new InvalidDataException("not a valheim-test-<32 hex> copy directory");
                 var found = OwnedCopies.Find(path);

@@ -47,13 +47,17 @@ internal static class DesktopClientSession
 
     /// <summary>Launches the plan's pinned disposable install in the desktop session and waits for its menu.</summary>
     public static ClientSession Open(ClientRunPlan plan, string output, ICollection<RunLog> logs, CancellationToken cancellation = default)
+        => Open(plan, output, logs, cancellation, null, null);
+
+    internal static ClientSession Open(ClientRunPlan plan, string output, ICollection<RunLog> logs, CancellationToken cancellation,
+        Action? processIntended, Action<IOwnedProcess>? processStarted)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(logs);
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("DesktopClientSession requires Windows.");
         if (!plan.Owned || plan.CopySource) throw new ArgumentException("Desktop launch needs a bound, owned disposable client plan.", nameof(plan));
         if (!NeedsDesktopTask(Process.GetCurrentProcess().SessionId))
-            return ClientSession.Open(plan, output, logs, cancellation);
+            return ClientSession.Open(plan, output, logs, cancellation, processIntended, processStarted);
         plan.CheckOwnedInstall();
         var host = new LocalGameHost("this machine", HostShell.WindowsPowerShell);
         var quick = TimeSpan.FromSeconds(30);
@@ -85,11 +89,16 @@ internal static class DesktopClientSession
                 () =>
                 {
                     var process = InteractiveClient.StartAsync(host, launch, launchDirectory,
-                        TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds)), cancellation: cancellation).GetAwaiter().GetResult();
-                    try { OwnedClientCommandLease.Write(output, process.Id, process.StartIdentity, plan); }
+                        TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds)), display: null, cancellation: cancellation,
+                        beforeLaunch: processIntended).GetAwaiter().GetResult();
+                    try
+                    {
+                        OwnedClientCommandLease.Write(output, process.Id, process.StartIdentity, plan);
+                        processStarted?.Invoke(process);
+                    }
                     catch
                     {
-                        process.Stop(TimeSpan.FromSeconds(15)); // Never leave a launched client behind if its lease file cannot be kept.
+                        try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
                         throw;
                     }
                     return new HostedClientProcess(process, host, plan.Install, tunnel, keptDirectory);

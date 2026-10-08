@@ -114,8 +114,13 @@ public static class InteractiveClient
     /// </summary>
     /// <param name="timeout">How long the start may take, at least 15 s. A reply lost past it is an unknown outcome: a client (and, on
     /// Windows, its task) may exist, named in the exception.</param>
-    public static async Task<InteractiveClientProcess> StartAsync(IGameHost host, GameLaunch launch, string launchDirectory, TimeSpan timeout,
-        LinuxDisplay? display = null, CancellationToken cancellation = default)
+    public static Task<InteractiveClientProcess> StartAsync(IGameHost host, GameLaunch launch, string launchDirectory, TimeSpan timeout,
+        LinuxDisplay? display = null, CancellationToken cancellation = default) =>
+        StartAsync(host, launch, launchDirectory, timeout, display, cancellation, null);
+
+    // Journal intent after local validation but immediately before asking the host to start a process.
+    internal static async Task<InteractiveClientProcess> StartAsync(IGameHost host, GameLaunch launch, string launchDirectory, TimeSpan timeout,
+        LinuxDisplay? display, CancellationToken cancellation, Action? beforeLaunch)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
@@ -161,6 +166,7 @@ public static class InteractiveClient
             variables["runtime"] = display.RuntimeDirectory ?? ""; variables["xauthority"] = display.XAuthority ?? "";
         }
         string script = windows ? InteractiveScripts.WindowsStart : InteractiveScripts.LinuxStart;
+        beforeLaunch?.Invoke();
         var result = Redact(await (host is ScriptedGameHost scripted
             ? scripted.RunWithSecretsAsync(script, variables, secretTokens, timeout, cancellation)
             : host.RunAsync(script, variables, timeout, cancellation)).ConfigureAwait(false), secretValues);

@@ -26,6 +26,17 @@ public sealed class NativeSmokeOutputTests
     }
 
     [Fact]
+    public void StartHoldIsAFlagAndCannotBeRepeated()
+    {
+        Assert.True(StartArguments.TryRead(["--mod", "mod.dll", "--output", "new-run", "--hold"],
+            out var options, out _, out _, out _, out string error), error);
+        Assert.Equal("true", options!["--hold"]);
+        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--output", "new-run", "--hold", "--hold"],
+            out _, out _, out _, out _, out error));
+        Assert.Contains("Repeated option", error);
+    }
+
+    [Fact]
     public void DisposableOutputMustStayOutsideInstallsAndAccountData()
     {
         string root = Path.Combine(Path.GetTempPath(), "native-smoke-path-test");

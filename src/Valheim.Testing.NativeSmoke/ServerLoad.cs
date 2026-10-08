@@ -16,7 +16,7 @@ using Valheim.Testing.GameSessions;
 internal static class ServerLoad
 {
     internal const string Usage = "valheim-test server-load --mod DLL [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
-        "[--server-env NAME] [--client-env NAME] [--server-only] [--join HOST:PORT] [--preflight-only] [--loader-package FILE] [--client-loader-package FILE] " +
+        "[--server-env NAME] [--client-env NAME] [--server-only] [--join HOST:PORT] [--preflight-only] [--hold] [--loader-package FILE] [--client-loader-package FILE] " +
         "[--adapter DLL] [--cli-manifest FILE --cli-files DIR] [--search-root DIR ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
     private static readonly string[] Session = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"];
@@ -50,6 +50,11 @@ internal static class ServerLoad
         {
             Console.Error.WriteLine(error);
             Console.Error.WriteLine("Usage: " + Usage);
+            return 2;
+        }
+        if (parsed!.Switches.Contains("--hold") && parsed.Switches.Contains("--preflight-only"))
+        {
+            Console.Error.WriteLine("--hold needs a running game; leave out --preflight-only.");
             return 2;
         }
         using var cancel = new CancellationTokenSource();
@@ -361,7 +366,7 @@ internal static class ServerLoad
                         if (serverAuto != null) record["serverLoaderShipped"] = serverAuto.Reason;
                         if (clientAuto != null) record["clientLoaderShipped"] = clientAuto.Reason;
                     },
-                    Scenario = (session, plan) => Scenario(session, clientPlan, clock),
+                    Scenario = (session, plan) => Scenario(session, clientPlan, clock, parsed.Switches.Contains("--hold")),
                 }).ConfigureAwait(false);
         }
         finally
@@ -373,7 +378,7 @@ internal static class ServerLoad
     }
 
     // Loaded with the packaged world, joinable, and (with a client) a clean client reading that world.
-    private static Task Scenario(GameSession session, ClientRunPlan? client, Stopwatch clock)
+    private static Task Scenario(GameSession session, ClientRunPlan? client, Stopwatch clock, bool hold)
     {
         var server = session.Server!;
         session.Report.Step("selected server mods loaded and world identity matches", () =>
@@ -385,17 +390,34 @@ internal static class ServerLoad
         session.Report.Provenance["firstModLoadedSecondsFromCommand"] = clock.Elapsed.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture);
         session.Report.Step("dedicated server accepts a game connection", () => server.WaitUntilJoinable(server.Game));
         if (client != null)
+        {
+            ClientSession? opened = null;
             new ClientRounds
             {
                 Client = client, WorldUid = DefaultSmokeWorld.Uid, Report = session.Report, Output = session.Output,
                 OwnedServer = server, Rounds = ["first"], ProtectPlayer = false, Cancellation = session.Cancellation,
-            }.Run(server.Game, () => session.OpenClient(client), round =>
+            }.Run(server.Game, () => opened = session.OpenClient(client), round =>
+            {
                 round.Step("clean client can read the joined world", () =>
                 {
                     var state = new SessionControl(round.Client).Read();
                     if (!state.WorldReady || !state.PlayerReady || state.WorldUid != DefaultSmokeWorld.Uid)
                         throw new InvalidDataException("The clean client has no ready player in the pinned world.");
-                }));
+                });
+                if (hold)
+                    round.Step("keep the owned server and client running until finish", () =>
+                        ForegroundHold.HoldAsync(session.Report.Provenance["runId"], GameSession.ActorOutput(session.Output, "client"),
+                            session.Cancellation,
+                            [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing.")),
+                             ("client", opened?.OwnedProcess ?? throw new InvalidOperationException("The owned client process is missing."))])
+                            .GetAwaiter().GetResult());
+            });
+        }
+        else if (hold)
+            session.Report.Step("keep the owned server running until finish", () =>
+                ForegroundHold.HoldAsync(session.Report.Provenance["runId"], session.Output, session.Cancellation,
+                    [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing."))], client: false)
+                    .GetAwaiter().GetResult());
         return Task.CompletedTask;
     }
 
@@ -411,7 +433,7 @@ internal static class ServerLoad
         "--output", "--inventory", "--server", "--client", "--server-env", "--client-env", "--join", "--adapter", "--cli-manifest", "--cli-files",
         "--loader-package", "--client-loader-package", "--expected-log-error", "--expected-log-reason",
     };
-    private static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "--server-only", "--preflight-only" };
+    private static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "--server-only", "--preflight-only", "--hold" };
 
     internal static bool TryRead(string[] args, out Arguments? parsed, out string error)
     {

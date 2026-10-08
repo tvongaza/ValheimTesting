@@ -141,6 +141,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     private readonly TimeSpan _startup, _command, _poll;
     private readonly CancellationToken _cancellation;
     private IOwnedProcess? _process;
+    internal IOwnedProcess? CurrentProcess => _process;
     private GameActor? _actor;
     public List<int> StartedProcesses { get; } = [];
     /// <summary>

@@ -307,6 +307,44 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(JournalRunState.Ended, after.State);
     }
 
+    [Fact] public async Task ADeadOneShotRunRetiresOnlyItsMarkedRegressionInstall()
+    {
+        string data = Path.Combine(_root, "data"), journal = Path.Combine(data, "journal");
+        string install = Path.Combine(_root, "regression-native-smoke-recovery"), evidence = Path.Combine(_root, "evidence");
+        Directory.CreateDirectory(install);
+        Directory.CreateDirectory(Path.Combine(install, "BepInEx"));
+        Directory.CreateDirectory(evidence);
+        File.WriteAllText(Path.Combine(install, TargetedRegression.MarkerFile), "{\"tool\":\"TargetedRegression\"}");
+        File.WriteAllText(Path.Combine(install, "BepInEx", "LogOutput.log"), "game log from the interrupted run");
+        string file = Path.Combine(journal, "run-regression", WorldFixture.Actor + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        foreach (string kind in new[] { JournalEntry.CopyIntended, JournalEntry.CopyDone })
+            File.AppendAllText(file, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["utc"] = DateTime.UtcNow.AddHours(-1).ToString("O"), ["run"] = "run-regression", ["actor"] = WorldFixture.Actor, ["kind"] = kind,
+                ["fields"] = new Dictionary<string, string> { ["runtime"] = install, ["local"] = "true", ["copyKind"] = "regression", ["evidenceRoot"] = evidence },
+                ["runner"] = new Dictionary<string, object> { ["machine"] = Gone.Machine, ["pid"] = Gone.Pid, ["startedUtc"] = Gone.StartedUtc.ToString("O") },
+            }) + "\n");
+        using var localJournal = RunJournal.UseLocalDirectory(journal);
+        var hosts = new Dictionary<string, HostProfile> { ["this-machine"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
+        var local = OperatingSystem.IsWindows() ? new LocalGameHost("this-machine", HostShell.WindowsPowerShell) : new LocalGameHost("this-machine", HostShell.Bash);
+
+        Assert.True((await RunRecovery.RecoverAsync(hosts, _ => local, "run-regression", false, TimeSpan.FromSeconds(60))).Recovered);
+        Assert.False(Directory.Exists(install));
+        Assert.Equal("game log from the interrupted run", File.ReadAllText(Path.Combine(evidence, "recovered-game-logs", "BepInEx", "LogOutput.log")));
+
+        // A journal entry alone never authorizes deletion of an unmarked directory.
+        Directory.CreateDirectory(install);
+        File.WriteAllText(Path.Combine(install, "personal.txt"), "keep");
+        string other = File.ReadAllText(file).Replace("run-regression", "run-unmarked", StringComparison.Ordinal);
+        string otherFile = Path.Combine(journal, "run-unmarked", WorldFixture.Actor + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(otherFile)!);
+        File.WriteAllText(otherFile, other);
+        var refused = await RunRecovery.RecoverAsync(hosts, _ => local, "run-unmarked", false, TimeSpan.FromSeconds(60));
+        Assert.False(refused.Recovered);
+        Assert.True(File.Exists(Path.Combine(install, "personal.txt")));
+    }
+
     // #412: the game's logs inside a copy are what explains why the run was interrupted. Recover keeps them in the run's
     // evidence folder on the host (beside its boot-N and client launch folders) before the copy goes, and names them. A log
     // older than the copy came with the install: it is named, not kept.

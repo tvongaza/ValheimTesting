@@ -126,9 +126,10 @@ internal static class EnvCommand
                 : copy != null ? await EnvironmentRuns.TeardownCopyAsync(inventory, copy, output).ConfigureAwait(false)
                 : machineGone ? await EnvironmentRuns.ReleaseLeasesOfGoneRunAsync(inventory, run!, output).ConfigureAwait(false)
                 : await EnvironmentRuns.RecoverRunAsync(inventory, run!, action == "teardown", output, json).ConfigureAwait(false);
+            if (clean && !machineGone && run != null && action is ("recover" or "teardown")) ForegroundHold.RetireRecovered(run);
             return clean ? 0 : 3;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException or HostOperationException)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or JsonException or HostOperationException)
         {
             error.WriteLine("REFUSED: " + failure.Message);
             return 3;
