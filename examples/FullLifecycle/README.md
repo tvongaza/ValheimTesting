@@ -27,7 +27,7 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 
 The scenario never protects the player itself: the session protects the joined player (god, ghost and debug mode, read back) as soon as the world is ready, so the join step fails if the game does not confirm it, and the player is never moved unprotected. Fly stays off; the arrival and marker checks measure a player standing on the ground.
 
-Observations use ValheimCLI's generic commands (`cli_zdos_at` on the server, `cli_prefabs_at` on the client). A mod that needs a test-only action or observation adds it to its adapter as another extension command; the optional [Observe pack](https://github.com/tvongaza/valheimCLI/blob/5301f286a5a9e1434cc0e0a319dadc8b73fc2294/docs/command-packs.md) provides generic observations.
+Observations use ValheimCLI's generic commands (`cli_zdos_at` on the server, `cli_prefabs_at` on the client). A mod that needs a test-only action or observation adds it to its adapter as another extension command; the optional Observe pack provides generic observations.
 
 ## Run the layers
 
