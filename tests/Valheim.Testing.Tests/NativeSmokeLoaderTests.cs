@@ -74,11 +74,25 @@ public sealed class NativeSmokeLoaderTests : IDisposable
     public void StartRunsTheHostedRunWithoutBuildingAConsumer()
     {
         string output = Path.Combine(_rig.Root, "offline-start");
+        // On a locked Mac the new preflight must stop before the output exists. The hosted-run
+        // assertion below still runs on every other host and on an unlocked Mac desktop.
+        bool unavailableMacGui = false;
+        if (OperatingSystem.IsMacOS())
+        {
+            try { MacGuiSession.Require(); }
+            catch (InvalidOperationException) { unavailableMacGui = true; }
+        }
         object? exit = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
         {
             "start", "--game", _rig.Game, "--mod", _rig.Parent, "--cli-manifest", _rig.CliManifest(save: true),
             "--cli-files", Path.Combine(_rig.Root, "cli"), "--search-root", Path.Combine(_rig.Root, "deps"), "--output", output,
         }]);
+        if (unavailableMacGui)
+        {
+            Assert.Equal(3, exit);
+            Assert.False(Directory.Exists(output));
+            return;
+        }
         Assert.Equal(1, exit);
         var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "evidence", "smoke", "result.json")));
         var steps = report.RootElement.GetProperty("Steps").EnumerateArray().ToList();
