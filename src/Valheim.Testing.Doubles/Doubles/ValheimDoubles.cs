@@ -133,7 +133,7 @@ public partial class Heightmap
     /// <summary>The generated build this heightmap was made from (the game's private field); null until a test sets one.</summary>
     public HeightmapBuilder.HMBuildData? m_buildData;
     /// <summary>The loaded zone heightmaps, as the game's own list. <c>ValheimWorldScope.RegisterHeightmap</c> loads one per zone.</summary>
-    public static System.Collections.Generic.List<Heightmap> s_heightmaps { get; private set; } = new();
+    public static readonly System.Collections.Generic.List<Heightmap> s_heightmaps = new();
     /// <summary>
     /// A single-zone shorthand over <see cref="s_heightmaps"/>: the heightmap loaded last; setting it leaves that one
     /// heightmap loaded (or none).
@@ -141,7 +141,7 @@ public partial class Heightmap
     [TestOnly] public static Heightmap? Registered
     {
         get => s_heightmaps.Count == 0 ? null : s_heightmaps[s_heightmaps.Count - 1];
-        set => s_heightmaps = value == null ? new() : new() { value };
+        set { s_heightmaps.Clear(); if (value != null) s_heightmaps.Add(value); }
     }
 
     public readonly UnityEngine.Transform transform = new();
@@ -159,7 +159,7 @@ public partial class Heightmap
     }
     /// <summary>The first loaded heightmap that contains the point, or null where no zone is loaded, as in the game.</summary>
     public static Heightmap? FindHeightmap(UnityEngine.Vector3 point) => s_heightmaps.Find(h => h.IsPointInside(point));
-    public static System.Collections.Generic.List<Heightmap> GetAllHeightmaps() => new(s_heightmaps);
+    public static System.Collections.Generic.List<Heightmap> GetAllHeightmaps() => s_heightmaps;
     /// <summary>Like the game: the zone's live compiler, or a new one (with a new ZDO) if it has none.</summary>
     public TerrainComp GetAndCreateTerrainCompiler() => m_terrainComp ??= new TerrainComp(this, m_width);
     /// <summary>Valheim 1.0: the argument selects which late pass rebuilds

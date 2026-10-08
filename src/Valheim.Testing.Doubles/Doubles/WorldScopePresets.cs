@@ -13,7 +13,7 @@ using Valheim.Testing.Doubles;
 /// <summary>A player, as mod code finds one: its view (and so its ZDO), its name and id from the ZDO, and the list of every player object.</summary>
 public sealed partial class Player
 {
-    internal static List<Player> s_players { get; private set; } = new();
+    internal static readonly List<Player> s_players = new();
     /// <summary>Every player object, as the game's list: the main-menu preview and remote players count too.</summary>
     public static List<Player> GetAllPlayers() => s_players;
     /// <summary>The player's view: over its ZDO in a world, over none for the main-menu preview. Protected in the game (Character); public here, as with publicized assemblies.</summary>
@@ -97,9 +97,9 @@ namespace Valheim.Testing.Doubles
             _statics.And(() => ZNet.instance, null!); _statics.And(() => ZRoutedRpc.instance, null!);
             _statics.And(() => ZDOMan.instance, null); _statics.And(() => ZoneSystem.instance, null);
             _statics.And(() => ZNetScene.instance, null); _statics.And(() => WorldGenerator.instance, null);
-            _statics.And(() => global::Heightmap.s_heightmaps, new List<global::Heightmap>()); _ownsHeightmaps = true;
+            global::Heightmap.s_heightmaps.Clear();
             Player.m_localPlayer = null;
-            _statics.And(() => Player.s_players, new List<Player>());
+            Player.s_players.Clear();
             PreviewPlayer = new Player();
             Player.s_players.Add(PreviewPlayer);
             return this;
@@ -128,7 +128,7 @@ namespace Valheim.Testing.Doubles
             WithNetwork(server);
             ZNet.instance.Dedicated = dedicated;
             WithZdos(); WithZoneSystem(); WithScene();
-            _statics.And(() => Player.s_players, new List<Player>());
+            Player.s_players.Clear();
             PreviewPlayer = null;
             Localization.Current = null; ZInput.Current = null;
             PlatformPrefs.s_values = new Dictionary<string, object>();

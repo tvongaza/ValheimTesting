@@ -764,6 +764,10 @@ namespace UnityEngine
         {
             deltaTime = step; time += step; realtimeSinceStartup += step; frameCount++;
         }
+        [TestOnly] internal static void SetClockForTest(float seconds)
+        {
+            time = seconds; realtimeSinceStartup = seconds; deltaTime = 0f;
+        }
     }
 
     /// <summary>Unity's log. Lines go to the log capture (<c>ManualLogSource.Captured</c>) and the console.</summary>

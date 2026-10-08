@@ -494,6 +494,7 @@ Heightmap	field	static m_paintMaskDeepSnow : UnityEngine.Color	game
 Heightmap	field	static m_paintMaskDirt : UnityEngine.Color	game
 Heightmap	field	static m_paintMaskNothing : UnityEngine.Color	game
 Heightmap	field	static m_paintMaskPaved : UnityEngine.Color	game
+Heightmap	field	static s_heightmaps : List<Heightmap> { get; }	game
 Heightmap	field	transform : UnityEngine.Transform { get; }	game
 Heightmap	method	CheckTerrainModIsContained(TerrainModifier) : bool	game
 Heightmap	method	GetAndCreateTerrainCompiler() : TerrainComp	game
@@ -507,7 +508,6 @@ Heightmap	method	static CreateForZone(Vector2s, int, bool) : Heightmap	absent
 Heightmap	method	static FindHeightmap(UnityEngine.Vector3) : Heightmap	game
 Heightmap	method	static GetAllHeightmaps() : List<Heightmap>	game
 Heightmap	property	static Registered : Heightmap	absent
-Heightmap	property	static s_heightmaps : List<Heightmap> { get; }	game
 Heightmap.Biome	type	enum	game
 Heightmap.Biome	field	static AshLands : Heightmap.Biome { get; }	game
 Heightmap.Biome	field	static BlackForest : Heightmap.Biome { get; }	game
@@ -843,6 +843,7 @@ Player	type	class	game
 Player	ctor	.ctor()	game
 Player	field	m_nview : ZNetView	game
 Player	field	static m_localPlayer : Player	game
+Player	field	static s_players : List<Player> { get; }	game
 Player	field	transform : UnityEngine.Transform { get; }	game
 Player	method	GetPlayerID() : long	game
 Player	method	GetPlayerName() : string	game
@@ -850,7 +851,6 @@ Player	method	GetZDOID() : ZDOID	game
 Player	method	IsOwner() : bool	game
 Player	method	OnSpawned(bool) : void	game
 Player	method	static GetAllPlayers() : List<Player>	game
-Player	property	static s_players : List<Player> { get; }	game
 RandomObject	type	class : UnityEngine.MonoBehaviour	game
 RandomObject	ctor	.ctor()	game
 RandomObject	field	m_maxElevation : int	game
@@ -1121,6 +1121,7 @@ TerrainModifier	field	m_smoothRadius : float	game
 TerrainModifier	field	m_sortOrder : int	game
 TerrainModifier	field	m_square : bool	game
 TerrainModifier	field	m_useTerrainCompiler : bool	game
+TerrainModifier	field	static s_instances : List<TerrainModifier> { get; }	game
 TerrainModifier	field	static s_needsSorting : bool	game
 TerrainModifier	method	Awake() : void	game
 TerrainModifier	method	GetRadius() : float	game
@@ -1130,7 +1131,6 @@ TerrainModifier	method	static GetAllInstances() : List<TerrainModifier>	game
 TerrainModifier	method	static RemoveAll() : void	game
 TerrainModifier	method	static SortByModifiers(TerrainModifier, TerrainModifier) : int	game
 TerrainModifier	property	CreationTime : long { get; }	absent
-TerrainModifier	property	static s_instances : List<TerrainModifier> { get; }	game
 TerrainModifier.PaintType	type	enum	game
 TerrainModifier.PaintType	field	static ClearVegetation : TerrainModifier.PaintType { get; }	game
 TerrainModifier.PaintType	field	static Cultivate : TerrainModifier.PaintType { get; }	game
@@ -1531,6 +1531,7 @@ UnityEngine.Sprite	type	class : UnityEngine.Object	game
 UnityEngine.Sprite	ctor	.ctor()	game
 UnityEngine.Time	type	static class	game
 UnityEngine.Time	method	static AdvanceForTest(float) : void	absent
+UnityEngine.Time	method	static SetClockForTest(float) : void	absent
 UnityEngine.Time	property	static deltaTime : float { get; }	game
 UnityEngine.Time	property	static frameCount : int { get; }	game
 UnityEngine.Time	property	static realtimeSinceStartup : float { get; }	game

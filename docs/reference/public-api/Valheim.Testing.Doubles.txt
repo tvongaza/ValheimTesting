@@ -478,6 +478,7 @@ class Heightmap
   field static UnityEngine.Color m_paintMaskDirt
   field static UnityEngine.Color m_paintMaskNothing
   field static UnityEngine.Color m_paintMaskPaved
+  field static readonly System.Collections.Generic.List`1<Heightmap> s_heightmaps
   method System.Boolean CheckTerrainModIsContained(TerrainModifier modifier)
   method System.Boolean IsPointInside(UnityEngine.Vector3 point, System.Single radius = 0)
   method System.Boolean TerrainVSModifier(TerrainModifier modifier)
@@ -491,7 +492,6 @@ class Heightmap
   method static Heightmap FindHeightmap(UnityEngine.Vector3 point)
   method static System.Collections.Generic.List`1<Heightmap> GetAllHeightmaps()
   property static Heightmap Registered { get; set; }
-  property static System.Collections.Generic.List`1<Heightmap> s_heightmaps { get; }
 enum Heightmap/Biome
   field const Heightmap/Biome AshLands = 32
   field const Heightmap/Biome BlackForest = 8
@@ -1645,6 +1645,7 @@ sealed class Valheim.Testing.Doubles.ValheimWorldScope : System.IDisposable
   method Valheim.Testing.Doubles.ValheimWorldScope AsServer(System.Boolean server = true)
   method Valheim.Testing.Doubles.ValheimWorldScope AtMainMenu()
   method Valheim.Testing.Doubles.ValheimWorldScope WithCheats()
+  method Valheim.Testing.Doubles.ValheimWorldScope WithClock(System.Single seconds)
   method Valheim.Testing.Doubles.ValheimWorldScope WithCommands()
   method Valheim.Testing.Doubles.ValheimWorldScope WithConfigFiles()
   method Valheim.Testing.Doubles.ValheimWorldScope WithHeightmapBuilder(HeightmapBuilder builder)
