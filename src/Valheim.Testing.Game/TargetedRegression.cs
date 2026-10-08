@@ -559,7 +559,17 @@ public sealed class TargetedRegression
     /// plugins verified; a caller can record cold-start timing there without treating later world entry as plugin load.
     /// </summary>
     public ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure,
-        CancellationToken cancellation = default, Action<ScenarioReport>? afterPinnedClientOpened = null)
+        CancellationToken cancellation = default, Action<ScenarioReport>? afterPinnedClientOpened = null) =>
+        Run(arm, output, scenario, rounds, measure, cancellation, afterPinnedClientOpened, null);
+
+    /// <summary>
+    /// The same run with an owned-client placement supplied by the host layer. A Windows SSH runner can use a desktop task
+    /// while retaining the same staging, rounds, evidence, log scan and teardown. The opener must add its kept logs to
+    /// the log collection it receives even when startup fails after the process exists.
+    /// </summary>
+    internal ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure,
+        CancellationToken cancellation, Action<ScenarioReport>? afterPinnedClientOpened,
+        Func<ClientRunPlan, string, ICollection<RunLog>, CancellationToken, ClientSession>? openClient)
     {
         ArgumentNullException.ThrowIfNull(measure);
         output = Path.GetFullPath(output);
@@ -590,7 +600,8 @@ public sealed class TargetedRegression
             new ClientRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
             {
                 staged.Verify();
-                var client = ClientSession.Open(staged.Plan, output, logs, cancellation);
+                var client = openClient == null ? ClientSession.Open(staged.Plan, output, logs, cancellation)
+                    : openClient(staged.Plan, output, logs, cancellation);
                 report.RecordPlugins("client", staged.Plan.Pins); // confirmed at its menu
                 if (LoaderPackage != null)
                 {

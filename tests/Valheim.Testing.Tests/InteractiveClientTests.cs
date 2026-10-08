@@ -11,6 +11,22 @@ using Valheim.Testing.GameSessions;
 // secret never reaches anything a person or a report can read.
 public class InteractiveClientTests
 {
+    [Fact] public void AWindowsTerminalAlreadyInTheDesktopKeepsTheDirectClientPath()
+    {
+        Assert.False(DesktopClientSession.NeedsDesktopTask(1));
+        Assert.False(DesktopClientSession.NeedsDesktopTask(7));
+        Assert.True(DesktopClientSession.NeedsDesktopTask(0));
+    }
+    [Fact] public async Task DesktopPreflightUsesTheSameSessionChoiceAsLaunch()
+    {
+        int checks = 0;
+        using var replacement = DesktopClientSession.ReplacePreflightForTest(_ => { checks++; return Task.CompletedTask; });
+        await DesktopClientSession.PreflightForSessionAsync(1);
+        await DesktopClientSession.PreflightForSessionAsync(7);
+        Assert.Equal(0, checks);
+        await DesktopClientSession.PreflightForSessionAsync(0);
+        Assert.Equal(1, checks);
+    }
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
     private const string WindowsInstall = @"C:\Games\Valheim";
     private const string WindowsLaunch = @"C:\ValheimTesting\runs\run-42\client";
@@ -20,6 +36,26 @@ public class InteractiveClientTests
     private static ScriptedGameHost WindowsHost(FakeLauncher fake) => new SshGameHost("gaming-pc", "tester@gaming-pc.example", HostShell.WindowsPowerShell, 0, null, null, "ssh", fake);
     private static ScriptedGameHost LinuxHost(FakeLauncher fake) => new SshGameHost("linux-box", "tester@linux-box.example", HostShell.Bash, 0, null, null, "ssh", fake);
     private static string Reply(params string[] lines) => string.Join('\n', lines) + "\n";
+
+    [Theory]
+    [InlineData("ready", null)]
+    [InlineData("no-session tester has no desktop session here", InteractiveRefusal.NoSession)]
+    [InlineData("no-steam no Steam client in the desktop session", InteractiveRefusal.NoSteam)]
+    public async Task WindowsDesktopPreflightRefusesBeforeCreatingATask(string verdict, InteractiveRefusal? refusal)
+    {
+        var fake = new FakeLauncher().Exits(0, Reply("VT-INTERACTIVE " + verdict), FakeLauncher.Report(0));
+        var host = WindowsHost(fake);
+        if (refusal is { } reason)
+            Assert.Equal(reason, (await Assert.ThrowsAsync<InteractiveSessionException>(() =>
+                InteractiveClient.RequireWindowsDesktopAsync(host))).Reason);
+        else await InteractiveClient.RequireWindowsDesktopAsync(host);
+        string script = FakeLauncher.Script(Assert.Single(fake.Calls));
+        Assert.Contains("Get-VtSessions", script);
+        Assert.Contains(InteractiveScripts.WindowsDesktopGuard.ReplaceLineEndings("\n"), script);
+        Assert.Contains(InteractiveScripts.WindowsDesktopGuard.ReplaceLineEndings("\n"), InteractiveScripts.WindowsStart);
+        Assert.DoesNotContain("RegisterTaskDefinition", script);
+        Assert.DoesNotContain("CreateDirectory", script);
+    }
 
     internal static List<(string Kind, string Value)> Decode(string spec) => spec.Split('\n', StringSplitOptions.RemoveEmptyEntries)
         .Select(line => line.Split(' ', 2)).Select(parts => (parts[0], Encoding.UTF8.GetString(Convert.FromBase64String(parts[1])))).ToList();

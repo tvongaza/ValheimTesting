@@ -46,6 +46,10 @@ try
     var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead);
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
     Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}");
+    // An SSH-launched Windows runner is in session 0. Check the desktop before copying the fixture or disposable game;
+    // DesktopClientSession repeats the check and starts the client in that session after staging.
+    if (OperatingSystem.IsWindows())
+        await DesktopClientSession.PreflightAsync(cancel.Token);
     string game = client.Install;
     var selectedMods = mods!.Select(Path.GetFullPath).ToList();
     string mod = selectedMods[0];
@@ -130,7 +134,7 @@ try
                 ready.Provenance["firstModLoadedSecondsFromCommand"] =
                     elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
                 if (shippedLoader != null) ready.Provenance["bepInExPackageShipped"] = shippedLoader.Reason;
-            });
+            }, openClient: OperatingSystem.IsWindows() ? DesktopClientSession.Open : null);
         lastArm = report; lastArmOutput = armOutput; // Only an arm whose report was written records the removal.
         passed &= report.Passed;
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.

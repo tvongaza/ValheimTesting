@@ -82,6 +82,27 @@ public static class InteractiveClient
     private static readonly UTF8Encoding Utf8 = new(false);
 
     /// <summary>
+    /// Checks, without creating a task or a launch directory, that this Windows host has exactly one desktop session for its
+    /// user and Steam is running in that session. Call this before staging a large disposable install for a one-shot run;
+    /// <see cref="StartAsync(IGameHost, GameLaunch, string, TimeSpan, LinuxDisplay, CancellationToken)"/> checks again at launch.
+    /// </summary>
+    internal static async Task RequireWindowsDesktopAsync(IGameHost host, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        if (host.Shell.Kind != HostShellKind.PowerShell)
+            throw new ArgumentException("The Windows desktop check needs a PowerShell host.", nameof(host));
+        var result = (await host.RunAsync(InteractiveScripts.WindowsDesktopCheck, new Dictionary<string, string>(),
+            TimeSpan.FromSeconds(15), cancellation).ConfigureAwait(false)).EnsureSuccess($"Checking the desktop session on {host.Name}");
+        string? verdict = Line(result.Stdout, "VT-INTERACTIVE ");
+        if (verdict == "ready") return;
+        if (verdict?.StartsWith("no-session ", StringComparison.Ordinal) == true)
+            throw new InteractiveSessionException(InteractiveRefusal.NoSession, host.Name, verdict["no-session ".Length..]);
+        if (verdict?.StartsWith("no-steam ", StringComparison.Ordinal) == true)
+            throw new InteractiveSessionException(InteractiveRefusal.NoSteam, host.Name, verdict["no-steam ".Length..]);
+        throw new HostOperationException($"Unexpected desktop check reply from {host.Name}", result);
+    }
+
+    /// <summary>
     /// Starts <paramref name="launch"/> in <paramref name="host"/>'s desktop session and returns the game's process, identified by
     /// process ID and start time. <paramref name="launchDirectory"/> is a new absolute directory on the host for this launch's evidence:
     /// the recorded process identity (its <c>pid</c> file), and the game's standard output (Linux) or the launcher's error (Windows);
@@ -415,6 +436,24 @@ internal static class InteractiveScripts
         }
         """;
 
+    // Shared by the read-only desktop check and the actual launch: the verdict cannot drift between them.
+    internal const string WindowsDesktopGuard = """
+        $desktops = Get-VtSessions ''
+        if ($desktops.Count -eq 0) { 'VT-INTERACTIVE no-session ' + $me + ' has no desktop session here; sign in at the console or over Remote Desktop and leave the session running'; exit 0 }
+        if ($desktops.Count -gt 1) { 'VT-INTERACTIVE no-session ' + $me + ' has ' + $desktops.Count + ' desktop sessions (' + ($desktops -join ', ') + ') and a task could start in any of them; sign out of all but one'; exit 0 }
+        $steam = Get-VtSessions 'steam.exe'
+        if ($steam.Count -eq 0) { 'VT-INTERACTIVE no-steam no Steam client (steam.exe) runs in the desktop session ' + $desktops[0] + ' of ' + $me; exit 0 }
+        """;
+
+    // The read-only part of WindowsStart, available before a one-shot copies the game. Start performs the same checks again
+    // so a desktop logout or Steam exit between preflight and launch is still refused.
+    internal static readonly string WindowsDesktopCheck = ("""
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $system = [Environment]::SystemDirectory
+""" + "\n" + WindowsSessions + "\n" + WindowsDesktopGuard + "\n" + """
+        'VT-INTERACTIVE ready'
+        """).ReplaceLineEndings("\n");
+
     // Variables: install, files, dir, spec, task, launcher, seconds; secrets arrive in VT_SECRETS (base64 NAME=value tokens,
     // space separated), which the wrapper keeps in memory and this script clears at once. Runs as the SSH user (or locally). The user's
     // desktop sessions are the sessions other than 0 (services, and SSH) in which it runs processes; tasklist reports them
@@ -429,13 +468,7 @@ internal static class InteractiveScripts
         }
         if ([IO.Directory]::Exists($dir) -or [IO.File]::Exists($dir)) { 'VT-INTERACTIVE exists'; exit 0 }
         $system = [Environment]::SystemDirectory
-""" + "\n" + WindowsSessions + "\n" + """
-        $desktops = Get-VtSessions ''
-        if ($desktops.Count -eq 0) { 'VT-INTERACTIVE no-session ' + $me + ' has no desktop session here; sign in at the console or over Remote Desktop and leave the session running'; exit 0 }
-        if ($desktops.Count -gt 1) { 'VT-INTERACTIVE no-session ' + $me + ' has ' + $desktops.Count + ' desktop sessions (' + ($desktops -join ', ') + ') and a task could start in any of them; sign out of all but one'; exit 0 }
-        $steam = Get-VtSessions 'steam.exe'
-        if ($steam.Count -eq 0) { 'VT-INTERACTIVE no-steam no Steam client (steam.exe) runs in the desktop session ' + $desktops[0] + ' of ' + $me; exit 0 }
-
+""" + "\n" + WindowsSessions + "\n" + WindowsDesktopGuard + "\n" + """
         [void][IO.Directory]::CreateDirectory($dir)
         $specFile = Join-Path $dir 'spec.txt'
         [IO.File]::WriteAllText($specFile, $spec, $utf8)
