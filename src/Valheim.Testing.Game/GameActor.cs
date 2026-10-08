@@ -217,8 +217,17 @@ public sealed class GameActor : IDisposable
     private static InvalidOperationException ExtensionFailed(Capability command, JsonElement result)
     {
         static string? Text(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-        return new InvalidOperationException($"{command.Path} failed: {Text(result, "code") ?? "no code"}: {Text(result, "message") ?? "no message"}");
+        string? code = Text(result, "code"), message = Text(result, "message");
+        var error = new InvalidOperationException($"{command.Path} failed: {code ?? "no code"}: {message ?? "no message"}");
+        // Keep the existing exception type while giving internal callers a structured way to identify a game wait
+        // expiry. Never classify it by translated or changing message text.
+        error.Data["extension.path"] = command.Path;
+        error.Data["extension.code"] = code;
+        return error;
     }
+    internal static bool IsExtensionFailure(InvalidOperationException error, string path, string code) =>
+        error.Data["extension.path"] is string actualPath && actualPath == path &&
+        error.Data["extension.code"] is string actualCode && actualCode == code;
     public Observation Observe(Capability command, params string[] arguments) => Observe(command, null, arguments);
     /// <summary><see cref="Observe(Capability, string[])"/>, handing the complete reply lines to <paramref name="replied"/> before judging them.</summary>
     internal Observation Observe(Capability command, Action<IReadOnlyList<string>>? replied, string[] arguments)

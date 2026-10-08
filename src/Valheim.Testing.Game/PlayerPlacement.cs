@@ -38,17 +38,20 @@ public static class PlayerPlacement
     /// client); with none, the client teleports its own player (<c>cli_teleport</c>), which needs the client's test access
     /// (cheats acknowledged and, on a client joined to a server, ValheimCLI's <c>AllowOnServerClients</c>) and is the way to
     /// place one of several players. Unless <paramref name="skipIntro"/> is false it first ends a first-join intro
-    /// (<see cref="SkipIntro"/>), a no-op for a character that has spawned before. Each transition is one bounded wait inside
-    /// the game, not repeated remote reads: ValheimCLI waits until the player can be teleported (the game silently drops a
+    /// (<see cref="SkipIntro"/>), a no-op for a character that has spawned before. Each transition is awaited inside
+    /// the game in bounded intervals, without repeatedly reading remote state: ValheimCLI waits until the player can be
+    /// teleported (the game silently drops a
     /// teleport within 2 s of a spawn or of the previous teleport), arms a one-hop trace, and after the one teleport request
     /// waits for the teleport to finish with a ready floor, then for supported arrival. A player shown flying is refused
-    /// before the teleport (see <see cref="SetFly"/>). With <paramref name="loadedGround"/>, the point's height is only the
+    /// before the teleport (see <see cref="SetFly"/>). The read-only game waits use short bounded intervals so cancellation
+    /// is checked between them; the trace stays armed and the teleport is never issued again. With
+    /// <paramref name="loadedGround"/>, the point's height is only the
     /// teleport target: once the floor is ready the client measures the loaded ground there (<see cref="TerrainProbe"/>,
     /// <c>loaded-ground</c>) and the landing must be supported at that height (<see cref="TeleportArrival.Target"/>). Use it
     /// for a check that is not about terrain, where a location's levelling can move the ground from the generator's height;
     /// a terrain check leaves it off, so a different ground fails. <paramref name="timeout"/> (at most 600 s) covers the
-    /// intro and every wait; each CLI wait is capped at 120 s. Nothing is retried: a lost reply is an unknown outcome, not a
-    /// failure to act. Needs <see cref="ArrivalCapabilities"/> on the client, and <c>valheim.world/terrain</c> with
+    /// intro and every wait. Only a named in-game wait timeout starts another interval; a lost reply is an unknown outcome,
+    /// not a failure to act. Needs <see cref="ArrivalCapabilities"/> on the client, and <c>valheim.world/terrain</c> with
     /// <paramref name="loadedGround"/>.
     /// </summary>
     public static TeleportArrival Arrive(GameActor? server, GameActor client, HeightExpectation point,
@@ -64,10 +67,8 @@ public static class PlayerPlacement
         cancellation.ThrowIfCancellationRequested();
         // One read, not a wait: a flying player is never supported, so refuse before anything moves.
         RefuseFlying(client.Observe(reading));
-        string ready = SecondsLeft(clock, timeout);
-        WithTimeout(client, timeout - clock.Elapsed, () =>
-            client.Execute($"cli_wait_teleportable {ready} 0 {!skipIntro}").RequireLine("OK: TELEPORTABLE ",
-                "The client never became ready for a teleport"));
+        WaitConsole(client, clock, timeout, cancellation, seconds => $"cli_wait_teleportable {seconds} 0 {!skipIntro}",
+            "OK: TELEPORTABLE ", "ERROR: code=teleport_ready_timeout ", "The client never became ready for a teleport");
         cancellation.ThrowIfCancellationRequested();
         string armed = client.Execute("cli_teleport_trace_arm").RequireLine("OK: TELEPORT_TRACE_ARM id=", "The client did not arm a teleport trace");
         if (!int.TryParse(armed["OK: TELEPORT_TRACE_ARM id=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int id) || id < 1)
@@ -78,10 +79,8 @@ public static class PlayerPlacement
         else
             client.Execute("cli_teleport " + at).RequireLine("OK: Teleported to ", "The client did not teleport its own player"); // Never a peer index.
         cancellation.ThrowIfCancellationRequested();
-        string trace = "";
-        WithTimeout(client, timeout - clock.Elapsed, () =>
-            trace = client.Execute($"cli_teleport_trace_wait {id} {SecondsLeft(clock, timeout)}").RequireLine(
-                "OK: TELEPORT_TRACE ", "The client did not complete its teleport"));
+        string trace = WaitConsole(client, clock, timeout, cancellation, seconds => $"cli_teleport_trace_wait {id} {seconds}",
+            "OK: TELEPORT_TRACE ", $"ERROR: code=teleport_trace_timeout id={id} ", "The client did not complete its teleport");
         var timing = TeleportTrace.Parse(trace, id);
         if (!timing.FloorAtDone)
             throw new InvalidOperationException("The game ended its teleport without a ready floor: " + trace + ". The teleport was not repeated.");
@@ -95,21 +94,58 @@ public static class PlayerPlacement
                 (x, z) => client.Observe(terrain, x.ToString("R", CultureInfo.InvariantCulture), z.ToString("R", CultureInfo.InvariantCulture), "loaded-ground")));
             point = point with { Height = ground.Samples[0].Actual };
         }
-        Observation landed = null!;
-        WithTimeout(client, timeout - clock.Elapsed, () => landed = client.Observe(support,
-            point.X.ToString("R", CultureInfo.InvariantCulture), point.Height.ToString("R", CultureInfo.InvariantCulture),
-            point.Z.ToString("R", CultureInfo.InvariantCulture), SecondsLeft(clock, timeout)));
+        Observation landed;
+        while (true)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            TimeSpan slice = WaitSlice(clock, timeout);
+            string seconds = slice.TotalSeconds.ToString("R", CultureInfo.InvariantCulture);
+            try
+            {
+                Observation result = null!;
+                WithTimeout(client, slice, () => result = client.Observe(support,
+                    point.X.ToString("R", CultureInfo.InvariantCulture), point.Height.ToString("R", CultureInfo.InvariantCulture),
+                    point.Z.ToString("R", CultureInfo.InvariantCulture), seconds));
+                landed = result;
+                break;
+            }
+            catch (InvalidOperationException error) when (GameActor.IsExtensionFailure(error, support.Path, "support_timeout"))
+            {
+                // The game's wait expired, but the observation is safe to ask again with the original arrival deadline.
+            }
+        }
         RefuseFlying(landed);
         if (!SurfaceProbe.Supported(landed, point))
             throw new InvalidOperationException($"The player did not settle at ({point.X}, {point.Height}, {point.Z}); the client's wait ended with: {landed.Data.GetRawText()}. The teleport was not repeated.");
         return new TeleportArrival(landed.Data.Clone(), trace, timing) { Target = point };
     }
 
-    private static string SecondsLeft(Stopwatch clock, TimeSpan timeout)
+    private static TimeSpan WaitSlice(Stopwatch clock, TimeSpan timeout)
     {
-        double left = (timeout - clock.Elapsed).TotalSeconds;
-        if (left <= 0) throw new TimeoutException("The arrival deadline expired; the teleport was not repeated.");
-        return Math.Min(120, left).ToString("R", CultureInfo.InvariantCulture);
+        TimeSpan left = timeout - clock.Elapsed;
+        if (left <= TimeSpan.Zero) throw new TimeoutException("The arrival deadline expired; the teleport was not repeated.");
+        return left < TimeSpan.FromSeconds(5) ? left : TimeSpan.FromSeconds(5);
+    }
+
+    private static string WaitConsole(GameActor client, Stopwatch clock, TimeSpan timeout, CancellationToken cancellation,
+        Func<string, string> command, string success, string gameTimeout, string failure)
+    {
+        while (true)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            TimeSpan slice = WaitSlice(clock, timeout);
+            string seconds = slice.TotalSeconds.ToString("R", CultureInfo.InvariantCulture);
+            GameReply reply = null!;
+            WithTimeout(client, slice, () =>
+                reply = client.Execute(command(seconds), requireAccepted: false));
+            if (reply.Accepted) return reply.RequireLine(success, failure);
+            // ValheimCLI marks the game's ERROR line as command_failed. A socket timeout or lost completion has a
+            // different transport code, and must never cause an action or wait to be replayed blindly.
+            if (reply.ErrorCode == "command_failed" &&
+                reply.Output.Count(GameReply.IsRefusalLine) == 1 &&
+                reply.Refusal?.StartsWith(gameTimeout, StringComparison.Ordinal) == true) continue;
+            reply.RequireAccepted();
+        }
     }
 
     private static void WithTimeout(GameActor actor, TimeSpan remaining, Action action)
