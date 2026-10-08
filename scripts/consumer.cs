@@ -33,10 +33,12 @@ using System.Text.RegularExpressions;
 
 const string NuGetOrg = "https://api.nuget.org/v3/index.json";
 const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
-string[] packed = ["Valheim.Testing", "Valheim.Testing.Game", "Valheim.Testing.GameSessions", "Valheim.Testing.Doubles", "Valheim.Testing.Adapter", "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 string[] tools = ["Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
 string root = FindRoot();
+string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
+    .Select(Path.GetFileName).OfType<string>()
+    .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj"))).Order(StringComparer.Ordinal).ToArray();
 string? feed = null, candidate = null;
 int waitMinutes = 0;
 for (int i = 0; i < args.Length; i++)
@@ -126,6 +128,7 @@ try
         using Valheim.Testing;
         using Valheim.Testing.Bindings;
         using Valheim.Testing.Game;
+        using Valheim.Testing.Game.Fakes;
         using Valheim.Testing.GameSessions;
 
         // 40 m at the origin, rising 0.5 m per metre in x: 41 m at x = 2.
@@ -133,6 +136,32 @@ try
         if (plane.GetHeight(2, 0) != 41f) { Console.Error.WriteLine("PlaneTerrain returned " + plane.GetHeight(2, 0)); return 1; }
         foreach (Type type in new[] { typeof(PlaneTerrain), typeof(GameActor), typeof(GameSession), typeof(BindingCheck) })
             Console.WriteLine($"{type.FullName}: {type.Assembly.GetName().Name} {type.Assembly.GetName().Version}");
+        // The public transport and Game package must agree on strict pins and schema-1 pack discovery.
+        var transport = new ScriptedTransport()
+            .Extension("valheim.session", "state", _ => new { })
+            .Extension("valheim.session", "save", _ => new { })
+            .Extension("valheim.session", "leave", _ => new { });
+        using var actor = transport.Actor("published-consumer");
+        CliCapabilities.Require(actor, CliCapabilities.HostedRounds);
+        try
+        {
+            CliCapabilities.Require(actor, CliCapabilities.HostedRounds.Append("valheim.world/terrain"));
+            Console.Error.WriteLine("The incomplete World Tools pack was accepted without valheim.world/terrain.");
+            return 2;
+        }
+        catch (InvalidOperationException error) when (error.Message.Contains("World Tools pack")) { }
+        int listings = transport.Count("cli_extensions");
+        int pinChecks = transport.Count("cli_expect");
+        transport.PinsHold = false;
+        bool refused = false;
+        try { CliCapabilities.Require(actor, CliCapabilities.HostedRounds); }
+        catch (InvalidOperationException) { refused = true; }
+        // The failed pin check did not reach capability discovery.
+        if (!refused || transport.Count("cli_expect") != pinChecks + 1 || transport.Count("cli_extensions") != listings)
+        {
+            Console.Error.WriteLine($"Strict-pin negative control failed: refused={refused}, cli_expect={transport.Count("cli_expect") - pinChecks} new call(s), cli_extensions={transport.Count("cli_extensions") - listings} new call(s).");
+            return 3;
+        }
         return 0;
         """);
     Run(env, app, "dotnet", "run", "--project", "Consumer.csproj", "-c", "Release");

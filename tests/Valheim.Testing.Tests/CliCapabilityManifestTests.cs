@@ -16,6 +16,18 @@ public sealed class CliCapabilityManifestTests : IDisposable
 
     private const string Core = "valheimCLI.dll", Standard = "Valheim.Cli.Standard.dll", WorldTools = "Valheim.Cli.WorldTools.dll";
 
+    [Fact] public void ReleasePackContractCoversTheToolkitsSessionAndTerrainCommands()
+    {
+        Assert.Equal(new[]
+        {
+            "valheim.session/join", "valheim.session/leave", "valheim.session/save", "valheim.session/state",
+            "valheim.session/teleport-signals", "valheim.world/player-support", "valheim.world/player-support-wait",
+            "valheim.world/terrain", "valheim.world/terrain-grid", "valheim.world/terrain-paint", "valheim.world/terrain-surface"
+        }, CliCapabilities.Toolkit);
+        Assert.All(CliCapabilities.HostedRounds.Concat(PlayerPlacement.ArrivalCapabilities),
+            capability => Assert.Contains(capability, CliCapabilities.Toolkit));
+    }
+
     // ---- the generator: what each DLL registers, read from its metadata and IL ----
 
     [Theory]
