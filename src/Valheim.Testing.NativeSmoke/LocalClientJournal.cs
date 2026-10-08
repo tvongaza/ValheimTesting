@@ -13,6 +13,7 @@ internal sealed class LocalClientJournal(ClientRunPlan plan, string evidence, bo
     private string? _startIdentity;
     private bool _intended;
     private bool _started;
+    internal IOwnedProcess? Process => _process;
 
     internal void Begin()
     {

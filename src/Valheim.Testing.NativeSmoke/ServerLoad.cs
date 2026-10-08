@@ -390,11 +390,13 @@ internal static class ServerLoad
         session.Report.Provenance["firstModLoadedSecondsFromCommand"] = clock.Elapsed.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture);
         session.Report.Step("dedicated server accepts a game connection", () => server.WaitUntilJoinable(server.Game));
         if (client != null)
+        {
+            ClientSession? opened = null;
             new ClientRounds
             {
                 Client = client, WorldUid = DefaultSmokeWorld.Uid, Report = session.Report, Output = session.Output,
                 OwnedServer = server, Rounds = ["first"], ProtectPlayer = false, Cancellation = session.Cancellation,
-            }.Run(server.Game, () => session.OpenClient(client), round =>
+            }.Run(server.Game, () => opened = session.OpenClient(client), round =>
             {
                 round.Step("clean client can read the joined world", () =>
                 {
@@ -403,12 +405,19 @@ internal static class ServerLoad
                         throw new InvalidDataException("The clean client has no ready player in the pinned world.");
                 });
                 if (hold)
-                    ForegroundHold.HoldAsync(session.Report.Provenance["runId"], GameSession.ActorOutput(session.Output, "client"),
-                        session.Cancellation).GetAwaiter().GetResult();
+                    round.Step("keep the owned server and client running until finish", () =>
+                        ForegroundHold.HoldAsync(session.Report.Provenance["runId"], GameSession.ActorOutput(session.Output, "client"),
+                            session.Cancellation,
+                            [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing.")),
+                             ("client", opened?.OwnedProcess ?? throw new InvalidOperationException("The owned client process is missing."))])
+                            .GetAwaiter().GetResult());
             });
+        }
         else if (hold)
-            ForegroundHold.HoldAsync(session.Report.Provenance["runId"], session.Output, session.Cancellation, client: false)
-                .GetAwaiter().GetResult();
+            session.Report.Step("keep the owned server running until finish", () =>
+                ForegroundHold.HoldAsync(session.Report.Provenance["runId"], session.Output, session.Cancellation,
+                    [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing."))], client: false)
+                    .GetAwaiter().GetResult());
         return Task.CompletedTask;
     }
 

@@ -147,10 +147,13 @@ try
         string armOutput = Path.Combine(output, "evidence", arm);
         LocalClientJournal? processJournal = null;
         var report = runner.Run(arm, armOutput, "selected plugin loads in a hosted fixture",
-            ["first"], _ =>
+            ["first"], round =>
             {
                 if (holdRunId != null && arm == inputs.Mod.Arms.Keys.Last())
-                    ForegroundHold.HoldAsync(holdRunId, armOutput, cancel.Token).GetAwaiter().GetResult();
+                    round.Step("keep the owned client running until finish", () =>
+                        ForegroundHold.HoldAsync(holdRunId, armOutput, cancel.Token,
+                            [("client", processJournal?.Process ?? throw new InvalidOperationException("The owned client process was not recorded."))])
+                            .GetAwaiter().GetResult());
             }, cancel.Token, afterPinnedClientOpened: ready =>
             {
                 if (holdRunId != null) ready.Provenance["runId"] = holdRunId;

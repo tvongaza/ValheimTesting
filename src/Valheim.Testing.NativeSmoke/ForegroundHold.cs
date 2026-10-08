@@ -36,13 +36,15 @@ internal sealed class ForegroundHold : IDisposable
         return new ForegroundHold(marker, request, identity);
     }
 
-    internal static async Task HoldAsync(string run, string evidence, CancellationToken cancellation, bool client = true)
+    internal static async Task HoldAsync(string run, string evidence, CancellationToken cancellation,
+        IReadOnlyList<(string Name, IOwnedProcess Process)> processes, bool client = true)
     {
+        if (processes.Count == 0) throw new ArgumentException("A hold needs at least one owned process to watch.", nameof(processes));
         using var hold = Open(run, evidence);
         Console.WriteLine("HELD run " + run + "; finish from another shell with: " + FinishUsage.Replace("ID", run, StringComparison.Ordinal));
         if (client) Console.WriteLine("Pinned client commands: valheim-test cli --evidence " + evidence + " --phase world --command cli_screenshot");
         Console.Out.Flush();
-        try { await hold.WaitAsync(cancellation).ConfigureAwait(false); }
+        try { await hold.WaitAsync(cancellation, processes).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
     }
 
@@ -63,7 +65,37 @@ internal sealed class ForegroundHold : IDisposable
         }
     }
 
-    internal async Task WaitAsync(CancellationToken cancellation)
+    internal Task WaitAsync(CancellationToken cancellation) => WaitForFinishAsync(cancellation);
+
+    internal async Task WaitAsync(CancellationToken cancellation, IReadOnlyList<(string Name, IOwnedProcess Process)> processes)
+    {
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        var elapsed = Stopwatch.StartNew();
+        Task finish = WaitForFinishAsync(waiting.Token);
+        Task<int>[] exits = processes.Select(actor => actor.Process.WaitForExitAsync(waiting.Token)).ToArray();
+        try
+        {
+            Task completed = await Task.WhenAny([finish, .. exits]).ConfigureAwait(false);
+            // A client that exited at the same time as finish is still an unexpected exit: the
+            // holding runner has not started its teardown yet.
+            for (int i = 0; i < exits.Length; i++)
+                if (exits[i].IsCompleted && (completed == exits[i] || !cancellation.IsCancellationRequested))
+                {
+                    int code = await exits[i].ConfigureAwait(false);
+                    throw new InvalidOperationException($"Held {processes[i].Name} exited during the hold with code {code} after {elapsed.Elapsed.TotalSeconds:F1} s.");
+                }
+            await finish.ConfigureAwait(false);
+        }
+        finally
+        {
+            waiting.Cancel();
+            try { await finish.ConfigureAwait(false); } catch (OperationCanceledException) when (waiting.IsCancellationRequested) { }
+            foreach (Task<int> exit in exits)
+                try { await exit.ConfigureAwait(false); } catch (OperationCanceledException) when (waiting.IsCancellationRequested) { }
+        }
+    }
+
+    private async Task WaitForFinishAsync(CancellationToken cancellation)
     {
         using var watcher = new FileSystemWatcher(Path.GetDirectoryName(_request)!)
         { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite, EnableRaisingEvents = true };
@@ -111,6 +143,33 @@ internal sealed class ForegroundHold : IDisposable
             throw new InvalidOperationException("The holding runner is gone; use valheim-test env status and env recover for its run.");
         }
         using var request = new FileStream(Path.Combine(directory, run + ".finish"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+    }
+
+    // Recovery already proved the run has no live owner or owned game. Retire only the marker
+    // naming that run, and never remove a marker whose exact owner is still alive.
+    internal static void RetireRecovered(string run, string? directory = null)
+    {
+        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+        directory ??= DirectoryForThisMachine;
+        string marker = Path.Combine(directory, run + ".json");
+        if (!File.Exists(marker)) return;
+        string source = File.ReadAllText(marker);
+        var identity = JsonSerializer.Deserialize<Marker>(source)
+            ?? throw new InvalidDataException("The hold marker is empty.");
+        if (identity.Run != run || identity.Pid <= 0 || identity.Started.Length == 0)
+            throw new InvalidDataException("The hold marker has an invalid owner.");
+        bool ownerAlive = false;
+        try
+        {
+            using var process = Process.GetProcessById(identity.Pid);
+            if (!process.HasExited)
+                ownerAlive = process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture) == identity.Started;
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        if (ownerAlive) throw new InvalidOperationException("The holding runner is still alive; finish it instead of recovering it.");
+        if (File.ReadAllText(marker) != source) throw new IOException("The hold marker changed during recovery.");
+        File.Delete(Path.Combine(directory, run + ".finish"));
+        File.Delete(marker);
     }
 
     public void Dispose()

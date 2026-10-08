@@ -114,6 +114,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     public IReadOnlyList<int> StartedProcesses => _session?.StartedProcesses ?? [];
     /// <summary>How each boot ended, in boot order, restarts included.</summary>
     public IReadOnlyList<ProcessStop> Stops => _session?.Stops ?? [];
+    internal IOwnedProcess? CurrentProcess => _session?.CurrentProcess;
     /// <summary>
     /// The current boot's live BepInEx log, for a scenario's in-run log reads: on this machine only (null when the server runs
     /// on a host, where <see cref="Lobby"/> reads its log there).
