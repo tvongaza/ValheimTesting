@@ -17,6 +17,16 @@ public class InteractiveClientTests
         Assert.False(DesktopClientSession.NeedsDesktopTask(7));
         Assert.True(DesktopClientSession.NeedsDesktopTask(0));
     }
+    [Fact] public async Task DesktopPreflightUsesTheSameSessionChoiceAsLaunch()
+    {
+        int checks = 0;
+        using var replacement = DesktopClientSession.ReplacePreflightForTest(_ => { checks++; return Task.CompletedTask; });
+        await DesktopClientSession.PreflightForSessionAsync(1);
+        await DesktopClientSession.PreflightForSessionAsync(7);
+        Assert.Equal(0, checks);
+        await DesktopClientSession.PreflightForSessionAsync(0);
+        Assert.Equal(1, checks);
+    }
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
     private const string WindowsInstall = @"C:\Games\Valheim";
     private const string WindowsLaunch = @"C:\ValheimTesting\runs\run-42\client";

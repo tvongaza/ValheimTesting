@@ -30,11 +30,17 @@ internal static class DesktopClientSession
         public void Dispose() => s_preflightForTest.Value = previous;
     }
 
-    /// <summary>Refuses without a side effect if this runner cannot reach one Steam-backed Windows desktop session.</summary>
+    /// <summary>Checks the desktop only when this runner needs a task to leave Windows session 0.</summary>
     public static Task PreflightAsync(CancellationToken cancellation = default)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("A desktop task is only needed for a Windows client started from an SSH session.");
+        return PreflightForSessionAsync(Process.GetCurrentProcess().SessionId, cancellation);
+    }
+
+    internal static Task PreflightForSessionAsync(int currentSessionId, CancellationToken cancellation = default)
+    {
+        if (!NeedsDesktopTask(currentSessionId)) return Task.CompletedTask;
         if (s_preflightForTest.Value is { } substitute) return substitute(cancellation);
         return InteractiveClient.RequireWindowsDesktopAsync(new LocalGameHost("this machine", HostShell.WindowsPowerShell), cancellation);
     }
