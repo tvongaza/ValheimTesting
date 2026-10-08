@@ -12,6 +12,28 @@ public sealed class RunJournalTests : IDisposable
     private static LocalGameHost Host() => OperatingSystem.IsWindows()
         ? new LocalGameHost("journal-host", HostShell.WindowsPowerShell) : new LocalGameHost("journal-host", HostShell.Bash);
 
+    [Fact] public async Task AnUnfinishedMacLaunchIsNotMistakenForTheGame()
+    {
+        Assert.Equal(ProbedState.Starting, HostProcessProbe.ParseState("starting"));
+        Assert.NotEqual(ProbedState.Same, HostProcessProbe.ParseState("starting"));
+        if (!OperatingSystem.IsMacOS()) return;
+        // Hold ps at the arch wrapper through every settle attempt. The real probe must not hash it as the game.
+        string script = """
+            ps() { case "$*" in *stat=*) echo S ;; *lstart=*) echo 'Thu Oct  8 10:00:00 2026' ;; *command=*) echo '/usr/bin/arch -arm64 -e DYLD_LIBRARY_PATH=/tmp /tmp/Valheim' ;; esac; }
+            sleep() { :; }
+            processes=123:; settle=1
+            """ + "\n" + HostProcessProbe.Mac;
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/bash")
+        {
+            ArgumentList = { "-c", script }, RedirectStandardOutput = true, RedirectStandardError = true,
+        })!;
+        string output = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.Equal(0, process.ExitCode);
+        Assert.Contains("VT-PROC 123 - starting ", output);
+        Assert.Contains("VT-PROC-END", output);
+    }
+
     [Fact] public async Task EntriesAreAppendedPerActorAndReadBackExactlyThroughTheHostsShell()
     {
         var host = Host();

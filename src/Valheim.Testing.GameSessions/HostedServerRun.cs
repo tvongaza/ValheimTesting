@@ -26,6 +26,7 @@ internal sealed class HostedServerRun : IServerPlacement
     private CliTunnel? _tunnel;
     private HostListing? _runtime;
     private HostedWorld? _macWorld;
+    private MacServerLists? _macLists;
     private bool _serverMayRun;
     // A standalone run's own copies on the server host, journalled before their scripts run (#257): from then on teardown
     // removes them, even a partial one, or leaves them open in the journal for env recover.
@@ -149,6 +150,13 @@ internal sealed class HostedServerRun : IServerPlacement
             await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, Quick, cancellation)).ConfigureAwait(false);
         await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         await NoteLockAsync(Host, Role.Host, _lock!, JournalEntry.LockHeld).ConfigureAwait(false);
+        if (LocalMac)
+            await report.StepAsync(StepPhase.Setup, "preserve the Mac server's user-level access lists", async () =>
+            {
+                _macLists = MacServerLists.Capture(WorldDirectory, Path.Combine(RunDirectory, "server-lists"));
+                await JournalAsync(Host, Role.Host, "server", _macLists.Captured(), cancellation).ConfigureAwait(false);
+                _macLists.Isolate();
+            }).ConfigureAwait(false);
         // Only an unpinned plan may leave out the manifest; the copy is then recorded as found.
         bool verified = pinned || plan.Runtime.Sha256.Count != 0;
         if (Prepared)
@@ -418,6 +426,19 @@ internal sealed class HostedServerRun : IServerPlacement
             }
             else
                 await Try("keep the Mac server's world for recovery", () => throw new IOException("The server may still run; its world remains journalled under the host lock.")).ConfigureAwait(false);
+        }
+        if (_macLists != null)
+        {
+            if (serverStopped || !launched && !_serverMayRun)
+            {
+                int before = failures.Count;
+                await Try("restore the Mac server's user-level access lists", () => { _macLists.Restore(); return Task.CompletedTask; }).ConfigureAwait(false);
+                if (failures.Count == before)
+                    await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.MacListsRestored, ("backup", Path.Combine(RunDirectory, "server-lists")))).ConfigureAwait(false);
+                else serverStopped = false; // the lock and backup stay for env recover
+            }
+            else
+                await Try("keep the Mac server's access lists for recovery", () => throw new IOException("The server may still run; its access-list backup remains journalled under the host lock.")).ConfigureAwait(false);
         }
         if (launched && _world >= WorldCopy.Shipped && serverStopped)
         {

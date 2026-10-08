@@ -12,6 +12,8 @@ internal enum ProbedState
     Reused,
     /// <summary>The process with that ID started at the journalled time.</summary>
     Same,
+    /// <summary>The launch wrapper still runs after the bounded wait; it has not executed the game yet.</summary>
+    Starting,
     /// <summary>The host could not tell (the start time could not be read, or the reply named nothing).</summary>
     Unreadable,
 }
@@ -58,7 +60,7 @@ internal static class HostProcessProbe
             // VT-PROC <pid> <start asked, or -> <state> <start read, or -> <sha256, or ->
             var parts = line.Trim().Split(' ');
             if (parts.Length != 6 || parts[0] != "VT-PROC" || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out int pid)) continue;
-            var state = parts[3] switch { "gone" => ProbedState.Gone, "reused" => ProbedState.Reused, "same" => ProbedState.Same, _ => ProbedState.Unreadable };
+            var state = ParseState(parts[3]);
             string? Read(string value) => value == "-" ? null : value;
             found[(pid, Read(parts[2]) ?? "")] = new(pid, state, Read(parts[4]), Read(parts[5]) is { Length: 64 } hash && hash.All(Uri.IsHexDigit) ? hash.ToLowerInvariant() : null);
         }
@@ -66,6 +68,12 @@ internal static class HostProcessProbe
         foreach (var process in processes) found.TryAdd(process, new(process.Pid, ProbedState.Unreadable, null, null));
         return found;
     }
+
+    internal static ProbedState ParseState(string value) => value switch
+    {
+        "gone" => ProbedState.Gone, "reused" => ProbedState.Reused, "same" => ProbedState.Same,
+        "starting" => ProbedState.Starting, _ => ProbedState.Unreadable,
+    };
 
     /// <summary>
     /// The command-line hash of a process just started, for its journal entry; null (with a warning) when the host could not
@@ -136,6 +144,9 @@ internal static class HostProcessProbe
           fi
           command=$(LC_ALL=C ps -ww -p "$id" -o command= 2>/dev/null) || command=
           if [ -z "$command" ]; then echo "VT-PROC $id $asked unreadable $identity -"; continue; fi
+          case "$command" in
+            /usr/bin/arch\ *|arch\ *) echo "VT-PROC $id $asked starting $identity -"; continue ;;
+          esac
           hash=$(printf '%s' "$command" | shasum -a 256 | awk '{print $1}')
           echo "VT-PROC $id $asked same $identity $hash"
         done

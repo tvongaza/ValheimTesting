@@ -44,6 +44,24 @@ public sealed class RunJournalStatusTests : IDisposable
 
     private static JournalRunStatus Run(JournalStatusReport report, string run) => Assert.Single(report.Runs, status => status.Run == run);
 
+    [Fact] public async Task ACapturedMacAccessListStaysVisibleUntilRestorationIsJournalled()
+    {
+        const string run = "run-mac-lists";
+        const string backup = "/runs/run-mac-lists/server-lists";
+        Line(_host, run, "server", Gone, JournalEntry.MacListsCaptured,
+            ("saveRoot", "/Users/test/Library/Application Support/IronGate/Valheim"), ("backup", backup),
+            ("admin", "-"), ("permitted", "-"), ("banned", "-"));
+        var pending = Run(await InspectAsync(), run);
+        Assert.Equal(JournalRunState.Recoverable, pending.State);
+        var item = Assert.Single(pending.Items);
+        Assert.Equal("mac-lists", item.Kind);
+        Assert.Equal("user access lists captured, not restored", item.Status);
+
+        Line(_host, run, "server", Gone, JournalEntry.MacListsRestored, ("backup", backup));
+        var restored = Run(await InspectAsync(), run);
+        Assert.Empty(restored.Items);
+    }
+
     [Fact] public async Task ARunThatEndedAndRetiredEverythingLeftNothingAndAnInterruptedOneNamesEachThingItLeft()
     {
         // Over: copied, retired, its lock released, its end journalled.

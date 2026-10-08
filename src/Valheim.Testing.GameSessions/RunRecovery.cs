@@ -209,9 +209,10 @@ internal static class RunRecovery
         }
 
         // 2b. Each host's characters and prepared copies, under its lock, once no process of the run is left on it.
-        foreach (var group in Of("character").Concat(Of("copy").Where(item => !Local(item))).GroupBy(item => item.Host, StringComparer.Ordinal))
+        foreach (var group in Of("mac-lists").Concat(Of("character")).Concat(Of("copy").Where(item => !Local(item))).GroupBy(item => item.Host, StringComparer.Ordinal))
         {
             var host = connections[group.Key];
+            var lists = group.Where(item => item.Kind == "mac-lists").ToList();
             var characters = group.Where(item => item.Kind == "character").ToList();
             var copies = group.Where(item => item.Kind == "copy").ToList();
             if (Failed(group.Key))
@@ -228,6 +229,20 @@ internal static class RunRecovery
                     claim = await host.AcquireLockAsync(hosts[group.Key].Lock, "recover " + runId, timeout, cancellation).ConfigureAwait(false);
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout, runtimes: copies.Select(copy => copy.What).ToList(), clientSession: characters.Count != 0)
                     .ConfigureAwait(false);
+                foreach (var item in lists)
+                {
+                    try
+                    {
+                        if (host.Kind != GameHostKind.Local || !OperatingSystem.IsMacOS())
+                            throw new InvalidDataException("Mac server access lists can be restored only on their local Mac host.");
+                        MacServerLists.FromJournal(item.Fields, runId).Restore();
+                        Step(group.Key, "Mac server access lists", "restored; versions written during the run kept in its backup");
+                        await Note(group.Key, JournalEntry.Of(JournalEntry.MacListsRestored, ("backup", item.Fields["backup"]))).ConfigureAwait(false);
+                    }
+                    catch (Exception error) when (error is not OperationCanceledException)
+                    { Step(group.Key, "Mac server access lists", "not restored: " + error.Message, failed: true); }
+                }
+                if (Failed(group.Key)) continue; // preserve the run's other copies and lock until its user files are restored
                 foreach (var character in characters)
                 {
                     string what = $"character {character.What}";
