@@ -212,6 +212,9 @@ jobs:
           refused versions "cli-dependency.json:[0-9]*: names the candidate version"
           sed -i -E 's/(Include="Valheim\.Testing\.Cli" Version="\[[^]]+)\]/\1-candidate.0000000]/' src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
           refused versions "src/Valheim.Testing.Game/Valheim.Testing.Game.csproj:[0-9]*: names the candidate version"
+          # A fork move cannot silently reuse the transport's published version: the package on NuGet.org keeps its old bytes.
+          sed -i -E 's/("packageVersion": ")[^"]+"/\10.1.0-preview.8"/' cli-dependency.json
+          refused versions "Valheim.Testing.Cli 0.1.0-preview.8 is already on NuGet.org from fork commit"
           # A source version older than its release.
           sed -i -E 's#<Version>[^<]+</Version>#<Version>0.1.0-preview.1</Version>#' src/Valheim.Testing.Doubles/Valheim.Testing.Doubles.csproj
           refused versions "Valheim.Testing.Doubles 0.1.0-preview.1 in source is older than the release"

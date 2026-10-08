@@ -126,6 +126,7 @@ try
         using Valheim.Testing;
         using Valheim.Testing.Bindings;
         using Valheim.Testing.Game;
+        using Valheim.Testing.Game.Fakes;
         using Valheim.Testing.GameSessions;
 
         // 40 m at the origin, rising 0.5 m per metre in x: 41 m at x = 2.
@@ -133,6 +134,23 @@ try
         if (plane.GetHeight(2, 0) != 41f) { Console.Error.WriteLine("PlaneTerrain returned " + plane.GetHeight(2, 0)); return 1; }
         foreach (Type type in new[] { typeof(PlaneTerrain), typeof(GameActor), typeof(GameSession), typeof(BindingCheck) })
             Console.WriteLine($"{type.FullName}: {type.Assembly.GetName().Name} {type.Assembly.GetName().Version}");
+        // The public transport and Game package must agree on strict pins and schema-1 pack discovery.
+        var transport = new ScriptedTransport()
+            .Extension("valheim.session", "state", _ => new { })
+            .Extension("valheim.session", "save", _ => new { })
+            .Extension("valheim.session", "leave", _ => new { });
+        using var actor = transport.Actor("published-consumer");
+        CliCapabilities.Require(actor, CliCapabilities.HostedRounds);
+        try { CliCapabilities.Require(actor, CliCapabilities.HostedRounds.Append("valheim.world/terrain")); return 2; }
+        catch (InvalidOperationException error) when (error.Message.Contains("World Tools pack")) { }
+        int listings = transport.Count("cli_extensions");
+        int pinChecks = transport.Count("cli_expect");
+        transport.PinsHold = false;
+        bool refused = false;
+        try { CliCapabilities.Require(actor, CliCapabilities.HostedRounds); }
+        catch (InvalidOperationException) { refused = true; }
+        // The failed pin check did not reach capability discovery.
+        if (!refused || transport.Count("cli_expect") != pinChecks + 1 || transport.Count("cli_extensions") != listings) return 3;
         return 0;
         """);
     Run(env, app, "dotnet", "run", "--project", "Consumer.csproj", "-c", "Release");

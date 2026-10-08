@@ -38,6 +38,8 @@
 // local build identity, and NuGet.org never lets a published id/version be replaced. Checked are each packed project's
 // <Version> and Valheim.Testing* PackageReferences, and the Cli packageVersion in cli-dependency.json. It also refuses a
 // source version older than the release recorded in toolkit-versions.json. A candidate may sit on main between releases.
+// A transport version already on NuGet.org must name the same fork commit as cli-dependency.json: --skip-duplicate would
+// otherwise keep old transport bytes while the newly built Game and bundled plugins use the new fork commit.
 // And it refuses a change under a published version in a package the valheim-test tool embeds (#363): the tool ships the
 // DLLs of the projects it references (GameSessions, and Game and Valheim.Testing through it), and the consumer its `init`
 // creates restores those versions from NuGet.org. So when NuGet.org already serves such a package's source <Version>, its directory and
@@ -235,11 +237,26 @@ async Task<int> Versions()
     problems.AddRange(SourceOlderThanReleased(stated, released));
     problems.AddRange(DependentsNotBumped(stated, released));
     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    problems.AddRange(await ChangedCliUnderPublishedVersion(http, stated));
     var embedded = ProjectClosure(Tool);
     foreach (var found in await Task.WhenAll(embedded.Select(id => ChangedUnderPublishedVersion(http, stated, id))))
         problems.AddRange(found);
     return Report(problems, $"No candidate version in the {stated.Count} release versions and dependencies, none older than {VersionsFile}, " +
         $"and each package the {Tool} tool embeds ({string.Join(", ", embedded)}) is a new version or the source NuGet.org's copy was built from.");
+}
+
+async Task<List<Problem>> ChangedCliUnderPublishedVersion(HttpClient http, List<Pin> stated)
+{
+    if (stated.FirstOrDefault(pin => pin.Id == Cli && pin.Declares) is not { } source || IsCandidate(source.Version)
+        || !NuGetVersion.TryParse(source.Version, out NuGetVersion? version)) return []; // Refused above.
+    string v = version.ToNormalizedString().ToLowerInvariant();
+    if (await Get(http, $"{FlatContainer}/valheim.testing.cli/{v}/valheim.testing.cli.nuspec") is not { } published) return []; // New version.
+    using JsonDocument pin = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "cli-dependency.json")));
+    string wanted = pin.RootElement.GetProperty("commit").GetString()!;
+    string actual = NuspecCommit(XDocument.Parse(published)) ?? "(no commit recorded)";
+    if (actual.Equals(wanted, StringComparison.OrdinalIgnoreCase)) return [];
+    return [new(source.File, source.Line, $"{Cli} {source.Version} is already on NuGet.org from fork commit {actual}, but cli-dependency.json pins {wanted}. " +
+        "Bump packageVersion and its Game dependency; --skip-duplicate cannot replace the published transport.")];
 }
 
 // Same id, different bytes, for a package the tool embeds: when NuGet.org already serves the source version, the package's

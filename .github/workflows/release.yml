@@ -123,8 +123,16 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet run scripts/consumer.cs -- --feed nuget --wait-minutes 30
+      # Hash the bytes NuGet.org actually serves. A local rebuild of an already-published version can differ,
+      # and the transport's published nuspec must name the fork commit this tag pins.
+      - name: Record the published transport and package contract
+        run: dotnet run scripts/release-contract.cs -- --output release-contract.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-contract
+          path: release-contract.json
   github-release:
-    needs: publish
+    needs: [publish, consumer]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -133,6 +141,10 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: release-notes
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-contract
           path: dist
       - name: Create the GitHub release
         env:
@@ -151,12 +163,13 @@ jobs:
             cat dist/notes/packages.md
             echo
             echo "The new packages and their SHA-256 checksums are attached. Pin exact versions; see [package versions and feeds](https://github.com/$GITHUB_REPOSITORY/blob/main/docs/getting-started.md#package-versions-and-feeds)."
+            echo "The attached release-contract.json records the exact published bytes of all nine compatible packages, the ValheimCLI fork and required commands, and the shipped loader."
           } > dist/notes.md
           # Package IDs have no hyphen, so one in a file name is a prerelease version.
           prerelease=()
           for f in "${new[@]}"; do
             case "${f##*/}" in *-*) prerelease=(--prerelease) ;; esac
           done
-          gh release create "$GITHUB_REF_NAME" "${new[@]}" dist/SHA256SUMS \
+          gh release create "$GITHUB_REF_NAME" "${new[@]}" dist/SHA256SUMS dist/release-contract.json \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
             --notes-file dist/notes.md --generate-notes "${prerelease[@]}"

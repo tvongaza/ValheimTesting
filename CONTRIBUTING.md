@@ -23,6 +23,8 @@ Only adopting the library in your mod? Use [Bring your mod](docs/adopting.md) fi
 
 For a change spanning repositories, link the companion PRs and state which dependency is required. The fork and exact transport revision currently used here are recorded in [`cli-dependency.json`](cli-dependency.json). Do not assume upstream or every installed ValheimCLI already exposes a preview capability.
 
+For a fork, transport-package or command-pack update, follow the [ValheimCLI release contract](docs/valheimcli-release-contract.md). The release workflow checks NuGet.org's published package bytes against that pin and attaches the resulting contract to the GitHub release.
+
 ## Set up and validate locally
 
 Fork the repository, clone your fork, and make a focused branch from current `main`. Check existing edits before starting. The [setup guide](docs/getting-started.md) covers prerequisites and package consumption. From the repository root:
