@@ -11,11 +11,29 @@ namespace Valheim.Testing.GameSessions;
 /// </summary>
 internal static class DesktopClientSession
 {
+    private static readonly AsyncLocal<Func<CancellationToken, Task>?> s_preflightForTest = new();
+
+    // The NativeSmoke offline fixture has no interactive Windows desktop. Scope only that fixture's initial guard;
+    // Open still performs the real desktop check before it launches a client.
+    internal static IDisposable ReplacePreflightForTest(Func<CancellationToken, Task> replacement)
+    {
+        ArgumentNullException.ThrowIfNull(replacement);
+        var previous = s_preflightForTest.Value;
+        s_preflightForTest.Value = replacement;
+        return new PreflightReset(previous);
+    }
+
+    private sealed class PreflightReset(Func<CancellationToken, Task>? previous) : IDisposable
+    {
+        public void Dispose() => s_preflightForTest.Value = previous;
+    }
+
     /// <summary>Refuses without a side effect if this runner cannot reach one Steam-backed Windows desktop session.</summary>
     public static Task PreflightAsync(CancellationToken cancellation = default)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("A desktop task is only needed for a Windows client started from an SSH session.");
+        if (s_preflightForTest.Value is { } substitute) return substitute(cancellation);
         return InteractiveClient.RequireWindowsDesktopAsync(new LocalGameHost("this machine", HostShell.WindowsPowerShell), cancellation);
     }
 
