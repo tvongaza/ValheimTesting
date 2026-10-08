@@ -148,6 +148,8 @@ public sealed class RegressionClient
     /// <summary>An existing disposable <b>local</b> character's file name without <c>.fch</c>, never a cloud character.</summary>
     public string Character { get; set; } = "";
     public string[] LaunchArguments { get; set; } = [];
+    /// <summary>The owned client's requested slice; empty inherits its inventory environment.</summary>
+    public string Architecture { get; set; } = "";
     /// <summary>Non-secret variables set only in the disposable client's process. Loader overrides are refused.</summary>
     public Dictionary<string, string> Environment { get; set; } = new(StringComparer.Ordinal);
     public int StartSeconds { get; set; } = 300;
@@ -157,6 +159,8 @@ public sealed class RegressionClient
 
     public void Validate()
     {
+        if (Architecture is not ("" or "x64" or "arm64"))
+            throw new ArgumentException("client.architecture: use x64 or arm64.");
         if (Character.Length == 0 || Character.Any(char.IsWhiteSpace) || Character.EndsWith(".fch", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("client.character: give the disposable local character's file name, without .fch.");
         if (CharacterStore != null && !Path.IsPathFullyQualified(CharacterStore)) throw new ArgumentException("client.characterStore: give the full path of a registered disposable character store.");
@@ -372,6 +376,8 @@ public sealed class TargetedRegression
     public int Port { get; }
     /// <summary>The client environment's loader package, when it names one.</summary>
     public string? LoaderPackage { get; }
+    /// <summary>The effective client slice selected by the inputs or inventory.</summary>
+    public string Architecture { get; }
     /// <summary>What the inventory detected and assumed for this machine (<see cref="EnvironmentInventory.Detected"/>), for a caller to print.</summary>
     public IReadOnlyList<string> Detected { get; }
     /// <summary>This machine's detected Steam <c>userdata</c>, which a registered character is checked against; null when none was detected.</summary>
@@ -409,6 +415,9 @@ public sealed class TargetedRegression
                 "name a client environment on this machine.");
         ClientEnvironment = recipe.Name;
         Game = recipe.Install; Port = recipe.CliPort; LoaderPackage = recipe.LoaderPackage;
+        Architecture = inputs.Client.Architecture.Length == 0 ? recipe.Architecture : inputs.Client.Architecture;
+        if (Architecture == "arm64" && host.Platform != "macos")
+            throw new ArgumentException("client.architecture arm64 needs a macOS client environment.");
         Install = Path.Combine(recipe.Runtime, "regression-" + inputs.Name);
         SteamUserData = inventory.SteamUserData;
         Detected = inventory.Detected;
@@ -480,6 +489,10 @@ public sealed class TargetedRegression
         if (env.Probe != null && Read(env.Probe.File).Plugins.Count == 0)
             throw new InvalidOperationException($"probe: {env.Probe.File} declares no [BepInPlugin]; a probe is a plugin.");
 
+        // A direct regression.json consumer gets the same refusal as valheim-test start, before its large game copy.
+        if (Architecture == "arm64")
+            GameLaunch.RequireClientArchitecture(Game, ClientArchitecture.Arm64,
+                LoaderPackage == null ? null : BepInExLoaderPackage.Read(LoaderPackage).Root);
         string install = PrepareInstall();
         string plugins = Path.Combine(install, "BepInEx", "plugins");
         var staged = new List<(StagedFile File, PluginAssembly Metadata)>();
@@ -536,6 +549,7 @@ public sealed class TargetedRegression
         var plan = new ClientRunPlan
         {
             Mode = "owned", Install = install, Port = Port, Character = env.Client.Character,
+            Architecture = Architecture,
             LaunchArguments = env.Client.LaunchArguments, Environment = env.Client.Environment,
             StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
             Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),

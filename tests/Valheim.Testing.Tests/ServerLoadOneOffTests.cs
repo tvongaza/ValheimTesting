@@ -12,6 +12,17 @@ public sealed class ServerLoadOneOffTests : IDisposable
     public void Dispose() => _rig.Dispose();
 
     private static readonly CampaignPreflightReport Ready = new([]);
+    [Fact]
+    public void JoinedClientArchitectureOverridesTheInventoryAndServerOnlyRejectsIt()
+    {
+        var recipe = new EnvironmentRecipe { Architecture = "x64" };
+        Assert.Equal("arm64", ClientArchitectureChoice.Select("arm64", recipe));
+        Assert.Equal("x64", ClientArchitectureChoice.Select(null, recipe));
+        Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "arm64"], out var parsed, out _));
+        Assert.Equal("arm64", parsed!.Options["--client-architecture"]);
+        Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--server-only", "--client-architecture", "arm64"], out _, out _));
+        Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "native"], out _, out _));
+    }
     private string Adapter() => _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
         RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
 

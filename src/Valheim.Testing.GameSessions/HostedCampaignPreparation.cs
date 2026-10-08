@@ -16,6 +16,8 @@ public sealed class HostedCampaignRole
     public List<string> DifferentHostFrom { get; set; } = [];
     /// <summary>Optional local manifest for a reviewed loader/core set applied only to the disposable runtime.</summary>
     public string? LoaderPackage { get; set; }
+    /// <summary>Client only: x64 or arm64; empty inherits the selected environment's architecture.</summary>
+    public string Architecture { get; set; } = "";
     public List<HostedRuntimeFile> Files { get; set; } = [];
     /// <summary>Client only: a registered character with a fresh filename and its host's local save folders.</summary>
     public HostedCampaignCharacter? Character { get; set; }
@@ -73,6 +75,8 @@ public sealed class HostedCampaignManifest
             throw new InvalidDataException("join is the dedicated server's address; a campaign without a server has none (its peers join the hosting client).");
         void Resolve(HostedCampaignRole role)
         {
+            if (role.Architecture is not ("" or "x64" or "arm64"))
+                throw new InvalidDataException("A campaign client's architecture is x64 or arm64 (or empty to inherit its environment).");
             if (string.IsNullOrWhiteSpace(role.DependencyLock)) throw new InvalidDataException("Every campaign role needs its own reviewed dependencyLock.");
             if (role.EnvironmentCandidates == null || role.DifferentHostFrom == null || role.Files == null)
                 throw new InvalidDataException("A campaign role's environmentCandidates, differentHostFrom and files must be lists, not null.");
@@ -84,7 +88,12 @@ public sealed class HostedCampaignManifest
             if (role.Character != null && !string.IsNullOrWhiteSpace(role.Character.Store))
                 role.Character.Store = Path.GetFullPath(role.Character.Store, directory);
         }
-        if (manifest.Server != null) Resolve(manifest.Server);
+        if (manifest.Server != null)
+        {
+            if (!string.IsNullOrEmpty(manifest.Server.Architecture))
+                throw new InvalidDataException("A dedicated server role does not select a client architecture.");
+            Resolve(manifest.Server);
+        }
         foreach (var client in manifest.Clients.Values) Resolve(client);
         return manifest;
     }
@@ -207,6 +216,8 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         client.InPlace = false;
         client.Mode = "owned";
         client.Install = role.Install;
+        if (client.Architecture.Length == 0)
+            client.Architecture = manifest.Clients[name].Architecture.Length != 0 ? manifest.Clients[name].Architecture : role.Architecture;
         client.Port = role.CliPort;
         client.InstallPins = HostInstall.Pins(Listings[name]);
         client.Pins = Bound(client.Pins, PluginPins(name));

@@ -1,7 +1,31 @@
 using Xunit;
+using Valheim.Testing.Game;
 
 public sealed class NativeSmokeOutputTests
 {
+    [Fact]
+    public void Arm64OneShotRefusesAStockMacLoaderBeforeAnyCopy()
+    {
+        using var stock = ClientLaunchTests.Install.Mac();
+        using var native = ClientLaunchTests.Install.Mac(packDoorstop: false, arm64Doorstop: true, core: new Version(25, 3, 4));
+        var inventory = new EnvironmentInventory { Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = "macos" } } };
+        var recipe = new EnvironmentRecipe { Name = "local-client", Host = "local", Roles = ["client"], Install = stock.Root };
+        string refusal = Assert.Throws<InvalidOperationException>(() =>
+            ClientArchitectureChoice.RequireLocal(inventory, recipe, "arm64", null)).Message;
+        Assert.Contains("arm64 slice", refusal);
+        recipe.Install = native.Root;
+        ClientArchitectureChoice.RequireLocal(inventory, recipe, "arm64", null);
+    }
+    [Fact]
+    public void StartArchitectureAcceptsOnlyTheTwoSupportedSlices()
+    {
+        Assert.True(StartArguments.TryRead(["--mod", "mod.dll", "--output", "new-run", "--client-architecture", "arm64"],
+            out var options, out _, out _, out _, out _));
+        Assert.Equal("arm64", options!["--client-architecture"]);
+        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--output", "new-run", "--client-architecture", "native"],
+            out _, out _, out _, out _, out string error));
+        Assert.Contains("x64 or arm64", error);
+    }
     [Theory]
     [InlineData("9")]
     [InlineData("901")]

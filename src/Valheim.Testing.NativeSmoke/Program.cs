@@ -4,7 +4,7 @@ using Valheim.Testing.GameSessions;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [setup options] (the inventory's client; this machine's Valheim with no --inventory)");
+    Console.WriteLine("valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (the inventory's client; this machine's Valheim with no --inventory)");
     Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
@@ -31,7 +31,7 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -54,8 +54,10 @@ try
     if (Path.Exists(output)) throw new IOException("--output must be a new directory; an earlier run or personal files will not be changed: " + output);
     // The client: the inventory's (this machine's Valheim with no --inventory); --game and --loader-package override it.
     var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead);
+    string architecture = ClientArchitectureChoice.Select(options.GetValueOrDefault("--client-architecture"), client);
+    ClientArchitectureChoice.RequireLocal(inventory, client, architecture, client.LoaderPackage);
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
-    Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}");
+    Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}; architecture {architecture}");
     // An SSH-launched Windows runner is in session 0. Check the desktop before copying the fixture or disposable game;
     // DesktopClientSession repeats the check and starts the client in that session after staging.
     if (OperatingSystem.IsWindows())
@@ -113,7 +115,7 @@ try
         // A name per run: its disposable install is <runtime>/regression-<name>, never shared with another start.
         Name = "native-smoke-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture),
         Fixture = new RegressionFixture { Root = Path.Combine(output, "world-source"), WorldUid = world.UidText },
-        Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root },
+        Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root, Architecture = architecture },
         Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
             { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = FileHash.Sha256(mod),
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
@@ -246,7 +248,7 @@ return exitCode;
 internal static class StartArguments
 {
     private static readonly HashSet<string> Required = ["--mod", "--output"];
-    private static readonly HashSet<string> Allowed = [.. Required, "--game", "--inventory", "--client-env", "--join-seconds", "--source", "--cli-manifest", "--cli-files", "--loader-package", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
+    private static readonly HashSet<string> Allowed = [.. Required, "--game", "--inventory", "--client-env", "--client-architecture", "--join-seconds", "--source", "--cli-manifest", "--cli-files", "--loader-package", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
 
     public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
         out List<string>? roots, out List<string>? optionalReferences, out string error)
@@ -291,6 +293,8 @@ internal static class StartArguments
         if (found.TryGetValue("--join-seconds", out string? joinSeconds) &&
             (!int.TryParse(joinSeconds, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int seconds) || seconds is < 10 or > 900))
         { error = "--join-seconds must be a whole number from 10 to 900."; return false; }
+        if (found.TryGetValue("--client-architecture", out string? architecture) && architecture is not ("x64" or "arm64"))
+        { error = "--client-architecture must be x64 or arm64."; return false; }
         result = found;
         mods = selected;
         roots = searchRoots;

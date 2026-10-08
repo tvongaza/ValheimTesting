@@ -10,6 +10,17 @@ public sealed class NativeDependencyResolverTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [Fact] public void CampaignCarriesAndValidatesAClientArchitectureOverride()
+    {
+        string file = Path.Combine(_rig.Root, "architecture-campaign.json");
+        File.WriteAllText(file, """{"clients":{"client":{"dependencyLock":"client.lock","architecture":"arm64"}}}""");
+        Assert.Equal("arm64", HostedCampaignManifest.Read(file).Clients["client"].Architecture);
+        File.WriteAllText(file, """{"clients":{"client":{"dependencyLock":"client.lock","architecture":"native"}}}""");
+        Assert.Contains("architecture", Assert.Throws<InvalidDataException>(() => HostedCampaignManifest.Read(file)).Message);
+        File.WriteAllText(file, """{"server":{"dependencyLock":"server.lock","architecture":"arm64"}}""");
+        Assert.Contains("dedicated server", Assert.Throws<InvalidDataException>(() => HostedCampaignManifest.Read(file)).Message);
+    }
+
     [Fact] public void StandalonePluginNeedsNoDependencyDllAndRelativeRequestPathsAreResolved()
     {
         string mod = _rig.Write("standalone/Alone.dll", RegressionRig.Assembly("Alone", new("example.alone")));

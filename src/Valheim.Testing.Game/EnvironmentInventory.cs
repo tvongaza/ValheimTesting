@@ -17,11 +17,13 @@ public sealed class EnvironmentRecipe
     public int LocalCliPort { get; set; }
     public int GamePort { get; set; }
     public string? LoaderPackage { get; set; }
+    /// <summary>Client slice: x64 (default) or arm64 on macOS. A command-line choice may override it.</summary>
+    public string Architecture { get; set; } = "x64";
 
     internal GameRole Role() => new()
     {
         Host = Host, Install = Install, Runtime = Runtime, CliPort = CliPort,
-        LocalCliPort = LocalCliPort, GamePort = GamePort,
+        LocalCliPort = LocalCliPort, GamePort = GamePort, Architecture = Architecture,
     };
 }
 
@@ -257,6 +259,9 @@ public sealed class EnvironmentInventory
             if (recipe.CliPort is < 1024 or > 65535 || recipe.LocalCliPort is < 0 or > 65535)
                 errors.Add($"Environment {recipe.Name} needs valid ValheimCLI ports.");
             bool serves = recipe.Roles.Contains("server");
+            if (recipe.Architecture is not ("x64" or "arm64") ||
+                (recipe.Architecture == "arm64" && (serves || host.Platform != "macos")))
+                errors.Add($"Environment {recipe.Name}: architecture is x64, or arm64 for a macOS client only.");
             if (serves ? recipe.GamePort is < 1024 or > 65534 : recipe.GamePort != 0)
                 errors.Add($"Environment {recipe.Name} needs a gamePort only when it serves a world.");
             foreach (string role in recipe.Roles)

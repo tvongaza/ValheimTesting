@@ -262,6 +262,16 @@ public class ClientLaunchTests
         Assert.Contains("request x64 to run under Rosetta", error.Message);
         Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
+    [Fact] public void SourceArchitectureCheckUsesTheSelectedLoaderBeforeCopy()
+    {
+        using var game = Install.Mac();
+        using var loader = Install.Mac(universalDoorstop: true, core: NativeDetour);
+        Assert.DoesNotContain(ClientArchitecture.Arm64, GameLaunch.ClientLaunchArchitectures(game.Root));
+        Assert.Contains(ClientArchitecture.Arm64, GameLaunch.ClientLaunchArchitectures(game.Root, loader.Root));
+        GameLaunch.RequireClientArchitecture(game.Root, ClientArchitecture.Arm64, loader.Root);
+        Assert.Contains("arm64 slice", Assert.Throws<InvalidOperationException>(() =>
+            GameLaunch.RequireClientArchitecture(game.Root, ClientArchitecture.Arm64)).Message);
+    }
     // What a native install looks like: an arm64-only (or universal) Doorstop at the root, the pack's x64 library removed.
     [Fact] public void MacArm64OnlyDoorstopLaunchesNativelyAndRefusesX64()
     {

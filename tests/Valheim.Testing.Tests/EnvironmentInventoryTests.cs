@@ -41,6 +41,27 @@ public sealed class EnvironmentInventoryTests : IDisposable
     };
 
     [Fact]
+    public void InventoryAllowsArm64OnlyForAMacClient()
+    {
+        var inventory = Inventory();
+        var mac = inventory.Hosts["mac"];
+        mac.Platform = "macos";
+        mac.Shell = "bash";
+        mac.Lock = "/tmp/test.lock";
+        var client = inventory.Environments.Single(recipe => recipe.Name == "client-mac");
+        client.Install = "/opt/valheim";
+        client.Runtime = "/tmp/runs";
+        client.Architecture = "arm64";
+        inventory.Validate(_root);
+        Assert.Equal("arm64", inventory.Resolve(Campaign()).Environment.Clients["client-b"].Architecture);
+        client.Architecture = "native";
+        Assert.Contains("architecture", Assert.Throws<ArgumentException>(() => inventory.Validate(_root)).Message);
+        client.Architecture = "arm64";
+        mac.Platform = "windows";
+        Assert.Contains("arm64", Assert.Throws<ArgumentException>(() => inventory.Validate(_root)).Message);
+    }
+
+    [Fact]
     public void AssignsServerAndClientOnOneHostThenAnotherClientElsewhere()
     {
         var inventory = Inventory();

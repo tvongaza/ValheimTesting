@@ -56,6 +56,25 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.True(Directory.Exists(_rig.Install));
     }
 
+    [Fact] public void RegressionClientArchitectureMustBeASupportedSlice()
+    {
+        var client = new RegressionClient { Character = "Tester", Architecture = "arm64" };
+        client.Validate();
+        client.Architecture = "native";
+        Assert.Contains("client.architecture", Assert.Throws<ArgumentException>(client.Validate).Message);
+    }
+
+    [Fact] public void RegressionInputsOverrideTheInventorySlice()
+    {
+        var inventory = _rig.Inventory();
+        inventory.Hosts["local"].Platform = "macos";
+        inventory.Environments[0].Architecture = "arm64";
+        var inputs = _rig.Manifest();
+        Assert.Equal("arm64", new TargetedRegression(inputs, inventory: inventory).Architecture);
+        inputs.Client.Architecture = "x64";
+        Assert.Equal("x64", new TargetedRegression(inputs, inventory: inventory).Architecture);
+    }
+
     [Fact] public void ATargetedRunValidatesItsExpectedErrorLinesBeforeStaging()
     {
         var manifest = _rig.Manifest();
