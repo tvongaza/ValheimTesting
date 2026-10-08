@@ -146,7 +146,10 @@ public class InteractiveClientTests
             .Exits(0, Reply("VT-TASK removed", "VT-INTERACTIVE started 4343 133700000000000001"), FakeLauncher.Report(0));
         var host = WindowsHost(fake);
         var launch = GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows);
-        var client = await InteractiveClient.StartAsync(host, launch, WindowsLaunch + "\\", Timeout);
+        bool intentJournalled = false;
+        var client = await InteractiveClient.StartAsync(host, launch, WindowsLaunch + "\\", Timeout,
+            display: null, cancellation: CancellationToken.None, beforeLaunch: () => intentJournalled = true);
+        Assert.True(intentJournalled);
         Assert.Equal(4242, client.Id); Assert.Equal("133700000000000000", client.StartIdentity);
         Assert.Equal(WindowsLaunch, client.LaunchDirectory); Assert.Equal("gaming-pc", client.HostName);
         Assert.StartsWith(InteractiveClient.TaskPrefix, client.TaskName);
@@ -252,6 +255,18 @@ public class InteractiveClientTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             InteractiveClient.StartAsync(LinuxHost(fake), GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux, secretVariables: [missing]), LinuxLaunch, Timeout));
         Assert.Contains(missing, error.Message);
+        Assert.Empty(fake.Calls);
+    }
+
+    [Fact] public async Task AnInvalidLaunchDoesNotJournalProcessIntent()
+    {
+        var fake = new FakeLauncher();
+        bool intentJournalled = false;
+        var launch = GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows);
+        await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(WindowsHost(fake), launch,
+            "not-an-absolute-path", Timeout, display: null, cancellation: CancellationToken.None,
+            beforeLaunch: () => intentJournalled = true));
+        Assert.False(intentJournalled);
         Assert.Empty(fake.Calls);
     }
 

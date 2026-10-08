@@ -41,6 +41,17 @@ public sealed class ServerLoadOneOffTests : IDisposable
         return machine;
     }
 
+    [Fact]
+    public async Task HoldNeedsAnActualRunRatherThanPreflightOnly()
+    {
+        string output = Path.Combine(_rig.Root, "hold-refused");
+        Assert.Equal(2, await ServerLoad.RunAsync(Arguments(output, "--preflight-only", "--hold")));
+        Assert.False(Path.Exists(output));
+        Assert.True(ServerLoad.TryRead(Arguments(Path.Combine(_rig.Root, "hold-accepted"), "--server-only", "--hold"),
+            out var parsed, out string error), error);
+        Assert.Contains("--hold", parsed!.Switches);
+    }
+
     [Fact] public async Task TheDefaultIsAServerAndOneCleanClientAsADerivedCampaign()
     {
         string output = Path.Combine(_rig.Root, "one-off");
