@@ -57,7 +57,7 @@ A launch without a plan, or `valheim-cli --status`, only brings a game up; neith
 | run a console command only on a matching game | `valheim-cli --expect-strict pins.txt cli_manifest` |
 | run a plan only on a matching game | `valheim-cli --expect-strict pins.txt --test plan.yaml` |
 
-The load-time world files hash (`cli_world`'s `files=`, the `worldfiles` pin) is `Expectations.HashDirectory` in the `Valheim.Testing.Cli` package, documented once in ValheimCLI's [`docs/expectations.md`](https://github.com/tvongaza/valheimCLI/blob/80fb6cefcc99d7737ec9f9b589eff4d16e2fc5e3/docs/expectations.md#world-files-hash). To record a value over time, call `cli_call` from a test; to wait for a condition, use an event wait (see [Waiting](../../docs/packages/Valheim.Testing.Game.md#waiting)) or `valheim-cli wait --for`.
+The load-time world files hash (`cli_world`'s `files=`, the `worldfiles` pin) is `Expectations.HashDirectory` in the `Valheim.Testing.Cli` package, documented once in ValheimCLI's [`docs/expectations.md`](https://github.com/tvongaza/valheimCLI/blob/8428b6906e395450481659150a2dd41228183724/docs/expectations.md#world-files-hash). To record a value over time, call `cli_call` from a test; to wait for a condition, use an event wait (see [Waiting](../../docs/packages/Valheim.Testing.Game.md#waiting)) or `valheim-cli wait --for`.
 
 ## The smoke plan
 

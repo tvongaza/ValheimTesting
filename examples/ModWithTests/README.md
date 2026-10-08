@@ -6,7 +6,7 @@ This is a miniature mod source tree plus a complete xUnit consumer project. It t
 
 ## Run this example
 
-The example pins the newest release, `Valheim.Testing.Doubles` `0.1.0-preview.13`, which restores from NuGet.org together with its `Valheim.Testing` dependency. The pin follows each release (this repository rewrites it from [`toolkit-versions.json`](../../toolkit-versions.json)); in your mod, move it when you choose. From this directory, or from a copy of it anywhere:
+The example pins the newest release, `Valheim.Testing.Doubles` `0.1.0-preview.14`, which restores from NuGet.org together with its `Valheim.Testing` dependency. The pin follows each release (this repository rewrites it from [`toolkit-versions.json`](../../toolkit-versions.json)); in your mod, move it when you choose. From this directory, or from a copy of it anywhere:
 
 ```sh
 dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release

@@ -22,7 +22,7 @@ The runner copies the runtime and world again for every run and removes its runt
 
 ### What a test runtime holds
 
-A clean test runtime is BepInEx core plus the plugins below, with an empty `BepInEx/patchers` folder: a preloader patcher left behind by a removed mod breaks the game's types before any plugin loads, and the pinned runner refuses a patchers folder that is not the pinned one (`runtimePins` and `installPins` `patchers`), naming what it holds. Keep the ValheimCLI core in `plugins` and put each optional pack in `plugins` **or** `scripts`, never both ([ValheimCLI's pack guide](https://github.com/tvongaza/valheimCLI/blob/80fb6cefcc99d7737ec9f9b589eff4d16e2fc5e3/docs/command-packs.md)); an older monolithic ValheimCLI and extracted packs cannot be mixed.
+A clean test runtime is BepInEx core plus the plugins below, with an empty `BepInEx/patchers` folder: a preloader patcher left behind by a removed mod breaks the game's types before any plugin loads, and the pinned runner refuses a patchers folder that is not the pinned one (`runtimePins` and `installPins` `patchers`), naming what it holds. Keep the ValheimCLI core in `plugins` and put each optional pack in `plugins` **or** `scripts`, never both ([ValheimCLI's pack guide](https://github.com/tvongaza/valheimCLI/blob/8428b6906e395450481659150a2dd41228183724/docs/command-packs.md)); an older monolithic ValheimCLI and extracted packs cannot be mixed.
 
 | Component | Dedicated server | Client |
 |---|---|---|
