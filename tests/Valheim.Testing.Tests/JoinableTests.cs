@@ -44,8 +44,10 @@ public class JoinableTests
     [Fact] public void AReadinessPinCommandThatNeverStartedIsRetriedWithFreshPins()
     {
         int checks = 0;
+        int statuses = 0;
         using var transport = new ScriptedTransport()
             .Extension("my.mod", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = true })
+            .OnStatus(() => new Dictionary<string, string> { ["mainThreadIdleMs"] = ++statuses == 1 ? "3100" : "50" })
             .OnPrefix("cli_expect", _ => ++checks == 2
                 ? new CommandResult { Ok = false, ErrorCode = "command_failed", Message = "ERROR: code=command_timeout message=Command #2 had not started and will not run." }
                 : ScriptedTransport.Ok("OK: EXPECT"));
@@ -58,8 +60,10 @@ public class JoinableTests
     [Fact] public void AReadinessObservationThatNeverStartedIsRetried()
     {
         int reads = 0;
+        int statuses = 0;
         using var transport = new ScriptedTransport().Extension("my.mod", "session", _ =>
             new { source = "owned-test-session", complete = true, acceptingConnections = true })
+            .OnStatus(() => new Dictionary<string, string> { ["mainThreadIdleMs"] = ++statuses == 1 ? "3100" : "50" })
             .OnPrefix("cli_extension my.mod/session", _ => ++reads == 1
                 ? new CommandResult { Ok = false, ErrorCode = "command_failed", Message = "ERROR: code=command_timeout message=Command #4 had not started and will not run." }
                 : ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("my.mod", new { source = "owned-test-session", complete = true, acceptingConnections = true })));

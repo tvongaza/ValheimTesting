@@ -86,7 +86,7 @@ public static class CliCapabilities
     /// <summary>The <c>cli_extensions</c> reply; a ValheimCLI without the command is refused with what to install.</summary>
     internal static GameReply ListingReply(GameActor actor)
     {
-        var reply = actor.Execute("cli_extensions", requireAccepted: false); // an old core's unknown_command is named below
+        var reply = actor.ReadOnlyReply("cli_extensions"); // an old core's unknown_command is named below
         if (reply.Ok) return reply;
         if (reply.ErrorCode == "unknown_command")
             throw new InvalidOperationException($"The {actor.Name}'s ValheimCLI has no cli_extensions ({reply.Message}): it predates command packs, as an old monolithic build that still answers cli_expect does. " +

@@ -60,6 +60,27 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Equal(arms[0].Plan.Pins.Where(pin => pin.Key != "example.mod"), arms[1].Plan.Pins.Where(pin => pin.Key != "example.mod"));
     }
 
+    [Fact] public void ARegressionCarriesOnlyItsDeclaredClientVariablesIntoTheOwnedPlan()
+    {
+        var inputs = _rig.Manifest();
+        inputs.Client.Environment["PROCEDURALROADS_GENERATE_ROADS_ON_LOAD"] = "0";
+        var staged = _rig.Regression(inputs).Stage("parent");
+        Assert.Equal("0", staged.Plan.Environment["PROCEDURALROADS_GENERATE_ROADS_ON_LOAD"]);
+        Assert.DoesNotContain("PROCEDURALROADS_GENERATE_ROADS_ON_LOAD", staged.Plan.LaunchArguments);
+    }
+
+    [Theory]
+    [InlineData("DOORSTOP_ENABLED")]
+    [InlineData("doorstop_target_assembly")]
+    [InlineData("bad-name")]
+    public void ARegressionRefusesInvalidOrLoaderClientVariablesBeforeStaging(string name)
+    {
+        var inputs = _rig.Manifest();
+        inputs.Client.Environment[name] = "1";
+        Assert.Throws<ArgumentException>(() => _rig.Regression(inputs));
+        Assert.False(Directory.Exists(_rig.Install));
+    }
+
     // ---- the fixture: nesting and identity ----
 
     [Theory]

@@ -38,6 +38,16 @@ public static class ObservedWait
         return RunBlocking(target, _ => observe(), matches, timeout, interval, cancellation, fails, describe).Value;
     }
 
+    // A game-thread read that starts with only a few milliseconds left may be refused before it begins,
+    // hiding the last valid observation behind a misleading stalled-thread error.
+    internal static T UntilWithReadBudget<T>(string target, Func<T> observe, Func<T, bool> matches, TimeSpan timeout, TimeSpan interval,
+        TimeSpan minimumReadTime, CancellationToken cancellation = default, Func<T, string?>? fails = null, Func<T, string>? describe = null)
+    {
+        ArgumentNullException.ThrowIfNull(observe);
+        return RunBlocking(target, _ => observe(), matches, timeout, interval, cancellation, fails, describe,
+            minimumReadTime: minimumReadTime).Value;
+    }
+
     /// <summary>The value that matched and how long the wait took.</summary>
     internal readonly record struct Observed<T>(T Value, TimeSpan Elapsed);
 
@@ -47,7 +57,8 @@ public static class ObservedWait
     /// is cancelled (as <see cref="SemaphoreSlim.Wait(TimeSpan, CancellationToken)"/> does).
     /// </summary>
     internal static Observed<T> RunBlocking<T>(string target, Func<TimeSpan, T> observe, Func<T, bool> matches, TimeSpan timeout, TimeSpan interval,
-        CancellationToken cancellation, Func<T, string?>? fails = null, Func<T, string>? describe = null, Action<TimeSpan, CancellationToken>? changed = null)
+        CancellationToken cancellation, Func<T, string?>? fails = null, Func<T, string>? describe = null, Action<TimeSpan, CancellationToken>? changed = null,
+        TimeSpan minimumReadTime = default)
     {
         ArgumentNullException.ThrowIfNull(observe);
         // Every step completes synchronously here (the observation is synchronous and the pause blocks), so the shared
@@ -57,7 +68,7 @@ public static class ObservedWait
             if (changed != null) changed(wait, token);
             else token.WaitHandle.WaitOne(wait);
             return Task.CompletedTask;
-        });
+        }, minimumReadTime);
         return run.GetAwaiter().GetResult();
     }
 
@@ -68,7 +79,7 @@ public static class ObservedWait
     /// </summary>
     internal static async Task<Observed<T>> Run<T>(string target, Func<TimeSpan, CancellationToken, ValueTask<T>> observe, Func<T, bool> matches,
         TimeSpan timeout, TimeSpan interval, CancellationToken cancellation, Func<T, string?>? fails, Func<T, string>? describe,
-        Func<TimeSpan, CancellationToken, Task> pause)
+        Func<TimeSpan, CancellationToken, Task> pause, TimeSpan minimumReadTime = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(target);
         ArgumentNullException.ThrowIfNull(matches);
@@ -76,11 +87,18 @@ public static class ObservedWait
         if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval), "Give a positive interval.");
         describe ??= value => value?.ToString() ?? "nothing";
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        bool hasLast = false;
+        T last = default!;
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
-            // A value observed is judged even if cancellation arrives meanwhile: a match may own a resource (a connected actor).
+            // Do not start a new read after the deadline. A game-thread command given a few milliseconds would
+            // time out before starting and obscure the useful last state with a false stall diagnosis.
+            if (hasLast && timeout - clock.Elapsed <= minimumReadTime)
+                throw new WaitTimeoutException(target, clock.Elapsed, describe(last));
+            // A value observed is judged even if the deadline passes meanwhile: a match may own a resource.
             T value = await observe(timeout - clock.Elapsed, cancellation).ConfigureAwait(false);
+            last = value; hasLast = true;
             if (fails?.Invoke(value) is string reason) throw new WaitFailedException(target, reason, clock.Elapsed, describe(value));
             if (matches(value)) return new(value, clock.Elapsed);
             var remaining = timeout - clock.Elapsed;

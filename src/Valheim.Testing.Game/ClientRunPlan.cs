@@ -66,6 +66,8 @@ public sealed class ClientRunPlan
     [JsonIgnore] internal HashSet<string> StaticCapabilities { get; } = new(StringComparer.Ordinal);
     /// <summary>Owned only: extra game arguments; <see cref="GameLaunch.ForClient"/> adds <c>-console</c>.</summary>
     public string[] LaunchArguments { get; set; } = [];
+    /// <summary>Owned only: non-secret process variables for this disposable client. Loader overrides are refused.</summary>
+    public Dictionary<string, string> Environment { get; set; } = new(StringComparer.Ordinal);
     /// <summary>
     /// Owned only: the slice a macOS client (<c>Valheim.app</c>) runs as, <c>x64</c> or <c>arm64</c>. Left out, it is <c>x64</c>:
     /// under Rosetta on Apple Silicon, BepInExPack_Valheim's own loader and core work as installed, so a plan means the same
@@ -210,9 +212,11 @@ public sealed class ClientRunPlan
         // The install is a path on the client's machine, which on another host is not this one (a Windows
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
+        if (Environment == null) throw new ArgumentException("client.environment must be an object of variable names and values.");
         var architecture = LaunchArchitecture;
-        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || InstallPins != null || Architecture.Length != 0 || InPlace))
-            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, architecture and inPlace.");
+        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Environment.Count != 0 || InstallPins != null || Architecture.Length != 0 || InPlace))
+            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, architecture and inPlace. Leave out environment too.");
+        if (Owned) GameLaunch.ValidateClientEnvironment(Environment, LaunchArguments);
         var platform = Owned ? InstallPlatform() : null;
         if (architecture == ClientArchitecture.Arm64 && platform is { } other && other != ClientPlatform.MacOS)
             throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {other} client is x64 only. Leave architecture out.");

@@ -10,7 +10,7 @@ namespace Valheim.Testing.Game.Fakes;
 /// Commands registered with <see cref="On"/> or <see cref="OnPrefix"/> are answered first. Anything unscripted throws, so
 /// a scenario cannot silently issue a command its test did not expect. <see cref="Commands"/> records every command.
 /// </summary>
-public sealed class ScriptedTransport : IGameTransport
+public sealed class ScriptedTransport : IGameTransport, IGameThreadStatusTransport
 {
     private readonly object _sync = new();
     private readonly List<string> _commands = [];
@@ -19,6 +19,12 @@ public sealed class ScriptedTransport : IGameTransport
     private readonly List<(string Owner, string Instance, string Name, int ResultVersion, bool ReadOnly, Func<IReadOnlyList<string>, object> Data)> _extensions = [];
     private bool? _saveConfirmed;
     private int _saveNumber = 1;
+    private Func<IReadOnlyDictionary<string, string>>? _status;
+
+    /// <summary>Answer an independent STATUS connection in tests of a busy game thread.</summary>
+    public ScriptedTransport OnStatus(Func<IReadOnlyDictionary<string, string>> reply) { _status = reply; return this; }
+    public IReadOnlyDictionary<string, string> ReadStatus() =>
+        (_status ?? throw new IOException("Scripted ValheimCLI STATUS is not available."))();
 
     /// <summary>Whether <c>cli_expect</c> confirms the strict pins.</summary>
     public bool PinsHold { get; set; } = true;

@@ -213,7 +213,8 @@ sealed class Valheim.Testing.Game.CliManifestFile
   property System.Collections.Generic.SortedDictionary`2<System.String,System.Collections.Generic.SortedDictionary`2<System.String,System.Int32>> Extensions { get; set; }
   property System.String File { get; set; }
   property System.String Sha256 { get; set; }
-sealed class Valheim.Testing.Game.CliTransport : System.IDisposable, Valheim.Testing.Game.IGameTransport
+sealed class Valheim.Testing.Game.CliTransport : System.IDisposable, Valheim.Testing.Game.IGameThreadStatusTransport, Valheim.Testing.Game.IGameTransport
+  method System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> ReadStatus()
   method System.Void .ctor(System.String host, System.Int32 port)
   method System.Void Dispose()
   method valheim_cli.Testing.CommandResult Execute(System.String command, System.TimeSpan timeout)
@@ -266,6 +267,7 @@ sealed class Valheim.Testing.Game.ClientRunPlan
   property System.Boolean Owned { get; }
   property System.Boolean Pinned { get; }
   property System.Boolean Targetable { get; set; }
+  property System.Collections.Generic.Dictionary`2<System.String,System.String> Environment { get; set; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Pins { get; set; }
   property System.Int32 ArrivalSeconds { get; set; }
   property System.Int32 BepInExSeconds { get; set; }
@@ -670,7 +672,8 @@ sealed class Valheim.Testing.Game.Fakes.FakeOwnedServer
   method System.Void .ctor()
   property System.Boolean CheatsAcknowledged { get; set; }
   property System.Boolean Devcommands { get; set; }
-sealed class Valheim.Testing.Game.Fakes.ScriptedTransport : System.IDisposable, Valheim.Testing.Game.IGameTransport
+sealed class Valheim.Testing.Game.Fakes.ScriptedTransport : System.IDisposable, Valheim.Testing.Game.IGameThreadStatusTransport, Valheim.Testing.Game.IGameTransport
+  method System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> ReadStatus()
   method System.Int32 Count(System.String command)
   method System.Void .ctor()
   method System.Void Dispose()
@@ -679,6 +682,7 @@ sealed class Valheim.Testing.Game.Fakes.ScriptedTransport : System.IDisposable, 
   method Valheim.Testing.Game.Fakes.ScriptedTransport Extension(System.String owner, System.String name, System.Func`2<System.Collections.Generic.IReadOnlyList`1<System.String>,System.Object> data, System.Boolean readOnly = true, System.Int32 resultVersion = 1, System.String instance = "fake")
   method Valheim.Testing.Game.Fakes.ScriptedTransport On(System.String command, System.Func`2<System.String,valheim_cli.Testing.CommandResult> reply)
   method Valheim.Testing.Game.Fakes.ScriptedTransport OnPrefix(System.String prefix, System.Func`2<System.String,valheim_cli.Testing.CommandResult> reply)
+  method Valheim.Testing.Game.Fakes.ScriptedTransport OnStatus(System.Func`1<System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String>> reply)
   method Valheim.Testing.Game.Fakes.ScriptedTransport Saves(System.Boolean confirmed = true)
   method Valheim.Testing.Game.GameActor Actor(System.String name = "test", System.String expectations = "cli_expect worlduid=1")
   method static System.String ExtensionResult(System.String owner, System.Object data, System.String instance = "fake")
@@ -727,6 +731,8 @@ sealed class Valheim.Testing.Game.GameActor : System.IDisposable
   method static System.Text.Json.JsonDocument ParseLine(Valheim.Testing.Game.GameReply reply, System.String prefix)
   method static System.Text.Json.JsonDocument ParseLine(valheim_cli.Testing.CommandResult reply, System.String prefix)
   property System.Boolean Pinned { get; }
+  property System.Int64 LongestMainThreadIdleMs { get; }
+  property System.String BusyNote { get; }
   property System.String Name { get; }
   property System.TimeSpan CommandTimeout { get; set; }
 [result shape] enum Valheim.Testing.Game.GameConnectionStatus
@@ -903,6 +909,8 @@ interface Valheim.Testing.Game.IEvidence
   property System.String Kind { get; }
   property System.String Site { get; }
   property System.String WorldUid { get; }
+interface Valheim.Testing.Game.IGameThreadStatusTransport
+  method System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> ReadStatus()
 interface Valheim.Testing.Game.IGameTransport : System.IDisposable
   method valheim_cli.Testing.CommandResult Execute(System.String command, System.TimeSpan timeout)
 interface Valheim.Testing.Game.IOwnedProcess : System.IDisposable
@@ -1437,7 +1445,8 @@ enum Valheim.Testing.Game.QuitRequest
   field const Valheim.Testing.Game.QuitRequest CloseWindow = 1
   field const Valheim.Testing.Game.QuitRequest Interrupt = 0
   field const Valheim.Testing.Game.QuitRequest None = 2
-sealed class Valheim.Testing.Game.RecordingTransport : System.IDisposable, Valheim.Testing.Game.IGameTransport
+sealed class Valheim.Testing.Game.RecordingTransport : System.IDisposable, Valheim.Testing.Game.IGameThreadStatusTransport, Valheim.Testing.Game.IGameTransport
+  method System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> ReadStatus()
   method System.Void .ctor(Valheim.Testing.Game.IGameTransport inner, System.String file)
   method System.Void .ctor(Valheim.Testing.Game.IGameTransport inner, System.String file, System.String environment)
   method System.Void Dispose()
@@ -1457,6 +1466,7 @@ sealed class Valheim.Testing.Game.RegressionCli
 sealed class Valheim.Testing.Game.RegressionClient
   method System.Void .ctor()
   method System.Void Validate()
+  property System.Collections.Generic.Dictionary`2<System.String,System.String> Environment { get; set; }
   property System.Int32 JoinSeconds { get; set; }
   property System.Int32 StartSeconds { get; set; }
   property System.String Character { get; set; }

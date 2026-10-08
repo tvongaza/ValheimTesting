@@ -50,15 +50,19 @@ public sealed class SessionControl(GameActor actor)
     {
         ValidateWorldUid(worldUid);
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        var capability = actor.RequireCapability("valheim.session/state");
-        // A hosting game's world is ready before its own player spawns, so a protected wait goes on until that player exists.
-        var state = ObservedWait.Until(protectPlayer ? $"world {worldUid} ready with its local player (to protect it)" : $"world {worldUid} ready",
-            () => Read(capability), s => s.WorldReady && (!protectPlayer || s.Dedicated || s.LocalPlayer), timeout, ReadInterval, cancellation,
-            fails: s => s.LoadError ? "the game reports a world load error" : s.WorldPresent && s.WorldUid != worldUid
-                ? $"a different world is loaded: UID {s.WorldUid}, expected {worldUid}. The world loaded, so this is the wrong world (another fixture or a fresh one), not a load failure" : null,
-            describe: s => $"phase {s.Phase}, world {s.WorldUid ?? "none"}, ready {s.WorldReady}, local player {s.LocalPlayer}, connection {s.ConnectionStatus}" +
-                (s.WorldReady && s.WorldUid == worldUid ? ": the world is ready but its local player did not spawn, so it was not protected. Pass protectPlayer: false to wait for the world alone" : "") +
-                "; no action was retried");
+        SessionState state;
+        using (actor.BusyReadRetries(timeout, cancellation))
+        {
+            var capability = actor.RequireCapability("valheim.session/state");
+            // A hosting game's world is ready before its own player spawns, so a protected wait goes on until that player exists.
+            state = ObservedWait.UntilWithReadBudget(protectPlayer ? $"world {worldUid} ready with its local player (to protect it)" : $"world {worldUid} ready",
+                () => Read(capability), s => s.WorldReady && (!protectPlayer || s.Dedicated || s.LocalPlayer), actor.BusyReadTimeLeft($"world {worldUid}"), ReadInterval, TimeSpan.FromMilliseconds(200), cancellation,
+                fails: s => s.LoadError ? "the game reports a world load error" : s.WorldPresent && s.WorldUid != worldUid
+                    ? $"a different world is loaded: UID {s.WorldUid}, expected {worldUid}. The world loaded, so this is the wrong world (another fixture or a fresh one), not a load failure" : null,
+                describe: s => $"phase {s.Phase}, world {s.WorldUid ?? "none"}, ready {s.WorldReady}, local player {s.LocalPlayer}, connection {s.ConnectionStatus}" +
+                    (s.WorldReady && s.WorldUid == worldUid ? ": the world is ready but its local player did not spawn, so it was not protected. Pass protectPlayer: false to wait for the world alone" : "") +
+                    "; no action was retried");
+        }
         if (protectPlayer && !state.Dedicated) PlayerPlacement.Protect(actor);
         return state;
     }
@@ -230,8 +234,12 @@ public sealed class SessionControl(GameActor actor)
     // After the one join: the world pins, the world awaited, test access on an owned client's character, then protection.
     private SessionState Joined(ClientRunPlan plan, string worldUid, TimeSpan timeout, bool protectPlayer, CancellationToken cancellation)
     {
-        actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // A transition always needs fresh pins.
-        var state = WaitForWorld(worldUid, timeout, cancellation, protectPlayer: false); // A joined client's world is ready with its player.
+        SessionState state;
+        using (actor.BusyReadRetries(timeout, cancellation))
+        {
+            actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // A transition always needs fresh pins.
+            state = WaitForWorld(worldUid, actor.BusyReadTimeLeft($"world {worldUid}"), cancellation, protectPlayer: false); // A joined client's world is ready with its player.
+        }
         // Protection is a mutating test command on a joined client: an owned client's access is established first and must
         // allow it (AllowOnServerClients), so a client staged without it is named here rather than by a refused command.
         if (plan.Owned) TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: protectPlayer);
@@ -259,6 +267,7 @@ public sealed class SessionControl(GameActor actor)
                 .RequireLine(started, $"The {what} did not start");
         }
         finally { actor.InvalidateEnvironment(); } // A join that may have started can change the world.
+        using var busyReads = actor.BusyReadRetries(timeout, cancellation);
         bool worldPinned = false;
         try
         {
@@ -273,7 +282,7 @@ public sealed class SessionControl(GameActor actor)
             capability = actor.RequireCapability("valheim.session/state");
         }
         bool left = false;
-        return ObservedWait.Until("the " + what, () =>
+        return ObservedWait.UntilWithReadBudget("the " + what, () =>
             {
                 SessionState state;
                 try { state = Read(capability); }
@@ -287,7 +296,7 @@ public sealed class SessionControl(GameActor actor)
                 left |= state.Phase != "menu" || state.ConnectionStatus == "Connecting";
                 return state;
             },
-            state => state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected", timeout, ReadInterval, cancellation,
+            state => state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected", actor.BusyReadTimeLeft("the " + what), ReadInterval, TimeSpan.FromMilliseconds(200), cancellation,
             fails: state => state.LoadError ? "the game reports a world load error" : state.WorldPresent && state.WorldUid != worldUid ? "a different world is loaded"
                 : left && state.Phase == "menu" && state.ConnectionStatus.StartsWith("Error", StringComparison.Ordinal)
                     ? $"the {what} failed: the client is back at its menu with {state.ConnectionStatus}. Nothing was retried" : null,

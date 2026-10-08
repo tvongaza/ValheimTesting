@@ -162,7 +162,15 @@ public sealed class ClientRounds
         if (session != null)
             try { Report.Step(StepPhase.Cleanup, session.Owned ? "stop only the owned client" : "detach from the operator's client", session.Dispose); released |= session.Owned; }
             catch (Exception error) { teardown = error; }
-            finally { if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString(); }
+            finally
+            {
+                if (session.Stopped is { } stopped) Report.Provenance["clientStop"] = stopped.ToString();
+                if (session.Actor.LongestMainThreadIdleMs > 0)
+                {
+                    Report.Provenance["clientMainThreadStallMs"] = session.Actor.LongestMainThreadIdleMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    if (session.Actor.BusyNote is { } note) Report.Provenance["clientBusyNote"] = note;
+                }
+            }
         try { world.Release(released); }
         catch (Exception error) { teardown ??= error; }
         if (passed && teardown != null) ExceptionDispatchInfo.Capture(teardown).Throw();

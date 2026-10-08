@@ -344,6 +344,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     public static void WaitUntilJoinable(GameActor server, string sessionCapability, TimeSpan timeout, CancellationToken cancellation = default)
     {
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        using var busyReads = server.BusyReadRetries(timeout, cancellation);
         Capability? capability = null;
         string last = "none";
         ObservedWait.Until("server accepting game connections", () =>
@@ -511,7 +512,7 @@ public sealed class DirectServerProcess : IOwnedProcess
 }
 
 // Local evidence only. Review before publishing: world names/positions and IDs may appear.
-public sealed class RecordingTransport : IGameTransport
+public sealed class RecordingTransport : IGameTransport, IGameThreadStatusTransport
 {
     private readonly IGameTransport _inner;
     private readonly StreamWriter _writer;
@@ -542,6 +543,14 @@ public sealed class RecordingTransport : IGameTransport
         {
             _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, command, error = error.Message })); throw;
         }
+    }
+    public IReadOnlyDictionary<string, string> ReadStatus()
+    {
+        if (_inner is not IGameThreadStatusTransport source)
+            throw new IOException("The transport has no independent ValheimCLI STATUS connection.");
+        var fields = source.ReadStatus();
+        _writer.WriteLine(JsonSerializer.Serialize(new { utc = DateTime.UtcNow, status = fields }));
+        return fields;
     }
     private void WriteReply(string command, CommandResult reply)
     {

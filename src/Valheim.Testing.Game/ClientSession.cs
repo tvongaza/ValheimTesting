@@ -212,7 +212,7 @@ public sealed class ClientSession : IDisposable
 
     /// <summary>The owned launch of the plan's install as the plan's architecture, built for <paramref name="host"/> (injectable for tests).</summary>
     internal static ProcessStartInfo StartInfo(ClientRunPlan plan, ClientPlatform host) =>
-        GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, null, plan.LaunchArchitecture, true, host).ToStartInfo();
+        GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, plan.Environment, plan.LaunchArchitecture, true, host).ToStartInfo();
 
     // True once this machine's Steam logged "Logged In Elsewhere" after the launch; false at the deadline, on cancellation or when unreadable.
     private static async Task<bool> WatchLocalAsync(LogWait? steamLog, TimeSpan left, CancellationToken token)

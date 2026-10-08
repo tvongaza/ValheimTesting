@@ -24,10 +24,10 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 }
 
 // The default path hosts a world in an owned client; server-load uses an owned dedicated server.
-if (!Arguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
+if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--join-seconds 10..900] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -105,6 +105,8 @@ try
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
                 Commit = options.GetValueOrDefault("--source") } } },
     };
+    if (options.TryGetValue("--join-seconds", out string? joinSeconds))
+        inputs.Client.JoinSeconds = int.Parse(joinSeconds, System.Globalization.CultureInfo.InvariantCulture);
     if (options.TryGetValue("--expected-log-error", out string? expectedError))
         inputs.LogScan[LogScanner.UnknownError] = new LogClassification
         { Expected = [expectedError], Reason = options["--expected-log-reason"] };
@@ -160,10 +162,10 @@ if (outcome != null)
 }
 return exitCode;
 
-file static class Arguments
+internal static class StartArguments
 {
     private static readonly HashSet<string> Required = ["--mod", "--output"];
-    private static readonly HashSet<string> Allowed = [.. Required, "--game", "--inventory", "--client-env", "--source", "--cli-manifest", "--cli-files", "--loader-package", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
+    private static readonly HashSet<string> Allowed = [.. Required, "--game", "--inventory", "--client-env", "--join-seconds", "--source", "--cli-manifest", "--cli-files", "--loader-package", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
 
     public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
         out List<string>? roots, out List<string>? optionalReferences, out string error)
@@ -201,6 +203,9 @@ file static class Arguments
         { error = "--expected-log-error needs --expected-log-reason (and vice versa); an unexplained error is never ignored."; return false; }
         if (found.ContainsKey("--compare-mod") != found.ContainsKey("--compare-source"))
         { error = "--compare-mod needs --compare-source (and vice versa); both builds need provenance."; return false; }
+        if (found.TryGetValue("--join-seconds", out string? joinSeconds) &&
+            (!int.TryParse(joinSeconds, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int seconds) || seconds is < 10 or > 900))
+        { error = "--join-seconds must be a whole number from 10 to 900."; return false; }
         result = found;
         mods = selected;
         roots = searchRoots;
