@@ -25,6 +25,19 @@ public sealed partial class GameLaunch
 {
     private static readonly Regex VariableName = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
 
+    /// <summary>Validate a disposable client's caller variables before its install is copied or a process starts.</summary>
+    internal static void ValidateClientEnvironment(IReadOnlyDictionary<string, string> environment, IEnumerable<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        BepInExLoader.RefuseOverrides(environment, arguments, StringComparer.OrdinalIgnoreCase, nameof(GameLaunch));
+        foreach (var (name, value) in environment)
+        {
+            if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a client environment variable name.", nameof(environment));
+            if (value == null || value.IndexOfAny(['\0', '\r', '\n']) >= 0)
+                throw new ArgumentException($"Client environment variable '{name}' needs a single-line value without NUL.", nameof(environment));
+        }
+    }
+
     private GameLaunch(bool server, ClientPlatform platform, bool forHost, string workingDirectory, string executable, IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended, IReadOnlyList<string> requiredFiles,
         ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null)

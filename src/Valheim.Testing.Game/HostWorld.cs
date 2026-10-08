@@ -289,19 +289,22 @@ public static class HostWorlds
                 throw new InvalidOperationException("The hosted world did not start as planned: " + (line ?? reply.Describe()));
         }
         finally { host.InvalidateEnvironment(); } // A start that may have begun changes the world.
-        try
+        using (host.BusyReadRetries(Left(), cancellation))
         {
-            host.VerifyEnvironment(plan.MenuExpectations); // Plugins only: the world is still loading.
-            session.WaitForWorld(world.WorldUid, Left(), cancellation, protectPlayer: false);
-        }
-        // The world loaded between two reads, so the menu pins no longer hold ("loaded but not listed"). The exact world pins
-        // below decide whether it is the fixture's world; the wait for readiness then goes on.
-        catch (Exception error) when (SessionControl.LoadedButNotListed(error)) { }
-        try { host.VerifyEnvironment(plan.WorldExpectations(world.WorldUid)); }
-        catch (InvalidOperationException error) when (error.Message.Contains("worlduid:", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException($"The hosted world loaded, but it is not world UID {world.WorldUid}: {error.Message}. The client hosted another world under the fixture's name " +
-                "(a wrong fixture, not a load failure; a load failure is reported as one). HostWorldPlan.Preflight reads the fixture's own UID before the run.", error);
+            try
+            {
+                host.VerifyEnvironment(plan.MenuExpectations); // Plugins only: the world is still loading.
+                session.WaitForWorld(world.WorldUid, Left(), cancellation, protectPlayer: false);
+            }
+            // The world loaded between two reads, so the menu pins no longer hold ("loaded but not listed"). The exact world pins
+            // below decide whether it is the fixture's world; the wait for readiness then goes on.
+            catch (Exception error) when (SessionControl.LoadedButNotListed(error)) { }
+            try { host.VerifyEnvironment(plan.WorldExpectations(world.WorldUid)); }
+            catch (InvalidOperationException error) when (error.Message.Contains("worlduid:", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"The hosted world loaded, but it is not world UID {world.WorldUid}: {error.Message}. The client hosted another world under the fixture's name " +
+                    "(a wrong fixture, not a load failure; a load failure is reported as one). HostWorldPlan.Preflight reads the fixture's own UID before the run.", error);
+            }
         }
         return session.WaitForWorld(world.WorldUid, Left(), cancellation, protectPlayer);
 

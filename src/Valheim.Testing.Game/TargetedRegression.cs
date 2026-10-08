@@ -148,6 +148,8 @@ public sealed class RegressionClient
     /// <summary>An existing disposable <b>local</b> character's file name without <c>.fch</c>, never a cloud character.</summary>
     public string Character { get; set; } = "";
     public string[] LaunchArguments { get; set; } = [];
+    /// <summary>Non-secret variables set only in the disposable client's process. Loader overrides are refused.</summary>
+    public Dictionary<string, string> Environment { get; set; } = new(StringComparer.Ordinal);
     public int StartSeconds { get; set; } = 300;
     public int JoinSeconds { get; set; } = 180;
     /// <summary>Optional registered, game-created disposable character to stage for the owned hosted run (checked against this machine's Steam userdata).</summary>
@@ -158,6 +160,7 @@ public sealed class RegressionClient
         if (Character.Length == 0 || Character.Any(char.IsWhiteSpace) || Character.EndsWith(".fch", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("client.character: give the disposable local character's file name, without .fch.");
         if (CharacterStore != null && !Path.IsPathFullyQualified(CharacterStore)) throw new ArgumentException("client.characterStore: give the full path of a registered disposable character store.");
+        GameLaunch.ValidateClientEnvironment(Environment, LaunchArguments);
     }
 }
 
@@ -523,7 +526,8 @@ public sealed class TargetedRegression
         var plan = new ClientRunPlan
         {
             Mode = "owned", Install = install, Port = Port, Character = env.Client.Character,
-            LaunchArguments = env.Client.LaunchArguments, StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
+            LaunchArguments = env.Client.LaunchArguments, Environment = env.Client.Environment,
+            StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
             Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),
             InstallPins = installPins,
             CliManifest = env.Cli.Manifest, // Required (RegressionCli.Validate): the static check always runs on what was staged.

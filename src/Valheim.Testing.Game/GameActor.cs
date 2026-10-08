@@ -8,11 +8,19 @@ public interface IGameTransport : IDisposable
 {
     CommandResult Execute(string command, TimeSpan timeout);
 }
-public sealed class CliTransport : IGameTransport
+/// <summary>A STATUS reading made on a separate socket, independent of a queued game-thread command.</summary>
+public interface IGameThreadStatusTransport
+{
+    IReadOnlyDictionary<string, string> ReadStatus();
+}
+public sealed class CliTransport : IGameTransport, IGameThreadStatusTransport
 {
     private readonly ValheimClient _client;
+    private readonly string _host;
+    private readonly int _port;
     public CliTransport(string host, int port)
     {
+        _host = host; _port = port;
         _client = new ValheimClient(host, port);
         if (!_client.Connect()) { _client.Dispose(); throw new IOException("CLI connection failed."); }
         if (!_client.SupportsCompletion) { _client.Dispose(); throw new IOException("Tests require command completion support."); }
@@ -21,6 +29,14 @@ public sealed class CliTransport : IGameTransport
     {
         _client.CommandTimeout = timeout;
         return _client.ExecuteCommand(command);
+    }
+    public IReadOnlyDictionary<string, string> ReadStatus()
+    {
+        using var probe = new ValheimClient(_host, _port);
+        if (!probe.Connect()) throw new IOException("ValheimCLI did not answer a separate STATUS connection.");
+        var fields = probe.GetStatusDetails(fallbackToState: false);
+        if (!probe.StatusLineRead) throw new IOException("ValheimCLI did not answer STATUS; the state-only fallback cannot prove game-thread liveness.");
+        return fields;
     }
     public void Dispose() => _client.Dispose(); // Attachment never owns the game's process.
 }
@@ -51,6 +67,13 @@ public sealed class GameActor : IDisposable
     private readonly object _sync = new();
     private bool _verified, _pinned = true;
     private string _expectations = "";
+    private BusyReadScope? _busyReads;
+    private long _longestMainThreadIdleMs;
+    private string? _lastBusyNote;
+    /// <summary>The largest observed frame age during a busy world-entry wait, or zero if none was observed.</summary>
+    public long LongestMainThreadIdleMs => _longestMainThreadIdleMs;
+    /// <summary>The last busy note the game published during that wait, if any.</summary>
+    public string? BusyNote => _lastBusyNote;
     public string Name { get; }
     public TimeSpan CommandTimeout { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>
@@ -60,6 +83,84 @@ public sealed class GameActor : IDisposable
     public bool Pinned { get { lock (_sync) return _pinned; } }
     public GameActor(string name, IGameTransport transport)
     { Name = name; _transport = transport; }
+
+    private sealed class BusyReadScope(GameActor actor, TimeSpan timeout, BusyReadScope? previous, CancellationToken cancellation) : IDisposable
+    {
+        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+        public TimeSpan Left => timeout - _clock.Elapsed;
+        public CancellationToken Cancellation => cancellation;
+        public void Dispose() => actor._busyReads = previous;
+    }
+
+    /// <summary>Bound safe read retries by a world-entry deadline; mutating commands are never retried.</summary>
+    internal IDisposable BusyReadRetries(TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (_busyReads is { } previous && previous.Left < timeout)
+            timeout = previous.Left;
+        if (timeout <= TimeSpan.Zero)
+            throw new WaitTimeoutException("the game-thread read", TimeSpan.Zero, "The world-entry deadline has passed.");
+        var scope = new BusyReadScope(this, timeout, _busyReads, cancellation);
+        _busyReads = scope;
+        return scope;
+    }
+
+    private CommandResult ReadOnlyCommand(string command)
+    {
+        while (true)
+        {
+            try
+            {
+                var reply = Execute(command, requireAccepted: false);
+                if (!reply.Ok && reply.ErrorCode == "command_failed" &&
+                    reply.Message?.Contains("had not started and will not run", StringComparison.Ordinal) == true)
+                    reply.RequireAccepted();
+                return reply.Result;
+            }
+            catch (InvalidOperationException error) when (_busyReads != null && IsUnstartedCommandTimeout(error))
+            { WaitForResponsiveThread(error); }
+        }
+    }
+
+    private TimeSpan EffectiveTimeout()
+    {
+        var left = _busyReads?.Left;
+        // ObservedWait takes one final read at its deadline so it can report the last game state.
+        // Give that read only a millisecond; the outer wait owns the useful timeout message.
+        if (left <= TimeSpan.Zero) return TimeSpan.FromMilliseconds(1);
+        return left is { } time && time < CommandTimeout ? time : CommandTimeout;
+    }
+
+    private void WaitForResponsiveThread(InvalidOperationException timeout)
+    {
+        var scope = _busyReads ?? throw timeout;
+        if (_transport is not IGameThreadStatusTransport statusTransport)
+            throw new InvalidOperationException("The read timed out before starting, but this transport cannot inspect ValheimCLI STATUS.", timeout);
+        bool first = true;
+        while (true)
+        {
+            scope.Cancellation.ThrowIfCancellationRequested();
+            if (scope.Left <= TimeSpan.Zero)
+                throw new WaitTimeoutException("the game thread to resume", TimeSpan.Zero,
+                    $"longest idle {LongestMainThreadIdleMs} ms; busy {BusyNote ?? "none"}");
+            IReadOnlyDictionary<string, string> fields;
+            try { fields = statusTransport.ReadStatus(); }
+            catch (Exception error) when (error is IOException or InvalidOperationException)
+            { throw new InvalidOperationException("The client or ValheimCLI stopped answering STATUS during world entry.", error); }
+            if (!fields.TryGetValue("mainThreadIdleMs", out string? text) ||
+                !long.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out long age) || age < 0)
+                throw new InvalidOperationException("The pinned ValheimCLI STATUS has no valid game-thread heartbeat.");
+            if (first && age < 2000)
+                throw new InvalidOperationException("Harness fault: the game thread is responsive but a read-only command expired before starting.", timeout);
+            if (age < 2000) return;
+            if (age > _longestMainThreadIdleMs) _longestMainThreadIdleMs = age;
+            if (fields.TryGetValue("busy", out string? busy) && busy is not (null or "none"))
+                _lastBusyNote = Uri.UnescapeDataString(busy);
+            first = false;
+            var pause = scope.Left < TimeSpan.FromMilliseconds(250) ? scope.Left : TimeSpan.FromMilliseconds(250);
+            if (scope.Cancellation.WaitHandle.WaitOne(pause)) scope.Cancellation.ThrowIfCancellationRequested();
+        }
+    }
     /// <summary>
     /// Checks the strict pins now and before every command. <see cref="EnvironmentPinning.None"/> instead of a
     /// <c>cli_expect</c> command is the explicit opt-out: the actor then runs commands without any pin check, prints
@@ -102,20 +203,25 @@ public sealed class GameActor : IDisposable
                 try { CheckEnvironment(); _verified = true; }
                 catch (InvalidOperationException error) when (IsUnstartedCommandTimeout(error))
                 {
-                    // The CLI explicitly says the pin check never ran. Permit a later read-only retry,
-                    // which will issue a fresh pin check before observing anything.
+                    // The CLI explicitly says the pin check never ran. A world-entry read scope can
+                    // verify game-thread liveness and retry the read without relaxing the pins.
                     _verified = true;
                     throw;
                 }
             }
-            var reply = new GameReply(command, _transport.Execute(command, CommandTimeout));
+            var reply = new GameReply(command, _transport.Execute(command, EffectiveTimeout()));
             return requireAccepted ? reply.RequireAccepted() : reply;
         }
     }
     private void CheckEnvironment()
     {
-        CommandResult response = _transport.Execute(_expectations, CommandTimeout);
-        RequireSuccess(response);
+        CommandResult response;
+        while (true)
+        {
+            try { response = _transport.Execute(_expectations, EffectiveTimeout()); RequireSuccess(response); break; }
+            catch (InvalidOperationException error) when (_busyReads != null && IsUnstartedCommandTimeout(error))
+            { WaitForResponsiveThread(error); }
+        }
         if (!PlanExpectations.Judge(new ExpectationSource { From = "actor", Strict = true }, response.Output).Held)
             throw new InvalidOperationException("Game did not confirm the strict environment pins.");
     }
@@ -188,13 +294,15 @@ public sealed class GameActor : IDisposable
             throw new InvalidOperationException("Required capability is absent: " + path + ". " + CliCapabilities.Provider(path.Split('/')[0]));
         }).ToArray();
     }
+    internal GameReply ReadOnlyReply(string command) => new(command, ReadOnlyCommand(command));
     public JsonElement Invoke(Capability command, params string[] arguments) => Invoke(command, null, arguments);
     /// <summary><see cref="Invoke(Capability, string[])"/>, handing the complete reply lines to <paramref name="replied"/> before judging them.</summary>
     internal JsonElement Invoke(Capability command, Action<IReadOnlyList<string>>? replied, string[] arguments)
     {
         if (arguments.Any(x => x.Any(char.IsWhiteSpace) || x.Length == 0)) throw new ArgumentException("Extension arguments must be single tokens in preview 1.");
         // ParseInvocation checks success itself, after reading a failed extension's own code and message.
-        var reply = Execute("cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments)), requireAccepted: false);
+        var text = "cli_extension " + command.Path + (arguments.Length == 0 ? "" : " " + string.Join(" ", arguments));
+        var reply = command.ReadOnly && _busyReads != null ? ReadOnlyReply(text) : Execute(text, requireAccepted: false);
         replied?.Invoke(reply.Result.Output.ToArray());
         return ParseInvocation(command, reply.Result);
     }

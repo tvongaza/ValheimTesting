@@ -7,6 +7,21 @@ public sealed class ClientSessionTests : IDisposable
     private readonly string _output = Directory.CreateTempSubdirectory("client-session-").FullName;
     public void Dispose() => Directory.Delete(_output, recursive: true);
 
+    [Fact] public void AnOwnedClientReceivesItsDeclaredProcessVariable()
+    {
+        using var install = ClientLaunchTests.Install.For(ClientPlatform.Windows);
+        var plan = Plan(); plan.Install = install.Root;
+        plan.Environment["PROCEDURALROADS_GENERATE_ROADS_ON_LOAD"] = "0";
+        var launch = ClientSession.StartInfo(plan, ClientPlatform.Windows);
+        Assert.Equal("0", launch.Environment["PROCEDURALROADS_GENERATE_ROADS_ON_LOAD"]);
+    }
+
+    [Fact] public void ANullClientEnvironmentIsRefusedAsAPlanError()
+    {
+        var plan = Plan(); plan.Environment = null!;
+        Assert.Contains("client.environment", Assert.Throws<ArgumentException>(() => plan.Validate()).Message);
+    }
+
     private static ClientRunPlan Plan(string mode = "owned") => new()
     {
         Mode = mode, Install = mode == "owned" ? Path.GetFullPath("client-install") : "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
