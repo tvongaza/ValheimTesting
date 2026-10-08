@@ -257,6 +257,7 @@ public class PlayerPlacementTests
 
         var error = Assert.Throws<TimeoutException>(() => PlayerPlacement.ArriveCore(server, client, Point,
             TimeSpan.FromSeconds(10.75), default, skipIntro: false, loadedGround: false, () => elapsed));
+        Assert.Contains("too little time remains", error.Message);
         Assert.Contains("still settling", error.Message);
         Assert.Equal(2, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));

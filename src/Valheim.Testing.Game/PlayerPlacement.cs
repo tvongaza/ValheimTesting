@@ -127,9 +127,11 @@ public static class PlayerPlacement
     private static TimeSpan WaitSlice(Func<TimeSpan> elapsed, TimeSpan timeout, TimeSpan minimum, string failure, string? lastPending)
     {
         TimeSpan left = timeout - elapsed();
-        // A support wait shorter than its required hold could only restart that hold and obscure the last game reason.
-        if (left < minimum || left <= TimeSpan.Zero)
+        if (left <= TimeSpan.Zero)
             throw new TimeoutException($"{failure} by the arrival deadline. Last game result: {lastPending ?? "no game wait result"}.");
+        // Leave enough time for a useful support hold after request/frame latency; otherwise keep the last game reason.
+        if (left < minimum)
+            throw new TimeoutException($"{failure}: too little time remains before the arrival deadline for another game wait. Last game result: {lastPending ?? "no game wait result"}.");
         return left < TimeSpan.FromSeconds(5) ? left : TimeSpan.FromSeconds(5);
     }
 
