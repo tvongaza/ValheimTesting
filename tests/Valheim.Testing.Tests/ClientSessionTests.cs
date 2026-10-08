@@ -35,6 +35,19 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(1, process.Stops);
     }
 
+    [Fact] public void AnExplicitlyUnpinnedClientCannotSendADiagnosticGameCommand()
+    {
+        var plan = Owned(Path.GetFullPath("client-install"));
+        plan.Capabilities = ["test/absent"]; // Failure after the unpinned environment check.
+        var transport = new ScriptedTransport();
+        GameActor? diagnosticActor = null;
+        Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _output,
+            () => new FakeOwnedProcess(99), () => transport, (_, _) => Task.CompletedTask,
+            default, null, null, failureEvidence: (_, actor, _) => diagnosticActor = actor));
+        Assert.Null(diagnosticActor);
+        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal));
+    }
+
     [Fact] public void AFailedWorldRoundCapturesEvidenceOnlyOnceBeforeStopping()
     {
         var process = new FakeOwnedProcess(99);

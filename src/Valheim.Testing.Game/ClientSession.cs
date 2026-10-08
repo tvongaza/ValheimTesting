@@ -304,7 +304,7 @@ public sealed class ClientSession : IDisposable
             actor.VerifyEnvironment(plan.MenuExpectations);
             if (plan.Capabilities.Any())
                 CliCapabilities.Require(actor, plan.Capabilities); // Live, after any static manifest check.
-            pinsVerified = true;
+            pinsVerified = actor.Pinned;
             return new ClientSession(actor, process, logs, architecture, output, failureEvidence).Using(account);
         }
         catch (Exception error)
