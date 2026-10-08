@@ -55,8 +55,8 @@ public sealed class SessionControl(GameActor actor)
         {
             var capability = actor.RequireCapability("valheim.session/state");
             // A hosting game's world is ready before its own player spawns, so a protected wait goes on until that player exists.
-            state = ObservedWait.Until(protectPlayer ? $"world {worldUid} ready with its local player (to protect it)" : $"world {worldUid} ready",
-                () => Read(capability), s => s.WorldReady && (!protectPlayer || s.Dedicated || s.LocalPlayer), timeout, ReadInterval, cancellation,
+            state = ObservedWait.UntilWithReadBudget(protectPlayer ? $"world {worldUid} ready with its local player (to protect it)" : $"world {worldUid} ready",
+                () => Read(capability), s => s.WorldReady && (!protectPlayer || s.Dedicated || s.LocalPlayer), actor.BusyReadTimeLeft($"world {worldUid}"), ReadInterval, TimeSpan.FromMilliseconds(200), cancellation,
                 fails: s => s.LoadError ? "the game reports a world load error" : s.WorldPresent && s.WorldUid != worldUid
                     ? $"a different world is loaded: UID {s.WorldUid}, expected {worldUid}. The world loaded, so this is the wrong world (another fixture or a fresh one), not a load failure" : null,
                 describe: s => $"phase {s.Phase}, world {s.WorldUid ?? "none"}, ready {s.WorldReady}, local player {s.LocalPlayer}, connection {s.ConnectionStatus}" +
@@ -238,7 +238,7 @@ public sealed class SessionControl(GameActor actor)
         using (actor.BusyReadRetries(timeout, cancellation))
         {
             actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // A transition always needs fresh pins.
-            state = WaitForWorld(worldUid, timeout, cancellation, protectPlayer: false); // A joined client's world is ready with its player.
+            state = WaitForWorld(worldUid, actor.BusyReadTimeLeft($"world {worldUid}"), cancellation, protectPlayer: false); // A joined client's world is ready with its player.
         }
         // Protection is a mutating test command on a joined client: an owned client's access is established first and must
         // allow it (AllowOnServerClients), so a client staged without it is named here rather than by a refused command.
@@ -282,7 +282,7 @@ public sealed class SessionControl(GameActor actor)
             capability = actor.RequireCapability("valheim.session/state");
         }
         bool left = false;
-        return ObservedWait.Until("the " + what, () =>
+        return ObservedWait.UntilWithReadBudget("the " + what, () =>
             {
                 SessionState state;
                 try { state = Read(capability); }
@@ -296,7 +296,7 @@ public sealed class SessionControl(GameActor actor)
                 left |= state.Phase != "menu" || state.ConnectionStatus == "Connecting";
                 return state;
             },
-            state => state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected", timeout, ReadInterval, cancellation,
+            state => state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected", actor.BusyReadTimeLeft("the " + what), ReadInterval, TimeSpan.FromMilliseconds(200), cancellation,
             fails: state => state.LoadError ? "the game reports a world load error" : state.WorldPresent && state.WorldUid != worldUid ? "a different world is loaded"
                 : left && state.Phase == "menu" && state.ConnectionStatus.StartsWith("Error", StringComparison.Ordinal)
                     ? $"the {what} failed: the client is back at its menu with {state.ConnectionStatus}. Nothing was retried" : null,

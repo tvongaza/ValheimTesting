@@ -5,6 +5,35 @@ using Xunit;
 
 public class GameThreadBusyTests
 {
+    private sealed class LaggedTransport(ScriptedTransport inner) : IGameTransport, IGameThreadStatusTransport
+    {
+        public CommandResult Execute(string command, TimeSpan timeout)
+        {
+            if (command == "cli_extensions") Thread.Sleep(150);
+            if (command == "cli_extension valheim.session/state" && timeout < TimeSpan.FromMilliseconds(25)) return Unstarted();
+            return inner.Execute(command, timeout);
+        }
+        public IReadOnlyDictionary<string, string> ReadStatus() => new Dictionary<string, string> { ["mainThreadIdleMs"] = "10" };
+        public void Dispose() => inner.Dispose();
+    }
+
+    [Fact]
+    public void DelayedCapabilityListingDoesNotRestartTheWorldWaitDeadline()
+    {
+        var inner = new ScriptedTransport().Extension("valheim.session", "state", _ => new
+        {
+            source = "session-state", complete = true, phase = "loading", worldUid = "7",
+            worldPresent = true, worldReady = false, server = true, dedicated = true,
+            localPlayer = false, playerReady = false, saving = false, loadError = false, connectionStatus = "Connecting"
+        });
+        using var actor = new GameActor("server", new LaggedTransport(inner));
+        actor.VerifyEnvironment("cli_expect worlduid=7");
+        var error = Assert.Throws<WaitTimeoutException>(() =>
+            new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(350)));
+        Assert.Contains("phase loading", error.Message);
+        Assert.DoesNotContain("game thread to resume", error.Message);
+    }
+
     private static CommandResult Unstarted() => new()
     {
         Ok = false, ErrorCode = "command_failed",

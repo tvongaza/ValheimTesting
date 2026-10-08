@@ -106,6 +106,16 @@ public sealed class GameActor : IDisposable
         return scope;
     }
 
+    // Session waits and their read retries must use the same deadline. Re-applying the original timeout
+    // after capability or pin round trips leaves a window of 1 ms reads after the retry budget expires.
+    internal TimeSpan BusyReadTimeLeft(string target)
+    {
+        var left = _busyReads?.Left ?? throw new InvalidOperationException("No busy-read scope is active.");
+        if (left <= TimeSpan.FromMilliseconds(25))
+            throw new WaitTimeoutException(target, TimeSpan.Zero, "The world-entry deadline passed before another session read could start.");
+        return left;
+    }
+
     private CommandResult ReadOnlyCommand(string command)
     {
         while (true)
@@ -116,6 +126,7 @@ public sealed class GameActor : IDisposable
                 if (!reply.Ok && reply.ErrorCode == "command_failed" &&
                     reply.Message?.Contains("had not started and will not run", StringComparison.Ordinal) == true)
                     reply.RequireAccepted();
+                if (reply.Ok && _busyReads != null) _busyReads.ResponsiveRetryUsed = false;
                 return reply.Result;
             }
             catch (InvalidOperationException error) when (_busyReads != null && IsUnstartedCommandTimeout(error))
