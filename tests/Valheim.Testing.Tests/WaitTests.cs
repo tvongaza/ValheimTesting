@@ -125,6 +125,17 @@ public class ObservedWaitTests
         Assert.Equal("a value that never comes", error.Target); Assert.Equal("read " + reads, error.LastSeen);
         Assert.Throws<WaitTimeoutException>(() => ObservedWait.Until("a value that never comes", () => false, x => x, TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(5)));
     }
+    [Fact] public void ExpiryDoesNotStartASecondReadWithNoTimeLeft()
+    {
+        int reads = 0;
+        var error = Assert.Throws<WaitTimeoutException>(() => ObservedWait.RunBlocking(
+            "a game state that never arrives", _ => ++reads, _ => false,
+            TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(20), default,
+            describe: value => "read " + value,
+            changed: (_, _) => Thread.Sleep(40)));
+        Assert.Equal(1, reads);
+        Assert.Equal("read 1", error.LastSeen);
+    }
     [Fact] public void AFailingObservationEndsTheWaitAtOnce()
     {
         int reads = 0;

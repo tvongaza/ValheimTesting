@@ -76,11 +76,18 @@ public static class ObservedWait
         if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval), "Give a positive interval.");
         describe ??= value => value?.ToString() ?? "nothing";
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        bool hasLast = false;
+        T last = default!;
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
-            // A value observed is judged even if cancellation arrives meanwhile: a match may own a resource (a connected actor).
+            // Do not start a new read after the deadline. A game-thread command given a few milliseconds would
+            // time out before starting and obscure the useful last state with a false stall diagnosis.
+            if (hasLast && clock.Elapsed >= timeout)
+                throw new WaitTimeoutException(target, clock.Elapsed, describe(last));
+            // A value observed is judged even if the deadline passes meanwhile: a match may own a resource.
             T value = await observe(timeout - clock.Elapsed, cancellation).ConfigureAwait(false);
+            last = value; hasLast = true;
             if (fails?.Invoke(value) is string reason) throw new WaitFailedException(target, reason, clock.Elapsed, describe(value));
             if (matches(value)) return new(value, clock.Elapsed);
             var remaining = timeout - clock.Elapsed;

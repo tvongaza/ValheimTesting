@@ -89,6 +89,7 @@ public sealed class GameActor : IDisposable
         private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
         public TimeSpan Left => timeout - _clock.Elapsed;
         public CancellationToken Cancellation => cancellation;
+        public bool ResponsiveRetryUsed { get; set; }
         public void Dispose() => actor._busyReads = previous;
     }
 
@@ -125,8 +126,8 @@ public sealed class GameActor : IDisposable
     private TimeSpan EffectiveTimeout()
     {
         var left = _busyReads?.Left;
-        // ObservedWait takes one final read at its deadline so it can report the last game state.
-        // Give that read only a millisecond; the outer wait owns the useful timeout message.
+        // An in-flight read can consume the deadline. The caller's wait should report its last valid state;
+        // no new read is started after expiry by ObservedWait.
         if (left <= TimeSpan.Zero) return TimeSpan.FromMilliseconds(1);
         return left is { } time && time < CommandTimeout ? time : CommandTimeout;
     }
@@ -151,7 +152,14 @@ public sealed class GameActor : IDisposable
                 !long.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out long age) || age < 0)
                 throw new InvalidOperationException("The pinned ValheimCLI STATUS has no valid game-thread heartbeat.");
             if (first && age < 2000)
-                throw new InvalidOperationException("Harness fault: the game thread is responsive but a read-only command expired before starting.", timeout);
+            {
+                // The game may have resumed between the command's timeout and this independent STATUS read.
+                // Give that race one read-only retry; two such expiries with a responsive thread are a harness fault.
+                if (scope.ResponsiveRetryUsed)
+                    throw new InvalidOperationException("Harness fault: the game thread is responsive but read-only commands repeatedly expire before starting.", timeout);
+                scope.ResponsiveRetryUsed = true;
+                return;
+            }
             if (age < 2000) return;
             if (age > _longestMainThreadIdleMs) _longestMainThreadIdleMs = age;
             if (fields.TryGetValue("busy", out string? busy) && busy is not (null or "none"))

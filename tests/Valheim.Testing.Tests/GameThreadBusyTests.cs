@@ -11,7 +11,7 @@ public class GameThreadBusyTests
         Message = "ERROR: code=command_timeout message=Command #30 did not complete in time; it had not started and will not run."
     };
 
-    private static ScriptedTransport Session(out Func<int> attempts)
+    private static ScriptedTransport Session(out Func<int> attempts, int unstartedReads = 1)
     {
         int count = 0;
         var transport = new ScriptedTransport()
@@ -22,7 +22,7 @@ public class GameThreadBusyTests
                 localPlayer = false, playerReady = false, saving = false, loadError = false, connectionStatus = "None"
             });
         transport.On("cli_extension valheim.session/state", command =>
-            ++count == 1 ? Unstarted() : ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.session", new
+            ++count <= unstartedReads ? Unstarted() : ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.session", new
             {
                 source = "session-state", complete = true, phase = "world-present", worldUid = "7",
                 worldPresent = true, worldReady = true, server = true, dedicated = true,
@@ -60,13 +60,22 @@ public class GameThreadBusyTests
     }
 
     [Fact]
-    public void AResponsiveHeartbeatMakesAnUnstartedTimeoutAHarnessFault()
+    public void AStallThatEndsBeforeTheFirstStatusReadingRetriesTheReadOnce()
     {
         var transport = Session(out var attempts).OnStatus(() => new Dictionary<string, string> { ["mainThreadIdleMs"] = "15" });
         using var actor = transport.Actor(expectations: "cli_expect worlduid=7");
+        Assert.True(new SessionControl(actor).WaitForWorld("7", TimeSpan.FromSeconds(2)).WorldReady);
+        Assert.Equal(2, attempts());
+    }
+
+    [Fact]
+    public void AResponsiveHeartbeatMakesAnUnstartedTimeoutAHarnessFault()
+    {
+        var transport = Session(out var attempts, unstartedReads: 2).OnStatus(() => new Dictionary<string, string> { ["mainThreadIdleMs"] = "15" });
+        using var actor = transport.Actor(expectations: "cli_expect worlduid=7");
         Assert.Contains("Harness fault", Assert.Throws<InvalidOperationException>(() =>
             new SessionControl(actor).WaitForWorld("7", TimeSpan.FromSeconds(2))).Message);
-        Assert.Equal(1, attempts());
+        Assert.Equal(2, attempts());
     }
 
     [Fact]
