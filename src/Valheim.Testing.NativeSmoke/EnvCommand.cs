@@ -65,10 +65,17 @@ internal static class EnvCommand
         if (preflight)
             try { packaged = packagedRefusal(); }
             catch (InvalidOperationException unread) { packaged = unread.Message; } // an identity Windows would not report refuses too
-        IReadOnlyList<CampaignPreflightProblem> problems = preflight
+        List<CampaignPreflightProblem> problems = preflight
             ? [.. packaged == null ? [] : new[] { new CampaignPreflightProblem("this-machine", "packaged app", packaged) },
                .. await inventory.LocalJournalProblemsAsync().ConfigureAwait(false)]
             : [];
+        if (preflight && OperatingSystem.IsWindows() && inventory.Environments.Any(recipe => recipe.Roles.Contains("client") &&
+            inventory.Hosts.TryGetValue(recipe.Host, out var host) && host.Kind == "local"))
+        {
+            try { await DesktopClientSession.PreflightAsync().ConfigureAwait(false); }
+            catch (Exception failure) when (failure is InteractiveSessionException or HostOperationException)
+            { problems.Add(new CampaignPreflightProblem("this-machine", "client desktop", failure.Message)); }
+        }
         bool ready = missingRoles.Length == 0 && problems.Count == 0;
         if (json)
         {
@@ -90,6 +97,7 @@ internal static class EnvCommand
         foreach (var problem in problems) output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
         output.WriteLine(missingRoles.Length != 0 ? "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment."
             : packaged != null ? "REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal."
+            : problems.Any(problem => problem.Input == "client desktop") ? "REFUSED: the client desktop is unavailable; see the reason above."
             : problems.Count != 0 ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
             : "ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered. " +
               (OperatingSystem.IsWindows() ? "This process is not inside a packaged app. " : "") +

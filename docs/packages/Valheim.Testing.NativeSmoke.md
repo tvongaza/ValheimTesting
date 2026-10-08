@@ -26,13 +26,15 @@ dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease
 
 ## One Windows PC
 
-The usual setup is one Windows PC with Valheim and the free Valheim Dedicated Server installed through Steam, each with BepInExPack_Valheim, and the Steam client running and signed in. Nothing else is written by hand: the machine's installs, ports and folders are detected, and `valheim-test env list` prints what it found, what it assumed and every path it tried for anything missing ([this machine, with no file](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Game.md#this-machine-with-no-file)). `valheim-test env preflight` adds whether a one-off can run there: a server and a client environment, and no earlier run going or left unrecovered on this machine.
+The usual setup is one Windows PC with Valheim and the free Valheim Dedicated Server installed through Steam, each with BepInExPack_Valheim, and the Steam client running and signed in. Nothing else is written by hand: the machine's installs, ports and folders are detected, and `valheim-test env list` prints what it found, what it assumed and every path it tried for anything missing ([this machine, with no file](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Game.md#this-machine-with-no-file)). `valheim-test env preflight` adds whether a one-off can run there: a server and a client environment, no earlier run going or left unrecovered on this machine, and, for a local Windows client, a single desktop session with Steam running in it.
 
 For a server-only mod, `server-load` loads it on an owned dedicated server and, by default, joins one owned clean client (ValheimCLI only, the mod pinned absent). On one Windows PC with Valheim and the free Valheim Dedicated Server installed through Steam, each with BepInExPack_Valheim installed (or the loader as `--loader-package`), nothing else is needed; valheim-test brings its pinned ValheimCLI when its build carries the bundle (otherwise give `VALHEIMCLI_BUNDLE`):
 
 ```sh
 valheim-test server-load --mod /path/to/ServerMod.dll
 ```
+
+You can invoke `valheim-test start` through SSH on a Windows PC. Before it copies a fixture or game, it checks that the SSH user has exactly one desktop session and Steam is running there. It then starts the owned client in that desktop through a temporary scheduled task, rather than leaving the client in SSH's noninteractive session. If Steam is absent or the session changes between the check and launch, the run refuses. Leave the desktop unlocked for a native run; a locked desktop can leave the game stalled at its first scene, which the startup deadline and kept logs will report. The client process is stopped by identity and its logs are kept with the result.
 
 ## A client-side mod: start
 

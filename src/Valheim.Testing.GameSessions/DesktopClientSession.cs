@@ -1,0 +1,82 @@
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
+
+namespace Valheim.Testing.GameSessions;
+
+/// <summary>
+/// Opens a disposable Windows client from a runner started over SSH. The client belongs to the signed-in desktop user,
+/// while the runner keeps ownership of its exact process and collects its logs on every exit path. The install and world
+/// are staged by the caller; this is only the placement of the already-pinned client.
+/// </summary>
+internal static class DesktopClientSession
+{
+    /// <summary>Refuses without a side effect if this runner cannot reach one Steam-backed Windows desktop session.</summary>
+    public static Task PreflightAsync(CancellationToken cancellation = default)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("A desktop task is only needed for a Windows client started from an SSH session.");
+        return InteractiveClient.RequireWindowsDesktopAsync(new LocalGameHost("this machine", HostShell.WindowsPowerShell), cancellation);
+    }
+
+    /// <summary>Launches the plan's pinned disposable install in the desktop session and waits for its menu.</summary>
+    public static ClientSession Open(ClientRunPlan plan, string output, ICollection<RunLog> logs, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(logs);
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("DesktopClientSession requires Windows.");
+        if (!plan.Owned || plan.CopySource) throw new ArgumentException("Desktop launch needs a bound, owned disposable client plan.", nameof(plan));
+        plan.CheckOwnedInstall();
+        var host = new LocalGameHost("this machine", HostShell.WindowsPowerShell);
+        var quick = TimeSpan.FromSeconds(30);
+        InteractiveClient.RequireWindowsDesktopAsync(host, cancellation).GetAwaiter().GetResult();
+        HostInstall.RequirePortFreeAsync(host, plan.Port, quick, cancellation).GetAwaiter().GetResult();
+        HostClientPreflight.CheckAsync(host, plan.Install, ClientPlatform.Windows, plan, quick, cancellation).GetAwaiter().GetResult();
+
+        string launchDirectory = Path.Combine(output, "desktop-launch");
+        string keptDirectory = Path.Combine(output, "desktop-client");
+        string log = Path.Combine(plan.Install, HostedServerRun.BepInExLog);
+        var moved = host.RunAsync(HostedClientScripts.MoveAside(host.Shell.Kind), new Dictionary<string, string>
+        {
+            ["log"] = log, ["to"] = Path.Combine(output, "previous-LogOutput.log"),
+        }, quick, cancellation).GetAwaiter().GetResult().EnsureSuccess("Moving the client's previous BepInEx log aside");
+        if (InteractiveClient.Line(moved.Stdout, "VT-MOVED") == null && InteractiveClient.Line(moved.Stdout, "VT-NONE") == null)
+            throw new HostOperationException("Unexpected reply while moving the client's previous BepInEx log", moved);
+
+        var launch = GameLaunch.ForClient(plan.Install, plan.LaunchArguments, plan.Environment, hostPlatform: ClientPlatform.Windows,
+            secretVariables: plan.PasswordVariable is { } password ? [password] : null);
+        var tunnel = host.OpenCliTunnelAsync(plan.Port, quick, cancellation: cancellation).GetAwaiter().GetResult();
+        var keptLogs = new[]
+        {
+            new RunLog("client BepInEx log", Path.Combine(keptDirectory, "game-0.log"), Required: true),
+            new RunLog("client Player.log", Path.Combine(keptDirectory, "game-1.log")),
+        };
+        try
+        {
+            var session = ClientSession.Launch(plan, output,
+                () => new HostedClientProcess(InteractiveClient.StartAsync(host, launch, launchDirectory,
+                    TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds)), cancellation: cancellation).GetAwaiter().GetResult(),
+                    host, plan.Install, tunnel, keptDirectory),
+                () => new CliTransport(tunnel.Address, tunnel.LocalPort),
+                async (left, token) =>
+                {
+                    var clock = Stopwatch.StartNew();
+                    var bepInEx = TimeSpan.FromSeconds(plan.BepInExSeconds);
+                    (await host.WaitForLogAsync(log, 0, new Regex("^"), StartupEvents.StartupFailures,
+                        bepInEx < left ? bepInEx : left, token).ConfigureAwait(false)).EnsureMatched();
+                    (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures,
+                        left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
+                    using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
+                    await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
+                }, cancellation, null, keptLogs);
+            foreach (var kept in session.Logs) logs.Add(kept);
+            return session;
+        }
+        catch (Exception error)
+        {
+            foreach (var kept in ClientSession.KeptLogs(error)) logs.Add(kept);
+            tunnel.Dispose();
+            throw;
+        }
+    }
+}
