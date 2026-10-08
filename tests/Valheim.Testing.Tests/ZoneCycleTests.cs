@@ -200,7 +200,8 @@ public sealed class ZoneCycleTests : IDisposable
         using var server = world.Server().Actor("server"); using var client = world.Client().Actor("client");
         var report = new ScenarioReport("zones");
         var round = new ClientRound("first", 0, true, server, client, report, _output, "1");
-        Assert.Throws<WaitTimeoutException>(() => Cycle(timeout: TimeSpan.FromMilliseconds(300)).Run(round));
+        // Leave enough time for arrival's 250 ms supported hold; this case tests the later, stuck zone unload.
+        Assert.Throws<WaitTimeoutException>(() => Cycle(timeout: TimeSpan.FromSeconds(1)).Run(round));
         Assert.Equal(new[] { "first: the client unloads the zones" }, report.Steps.Where(s => !s.Passed).Select(s => s.Name));
         var evidence = JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "first-zone-cycle.json"))).RootElement;
         Assert.Equal(JsonValueKind.Object, evidence.GetProperty("before").ValueKind);

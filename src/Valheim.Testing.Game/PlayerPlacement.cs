@@ -38,8 +38,9 @@ public static class PlayerPlacement
     /// client); with none, the client teleports its own player (<c>cli_teleport</c>), which needs the client's test access
     /// (cheats acknowledged and, on a client joined to a server, ValheimCLI's <c>AllowOnServerClients</c>) and is the way to
     /// place one of several players. Unless <paramref name="skipIntro"/> is false it first ends a first-join intro
-    /// (<see cref="SkipIntro"/>), a no-op for a character that has spawned before. Each transition is awaited inside
-    /// the game in bounded intervals, without repeatedly reading remote state: ValheimCLI waits until the player can be
+    /// (<see cref="SkipIntro"/>), a no-op for a character that has spawned before. The intro skip is one mutating game
+    /// command and cannot be cancelled while it is in flight. The subsequent read-only game waits use bounded intervals,
+    /// without repeatedly reading remote state: ValheimCLI waits until the player can be
     /// teleported (the game silently drops a
     /// teleport within 2 s of a spawn or of the previous teleport), arms a one-hop trace, and after the one teleport request
     /// waits for the teleport to finish with a ready floor, then for supported arrival. A player shown flying is refused
@@ -49,25 +50,33 @@ public static class PlayerPlacement
     /// teleport target: once the floor is ready the client measures the loaded ground there (<see cref="TerrainProbe"/>,
     /// <c>loaded-ground</c>) and the landing must be supported at that height (<see cref="TeleportArrival.Target"/>). Use it
     /// for a check that is not about terrain, where a location's levelling can move the ground from the generator's height;
-    /// a terrain check leaves it off, so a different ground fails. <paramref name="timeout"/> (at most 600 s) covers the
-    /// intro and every wait. Only a named in-game wait timeout starts another interval; a lost reply is an unknown outcome,
+    /// a terrain check leaves it off, so a different ground fails. The loaded-ground comparison is one observation, not
+    /// a sliced game wait. <paramref name="timeout"/> (at most 600 s) covers the intro and every wait. Only a named
+    /// in-game wait timeout starts another interval; a lost reply is an unknown outcome,
     /// not a failure to act. Needs <see cref="ArrivalCapabilities"/> on the client, and <c>valheim.world/terrain</c> with
     /// <paramref name="loadedGround"/>.
     /// </summary>
     public static TeleportArrival Arrive(GameActor? server, GameActor client, HeightExpectation point,
         TimeSpan timeout, CancellationToken cancellation = default, bool skipIntro = true, bool loadedGround = false)
+        => ArriveCore(server, client, point, timeout, cancellation, skipIntro, loadedGround, null);
+
+    // A monotonic elapsed-time source lets tests drive every deadline boundary without sleeping or depending on CI load.
+    internal static TeleportArrival ArriveCore(GameActor? server, GameActor client, HeightExpectation point,
+        TimeSpan timeout, CancellationToken cancellation, bool skipIntro, bool loadedGround, Func<TimeSpan>? elapsedOverride)
     {
         if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(600)) throw new ArgumentOutOfRangeException(nameof(timeout));
         TerrainProbe.Validate("loaded-ground", "arrival point", [point], .3f);
         // One listing; a missing pack is named before anything is sent.
         var capabilities = client.RequireCapabilities(loadedGround ? [.. ArrivalCapabilities, "valheim.world/terrain"] : ArrivalCapabilities);
         Capability support = capabilities[1], reading = capabilities[2];
-        var clock = Stopwatch.StartNew();
+        var stopwatch = Stopwatch.StartNew();
+        Func<TimeSpan> elapsed = elapsedOverride ?? (() => stopwatch.Elapsed);
+        cancellation.ThrowIfCancellationRequested();
         if (skipIntro) SkipIntro(client, TimeSpan.FromSeconds(Math.Clamp(Math.Floor(timeout.TotalSeconds), 1, 60)));
         cancellation.ThrowIfCancellationRequested();
         // One read, not a wait: a flying player is never supported, so refuse before anything moves.
         RefuseFlying(client.Observe(reading));
-        WaitConsole(client, clock, timeout, cancellation, seconds => $"cli_wait_teleportable {seconds} 0 {!skipIntro}",
+        WaitConsole(client, elapsed, timeout, cancellation, seconds => $"cli_wait_teleportable {seconds} 0 {!skipIntro}",
             "OK: TELEPORTABLE ", "ERROR: code=teleport_ready_timeout ", "The client never became ready for a teleport");
         cancellation.ThrowIfCancellationRequested();
         string armed = client.Execute("cli_teleport_trace_arm").RequireLine("OK: TELEPORT_TRACE_ARM id=", "The client did not arm a teleport trace");
@@ -79,7 +88,7 @@ public static class PlayerPlacement
         else
             client.Execute("cli_teleport " + at).RequireLine("OK: Teleported to ", "The client did not teleport its own player"); // Never a peer index.
         cancellation.ThrowIfCancellationRequested();
-        string trace = WaitConsole(client, clock, timeout, cancellation, seconds => $"cli_teleport_trace_wait {id} {seconds}",
+        string trace = WaitConsole(client, elapsed, timeout, cancellation, seconds => $"cli_teleport_trace_wait {id} {seconds}",
             "OK: TELEPORT_TRACE ", $"ERROR: code=teleport_trace_timeout id={id} ", "The client did not complete its teleport");
         var timing = TeleportTrace.Parse(trace, id);
         if (!timing.FloorAtDone)
@@ -90,62 +99,73 @@ public static class PlayerPlacement
             // The floor is ready, so the loaded ground is the game's own; the support check below keeps its limits.
             var terrain = capabilities[3];
             TerrainComparison ground = null!;
-            WithTimeout(client, timeout - clock.Elapsed, () => ground = TerrainProbe.Compare("loaded-ground", "arrival target", [point], .3f,
+            WithTimeout(client, timeout - elapsed(), () => ground = TerrainProbe.Compare("loaded-ground", "arrival target", [point], .3f,
                 (x, z) => client.Observe(terrain, x.ToString("R", CultureInfo.InvariantCulture), z.ToString("R", CultureInfo.InvariantCulture), "loaded-ground")));
             point = point with { Height = ground.Samples[0].Actual };
         }
-        Observation landed;
-        while (true)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            TimeSpan slice = WaitSlice(clock, timeout);
-            string seconds = slice.TotalSeconds.ToString("R", CultureInfo.InvariantCulture);
-            try
+        Observation landed = Sliced(client, elapsed, timeout, cancellation, "The player did not settle after the teleport",
+            seconds =>
             {
-                Observation result = null!;
-                WithTimeout(client, slice, () => result = client.Observe(support,
-                    point.X.ToString("R", CultureInfo.InvariantCulture), point.Height.ToString("R", CultureInfo.InvariantCulture),
-                    point.Z.ToString("R", CultureInfo.InvariantCulture), seconds));
-                landed = result;
-                break;
-            }
-            catch (InvalidOperationException error) when (GameActor.IsExtensionFailure(error, support.Path, "support_timeout"))
-            {
-                // The game's wait expired, but the observation is safe to ask again with the original arrival deadline.
-            }
-        }
+                try
+                {
+                    return new GameWait<Observation>(client.Observe(support,
+                        point.X.ToString("R", CultureInfo.InvariantCulture), point.Height.ToString("R", CultureInfo.InvariantCulture),
+                        point.Z.ToString("R", CultureInfo.InvariantCulture), seconds), null);
+                }
+                catch (InvalidOperationException error) when (GameActor.IsExtensionFailure(error, support.Path, "support_timeout", "command_failed"))
+                {
+                    return new GameWait<Observation>(null, error.Message);
+                }
+            }, TimeSpan.FromMilliseconds(300)); // The game requires a continuous 250 ms supported hold.
         RefuseFlying(landed);
         if (!SurfaceProbe.Supported(landed, point))
             throw new InvalidOperationException($"The player did not settle at ({point.X}, {point.Height}, {point.Z}); the client's wait ended with: {landed.Data.GetRawText()}. The teleport was not repeated.");
         return new TeleportArrival(landed.Data.Clone(), trace, timing) { Target = point };
     }
 
-    private static TimeSpan WaitSlice(Stopwatch clock, TimeSpan timeout)
+    private static TimeSpan WaitSlice(Func<TimeSpan> elapsed, TimeSpan timeout, TimeSpan minimum, string failure, string? lastPending)
     {
-        TimeSpan left = timeout - clock.Elapsed;
-        if (left <= TimeSpan.Zero) throw new TimeoutException("The arrival deadline expired; the teleport was not repeated.");
+        TimeSpan left = timeout - elapsed();
+        // A support wait shorter than its required hold could only restart that hold and obscure the last game reason.
+        if (left < minimum || left <= TimeSpan.Zero)
+            throw new TimeoutException($"{failure} by the arrival deadline. Last game result: {lastPending ?? "no game wait result"}.");
         return left < TimeSpan.FromSeconds(5) ? left : TimeSpan.FromSeconds(5);
     }
 
-    private static string WaitConsole(GameActor client, Stopwatch clock, TimeSpan timeout, CancellationToken cancellation,
-        Func<string, string> command, string success, string gameTimeout, string failure)
+    private sealed record GameWait<T>(T? Value, string? Pending) where T : class;
+
+    private static T Sliced<T>(GameActor client, Func<TimeSpan> elapsed, TimeSpan timeout, CancellationToken cancellation,
+        string failure, Func<string, GameWait<T>> attempt, TimeSpan? minimum = null) where T : class
     {
+        string? lastPending = null;
         while (true)
         {
             cancellation.ThrowIfCancellationRequested();
-            TimeSpan slice = WaitSlice(clock, timeout);
+            TimeSpan slice = WaitSlice(elapsed, timeout, minimum ?? TimeSpan.Zero, failure, lastPending);
             string seconds = slice.TotalSeconds.ToString("R", CultureInfo.InvariantCulture);
-            GameReply reply = null!;
-            WithTimeout(client, slice, () =>
-                reply = client.Execute(command(seconds), requireAccepted: false));
-            if (reply.Accepted) return reply.RequireLine(success, failure);
+            GameWait<T> result = null!;
+            WithTimeout(client, slice, () => result = attempt(seconds));
+            if (result.Value != null) return result.Value;
+            lastPending = result.Pending ?? throw new InvalidOperationException("A game wait returned neither a result nor a pending reason.");
+        }
+    }
+
+    private static string WaitConsole(GameActor client, Func<TimeSpan> elapsed, TimeSpan timeout, CancellationToken cancellation,
+        Func<string, string> command, string success, string gameTimeout, string failure)
+    {
+        return Sliced(client, elapsed, timeout, cancellation, failure, seconds =>
+        {
+            GameReply reply = client.Execute(command(seconds), requireAccepted: false);
+            if (reply.Accepted) return new GameWait<string>(reply.RequireLine(success, failure), null);
             // ValheimCLI marks the game's ERROR line as command_failed. A socket timeout or lost completion has a
             // different transport code, and must never cause an action or wait to be replayed blindly.
             if (reply.ErrorCode == "command_failed" &&
                 reply.Output.Count(GameReply.IsRefusalLine) == 1 &&
-                reply.Refusal?.StartsWith(gameTimeout, StringComparison.Ordinal) == true) continue;
+                reply.Refusal?.StartsWith(gameTimeout, StringComparison.Ordinal) == true)
+                return new GameWait<string>(null, reply.Refusal);
             reply.RequireAccepted();
-        }
+            throw new InvalidOperationException(failure + ": " + reply.Describe());
+        });
     }
 
     private static void WithTimeout(GameActor actor, TimeSpan remaining, Action action)

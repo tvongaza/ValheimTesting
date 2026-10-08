@@ -41,15 +41,13 @@ public class PlayerPlacementTests
         return (server, client);
     }
 
-    [Theory]
-    [InlineData(30)]
-    [InlineData(180)]
-    public void HealthyArrivalMakesOneWaitPerPhaseAndOneTeleport(int seconds)
+    [Fact]
+    public void HealthyArrivalMakesOneWaitPerPhaseAndOneTeleport()
     {
         var (serverTransport, clientTransport) = SignalTransports();
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         var before = client.CommandTimeout;
-        var result = PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(seconds));
+        var result = PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30));
         Assert.True(result.Support.GetProperty("grounded").GetBoolean());
         Assert.Contains("floorAtDone=True", result.Trace);
         Assert.Equal(2000, result.Timing.MovedMs);
@@ -140,6 +138,18 @@ public class PlayerPlacementTests
     }
 
     [Fact]
+    public void CancellationBeforeIntroDoesNotSendTheOneShotCommand()
+    {
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        var (serverTransport, clientTransport) = SignalTransports();
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.Throws<OperationCanceledException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30), cancel.Token));
+        Assert.Equal(0, clientTransport.Count("cli_skip_intro"));
+        Assert.Equal(0, serverTransport.Count("cli_teleport_peer"));
+    }
+
+    [Fact]
     public void UnrelatedTraceRefusalDoesNotWaitAgain()
     {
         var (serverTransport, clientTransport) = SignalTransports(traceWait: _ => ScriptedTransport.Ok("ERROR: code=teleport_trace_missing id=7"));
@@ -160,6 +170,94 @@ public class PlayerPlacementTests
         using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
         Assert.Throws<InvalidOperationException>(() => PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30)));
         Assert.Equal(1, clientTransport.Count("cli_teleport_trace_wait"));
+        Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
+    }
+
+    [Fact]
+    public void LostSupportReplyIsNotTreatedAsAnInGameTimeout()
+    {
+        var (serverTransport, clientTransport) = SignalTransports(supportWait: _ => new CommandResult
+        {
+            Ok = false, ErrorCode = "connection_lost", Message = "the connection closed",
+            Output = ["EXTENSION_RESULT {\"ok\":false,\"code\":\"support_timeout\",\"message\":\"still settling\"}"],
+        });
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        Assert.Contains("support_timeout", Assert.Throws<InvalidOperationException>(() =>
+            PlayerPlacement.Arrive(server, client, Point, TimeSpan.FromSeconds(30))).Message);
+        Assert.Equal(1, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
+        Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
+    }
+
+    [Theory]
+    [InlineData("ready", "pending=teleport cooldown")]
+    [InlineData("trace", "pending=floor loading")]
+    [InlineData("support", "still settling")]
+    public void RepeatedGameTimeoutsKeepTheLastReasonAndDoNotRepeatTeleport(string phase, string reason)
+    {
+        TimeSpan elapsed = TimeSpan.Zero;
+        void Advance(string command, int secondsIndex) => elapsed += TimeSpan.FromSeconds(
+            double.Parse(command.Split(' ')[secondsIndex], System.Globalization.CultureInfo.InvariantCulture));
+        int ready = 0, trace = 0, support = 0;
+        var (serverTransport, clientTransport) = SignalTransports(
+            teleportable: command =>
+            {
+                if (phase != "ready") return ScriptedTransport.Ok("OK: TELEPORTABLE ms=0");
+                ready++;
+                Advance(command, 1);
+                return CommandResult.FromOutput("cli_wait_teleportable", ["ERROR: code=teleport_ready_timeout pending=teleport cooldown"]);
+            },
+            traceWait: command =>
+            {
+                if (phase != "trace") return ScriptedTransport.Ok(TraceOk);
+                trace++;
+                Advance(command, 2);
+                return CommandResult.FromOutput("cli_teleport_trace_wait", ["ERROR: code=teleport_trace_timeout id=7 pending=floor loading"]);
+            },
+            supportWait: command =>
+            {
+                if (phase != "support") return ScriptedTransport.Ok(ScriptedTransport.ExtensionResult("valheim.world", Standing()));
+                support++;
+                Advance(command, 5);
+                return SupportTimeout();
+            });
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+        var error = Assert.Throws<TimeoutException>(() => PlayerPlacement.ArriveCore(server, client, Point,
+            TimeSpan.FromSeconds(12.5), default, skipIntro: false, loadedGround: false, () => elapsed));
+
+        Assert.Contains(reason, error.Message);
+        Assert.Contains(phase == "ready" ? "never became ready" : phase == "trace" ? "did not complete" : "did not settle", error.Message);
+        Assert.Equal(phase == "ready" ? 0 : 1, serverTransport.Count("cli_teleport_peer"));
+        int count = phase == "ready" ? ready : phase == "trace" ? trace : support;
+        Assert.Equal(3, count);
+        string prefix = phase switch
+        {
+            "ready" => "cli_wait_teleportable ",
+            "trace" => "cli_teleport_trace_wait ",
+            _ => "cli_extension valheim.world/player-support-wait ",
+        };
+        var seconds = clientTransport.Commands.Where(command => command.StartsWith(prefix, StringComparison.Ordinal))
+            .Select(command => double.Parse(command.Split(' ')[phase == "ready" ? 1 : phase == "trace" ? 2 : 5], System.Globalization.CultureInfo.InvariantCulture))
+            .ToArray();
+        Assert.Equal(count, seconds.Length);
+        Assert.Equal(new[] { 5d, 5d, 2.5d }, seconds);
+        if (phase == "support") Assert.All(seconds, value => Assert.True(value >= .3, "A support slice must allow the 250 ms hold"));
+    }
+
+    [Fact]
+    public void SupportDoesNotRestartAnImpossibleSubHoldTail()
+    {
+        TimeSpan elapsed = TimeSpan.Zero;
+        var (serverTransport, clientTransport) = SignalTransports(supportWait: command =>
+        {
+            elapsed += TimeSpan.FromSeconds(double.Parse(command.Split(' ')[5], System.Globalization.CultureInfo.InvariantCulture));
+            return SupportTimeout();
+        });
+        using var server = serverTransport.Actor(); using var client = clientTransport.Actor();
+
+        var error = Assert.Throws<TimeoutException>(() => PlayerPlacement.ArriveCore(server, client, Point,
+            TimeSpan.FromSeconds(10.2), default, skipIntro: false, loadedGround: false, () => elapsed));
+        Assert.Contains("still settling", error.Message);
+        Assert.Equal(2, clientTransport.Count("cli_extension valheim.world/player-support-wait"));
         Assert.Equal(1, serverTransport.Count("cli_teleport_peer"));
     }
 
