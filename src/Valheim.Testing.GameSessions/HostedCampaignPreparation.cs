@@ -282,6 +282,16 @@ public static class HostedCampaignPreparation
         return (await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, hostFactory == null ? ShippedLoader.OnHostAsync : null).ConfigureAwait(false)).Report;
     }
 
+    // The one-shot checked its local host before writing an adapter or fixture. Inspect remote actors here; preparation
+    // rechecks local conditions immediately before staging. This avoids a third local process/port/desktop probe.
+    internal static async Task<CampaignPreflightReport> InspectAfterLocalPreflightAsync(string manifestFile, TimeSpan timeout,
+        CancellationToken cancellation = default)
+    {
+        var inspection = InspectInputs(manifestFile);
+        return (await InspectHostsAsync(inspection, timeout, null, cancellation, ShippedLoader.OnHostAsync,
+            skipLocalChecks: true).ConfigureAwait(false)).Report;
+    }
+
     private sealed record HostInspection(CampaignPreflightReport Report,
         IReadOnlyDictionary<string, string> ObservedSteamIds, IReadOnlyDictionary<string, HostListing> SourceListings,
         IReadOnlyDictionary<string, CharacterDirectories> CharacterDirectories)
@@ -309,11 +319,13 @@ public static class HostedCampaignPreparation
     // whose runner ran elsewhere may be going there; one that shares only the lease host is not a conflict. Runs of this very
     // process are its own. Returns, per host read, the process IDs runs journalled (for the conflicting-use check's message).
     private static async Task<Dictionary<string, Dictionary<int, string>>> InspectJournalsAsync(Inputs inputs, ConcurrentBag<CampaignPreflightProblem> failures,
-        TimeSpan timeout, Func<string, IGameHost>? hostFactory, CancellationToken cancellation)
+        TimeSpan timeout, Func<string, IGameHost>? hostFactory, CancellationToken cancellation, bool skipLocal = false)
     {
         var owners = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
         var names = inputs.Roles.Select(role => role.Role.Host).Append(inputs.Profile.SteamAccounts?.LeaseHost ?? "")
-            .Where(name => inputs.Profile.Hosts.ContainsKey(name)).Distinct(StringComparer.Ordinal).ToList();
+            .Where(name => inputs.Profile.Hosts.ContainsKey(name) && (!skipLocal || inputs.Profile.Hosts[name].Kind != "local"))
+            .Distinct(StringComparer.Ordinal).ToList();
+        if (names.Count == 0) return owners;
         JournalStatusReport status;
         try
         {
@@ -402,7 +414,8 @@ public static class HostedCampaignPreparation
     }
 
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, ShippedLoader.Rule? shippedLoader = null)
+        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, ShippedLoader.Rule? shippedLoader = null,
+        bool skipLocalChecks = false)
     {
         if (inspection.Inputs == null) return new HostInspection(inspection.Report,
             new Dictionary<string, string>(), new Dictionary<string, HostListing>(), new Dictionary<string, CharacterDirectories>());
@@ -413,7 +426,8 @@ public static class HostedCampaignPreparation
         var characterDirectories = new ConcurrentDictionary<string, CharacterDirectories>(StringComparer.Ordinal);
         var loaders = new ConcurrentDictionary<string, ShippedLoader.Choice>(StringComparer.Ordinal);
         // The run journal of every host the campaign touches (#257): no other run is going there or left something it owns.
-        var owners = await InspectJournalsAsync(inputs, failures, timeout, hostFactory, cancellation).ConfigureAwait(false);
+        var owners = await InspectJournalsAsync(inputs, failures, timeout, hostFactory, cancellation,
+            skipLocal: skipLocalChecks).ConfigureAwait(false);
         // The same local-host gate used by start, server-load and env preflight. Journal reading above still covers remote
         // actors and supplies process ownership; this call does not read the local journal a second time.
         var localActors = inputs.Roles.Where(item => inputs.Profile.Hosts[item.Role.Host].Kind == "local")
@@ -422,17 +436,17 @@ public static class HostedCampaignPreparation
                 Name = item.Name, Host = item.Role.Host, Install = item.Role.Install, Runtime = item.Role.Runtime,
                 CliPort = item.Role.CliPort, Roles = [item.Name == "server" ? "server" : "client"],
             })).ToArray();
-        if (localActors.Length != 0)
+        if (localActors.Length != 0 && !skipLocalChecks)
         {
             var localInventory = new EnvironmentInventory { Hosts = inputs.Profile.Hosts,
                 Environments = localActors.Select(actor => actor.Recipe).ToList() };
             var localProblems = await LocalHostPreflight.InspectAsync(localInventory, localActors, timeout, cancellation,
                 hostFactory: name => hostFactory?.Invoke(name) ?? inputs.Profile.CreateHost(name),
-                probes: new LocalHostPreflight.Probes(
-                    Processes: (host, client, limit, token) => HostedRuntimeStage.RequireStoppedAsync(host, limit, token,
+                probes: LocalHostPreflight.DefaultProbes with
+                {
+                    Processes = (host, client, limit, token) => HostedRuntimeStage.RequireStoppedAsync(host, limit, token,
                         clientSession: client, owners: owners.GetValueOrDefault(host.Name)),
-                    // A fake host in a controlled test represents its own Steam state; no test process owns that Steam.
-                    SteamRunning: hostFactory == null ? null : () => true),
+                },
                 includeJournal: false).ConfigureAwait(false);
             foreach (var problem in localProblems) failures.Add(problem);
         }

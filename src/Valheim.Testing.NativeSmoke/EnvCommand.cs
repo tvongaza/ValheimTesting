@@ -64,7 +64,7 @@ internal static class EnvCommand
         List<CampaignPreflightProblem> problems = preflight
             ? [.. await LocalHostPreflight.InspectAsync(inventory,
                 inventory.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
-                TimeSpan.FromSeconds(60), probes: new LocalHostPreflight.Probes(Packaged: packagedRefusal)).ConfigureAwait(false)]
+                TimeSpan.FromSeconds(60), probes: LocalHostPreflight.DefaultProbes with { Packaged = packagedRefusal }).ConfigureAwait(false)]
             : [];
         bool packaged = problems.Any(problem => problem.Input == "packaged app");
         foreach (var recipe in inventory.Environments.Where(recipe => preflight && recipe.Roles.Contains("client") &&
@@ -106,6 +106,7 @@ internal static class EnvCommand
             : problems.Any(problem => problem.Input == "run journal") ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
             : problems.Count != 0 ? "REFUSED: a local preflight check failed; see the reason above."
             : "ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered. " +
+              "The local host lock, desktop, Steam process, game processes, and ValheimCLI ports passed their checks. " +
               (OperatingSystem.IsWindows() ? "This process is not inside a packaged app. " : "") +
               "A session's inputs and host readiness are checked by valheim-test session check SESSION [--hosts].");
         return ready ? 0 : 3;

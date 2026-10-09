@@ -44,7 +44,6 @@ internal static class ServerLoad
         // and for a test that passes one.
         Func<string, string, ShippedLoader.Choice?>? Loader = null,
         Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null,
-        Func<Choice, Task<IReadOnlyList<CampaignPreflightProblem>>>? LocalPreflight = null,
         // An A/B run freezes its automatic server choice before either arm starts. Its command
         // still names the package, while this carries the reason into each arm's evidence.
         ShippedLoader.Choice? FrozenServerLoader = null);
@@ -230,18 +229,13 @@ internal static class ServerLoad
         }
         // The one-shot's local hosts are checked before an adapter, fixture or campaign file is written. The later campaign
         // inspection still checks remote actors and rechecks local conditions just before staging, closing the time gap.
-        if (seams.LocalPreflight != null || seams.Inspect == null)
-        {
-            var local = seams.LocalPreflight is { } probe
-                ? await probe(choice).ConfigureAwait(false)
-                : await LocalHostPreflight.InspectAsync(choice.Inventory,
-                    new[] { new LocalHostPreflight.Actor("server", server) }
-                        .Concat(choice.Client is { } client ? [new LocalHostPreflight.Actor("client", client)] : []),
-                    TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
-            if (local.Count != 0)
-                throw new InvalidOperationException(string.Join("; ", local.Select(problem =>
-                    $"{problem.Actor} {problem.Input}: {problem.Message}")));
-        }
+        var local = await LocalHostPreflight.InspectAsync(choice.Inventory,
+            new[] { new LocalHostPreflight.Actor("server", server) }
+                .Concat(choice.Client is { } client ? [new LocalHostPreflight.Actor("client", client)] : []),
+            TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
+        if (local.Count != 0)
+            throw new InvalidOperationException(string.Join("; ", local.Select(problem =>
+                $"{problem.Actor} {problem.Input}: {problem.Message}")));
         string core = Path.Combine(serverLoader == null ? serverInstall : BepInExLoaderPackage.Read(serverLoader).Root, InstallPins.CoreDirectory);
         if (!Directory.Exists(core))
             throw new DirectoryNotFoundException($"The server install {serverInstall} has no BepInEx ({InstallPins.CoreDirectory}). Install BepInExPack_Valheim into it, " +
@@ -373,7 +367,8 @@ internal static class ServerLoad
         if (clientPlan != null) clients["client"] = clientPlan;
 
         // The read-only host checks, before anything is copied: a client that cannot run is refused with the reason, never dropped.
-        var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(60), cancellation: cancellation)))(campaignFile).ConfigureAwait(false);
+        var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAfterLocalPreflightAsync(file,
+            TimeSpan.FromSeconds(60), cancellation)))(campaignFile).ConfigureAwait(false);
         foreach (var actor in report.Actors.Where(actor => actor.CharactersDirectory != null))
             Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
         if (!report.Ready)

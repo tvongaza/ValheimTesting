@@ -186,7 +186,7 @@ public sealed class ClientSession : IDisposable
         try { reservation.Start(); }
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }
         finally { reservation.Stop(); }
-        if (!SteamRunning()) throw new InvalidOperationException("No Steam client is running in this session. An owned client needs Steam running and signed in, in the desktop session this runner runs in.");
+        RequireSteamRunning();
         string log = Path.Combine(plan.Install, "BepInEx", "LogOutput.log");
         var platform = GameLaunch.DetectClient(plan.Install);
         string playerLog = PlayerLog(platform);
@@ -350,6 +350,13 @@ public sealed class ClientSession : IDisposable
         var found = Process.GetProcessesByName(name);
         foreach (var process in found) process.Dispose();
         return found.Length != 0;
+    }
+
+    internal static void RequireSteamRunning(Func<bool>? running = null)
+    {
+        // This is a machine-wide process check, not proof that the expected account is signed in.
+        if (!(running ?? SteamRunning)())
+            throw new InvalidOperationException("No Steam client is running on this machine; open Steam before running an owned client.");
     }
 
     /// <summary>

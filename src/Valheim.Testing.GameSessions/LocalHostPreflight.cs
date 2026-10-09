@@ -10,6 +10,7 @@ namespace Valheim.Testing.GameSessions;
 internal static class LocalHostPreflight
 {
     private static readonly AsyncLocal<Probes?> TestDefaults = new();
+    internal static Probes DefaultProbes => TestDefaults.Value ?? new Probes();
 
     internal sealed record Actor(string Name, EnvironmentRecipe Recipe);
 
@@ -40,7 +41,7 @@ internal static class LocalHostPreflight
         Func<string, IGameHost>? hostFactory = null, Probes? probes = null, bool includeJournal = true)
     {
         ArgumentNullException.ThrowIfNull(inventory);
-        probes ??= TestDefaults.Value ?? new Probes();
+        probes ??= DefaultProbes;
         var roles = selected.Where(actor => inventory.Hosts[actor.Recipe.Host].Kind == "local").ToArray();
         var problems = new List<CampaignPreflightProblem>();
         try
@@ -86,8 +87,7 @@ internal static class LocalHostPreflight
                 catch (Exception error) when (Refusal(error)) { problems.Add(new(group.Key, "client desktop", error.Message)); }
                 try
                 {
-                    if (!(probes.SteamRunning ?? ClientSession.SteamRunning)())
-                        problems.Add(new(group.Key, "Steam session", "No Steam client is running in this desktop session; open Steam and sign in before running a client."));
+                    ClientSession.RequireSteamRunning(probes.SteamRunning);
                 }
                 catch (Exception error) when (Refusal(error)) { problems.Add(new(group.Key, "Steam session", error.Message)); }
             }

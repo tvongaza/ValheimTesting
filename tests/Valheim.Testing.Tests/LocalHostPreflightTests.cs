@@ -73,6 +73,8 @@ public sealed class LocalHostPreflightTests : IDisposable
 
         Assert.Equal(["packaged app", "run journal", "host lock", "client desktop", "Steam session", "session", "ValheimCLI port"],
             problems.Select(problem => problem.Input));
+        Assert.Equal(Assert.Throws<InvalidOperationException>(() => ClientSession.RequireSteamRunning(() => false)).Message,
+            Assert.Single(problems, problem => problem.Input == "Steam session").Message);
         Assert.Contains(problems, problem => problem.Actor == "client" && problem.Input == "ValheimCLI port" && problem.Message == "port busy");
     }
 }
