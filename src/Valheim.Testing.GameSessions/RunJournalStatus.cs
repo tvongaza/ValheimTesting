@@ -123,6 +123,7 @@ internal static class RunJournalStatus
                             {
                                 var characterFields = staged.Fields.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
                                 foreach (var (name, value) in fields) characterFields[name] = value;
+                                characterFields["staged"] = "true";
                                 left[$"character {Field("fileName")}"] = staged with { Status = "staged, not retired", Fields = characterFields };
                             }
                             break;

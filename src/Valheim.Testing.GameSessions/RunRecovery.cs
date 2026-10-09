@@ -186,8 +186,22 @@ internal static class RunRecovery
                 {
                     if (!copy.Fields.TryGetValue("evidenceRoot", out string? evidence))
                         throw new InvalidDataException("its journal names no evidence folder for game logs");
-                    int logs = TargetedRegression.RecoverJournalledInstall(path, evidence);
-                    Step(copy.Host, what, $"removed the journalled regression install; kept {logs} game log(s) in its evidence");
+                    // A new plain start always claims its path before copying. Check an existing
+                    // claim before either the complete-marker or partial-copy removal path.
+                    if (File.Exists(RegressionCopyClaim.PathFor(path))) RegressionCopyClaim.Require(path, runId);
+                    int logs = 0;
+                    if (Directory.Exists(path) && !File.Exists(Path.Combine(path, TargetedRegression.MarkerFile)))
+                    {
+                        RegressionCopyClaim.Require(path, runId);
+                        WorldFixture.DeleteTree(path);
+                        Step(copy.Host, what, "removed the claimed partial regression copy (no game was launched)");
+                    }
+                    else
+                    {
+                        logs = TargetedRegression.RecoverJournalledInstall(path, evidence);
+                        Step(copy.Host, what, $"removed the journalled regression install; kept {logs} game log(s) in its evidence");
+                    }
+                    if (File.Exists(RegressionCopyClaim.PathFor(path))) RegressionCopyClaim.Retire(path, runId);
                     await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"))).ConfigureAwait(false);
                     continue;
                 }
@@ -257,14 +271,10 @@ internal static class RunRecovery
                     string what = $"character {character.What}";
                     try
                     {
-                        // An interrupted local copy that recorded intent but not completion may never have
-                        // created the file. Clear a missing file; delete only the one exact source copy.
-                        if (character.Fields.GetValueOrDefault("characterKind") == "regression" &&
-                            character.Fields.GetValueOrDefault("staged") != "true")
+                        // Intent without completion is not ownership. A missing file is safe to clear;
+                        // only regression copies with an exact registered hash may be retired.
+                        if (character.Fields.GetValueOrDefault("staged") != "true")
                         {
-                            string expected = character.Fields.GetValueOrDefault("expectedSha256") ?? "";
-                            if (expected.Length != 64 || !expected.All(Uri.IsHexDigit))
-                                throw new InvalidDataException("the registered character copy did not record completion or its expected SHA-256; its filename is not proof of ownership");
                             HostListing? listing;
                             try { listing = await HostInstall.ListAsync(host, character.Fields["characters"], timeout, cancellation: cancellation).ConfigureAwait(false); }
                             catch (DirectoryNotFoundException) { listing = null; }
@@ -276,10 +286,18 @@ internal static class RunRecovery
                                 await Note(group.Key, JournalEntry.Of(JournalEntry.CharacterRetired, ("fileName", fileName))).ConfigureAwait(false);
                                 continue;
                             }
+                            // A hosted stage checks for collisions only inside its install command, after
+                            // intent was journalled. Even identical bytes could be a pre-existing save.
+                            // Its unconfirmed file requires a human decision; never retire by name.
+                            if (character.Fields.GetValueOrDefault("characterKind") != "regression")
+                                throw new InvalidDataException("the hosted character stage never confirmed completion; a same-named save may be personal even if its bytes match. Move it out of characters_local for safekeeping after inspection, then retry recovery");
+                            string expected = character.Fields.GetValueOrDefault("expectedSha256") ?? "";
+                            if (expected.Length != 64 || !expected.All(Uri.IsHexDigit))
+                                throw new InvalidDataException("the registered character copy did not record completion or its expected SHA-256; its filename is not proof of ownership. Inspect the save and journal, move the file out of characters_local for safekeeping if personal, then retry recovery");
                             if (owned.Length != 1 || !owned[0].Key.Equals(DisposableCharacterStore.SaveFile(fileName),
                                     host.Shell.Kind == HostShellKind.PowerShell ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
                                 !owned[0].Value.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                                throw new InvalidDataException("the registered character copy did not record completion and the file differs from its journalled SHA-256; inspect it without deleting it");
+                                throw new InvalidDataException("the registered character copy did not record completion and the file differs from its journalled SHA-256; inspect the save without deleting it, move it out of characters_local for safekeeping if personal, then retry recovery");
                         }
                         await HostedCharacterStage.RetireAsync(host, new HostedCampaignCharacter
                         {

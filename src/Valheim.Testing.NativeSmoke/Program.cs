@@ -47,6 +47,7 @@ int exitCode = 3;
 string? outcome = null;
 bool journalClean = true;
 bool copyJournalled = false;
+bool copyClaimed = false;
 bool copyDone = false;
 bool characterPending = false;
 try
@@ -141,6 +142,8 @@ try
     RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyIntended,
         ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", output)));
     copyJournalled = true;
+    RegressionCopyClaim.Create(runner.Install, runId);
+    copyClaimed = true;
     Console.WriteLine("run ID: " + runId);
     bool passed = true;
     foreach (string arm in inputs.Mod.Arms.Keys)
@@ -232,6 +235,7 @@ finally
         try
         {
             if (lastArm != null) runner.Remove(lastArm, lastArmOutput!); else runner.Remove();
+            if (copyClaimed) RegressionCopyClaim.Retire(runner.Install, runId);
             if (copyJournalled)
                 RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyRetired,
                     ("runtime", runner.Install), ("local", "true")));
