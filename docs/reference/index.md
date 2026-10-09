@@ -2,6 +2,8 @@
 
 This reference is generated from the current package sources. It is a **candidate public-surface inventory**, not a promise that every listed type is supported in 1.0. Issue [#135](https://github.com/tvongaza/ValheimTesting/issues/135) selects that contract; [#140](https://github.com/tvongaza/ValheimTesting/issues/140) supplies the behavior and failure documentation it needs.
 
+For a released 0.1 package, use its [versioned API reference](https://tvongaza.github.io/ValheimTesting/versions/) built from the release tag. The unversioned site home tracks current source and may move ahead of packages on NuGet.org.
+
 The [0.1 documentation scope](documentation-scope.md) names the operation entry points whose members must have rendered XML summaries in CI and explains the boundaries for other generated declarations.
 
 Start with [Bring your mod](https://github.com/tvongaza/ValheimTesting/blob/main/docs/adopting.md) to choose a package and test layer. The [getting-started guide](https://github.com/tvongaza/ValheimTesting/blob/main/docs/getting-started.md) has current package versions; each package guide below explains its contract and limits. The guides are published from the same source revision as this reference. The [ValheimCLI fork](https://github.com/tvongaza/valheimCLI) owns game-side command and capability semantics. The external `Valheim.Testing.Cli` transport is built from the exact fork commit in [`cli-dependency.json`](https://github.com/tvongaza/ValheimTesting/blob/main/cli-dependency.json); read its [transport guide at that commit](https://github.com/tvongaza/valheimCLI/blob/9e8ca679298e559e995ab5b04ef84b782b15a0ad/docs/client-library.md). Its generated type reference is still to be integrated under #140.

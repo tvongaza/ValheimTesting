@@ -8,6 +8,8 @@ docs/reference/api/
 docs/reference/_site/
 docs/reference/packages/
 .DS_Store
+__pycache__/
+*.pyc
 *.user
 # A native GameSession fixture's private environment (examples/FullLifecycle/ExampleMod.Tests/ExampleSession.cs,
 # tests/Valheim.Testing.NativeAcceptance.Tests/AcceptanceSession.cs).

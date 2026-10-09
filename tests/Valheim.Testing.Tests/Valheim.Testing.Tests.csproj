@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable>
     <!-- dev-loop.cs is a file-based script; compiled here without its top-level entry point. -->
-    <DefineConstants>$(DefineConstants);DEV_LOOP_TESTS</DefineConstants>
+    <DefineConstants>$(DefineConstants);DEV_LOOP_TESTS;VERSIONED_API_DOCS_TESTS</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
@@ -14,6 +14,7 @@
     <!-- Compiled twice at test time against a working BepInEx stub, as a ScriptEngine reload loads it twice. -->
     <EmbeddedResource Include="../../src/Valheim.Testing.Adapter/Adapter/QuitLogFlush.cs" LogicalName="Adapter.QuitLogFlush.cs" />
     <Compile Include="../../tools/dev-loop/dev-loop.cs" Link="DevLoop/dev-loop.cs" />
+    <Compile Include="../../scripts/versioned-api-docs.cs" Link="Tools/versioned-api-docs.cs" />
     <!-- The ObserveCheck example's flow without its CliTransport entry point (ObserveCheckTests). -->
     <Compile Include="../../examples/ObserveCheck/ObserveCheck.cs" Link="ObserveCheck/ObserveCheck.cs" />
     <!-- Compiles small ValheimCLI-shaped assemblies at test time for the capability manifest tests; none is committed. -->

@@ -60,6 +60,18 @@ jobs:
           (cd release && sha256sum *.nupkg)
       - name: Audit package contents before publication
         run: dotnet run scripts/package-audit.cs -- --directory release --source-commit "$GITHUB_SHA"
+      # Only a coordinated 0.1 RC or final build gets an immutable API snapshot.
+      # The snapshot is built from this tag's XML/source, before any package is pushed.
+      - name: Build versioned API reference before publication
+        run: |
+          version=$(dotnet run scripts/versioned-api-docs.cs -- version release/*.nupkg)
+          if [ -z "$version" ]; then
+            echo "No coordinated 0.1 RC/final version; current preview docs remain on Pages."
+            exit 0
+          fi
+          dotnet tool restore
+          VALHEIM_DOCS_RELEASE_VERSION="$version" dotnet run scripts/api-docs.cs
+          dotnet run scripts/versioned-api-docs.cs -- archive docs/reference/_site "$version" "$GITHUB_SHA" "release/api-reference-$version.tgz"
       # Before the push, so "new" means this run publishes it. A version already on NuGet.org is skipped by the
       # push, and its package here is a rebuild with different bytes, so it is not attached to the GitHub
       # release. The exact package URL answers at once; the search index is not consulted.
@@ -95,6 +107,7 @@ jobs:
           path: |
             notes/packages.md
             new/*.nupkg
+            release/api-reference-*.tgz
           if-no-files-found: error
       - name: NuGet login (OIDC to temporary API key)
         uses: NuGet/login@v1
@@ -157,17 +170,24 @@ jobs:
         run: |
           shopt -s nullglob
           new=(dist/new/*.nupkg)
+          docs=(dist/release/api-reference-*.tgz)
           if [ ${#new[@]} -eq 0 ]; then
             echo "::error::No package version is new in $GITHUB_REF_NAME; bump a <Version> before tagging."
             exit 1
           fi
           (cd dist/new && sha256sum *.nupkg) > dist/SHA256SUMS
+          if [ ${#docs[@]} -gt 0 ]; then
+            (cd dist/release && sha256sum api-reference-*.tgz) >> dist/SHA256SUMS
+          fi
           {
             echo "Built from \`$GITHUB_SHA\` and published to NuGet.org by [this run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
             echo
             cat dist/notes/packages.md
             echo
             echo "The new packages and their SHA-256 checksums are attached. Pin exact versions; see [package versions and feeds](https://github.com/$GITHUB_REPOSITORY/blob/main/docs/getting-started.md#package-versions-and-feeds)."
+            if [ ${#docs[@]} -gt 0 ]; then
+              echo "This coordinated 0.1 release also attaches its source-built API reference archive. The same SHA256SUMS covers it; after the API Pages workflow deploys, the online snapshot is listed at https://tvongaza.github.io/ValheimTesting/versions/."
+            fi
             echo "The attached release-contract.json hashes NuGet.org's repository-signed bytes of every compatible package; SHA256SUMS hashes the unsigned package files attached here. It also records the ValheimCLI fork, required commands and shipped loader."
           } > dist/notes.md
           # Package IDs have no hyphen, so one in a file name is a prerelease version.
@@ -175,6 +195,6 @@ jobs:
           for f in "${new[@]}"; do
             case "${f##*/}" in *-*) prerelease=(--prerelease) ;; esac
           done
-          gh release create "$GITHUB_REF_NAME" "${new[@]}" dist/SHA256SUMS dist/release-contract.json \
+          gh release create "$GITHUB_REF_NAME" "${new[@]}" "${docs[@]}" dist/SHA256SUMS dist/release-contract.json \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
             --notes-file dist/notes.md --generate-notes "${prerelease[@]}"
