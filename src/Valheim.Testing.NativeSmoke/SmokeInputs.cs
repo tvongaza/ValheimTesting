@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
@@ -65,7 +64,7 @@ internal static class SmokeInputs
 
     /// <summary>
     /// start's client environment: --client-env, or the first, of the --inventory file's or this machine's (Valheim from
-    /// Steam), with --game and --loader-package as this machine's override. It must be on this machine. The chosen
+    /// Steam), with --game as this machine's install override and --client-loader-package for the selected client's loader. It must be on this machine. The chosen
     /// environment and its host are written to <c>environments.json</c> in <paramref name="output"/>, beside the run's
     /// <c>regression.json</c>, so the run's consumer and its bundle read the machine it used. <paramref name="shippedLoader"/> is the
     /// shipped-loader decision (<see cref="ShippedLoader.Instead(string, string)"/> in a real run; it reads the real install,
@@ -74,42 +73,30 @@ internal static class SmokeInputs
     internal static (EnvironmentInventory Inventory, EnvironmentRecipe Client, ShippedLoader.Choice? ShippedLoader) Client(IReadOnlyDictionary<string, string> options, string output,
         Func<string, string, ShippedLoader.Choice?>? shippedLoader = null, Action? requireMacGui = null)
     {
-        string? file = options.TryGetValue("--inventory", out string? named) ? Path.GetFullPath(named) : null;
-        bool overrides = options.ContainsKey("--game") || options.ContainsKey("--loader-package");
-        if (file != null && overrides)
-            throw new ArgumentException("--game and --loader-package override this machine's client; with --inventory, set install and loaderPackage in the file.");
-        string? overrideFile = null;
-        if (overrides)
-        {
-            options.TryGetValue("--game", out string? game);
-            if (game != null) SmokeOutput.RefuseInside(output, game);
-            var entry = new JsonObject { ["name"] = "local-client", ["roles"] = new JsonArray("client") };
-            if (game != null) entry["install"] = Path.GetFullPath(game);
-            if (options.TryGetValue("--loader-package", out string? loader)) entry["loaderPackage"] = Path.GetFullPath(loader);
-            overrideFile = Path.Combine(Path.GetTempPath(), "vt-start-" + Guid.NewGuid().ToString("N") + ".json");
-            File.WriteAllText(overrideFile, new JsonObject { ["environments"] = new JsonArray(entry) }.ToJsonString());
-        }
         EnvironmentInventory inventory;
-        try { inventory = EnvironmentInventory.Read(file ?? overrideFile); }
-        catch (ArgumentException failure) when (file == null)
+        string? file;
+        try
+        {
+            (inventory, file) = SmokeInputResolver.ReadInventory(options, output,
+                [new SmokeInputResolver.LocalOverride("local-client", "client", options.GetValueOrDefault("--game"))],
+                ["--game"], keepOverrideFile: false,
+                "--game overrides this machine's client; with --inventory, set its install in the file. --client-loader-package may still override the selected client's loader.");
+        }
+        catch (ArgumentException failure) when (!options.ContainsKey("--inventory"))
         {
             throw new ArgumentException(failure.Message + (failure.Message.Contains("892970", StringComparison.Ordinal) ? " Give --game DIR." : ""), failure);
         }
-        finally { if (overrideFile != null) File.Delete(overrideFile); }
         string? wanted = options.GetValueOrDefault("--client-env");
-        var client = (wanted == null ? inventory.Environments.FirstOrDefault(recipe => recipe.Roles.Contains("client"))
-                : inventory.Environments.FirstOrDefault(recipe => recipe.Name == wanted && recipe.Roles.Contains("client")))
-            ?? throw new ArgumentException(wanted != null ? $"--client-env {wanted}: the inventory has no client environment of that name."
-                : "The inventory has no client environment. " + string.Join(" ", inventory.Missing) + " Give --game DIR.");
-        if (inventory.Hosts[client.Host].Kind != "local")
-            throw new ArgumentException($"Client environment {client.Name} is on {client.Host}, not this machine. start runs its client here; name a client environment on this machine with --client-env.");
+        var client = SmokeInputResolver.Pick(inventory, "client", wanted, "--client-env", file ?? "this machine",
+            "Give --game DIR.", localOnly: true, command: "start");
         // Refuse a locked or non-console Mac before creating run evidence or a disposable install.
         // The optional probe lets every test host prove the refusal order without an actual GUI session.
         if (requireMacGui != null) requireMacGui();
         else if (OperatingSystem.IsMacOS()) MacGuiSession.Require();
         // An install whose own Doorstop pair does not match takes the shipped BepInExPack in its disposable copy (one printed line).
-        var shipped = client.LoaderPackage == null ? shippedLoader?.Invoke("client", client.Install) : null;
-        if (shipped != null) client.LoaderPackage = shipped.Manifest;
+        var (clientManifest, shipped) = SmokeInputResolver.Loader("client", client,
+            options.GetValueOrDefault("--client-loader-package"), shippedLoader);
+        client.LoaderPackage = clientManifest;
         // The machine the run uses, as a one-environment inventory beside its inputs.
         var recorded = new EnvironmentInventory
         {

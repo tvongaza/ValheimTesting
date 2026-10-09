@@ -474,6 +474,12 @@ public static class HostedCampaignPreparation
                         sourceListings[item.Name] = await HostedRuntimeStage.InspectSourceAsync(host,
                             item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
                             item.Role.Install, loader, timeout, cancellation).ConfigureAwait(false);
+                        // Use the same slice check as one-shot start/server-load, with the loader the host
+                        // inspection actually selected. Session check --hosts must refuse before any copy.
+                        if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" } && hostFactory == null)
+                            GameLaunch.RequireClientArchitecture(item.Role.Install,
+                                item.Role.Architecture == "arm64" ? ClientArchitecture.Arm64 : ClientArchitecture.X64,
+                                loader?.Root);
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "game and loader", error.Message)); }

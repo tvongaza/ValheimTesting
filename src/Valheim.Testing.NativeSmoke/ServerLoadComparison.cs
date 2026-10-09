@@ -18,19 +18,14 @@ internal static class ServerLoadComparison
         Console.CancelKeyPress += onCancel;
         try
         {
-            // Arguments as server-load reads them, without --remove-mod: one value per option, or a switch.
-            int removeAt = Array.IndexOf(args, "--remove-mod");
-            if (removeAt < 0 || removeAt + 1 >= args.Length || Array.IndexOf(args, "--remove-mod", removeAt + 1) >= 0)
-                throw new ArgumentException("Specify exactly one --remove-mod.");
-            var rest = args.Take(removeAt).Concat(args.Skip(removeAt + 2)).ToArray();
-            if (!ServerLoad.TryRead(rest, out var parsed, out string error)) throw new ArgumentException(error);
-            if (parsed!.Switches.Contains("--preflight-only")) throw new ArgumentException("--preflight-only runs no arm; preflight each arm with server-load instead.");
-            if (parsed.Switches.Contains("--hold")) throw new ArgumentException("--hold cannot run in a comparison: both arms must finish before their results can be compared. Use server-load --hold for interactive inspection.");
+            if (!SmokeCommandOptions.TryRead(args, SmokeCommandOptions.Command.ServerLoadAb,
+                allowImplicitMod: false, out var read, out string error)) throw new ArgumentException(error);
+            string removed = Path.GetFullPath(read!.Options["--remove-mod"]);
+            read.Options.Remove("--remove-mod");
+            var parsed = ServerLoad.FromParsed(read);
             var options = parsed!.Options;
-            if (!options.TryGetValue("--output", out string? outputOption)) throw new ArgumentException("Specify --output for the comparison's two arms.");
-            string output = Path.GetFullPath(outputOption);
+            string output = Path.GetFullPath(options["--output"]);
             if (Path.Exists(output)) throw new IOException("--output must be new; comparison evidence will not be overwritten: " + output);
-            string removed = Path.GetFullPath(args[removeAt + 1]);
             var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             var mods = parsed.Mods.Select(Path.GetFullPath).ToList();
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
@@ -56,23 +51,15 @@ internal static class ServerLoadComparison
             var optional = parsed.Optional.ToList();
             var capabilities = parsed.ServerOnly ? ["valheim.session/state"]
                 : new List<string> { "valheim.session/state", "valheim.session/join", "valheim.session/leave" };
-            NativeDependencyRequest Request(List<string> selected) => new()
-            {
-                Mods = selected, SearchRoots = roots,
-                GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(server))!,
-                BepInExCore = serverCore,
-                CliManifest = cliManifest, CliFiles = cliFiles,
-                Capabilities = capabilities, OptionalReferences = optional,
-            };
+            NativeDependencyRequest Request(List<string> selected) => SmokeDependencyInputs.Request(selected, server,
+                serverCore, cliManifest, cliFiles, roots, optional, capabilities);
             var before = resolve(Request(mods));
             var after = resolve(Request(mods.Where(mod => !mod.Equals(removed, pathComparison)).ToList()));
             if (!before.Ready || !after.Ready)
             {
-                static string Gaps(NativeDependencyLock arm) => string.Join("; ", arm.Gaps.Select(gap =>
-                    gap.Kind + " " + gap.Name + ": " + gap.Reason));
                 throw new InvalidDataException("Dependency choices remain before launch: " +
-                    (before.Ready ? "before ready" : "before [" + Gaps(before) + "]") + "; " +
-                    (after.Ready ? "after ready" : "after [" + Gaps(after) + "]"));
+                    (before.Ready ? "before ready" : "before [" + SmokeDependencyInputs.Gaps(before) + "]") + "; " +
+                    (after.Ready ? "after ready" : "after [" + SmokeDependencyInputs.Gaps(after) + "]"));
             }
             before.RequireSameExceptRemovedMod(after, removed);
 

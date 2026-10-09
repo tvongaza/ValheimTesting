@@ -15,8 +15,8 @@ using Valheim.Testing.GameSessions;
 /// </summary>
 internal static class ServerLoad
 {
-    internal const string Usage = "valheim-test server-load --mod DLL [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
-        "[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--join HOST:PORT] [--preflight-only] [--hold] [--loader-package FILE] [--client-loader-package FILE] " +
+    internal const string Usage = "valheim-test server-load [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
+        "[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--loader-package FILE] [--client-loader-package FILE] " +
         "[--adapter DLL] [--cli-manifest FILE --cli-files DIR] [--search-root DIR ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
     private static readonly string[] Session = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"];
@@ -32,6 +32,7 @@ internal static class ServerLoad
         public List<string> PluginDirectories { get; } = [];
         public List<string> Optional { get; } = [];
         public HashSet<string> Switches { get; } = new(StringComparer.Ordinal);
+        public string ModSelection { get; set; } = "explicit --mod";
         public bool ServerOnly => Switches.Contains("--server-only");
     }
 
@@ -50,7 +51,7 @@ internal static class ServerLoad
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
         seams ??= new Seams(Loader: ShippedLoader.Instead);
-        if (!TryRead(args, out var parsed, out string error))
+        if (!TryRead(args, out var parsed, out string error, allowImplicitMod: true))
         {
             Console.Error.WriteLine(error);
             Console.Error.WriteLine("Usage: " + Usage);
@@ -69,6 +70,11 @@ internal static class ServerLoad
         var state = new RunState();
         try
         {
+            var selected = SmokeModInput.Select(parsed!.Mods, Environment.CurrentDirectory);
+            parsed.Mods.Clear();
+            parsed.Mods.AddRange(selected.Mods);
+            parsed.ModSelection = selected.Reason;
+            Console.WriteLine("mod selection: " + selected.Reason);
             output = Output(parsed!);
             return await RunCampaignAsync(parsed!, output, clock, seams, state, cancel.Token).ConfigureAwait(false);
         }
@@ -116,12 +122,7 @@ internal static class ServerLoad
             : problem.Actor == "client" && clientLoader == null ? " (--client-loader-package FILE gives the client's disposable copy a reviewed loader)" : "";
     // --output, or a new timestamped directory under ./valheim-test-runs. Never an existing one.
     private static string Output(Arguments parsed)
-    {
-        string output = parsed.Options.TryGetValue("--output", out string? given) ? Path.GetFullPath(given)
-            : Path.GetFullPath(Path.Combine("valheim-test-runs", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "Z"));
-        if (Path.Exists(output)) throw new IOException("--output must be new; existing evidence will not be overwritten: " + output);
-        return output;
-    }
+        => SmokeCommandOptions.Output(parsed.Options);
 
     /// <summary>The environments a one-off runs on, chosen from the inventory with the reason for each.</summary>
     internal sealed record Choice(EnvironmentInventory Inventory, string? InventoryFile, EnvironmentRecipe Server, string ServerReason,
@@ -131,12 +132,7 @@ internal static class ServerLoad
     // adapter must compile against the exact BepInEx core that the staged server will run.
     internal static (string? Manifest, ShippedLoader.Choice? Shipped) SelectServerLoader(
         Arguments parsed, EnvironmentRecipe server, Func<string, string, ShippedLoader.Choice?>? shipped)
-    {
-        string? manifest = parsed.Options.TryGetValue("--loader-package", out string? given)
-            ? Path.GetFullPath(given) : server.LoaderPackage;
-        var automatic = manifest == null ? shipped?.Invoke("server", server.Install) : null;
-        return (manifest ?? automatic?.Manifest, automatic);
-    }
+        => SmokeInputResolver.Loader("server", server, parsed.Options.GetValueOrDefault("--loader-package"), shipped);
 
     /// <summary>
     /// The inventory (the file, this machine with <c>--server</c>/<c>--client</c> written as its override into
@@ -146,30 +142,22 @@ internal static class ServerLoad
     /// </summary>
     internal static Choice Choose(Arguments parsed, string output)
     {
-        string? file = parsed.Options.TryGetValue("--inventory", out string? named) ? Path.GetFullPath(named) : null;
         bool overrides = parsed.Options.ContainsKey("--server") || parsed.Options.ContainsKey("--client");
-        if (file != null && overrides)
-            throw new ArgumentException("--server and --client override this machine's environments; with --inventory, list the installs in the file.");
-        if (overrides)
-        {
-            SmokeOutput.RefuseInside(output, new[] { "--server", "--client" }.Where(parsed.Options.ContainsKey).Select(key => parsed.Options[key]).ToArray());
-            var environments = new JsonArray();
-            JsonObject Entry(string name, string role, string? install)
-            {
-                var entry = new JsonObject { ["name"] = name, ["roles"] = new JsonArray(role) };
-                if (install != null) entry["install"] = install;
-                return entry;
-            }
-            environments.Add(Entry("local-server", "server", parsed.Options.TryGetValue("--server", out string? server) ? Path.GetFullPath(server) : null));
-            if (!parsed.ServerOnly)
-                environments.Add(Entry("local-client", "client", parsed.Options.TryGetValue("--client", out string? client) ? Path.GetFullPath(client) : null));
-            Directory.CreateDirectory(output);
-            file = Path.Combine(output, "environments.json");
-            File.WriteAllText(file, new JsonObject { ["environments"] = environments }.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n");
-        }
         EnvironmentInventory inventory;
-        try { inventory = EnvironmentInventory.Read(file); }
-        catch (ArgumentException failure) when (file == null || overrides)
+        string? file;
+        try
+        {
+            var local = new List<SmokeInputResolver.LocalOverride>
+            {
+                new("local-server", "server", parsed.Options.GetValueOrDefault("--server")),
+            };
+            if (!parsed.ServerOnly)
+                local.Add(new("local-client", "client", parsed.Options.GetValueOrDefault("--client")));
+            (inventory, file) = SmokeInputResolver.ReadInventory(parsed.Options, output, local,
+                ["--server", "--client"], keepOverrideFile: true,
+                "--server and --client override this machine's environments; with --inventory, list the installs in the file.");
+        }
+        catch (ArgumentException failure) when (!parsed.Options.ContainsKey("--inventory") || overrides)
         {
             // This machine's environments: say how to go on without what was not found.
             throw new ArgumentException(failure.Message +
@@ -178,23 +166,15 @@ internal static class ServerLoad
         }
         string where = file == null ? "this machine" : file;
 
-        EnvironmentRecipe Pick(string role, string option, string hint)
-        {
-            if (parsed.Options.TryGetValue(option, out string? name))
-                return inventory.Environments.FirstOrDefault(recipe => recipe.Name == name && recipe.Roles.Contains(role))
-                    ?? throw new ArgumentException($"{option} {name}: the inventory ({where}) has no {role} environment of that name.");
-            return inventory.Environments.FirstOrDefault(recipe => recipe.Roles.Contains(role))
-                ?? throw new ArgumentException($"The inventory ({where}) has no {role} environment. " +
-                    (inventory.Missing.Count == 0 ? "" : string.Join(" ", inventory.Missing) + " ") + hint);
-        }
-        var serverRecipe = Pick("server", "--server-env", "Install Valheim Dedicated Server from Steam (it is free), give --server DIR, or run `valheim-test start` for a hosted local world.");
-        if (inventory.Hosts[serverRecipe.Host].Kind != "local")
-            throw new ArgumentException($"Server environment {serverRecipe.Name} is on {serverRecipe.Host}, not this machine. server-load resolves the mod and builds its adapter " +
-                "against the server's own install, so its server runs here; run a server elsewhere as a campaign (PinnedServerRun.RunCampaignAsync) or with PinnedServerRun --inventory.");
+        var serverRecipe = SmokeInputResolver.Pick(inventory, "server", parsed.Options.GetValueOrDefault("--server-env"),
+            "--server-env", where, "Install Valheim Dedicated Server from Steam (it is free), give --server DIR, or run `valheim-test start` for a hosted local world.",
+            localOnly: true, command: "server-load", remoteHint: "server-load resolves the mod and builds its adapter against the server's own install, so its server runs here; run a server elsewhere as a campaign (PinnedServerRun.RunCampaignAsync) or with PinnedServerRun --inventory.");
         string serverReason = parsed.Options.ContainsKey("--server-env") ? "named by --server-env" : "first server environment in inventory order";
         if (parsed.ServerOnly) return new Choice(inventory, file, serverRecipe, serverReason, null, null, null);
 
-        var clientRecipe = Pick("client", "--client-env", "Give --client DIR, add a client environment, or use --server-only to skip the client's join.");
+        var clientRecipe = SmokeInputResolver.Pick(inventory, "client", parsed.Options.GetValueOrDefault("--client-env"),
+            "--client-env", where, "Give --client DIR, add a client environment, or use --server-only to skip the client's join.",
+            localOnly: false, command: "server-load");
         if (inventory.Hosts[clientRecipe.Host] is { Platform: "macos", Kind: not "local" })
             throw new ArgumentException($"Client environment {clientRecipe.Name} is on a remote macOS host; owned Mac clients need this runner's local GUI session.");
         string clientReason = parsed.Options.ContainsKey("--client-env") ? "named by --client-env" : "default; --server-only to skip";
@@ -215,7 +195,7 @@ internal static class ServerLoad
         var server = choice.Server;
         Console.WriteLine($"server: {server.Name} on {server.Host} ({choice.ServerReason}): install {server.Install}; ValheimCLI port {server.CliPort}, game port {server.GamePort}");
         string? clientArchitecture = choice.Client is { } selectedClient
-            ? ClientArchitectureChoice.Select(parsed.Options.GetValueOrDefault("--client-architecture"), selectedClient) : null;
+            ? SmokeInputResolver.SelectClientArchitecture(parsed.Options.GetValueOrDefault("--client-architecture"), selectedClient) : null;
         Console.WriteLine(choice.Client is { } chosen
             ? $"client: {chosen.Name} on {chosen.Host} ({choice.ClientReason}): install {chosen.Install}; ValheimCLI port {chosen.CliPort}; joins {choice.Join}; architecture {clientArchitecture}"
             : "client: none (--server-only)");
@@ -230,17 +210,16 @@ internal static class ServerLoad
                 throw new InvalidDataException("The A/B arm's pinned server loader differs from the package chosen before either arm started.");
             serverAuto = frozen;
         }
-        var clientLoader = parsed.Options.TryGetValue("--client-loader-package", out string? clientLoaderFile) ? Path.GetFullPath(clientLoaderFile) : choice.Client?.LoaderPackage;
-        // An install on this machine whose own Doorstop proxy and configuration do not match (a mod manager swapped the proxy)
-        // gets the BepInExPack this tool ships in its disposable copy, with one printed line; every other loader fault still refuses.
         var shipped = seams.Loader ?? ((_, _) => null);
-        var clientAuto = clientLoader == null && choice.Client is { } localClient && choice.Inventory.Hosts[localClient.Host].Kind == "local"
-            ? shipped("client", localClient.Install) : null;
-        clientLoader ??= clientAuto?.Manifest;
+        // A local install with a mismatched Doorstop pair may use the reviewed shipped BepInExPack in its copy.
+        var (clientLoader, clientAuto) = choice.Client is { } localClient
+            ? SmokeInputResolver.Loader("client", localClient, parsed.Options.GetValueOrDefault("--client-loader-package"),
+                choice.Inventory.Hosts[localClient.Host].Kind == "local" ? shipped : null)
+            : (null, null);
         if (choice.Client is { } architectureClient)
         {
             if (seams.ClientArchitecture is { } check) check(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
-            else ClientArchitectureChoice.RequireLocal(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
+            else SmokeInputResolver.RequireClientArchitecture(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
         }
         string core = Path.Combine(serverLoader == null ? serverInstall : BepInExLoaderPackage.Read(serverLoader).Root, InstallPins.CoreDirectory);
         if (!Directory.Exists(core))
@@ -253,19 +232,14 @@ internal static class ServerLoad
         SmokeOutput.RefuseInside(output, new[] { serverInstall, cliFiles, choice.Client?.Install }.OfType<string>().ToArray());
         state.OutputChecked = true;
 
-        var dependencies = NativeDependencyResolver.Resolve(new NativeDependencyRequest
-        {
-            Mods = parsed.Mods.Select(Path.GetFullPath).ToList(), SearchRoots = parsed.Roots.Select(Path.GetFullPath).ToList(),
-            GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(serverInstall))!, BepInExCore = core,
-            CliManifest = cliManifest, CliFiles = cliFiles,
-            Capabilities = choice.Client == null ? ["valheim.session/state"] : [.. Session],
-            OptionalReferences = [.. parsed.Optional],
-        });
+        var dependencies = NativeDependencyResolver.Resolve(SmokeDependencyInputs.Request(parsed.Mods, serverInstall, core,
+            cliManifest, cliFiles, parsed.Roots, parsed.Optional,
+            choice.Client == null ? ["valheim.session/state"] : Session));
         Directory.CreateDirectory(output);
         string serverLock = Path.Combine(output, "dependencies.lock.json");
         dependencies.Write(serverLock);
         if (!dependencies.Ready)
-            throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
+            throw new InvalidDataException("Dependency choices remain: " + SmokeDependencyInputs.Gaps(dependencies));
         adapter ??= await SmokeAdapter.BuildAsync(serverInstall, dependencies, output, cancellation, core).ConfigureAwait(false);
 
         // The server's own files beside its lock: the session adapter, explicit configs and plugin sidecars.
@@ -352,6 +326,8 @@ internal static class ServerLoad
         {
             Mode = "owned", PasswordVariable = SmokeSessionContract.PasswordVariable, Capabilities = [.. Session],
             Architecture = clientArchitecture!,
+            JoinSeconds = parsed.Options.TryGetValue("--join-seconds", out string? seconds)
+                ? int.Parse(seconds, CultureInfo.InvariantCulture) : 180,
             // The clean client loads none of the server's plugins.
             Pins = serverGuids.ToDictionary(guid => guid, _ => "absent", StringComparer.Ordinal),
         };
@@ -392,10 +368,9 @@ internal static class ServerLoad
                     Mod = new(SmokeSessionContract.SessionCapability, SmokeSessionContract.SessionTokenVariable),
                     Provenance = (_, record) =>
                     {
-                        if (serverLoader != null) record["serverLoaderPackage"] = BepInExLoaderPackage.Read(serverLoader).Identity;
-                        if (clientLoader != null) record["clientLoaderPackage"] = BepInExLoaderPackage.Read(clientLoader).Identity;
-                        if (serverAuto != null) record["serverLoaderShipped"] = serverAuto.Reason;
-                        if (clientAuto != null) record["clientLoaderShipped"] = clientAuto.Reason;
+                        SmokeInputResolver.RecordLoader(record, "server", serverLoader, serverAuto);
+                        SmokeInputResolver.RecordLoader(record, "client", clientLoader, clientAuto);
+                        record["modSelection"] = parsed.ModSelection;
                     },
                     Scenario = (session, plan) => Scenario(session, clientPlan, clock, parsed.Switches.Contains("--hold")),
                 }).ConfigureAwait(false);
@@ -459,44 +434,26 @@ internal static class ServerLoad
                 joined ? "Clean client joined with selected server mods absent." : "A clean-client join has not run (--server-only).") +
             $" Private evidence ({DiskSpace.Format(DiskSpace.DirectoryBytes(output))}) in {output}");
 
-    private static readonly HashSet<string> Single = new(StringComparer.Ordinal)
+    internal static bool TryRead(string[] args, out Arguments? parsed, out string error, bool allowImplicitMod = false)
     {
-        "--output", "--inventory", "--server", "--client", "--server-env", "--client-env", "--client-architecture", "--join", "--adapter", "--cli-manifest", "--cli-files",
-        "--loader-package", "--client-loader-package", "--expected-log-error", "--expected-log-reason",
-    };
-    private static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "--server-only", "--preflight-only", "--hold" };
-
-    internal static bool TryRead(string[] args, out Arguments? parsed, out string error)
-    {
-        parsed = null; error = "";
-        var result = new Arguments();
-        for (int i = 0; i < args.Length; i++)
-        {
-            string key = args[i];
-            if (Flags.Contains(key))
-            {
-                if (!result.Switches.Add(key)) { error = "Repeated option: " + key; return false; }
-                continue;
-            }
-            if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1])) { error = "Option needs a value: " + key; return false; }
-            string value = args[++i];
-            var list = key switch
-            {
-                "--mod" => result.Mods, "--search-root" => result.Roots, "--config" => result.Configs, "--plugin-file" => result.PluginFiles,
-                "--plugin-dir" => result.PluginDirectories, "--optional-reference" => result.Optional, _ => null,
-            };
-            if (list != null) list.Add(value);
-            else if (!Single.Contains(key) || !result.Options.TryAdd(key, value)) { error = "Unknown or repeated option: " + key; return false; }
-        }
-        if (result.Mods.Count == 0) { error = "Missing: --mod"; return false; }
-        if (result.Options.ContainsKey("--expected-log-error") != result.Options.ContainsKey("--expected-log-reason"))
-        { error = "An expected log error needs its full header and a written reason."; return false; }
-        if (result.ServerOnly && (result.Options.ContainsKey("--client") || result.Options.ContainsKey("--client-env") ||
-            result.Options.ContainsKey("--client-loader-package") || result.Options.ContainsKey("--client-architecture") || result.Options.ContainsKey("--join")))
-        { error = "--server-only runs no client: leave out --client, --client-env, --client-loader-package, --client-architecture and --join."; return false; }
-        if (result.Options.TryGetValue("--client-architecture", out string? architecture) && architecture is not ("x64" or "arm64"))
-        { error = "--client-architecture must be x64 or arm64."; return false; }
-        parsed = result;
+        parsed = null;
+        if (!SmokeCommandOptions.TryRead(args, SmokeCommandOptions.Command.ServerLoad, allowImplicitMod, out var read, out error))
+            return false;
+        parsed = FromParsed(read!);
         return true;
+    }
+
+    internal static Arguments FromParsed(SmokeCommandOptions.Parsed read)
+    {
+        var result = new Arguments();
+        foreach (var (key, value) in read.Options) result.Options.Add(key, value);
+        result.Mods.AddRange(read.List("--mod"));
+        result.Roots.AddRange(read.List("--search-root"));
+        result.Configs.AddRange(read.List("--config"));
+        result.PluginFiles.AddRange(read.List("--plugin-file"));
+        result.PluginDirectories.AddRange(read.List("--plugin-dir"));
+        result.Optional.AddRange(read.List("--optional-reference"));
+        result.Switches.UnionWith(read.Switches);
+        return result;
     }
 }

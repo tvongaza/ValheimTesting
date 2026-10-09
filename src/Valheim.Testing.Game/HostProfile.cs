@@ -82,7 +82,7 @@ internal sealed class GameRole
     /// <summary>The local end of the CLI tunnel; 0 picks a free port.</summary>
     public int LocalCliPort { get; set; }
     /// <summary>The selected client slice; a command-line option may override it.</summary>
-    public string Architecture { get; set; } = "x64";
+    public string Architecture { get; set; } = "";
     /// <summary>Clients only: the lease key of the Steam identity observed signed in on its host (an opaque hash; never the SteamID).</summary>
     public string? SteamAccount { get; set; }
 

@@ -16,8 +16,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
     public void JoinedClientArchitectureOverridesTheInventoryAndServerOnlyRejectsIt()
     {
         var recipe = new EnvironmentRecipe { Architecture = "x64" };
-        Assert.Equal("arm64", ClientArchitectureChoice.Select("arm64", recipe));
-        Assert.Equal("x64", ClientArchitectureChoice.Select(null, recipe));
+        Assert.Equal("arm64", SmokeInputResolver.SelectClientArchitecture("arm64", recipe));
+        Assert.Equal("x64", SmokeInputResolver.SelectClientArchitecture(null, recipe));
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "arm64"], out var parsed, out _));
         Assert.Equal("arm64", parsed!.Options["--client-architecture"]);
         Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--server-only", "--client-architecture", "arm64"], out _, out _));
@@ -358,6 +358,12 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string chosen = Path.Combine(_rig.Root, "start-alt");
         var (_, alt, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen, requireMacGui: () => { });
         Assert.Equal(5702, alt.CliPort);
+        string explicitLoader = Path.Combine(_rig.Root, "client-loader.json");
+        var (_, withLoader, _) = SmokeInputs.Client(new Dictionary<string, string>
+        {
+            ["--inventory"] = file, ["--client-env"] = "alt", ["--client-loader-package"] = explicitLoader,
+        }, Path.Combine(_rig.Root, "start-alt-loader"), requireMacGui: () => { });
+        Assert.Equal(explicitLoader, withLoader.LoaderPackage);
         var recorded = EnvironmentInventory.Read(Path.Combine(chosen, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform));
         Assert.Equal(("alt", 5702), (recorded.Environments.Single().Name, recorded.Environments.Single().CliPort));
 
