@@ -168,16 +168,20 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         var resolvedCores = new List<string>();
         var builtCores = new List<string?>();
         var arms = new List<ServerLoad.Arguments>();
+        var armChoices = new List<ShippedLoader.Choice?>();
         int shippedCalls = 0;
 
-        int result = await ServerLoadComparison.RunAsync([.. arguments], args =>
+        int result = await ServerLoadComparison.RunAsync([.. arguments],
+        shippedLoader: (_, _) => { shippedCalls++; return new ShippedLoader.Choice(shipped.Manifest, "selected pinned pack"); },
+        resolve: request => { resolvedCores.Add(request.BepInExCore); return NativeDependencyResolver.Resolve(request); },
+        buildAdapter: (_, _, _, _, core) => { builtCores.Add(core); return Task.FromResult(adapter); },
+        runArmWithSeams: (args, seams) =>
         {
             Assert.True(ServerLoad.TryRead(args, out var parsed, out string error), error);
             arms.Add(parsed!);
+            armChoices.Add(seams.FrozenServerLoader);
             return Task.FromResult(0);
-        }, shippedLoader: (_, _) => { shippedCalls++; return new ShippedLoader.Choice(shipped.Manifest, "selected pinned pack"); },
-        resolve: request => { resolvedCores.Add(request.BepInExCore); return NativeDependencyResolver.Resolve(request); },
-        buildAdapter: (_, _, _, _, core) => { builtCores.Add(core); return Task.FromResult(adapter); });
+        });
 
         string expectedCore = Path.Combine(selected.Root, InstallPins.CoreDirectory);
         Assert.Equal(0, result);
@@ -186,6 +190,8 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.Equal([expectedCore], builtCores);
         Assert.Equal(2, arms.Count);
         Assert.All(arms, arm => Assert.Equal(selected.Manifest, arm.Options["--loader-package"]));
+        Assert.All(armChoices, choice => Assert.Equal(environmentPackage || explicitPackage ? null : shipped.Manifest,
+            choice?.Manifest));
     }
 
     [Fact] public async Task RefusedFullSetDoesNotLaunchTheRemovalArm()

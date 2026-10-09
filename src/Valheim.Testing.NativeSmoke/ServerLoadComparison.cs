@@ -7,7 +7,8 @@ internal static class ServerLoadComparison
     public static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runArm = null,
         Func<string, string, ShippedLoader.Choice?>? shippedLoader = null,
         Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null,
-        Func<string, NativeDependencyLock, string, CancellationToken, string?, Task<string>>? buildAdapter = null)
+        Func<string, NativeDependencyLock, string, CancellationToken, string?, Task<string>>? buildAdapter = null,
+        Func<string[], ServerLoad.Seams, Task<int>>? runArmWithSeams = null)
     {
         shippedLoader ??= ShippedLoader.Instead;
         resolve ??= NativeDependencyResolver.Resolve;
@@ -40,8 +41,9 @@ internal static class ServerLoadComparison
                 : ServerLoad.Choose(parsed, Path.Combine(output, "choice")).Server;
             string server = serverRecipe.Install;
             var (loaderManifest, automaticLoader) = ServerLoad.SelectServerLoader(parsed, serverRecipe, shippedLoader);
-            runArm ??= arm => ServerLoad.RunAsync(arm,
-                new ServerLoad.Seams(Loader: ShippedLoader.Instead, FrozenServerLoader: automaticLoader));
+            var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Instead, FrozenServerLoader: automaticLoader);
+            runArm ??= arm => runArmWithSeams == null
+                ? ServerLoad.RunAsync(arm, armSeams) : runArmWithSeams(arm, armSeams);
             var serverLoader = loaderManifest == null ? null : BepInExLoaderPackage.Read(loaderManifest);
             string serverCore = Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory);
             var clientLoader = options.TryGetValue("--client-loader-package", out string? clientLoaderFile)
