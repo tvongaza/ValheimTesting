@@ -6,7 +6,7 @@
   -->
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
-    <Version>0.1.0-preview.2</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Offline check that a built mod's references into assembly_valheim and other game assemblies still bind: reports each missing type, field or method with the mod method that uses it, and members no longer accessible separately. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
+    <Version>0.1.0-preview.3</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Offline check that a built mod's references into assembly_valheim and other game assemblies still bind: reports each missing type, field or method with the mod method that uses it, and members no longer accessible separately. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
     <PackageId>Valheim.Testing.Bindings</PackageId><PackageProjectUrl>https://github.com/tvongaza/ValheimTesting</PackageProjectUrl><RepositoryUrl>https://github.com/tvongaza/ValheimTesting.git</RepositoryUrl><RepositoryType>git</RepositoryType><PackageTags>valheim;modding;testing;bepinex;cecil;ci</PackageTags>
   </PropertyGroup>
   <ItemGroup><PackageReference Include="Mono.Cecil" Version="[0.11.6]" /></ItemGroup>
