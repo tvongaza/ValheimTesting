@@ -384,6 +384,9 @@ public sealed class TargetedRegression
     public string? SteamUserData { get; internal init; }
     // The client's save root (worlds_local, characters_local): this user's by default; tests replace it.
     internal string? SaveDirectory { get; init; }
+    // Synthetic test installs are not notarized Steam apps; production always uses the real macOS assessment.
+    internal Func<string, bool, MacBundleInspection.Verdict> BundleInspection { get; init; } =
+        (install, repair) => repair ? MacBundleInspection.Repair(install) : MacBundleInspection.Inspect(install);
     /// <summary>
     /// The ValheimCLI capabilities the run uses: <see cref="CliCapabilities.HostedRounds"/> and the scenario's own whose owner is
     /// ValheimCLI's (<c>valheim.*</c> or <c>cli.*</c>). They are checked against <see cref="RegressionCli.Manifest"/> before
@@ -493,6 +496,13 @@ public sealed class TargetedRegression
         if (Architecture == "arm64")
             GameLaunch.RequireClientArchitecture(Game, ClientArchitecture.Arm64,
                 LoaderPackage == null ? null : BepInExLoaderPackage.Read(LoaderPackage).Root);
+        // The one-shot path makes its own copy rather than using HostedRuntimeStage. Check the signed app here as well:
+        // otherwise an old preloader log inside the source bundle becomes a Gatekeeper "damaged" dialog at launch.
+        if (OperatingSystem.IsMacOS() && Directory.Exists(Path.Combine(Game, GameLaunch.ClientMacBundle)))
+        {
+            string? refusal = MacBundleInspection.SourceRefusal(BundleInspection(Game, false));
+            if (refusal != null) throw new InvalidOperationException(refusal);
+        }
         string install = PrepareInstall();
         string plugins = Path.Combine(install, "BepInEx", "plugins");
         var staged = new List<(StagedFile File, PluginAssembly Metadata)>();
@@ -782,6 +792,7 @@ public sealed class TargetedRegression
             {
                 Copy(game, install, game);
                 package?.Apply(install);
+                RequireLaunchableMacCopy(install);
                 WriteMarker(install, null, null, InstallPins.Of(install), LoaderFiles(install), package?.Identity);
             }
             catch
@@ -792,6 +803,7 @@ public sealed class TargetedRegression
                 throw;
             }
         }
+        else RequireLaunchableMacCopy(install); // A reused copy may have gained preloader logs inside its bundle.
         foreach (string folder in StagedFolders.Append("cache"))
         {
             string path = Path.Combine(install, "BepInEx", folder);
@@ -805,6 +817,15 @@ public sealed class TargetedRegression
         if (copied.Game != pins.Game || copied.Loader != pins.Loader)
             throw new InvalidOperationException($"The disposable install {install} does not match the selected game and loader after copying (game {copied.Game} vs {pins.Game}, loader {copied.Loader} vs {pins.Loader}). Remove it and stage again.");
         return install;
+    }
+
+    private void RequireLaunchableMacCopy(string install)
+    {
+        if (!OperatingSystem.IsMacOS() || !Directory.Exists(Path.Combine(install, GameLaunch.ClientMacBundle))) return;
+        var verdict = BundleInspection(install, true);
+        if (verdict.State != MacBundleInspection.State.Accepted)
+            throw new InvalidOperationException("macOS would reject the disposable Valheim.app before it reaches BepInEx (" +
+                verdict.State + ": " + verdict.Detail + "). No client was launched and the source install was not changed.");
     }
 
     // Remember the source file set as well as its contents: removal of an old Doorstop proxy must invalidate the copy too.

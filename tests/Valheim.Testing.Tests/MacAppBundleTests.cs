@@ -37,6 +37,10 @@ public sealed class MacAppBundleTests : IDisposable
         Assert.Contains("Contents/MacOS/preloader_1.log", inspected.Detail);
         Assert.Null(MacAppBundle.SourceRefusal(inspected));
         Assert.True(File.Exists(added)); // inspecting never changes the bundle
+        var localInspection = MacBundleInspection.Inspect(_root); // the one-shot runner uses the same script
+        Assert.Equal(MacBundleInspection.State.Fixable, localInspection.State);
+        Assert.Equal(1, localInspection.Count);
+        Assert.True(File.Exists(added));
 
         // An ad-hoc signature satisfies codesign; Gatekeeper rejects it unless assessments are disabled (CI runners may be).
         var repaired = await MacAppBundle.RepairAsync(host, _root, timeout);
@@ -46,12 +50,19 @@ public sealed class MacAppBundleTests : IDisposable
         Assert.Equal(0, await Run("codesign", "--verify", "--deep", "--strict", app));
         Assert.NotEqual(0, await Run("xattr", "-p", "com.apple.quarantine", app));
 
+        File.WriteAllText(added, "left by a second launch");
+        var localRepair = MacBundleInspection.Repair(_root);
+        Assert.Contains(localRepair.State, new[] { MacBundleInspection.State.Accepted, MacBundleInspection.State.Rejected });
+        Assert.Equal(1, localRepair.Count);
+        Assert.False(File.Exists(added));
+
         File.WriteAllText(Path.Combine(app, "Contents", "Resources", "data.txt"), "changed");
         var broken = await MacAppBundle.InspectAsync(host, _root, timeout);
         Assert.Equal(MacBundleState.Broken, broken.State);
         Assert.Contains("data.txt", broken.Detail);
         Assert.Contains("Verify the game's files in Steam", MacAppBundle.SourceRefusal(broken));
         Assert.Equal(MacBundleState.Broken, (await MacAppBundle.RepairAsync(host, _root, timeout)).State);
+        Assert.Equal(MacBundleInspection.State.Broken, MacBundleInspection.Inspect(_root).State);
         Assert.Equal("changed", File.ReadAllText(Path.Combine(app, "Contents", "Resources", "data.txt")));
     }
 

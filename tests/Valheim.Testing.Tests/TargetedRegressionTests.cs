@@ -75,6 +75,47 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Equal("x64", new TargetedRegression(inputs, inventory: inventory).Architecture);
     }
 
+    [Fact] public void ARejectedMacSourceStopsBeforeTheDisposableCopy()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        {
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
+        };
+        Assert.Contains("Verify the game in Steam", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
+        Assert.False(Directory.Exists(runner.Install));
+    }
+
+    [Fact] public void ARejectedMacCopyIsRemovedBeforeAnyClientLaunch()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        {
+            BundleInspection = (_, repair) => repair
+                ? new(MacBundleInspection.State.Rejected, 0, "Gatekeeper refused the copy")
+                : new(MacBundleInspection.State.Fixable, 1, "old preloader log"),
+        };
+        Assert.Contains("No client was launched", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
+        Assert.False(Directory.Exists(runner.Install));
+        Assert.True(Directory.Exists(_rig.Game));
+    }
+
+    [Fact] public void AReusedMacCopyIsAssessedAgainBeforeTheNextArm()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        int repairs = 0;
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        {
+            BundleInspection = (_, repair) => !repair || ++repairs == 1
+                ? new(MacBundleInspection.State.Accepted, 0, "")
+                : new(MacBundleInspection.State.Rejected, 0, "copy changed after first arm"),
+        };
+        runner.Stage("parent");
+        Assert.Contains("No client was launched", Assert.Throws<InvalidOperationException>(() => runner.Stage("candidate")).Message);
+        Assert.Equal(2, repairs);
+        runner.Remove();
+    }
+
     [Fact] public void ATargetedRunValidatesItsExpectedErrorLinesBeforeStaging()
     {
         var manifest = _rig.Manifest();
@@ -569,6 +610,7 @@ internal sealed class RegressionRig : IDisposable
             SaveDirectory = Save, SteamUserData = SteamUserData,
             // This rig stages fake files without a desktop. Tests of the SSH refusal override this explicitly.
             DirectClientSession = () => (OperatingSystem.IsWindows(), 1),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
         };
 
     public RegressionInputs Manifest(string? fixture = null, string? worldUid = null) => new()
