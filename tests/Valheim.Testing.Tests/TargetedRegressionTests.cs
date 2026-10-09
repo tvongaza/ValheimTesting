@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 // Targeted native regressions (#125): the setup mistakes two hand-written A/B runs hit before their first assertion, each

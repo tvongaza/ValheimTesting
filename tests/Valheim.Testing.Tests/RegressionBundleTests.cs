@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Valheim.Testing.Bundles;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 // Public bundles of targeted native regressions (#126): each way a hand-made public copy diverged from the run or disclosed

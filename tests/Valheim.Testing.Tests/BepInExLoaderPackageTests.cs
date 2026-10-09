@@ -1,4 +1,5 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 public sealed class BepInExLoaderPackageTests : IDisposable
