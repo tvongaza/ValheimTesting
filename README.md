@@ -12,6 +12,16 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 
 Then [Bring your mod](docs/adopting.md) helps choose the layer for each behaviour, [Get started](docs/getting-started.md) has the package versions and IDE setup, and the [examples](examples/README.md) go up to native checks with an owned server and client on one Windows PC. Other hosts are in [platforms](docs/platforms.md). New to BepInEx and Harmony? The community wiki's [overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the concepts; check its older samples against 1.0 ([wiki caveats](docs/runtime-hygiene.md#wiki-pages-that-predate-10)). A plugin that will not load, or two mods that conflict: [debugging guide](docs/debugging-mods.md).
 
+For a disposable in-game load check, build your mod and run the tool from the directory containing its single `.csproj`:
+
+```sh
+dotnet build -c Release
+valheim-test env preflight
+valheim-test server-load
+```
+
+`server-load` selects the newest built `[BepInPlugin]` DLL, prints the choice, and records it in the run. `start` uses the same default for a client mod; `server-load-ab` requires explicit mod paths to keep both arms fixed. The tool refuses a missing, stale or ambiguous build instead of guessing. It writes run output under this machine's ValheimTesting data folder, outside your mod project. See the [one-shot guide](docs/packages/Valheim.Testing.NativeSmoke.md) for setup and explicit options.
+
 ## Packages
 
 Each package's page is its reference: what it is for, the types a test calls, how it fails and its limits.
