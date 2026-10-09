@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
 
 namespace Valheim.Testing.Game;
 
@@ -162,8 +163,8 @@ public sealed partial class GameLaunch
     /// whose contents decide the platform (<see cref="DetectClient"/>). BepInEx's preloader and the platform's Doorstop
     /// loader must be present, and on Windows <c>doorstop_config.ini</c> must enable Doorstop and target BepInEx's preloader. macOS
     /// starts the bundle through <c>/usr/bin/arch</c> as the requested <paramref name="architecture"/>, inserting a Doorstop library
-    /// that has that slice. <c>arch</c> fails rather than run another slice, so an arm64 request never falls back to Rosetta. X64,
-    /// the default, is the Rosetta compatibility path on Apple Silicon. Arm64 is the native path and also needs a BepInEx core
+    /// that has that slice. <c>arch</c> fails rather than run another slice, so an arm64 request never falls back to Rosetta. On
+    /// Apple Silicon, arm64 is the default; x64 selects the Rosetta compatibility path explicitly. Arm64 also needs a BepInEx core
     /// whose <c>MonoMod.RuntimeDetour.dll</c> is version 25 or later (legacy MonoMod cannot hook on arm64); an install without it is
     /// refused here, before anything starts. The machine must be the client's own OS.
     /// With <paramref name="hostPlatform"/> (Windows or Linux) the launch is for a host of that platform.
@@ -175,12 +176,21 @@ public sealed partial class GameLaunch
     /// <param name="secretVariables">For a host only: variables (for example the join password's) read from this process at launch and given only to
     /// the game; never logged or written as evidence. A launch for this machine inherits this process's environment and refuses them.</param>
     public static GameLaunch ForClient(string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment = null,
-        ClientPlatform? hostPlatform = null, ClientArchitecture architecture = ClientArchitecture.X64, bool console = true, IEnumerable<string>? secretVariables = null)
+        ClientPlatform? hostPlatform = null, ClientArchitecture? architecture = null, bool console = true, IEnumerable<string>? secretVariables = null)
     {
-        if (hostPlatform is { } platform) return ClientOnHost(platform, install, arguments, environment, architecture, console, secretVariables);
+        string platformName = hostPlatform switch
+        {
+            ClientPlatform.Windows => "windows",
+            ClientPlatform.Linux => "linux",
+            ClientPlatform.MacOS => "macos",
+            _ => HostProfile.CurrentPlatform,
+        };
+        ClientArchitecture selected = architecture ?? EnvironmentInventory.DefaultClientLaunchArchitecture(platformName,
+            hostPlatform is null ? RuntimeInformation.OSArchitecture : null);
+        if (hostPlatform is { } platform) return ClientOnHost(platform, install, arguments, environment, selected, console, secretVariables);
         if (secretVariables?.Any() == true)
             throw new ArgumentException("A launch for this machine inherits this process's environment; secret variables are named only for a host's launch.", nameof(secretVariables));
-        return LocalClient(install, arguments, environment, architecture, console, CurrentClientHost);
+        return LocalClient(install, arguments, environment, selected, console, CurrentClientHost);
     }
 
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).

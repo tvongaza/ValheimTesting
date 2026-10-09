@@ -125,8 +125,12 @@ public sealed class EnvironmentInventory
     private const int FirstCliPort = 5688, FirstGamePort = 2486;
     private readonly Dictionary<string, string> _noInstall = new(StringComparer.Ordinal);
 
-    internal static string DefaultClientArchitecture(string platform, Architecture osArchitecture) =>
-        platform == "macos" && osArchitecture == Architecture.Arm64 ? "arm64" : "x64";
+    // A remote Mac's CPU is not known here. Prefer native arm64 there as well; an Intel Mac selects x64 explicitly.
+    internal static ClientArchitecture DefaultClientLaunchArchitecture(string platform, Architecture? osArchitecture) =>
+        platform == "macos" && osArchitecture != Architecture.X64 ? ClientArchitecture.Arm64 : ClientArchitecture.X64;
+
+    internal static string DefaultClientArchitecture(string platform, Architecture? osArchitecture) =>
+        GameLaunch.PlanName(DefaultClientLaunchArchitecture(platform, osArchitecture));
 
     // Fills this machine's host and the left-out fields of its environments, saying what it detected and assumed. With no
     // file it also lists the detected environments; a file's list is kept as written.
@@ -262,8 +266,8 @@ public sealed class EnvironmentInventory
             if (recipe.Host == null || !Hosts.TryGetValue(recipe.Host, out var host))
             { errors.Add($"Environment {recipe.Name} names unknown host {recipe.Host}."); continue; }
             if (string.IsNullOrEmpty(recipe.Architecture) && recipe.Roles.Contains("client"))
-                recipe.Architecture = host.Kind == "local"
-                    ? DefaultClientArchitecture(host.Platform, ThisMachine.OsArchitecture) : "x64";
+                recipe.Architecture = DefaultClientArchitecture(host.Platform,
+                    host.Kind == "local" ? ThisMachine.OsArchitecture : null);
             if (recipe.Roles is not (["server"] or ["client"]))
                 errors.Add($"Environment {recipe.Name} needs roles [\"server\"] or [\"client\"]: a dedicated server recipe cannot also be a client process.");
             if (!host.IsAbsolutePath(recipe.Install) || !host.IsAbsolutePath(recipe.Runtime))

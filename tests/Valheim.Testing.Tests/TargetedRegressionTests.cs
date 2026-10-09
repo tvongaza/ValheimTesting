@@ -615,7 +615,8 @@ internal sealed class RegressionRig : IDisposable
     public EnvironmentInventory Inventory() => new()
     {
         Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = OperatingSystem.IsWindows() ? "powershell" : "bash", Lock = Path.Combine(Root, "lock") } },
-        Environments = [new EnvironmentRecipe { Name = "rig-client", Host = "local", Roles = ["client"], Install = Game, Runtime = Runtime, CliPort = 5560, LoaderPackage = LoaderPackage }],
+        // The synthetic Mac install uses the stock x64-only Doorstop. Select Rosetta explicitly, as a real consumer must.
+        Environments = [new EnvironmentRecipe { Name = "rig-client", Host = "local", Roles = ["client"], Install = Game, Runtime = Runtime, CliPort = 5560, LoaderPackage = LoaderPackage, Architecture = "x64" }],
         LeaseHost = "local", LeaseDirectory = Path.Combine(Root, "leases"),
     };
 

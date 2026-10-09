@@ -217,7 +217,7 @@ public sealed class ClientSessionTests : IDisposable
         Mode = "owned", Install = install, Port = 5556, Join = "127.0.0.1:2456", Character = "Tester", Pinning = "none", Architecture = architecture ?? "",
     };
 
-    [Theory] [InlineData(null, "-x86_64", false)] [InlineData("x64", "-x86_64", false)] [InlineData("arm64", "-arm64", true)]
+    [Theory] [InlineData("x64", "-x86_64", false)] [InlineData("arm64", "-arm64", true)]
     public void ThePlansArchitectureChoosesTheMacSliceAndItsDoorstop(string? architecture, string slice, bool native)
     {
         using var install = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
@@ -225,6 +225,19 @@ public sealed class ClientSessionTests : IDisposable
         plan.Validate();
         var arguments = ClientSession.StartInfo(plan, ClientPlatform.MacOS).ArgumentList.ToList();
         Assert.Equal(slice, arguments[0]);
+        string doorstop = native ? Path.Combine(install.Root, "libdoorstop.dylib") : Path.Combine(install.Root, "doorstop_libs", "libdoorstop_x64.dylib");
+        Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + doorstop }, ClientLaunchTests.ExportPair(arguments, "DYLD_INSERT_LIBRARIES"));
+    }
+
+    [Fact] public void AnOmittedArchitectureUsesTheCurrentHostsDefaultMacSlice()
+    {
+        using var install = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
+        var plan = Owned(install.Root);
+        bool native = OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
+        Assert.Equal(native ? ClientArchitecture.Arm64 : ClientArchitecture.X64, plan.LaunchArchitecture);
+        plan.Validate();
+        var arguments = ClientSession.StartInfo(plan, ClientPlatform.MacOS).ArgumentList.ToList();
+        Assert.Equal(native ? "-arm64" : "-x86_64", arguments[0]);
         string doorstop = native ? Path.Combine(install.Root, "libdoorstop.dylib") : Path.Combine(install.Root, "doorstop_libs", "libdoorstop_x64.dylib");
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + doorstop }, ClientLaunchTests.ExportPair(arguments, "DYLD_INSERT_LIBRARIES"));
     }
@@ -265,12 +278,16 @@ public sealed class ClientSessionTests : IDisposable
         using var pack = ClientLaunchTests.Install.Mac();
         var error = Assert.Throws<ArgumentException>(() => Owned(pack.Root, "arm64").Validate());
         Assert.Contains("The client install cannot launch as arm64: No Doorstop library in the install has an arm64 slice", error.Message);
-        Owned(pack.Root).Validate(); // The pack's own route, x64, is fine.
+        Owned(pack.Root, "x64").Validate(); // The pack's own route remains available when explicitly requested.
+        if (OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64)
+            Assert.Contains("cannot launch as arm64", Assert.Throws<ArgumentException>(() => Owned(pack.Root).Validate()).Message);
         using var legacy = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.LegacyDetour);
         Assert.Contains("MonoMod before 25", Assert.Throws<ArgumentException>(() => Owned(legacy.Root, "arm64").Validate()).Message);
         using var nativeOnly = ClientLaunchTests.Install.Mac(packDoorstop: false, arm64Doorstop: true, core: ClientLaunchTests.NativeDetour);
         Owned(nativeOnly.Root, "arm64").Validate();
-        Assert.Contains("cannot launch as x64: No Doorstop library in the install has an x86_64 slice", Assert.Throws<ArgumentException>(() => Owned(nativeOnly.Root).Validate()).Message);
+        Assert.Contains("cannot launch as x64: No Doorstop library in the install has an x86_64 slice", Assert.Throws<ArgumentException>(() => Owned(nativeOnly.Root, "x64").Validate()).Message);
+        if (OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64)
+            Owned(nativeOnly.Root).Validate();
         using var noGame = ClientLaunchTests.Install.Mac(core: ClientLaunchTests.NativeDetour);
         File.Delete(noGame.Executable);
         Assert.Contains("has no executable", Assert.Throws<ArgumentException>(() => Owned(noGame.Root).Validate()).Message);
@@ -305,7 +322,9 @@ public sealed class ClientSessionTests : IDisposable
         var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true, UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
         var plan = System.Text.Json.JsonSerializer.Deserialize<ClientRunPlan>("""{ "mode": "owned", "architecture": "arm64" }""", options)!;
         Assert.Equal(ClientArchitecture.Arm64, plan.LaunchArchitecture);
-        Assert.Equal(ClientArchitecture.X64, System.Text.Json.JsonSerializer.Deserialize<ClientRunPlan>("""{ "mode": "owned" }""", options)!.LaunchArchitecture);
+        var defaultArchitecture = OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64
+            ? ClientArchitecture.Arm64 : ClientArchitecture.X64;
+        Assert.Equal(defaultArchitecture, System.Text.Json.JsonSerializer.Deserialize<ClientRunPlan>("""{ "mode": "owned" }""", options)!.LaunchArchitecture);
         foreach (string? value in new[] { "arm", "ARM64", "x86_64", "universal", null })
         {
             var refused = Owned("/Users/tester/valheim"); refused.Architecture = value!;
@@ -321,9 +340,11 @@ public sealed class ClientSessionTests : IDisposable
         using (var session = ClientSession.Launch(plan, _output, () => new FakeOwnedProcess(99), () => new ScriptedTransport(), (_, _) => Task.CompletedTask))
             Assert.Equal(ClientArchitecture.Arm64, session.Architecture);
         Assert.Contains("\"architecture\":\"arm64\"", File.ReadAllText(Path.Combine(_output, "client-process.json")));
+        var defaultArchitecture = OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64
+            ? ClientArchitecture.Arm64 : ClientArchitecture.X64;
         using (var session = ClientSession.Launch(Plan(), _output, () => new FakeOwnedProcess(99), () => new ScriptedTransport(), (_, _) => Task.CompletedTask))
-            Assert.Equal(ClientArchitecture.X64, session.Architecture);
-        Assert.Contains("\"architecture\":\"x64\"", File.ReadAllText(Path.Combine(_output, "client-process.json")));
+            Assert.Equal(defaultArchitecture, session.Architecture);
+        Assert.Contains("\"architecture\":\"" + (defaultArchitecture == ClientArchitecture.Arm64 ? "arm64" : "x64") + "\"", File.ReadAllText(Path.Combine(_output, "client-process.json")));
         using (var session = ClientSession.Attach(Plan("attach"), _output, new ScriptedTransport())) Assert.Null(session.Architecture);
     }
 

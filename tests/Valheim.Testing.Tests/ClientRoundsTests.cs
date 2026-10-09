@@ -225,7 +225,8 @@ public sealed class ClientRoundsTests : IDisposable
         foreach (string file in new[] { "first-arrival.json", "first-reading.json", "after-restart-arrival.json", "after-restart-reading.json" }) Assert.True(Wrote(file), file);
         Assert.True(JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "first-arrival.json"))).RootElement.GetProperty("grounded").GetBoolean());
         Assert.Equal("first,after-restart", report.Provenance["clientRoundsCompleted"]);
-        Assert.Equal("x64", report.Provenance["clientArchitecture"]);
+        Assert.Equal(EnvironmentInventory.DefaultClientArchitecture(HostProfile.CurrentPlatform,
+            System.Runtime.InteropServices.RuntimeInformation.OSArchitecture), report.Provenance["clientArchitecture"]);
     }
 
     [Fact] public void EachRoundsArrivalMakesOneWaitPerPhaseAndWritesItsTrace()
@@ -581,7 +582,8 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("false", report.Provenance["hostCrossplay"]);
         Assert.False(report.Provenance.ContainsKey("hostMode")); // #301: a host always opens a listen server.
         Assert.Equal("first,after-restart", report.Provenance["hostRoundsCompleted"]);
-        Assert.Equal("x64", report.Provenance["clientArchitecture"]); // The plan asked for none.
+        Assert.Equal(EnvironmentInventory.DefaultClientArchitecture(HostProfile.CurrentPlatform,
+            System.Runtime.InteropServices.RuntimeInformation.OSArchitecture), report.Provenance["clientArchitecture"]); // The plan asked for none.
         // The world, with what the game wrote for it, left the client's worlds for the evidence; the user's world stayed.
         Assert.Empty(OurWorldFiles());
         Assert.Equal("the user's world", File.ReadAllText(Path.Combine(Worlds, "MyWorld.fwl")));

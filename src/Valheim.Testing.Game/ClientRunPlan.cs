@@ -1,6 +1,7 @@
 using valheim_cli.Testing;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Runtime.InteropServices;
 using valheimCLI;
 
 namespace Valheim.Testing.Game;
@@ -69,9 +70,9 @@ public sealed class ClientRunPlan
     /// <summary>Owned only: non-secret process variables for this disposable client. Loader overrides are refused.</summary>
     public Dictionary<string, string> Environment { get; set; } = new(StringComparer.Ordinal);
     /// <summary>
-    /// Owned only: the slice a macOS client (<c>Valheim.app</c>) runs as, <c>x64</c> or <c>arm64</c>. Left out, it is <c>x64</c>:
-    /// under Rosetta on Apple Silicon, BepInExPack_Valheim's own loader and core work as installed, so a plan means the same
-    /// process on every Mac. <c>arm64</c> is the native path: the install needs a Doorstop library with an arm64 slice and a
+    /// Owned only: the slice a macOS client (<c>Valheim.app</c>) runs as, <c>x64</c> or <c>arm64</c>. Left out, it is
+    /// <c>arm64</c> on Apple Silicon and <c>x64</c> elsewhere. Select <c>x64</c> explicitly for Rosetta on Apple Silicon.
+    /// The native path needs a Doorstop library with an arm64 slice and a
     /// BepInEx core built on MonoMod 25 or later, and the launch refuses one without them rather than fall back to Rosetta.
     /// Windows and Linux clients are x64 only, so <c>arm64</c> is refused for them. <see cref="Validate"/> runs the launch's slice
     /// and core check on a <c>Valheim.app</c> install on this machine, so a runner refuses such a plan before it starts anything.
@@ -186,13 +187,28 @@ public sealed class ClientRunPlan
     [JsonIgnore] public bool Pinned => EnvironmentPinning.IsStrict(Pinning, "The client's");
 
     public bool Owned => Mode == "owned";
-    /// <summary><see cref="Architecture"/> as the launch takes it; refuses any value but <c>x64</c>, <c>arm64</c> or none.</summary>
+    /// <summary><see cref="Architecture"/> as the launch takes it; an omitted value uses this client's host default.</summary>
     [JsonIgnore] public ClientArchitecture LaunchArchitecture => Architecture switch
     {
-        "" or "x64" => ClientArchitecture.X64,
+        "" => DefaultArchitectureForInstall(),
+        "x64" => ClientArchitecture.X64,
         "arm64" => ClientArchitecture.Arm64,
-        _ => throw new ArgumentException($"Client architecture \"{Architecture}\" is neither x64 nor arm64; leave it out for x64."),
+        _ => throw new ArgumentException($"Client architecture \"{Architecture}\" is neither x64 nor arm64; leave it out for this client's host default."),
     };
+
+    private ClientArchitecture DefaultArchitectureForInstall()
+    {
+        // A plan with a visible Windows/Linux install uses that host's rule even when read on a Mac.
+        // Campaigns bind an otherwise unknown remote install to its assigned host before opening it.
+        string platform = InstallPlatform() switch
+        {
+            ClientPlatform.Windows => "windows",
+            ClientPlatform.Linux => "linux",
+            ClientPlatform.MacOS => "macos",
+            _ => HostProfile.CurrentPlatform,
+        };
+        return EnvironmentInventory.DefaultClientLaunchArchitecture(platform, RuntimeInformation.OSArchitecture);
+    }
 
     /// <summary>A full path on a Windows host (drive or UNC) or a POSIX host (rooted), whichever machine this runs on.</summary>
     internal static bool IsFullPathOnAnyHost(string? path) =>

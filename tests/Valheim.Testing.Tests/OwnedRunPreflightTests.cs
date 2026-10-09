@@ -468,6 +468,7 @@ internal sealed class PreflightInstall : IDisposable
     public ClientRunPlan Plan() => new()
     {
         Mode = "owned", InPlace = true, Install = Root, Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
+        Architecture = "x64", // The synthetic Mac install has only the stock x64 Doorstop.
         Pins = new() { ["valheimCLI.valheimCLI"] = CliMd5, ["my.mod"] = "absent" },
         InstallPins = InstallPins.Of(Root),
     };

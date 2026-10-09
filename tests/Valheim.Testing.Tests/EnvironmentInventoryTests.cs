@@ -46,6 +46,7 @@ public sealed class EnvironmentInventoryTests : IDisposable
     {
         Assert.Equal("arm64", EnvironmentInventory.DefaultClientArchitecture("macos", Architecture.Arm64));
         Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("macos", Architecture.X64));
+        Assert.Equal("arm64", EnvironmentInventory.DefaultClientArchitecture("macos", null));
         Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("windows", Architecture.Arm64));
         Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("linux", Architecture.Arm64));
     }
@@ -65,6 +66,11 @@ public sealed class EnvironmentInventoryTests : IDisposable
         inventory.Validate(_root);
         Assert.Equal("", inventory.Environments.Single(recipe => recipe.Name == "server-pc").Architecture);
         Assert.Equal("arm64", inventory.Resolve(Campaign()).Environment.Clients["client-b"].Architecture);
+        client.Architecture = "";
+        inventory.Validate(_root);
+        Assert.Equal("arm64", client.Architecture); // Prefer native on an unknown remote Mac.
+        client.Architecture = "x64";
+        inventory.Validate(_root); // Rosetta is an explicit choice on a remote Mac too.
         client.Architecture = "native";
         Assert.Contains("architecture", Assert.Throws<ArgumentException>(() => inventory.Validate(_root)).Message);
         client.Architecture = "arm64";

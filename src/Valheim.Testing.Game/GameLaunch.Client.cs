@@ -11,7 +11,7 @@ public enum ClientPlatform { Windows, Linux, MacOS }
 // Windows and Linux clients are x64 only. The macOS client is universal, so its slice is chosen at launch and the Doorstop
 // library inserted into it must contain the same one. X64 runs under Rosetta on Apple Silicon, with BepInExPack_Valheim's own
 // loader and core: the compatibility path. Arm64 runs natively, with a Doorstop library that has an arm64 slice and a
-// BepInEx core whose MonoMod can hook on arm64. Both are modded paths; neither is chosen for the caller.
+// BepInEx core whose MonoMod can hook on arm64. Both are modded paths; Apple Silicon defaults to arm64.
 [ResultShape]
 public enum ClientArchitecture { X64, Arm64 }
 
