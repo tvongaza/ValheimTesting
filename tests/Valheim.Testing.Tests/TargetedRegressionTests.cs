@@ -78,7 +78,7 @@ public sealed class TargetedRegressionTests : IDisposable
     [Fact] public void ARejectedMacSourceStopsBeforeTheDisposableCopy()
     {
         if (!OperatingSystem.IsMacOS()) return;
-        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        var runner = _rig.Regression(_rig.Manifest())
         {
             BundleInspection = (_, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
         };
@@ -89,7 +89,7 @@ public sealed class TargetedRegressionTests : IDisposable
     [Fact] public void ARejectedMacCopyIsRemovedBeforeAnyClientLaunch()
     {
         if (!OperatingSystem.IsMacOS()) return;
-        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        var runner = _rig.Regression(_rig.Manifest())
         {
             BundleInspection = (_, repair) => repair
                 ? new(MacBundleInspection.State.Rejected, 0, "Gatekeeper refused the copy")
@@ -104,7 +104,7 @@ public sealed class TargetedRegressionTests : IDisposable
     {
         if (!OperatingSystem.IsMacOS()) return;
         int repairs = 0;
-        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        var runner = _rig.Regression(_rig.Manifest())
         {
             BundleInspection = (_, repair) => !repair || ++repairs == 1
                 ? new(MacBundleInspection.State.Accepted, 0, "")
