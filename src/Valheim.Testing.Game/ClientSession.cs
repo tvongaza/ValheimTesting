@@ -181,6 +181,7 @@ public sealed class ClientSession : IDisposable
                 "Open it through a GameSession or ClientActor, which make the copy, or set inPlace (--in-place) to run your install as it is.");
         account?.RequireReady(null);
         var start = plan.CheckOwnedInstall()!; // Install pins (patchers included), loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
+        DirectClientDesktop.RequireCurrent(); // Direct launch has no desktop task; refuse session 0 before probing or starting.
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
         try { reservation.Start(); }
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }

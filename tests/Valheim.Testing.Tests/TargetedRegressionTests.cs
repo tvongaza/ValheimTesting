@@ -12,6 +12,50 @@ public sealed class TargetedRegressionTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [Fact] public void DirectClientLaunchHasNoWindowsSessionZeroRoute()
+    {
+        Assert.Contains("Windows SSH/session 0", Assert.Throws<InvalidOperationException>(() =>
+            DirectClientDesktop.Require((true, 0))).Message);
+        DirectClientDesktop.Require((true, 1));
+        DirectClientDesktop.Require((false, 0));
+    }
+
+    [Fact] public void AGeneratedConsumerRefusesWindowsSshBeforePreflightCopiesTheGame()
+    {
+        var regression = _rig.Regression(_rig.Manifest());
+        regression.DirectClientSession = () => (true, 0);
+
+        var error = Assert.Throws<InvalidOperationException>(() => regression.Preflight());
+        Assert.Contains("Windows SSH/session 0", error.Message);
+        Assert.Contains("interactive desktop terminal", error.Message);
+        Assert.Contains("valheim-test start", error.Message);
+        Assert.False(Directory.Exists(_rig.Install));
+    }
+
+    [Fact] public void AGeneratedConsumerRefusesWindowsSshBeforeRunWritesEvidenceOrCopiesTheGame()
+    {
+        var regression = _rig.Regression(_rig.Manifest());
+        regression.DirectClientSession = () => (true, 0);
+        string output = Path.Combine(_rig.Root, "ssh-refused");
+
+        var error = Assert.Throws<InvalidOperationException>(() => regression.Run("parent", output, "smoke", ["first"], _ => { }));
+        Assert.Contains("Windows SSH/session 0", error.Message);
+        Assert.False(Directory.Exists(output));
+        Assert.False(Directory.Exists(_rig.Install));
+    }
+
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 0)]
+    public void ADesktopOrNonWindowsPreflightCanStage(bool windows, int sessionId)
+    {
+        var regression = _rig.Regression(_rig.Manifest());
+        regression.DirectClientSession = () => (windows, sessionId);
+
+        Assert.Equal(2, regression.Preflight().Count);
+        Assert.True(Directory.Exists(_rig.Install));
+    }
+
     [Fact] public void ATargetedRunValidatesItsExpectedErrorLinesBeforeStaging()
     {
         var manifest = _rig.Manifest();
@@ -501,7 +545,12 @@ internal sealed class RegressionRig : IDisposable
 
     /// <summary>The regression of <paramref name="inputs"/> on the rig's client environment, with the rig's save folder.</summary>
     public TargetedRegression Regression(RegressionInputs inputs, IEnumerable<string>? scenarioCapabilities = null) =>
-        new(inputs, scenarioCapabilities, Inventory()) { SaveDirectory = Save, SteamUserData = SteamUserData };
+        new(inputs, scenarioCapabilities, Inventory())
+        {
+            SaveDirectory = Save, SteamUserData = SteamUserData,
+            // This rig stages fake files without a desktop. Tests of the SSH refusal override this explicitly.
+            DirectClientSession = () => (OperatingSystem.IsWindows(), 1),
+        };
 
     public RegressionInputs Manifest(string? fixture = null, string? worldUid = null) => new()
     {
