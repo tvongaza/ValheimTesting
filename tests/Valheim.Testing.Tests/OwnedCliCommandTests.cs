@@ -77,6 +77,22 @@ public sealed class OwnedCliCommandTests
         Assert.Throws<InvalidOperationException>(() => OwnedCliCommand.RequirePortOwner(0, pid));
     }
 
+    [Fact] public void WindowsPortProofRefusesARecentlyClosedListener()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        int port;
+        using (var listener = new TcpListener(IPAddress.Loopback, 0))
+        {
+            listener.Start();
+            port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            OwnedCliCommand.RequirePortOwner(port, Environment.ProcessId);
+            listener.Stop();
+        }
+
+        Assert.Throws<InvalidOperationException>(() =>
+            OwnedCliCommand.RequirePortOwner(port, Environment.ProcessId));
+    }
+
     [Fact] public void PassthroughRequiresOneCommandAndIndependentStrictPins()
     {
         using var output = new StringWriter(); using var error = new StringWriter();
