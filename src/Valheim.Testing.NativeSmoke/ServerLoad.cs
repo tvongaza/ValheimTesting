@@ -42,7 +42,10 @@ internal static class ServerLoad
         // The shipped-loader decision reads the real install on this machine, so it is on only for a real run (no seams)
         // and for a test that passes one.
         Func<string, string, ShippedLoader.Choice?>? Loader = null,
-        Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null);
+        Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null,
+        // An A/B run freezes its automatic server choice before either arm starts. Its command
+        // still names the package, while this carries the reason into each arm's evidence.
+        ShippedLoader.Choice? FrozenServerLoader = null);
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
@@ -220,6 +223,13 @@ internal static class ServerLoad
         string serverInstall = server.Install;
         // A loader package given, or the chosen environment's own (which the campaign applies too); else the install's BepInEx.
         var (serverLoader, serverAuto) = SelectServerLoader(parsed, server, seams.Loader);
+        if (seams.FrozenServerLoader is { } frozen)
+        {
+            if (serverLoader == null || !Path.GetFullPath(serverLoader).Equals(Path.GetFullPath(frozen.Manifest),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new InvalidDataException("The A/B arm's pinned server loader differs from the package chosen before either arm started.");
+            serverAuto = frozen;
+        }
         var clientLoader = parsed.Options.TryGetValue("--client-loader-package", out string? clientLoaderFile) ? Path.GetFullPath(clientLoaderFile) : choice.Client?.LoaderPackage;
         // An install on this machine whose own Doorstop proxy and configuration do not match (a mod manager swapped the proxy)
         // gets the BepInExPack this tool ships in its disposable copy, with one printed line; every other loader fault still refuses.

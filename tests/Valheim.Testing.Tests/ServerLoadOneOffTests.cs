@@ -211,6 +211,28 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Empty(asked);
     }
 
+    [Fact] public async Task FrozenABServerLoaderRetainsTheAutomaticReplacementReason()
+    {
+        string package = Path.Combine(_rig.Root, "frozen-loader.json");
+        BepInExLoaderPackage.Capture(_rig.Game, "BepInExPack_Valheim", "5.4.2351").Write(package);
+        const string reason = "the source Doorstop pair was incoherent";
+        var recorded = new Dictionary<string, string>();
+        int result = await ServerLoad.RunAsync(Arguments(Path.Combine(_rig.Root, "frozen-server"),
+            "--server-only", "--loader-package", package), new ServerLoad.Seams(
+            Inspect: _ => Task.FromResult(Ready),
+            Campaign: (_, plan, _, _, options) =>
+            {
+                options.Provenance!(plan, recorded);
+                return Task.FromResult(0);
+            },
+            Loader: (_, _) => throw new InvalidOperationException("An explicit arm package must not choose another loader."),
+            FrozenServerLoader: new ShippedLoader.Choice(package, reason)));
+
+        Assert.Equal(0, result);
+        Assert.Equal(reason, recorded["serverLoaderShipped"]);
+        Assert.Contains("BepInExPack_Valheim", recorded["serverLoaderPackage"]);
+    }
+
     // The server must be on this machine; a client elsewhere needs --join unless it can be inferred.
     [Fact] public void ARemoteServerIsRefusedAndARemoteClientNeedsAJoinAddress()
     {

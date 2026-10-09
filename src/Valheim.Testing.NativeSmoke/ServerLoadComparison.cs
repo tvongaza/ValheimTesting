@@ -9,7 +9,6 @@ internal static class ServerLoadComparison
         Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null,
         Func<string, NativeDependencyLock, string, CancellationToken, string?, Task<string>>? buildAdapter = null)
     {
-        runArm ??= arm => ServerLoad.RunAsync(arm);
         shippedLoader ??= ShippedLoader.Instead;
         resolve ??= NativeDependencyResolver.Resolve;
         buildAdapter ??= SmokeAdapter.BuildAsync;
@@ -40,7 +39,9 @@ internal static class ServerLoadComparison
                 ? new EnvironmentRecipe { Install = Path.GetFullPath(serverOption) }
                 : ServerLoad.Choose(parsed, Path.Combine(output, "choice")).Server;
             string server = serverRecipe.Install;
-            var (loaderManifest, _) = ServerLoad.SelectServerLoader(parsed, serverRecipe, shippedLoader);
+            var (loaderManifest, automaticLoader) = ServerLoad.SelectServerLoader(parsed, serverRecipe, shippedLoader);
+            runArm ??= arm => ServerLoad.RunAsync(arm,
+                new ServerLoad.Seams(Loader: ShippedLoader.Instead, FrozenServerLoader: automaticLoader));
             var serverLoader = loaderManifest == null ? null : BepInExLoaderPackage.Read(loaderManifest);
             string serverCore = Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory);
             var clientLoader = options.TryGetValue("--client-loader-package", out string? clientLoaderFile)
