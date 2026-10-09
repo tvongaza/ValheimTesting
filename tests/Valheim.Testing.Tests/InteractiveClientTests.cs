@@ -175,6 +175,69 @@ public class InteractiveClientTests
         Assert.Equal(3, fake.Calls.Count);
     }
 
+    [Fact] public async Task AWindowsClientCanQuitThroughItsDesktopSessionAndReportsAnUnsentRequestHonestly()
+    {
+        var cleanHost = new FakeLauncher()
+            .Exits(0, Reply("VT-TASK removed", "VT-INTERACTIVE started 4242 133700000000000000"), FakeLauncher.Report(0))
+            .Exits(0, Reply("VT-QUIT desktop-window", "VT-STOP quit"), FakeLauncher.Report(0));
+        var clean = await InteractiveClient.StartAsync(WindowsHost(cleanHost),
+            GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows), WindowsLaunch, Timeout);
+        ProcessStop quit = clean.StopCleanly(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(10));
+        Assert.Equal(StopOutcome.Clean, quit.Outcome);
+        Assert.Contains("desktop task", quit.Request);
+        string stop = FakeLauncher.Script(cleanHost.Calls[1]);
+        Assert.Contains("RegisterTaskDefinition($quitTask", stop);
+        Assert.Contains("$process.SessionId", stop);
+        Assert.Contains("$process.StartTime.ToFileTimeUtc()", stop);
+        Assert.Contains("$folder.DeleteTask($quitTask, 0)", stop);
+        Assert.Contains("CloseMainWindow()", stop); // the helper runs in the desktop session
+
+        var failedHost = new FakeLauncher()
+            .Exits(0, Reply("VT-TASK removed", "VT-INTERACTIVE started 4343 133700000000000001"), FakeLauncher.Report(0))
+            .Exits(0, Reply("VT-QUIT desktop-no-window", "VT-STOP stopped"), FakeLauncher.Report(0));
+        var failed = await InteractiveClient.StartAsync(WindowsHost(failedHost),
+            GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows), WindowsLaunch + "-other", Timeout);
+        ProcessStop killed = failed.StopCleanly(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(10));
+        Assert.Equal(StopOutcome.Killed, killed.Outcome);
+        Assert.Contains("no main window", killed.Request);
+        Assert.Contains("without a confirmed quit request", killed.Request);
+        Assert.DoesNotContain("no exit within 60", killed.Request);
+
+        var leakedTaskHost = new FakeLauncher()
+            .Exits(0, Reply("VT-TASK removed", "VT-INTERACTIVE started 4444 133700000000000002"), FakeLauncher.Report(0))
+            .Exits(0, Reply("VT-TASK kept ValheimTesting-client-quit-example", "VT-QUIT desktop-window", "VT-STOP quit"), FakeLauncher.Report(0));
+        var leakedTask = await InteractiveClient.StartAsync(WindowsHost(leakedTaskHost),
+            GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows), WindowsLaunch + "-leaked", Timeout);
+        var refusal = await Assert.ThrowsAsync<HostOperationException>(() => leakedTask.StopAsync(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(10)));
+        Assert.Contains("ValheimTesting-client-quit-example", refusal.Message);
+    }
+
+    [Fact] public void DesktopQuitScriptsParseUnderWindowsPowerShell51()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string root = Directory.CreateTempSubdirectory("vt-quit-parse-").FullName;
+        try
+        {
+            string[] scripts = [InteractiveScripts.WindowsStop, InteractiveScripts.WindowsDesktopQuit];
+            for (int index = 0; index < scripts.Length; index++)
+            {
+                string file = Path.Combine(root, index + ".ps1");
+                File.WriteAllText(file, scripts[index]);
+                var start = new ProcessStartInfo("powershell.exe")
+                {
+                    UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true,
+                    ArgumentList = { "-NoProfile", "-NonInteractive", "-Command",
+                        "$t=$null;$e=$null;[System.Management.Automation.Language.Parser]::ParseFile($env:VT_PARSE_FILE,[ref]$t,[ref]$e)>$null;if($e.Count){$e|ForEach-Object Message;exit 1}" },
+                };
+                start.Environment["VT_PARSE_FILE"] = file;
+                using var process = Process.Start(start)!;
+                Assert.True(process.WaitForExit(15000), "PowerShell parser did not finish.");
+                Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd() + process.StandardOutput.ReadToEnd());
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Fact] public async Task ALinuxClientInAContainerStartsAsTheContainersUserOnItsDisplay()
     {
         var fake = new FakeLauncher().Exits(0, Reply("VT-INTERACTIVE started 812 4711"), FakeLauncher.Report(0));
