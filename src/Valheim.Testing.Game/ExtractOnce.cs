@@ -19,46 +19,104 @@ internal static class ExtractOnce
     /// if it cannot, the damaged one goes back, so the folder is never left missing. <paramref name="what"/> names the
     /// content in errors ("ValheimCLI bundle").
     /// </summary>
-    internal static bool Ensure(string target, Func<string, bool> current, Action<string> extract, string what)
+    internal static bool Ensure(string target, Func<string, bool> current, Action<string> extract, string what,
+        Action<string>? oldMovedForTest = null)
     {
         // Read without the lock: a copy another run is swapping in or out reads as not current here, never as an error.
-        if (Settled(() => current(target))) return false;
+        if (Settled(() => current(target)))
+        {
+            // Normally this is lock-free. A previous run may have installed a good copy but left a locked old folder;
+            // take the swap lock before sweeping it so a concurrent replacement can still roll back safely. A busy
+            // lock or unreadable old folder cannot make the verified current copy fail this run.
+            try
+            {
+                if (OldFolders(target).Any())
+                {
+                    using var cleanupLock = new FileStream(target + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                    SweepOld(target, what);
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"WARNING: could not inspect replaced {what} folders beside {target}: {error.Message}; the next extraction will retry cleanup.");
+            }
+            return false;
+        }
 
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         string? old = null;
+        bool extracted = false;
         using (SwapLock(target + ".lock", what))
         {
             // Strict under the lock: an unreadable copy is an error, never a reason to replace it.
-            if (current(target)) return false;
-            string staging = target + ".extract-" + Guid.NewGuid().ToString("N");
-            try
+            if (!current(target))
             {
-                extract(staging);
-                // A damaged copy goes aside first (a rename; on Windows it waits while a run outside the lock still reads a
-                // file of it), then the new one moves in. If the new one cannot, the damaged one goes back: never no copy.
-                if (Directory.Exists(target))
+                string staging = target + ".extract-" + Guid.NewGuid().ToString("N");
+                try
                 {
-                    old = target + ".old-" + Guid.NewGuid().ToString("N");
-                    Retry(() => Directory.Move(target, old), $"set the damaged {what} at {target} aside");
+                    extract(staging);
+                    // A damaged copy goes aside first (a rename; on Windows it waits while a run outside the lock still reads a
+                    // file of it), then the new one moves in. If the new one cannot, the damaged one goes back: never no copy.
+                    if (Directory.Exists(target))
+                    {
+                        old = target + ".old-" + Guid.NewGuid().ToString("N");
+                        Retry(() => Directory.Move(target, old), $"set the damaged {what} at {target} aside");
+                    }
+                    try
+                    {
+                        if (old != null) oldMovedForTest?.Invoke(old);
+                        Retry(() => Directory.Move(staging, target), $"move the extracted {what} into {target}");
+                    }
+                    catch when (old != null)
+                    {
+                        // Retried like the moves above; if even that fails, the move-in's error is the one reported.
+                        try { Retry(() => Directory.Move(old, target), $"put the damaged {what} back at {target}"); old = null; } catch (IOException) { }
+                        throw;
+                    }
+                    extracted = true;
                 }
-                try { Retry(() => Directory.Move(staging, target), $"move the extracted {what} into {target}"); }
-                catch when (old != null)
+                finally
                 {
-                    // Retried like the moves above; if even that fails, the move-in's error is the one reported.
-                    try { Retry(() => Directory.Move(old, target), $"put the damaged {what} back at {target}"); old = null; } catch (IOException) { }
-                    throw;
+                    // Best effort: a failed clean-up never hides why the extraction failed.
+                    try { if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
                 }
             }
-            finally
-            {
-                // Best effort: a failed clean-up never hides why the extraction failed.
-                try { if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true); }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-            }
+            // This lock also protects the displaced folder while a failed move-in might still need it for rollback.
+            SweepOld(target, what);
         }
-        // The damaged copy is out of the way: removed after the lock, best effort.
-        if (old != null) try { Directory.Delete(old, recursive: true); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-        return true;
+        return extracted;
+    }
+
+    private static IEnumerable<string> OldFolders(string target) => Directory.EnumerateDirectories(
+        Path.GetDirectoryName(target)!, Path.GetFileName(target) + ".old-*", SearchOption.TopDirectoryOnly);
+
+    // A reader may keep the displaced copy open on Windows after a successful swap. A persistent cleanup problem is
+    // visible, but does not turn the valid new copy into a failed extraction. Later calls sweep these folders again.
+    private static void SweepOld(string target, string what)
+    {
+        string[] folders;
+        try { folders = OldFolders(target).ToArray(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"WARNING: could not inspect replaced {what} folders beside {target}: {error.Message}; the next extraction will retry cleanup.");
+            return;
+        }
+        foreach (string old in folders)
+        {
+            for (int attempt = 1; ; attempt++)
+                try { Directory.Delete(old, recursive: true); break; }
+                catch (DirectoryNotFoundException) { break; } // another cleanup already removed it
+                catch (IOException) when (attempt < 50)
+                {
+                    Thread.Sleep(20 * Math.Min(attempt, 10));
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    Console.Error.WriteLine($"WARNING: replaced {what} at {old} could not be removed: {error.Message}; the next extraction will retry cleanup.");
+                    break;
+                }
+        }
     }
 
     // An exclusive handle on the lock file (FileShare.None: a sharing lock on Windows, flock on Linux and macOS), retried
@@ -74,7 +132,7 @@ internal static class ExtractOnce
         }
     }
 
-    // A folder rename that a reader outside the lock briefly blocks on Windows (a file of it open for hashing), for up to ~10 s.
+    // A rename or deletion that a reader outside the lock briefly blocks on Windows (a file open for hashing), for up to ~10 s.
     private static void Retry(Action action, string what)
     {
         for (int attempt = 1; ; attempt++)
