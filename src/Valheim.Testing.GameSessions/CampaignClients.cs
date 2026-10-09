@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using Valheim.Testing.Game;
 
 namespace Valheim.Testing.GameSessions;
@@ -132,7 +131,7 @@ internal sealed class CampaignClients
         // An unknown remote Mac prefers arm64; x64/Rosetta is an explicit choice.
         if (plan.Owned && plan.Architecture.Length == 0)
             plan.Architecture = EnvironmentInventory.DefaultClientArchitecture(hostProfile.Platform,
-                hostProfile.Kind == "local" ? RuntimeInformation.OSArchitecture : null);
+                hostProfile.Kind == "local" ? EnvironmentInventory.ThisMachine.OsArchitecture : null);
         if (platform == ClientPlatform.MacOS)
             return await OpenLocalMacClientAsync(report, output, plan, name, role, hostProfile, cancellation).ConfigureAwait(false);
         // Remote Windows and Linux clients are x64 only.

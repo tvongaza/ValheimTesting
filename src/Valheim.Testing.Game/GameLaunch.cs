@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
-using System.Runtime.InteropServices;
 
 namespace Valheim.Testing.Game;
 
@@ -183,10 +182,10 @@ public sealed partial class GameLaunch
             ClientPlatform.Windows => "windows",
             ClientPlatform.Linux => "linux",
             ClientPlatform.MacOS => "macos",
-            _ => HostProfile.CurrentPlatform,
+            _ => EnvironmentInventory.ThisMachine.Platform,
         };
         ClientArchitecture selected = architecture ?? EnvironmentInventory.DefaultClientLaunchArchitecture(platformName,
-            hostPlatform is null ? RuntimeInformation.OSArchitecture : null);
+            hostPlatform is null ? EnvironmentInventory.ThisMachine.OsArchitecture : null);
         if (hostPlatform is { } platform) return ClientOnHost(platform, install, arguments, environment, selected, console, secretVariables);
         if (secretVariables?.Any() == true)
             throw new ArgumentException("A launch for this machine inherits this process's environment; secret variables are named only for a host's launch.", nameof(secretVariables));

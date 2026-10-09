@@ -1,7 +1,6 @@
 using valheim_cli.Testing;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Runtime.InteropServices;
 using valheimCLI;
 
 namespace Valheim.Testing.Game;
@@ -205,9 +204,9 @@ public sealed class ClientRunPlan
             ClientPlatform.Windows => "windows",
             ClientPlatform.Linux => "linux",
             ClientPlatform.MacOS => "macos",
-            _ => HostProfile.CurrentPlatform,
+            _ => EnvironmentInventory.ThisMachine.Platform,
         };
-        return EnvironmentInventory.DefaultClientLaunchArchitecture(platform, RuntimeInformation.OSArchitecture);
+        return EnvironmentInventory.DefaultClientLaunchArchitecture(platform, EnvironmentInventory.ThisMachine.OsArchitecture);
     }
 
     /// <summary>A full path on a Windows host (drive or UNC) or a POSIX host (rooted), whichever machine this runs on.</summary>

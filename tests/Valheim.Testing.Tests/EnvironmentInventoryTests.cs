@@ -51,6 +51,21 @@ public sealed class EnvironmentInventoryTests : IDisposable
         Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("linux", Architecture.Arm64));
     }
 
+    [Theory]
+    [InlineData(Architecture.Arm64, ClientArchitecture.Arm64)]
+    [InlineData(Architecture.X64, ClientArchitecture.X64)]
+    public void PlansAndDirectLaunchesUseTheSameMachineArchitectureAsTheInventory(Architecture cpu, ClientArchitecture expected)
+    {
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine("macos") { OsArchitecture = cpu });
+        Assert.Equal(expected, new ClientRunPlan { Mode = "owned" }.LaunchArchitecture);
+        Assert.Equal(GameLaunch.PlanName(expected), EnvironmentInventory.DefaultClientArchitecture(
+            EnvironmentInventory.ThisMachine.Platform, EnvironmentInventory.ThisMachine.OsArchitecture));
+        if (!OperatingSystem.IsMacOS()) return; // A direct Mac launch itself can run only on a Mac.
+        using var install = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
+        Assert.Equal(expected == ClientArchitecture.Arm64 ? "-arm64" : "-x86_64",
+            GameLaunch.ForClient(install.Root, []).ToStartInfo().ArgumentList[0]);
+    }
+
     [Fact]
     public void InventoryAllowsArm64OnlyForAMacClient()
     {

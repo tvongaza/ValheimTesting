@@ -44,6 +44,7 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
     {
         EnvironmentInventory.ThisMachine = new FakeMachine(HostProfile.CurrentPlatform)
         {
+            OsArchitecture = RuntimeInformation.OSArchitecture,
             Home = Path.Combine(Path.GetTempPath(), "vt-no-steam-home"), DataRoot = Path.Combine(Path.GetTempPath(), "vt-no-steam-data"),
         };
         // Every copy a test makes is journalled here, never in the test machine's own ValheimTesting folder.
