@@ -1,4 +1,5 @@
-// Build the preview public-surface reference after bootstrap-cli.cs and validate.cs.
+// Build the preview public-surface reference after bootstrap-cli.cs and a Release build of
+// docs/reference/ValheimTesting.Api.sln (full validate.cs also supplies that build).
 // No game process or game assemblies are needed.
 //
 //   dotnet tool restore

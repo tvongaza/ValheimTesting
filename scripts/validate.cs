@@ -1,6 +1,8 @@
 // Local test-pyramid layers only; never launches Valheim. Run bootstrap-cli.cs first.
 //
 //   dotnet run scripts/validate.cs
+//   dotnet run scripts/validate.cs -- --skip-ci-shell   CI only: shell integration runs in its own job
+//   dotnet run scripts/validate.cs -- --only-ci-shell   CI only: run that shard with the same data-root guard
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
@@ -19,7 +21,10 @@ using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 
 string root = FindRoot();
-if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/validate.cs");
+bool skipCiShell = args.SequenceEqual(["--skip-ci-shell"]);
+bool onlyCiShell = args.SequenceEqual(["--only-ci-shell"]);
+if (args.Length != 0 && !skipCiShell && !onlyCiShell)
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell]");
 string results = Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
@@ -28,7 +33,16 @@ var started = Stopwatch.StartNew();
 string dataRoot = DataRoot();
 var dataBefore = Snapshot(dataRoot);
 
-Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj");
+if (onlyCiShell)
+{
+    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category=CiShell", "--", "RunConfiguration.TreatNoTestsAsError=true");
+    Note("Local-shell integration validation passed; the data-root guard found no changes.");
+    return 0;
+}
+
+// CI runs the slower local-shell integration tests in their own three-OS job. Plain local validation still runs all tests.
+if (skipCiShell) Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category!=CiShell");
+else Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj");
 Test("tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj");
 Test("tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj");
 // The adapter source is compiled into a mod's game-side adapter against the game; here, against declared signatures
@@ -79,7 +93,7 @@ Run("dotnet", "run", "scripts/package-audit.cs", "--", "--directory", feed, "--c
 // A mod's view of what was just packed: outside this checkout, the candidate packages only from .packages and byte-identical
 // to it, the Cli from .packages too (its pin may not be published yet), every other package from NuGet.org.
 Run("dotnet", "run", "scripts/consumer.cs", "--", "--feed", "local", "--candidate", candidate);
-Note("Local validation passed.");
+Note(skipCiShell ? "CI validation passed; local-shell integration tests run in their separate job." : "Local validation passed.");
 return 0;
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
