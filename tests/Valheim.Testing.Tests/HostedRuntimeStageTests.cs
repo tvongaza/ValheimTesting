@@ -275,6 +275,18 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.DoesNotContain(listing.Files.Keys, file => file.StartsWith("logs/", StringComparison.OrdinalIgnoreCase));
         // A nested logs folder is the game's own: only the install's top level is left out.
         Assert.True(File.Exists(Path.Combine(host.Local(runtime), "BepInEx", "logs", "kept.txt")));
+
+        string explicitConfig = Path.Combine(_root, "explicit-BepInEx.cfg");
+        File.WriteAllText(explicitConfig, "explicit settings");
+        const string explicitRuntime = @"C:\runs\explicit\runtime", explicitStaging = @"C:\runs\explicit\staging";
+        var explicitListing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source,
+            explicitRuntime, explicitStaging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen.dll"),
+                new HostedRuntimeFile(explicitConfig, BepInExSettings.RelativePath)], TimeSpan.FromSeconds(30));
+        Assert.Equal("explicit settings", File.ReadAllText(Path.Combine(host.Local(explicitRuntime),
+            "BepInEx", "config", "BepInEx.cfg")));
+        Assert.Equal(FileHash.Sha256(explicitConfig), explicitListing.Files[BepInExSettings.RelativePath]);
+        Assert.Equal("source settings", File.ReadAllText(sourceConfig));
     }
 
     [Fact] public async Task ASourceBepInExConfigChangedDuringStagingFailsItsPin()

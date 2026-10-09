@@ -813,6 +813,7 @@ public sealed class TargetedRegression
         foreach (string folder in new[] { "plugins", "patchers", "config" }) Directory.CreateDirectory(Path.Combine(install, "BepInEx", folder));
         string sourceSettings = Path.Combine(game, "BepInEx", "config", BepInExConfig);
         string? packageSettings = package == null ? null : Path.Combine(package.Root, "BepInEx", "config", BepInExConfig);
+        // An explicit regression config is staged later, after this copy, and therefore wins over either source.
         var settingsOrigin = BepInExSettings.Choose(File.Exists(sourceSettings),
             packageSettings != null && File.Exists(packageSettings), explicitExists: false);
         string? settings = settingsOrigin switch
