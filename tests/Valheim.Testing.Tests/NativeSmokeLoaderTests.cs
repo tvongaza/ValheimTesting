@@ -73,6 +73,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
     [Fact]
     public void StartRunsTheHostedRunWithoutBuildingAConsumer()
     {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "journal"));
         // The fake game has no desktop. Keep this test on the hosted-run path while a separate test checks that the
         // real Windows preflight refuses an unavailable desktop before any copy.
         using var desktop = DesktopClientSession.ReplacePreflightForTest(_ => Task.CompletedTask);
@@ -99,6 +100,11 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         }
         Assert.Equal(1, exit);
         var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "evidence", "smoke", "result.json")));
+        string runId = report.RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
+        string fixtureJournal = File.ReadAllText(Path.Combine(_rig.Root, "journal", runId, WorldFixture.Actor + ".jsonl"));
+        Assert.Contains(JournalEntry.CopyIntended, fixtureJournal);
+        Assert.Contains(JournalEntry.CopyRetired, fixtureJournal);
+        Assert.Contains(JournalEntry.RunEnded, File.ReadAllText(Path.Combine(_rig.Root, "journal", runId, "run.jsonl")));
         var steps = report.RootElement.GetProperty("Steps").EnumerateArray().ToList();
         Assert.Equal("stage only the registered disposable character", steps[0].GetProperty("Name").GetString());
         Assert.Contains("userdata", steps[0].GetProperty("Error").GetString());

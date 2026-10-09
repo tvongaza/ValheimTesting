@@ -39,6 +39,249 @@ public sealed class RunRecoveryTests : IDisposable
             ("commandLineSha256", FakeServerHost.CommandLineSha256("41")), ("bootDirectory", "/srv/runs/cut/boot-1"));
     }
 
+    [Fact]
+    public async Task RegressionCharacterIntentWithoutCompletionCannotDeleteASameNamedSave()
+    {
+        const string run = "run-character-intent";
+        string personal = _host.Local(Characters + "/vt01.fch");
+        Directory.CreateDirectory(Path.GetDirectoryName(personal)!);
+        File.WriteAllText(personal, "personal save");
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "regression"), ("local", "true"),
+            ("expectedSha256", FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes("registered save"))));
+
+        var report = await RecoverAsync(run);
+
+        Assert.False(report.Recovered);
+        Assert.Contains(report.Steps, step => step.What.StartsWith("character vt01", StringComparison.Ordinal) &&
+            step.Failed && step.Outcome.Contains("differs from its journalled SHA-256", StringComparison.Ordinal));
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
+        Assert.Equal("personal save", File.ReadAllText(personal));
+        Assert.Equal(JournalRunState.Recoverable, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    [Fact]
+    public async Task HostedCharacterIntentCannotDeleteAPersonalSaveWithTheSameName()
+    {
+        const string run = "run-hosted-character-intent";
+        string personal = _host.Local(Characters + "/vt01.fch");
+        Directory.CreateDirectory(Path.GetDirectoryName(personal)!);
+        File.WriteAllText(personal, "personal save");
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "hosted"));
+
+        var report = await RecoverAsync(run);
+
+        Assert.False(report.Recovered);
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
+        Assert.Equal("personal save", File.ReadAllText(personal));
+    }
+
+    [Theory]
+    [InlineData("regression", false)]
+    [InlineData("regression", true)]
+    [InlineData("hosted", false)]
+    public async Task CharacterIntentCanRecoverWhenFileIsMissingOrMatchesItsSource(string kind, bool copyFinished)
+    {
+        const string run = "run-character-intent-recoverable";
+        byte[] source = System.Text.Encoding.UTF8.GetBytes("registered save");
+        string local = _host.Local(Characters);
+        Directory.CreateDirectory(local);
+        if (copyFinished) File.WriteAllBytes(Path.Combine(local, "vt01.fch"), source);
+        var fields = new List<(string, string)>
+        {
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", kind), ("local", "true"),
+        };
+        if (kind == "regression") fields.Add(("expectedSha256", FileHash.Sha256(source)));
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended, [.. fields]);
+
+        var report = await RecoverAsync(run);
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.False(File.Exists(Path.Combine(local, "vt01.fch")));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+        Assert.Equal(copyFinished, _host.Runs.Any(call => call.Script == "character-retire"));
+    }
+
+    [Fact]
+    public async Task IncompleteHostedIntentNeverDeletesEvenAnIdenticalSave()
+    {
+        const string run = "run-hosted-identical";
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes("registered save");
+        string local = _host.Local(Characters);
+        Directory.CreateDirectory(local);
+        File.WriteAllBytes(Path.Combine(local, "vt01.fch"), bytes);
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "hosted"));
+
+        var report = await RecoverAsync(run);
+
+        Assert.False(report.Recovered);
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
+        Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(local, "vt01.fch")));
+    }
+
+    [Fact]
+    public async Task OlderHostedIntentWithoutAHashClearsWhenNoSaveExists()
+    {
+        const string run = "run-hosted-old-intent";
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"));
+
+        var report = await RecoverAsync(run);
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
+    }
+
+    [Fact]
+    public async Task RegressionCharacterIntentRefusesAnUnexpectedBackupEvenWhenTheMainFileMatches()
+    {
+        const string run = "run-character-intent-extra";
+        byte[] source = System.Text.Encoding.UTF8.GetBytes("registered save");
+        string local = _host.Local(Characters);
+        Directory.CreateDirectory(local);
+        File.WriteAllBytes(Path.Combine(local, "vt01.fch"), source);
+        File.WriteAllText(Path.Combine(local, "vt01.fch.old"), "personal backup");
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "regression"), ("local", "true"), ("expectedSha256", FileHash.Sha256(source)));
+
+        var report = await RecoverAsync(run);
+
+        Assert.False(report.Recovered);
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
+        Assert.True(File.Exists(Path.Combine(local, "vt01.fch")));
+        Assert.Equal("personal backup", File.ReadAllText(Path.Combine(local, "vt01.fch.old")));
+    }
+
+    [Fact]
+    public async Task CompletedRegressionCharacterCanBeRetiredByRecovery()
+    {
+        const string run = "run-character-done";
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "regression"), ("local", "true"));
+        Line(_host, run, "client", Gone, JournalEntry.CharacterDone,
+            ("fileName", "vt01"), ("staged", "true"));
+
+        var report = await RecoverAsync(run);
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Contains(_host.Runs, call => call.Script == "character-retire");
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    [Fact]
+    public async Task InterruptedPlainStartListsAndRecoversItsMarkedDisposableCopy()
+    {
+        using var rig = new RegressionRig();
+        var regression = rig.Regression(rig.Manifest());
+        regression.Stage("parent"); // The fake runner was killed after this copy, before normal cleanup.
+        Assert.True(Directory.Exists(regression.Install));
+        string evidence = Path.Combine(_root, "plain-start-evidence");
+        Directory.CreateDirectory(evidence);
+        const string run = "run-plain-start";
+        Line(_host, run, "fixture", Gone, JournalEntry.CopyIntended,
+            ("runtime", regression.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", evidence));
+        Line(_host, run, "fixture", Gone, JournalEntry.CopyDone,
+            ("runtime", regression.Install), ("local", "true"), ("copyKind", "regression"));
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "regression"), ("local", "true"));
+        Line(_host, run, "client", Gone, JournalEntry.CharacterDone,
+            ("fileName", "vt01"), ("staged", "true"));
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "local", Lock = "/var/tmp/vt/lock" } };
+        var before = await RunJournalStatus.InspectAsync(hosts, _ => _host, TimeSpan.FromSeconds(5));
+        var listed = Assert.Single(before.Runs);
+        Assert.Equal(JournalRunState.Recoverable, listed.State);
+        Assert.Contains(listed.Items, item => item.Kind == "copy" && item.What == regression.Install);
+        Assert.Contains(listed.Items, item => item.Kind == "character" && item.Fields.GetValueOrDefault("staged") == "true");
+
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.False(Directory.Exists(regression.Install));
+        Assert.Contains(_host.Runs, call => call.Script == "character-retire");
+        Assert.Empty(Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => _host,
+            TimeSpan.FromSeconds(5))).Runs).Items);
+    }
+
+    [Fact]
+    public async Task InterruptedPlainStartRecoversItsClaimedPartialCopy()
+    {
+        using var rig = new RegressionRig();
+        var regression = rig.Regression(rig.Manifest());
+        const string run = "run-partial-plain-start";
+        string evidence = Path.Combine(_root, "partial-copy-evidence");
+        Directory.CreateDirectory(evidence);
+        RegressionCopyClaim.Create(regression.Install, run);
+        Directory.CreateDirectory(regression.Install);
+        File.WriteAllText(Path.Combine(regression.Install, "unfinished-copy"), "partial");
+        Line(_host, run, "fixture", Gone, JournalEntry.CopyIntended,
+            ("runtime", regression.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", evidence));
+
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "local", Lock = "/var/tmp/vt/lock" } };
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.False(Directory.Exists(regression.Install));
+        Assert.False(File.Exists(RegressionCopyClaim.PathFor(regression.Install)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACopyClaimedByAnotherRunIsNeverRemoved(bool complete)
+    {
+        using var rig = new RegressionRig();
+        var regression = rig.Regression(rig.Manifest());
+        string evidence = Path.Combine(_root, "foreign-copy-evidence");
+        Directory.CreateDirectory(evidence);
+        RegressionCopyClaim.Create(regression.Install, "another-run");
+        if (complete) regression.Stage("parent");
+        else
+        {
+            Directory.CreateDirectory(regression.Install);
+            File.WriteAllText(Path.Combine(regression.Install, "keep-me"), "personal");
+        }
+        Line(_host, "run-partial-foreign", "fixture", Gone, JournalEntry.CopyIntended,
+            ("runtime", regression.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", evidence));
+
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "local", Lock = "/var/tmp/vt/lock" } };
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => _host, "run-partial-foreign", false, TimeSpan.FromSeconds(5));
+
+        Assert.False(recovered.Recovered);
+        Assert.True(Directory.Exists(regression.Install));
+        Assert.True(File.Exists(RegressionCopyClaim.PathFor(regression.Install)));
+    }
+
+    [Fact]
+    public async Task CompletedPlainStartLeavesNoRecoverableCopyCharacterOrProcess()
+    {
+        const string run = "run-plain-complete";
+        const string copy = "/tmp/regression-plain-complete";
+        Line(_host, run, "fixture", Gone, JournalEntry.CopyIntended,
+            ("runtime", copy), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", "/tmp/evidence"));
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "regression"), ("local", "true"));
+        Line(_host, run, "client", Gone, JournalEntry.CharacterDone, ("fileName", "vt01"), ("staged", "true"));
+        Line(_host, run, "client", Gone, JournalEntry.CharacterRetired, ("fileName", "vt01"));
+        Line(_host, run, "fixture", Gone, JournalEntry.CopyRetired, ("runtime", copy), ("local", "true"));
+        Line(_host, run, "run", Gone, JournalEntry.RunEnded, ("state", "passed"), ("cleanupVerified", "true"));
+
+        var status = await StatusAsync();
+
+        Assert.True(status.Clean);
+        Assert.Equal(JournalRunState.Ended, Assert.Single(status.Runs).State);
+        Assert.Empty(Assert.Single(status.Runs).Items);
+    }
+
     [Fact] public async Task RecoverStopsTheRunsOwnServerRetiresItsCharacterAndCopyAndReleasesItsLeaseAndLock()
     {
         InterruptedRun();
