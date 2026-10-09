@@ -1,11 +1,18 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>Runs the same disposable server smoke twice, removing exactly one selected mod in the second arm.</summary>
 internal static class ServerLoadComparison
 {
-    public static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runArm = null)
+    public static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runArm = null,
+        Func<string, string, ShippedLoader.Choice?>? shippedLoader = null,
+        Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null,
+        Func<string, NativeDependencyLock, string, CancellationToken, string?, Task<string>>? buildAdapter = null)
     {
         runArm ??= arm => ServerLoad.RunAsync(arm);
+        shippedLoader ??= ShippedLoader.Instead;
+        resolve ??= NativeDependencyResolver.Resolve;
+        buildAdapter ??= SmokeAdapter.BuildAsync;
         using var cancel = new CancellationTokenSource();
         ConsoleCancelEventHandler onCancel = (_, press) => { press.Cancel = true; cancel.Cancel(); };
         Console.CancelKeyPress += onCancel;
@@ -29,15 +36,17 @@ internal static class ServerLoadComparison
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
                 throw new ArgumentException("--remove-mod must name exactly one of at least two selected --mod DLLs.");
             // The server install both arms resolve against: given, or the inventory's server environment on this machine.
-            string server = options.TryGetValue("--server", out string? serverOption) ? Path.GetFullPath(serverOption)
-                : ServerLoad.Choose(parsed, Path.Combine(output, "choice")).Server.Install;
-            var serverLoader = options.TryGetValue("--loader-package", out string? loaderFile)
-                ? BepInExLoaderPackage.Read(loaderFile) : null;
+            var serverRecipe = options.TryGetValue("--server", out string? serverOption)
+                ? new EnvironmentRecipe { Install = Path.GetFullPath(serverOption) }
+                : ServerLoad.Choose(parsed, Path.Combine(output, "choice")).Server;
+            string server = serverRecipe.Install;
+            var (loaderManifest, _) = ServerLoad.SelectServerLoader(parsed, serverRecipe, shippedLoader);
+            var serverLoader = loaderManifest == null ? null : BepInExLoaderPackage.Read(loaderManifest);
+            string serverCore = Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory);
             var clientLoader = options.TryGetValue("--client-loader-package", out string? clientLoaderFile)
                 ? BepInExLoaderPackage.Read(clientLoaderFile) : null;
             var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
             string[] protectedRoots = new[] { server, cliFiles, options.TryGetValue("--client", out string? client) ? Path.GetFullPath(client) : null,
-                options.TryGetValue("--steam-userdata", out string? userdata) ? Path.GetFullPath(userdata) : null,
                 serverLoader?.Root, clientLoader?.Root }.OfType<string>().ToArray();
             SmokeOutput.RefuseInside(output, protectedRoots);
             var roots = parsed.Roots.Select(Path.GetFullPath).ToList();
@@ -48,12 +57,12 @@ internal static class ServerLoadComparison
             {
                 Mods = selected, SearchRoots = roots,
                 GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(server))!,
-                BepInExCore = Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory),
+                BepInExCore = serverCore,
                 CliManifest = cliManifest, CliFiles = cliFiles,
                 Capabilities = capabilities, OptionalReferences = optional,
             };
-            var before = NativeDependencyResolver.Resolve(Request(mods));
-            var after = NativeDependencyResolver.Resolve(Request(mods.Where(mod => !mod.Equals(removed, pathComparison)).ToList()));
+            var before = resolve(Request(mods));
+            var after = resolve(Request(mods.Where(mod => !mod.Equals(removed, pathComparison)).ToList()));
             if (!before.Ready || !after.Ready)
             {
                 static string Gaps(NativeDependencyLock arm) => string.Join("; ", arm.Gaps.Select(gap =>
@@ -67,7 +76,7 @@ internal static class ServerLoadComparison
             Directory.CreateDirectory(output);
             string adapter = options.TryGetValue("--adapter", out string? chosenAdapter)
                 ? Path.GetFullPath(chosenAdapter)
-                : await SmokeAdapter.BuildAsync(server, before, output, cancel.Token, Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory));
+                : await buildAdapter(server, before, output, cancel.Token, serverCore);
 
             // Both arms receive identical arguments and the same packaged fixture; only the selected DLL is omitted.
             // Pin the source installs and explicit assets as well as dependency files before launching either arm.
@@ -76,9 +85,9 @@ internal static class ServerLoadComparison
                 .Concat(options.TryGetValue("--client", out string? clientInstall) ? [Path.GetFullPath(clientInstall)] : [])
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Manifest, StringComparer.Ordinal);
-            var fileInputs = new[] { cliManifest, adapter }
+            var fileInputs = new[] { cliManifest, adapter, loaderManifest }.OfType<string>()
                 .Concat(parsed.Configs.Concat(parsed.PluginFiles).Select(Path.GetFullPath))
-                .Concat(new[] { "--loader-package", "--client-loader-package" }
+                .Concat(new[] { "--client-loader-package" }
                     .Where(options.ContainsKey).Select(key => Path.GetFullPath(options[key])))
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, FileHash.Sha256, StringComparer.Ordinal);
@@ -95,6 +104,10 @@ internal static class ServerLoadComparison
                 // Rebuild from the validated parse, not raw tokens: flags never consume the next option.
                 foreach (var (key, value) in options)
                     Add(key, [key == "--output" ? Path.Combine(output, name) : value]);
+                // Freeze the environment or shipped-package decision for both arms. No arm can silently
+                // compile against one core and run against a different one.
+                if (!options.ContainsKey("--loader-package") && loaderManifest != null)
+                    Add("--loader-package", [loaderManifest]);
                 arm.AddRange(parsed.Switches);
                 Add("--mod", parsed.Mods.Where(mod => !omit || !Path.GetFullPath(mod).Equals(removed, pathComparison)));
                 Add("--search-root", parsed.Roots);

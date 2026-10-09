@@ -1,4 +1,6 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
+using System.Text.Json;
 using Xunit;
 
 public sealed class NativeSmokeComparisonTests : IDisposable
@@ -121,6 +123,61 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.Equal([_rig.Parent], arms[1].Mods);
         Assert.Equal(Path.Combine(output, "before"), arms[0].Options["--output"]);
         Assert.Equal(Path.Combine(output, "after"), arms[1].Options["--output"]);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task BothArmsResolveAndBuildAgainstTheSelectedLoader(bool environmentPackage, bool explicitPackage)
+    {
+        string packageRoot = Path.Combine(_rig.Root, "reviewed-loader");
+        var sourcePackage = BepInExLoaderPackage.Capture(_rig.Game, "source-loader", "1");
+        foreach (string relative in sourcePackage.Files.Keys)
+        {
+            string destination = Path.Combine(packageRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(Path.Combine(_rig.Game, relative.Replace('/', Path.DirectorySeparatorChar)), destination);
+        }
+        string package = Path.Combine(_rig.Root, "reviewed-loader.json");
+        BepInExLoaderPackage.Capture(packageRoot, "reviewed-loader", "2").Write(package);
+        string inventory = Path.Combine(_rig.Root, environmentPackage ? "environment-loader.json" : "shipped-loader.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            environments = new[] { new { name = "local-server", roles = new[] { "server" }, install = _rig.Game,
+                loaderPackage = environmentPackage ? package : null } },
+        }));
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, environmentPackage ? "env-ab" : "shipped-ab");
+        var arguments = Arguments(output, _rig.Parent, companion).ToList();
+        arguments.RemoveRange(0, 2); // The inventory, not --server, owns this server's loader choice.
+        int adapterAt = arguments.IndexOf("--adapter");
+        arguments.RemoveRange(adapterAt, 2); // Exercise the adapter build's selected-core argument.
+        arguments.AddRange(["--inventory", inventory, "--server-only"]);
+        if (explicitPackage) arguments.AddRange(["--loader-package", package]);
+        string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
+            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
+        var resolvedCores = new List<string>();
+        var builtCores = new List<string?>();
+        var arms = new List<ServerLoad.Arguments>();
+        int shippedCalls = 0;
+
+        int result = await ServerLoadComparison.RunAsync([.. arguments], args =>
+        {
+            Assert.True(ServerLoad.TryRead(args, out var parsed, out string error), error);
+            arms.Add(parsed!);
+            return Task.FromResult(0);
+        }, shippedLoader: (_, _) => { shippedCalls++; return new ShippedLoader.Choice(package, "selected pinned pack"); },
+        resolve: request => { resolvedCores.Add(request.BepInExCore); return NativeDependencyResolver.Resolve(request); },
+        buildAdapter: (_, _, _, _, core) => { builtCores.Add(core); return Task.FromResult(adapter); });
+
+        string expectedCore = Path.Combine(packageRoot, InstallPins.CoreDirectory);
+        Assert.Equal(0, result);
+        Assert.Equal(environmentPackage || explicitPackage ? 0 : 1, shippedCalls);
+        Assert.Equal([expectedCore, expectedCore], resolvedCores);
+        Assert.Equal([expectedCore], builtCores);
+        Assert.Equal(2, arms.Count);
+        Assert.All(arms, arm => Assert.Equal(package, arm.Options["--loader-package"]));
     }
 
     [Fact] public async Task RefusedFullSetDoesNotLaunchTheRemovalArm()
