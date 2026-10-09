@@ -38,7 +38,6 @@ if (packageFiles.Length != versions.Count) throw new InvalidDataException($"Expe
 
 var found = new Dictionary<string, (string Version, IReadOnlyList<(string Id, string Version)> Dependencies)>(StringComparer.Ordinal);
 string? candidateSuffix = null;
-string? candidateCommit = null;
 foreach (string file in packageFiles)
 {
     using var archive = ZipFile.OpenRead(file);
@@ -69,13 +68,13 @@ foreach (string file in packageFiles)
     string expectedRepository = id == "Valheim.Testing.Cli" ? "https://github.com/tvongaza/valheimCLI.git" : "https://github.com/tvongaza/ValheimTesting.git";
     string? actualCommit = (string?)repository.Attribute("commit");
     string expectedCommit = id == "Valheim.Testing.Cli" ? cliCommit : sourceCommit ?? "";
+    // An unchanged candidate package can be reused from an earlier commit under the same input identity.
+    // Published packages still have to name the exact release source commit.
     bool commitMatches = candidate && id != "Valheim.Testing.Cli"
-        ? Regex.IsMatch(actualCommit ?? "", "^[0-9a-f]{40}$", RegexOptions.IgnoreCase) &&
-            (candidateCommit == null || string.Equals(candidateCommit, actualCommit, StringComparison.OrdinalIgnoreCase))
+        ? Regex.IsMatch(actualCommit ?? "", "^[0-9a-f]{40}$", RegexOptions.IgnoreCase)
         : string.Equals(actualCommit, expectedCommit, StringComparison.OrdinalIgnoreCase);
     if ((string?)repository.Attribute("type") != "git" || (string?)repository.Attribute("url") != expectedRepository || !commitMatches)
         throw new InvalidDataException($"{id} {version}: repository provenance does not match the {(candidate ? "candidate set" : "release source")}.");
-    if (candidate && id != "Valheim.Testing.Cli") candidateCommit ??= actualCommit;
 
     XElement license = metadata.Elements().Single(element => element.Name.LocalName == "license");
     if ((string?)license.Attribute("type") != "file" || license.Value != "LICENSE" || Field("readme") != "README.md")
