@@ -15,6 +15,11 @@ namespace Valheim.Testing.Game;
 [JsonConverter(typeof(JsonStringEnumConverter<StepPhase>))]
 [ResultShape]
 public enum StepPhase { Preflight, Setup, Scenario, Cleanup }
+/// <summary>
+/// One timed outcome in <see cref="ScenarioReport.Steps"/>. <paramref name="Seconds"/> is elapsed wall time;
+/// <paramref name="Error"/> is empty on success and contains the exception message on failure.
+/// The default <paramref name="Phase"/> is <see cref="StepPhase.Scenario"/>.
+/// </summary>
 [ResultShape]
 public sealed record StepResult(string Name, bool Passed, double Seconds, string Error, StepPhase Phase = StepPhase.Scenario);
 /// <summary>
@@ -22,6 +27,26 @@ public sealed record StepResult(string Name, bool Passed, double Seconds, string
 /// scans and linked evidence. <see cref="Write"/> writes <c>result.json</c> (schema <see cref="Schema"/>) and <c>junit.xml</c>
 /// (one test suite per phase).
 /// </summary>
+/// <example>
+/// A runner records each phase, scans the logs after its owned processes stop, and writes both result formats even when an
+/// earlier step failed. The complete owned-server lifecycle is in <c>examples/FullLifecycle/ExampleMod.SystemTests</c>.
+/// <code>
+/// static void Run(string outputDirectory, Action validatePlan, Action assertTerrain, Action restore)
+/// {
+///     var report = new ScenarioReport("terrain");
+///     try
+///     {
+///         report.Step(StepPhase.Preflight, "validate plan", validatePlan);
+///         report.Step("check terrain", assertTerrain);
+///     }
+///     finally
+///     {
+///         try { report.Step(StepPhase.Cleanup, "restore", restore); }
+///         finally { report.Write(outputDirectory); }
+///     }
+/// }
+/// </code>
+/// </example>
 public sealed class ScenarioReport
 {
     /// <summary>
@@ -30,7 +55,9 @@ public sealed class ScenarioReport
     /// </summary>
     public int Schema => 3;
     private readonly object _stepGate = new();
+    /// <summary>The run name written into both result files and each JUnit phase suite.</summary>
     public string Name { get; }
+    /// <summary>Caller-supplied source, fixture and environment facts written into <c>result.json</c>.</summary>
     public Dictionary<string, string> Provenance { get; } = new();
     /// <summary>The toolkit packages, ValheimCLI transport and runner that ran, each released, candidate or unreleased (read when written).</summary>
     public ToolkitProvenance Toolkit => ToolkitProvenance.Capture();
@@ -53,6 +80,7 @@ public sealed class ScenarioReport
         if (plugins.Count == 0) return;
         lock (_plugins) _plugins[actor] = plugins;
     }
+    /// <summary>Recorded outcomes in completion order. Concurrent actor starts may complete in either order.</summary>
     public List<StepResult> Steps { get; } = new();
     /// <summary>The teardown log scans (<see cref="ScanLogs"/>), one per log.</summary>
     public List<LogFileScan> Logs { get; } = new();
@@ -82,6 +110,7 @@ public sealed class ScenarioReport
     private readonly AsyncLocal<StepPhase?> _current = new();
     /// <summary><c>strict</c>, or <c>none</c> once <see cref="MarkNotPinned"/> recorded an explicit opt-out.</summary>
     public string Pinning { get; private set; } = EnvironmentPinning.Strict;
+    /// <summary>Creates an empty report; it cannot pass until at least one step runs and all recorded steps pass.</summary>
     public ScenarioReport(string name) => Name = name;
     /// <summary>
     /// Records that this run's environment is not pinned, and why: <see cref="Pinning"/> <c>none</c>, the provenance entry
@@ -204,6 +233,13 @@ public sealed class ScenarioReport
         }
         catch (Exception) { return false; }
     }
+    /// <summary>
+    /// Writes <c>result.json</c>, one JUnit suite per <see cref="StepPhase"/> in <c>junit.xml</c>, and attached evidence
+    /// beneath <c>evidence/</c> in <paramref name="directory"/>. It creates the directory if needed and overwrites those
+    /// result files if they already exist there; callers should provide a new run directory. A linked
+    /// <see cref="EvidenceReference"/> outside that directory retains its absolute path, so attach only evidence safe to
+    /// expose with the result. This method can throw on a file-system failure; run it from cleanup even after a failed step.
+    /// </summary>
     public void Write(string directory)
     {
         Directory.CreateDirectory(directory);
