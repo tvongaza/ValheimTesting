@@ -75,6 +75,54 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.True(File.Exists(Path.Combine(output, "after-dependencies.lock.json")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HoldIsRefusedWithoutShiftingArgumentsOrLaunchingAnArm(bool atEnd)
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, atEnd ? "trailing-hold" : "middle-hold");
+        var args = Arguments(output, _rig.Parent, companion).ToList();
+        args.Insert(atEnd ? args.Count : 2, "--hold");
+        int calls = 0;
+        int result = await ServerLoadComparison.RunAsync([.. args], _ =>
+        {
+            calls++;
+            return Task.FromResult(0);
+        });
+        Assert.Equal(3, result);
+        Assert.Equal(0, calls);
+        Assert.False(Directory.Exists(output));
+    }
+
+    [Fact] public async Task BothArmsKeepParsedSearchRootsOptionalReferencesAndSwitches()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "parsed-comparison");
+        string[] arguments = [.. Arguments(output, _rig.Parent, companion),
+            "--server-only", "--optional-reference", "Optional.Plugin"];
+        var arms = new List<ServerLoad.Arguments>();
+        int result = await ServerLoadComparison.RunAsync(arguments, args =>
+        {
+            Assert.True(ServerLoad.TryRead(args, out var parsed, out string error), error);
+            arms.Add(parsed!);
+            return Task.FromResult(0);
+        });
+        Assert.Equal(0, result);
+        Assert.Equal(2, arms.Count);
+        Assert.All(arms, arm =>
+        {
+            Assert.True(arm.ServerOnly);
+            Assert.Equal([Path.Combine(_rig.Root, "deps")], arm.Roots);
+            Assert.Equal(["Optional.Plugin"], arm.Optional);
+            Assert.DoesNotContain("--hold", arm.Switches);
+        });
+        Assert.Equal([_rig.Parent, companion], arms[0].Mods);
+        Assert.Equal([_rig.Parent], arms[1].Mods);
+        Assert.Equal(Path.Combine(output, "before"), arms[0].Options["--output"]);
+        Assert.Equal(Path.Combine(output, "after"), arms[1].Options["--output"]);
+    }
+
     [Fact] public async Task RefusedFullSetDoesNotLaunchTheRemovalArm()
     {
         string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));

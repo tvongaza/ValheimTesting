@@ -18,6 +18,7 @@ internal static class ServerLoadComparison
             var rest = args.Take(removeAt).Concat(args.Skip(removeAt + 2)).ToArray();
             if (!ServerLoad.TryRead(rest, out var parsed, out string error)) throw new ArgumentException(error);
             if (parsed!.Switches.Contains("--preflight-only")) throw new ArgumentException("--preflight-only runs no arm; preflight each arm with server-load instead.");
+            if (parsed.Switches.Contains("--hold")) throw new ArgumentException("--hold cannot run in a comparison: both arms must finish before their results can be compared. Use server-load --hold for interactive inspection.");
             var options = parsed!.Options;
             if (!options.TryGetValue("--output", out string? outputOption)) throw new ArgumentException("Specify --output for the comparison's two arms.");
             string output = Path.GetFullPath(outputOption);
@@ -39,11 +40,8 @@ internal static class ServerLoadComparison
                 options.TryGetValue("--steam-userdata", out string? userdata) ? Path.GetFullPath(userdata) : null,
                 serverLoader?.Root, clientLoader?.Root }.OfType<string>().ToArray();
             SmokeOutput.RefuseInside(output, protectedRoots);
-            var pairs = new List<(string Key, string Value)>();
-            for (int i = 0; i < rest.Length; i++)
-                pairs.Add(rest[i] is "--server-only" or "--preflight-only" ? (rest[i], "") : (rest[i], rest[++i]));
-            var roots = pairs.Where(pair => pair.Key == "--search-root").Select(pair => Path.GetFullPath(pair.Value)).ToList();
-            var optional = pairs.Where(pair => pair.Key == "--optional-reference").Select(pair => pair.Value).ToList();
+            var roots = parsed.Roots.Select(Path.GetFullPath).ToList();
+            var optional = parsed.Optional.ToList();
             var capabilities = parsed.ServerOnly ? ["valheim.session/state"]
                 : new List<string> { "valheim.session/state", "valheim.session/join", "valheim.session/leave" };
             NativeDependencyRequest Request(List<string> selected) => new()
@@ -74,25 +72,40 @@ internal static class ServerLoadComparison
             // Both arms receive identical arguments and the same packaged fixture; only the selected DLL is omitted.
             // Pin the source installs and explicit assets as well as dependency files before launching either arm.
             var directoryInputs = new[] { server, cliFiles }.Concat(new[] { serverLoader?.Root, clientLoader?.Root }.OfType<string>())
-                .Concat(pairs.Where(pair => pair.Key is "--client" or "--plugin-dir")
-                    .Select(pair => Path.GetFullPath(pair.Value)))
+                .Concat(parsed.PluginDirectories.Select(Path.GetFullPath))
+                .Concat(options.TryGetValue("--client", out string? clientInstall) ? [Path.GetFullPath(clientInstall)] : [])
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Manifest, StringComparer.Ordinal);
             var fileInputs = new[] { cliManifest, adapter }
-                .Concat(pairs.Where(pair => pair.Key is "--config" or "--plugin-file" or "--loader-package" or "--client-loader-package")
-                    .Select(pair => Path.GetFullPath(pair.Value)))
+                .Concat(parsed.Configs.Concat(parsed.PluginFiles).Select(Path.GetFullPath))
+                .Concat(new[] { "--loader-package", "--client-loader-package" }
+                    .Where(options.ContainsKey).Select(key => Path.GetFullPath(options[key])))
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, FileHash.Sha256, StringComparer.Ordinal);
             before.Write(Path.Combine(output, "before-dependencies.lock.json"));
             after.Write(Path.Combine(output, "after-dependencies.lock.json"));
 
-            string[] Arm(string name, bool omit) => pairs.Where(pair =>
-                    !(omit && pair.Key == "--mod" && Path.GetFullPath(pair.Value).Equals(removed, pathComparison)))
-                .SelectMany(pair => pair.Key == "--output" ? new[] { pair.Key, Path.Combine(output, name) }
-                    : pair.Value.Length == 0 ? new[] { pair.Key } : new[] { pair.Key, pair.Value })
+            string[] Arm(string name, bool omit)
+            {
+                var arm = new List<string>();
+                void Add(string key, IEnumerable<string> values)
+                {
+                    foreach (string value in values) { arm.Add(key); arm.Add(value); }
+                }
+                // Rebuild from the validated parse, not raw tokens: flags never consume the next option.
+                foreach (var (key, value) in options)
+                    Add(key, [key == "--output" ? Path.Combine(output, name) : value]);
+                arm.AddRange(parsed.Switches);
+                Add("--mod", parsed.Mods.Where(mod => !omit || !Path.GetFullPath(mod).Equals(removed, pathComparison)));
+                Add("--search-root", parsed.Roots);
+                Add("--config", parsed.Configs);
+                Add("--plugin-file", parsed.PluginFiles);
+                Add("--plugin-dir", parsed.PluginDirectories);
+                Add("--optional-reference", parsed.Optional);
                 // Each arm chooses its ValheimCLI the same way and prints where it came from; the set is pinned between arms below.
-                .Concat(options.ContainsKey("--adapter") ? [] : ["--adapter", adapter])
-                .ToArray();
+                if (!options.ContainsKey("--adapter")) Add("--adapter", [adapter]);
+                return [.. arm];
+            }
             int beforeResult = await runArm(Arm("before", omit: false));
             // A native failure is precisely the case where removing one mod can be informative. An input refusal
             // cannot establish a mod interaction, so do not launch another arm after one.
