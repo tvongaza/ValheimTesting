@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
@@ -69,26 +70,104 @@ internal static class OwnedCliCommand
             process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture), lease.StartFileTimeUtc, StringComparison.Ordinal);
 
     // Exact process identity alone is insufficient if a different game has taken over the recorded CLI port.
+    // Query Windows' listener table directly: starting PowerShell and Get-NetTCPConnection for each command
+    // made this proof depend on an unrelated shell's cold-start time.
     internal static void RequirePortOwner(int port, int pid)
     {
-        using var query = new Process { StartInfo = new ProcessStartInfo("powershell.exe")
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The owned-client port proof requires Windows.");
+        bool found = false;
+        foreach (int family in new[] { AfInet, AfInet6 })
         {
-            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            ArgumentList = { "-NoProfile", "-Command", $"Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess" },
-        } };
-        if (!query.Start() || !query.WaitForExit(8000))
-        {
-            if (!query.HasExited) query.Kill();
-            throw new InvalidOperationException("Could not prove which process owns the recorded ValheimCLI port within 8 seconds.");
+            foreach (int owner in ListenerOwners(family, port))
+            {
+                found = true;
+                if (owner != pid)
+                    throw new InvalidOperationException("The recorded ValheimCLI port is not listening in this exact owned client; no command was sent.");
+            }
         }
-        string owners = query.StandardOutput.ReadToEnd();
-        if (query.ExitCode != 0 || !OnlyOwner(owners, pid))
+        if (!found)
             throw new InvalidOperationException("The recorded ValheimCLI port is not listening in this exact owned client; no command was sent.");
     }
 
-    internal static bool OnlyOwner(string output, int pid)
+    private const int AfInet = 2;
+    private const int AfInet6 = 23;
+    private const int TcpTableOwnerPidListener = 3;
+    private const uint ErrorInsufficientBuffer = 122;
+    private const int MaxTableBytes = 16 * 1024 * 1024;
+
+    [DllImport("iphlpapi.dll", ExactSpelling = true)]
+    private static extern uint GetExtendedTcpTable(IntPtr table, ref uint size, bool ordered,
+        int addressFamily, int tableClass, uint reserved);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TcpRowOwnerPid
     {
-        var lines = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return lines.Length > 0 && lines.All(line => int.TryParse(line, NumberStyles.None, CultureInfo.InvariantCulture, out int owner) && owner == pid);
+        public uint State, LocalAddress, LocalPort, RemoteAddress, RemotePort, OwnerPid;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Tcp6RowOwnerPid
+    {
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)] public byte[] LocalAddress;
+        public uint LocalScope, LocalPort;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)] public byte[] RemoteAddress;
+        public uint RemoteScope, RemotePort, State, OwnerPid;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TcpTableOwnerPid { public uint Count; public TcpRowOwnerPid First; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Tcp6TableOwnerPid { public uint Count; public Tcp6RowOwnerPid First; }
+
+    private static IEnumerable<int> ListenerOwners(int family, int port)
+    {
+        uint size = 0;
+        uint status = GetExtendedTcpTable(IntPtr.Zero, ref size, false, family, TcpTableOwnerPidListener, 0);
+        if (status != ErrorInsufficientBuffer || size < sizeof(uint) || size > MaxTableBytes)
+            throw new InvalidOperationException($"Could not read the Windows TCP listener table (error {status}).");
+
+        // The table can grow between the size query and the read. Retry with the new size, never without a bound.
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            IntPtr table = Marshal.AllocHGlobal(checked((int)size));
+            try
+            {
+                uint available = size;
+                status = GetExtendedTcpTable(table, ref available, false, family, TcpTableOwnerPidListener, 0);
+                if (status == ErrorInsufficientBuffer && available > size && available <= MaxTableBytes)
+                { size = available; continue; }
+                if (status != 0)
+                    throw new InvalidOperationException($"Could not read the Windows TCP listener table (error {status}).");
+
+                // Windows permits alignment padding before and between rows. Use the marshalled native
+                // layouts for both the first-row offset and stride instead of assuming a packed table.
+                int firstRow = family == AfInet
+                    ? Marshal.OffsetOf<TcpTableOwnerPid>(nameof(TcpTableOwnerPid.First)).ToInt32()
+                    : Marshal.OffsetOf<Tcp6TableOwnerPid>(nameof(Tcp6TableOwnerPid.First)).ToInt32();
+                int rowBytes = family == AfInet ? Marshal.SizeOf<TcpRowOwnerPid>() : Marshal.SizeOf<Tcp6RowOwnerPid>();
+                int portOffset = family == AfInet
+                    ? Marshal.OffsetOf<TcpRowOwnerPid>(nameof(TcpRowOwnerPid.LocalPort)).ToInt32()
+                    : Marshal.OffsetOf<Tcp6RowOwnerPid>(nameof(Tcp6RowOwnerPid.LocalPort)).ToInt32();
+                int pidOffset = family == AfInet
+                    ? Marshal.OffsetOf<TcpRowOwnerPid>(nameof(TcpRowOwnerPid.OwnerPid)).ToInt32()
+                    : Marshal.OffsetOf<Tcp6RowOwnerPid>(nameof(Tcp6RowOwnerPid.OwnerPid)).ToInt32();
+                uint count = unchecked((uint)Marshal.ReadInt32(table));
+                if (available < firstRow || count > (available - firstRow) / rowBytes)
+                    throw new InvalidOperationException("The Windows TCP listener table has an invalid size.");
+                var owners = new List<int>();
+                for (int row = 0; row < count; row++)
+                {
+                    int offset = firstRow + row * rowBytes;
+                    int localPort = Marshal.ReadByte(table, offset + portOffset) << 8 |
+                                    Marshal.ReadByte(table, offset + portOffset + 1);
+                    if (localPort == port) owners.Add(Marshal.ReadInt32(table, offset + pidOffset));
+                }
+                return owners;
+            }
+            finally { Marshal.FreeHGlobal(table); }
+        }
+        throw new InvalidOperationException("The Windows TCP listener table changed too often to verify its owner.");
     }
 }

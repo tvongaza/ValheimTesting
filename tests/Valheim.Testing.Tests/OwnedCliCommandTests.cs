@@ -62,15 +62,19 @@ public sealed class OwnedCliCommandTests
         }
     }
 
-    [Fact] public void WindowsPortProofReadsTheActualListeningProcess()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WindowsPortProofReadsTheActualListeningProcess(bool ipv6)
     {
-        if (!OperatingSystem.IsWindows()) return;
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        if (!OperatingSystem.IsWindows() || ipv6 && !Socket.OSSupportsIPv6) return;
+        using var listener = new TcpListener(ipv6 ? IPAddress.IPv6Loopback : IPAddress.Loopback, 0);
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         int pid = Environment.ProcessId;
         OwnedCliCommand.RequirePortOwner(port, pid);
         Assert.Throws<InvalidOperationException>(() => OwnedCliCommand.RequirePortOwner(port, pid + 1));
+        Assert.Throws<InvalidOperationException>(() => OwnedCliCommand.RequirePortOwner(0, pid));
     }
 
     [Fact] public void PassthroughRequiresOneCommandAndIndependentStrictPins()
@@ -92,10 +96,6 @@ public sealed class OwnedCliCommandTests
         Assert.True(OwnedCliCommand.IsExactProcess(current, matching));
         Assert.False(OwnedCliCommand.IsExactProcess(current, matching with { StartFileTimeUtc = "1" }));
         Assert.False(OwnedCliCommand.IsExactProcess(current, matching with { Pid = current.Id + 1 }));
-        Assert.True(OwnedCliCommand.OnlyOwner($"{current.Id}\r\n{current.Id}\n", current.Id));
-        Assert.False(OwnedCliCommand.OnlyOwner($"{current.Id}\n{current.Id + 1}", current.Id));
-        Assert.False(OwnedCliCommand.OnlyOwner("", current.Id));
-
         string output = Directory.CreateTempSubdirectory("owned-cli-").FullName;
         try
         {
