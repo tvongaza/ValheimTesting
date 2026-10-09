@@ -56,8 +56,9 @@ internal static class ExtractOnce
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             }
         }
-        // The damaged copy is out of the way: removed after the lock, best effort.
-        if (old != null) try { Directory.Delete(old, recursive: true); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        // A reader that started before the swap may still have a file open on Windows. Remove the old copy after
+        // releasing the lock, but retry the transient sharing violation instead of silently leaving a stale folder.
+        if (old != null) Retry(() => Directory.Delete(old, recursive: true), $"remove the replaced {what} at {old}");
         return true;
     }
 
@@ -74,7 +75,7 @@ internal static class ExtractOnce
         }
     }
 
-    // A folder rename that a reader outside the lock briefly blocks on Windows (a file of it open for hashing), for up to ~10 s.
+    // A rename or deletion that a reader outside the lock briefly blocks on Windows (a file open for hashing), for up to ~10 s.
     private static void Retry(Action action, string what)
     {
         for (int attempt = 1; ; attempt++)
