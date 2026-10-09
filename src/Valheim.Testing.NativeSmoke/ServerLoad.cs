@@ -42,7 +42,10 @@ internal static class ServerLoad
         // The shipped-loader decision reads the real install on this machine, so it is on only for a real run (no seams)
         // and for a test that passes one.
         Func<string, string, ShippedLoader.Choice?>? Loader = null,
-        Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null);
+        Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null,
+        // An A/B run freezes its automatic server choice before either arm starts. Its command
+        // still names the package, while this carries the reason into each arm's evidence.
+        ShippedLoader.Choice? FrozenServerLoader = null);
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
@@ -123,6 +126,17 @@ internal static class ServerLoad
     /// <summary>The environments a one-off runs on, chosen from the inventory with the reason for each.</summary>
     internal sealed record Choice(EnvironmentInventory Inventory, string? InventoryFile, EnvironmentRecipe Server, string ServerReason,
         EnvironmentRecipe? Client, string? ClientReason, string? Join);
+
+    // One server-loader decision for a normal load and its A/B wrapper. The dependency lock and
+    // adapter must compile against the exact BepInEx core that the staged server will run.
+    internal static (string? Manifest, ShippedLoader.Choice? Shipped) SelectServerLoader(
+        Arguments parsed, EnvironmentRecipe server, Func<string, string, ShippedLoader.Choice?>? shipped)
+    {
+        string? manifest = parsed.Options.TryGetValue("--loader-package", out string? given)
+            ? Path.GetFullPath(given) : server.LoaderPackage;
+        var automatic = manifest == null ? shipped?.Invoke("server", server.Install) : null;
+        return (manifest ?? automatic?.Manifest, automatic);
+    }
 
     /// <summary>
     /// The inventory (the file, this machine with <c>--server</c>/<c>--client</c> written as its override into
@@ -208,15 +222,20 @@ internal static class ServerLoad
 
         string serverInstall = server.Install;
         // A loader package given, or the chosen environment's own (which the campaign applies too); else the install's BepInEx.
-        var serverLoader = parsed.Options.TryGetValue("--loader-package", out string? serverLoaderFile) ? Path.GetFullPath(serverLoaderFile) : server.LoaderPackage;
+        var (serverLoader, serverAuto) = SelectServerLoader(parsed, server, seams.Loader);
+        if (seams.FrozenServerLoader is { } frozen)
+        {
+            if (serverLoader == null || !Path.GetFullPath(serverLoader).Equals(Path.GetFullPath(frozen.Manifest),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new InvalidDataException("The A/B arm's pinned server loader differs from the package chosen before either arm started.");
+            serverAuto = frozen;
+        }
         var clientLoader = parsed.Options.TryGetValue("--client-loader-package", out string? clientLoaderFile) ? Path.GetFullPath(clientLoaderFile) : choice.Client?.LoaderPackage;
         // An install on this machine whose own Doorstop proxy and configuration do not match (a mod manager swapped the proxy)
         // gets the BepInExPack this tool ships in its disposable copy, with one printed line; every other loader fault still refuses.
         var shipped = seams.Loader ?? ((_, _) => null);
-        var serverAuto = serverLoader == null ? shipped("server", serverInstall) : null;
         var clientAuto = clientLoader == null && choice.Client is { } localClient && choice.Inventory.Hosts[localClient.Host].Kind == "local"
             ? shipped("client", localClient.Install) : null;
-        serverLoader ??= serverAuto?.Manifest;
         clientLoader ??= clientAuto?.Manifest;
         if (choice.Client is { } architectureClient)
         {

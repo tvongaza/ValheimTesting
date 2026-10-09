@@ -1,4 +1,6 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
+using System.Text.Json;
 using Xunit;
 
 public sealed class NativeSmokeComparisonTests : IDisposable
@@ -121,6 +123,75 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.Equal([_rig.Parent], arms[1].Mods);
         Assert.Equal(Path.Combine(output, "before"), arms[0].Options["--output"]);
         Assert.Equal(Path.Combine(output, "after"), arms[1].Options["--output"]);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task BothArmsResolveAndBuildAgainstTheSelectedLoader(bool environmentPackage, bool explicitPackage)
+    {
+        var sourcePackage = BepInExLoaderPackage.Capture(_rig.Game, "source-loader", "1");
+        (string Root, string Manifest) Package(string name)
+        {
+            string root = Path.Combine(_rig.Root, name);
+            foreach (string relative in sourcePackage.Files.Keys)
+            {
+                string destination = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(Path.Combine(_rig.Game, relative.Replace('/', Path.DirectorySeparatorChar)), destination);
+            }
+            string manifest = Path.Combine(_rig.Root, name + ".json");
+            BepInExLoaderPackage.Capture(root, name, "2").Write(manifest);
+            return (root, manifest);
+        }
+        var environment = Package("environment-loader");
+        var explicitChoice = Package("explicit-loader");
+        var shipped = Package("shipped-loader");
+        var selected = explicitPackage ? explicitChoice : environmentPackage ? environment : shipped;
+        string inventory = Path.Combine(_rig.Root, environmentPackage ? "inventory-with-loader.json" : "inventory-without-loader.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            environments = new[] { new { name = "local-server", roles = new[] { "server" }, install = _rig.Game,
+                loaderPackage = environmentPackage ? environment.Manifest : null } },
+        }));
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, environmentPackage ? "env-ab" : "shipped-ab");
+        var arguments = Arguments(output, _rig.Parent, companion).ToList();
+        arguments.RemoveRange(0, 2); // The inventory, not --server, owns this server's loader choice.
+        int adapterAt = arguments.IndexOf("--adapter");
+        arguments.RemoveRange(adapterAt, 2); // Exercise the adapter build's selected-core argument.
+        arguments.AddRange(["--inventory", inventory, "--server-only"]);
+        if (explicitPackage) arguments.AddRange(["--loader-package", explicitChoice.Manifest]);
+        string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
+            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
+        var resolvedCores = new List<string>();
+        var builtCores = new List<string?>();
+        var arms = new List<ServerLoad.Arguments>();
+        var armChoices = new List<ShippedLoader.Choice?>();
+        int shippedCalls = 0;
+
+        int result = await ServerLoadComparison.RunAsync([.. arguments],
+        shippedLoader: (_, _) => { shippedCalls++; return new ShippedLoader.Choice(shipped.Manifest, "selected pinned pack"); },
+        resolve: request => { resolvedCores.Add(request.BepInExCore); return NativeDependencyResolver.Resolve(request); },
+        buildAdapter: (_, _, _, _, core) => { builtCores.Add(core); return Task.FromResult(adapter); },
+        runArmWithSeams: (args, seams) =>
+        {
+            Assert.True(ServerLoad.TryRead(args, out var parsed, out string error), error);
+            arms.Add(parsed!);
+            armChoices.Add(seams.FrozenServerLoader);
+            return Task.FromResult(0);
+        });
+
+        string expectedCore = Path.Combine(selected.Root, InstallPins.CoreDirectory);
+        Assert.Equal(0, result);
+        Assert.Equal(environmentPackage || explicitPackage ? 0 : 1, shippedCalls);
+        Assert.Equal([expectedCore, expectedCore], resolvedCores);
+        Assert.Equal([expectedCore], builtCores);
+        Assert.Equal(2, arms.Count);
+        Assert.All(arms, arm => Assert.Equal(selected.Manifest, arm.Options["--loader-package"]));
+        Assert.All(armChoices, choice => Assert.Equal(environmentPackage || explicitPackage ? null : shipped.Manifest,
+            choice?.Manifest));
     }
 
     [Fact] public async Task RefusedFullSetDoesNotLaunchTheRemovalArm()
