@@ -75,6 +75,21 @@ public sealed class PinnedServerRunTests : IDisposable
     };
     private static bool HostRunsLinux => !OperatingSystem.IsWindows();
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void CleanupBudgetMustBePositiveBeforeARunStarts(int ticks)
+    {
+        var error = Assert.Throws<ArgumentOutOfRangeException>(() => new PinnedServerRunOptions<ServerRunPlan>
+        {
+            Name = "toolkit-smoke", Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
+            ReadPlan = _ => throw new Exception("a plan must not be read"),
+            Scenario = (_, _) => Task.CompletedTask,
+            CleanupBudget = TimeSpan.FromTicks(ticks),
+        });
+        Assert.Equal("CleanupBudget", error.ParamName);
+    }
+
     [Fact] public async Task ValidateCopiesAndVerifiesTheFixturesWithoutLaunching()
     {
         string plan = WritePlan(linux: HostRunsLinux);
