@@ -393,6 +393,14 @@ public static class HostedCampaignPreparation
         }));
     }
 
+    internal static void RequireLocalMacClientArchitecture(HostedCampaignRole input, GameRole role,
+        string? loaderManifest, Action<string, string, string?>? check = null)
+    {
+        string selected = ClientArchitectureChoice.Select(input.Architecture, role.Architecture,
+            "macos", EnvironmentInventory.ThisMachine.OsArchitecture);
+        (check ?? ClientArchitectureChoice.Require)(role.Install, selected, loaderManifest);
+    }
+
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation, ShippedLoader.Rule? shippedLoader = null)
     {
@@ -474,6 +482,10 @@ public static class HostedCampaignPreparation
                         sourceListings[item.Name] = await HostedRuntimeStage.InspectSourceAsync(host,
                             item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
                             item.Role.Install, loader, timeout, cancellation).ConfigureAwait(false);
+                        // Use the same slice check as one-shot start/server-load, with the loader the host
+                        // inspection actually selected. Session check --hosts must refuse before any copy.
+                        if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" } && hostFactory == null)
+                            RequireLocalMacClientArchitecture(item.Input, item.Role, loaderPackage);
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "game and loader", error.Message)); }

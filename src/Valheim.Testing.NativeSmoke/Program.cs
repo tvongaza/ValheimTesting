@@ -4,7 +4,7 @@ using Valheim.Testing.GameSessions;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (the inventory's client; this machine's Valheim with no --inventory)");
+    Console.WriteLine("valheim-test start [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (with no --mod, the current project's one built plugin)");
     Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options except --hold and --preflight-only]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
@@ -28,10 +28,10 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 }
 
 // The default path hosts a world in an owned client; server-load uses an owned dedicated server.
-if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error))
+if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start --mod DLL [--mod DLL ...] --output NEW_DIR [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -52,12 +52,15 @@ bool copyDone = false;
 bool characterPending = false;
 try
 {
-    string output = Path.GetFullPath(options!["--output"]);
-    if (Path.Exists(output)) throw new IOException("--output must be a new directory; an earlier run or personal files will not be changed: " + output);
-    // The client: the inventory's (this machine's Valheim with no --inventory); --game and --loader-package override it.
-    var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead);
-    string architecture = ClientArchitectureChoice.Select(options.GetValueOrDefault("--client-architecture"), client);
-    ClientArchitectureChoice.RequireLocal(inventory, client, architecture, client.LoaderPackage);
+    string output = SmokeCommandOptions.Output(options!);
+    var modSelection = SmokeModInput.Select(mods!, Environment.CurrentDirectory);
+    var selectedMods = modSelection.Mods.ToList();
+    Console.WriteLine("mod selection: " + modSelection.Reason);
+    // The client: the inventory's (this machine's Valheim with no --inventory); --game overrides the install and --client-loader-package the loader.
+    var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead,
+        recordSelection: false);
+    string architecture = SmokeInputResolver.SelectClientArchitecture(options.GetValueOrDefault("--client-architecture"), client, inventory);
+    SmokeInputResolver.RequireClientArchitecture(inventory, client, architecture, client.LoaderPackage);
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
     Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}; architecture {architecture}");
     // An SSH-launched Windows runner is in session 0. Check the desktop before copying the fixture or disposable game;
@@ -65,48 +68,37 @@ try
     if (OperatingSystem.IsWindows())
         await DesktopClientSession.PreflightAsync(cancel.Token);
     string game = client.Install;
-    var selectedMods = mods!.Select(Path.GetFullPath).ToList();
     string mod = selectedMods[0];
     var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
     string? loader = client.LoaderPackage;
     foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
     SmokeOutput.RefuseInside(output, new[] { game, cliFiles, inventory.SteamUserData }.OfType<string>().ToArray());
+    SmokeInputs.RecordClient(inventory, client, output);
     foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
         if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
-    if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--loader-package file does not exist: " + loader, loader);
+    if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--client-loader-package file does not exist: " + loader, loader);
     string core = loader == null ? Path.Combine(game, InstallPins.CoreDirectory)
         : Path.Combine(BepInExLoaderPackage.Read(loader).Root, InstallPins.CoreDirectory);
-    var request = new NativeDependencyRequest
-    {
-        Mods = selectedMods, GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(game))!,
-        BepInExCore = core, CliManifest = cliManifest, CliFiles = cliFiles,
-        SearchRoots = roots!.Select(Path.GetFullPath).ToList(),
-        Capabilities = [.. CliCapabilities.HostedRounds],
-        OptionalReferences = [.. optionalReferences!],
-    };
+    var request = SmokeDependencyInputs.Request(selectedMods, game, core, cliManifest, cliFiles,
+        roots!, optionalReferences!, CliCapabilities.HostedRounds);
     var dependencies = NativeDependencyResolver.Resolve(request);
     Directory.CreateDirectory(output);
     dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
     if (!dependencies.Ready)
-        throw new InvalidDataException("Dependency choices remain: " + string.Join("; ", dependencies.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
+        throw new InvalidDataException("Dependency choices remain: " + SmokeDependencyInputs.Gaps(dependencies));
     NativeDependencyLock? comparison = null;
     string? compareMod = null;
     if (options.TryGetValue("--compare-mod", out string? compareFile))
     {
         compareMod = Path.GetFullPath(compareFile);
         if (!File.Exists(compareMod)) throw new FileNotFoundException("--compare-mod file does not exist: " + compareMod, compareMod);
-        var compareRequest = new NativeDependencyRequest
-        {
-            Mods = [compareMod, .. selectedMods.Skip(1)], GameManaged = request.GameManaged,
-            BepInExCore = request.BepInExCore, CliManifest = cliManifest, CliFiles = cliFiles,
-            SearchRoots = [.. request.SearchRoots], Capabilities = [.. request.Capabilities],
-            OptionalReferences = [.. request.OptionalReferences],
-        };
+        var compareRequest = SmokeDependencyInputs.Request([compareMod, .. selectedMods.Skip(1)], game, core,
+            cliManifest, cliFiles, request.SearchRoots, request.OptionalReferences, request.Capabilities);
         comparison = NativeDependencyResolver.Resolve(compareRequest);
         comparison.Write(Path.Combine(output, "comparison-dependencies.lock.json"));
         if (!comparison.Ready)
-            throw new InvalidDataException("Comparison dependency choices remain: " + string.Join("; ", comparison.Gaps.Select(gap => gap.Kind + " " + gap.Name + ": " + gap.Reason)));
+            throw new InvalidDataException("Comparison dependency choices remain: " + SmokeDependencyInputs.Gaps(comparison));
         dependencies.RequireSameFixedInputs(comparison);
     }
 
@@ -163,7 +155,8 @@ try
                 ready.Provenance["runId"] = runId;
                 ready.Provenance["firstModLoadedSecondsFromCommand"] =
                     elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
-                if (shippedLoader != null) ready.Provenance["bepInExPackageShipped"] = shippedLoader.Reason;
+                ready.Provenance["modSelection"] = modSelection.Reason;
+                SmokeInputResolver.RecordLoader(ready.Provenance, "client", loader, shippedLoader);
             }, openClient: (plan, directory, logs, token) =>
                 {
                     bool desktopTask = OperatingSystem.IsWindows() &&
@@ -268,58 +261,17 @@ return exitCode;
 
 internal static class StartArguments
 {
-    private static readonly HashSet<string> Required = ["--mod", "--output"];
-    private static readonly HashSet<string> Allowed = [.. Required, "--game", "--inventory", "--client-env", "--client-architecture", "--join-seconds", "--source", "--cli-manifest", "--cli-files", "--loader-package", "--expected-log-error", "--expected-log-reason", "--compare-mod", "--compare-source"];
-
     public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
-        out List<string>? roots, out List<string>? optionalReferences, out string error)
+        out List<string>? roots, out List<string>? optionalReferences, out string error, bool allowImplicitMod = false)
     {
-        result = null;
-        mods = null;
-        roots = null;
-        optionalReferences = null;
-        error = "";
-        int holds = args.Count(arg => arg == "--hold");
-        if (holds > 1) { error = "Repeated option: --hold"; return false; }
-        args = args.Where(arg => arg != "--hold").ToArray();
-        if (args.Length % 2 != 0) { error = "Every option needs one value."; return false; }
-        var found = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (holds == 1) found.Add("--hold", "true");
-        var selected = new List<string>();
-        var searchRoots = new List<string>();
-        var optional = new List<string>();
-        for (int i = 0; i < args.Length; i += 2)
-        {
-            if (args[i] == "--mod" && !string.IsNullOrWhiteSpace(args[i + 1]))
-            {
-                selected.Add(args[i + 1]);
-                found.TryAdd("--mod", args[i + 1]);
-                continue;
-            }
-            if (args[i] == "--search-root" || args[i] == "--optional-reference")
-            {
-                if (string.IsNullOrWhiteSpace(args[i + 1])) { error = "Empty option: " + args[i]; return false; }
-                (args[i] == "--search-root" ? searchRoots : optional).Add(args[i + 1]);
-                continue;
-            }
-            if (!Allowed.Contains(args[i]) || !found.TryAdd(args[i], args[i + 1]) || string.IsNullOrWhiteSpace(args[i + 1]))
-            { error = "Unknown, repeated or empty option: " + args[i]; return false; }
-        }
-        var missing = Required.Where(key => !found.ContainsKey(key)).ToList();
-        if (missing.Count != 0) { error = "Missing: " + string.Join(", ", missing); return false; }
-        if (found.ContainsKey("--expected-log-error") != found.ContainsKey("--expected-log-reason"))
-        { error = "--expected-log-error needs --expected-log-reason (and vice versa); an unexplained error is never ignored."; return false; }
-        if (found.ContainsKey("--compare-mod") != found.ContainsKey("--compare-source"))
-        { error = "--compare-mod needs --compare-source (and vice versa); both builds need provenance."; return false; }
-        if (found.TryGetValue("--join-seconds", out string? joinSeconds) &&
-            (!int.TryParse(joinSeconds, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int seconds) || seconds is < 10 or > 900))
-        { error = "--join-seconds must be a whole number from 10 to 900."; return false; }
-        if (found.TryGetValue("--client-architecture", out string? architecture) && architecture is not ("x64" or "arm64"))
-        { error = "--client-architecture must be x64 or arm64."; return false; }
-        result = found;
-        mods = selected;
-        roots = searchRoots;
-        optionalReferences = optional;
+        result = null; mods = null; roots = null; optionalReferences = null;
+        if (!SmokeCommandOptions.TryRead(args, SmokeCommandOptions.Command.Start, allowImplicitMod, out var parsed, out error))
+            return false;
+        result = parsed!.Options;
+        foreach (string flag in parsed.Switches) result[flag] = "true";
+        mods = parsed.List("--mod");
+        roots = parsed.List("--search-root");
+        optionalReferences = parsed.List("--optional-reference");
         return true;
     }
 }

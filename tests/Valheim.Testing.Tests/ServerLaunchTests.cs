@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -14,6 +15,14 @@ public class ServerLaunchTests
     {
         var expected = OperatingSystem.IsWindows() ? ServerHost.Windows : OperatingSystem.IsMacOS() ? ServerHost.MacOS : ServerHost.Linux;
         Assert.Equal(expected, GameLaunch.CurrentServerHost);
+    }
+    [Theory]
+    [InlineData(Architecture.Arm64, ClientArchitecture.Arm64)]
+    [InlineData(Architecture.X64, ClientArchitecture.X64)]
+    public void MacServerUsesTheSameFakeableNativeArchitectureSource(Architecture cpu, ClientArchitecture expected)
+    {
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine("macos") { OsArchitecture = cpu });
+        Assert.Equal(expected, GameLaunch.MacServerArchitecture);
     }
     [Fact] public void WindowsRuntimeIsDetectedFromItsExecutable()
     {

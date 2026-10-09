@@ -11,12 +11,12 @@ public sealed class NativeSmokeOutputTests
         var inventory = new EnvironmentInventory { Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = "macos" } } };
         var recipe = new EnvironmentRecipe { Name = "local-client", Host = "local", Roles = ["client"], Install = stock.Root };
         string refusal = Assert.Throws<InvalidOperationException>(() =>
-            ClientArchitectureChoice.RequireLocal(inventory, recipe, "arm64", null)).Message;
+            SmokeInputResolver.RequireClientArchitecture(inventory, recipe, "arm64", null)).Message;
         Assert.Contains("arm64 slice", refusal);
         recipe.Install = native.Root;
-        ClientArchitectureChoice.RequireLocal(inventory, recipe, "arm64", null);
+        SmokeInputResolver.RequireClientArchitecture(inventory, recipe, "arm64", null);
         string x64Refusal = Assert.Throws<InvalidOperationException>(() =>
-            ClientArchitectureChoice.RequireLocal(inventory, recipe, "x64", null)).Message;
+            SmokeInputResolver.RequireClientArchitecture(inventory, recipe, "x64", null)).Message;
         Assert.Contains("x86_64 slice", x64Refusal);
     }
     [Fact]

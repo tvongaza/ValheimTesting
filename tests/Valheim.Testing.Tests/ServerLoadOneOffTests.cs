@@ -15,13 +15,23 @@ public sealed class ServerLoadOneOffTests : IDisposable
     [Fact]
     public void JoinedClientArchitectureOverridesTheInventoryAndServerOnlyRejectsIt()
     {
-        var recipe = new EnvironmentRecipe { Architecture = "x64" };
-        Assert.Equal("arm64", ClientArchitectureChoice.Select("arm64", recipe));
-        Assert.Equal("x64", ClientArchitectureChoice.Select(null, recipe));
+        var recipe = new EnvironmentRecipe { Host = "local", Architecture = "x64" };
+        var inventory = new EnvironmentInventory { Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = "macos" } } };
+        Assert.Equal("arm64", SmokeInputResolver.SelectClientArchitecture("arm64", recipe, inventory));
+        Assert.Equal("x64", SmokeInputResolver.SelectClientArchitecture(null, recipe, inventory));
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "arm64"], out var parsed, out _));
         Assert.Equal("arm64", parsed!.Options["--client-architecture"]);
         Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--server-only", "--client-architecture", "arm64"], out _, out _));
         Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "native"], out _, out _));
+    }
+
+    [Fact]
+    public void Arm64SelectionRefusesANonMacClientBeforeAnyLoaderCheck()
+    {
+        var recipe = new EnvironmentRecipe { Host = "local", Architecture = "x64" };
+        var inventory = new EnvironmentInventory { Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = "linux" } } };
+        Assert.Contains("macOS", Assert.Throws<ArgumentException>(() =>
+            SmokeInputResolver.SelectClientArchitecture("arm64", recipe, inventory)).Message);
     }
     private string Adapter() => _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
         RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
@@ -50,6 +60,38 @@ public sealed class ServerLoadOneOffTests : IDisposable
         game = machine.App(steam, "892970", "Valheim", machine.Platform switch
             { "windows" => GameLaunch.ClientWindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => GameLaunch.ClientLinuxExecutable });
         return machine;
+    }
+
+    [Fact]
+    public async Task NamedInventoryChoiceIsFrozenForTheDerivedCampaign()
+    {
+        var machine = WithValheim(out string clientInstall);
+        string inventoryFile = Path.Combine(_rig.Root, "chosen-inventory.json");
+        File.WriteAllText(inventoryFile, JsonSerializer.Serialize(new
+        {
+            environments = new object[]
+            {
+                new { name = "server-choice", roles = new[] { "server" }, install = _rig.Game },
+                new { name = "first-client", roles = new[] { "client" }, install = clientInstall },
+                new { name = "chosen-client", roles = new[] { "client" }, install = clientInstall },
+            },
+        }));
+        string output = Path.Combine(_rig.Root, "frozen-choice");
+        var args = Arguments(output).Skip(2).Concat(["--inventory", inventoryFile,
+            "--client-env", "chosen-client", "--preflight-only"]).ToArray();
+        using (EnvironmentInventory.UseMachine(machine))
+            Assert.Equal(0, await ServerLoad.RunAsync(args, new ServerLoad.Seams(
+                Inspect: _ => Task.FromResult(Ready),
+                ClientArchitecture: (_, _, _, _) => { })));
+
+        string frozenFile = Path.Combine(output, "environments.json");
+        var campaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "campaign.json"))).RootElement;
+        Assert.Equal(frozenFile, campaign.GetProperty("inventory").GetString());
+        Assert.Equal(["server-choice", "chosen-client"],
+            EnvironmentInventory.Read(frozenFile, machine).Environments.Select(recipe => recipe.Name));
+        File.WriteAllText(inventoryFile, "{ broken source inventory");
+        Assert.Equal(["server-choice", "chosen-client"],
+            EnvironmentInventory.Read(frozenFile, machine).Environments.Select(recipe => recipe.Name));
     }
 
     [Fact]
@@ -156,14 +198,15 @@ public sealed class ServerLoadOneOffTests : IDisposable
         BepInExLoaderPackage.Capture(_rig.Game, "reviewed", "1").Write(package);
         string packagedOutput = Path.Combine(_rig.Root, "client-package-refused");
         string? checkedArchitecture = null; string? checkedLoader = null;
+        string requestedArchitecture = HostProfile.CurrentPlatform == "macos" ? "arm64" : "x64";
         using (EnvironmentInventory.UseMachine(WithValheim(out _)))
-            result = await ServerLoad.RunAsync(Arguments(packagedOutput, "--client-loader-package", package, "--client-architecture", "arm64"), new ServerLoad.Seams(
+            result = await ServerLoad.RunAsync(Arguments(packagedOutput, "--client-loader-package", package, "--client-architecture", requestedArchitecture), new ServerLoad.Seams(
                 Inspect: _ => Task.FromResult(new CampaignPreflightReport([new("client", "game and loader", "The reviewed loader package does not match the host platform.")])),
                 Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); },
                 ClientArchitecture: (_, recipe, architecture, loader) =>
                 { Assert.Equal("local-client", recipe.Name); checkedArchitecture = architecture; checkedLoader = loader; }));
         Assert.Equal(3, result);
-        Assert.Equal("arm64", checkedArchitecture);
+        Assert.Equal(requestedArchitecture, checkedArchitecture);
         Assert.Equal(package, checkedLoader);
         Assert.False(ran);
         refusal = File.ReadAllText(Path.Combine(packagedOutput, "REFUSED.txt"));
@@ -279,6 +322,16 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--server", server, "--server-only"], out var inside, out _));
         Assert.Contains("outside the prepared install", Assert.Throws<ArgumentException>(() => ServerLoad.Choose(inside!, Path.Combine(server, "run"))).Message);
         Assert.False(Directory.Exists(server));
+
+        // An override must not write its temporary inventory inside a different,
+        // detected source install before the selected client is checked.
+        using (EnvironmentInventory.UseMachine(WithValheim(out string clientGame)))
+        {
+            Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--server", server], out var selected, out _));
+            string unsafeOutput = Path.Combine(clientGame, "run");
+            ServerLoad.Choose(selected!, unsafeOutput);
+            Assert.False(Directory.Exists(unsafeOutput));
+        }
     }
 
     // Options from the removed Mac-only staged path are refused before anything is copied.
@@ -358,6 +411,12 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string chosen = Path.Combine(_rig.Root, "start-alt");
         var (_, alt, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen, requireMacGui: () => { });
         Assert.Equal(5702, alt.CliPort);
+        string explicitLoader = Path.Combine(_rig.Root, "client-loader.json");
+        var (_, withLoader, _) = SmokeInputs.Client(new Dictionary<string, string>
+        {
+            ["--inventory"] = file, ["--client-env"] = "alt", ["--client-loader-package"] = explicitLoader,
+        }, Path.Combine(_rig.Root, "start-alt-loader"), requireMacGui: () => { });
+        Assert.Equal(explicitLoader, withLoader.LoaderPackage);
         var recorded = EnvironmentInventory.Read(Path.Combine(chosen, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform));
         Assert.Equal(("alt", 5702), (recorded.Environments.Single().Name, recorded.Environments.Single().CliPort));
 
@@ -378,5 +437,27 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("macOS console session is locked", failure.Message);
         Assert.False(inspectedLoader);
         Assert.False(Directory.Exists(output));
+    }
+
+    [Fact] public void StartCanDeferRecordingUntilOutputPassesSourceProtection()
+    {
+        string output = Path.Combine(_rig.Game, "accidental-output");
+        string inventoryFile = Path.Combine(_rig.Root, "client-inventory.json");
+        File.WriteAllText(inventoryFile, JsonSerializer.Serialize(new
+        {
+            environments = new[] { new { name = "local-client", roles = new[] { "client" },
+                install = _rig.Game, runtime = Path.Combine(_rig.Root, "runs"), cliPort = 5701 } },
+        }));
+        var (inventory, client, _) = SmokeInputs.Client(
+            new Dictionary<string, string> { ["--inventory"] = inventoryFile }, output,
+            requireMacGui: () => { }, recordSelection: false);
+        Assert.False(Directory.Exists(output));
+        Assert.Throws<ArgumentException>(() => SmokeOutput.RefuseInside(output, _rig.Game));
+        Assert.False(Directory.Exists(output));
+
+        string safe = Path.Combine(_rig.Root, "safe-output");
+        SmokeOutput.RefuseInside(safe, _rig.Game);
+        SmokeInputs.RecordClient(inventory, client, safe);
+        Assert.True(File.Exists(Path.Combine(safe, "environments.json")));
     }
 }

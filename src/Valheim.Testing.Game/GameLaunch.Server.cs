@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-
 namespace Valheim.Testing.Game;
 
 [ResultShape]
@@ -37,7 +35,7 @@ public sealed partial class GameLaunch
     // A universal macOS server starts as its parent's architecture unless the slice is named; the machine's own is native
     // (arm64 on Apple Silicon, also when this runner itself runs under Rosetta).
     internal static ClientArchitecture MacServerArchitecture =>
-        RuntimeInformation.OSArchitecture == Architecture.Arm64 ? ClientArchitecture.Arm64 : ClientArchitecture.X64;
+        EnvironmentInventory.DefaultClientLaunchArchitecture("macos", EnvironmentInventory.ThisMachine.OsArchitecture);
 
     /// <summary>
     /// Decides the platform from the runtime's contents, never from the host: <see cref="ServerWindowsExecutable"/>,

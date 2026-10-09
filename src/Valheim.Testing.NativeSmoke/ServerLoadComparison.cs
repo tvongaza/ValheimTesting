@@ -8,8 +8,12 @@ internal static class ServerLoadComparison
         Func<string, string, ShippedLoader.Choice?>? shippedLoader = null,
         Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null,
         Func<string, NativeDependencyLock, string, CancellationToken, string?, Task<string>>? buildAdapter = null,
-        Func<string[], ServerLoad.Seams, Task<int>>? runArmWithSeams = null)
+        Func<string[], ServerLoad.Seams, Task<int>>? runArmWithSeams = null,
+        bool freezeInputs = false)
     {
+        // Real arms always use one frozen environment. A scripted arm may opt in to
+        // exercise that path without launching the game.
+        freezeInputs |= runArm == null && runArmWithSeams == null;
         shippedLoader ??= ShippedLoader.Instead;
         resolve ??= NativeDependencyResolver.Resolve;
         buildAdapter ??= SmokeAdapter.BuildAsync;
@@ -18,27 +22,23 @@ internal static class ServerLoadComparison
         Console.CancelKeyPress += onCancel;
         try
         {
-            // Arguments as server-load reads them, without --remove-mod: one value per option, or a switch.
-            int removeAt = Array.IndexOf(args, "--remove-mod");
-            if (removeAt < 0 || removeAt + 1 >= args.Length || Array.IndexOf(args, "--remove-mod", removeAt + 1) >= 0)
-                throw new ArgumentException("Specify exactly one --remove-mod.");
-            var rest = args.Take(removeAt).Concat(args.Skip(removeAt + 2)).ToArray();
-            if (!ServerLoad.TryRead(rest, out var parsed, out string error)) throw new ArgumentException(error);
-            if (parsed!.Switches.Contains("--preflight-only")) throw new ArgumentException("--preflight-only runs no arm; preflight each arm with server-load instead.");
-            if (parsed.Switches.Contains("--hold")) throw new ArgumentException("--hold cannot run in a comparison: both arms must finish before their results can be compared. Use server-load --hold for interactive inspection.");
+            if (!SmokeCommandOptions.TryRead(args, SmokeCommandOptions.Command.ServerLoadAb,
+                allowImplicitMod: false, out var read, out string error)) throw new ArgumentException(error);
+            string removed = Path.GetFullPath(read!.Options["--remove-mod"]);
+            read.Options.Remove("--remove-mod");
+            var parsed = ServerLoad.FromParsed(read);
             var options = parsed!.Options;
-            if (!options.TryGetValue("--output", out string? outputOption)) throw new ArgumentException("Specify --output for the comparison's two arms.");
-            string output = Path.GetFullPath(outputOption);
-            if (Path.Exists(output)) throw new IOException("--output must be new; comparison evidence will not be overwritten: " + output);
-            string removed = Path.GetFullPath(args[removeAt + 1]);
+            string output = SmokeCommandOptions.Output(options);
             var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             var mods = parsed.Mods.Select(Path.GetFullPath).ToList();
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
                 throw new ArgumentException("--remove-mod must name exactly one of at least two selected --mod DLLs.");
             // The server install both arms resolve against: given, or the inventory's server environment on this machine.
-            var serverRecipe = options.TryGetValue("--server", out string? serverOption)
-                ? new EnvironmentRecipe { Install = Path.GetFullPath(serverOption) }
-                : ServerLoad.Choose(parsed, Path.Combine(output, "choice")).Server;
+            // Freeze the first environment decision. The dependency locks and both arms
+            // must use the same choice even if the inventory changes before launch.
+            var selected = freezeInputs || !options.ContainsKey("--server")
+                ? ServerLoad.Choose(parsed, Path.Combine(output, "choice")) : null;
+            var serverRecipe = selected?.Server ?? new EnvironmentRecipe { Install = Path.GetFullPath(options["--server"]) };
             string server = serverRecipe.Install;
             var (loaderManifest, automaticLoader) = ServerLoad.SelectServerLoader(parsed, serverRecipe, shippedLoader);
             var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Instead, FrozenServerLoader: automaticLoader);
@@ -56,26 +56,25 @@ internal static class ServerLoadComparison
             var optional = parsed.Optional.ToList();
             var capabilities = parsed.ServerOnly ? ["valheim.session/state"]
                 : new List<string> { "valheim.session/state", "valheim.session/join", "valheim.session/leave" };
-            NativeDependencyRequest Request(List<string> selected) => new()
-            {
-                Mods = selected, SearchRoots = roots,
-                GameManaged = Path.GetDirectoryName(InstallPins.GameAssembly(server))!,
-                BepInExCore = serverCore,
-                CliManifest = cliManifest, CliFiles = cliFiles,
-                Capabilities = capabilities, OptionalReferences = optional,
-            };
+            NativeDependencyRequest Request(List<string> selected) => SmokeDependencyInputs.Request(selected, server,
+                serverCore, cliManifest, cliFiles, roots, optional, capabilities);
             var before = resolve(Request(mods));
             var after = resolve(Request(mods.Where(mod => !mod.Equals(removed, pathComparison)).ToList()));
             if (!before.Ready || !after.Ready)
             {
-                static string Gaps(NativeDependencyLock arm) => string.Join("; ", arm.Gaps.Select(gap =>
-                    gap.Kind + " " + gap.Name + ": " + gap.Reason));
                 throw new InvalidDataException("Dependency choices remain before launch: " +
-                    (before.Ready ? "before ready" : "before [" + Gaps(before) + "]") + "; " +
-                    (after.Ready ? "after ready" : "after [" + Gaps(after) + "]"));
+                    (before.Ready ? "before ready" : "before [" + SmokeDependencyInputs.Gaps(before) + "]") + "; " +
+                    (after.Ready ? "after ready" : "after [" + SmokeDependencyInputs.Gaps(after) + "]"));
             }
             before.RequireSameExceptRemovedMod(after, removed);
 
+            string? frozenInventory = null;
+            if (freezeInputs)
+            {
+                frozenInventory = SmokeInputResolver.RecordSelected(selected!.Inventory,
+                    Path.Combine(output, "selection"),
+                    new[] { selected.Server, selected.Client }.OfType<EnvironmentRecipe>());
+            }
             Directory.CreateDirectory(output);
             string adapter = options.TryGetValue("--adapter", out string? chosenAdapter)
                 ? Path.GetFullPath(chosenAdapter)
@@ -89,6 +88,7 @@ internal static class ServerLoadComparison
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Manifest, StringComparer.Ordinal);
             var fileInputs = new[] { cliManifest, adapter, loaderManifest }.OfType<string>()
+                .Concat(frozenInventory == null ? [] : [frozenInventory])
                 .Concat(parsed.Configs.Concat(parsed.PluginFiles).Select(Path.GetFullPath))
                 .Concat(new[] { "--client-loader-package" }
                     .Where(options.ContainsKey).Select(key => Path.GetFullPath(options[key])))
@@ -106,7 +106,11 @@ internal static class ServerLoadComparison
                 }
                 // Rebuild from the validated parse, not raw tokens: flags never consume the next option.
                 foreach (var (key, value) in options)
+                {
+                    if (frozenInventory != null && key is "--server" or "--client" or "--inventory") continue;
                     Add(key, [key == "--output" ? Path.Combine(output, name) : value]);
+                }
+                if (frozenInventory != null) Add("--inventory", [frozenInventory]);
                 // Freeze the environment or shipped-package decision for both arms. No arm can silently
                 // compile against one core and run against a different one.
                 if (!options.ContainsKey("--loader-package") && loaderManifest != null)
