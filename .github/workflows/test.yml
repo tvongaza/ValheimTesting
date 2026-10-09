@@ -56,6 +56,8 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet --info
       - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Seed stale publish files for the packaging regression
+        run: dotnet run scripts/tool-pack.cs -- seed
       # Normal runs take 3-6 minutes; the step timeout bounds a stuck one. The transcript and test results are kept when the
       # step fails or is cancelled (#171), and a test run with no progress for five minutes names its unfinished tests.
       - run: dotnet run scripts/validate.cs
