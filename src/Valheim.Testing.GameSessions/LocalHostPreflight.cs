@@ -9,6 +9,8 @@ namespace Valheim.Testing.GameSessions;
 /// </summary>
 internal static class LocalHostPreflight
 {
+    private static readonly AsyncLocal<Probes?> TestDefaults = new();
+
     internal sealed record Actor(string Name, EnvironmentRecipe Recipe);
 
     internal sealed record Probes(
@@ -21,12 +23,24 @@ internal static class LocalHostPreflight
         Func<EnvironmentInventory, CancellationToken, Task<IReadOnlyList<CampaignPreflightProblem>>>? Journals = null,
         Func<string?>? Packaged = null);
 
+    internal static IDisposable ReplaceDefaultProbesForTest(Probes probes)
+    {
+        var previous = TestDefaults.Value;
+        TestDefaults.Value = probes;
+        return new TestProbeScope(previous);
+    }
+
+    private sealed class TestProbeScope(Probes? previous) : IDisposable
+    {
+        public void Dispose() => TestDefaults.Value = previous;
+    }
+
     internal static async Task<IReadOnlyList<CampaignPreflightProblem>> InspectAsync(EnvironmentInventory inventory,
         IEnumerable<Actor> selected, TimeSpan timeout, CancellationToken cancellation = default,
         Func<string, IGameHost>? hostFactory = null, Probes? probes = null, bool includeJournal = true)
     {
         ArgumentNullException.ThrowIfNull(inventory);
-        probes ??= new Probes();
+        probes ??= TestDefaults.Value ?? new Probes();
         var roles = selected.Where(actor => inventory.Hosts[actor.Recipe.Host].Kind == "local").ToArray();
         var problems = new List<CampaignPreflightProblem>();
         try

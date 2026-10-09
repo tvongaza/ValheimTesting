@@ -77,6 +77,9 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         // The fake game has no desktop. Keep this test on the hosted-run path while a separate test checks that the
         // real Windows preflight refuses an unavailable desktop before any copy.
         using var desktop = DesktopClientSession.ReplacePreflightForTest(_ => Task.CompletedTask);
+        // This test stops while staging the disposable character, before launching a client. Model Steam as present so
+        // its purpose remains the hosted-run handoff on CI machines without Steam.
+        using var steam = LocalHostPreflight.ReplaceDefaultProbesForTest(new(SteamRunning: () => true));
         string output = Path.Combine(_rig.Root, "offline-start");
         // On a locked Mac the new preflight must stop before the output exists. The hosted-run
         // assertion below still runs on every other host and on an unlocked Mac desktop.
