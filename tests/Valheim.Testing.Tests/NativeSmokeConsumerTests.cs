@@ -71,6 +71,8 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         string source = File.ReadAllText(Path.Combine(_root, "Program.cs"));
         Assert.Contains(server ? "PinnedServerRun.MainAsync" : "TargetedRegression.Read", source);
         if (server) Assert.Contains("PinnedServerRun.RunCampaignAsync", source); // a server-load run off a Mac is a campaign
+        string readme = File.ReadAllText(Path.Combine(_root, "README.md"));
+        Assert.Equal(!server, readme.Contains("SSH/session-0 invocation", StringComparison.Ordinal));
     }
 
     [Theory]

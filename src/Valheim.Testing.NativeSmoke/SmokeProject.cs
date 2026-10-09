@@ -212,6 +212,7 @@ internal static class SmokeProject
 
             Keep the fixture, installed DLL hashes and ValheimCLI pins fixed while investigating a regression.
             A passing load check means the selected plugins started, not that their gameplay is correct.
+            {{(server ? "" : "The generated hosted-client consumer launches directly into this process's desktop session. On Windows, run it from an interactive desktop terminal; an SSH/session-0 invocation is refused before staging. Use `valheim-test start` for a Windows SSH launch because it preflights and uses the desktop route.")}}
             Do not publish the environment or evidence unchanged; they can contain private machine paths.
             """);
     }

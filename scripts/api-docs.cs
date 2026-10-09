@@ -8,6 +8,7 @@
 //   dotnet run scripts/api-docs.cs -- surface            write docs/reference/public-api/<Package>.txt from the release builds
 //   dotnet run scripts/api-docs.cs -- check [--base REV] CI: the committed lists match the builds; with --base, a change to
 //                                                        them since REV needs a line starting "public-api:" in PR_BODY
+//   dotnet run scripts/api-docs.cs -- check-docs          CI: selected 0.1 entrypoint pages and members have summaries
 //
 // The public-api lists are the reviewed public surface (#292, #135): every public or protected type and member of each
 // package, one per line. A pull request that changes one says why in its description, on a line starting "public-api:".
@@ -57,7 +58,8 @@ if (args.Length > 0 && args[0] == "check")
         : throw new ArgumentException("usage: dotnet run scripts/api-docs.cs -- check [--base REV]");
     return CheckLists(baseRevision);
 }
-if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/api-docs.cs [-- surface | -- check [--base REV]]");
+if (args is ["check-docs"]) return CheckDocumentedEntrypoints();
+if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/api-docs.cs [-- surface | -- check [--base REV] | -- check-docs]");
 
 PreparePackagePages();
 var info = new ProcessStartInfo("dotnet")
@@ -103,6 +105,8 @@ foreach (string page in new[]
 foreach (string package in packagePages)
     if (!File.Exists(Path.Combine(site, "packages", package + ".html")))
         throw new InvalidOperationException($"DocFX omitted the {package} package guide.");
+if (CheckDocumentedEntrypoints() != 0)
+    throw new InvalidOperationException("A selected 0.1 entrypoint has no rendered XML summary.");
 
 // These selected examples explain the order of operations. A successful metadata build alone does not prove that
 // DocFX rendered an XML <example> on the page a mod author will read.
@@ -146,6 +150,43 @@ foreach (string file in Directory.EnumerateFiles(site, "*", SearchOption.AllDire
 
 Console.WriteLine("API reference ready: docs/reference/_site/index.html");
 return 0;
+
+// These types are the selected 0.1 operation entrypoints. Adding a public member to one without an XML summary is a
+// CI failure. A new supported entrypoint type must be added here in its PR; public-api lists separately review every
+// new public type. The explicit boundaries for other generated types are in docs/reference/documentation-scope.md.
+int CheckDocumentedEntrypoints()
+{
+    string[] entrypoints =
+    [
+        "Valheim.Testing.ITerrain", "Valheim.Testing.PlaneTerrain", "Valheim.Testing.CompositeTerrain",
+        "Valheim.Testing.GridDumpTerrain", "Valheim.Testing.Doubles.TerrainAssert",
+        "Valheim.Testing.Game.GameActor", "Valheim.Testing.Game.ScenarioReport", "Valheim.Testing.Game.SiteSearch",
+        "Valheim.Testing.Game.PlayerPlacement", "Valheim.Testing.Game.WorldFixture", "Valheim.Testing.Game.DisposableCharacterStore",
+        "Valheim.Testing.GameSessions.GameSession", "Valheim.Testing.GameSessions.ClientActor",
+        "Valheim.Testing.GameSessions.ServerActor", "Valheim.Testing.GameSessions.PinnedServerRun",
+        "Valheim.Testing.Adapter.TestExtension", "Valheim.Testing.Bindings.BindingCheck",
+    ];
+    bool missing = false;
+    foreach (string type in entrypoints)
+    {
+        string page = Path.Combine(root, "docs", "reference", "api", type + ".yml");
+        if (!File.Exists(page)) { Console.Error.WriteLine($"Missing selected 0.1 entrypoint: {type}"); missing = true; continue; }
+        string yaml = File.ReadAllText(page).ReplaceLineEndings("\n");
+        string items = yaml.Split("\nreferences:", 2, StringSplitOptions.None)[0];
+        string[] entries = Regex.Split(items, @"(?m)^- uid: ");
+        if (entries.Length < 2 || !entries[1].StartsWith(type + "\n", StringComparison.Ordinal))
+        { Console.Error.WriteLine($"Selected 0.1 entrypoint has no type item: {type}"); missing = true; continue; }
+        foreach (string entry in entries.Skip(1))
+        {
+            string uid = entry.Split('\n', 2)[0];
+            if (Regex.IsMatch(entry, @"(?m)^  summary: [^\r\n]*\S[^\r\n]*$")) continue;
+            Console.Error.WriteLine($"Selected 0.1 entrypoint has no XML summary: {uid}");
+            missing = true;
+        }
+    }
+    if (!missing) Console.WriteLine($"Selected 0.1 entrypoint summaries are present ({entrypoints.Length} types).");
+    return missing ? 1 : 0;
+}
 
 // The repository's package guides are the single source of truth. DocFX publishes copies beside the generated types;
 // a link outside that set points at this exact source revision, never at a moving main branch or a build-machine path.

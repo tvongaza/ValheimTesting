@@ -49,13 +49,17 @@ jobs:
       - name: Pack release packages
         run: |
           mkdir -p release
+          dotnet run scripts/tool-pack.cs -- clean
           for project in src/Valheim.Testing*/Valheim.Testing*.csproj; do
             dir=$(dirname "$project")
             test "$(basename "$dir").csproj" = "$(basename "$project")" || continue
             dotnet pack "$project" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true -p:ValheimTestingRelease=true
           done
+          dotnet run scripts/tool-pack.cs -- verify release
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
           (cd release && sha256sum *.nupkg)
+      - name: Audit package contents before publication
+        run: dotnet run scripts/package-audit.cs -- --directory release --source-commit "$GITHUB_SHA"
       # Only a coordinated 0.1 RC or final build gets an immutable API snapshot.
       # The snapshot is built from this tag's XML/source, before any package is pushed.
       - name: Build versioned API reference before publication

@@ -45,6 +45,7 @@ public sealed class ClientActor : IDisposable
     public string Name { get; }
     /// <summary>The folder its evidence goes to (<see cref="GameSession.ActorOutput"/>).</summary>
     internal string Output => _output;
+    /// <summary>The client's pinned input plan used when <see cref="Start"/> opens it.</summary>
     public ClientRunPlan Plan { get; }
     /// <summary>The open client's session, or null before <see cref="Start"/> and once it is closed.</summary>
     public ClientSession? Session { get { lock (_state) return _session is { Closed: false } open ? open : null; } }

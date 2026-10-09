@@ -68,9 +68,14 @@ if (current.Count == packed.Length) Note($"{candidate}: every package is already
 else
 {
     foreach (string partial in current) File.Delete(partial);
+    // PackTool includes everything under PublishDir, even files from an earlier run. Clear only the two generated tool
+    // publish directories before the solution pack; other build outputs and the reviewed feed stay intact (#523).
+    Run("dotnet", "run", "scripts/tool-pack.cs", "--", "clean");
     Run("dotnet", "pack", Solution("packages", packed.Select(name => $"src/{name}/{name}.csproj")),
         "-c", "Release", "-nodeReuse:false", "-o", feed, "-p:ValheimTestingCandidate=" + candidate);
 }
+Run("dotnet", "run", "scripts/tool-pack.cs", "--", "verify", feed);
+Run("dotnet", "run", "scripts/package-audit.cs", "--", "--directory", feed, "--candidate");
 // A mod's view of what was just packed: outside this checkout, the candidate packages only from .packages and byte-identical
 // to it, the Cli from .packages too (its pin may not be published yet), every other package from NuGet.org.
 Run("dotnet", "run", "scripts/consumer.cs", "--", "--feed", "local", "--candidate", candidate);

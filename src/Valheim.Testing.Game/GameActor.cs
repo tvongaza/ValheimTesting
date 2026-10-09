@@ -6,18 +6,23 @@ namespace Valheim.Testing.Game;
 /// <summary>Low-level transport. Use GameActor for strictly pinned test actions and observations.</summary>
 public interface IGameTransport : IDisposable
 {
+    /// <summary>Send one command and wait at most <paramref name="timeout"/> for its reply. A completed refusal remains in the returned result.</summary>
     CommandResult Execute(string command, TimeSpan timeout);
 }
 /// <summary>A STATUS reading made on a separate socket, independent of a queued game-thread command.</summary>
 public interface IGameThreadStatusTransport
 {
+    /// <summary>Read the live STATUS fields without queuing a game-thread command. Missing or invalid fields are judged by the caller.</summary>
     IReadOnlyDictionary<string, string> ReadStatus();
 }
+/// <summary>A TCP attachment to a running ValheimCLI. Disposing it closes the socket, not the game process.</summary>
 public sealed class CliTransport : IGameTransport, IGameThreadStatusTransport
 {
     private readonly ValheimClient _client;
     private readonly string _host;
     private readonly int _port;
+    /// <summary>Connect to <paramref name="host"/>:<paramref name="port"/> and require the command-completion protocol.</summary>
+    /// <exception cref="IOException">The plugin does not answer or cannot confirm command completion.</exception>
     public CliTransport(string host, int port)
     {
         _host = host; _port = port;
@@ -25,11 +30,14 @@ public sealed class CliTransport : IGameTransport, IGameThreadStatusTransport
         if (!_client.Connect()) { _client.Dispose(); throw new IOException("CLI connection failed."); }
         if (!_client.SupportsCompletion) { _client.Dispose(); throw new IOException("Tests require command completion support."); }
     }
+    /// <summary>Send one command with this call's timeout; a game-side refusal is returned for the actor to judge.</summary>
     public CommandResult Execute(string command, TimeSpan timeout)
     {
         _client.CommandTimeout = timeout;
         return _client.ExecuteCommand(command);
     }
+    /// <summary>Read STATUS through a fresh connection, including while the game thread is busy.</summary>
+    /// <exception cref="IOException">The plugin does not answer or offers only the older state-line fallback.</exception>
     public IReadOnlyDictionary<string, string> ReadStatus()
     {
         using var probe = new ValheimClient(_host, _port);
@@ -38,8 +46,10 @@ public sealed class CliTransport : IGameTransport, IGameThreadStatusTransport
         if (!probe.StatusLineRead) throw new IOException("ValheimCLI did not answer STATUS; the state-only fallback cannot prove game-thread liveness.");
         return fields;
     }
+    /// <summary>Close this TCP attachment without stopping the game.</summary>
     public void Dispose() => _client.Dispose(); // Attachment never owns the game's process.
 }
+/// <summary>A command discovered from the current extension instance. Rediscover it after a plugin reload.</summary>
 [ResultShape]
 public sealed record Capability(string Path, string Instance, bool ReadOnly, int SchemaVersion);
 
@@ -74,13 +84,16 @@ public sealed class GameActor : IDisposable
     public long LongestMainThreadIdleMs => _longestMainThreadIdleMs;
     /// <summary>The last busy note the game published during that wait, if any.</summary>
     public string? BusyNote => _lastBusyNote;
+    /// <summary>The name used to identify this actor in diagnostics.</summary>
     public string Name { get; }
+    /// <summary>The timeout for each ordinary command and strict pin check; bounded world-entry reads may use less time.</summary>
     public TimeSpan CommandTimeout { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>
     /// False once the actor was explicitly unpinned (<see cref="VerifyEnvironment"/> with <see cref="EnvironmentPinning.None"/>)
     /// and not verified with pins since.
     /// </summary>
     public bool Pinned { get { lock (_sync) return _pinned; } }
+    /// <summary>Take ownership of <paramref name="transport"/>. Call <see cref="VerifyEnvironment"/> before issuing a command.</summary>
     public GameActor(string name, IGameTransport transport)
     { Name = name; _transport = transport; }
 
@@ -291,6 +304,9 @@ public sealed class GameActor : IDisposable
     internal static bool IsUnstartedCommandTimeout(InvalidOperationException error) =>
         error.Message.StartsWith("command_failed: ERROR: code=command_timeout ", StringComparison.Ordinal) &&
         error.Message.Contains("had not started and will not run", StringComparison.Ordinal);
+    /// <summary>Find <paramref name="path"/> in the live <c>cli_extensions</c> listing with the exact result schema.</summary>
+    /// <returns>The current extension instance and read-only flag; use it before the plugin reloads.</returns>
+    /// <exception cref="InvalidOperationException">The extension, command or requested schema is absent, or the listing is unsupported.</exception>
     public Capability RequireCapability(string path, int schemaVersion = 1) => RequireCapabilities([path], schemaVersion)[0];
     /// <summary><see cref="RequireCapability"/> for each of <paramref name="paths"/>, in order, from one <c>cli_extensions</c> listing.</summary>
     internal IReadOnlyList<Capability> RequireCapabilities(IReadOnlyList<string> paths, int schemaVersion = 1)
@@ -314,6 +330,8 @@ public sealed class GameActor : IDisposable
         }).ToArray();
     }
     internal GameReply ReadOnlyReply(string command) => new(command, ReadOnlyCommand(command));
+    /// <summary>Invoke a discovered extension command once and return a detached copy of its structured <c>data</c>.</summary>
+    /// <remarks>Each argument must be one nonempty token without whitespace. A game-side refusal, changed extension instance, or schema mismatch fails; no mutation is retried.</remarks>
     public JsonElement Invoke(Capability command, params string[] arguments) => Invoke(command, null, arguments);
     /// <summary><see cref="Invoke(Capability, string[])"/>, handing the complete reply lines to <paramref name="replied"/> before judging them.</summary>
     internal JsonElement Invoke(Capability command, Action<IReadOnlyList<string>>? replied, string[] arguments)
@@ -357,6 +375,8 @@ public sealed class GameActor : IDisposable
         error.Data["extension.path"] is string actualPath && actualPath == path &&
         error.Data["extension.code"] is string actualCode && actualCode == code &&
         error.Data["transport.errorCode"] is string actualTransportCode && actualTransportCode == transportCode;
+    /// <summary>Read a discovered read-only command once, preserving its source and completeness fields.</summary>
+    /// <exception cref="InvalidOperationException">The capability is mutating, or its reply fails the extension contract.</exception>
     public Observation Observe(Capability command, params string[] arguments) => Observe(command, null, arguments);
     /// <summary><see cref="Observe(Capability, string[])"/>, handing the complete reply lines to <paramref name="replied"/> before judging them.</summary>
     internal Observation Observe(Capability command, Action<IReadOnlyList<string>>? replied, string[] arguments)
@@ -382,16 +402,20 @@ public sealed class GameActor : IDisposable
     }
     /// <summary>The one structured line starting with <paramref name="prefix"/>, parsed; none or several is a failure.</summary>
     public static JsonDocument ParseLine(GameReply reply, string prefix) => ParseLine(reply.Result, prefix);
+    /// <summary>Parse exactly one structured line in a raw transport reply. Dispose the returned document after reading it.</summary>
     public static JsonDocument ParseLine(CommandResult reply, string prefix)
     {
         string[] lines = reply.Output.Where(x => x.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
         if (lines.Length != 1) throw new InvalidOperationException("Expected exactly one complete structured response.");
         return JsonDocument.Parse(lines[0][prefix.Length..]);
     }
+    /// <summary>Invalidate this actor and dispose its transport. The actor does not own the game process.</summary>
     public void Dispose() { lock (_sync) { _verified = false; _transport.Dispose(); } }
 }
+/// <summary>One read-only extension result and its declared source/completeness. An incomplete reading is not an assertion pass.</summary>
 public sealed record Observation(string Source, bool Complete, JsonElement Data)
 {
+    /// <summary>Require both <see cref="Complete"/> and the exact <paramref name="source"/> layer.</summary>
     public void RequireComplete(string source)
     {
         if (!Complete || Source != source) throw new InvalidOperationException("Incomplete observation or wrong observation layer.");

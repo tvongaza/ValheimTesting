@@ -45,6 +45,7 @@ public sealed class CompositeTerrain : ITerrain
 {
     private readonly ITerrain _background;
     private readonly TerrainRegion[] _regions;
+    /// <summary>Copies the region list; the last matching region wins, or <paramref name="background"/> when none matches.</summary>
     public CompositeTerrain(ITerrain background, params TerrainRegion[] regions)
     {
         _background = background ?? throw new ArgumentNullException(nameof(background));
@@ -57,7 +58,10 @@ public sealed class CompositeTerrain : ITerrain
         for (int i = _regions.Length - 1; i >= 0; i--) if (_regions[i].Contains(x, z)) return _regions[i].Terrain;
         return _background;
     }
+    /// <summary>Returns the selected region's height in metres; non-finite coordinates are refused.</summary>
     public float GetHeight(float x, float z) => At(x, z).GetHeight(x, z);
+    /// <summary>Returns the selected region's biome, with the same precedence as height.</summary>
     public TerrainBiome GetBiome(float x, float z) => At(x, z).GetBiome(x, z);
+    /// <summary>Returns the selected region's river facts, with the same precedence as height.</summary>
     public void GetRiverWeight(float x, float z, out float weight, out float width) => At(x, z).GetRiverWeight(x, z, out weight, out width);
 }

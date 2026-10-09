@@ -333,12 +333,25 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
             string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
             string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
             var result = (await _host.RunAsync(_platform == ClientPlatform.Windows ? InteractiveScripts.WindowsStop : InteractiveScripts.LinuxStop,
-                Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "TERM")), quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false))
+                Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "TERM"),
+                    ("quitTask", InteractiveClient.TaskPrefix + "quit-" + Guid.NewGuid().ToString("N")),
+                    ("desktopQuit", InteractiveScripts.WindowsDesktopQuit)), quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false))
                 .EnsureSuccess($"Stopping client process {Id} on {HostName}");
+            if (_platform == ClientPlatform.Windows && InteractiveClient.Line(result.Stdout, "VT-TASK ") is { } taskReply && taskReply.StartsWith("kept ", StringComparison.Ordinal))
+                throw new HostOperationException($"The desktop quit task {taskReply["kept ".Length..]} was not removed on {HostName}; inspect and remove it before another run.", result);
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-STOP ");
-            LastQuitRequest = _platform == ClientPlatform.Windows
-                ? (InteractiveClient.Line(result.Stdout, "VT-QUIT ") == "no-window" ? "window close: no main window in this session" : "window closed")
-                : "SIGTERM";
+            string? request = _platform == ClientPlatform.Windows ? InteractiveClient.Line(result.Stdout, "VT-QUIT ") : null;
+            _quitRequested = _platform != ClientPlatform.Windows || request is "window" or "desktop-window";
+            LastQuitRequest = _platform != ClientPlatform.Windows ? "SIGTERM" : request switch
+            {
+                "window" => "window close requested in this session",
+                "desktop-window" => "window close requested through desktop task",
+                "no-window" => "no main window in this session",
+                "desktop-no-window" => "desktop task found no main window",
+                "desktop-task-no-reply" => "desktop task did not confirm a window close",
+                "desktop-task-failed" => "desktop task could not request window close",
+                _ => "not asked",
+            };
             InteractiveStop outcome = verdict switch
             {
                 "quit" => InteractiveStop.Quit,
@@ -362,6 +375,7 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
 
     /// <summary>How the last stop asked the game to quit.</summary>
     public string LastQuitRequest { get; private set; } = "not asked";
+    private bool _quitRequested;
 
     /// <summary>The <see cref="IOwnedProcess"/> clean stop: <see cref="StopAsync(TimeSpan, TimeSpan, CancellationToken)"/>, waited for.</summary>
     public ProcessStop StopCleanly(TimeSpan quit, TimeSpan kill)
@@ -371,7 +385,8 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
         return outcome switch
         {
             InteractiveStop.Quit => new(StopOutcome.Clean, null, clock.Elapsed, LastQuitRequest),
-            InteractiveStop.Stopped => new(StopOutcome.Killed, null, clock.Elapsed, LastQuitRequest + $"; no exit within {WaitText.Seconds(quit)}"),
+            InteractiveStop.Stopped => new(StopOutcome.Killed, null, clock.Elapsed,
+                LastQuitRequest + (_quitRequested ? $"; no exit within {WaitText.Seconds(quit)}" : "; killed without a confirmed quit request")),
             _ => new(StopOutcome.AlreadyExited, null, clock.Elapsed, "not asked: it had exited"),
         };
     }
@@ -602,20 +617,92 @@ internal static class InteractiveScripts
         }
         """.ReplaceLineEndings("\n");
 
-    // Variables: game, start, seconds, quit. The start time must still match, so a reused process ID is never touched. With
-    // quit > 0 the game's main window is closed first and it gets quit seconds to exit by itself ("quit"); a window in another
-    // session than this script's cannot be closed from here, and the game is then killed ("stopped", after "VT-QUIT no-window").
+    // Runs inside the interactive desktop task. The numeric PID and start identity are checked again here, and the task may
+    // close only a window in its own session. The result file is unique to this stop and moved into place complete.
+    public static readonly string WindowsDesktopQuit = """
+        $ErrorActionPreference = 'Stop'
+        $answer = 'failed'
+        try {
+            $process = [Diagnostics.Process]::GetProcessById([int]$game)
+            if ([string]$process.StartTime.ToFileTimeUtc() -cne $start) { $answer = 'gone' }
+            elseif ($process.SessionId -ne [Diagnostics.Process]::GetCurrentProcess().SessionId) { $answer = 'wrong-session' }
+            elseif ($process.CloseMainWindow()) { $answer = 'requested' }
+            else { $answer = 'no-window' }
+        } catch { $answer = 'gone' }
+        $temporary = $marker + '.tmp'
+        [IO.File]::WriteAllText($temporary, $answer, (New-Object Text.UTF8Encoding $false))
+        [IO.File]::Move($temporary, $marker)
+        """.ReplaceLineEndings("\n");
+
+    // Variables: game, start, seconds, quit, dir, quitTask, desktopQuit. A process with a reused ID is never touched.
+    // A session-0 caller cannot close a session-1 window, so it asks through a one-shot task with the user's interactive
+    // token. This is the same desktop route used to start the client; the task and its marker are removed after the reply.
     public static readonly string WindowsStop = """
         $process = $null
         try { $process = [Diagnostics.Process]::GetProcessById([int]$game) } catch { }
         if ($null -eq $process) { 'VT-STOP gone'; exit 0 }
         try { $identity = [string]$process.StartTime.ToFileTimeUtc() } catch { if ($process.HasExited) { 'VT-STOP gone'; exit 0 }; throw }
         if ($identity -cne $start) { 'VT-STOP gone'; exit 0 }
+        $asked = $false
+        $method = 'not-asked'
         if ([int]$quit -gt 0) {
-            $asked = $false
-            try { $asked = $process.CloseMainWindow() } catch { }
-            if (-not $asked) { 'VT-QUIT no-window' }
-            elseif ($process.WaitForExit([int]$quit * 1000)) { 'VT-STOP quit'; exit 0 }
+            $quitDeadline = [DateTime]::UtcNow.AddSeconds([int]$quit)
+            if ($process.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId) {
+                try { $asked = $process.CloseMainWindow() } catch { }
+                $method = if ($asked) { 'window' } else { 'no-window' }
+            } else {
+                $marker = Join-Path $dir ('quit-' + [Guid]::NewGuid().ToString('N') + '.txt')
+                $folder = $null
+                try {
+                    # -EncodedCommand carries only the process identity, the private marker path and fixed script text.
+                    $prefix = '$game=' + [int]$game + "`n" + '$start=' + [long]$start + "`n" +
+                        '$marker=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("' +
+                        [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($marker)) + '"))' + "`n"
+                    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($prefix + $desktopQuit))
+                    $service = New-Object -ComObject Schedule.Service
+                    $service.Connect()
+                    $folder = $service.GetFolder('\')
+                    $definition = $service.NewTask(0)
+                    $definition.RegistrationInfo.Description = 'ValheimTesting: request one owned client to quit in its desktop session.'
+                    $definition.Principal.UserId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+                    $definition.Principal.LogonType = 3
+                    $definition.Principal.RunLevel = 0
+                    $definition.Settings.Enabled = $true
+                    $definition.Settings.AllowDemandStart = $true
+                    $definition.Settings.ExecutionTimeLimit = 'PT1M'
+                    $action = $definition.Actions.Create(0)
+                    $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+                    $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ' + $encoded
+                    $registered = $folder.RegisterTaskDefinition($quitTask, $definition, 2, $definition.Principal.UserId, $null, 3)
+                    [void]$registered.Run($null)
+                    $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(10, [int]$quit))
+                    $watcher = New-Object IO.FileSystemWatcher -ArgumentList $dir
+                    try {
+                        while (-not [IO.File]::Exists($marker) -and [DateTime]::UtcNow -lt $deadline) {
+                            [void]$watcher.WaitForChanged([IO.WatcherChangeTypes]::All, 250)
+                        }
+                    } finally { $watcher.Dispose() }
+                    if ([IO.File]::Exists($marker) -and [IO.File]::ReadAllText($marker) -ceq 'requested') {
+                        $asked = $true; $method = 'desktop-window'
+                    } elseif ([IO.File]::Exists($marker) -and [IO.File]::ReadAllText($marker) -ceq 'no-window') {
+                        $method = 'desktop-no-window'
+                    } else { $method = 'desktop-task-no-reply' }
+                } catch { $method = 'desktop-task-failed' }
+                finally {
+                    if ($null -ne $folder) {
+                        if (-not [IO.File]::Exists($marker)) { try { $registered.Stop(0) } catch { } }
+                        try { $folder.DeleteTask($quitTask, 0) } catch { }
+                        $removed = $false
+                        try { [void]$folder.GetTask($quitTask) } catch { $removed = $true }
+                        if ($removed) { 'VT-TASK removed' } else { 'VT-TASK kept ' + $quitTask }
+                    }
+                    if ([IO.File]::Exists($marker)) { [IO.File]::Delete($marker) }
+                    if ([IO.File]::Exists($marker + '.tmp')) { [IO.File]::Delete($marker + '.tmp') }
+                }
+            }
+            'VT-QUIT ' + $method
+            $remaining = [Math]::Max(0, [int][Math]::Ceiling(($quitDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+            if ($asked -and $process.WaitForExit($remaining)) { 'VT-STOP quit'; exit 0 }
         }
         try { $process.Kill() } catch { if (-not $process.HasExited) { throw } }
         if ($process.WaitForExit([int]$seconds * 1000)) { 'VT-STOP stopped' } else { 'VT-STOP running' }

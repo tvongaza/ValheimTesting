@@ -344,6 +344,12 @@ public sealed class StagedArm
 /// </summary>
 public sealed class TargetedRegression
 {
+    // Generated consumers use the public, direct client opener. The one-shot runner supplies its
+    // desktop opener explicitly and performs its own desktop preflight before staging.
+    internal Func<(bool Windows, int SessionId)> DirectClientSession { get; set; } = DirectClientDesktop.Current;
+
+    private void RequireDirectClientDesktop() => DirectClientDesktop.Require(DirectClientSession());
+
     /// <summary>The file that marks a disposable install as this tool's; an install without it is never changed.</summary>
     public const string MarkerFile = "valheim-testing-install.json";
     /// <summary>Where each arm's build is copied under its own artifact name, inside the disposable install.</summary>
@@ -428,7 +434,11 @@ public sealed class TargetedRegression
     }
 
     /// <summary>Stages and preflights every arm in turn, without the game; returns them in manifest order (the last stays staged).</summary>
-    public IReadOnlyList<StagedArm> Preflight() => Inputs.Mod.Arms.Keys.Select(Stage).ToList();
+    public IReadOnlyList<StagedArm> Preflight()
+    {
+        RequireDirectClientDesktop();
+        return Inputs.Mod.Arms.Keys.Select(Stage).ToList();
+    }
 
     /// <summary>
     /// Stages <paramref name="arm"/> into the disposable install and runs every static check (see the class summary).
@@ -573,6 +583,7 @@ public sealed class TargetedRegression
         Action? afterStaged)
     {
         ArgumentNullException.ThrowIfNull(measure);
+        if (openClient == null) RequireDirectClientDesktop();
         output = Path.GetFullPath(output);
         if (Path.Exists(output)) throw new IOException($"{output} already exists; give every run a new evidence directory.");
         Directory.CreateDirectory(output);

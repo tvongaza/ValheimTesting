@@ -73,6 +73,7 @@ public sealed class GameSession : IAsyncDisposable
     public HostingClientActor? Host { get; }
     /// <summary>The session's clients by name, for example <c>client</c>, or a campaign's <c>client-a</c> and <c>client-b</c>.</summary>
     public IReadOnlyDictionary<string, ClientActor> Clients { get; }
+    /// <summary>The shared report to which actor setup, scenario and teardown add their steps.</summary>
     public ScenarioReport Report { get; }
     /// <summary>The run's new output directory: reports, per-boot logs, command records and kept client logs.</summary>
     public string Output { get; }
