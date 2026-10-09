@@ -1,5 +1,7 @@
 # Valheim.Testing.NativeSmoke
 
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). This command-line tool's supported entry points are the commands documented below, rather than a public .NET library surface.
+
 *Assistant-written (Claude).*
 
 `valheim-test`, a .NET tool from [ValheimTesting](https://github.com/tvongaza/ValheimTesting): one-command disposable checks that a mod loads in the real game, an A/B run that isolates a load interaction between two mods, an editable consumer project for your own assertions, and the commands that look after the machines a native test runs on. Every run copies the game into a disposable install, pins what it stages, keeps private evidence, and removes what it made. A pass means the selected plugins loaded and a client entered the world; it says nothing about a mod's gameplay. For a step-by-step single-mod and mod-conflict investigation, including how to read failed setup versus failed gameplay, see [Debug a mod load or mod conflict](https://github.com/tvongaza/ValheimTesting/blob/main/docs/debugging-mods.md).

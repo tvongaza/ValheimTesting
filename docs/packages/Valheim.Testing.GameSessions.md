@@ -1,5 +1,7 @@
 # Valheim.Testing.GameSessions
 
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+
 *Assistant-written (Claude).*
 
 `Valheim.Testing.GameSessions` (net10.0) runs game sessions for mod tests: one or more real game processes in roles (a dedicated server, clients, a client that hosts its own world) on this machine or on others reached over SSH or a container, prepared, started, joined and torn down as one run. It is built on [`Valheim.Testing.Game`](Valheim.Testing.Game.md), which drives one game process; this package adds what a run of several processes, or a run on another machine, needs. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.

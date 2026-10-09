@@ -1,5 +1,7 @@
 # Valheim.Testing.Bindings
 
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+
 *Assistant-written (Claude).*
 
 An offline check that a built mod's references into the game still bind, from [ValheimTesting](https://github.com/tvongaza/ValheimTesting). A game update that removes, renames or retypes a member breaks a mod with `MissingFieldException`, `MissingMethodException` or `TypeLoadException`, but only when the runtime first compiles a method that uses it, which can be hours into play. This check reads the mod DLL with [Mono.Cecil](https://github.com/jbevain/cecil), resolves every type, field and method it references in the game assemblies you supply, and names the mod methods that use each one that no longer binds. (The modding wiki's examples of such breaks are `Terminal.m_input` in 0.217.14 and `SEMan.HaveStatusEffect` in 0.218.15; building against stale publicized assemblies hides the same break until the method runs.) It loads and runs nothing, and needs no game process.

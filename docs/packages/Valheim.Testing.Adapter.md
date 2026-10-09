@@ -1,5 +1,7 @@
 # Valheim.Testing.Adapter
 
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+
 `Valheim.Testing.Adapter` is a source package compiled into a mod's **test-only** BepInEx adapter. It provides the mod's owned-session identity, a guarded global-key fixture change, and small helpers for mod-specific commands. Production mods do not reference it. The released package version is in the [package table](../getting-started.md#package-versions-and-feeds).
 
 Generic observations belong to ValheimCLI's optional **Observe pack** (`Valheim.Cli.Observe.dll`, plugin `valheimCLI.observe`). Install and pin that pack on each server or client that needs its commands. It provides `valheim.observe/harmony`, `content-census`, `zones`, `custom-data`, `globalkeys`, `config`, `unresolved-prefabs`, `dungeon-rooms`, and the `review-*` commands. The toolkit checks each capability against the pinned manifest before launch and against `cli_extensions` after launch. A mod's adapter does not register these commands. See the ValheimCLI fork's command-pack guide for the pack boundary; the repository's [release contract](../valheimcli-release-contract.md) records the exact fork and bundle used by each release.
