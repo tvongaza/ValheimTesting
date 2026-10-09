@@ -198,6 +198,8 @@ internal sealed class FakeServerHost : IGameHost
             case "apply-stage":
             {
                 string runtime = Local(v["runtime"]), stage = Local(v["stage"]);
+                string sourceConfig = Path.Combine(runtime, "BepInEx", "config", "BepInEx.cfg");
+                byte[]? retainedConfig = v.GetValueOrDefault("preserveConfig") == "true" ? File.ReadAllBytes(sourceConfig) : null;
                 foreach (string folder in new[] { "plugins", "scripts", "config", "patchers" })
                 {
                     string directory = Path.Combine(runtime, "BepInEx", folder);
@@ -217,6 +219,7 @@ internal sealed class FakeServerHost : IGameHost
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     File.Copy(Path.Combine(stage, relative), target, overwrite: true);
                 }
+                if (retainedConfig != null) File.WriteAllBytes(sourceConfig, retainedConfig);
                 Directory.Delete(stage, recursive: true);
                 AfterApply?.Invoke(runtime);
                 return Ok("VT-STAGED selected files only\n");
