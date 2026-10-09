@@ -85,9 +85,9 @@ public sealed class SmokeCommandOptionsTests
             File.WriteAllText(Path.Combine(project, "MyMod.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             string nested = Path.Combine(project, "valheim-test-runs", "one");
             Assert.Contains("outside the mod project", Assert.Throws<ArgumentException>(() =>
-                SmokeCommandOptions.Output(new Dictionary<string, string> { ["--output"] = nested }, project)).Message);
+                SmokeCommandOptions.Output(new Dictionary<string, string> { ["--output"] = nested })).Message);
             string sibling = Path.Combine(Path.GetDirectoryName(project)!, "sibling-" + Guid.NewGuid().ToString("N"));
-            Assert.Equal(sibling, SmokeCommandOptions.Output(new Dictionary<string, string> { ["--output"] = sibling }, project));
+            Assert.Equal(sibling, SmokeCommandOptions.Output(new Dictionary<string, string> { ["--output"] = sibling }));
         }
         finally { Directory.Delete(project, recursive: true); }
     }

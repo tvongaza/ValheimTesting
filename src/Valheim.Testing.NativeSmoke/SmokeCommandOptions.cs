@@ -96,17 +96,14 @@ internal static class SmokeCommandOptions
         return true;
     }
 
-    internal static string Output(IReadOnlyDictionary<string, string> options, string? projectDirectory = null)
+    internal static string Output(IReadOnlyDictionary<string, string> options)
     {
         string output = options.TryGetValue("--output", out string? given) ? Path.GetFullPath(given)
             : Path.GetFullPath(Path.Combine(EnvironmentInventory.ThisMachine.DataRoot, "valheim-test-runs", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) +
                 "Z-" + Guid.NewGuid().ToString("N")[..8]));
-        string project = Path.GetFullPath(projectDirectory ?? Environment.CurrentDirectory);
-        if (Directory.Exists(project) && Directory.EnumerateFiles(project, "*.csproj", SearchOption.TopDirectoryOnly).Any())
+        for (string? parent = Path.GetDirectoryName(output); parent != null; parent = Path.GetDirectoryName(parent))
         {
-            string relative = Path.GetRelativePath(project, output);
-            if (relative == "." || (!Path.IsPathRooted(relative) && relative != ".." &&
-                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
+            if (Directory.Exists(parent) && Directory.EnumerateFiles(parent, "*.csproj", SearchOption.TopDirectoryOnly).Any())
                 throw new ArgumentException("--output must be outside the mod project; generated adapter .cs files would be compiled into the mod: " + output);
         }
         if (Path.Exists(output)) throw new IOException("--output must be new; existing evidence will not be overwritten: " + output);

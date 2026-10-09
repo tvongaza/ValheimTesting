@@ -8,6 +8,23 @@ public sealed class NativeSmokeComparisonTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [Fact] public async Task ComparisonRefusesOutputInsideAModProjectBeforeBuildingItsAdapter()
+    {
+        string project = Path.Combine(_rig.Root, "mod-project");
+        Directory.CreateDirectory(project);
+        File.WriteAllText(Path.Combine(project, "MyMod.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(project, "runs", "ab1");
+        int arms = 0, builds = 0;
+        int result = await ServerLoadComparison.RunAsync(Arguments(output, _rig.Parent, companion),
+            runArm: _ => { arms++; return Task.FromResult(0); },
+            buildAdapter: (_, _, _, _, _) => { builds++; throw new InvalidOperationException("must not build"); });
+        Assert.Equal(3, result);
+        Assert.Equal(0, arms);
+        Assert.Equal(0, builds);
+        Assert.False(Directory.Exists(output));
+    }
+
     [Fact] public async Task OutputInsidePreparedInstallIsRefusedBeforeCreatingEvidenceOrRunningAnArm()
     {
         string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));

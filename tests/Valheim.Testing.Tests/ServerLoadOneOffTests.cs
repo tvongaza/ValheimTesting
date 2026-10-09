@@ -24,6 +24,15 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--server-only", "--client-architecture", "arm64"], out _, out _));
         Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "native"], out _, out _));
     }
+
+    [Fact]
+    public void Arm64SelectionRefusesANonMacClientBeforeAnyLoaderCheck()
+    {
+        var recipe = new EnvironmentRecipe { Host = "local", Architecture = "x64" };
+        var inventory = new EnvironmentInventory { Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = "linux" } } };
+        Assert.Contains("macOS", Assert.Throws<ArgumentException>(() =>
+            SmokeInputResolver.SelectClientArchitecture("arm64", recipe, inventory)).Message);
+    }
     private string Adapter() => _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
         RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
 
@@ -189,14 +198,15 @@ public sealed class ServerLoadOneOffTests : IDisposable
         BepInExLoaderPackage.Capture(_rig.Game, "reviewed", "1").Write(package);
         string packagedOutput = Path.Combine(_rig.Root, "client-package-refused");
         string? checkedArchitecture = null; string? checkedLoader = null;
+        string requestedArchitecture = HostProfile.CurrentPlatform == "macos" ? "arm64" : "x64";
         using (EnvironmentInventory.UseMachine(WithValheim(out _)))
-            result = await ServerLoad.RunAsync(Arguments(packagedOutput, "--client-loader-package", package, "--client-architecture", "arm64"), new ServerLoad.Seams(
+            result = await ServerLoad.RunAsync(Arguments(packagedOutput, "--client-loader-package", package, "--client-architecture", requestedArchitecture), new ServerLoad.Seams(
                 Inspect: _ => Task.FromResult(new CampaignPreflightReport([new("client", "game and loader", "The reviewed loader package does not match the host platform.")])),
                 Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); },
                 ClientArchitecture: (_, recipe, architecture, loader) =>
                 { Assert.Equal("local-client", recipe.Name); checkedArchitecture = architecture; checkedLoader = loader; }));
         Assert.Equal(3, result);
-        Assert.Equal("arm64", checkedArchitecture);
+        Assert.Equal(requestedArchitecture, checkedArchitecture);
         Assert.Equal(package, checkedLoader);
         Assert.False(ran);
         refusal = File.ReadAllText(Path.Combine(packagedOutput, "REFUSED.txt"));

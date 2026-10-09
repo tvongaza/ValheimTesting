@@ -28,8 +28,7 @@ internal static class ServerLoadComparison
             read.Options.Remove("--remove-mod");
             var parsed = ServerLoad.FromParsed(read);
             var options = parsed!.Options;
-            string output = Path.GetFullPath(options["--output"]);
-            if (Path.Exists(output)) throw new IOException("--output must be new; comparison evidence will not be overwritten: " + output);
+            string output = SmokeCommandOptions.Output(options);
             var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             var mods = parsed.Mods.Select(Path.GetFullPath).ToList();
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
