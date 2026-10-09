@@ -25,3 +25,34 @@ EWD documents a limited server-only subset (locations, dungeons, rooms, vegetati
 - Feed captured input samples into replay tests to improve the mock's declared coverage. Keep this as an optional fixture-builder integration so other mod authors can use the framework without Expand World.
 
 No Expand World recipe has been installed or tested here. Exact authored height fields may warrant another authoring tool; don't add one until these simpler controls prove insufficient.
+
+## Bake a saved fixture with an owned server
+
+Use a one-phase bake when a mod can prove that its generated state is ready during one server boot. The source is a directory containing exactly one named world, either directly or under `worlds_local/`. The tool hashes the source, verifies its disposable copy, and checks the world's UID from its own metadata. The output directory must not exist.
+
+```sh
+valheim-test server-load --server-only \
+  --mod ./bin/Release/net48/MyMod.dll \
+  --world-fixture ./fixtures/poi-base \
+  --bake-fixture ./fixtures/poi-baked \
+  --before-save-command 'mymod_generate_sites' \
+  --before-save-line 'OK: generated sites=' \
+  --assert-command 'cli_extension mymod.testing/bake-ready' \
+  --assert-line 'EXTENSION_RESULT mymod.testing/bake-ready ready=true'
+```
+
+The assertion is **one** strict, pinned server command after the world accepts connections. Choose an observation whose accepted reply means generation is complete, and make its expected line specific enough to exclude a partial or refused result. If the test needs to cause a one-time change before that observation, add `--before-save-command TEXT --before-save-line PREFIX`; it runs once, before the assertion. A mod whose generation needs several phases or a longer event wait should express that as a `PinnedServerRun` scenario; see [the server runner](packages/Valheim.Testing.GameSessions.md) and later [multi-phase builds](https://github.com/tvongaza/ValheimTesting/issues/509).
+
+Only after that assertion passes does the runner ask ValheimCLI for a save and require its save number to advance. It then gives the server time to save again at clean quit, fetches the actual saved world, checks its name and UID, and publishes `poi-baked/worlds_local/<name>/` with `fixture-manifest.json` only when the whole run and cleanup passed. The manifest records every output hash, the source hashes and UID, selected mod hashes, dependency-lock hash, run ID, confirmed save number and final exported save number. A later `--world-fixture poi-baked` run verifies that manifest before loading. The source fixture and install are never edited; the disposable runtime is retired as usual. A failed assertion, unconfirmed save, unclean stop or existing destination leaves no baked fixture. The run's private evidence remains for diagnosis.
+
+Load the bake again to test persistence without issuing the one-time action:
+
+```sh
+valheim-test server-load --server-only \
+  --mod ./bin/Release/net48/MyMod.dll \
+  --world-fixture ./fixtures/poi-baked \
+  --assert-command 'cli_extension mymod.testing/generated-state' \
+  --assert-line 'EXTENSION_RESULT mymod.testing/generated-state sites=12'
+```
+
+For an object such as the [FullLifecycle marker](../examples/FullLifecycle/README.md), the assertion can use `cli_zdos_at X Z 8` and match its specific `ZDO <prefab>` line. A native macOS dedicated server places a world briefly in the signed-in user's default `worlds_local`; if a same-named world already exists there, preflight refuses instead of replacing it. Use another host or a separately named fixture.

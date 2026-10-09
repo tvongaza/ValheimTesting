@@ -28,6 +28,12 @@ internal static class SmokeCommandOptions
         ["--config"] = new(Kind.Repeat, Start: false), ["--plugin-file"] = new(Kind.Repeat, Start: false),
         ["--plugin-dir"] = new(Kind.Repeat, Start: false),
         ["--server-only"] = new(Kind.Switch, Start: false),
+        ["--world-fixture"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--bake-fixture"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--before-save-command"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--before-save-line"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--assert-command"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--assert-line"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--preflight-only"] = new(Kind.Switch, Start: false, ServerLoadAb: false),
         ["--remove-mod"] = new(Kind.Single, Start: false, ServerLoad: false),
     };
@@ -92,6 +98,25 @@ internal static class SmokeCommandOptions
             new[] { "--client", "--client-env", "--client-loader-package", "--client-architecture", "--join", "--join-seconds" }
                 .Any(result.Options.ContainsKey))
         { error = "--server-only runs no client: leave out --client, --client-env, --client-loader-package, --client-architecture, --join and --join-seconds."; return false; }
+        if ((result.Options.ContainsKey("--world-fixture") || result.Options.ContainsKey("--bake-fixture")) &&
+            !result.Switches.Contains("--server-only"))
+        { error = "--world-fixture and --bake-fixture currently require --server-only; a joined client needs a character prepared for that world's UID."; return false; }
+        if (result.Options.ContainsKey("--bake-fixture") &&
+            (result.Switches.Contains("--hold") || result.Switches.Contains("--preflight-only")))
+        { error = "--bake-fixture needs a completed server run and clean stop; leave out --hold and --preflight-only."; return false; }
+        if (result.Options.ContainsKey("--before-save-command") != result.Options.ContainsKey("--before-save-line") ||
+            result.Options.ContainsKey("--before-save-command") && !result.Options.ContainsKey("--bake-fixture"))
+        { error = "--before-save-command and --before-save-line must be given together with --bake-fixture."; return false; }
+        if (result.Options.TryGetValue("--before-save-command", out string? action) && action.IndexOfAny(['\0', '\r', '\n']) >= 0)
+        { error = "--before-save-command must be one game command, without control characters."; return false; }
+        if (result.Options.ContainsKey("--assert-command") != result.Options.ContainsKey("--assert-line"))
+        { error = "--assert-command and --assert-line must be given together."; return false; }
+        if (result.Options.ContainsKey("--bake-fixture") && !result.Options.ContainsKey("--assert-command"))
+        { error = "--bake-fixture needs --assert-command and --assert-line to prove the mod's generated state is ready before saving."; return false; }
+        if (result.Options.ContainsKey("--assert-command") && !result.Switches.Contains("--server-only"))
+        { error = "--assert-command currently runs on the owned dedicated server; give --server-only."; return false; }
+        if (result.Options.TryGetValue("--assert-command", out string? assertion) && assertion.IndexOfAny(['\0', '\r', '\n']) >= 0)
+        { error = "--assert-command must be one game command, without control characters."; return false; }
         parsed = result;
         return true;
     }

@@ -437,6 +437,7 @@ sealed class Valheim.Testing.GameSessions.PinnedServerRunOptions`1
   property System.Action`2<TPlan,System.Collections.Generic.IDictionary`2<System.String,System.String>> Provenance { get; init; }
   property System.Func`2<System.String,TPlan> ReadPlan { get; init; }
   property System.Func`3<Valheim.Testing.GameSessions.GameSession,TPlan,System.Threading.Tasks.Task> Scenario { get; init; }
+  property System.Nullable`1<System.TimeSpan> CleanupBudget { get; init; }
   property System.String Name { get; init; }
   property Valheim.Testing.GameSessions.ModDeclaration Mod { get; init; }
 sealed class Valheim.Testing.GameSessions.PreparedHostedCampaign : System.IAsyncDisposable
