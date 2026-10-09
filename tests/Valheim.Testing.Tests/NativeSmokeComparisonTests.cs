@@ -125,6 +125,32 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.Equal(Path.Combine(output, "after"), arms[1].Options["--output"]);
     }
 
+    [Fact] public async Task BothArmsUseOneFrozenSelectedEnvironment()
+    {
+        string companion = _rig.Write("companion/Companion.dll",
+            RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "frozen-comparison");
+        var arms = new List<ServerLoad.Arguments>();
+        int result = await ServerLoadComparison.RunAsync(
+            [.. Arguments(output, _rig.Parent, companion), "--server-only"],
+            args =>
+            {
+                Assert.True(ServerLoad.TryRead(args, out var parsed, out string error), error);
+                arms.Add(parsed!);
+                return Task.FromResult(0);
+            }, freezeInputs: true);
+        Assert.Equal(0, result);
+        Assert.Equal(2, arms.Count);
+        string frozen = Path.Combine(output, "selection", "environments.json");
+        Assert.All(arms, arm =>
+        {
+            Assert.Equal(frozen, arm.Options["--inventory"]);
+            Assert.False(arm.Options.ContainsKey("--server"));
+            Assert.True(arm.ServerOnly);
+        });
+        Assert.Single(EnvironmentInventory.Read(frozen).Environments);
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, false)]

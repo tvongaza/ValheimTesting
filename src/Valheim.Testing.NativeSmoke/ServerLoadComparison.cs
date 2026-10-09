@@ -8,8 +8,12 @@ internal static class ServerLoadComparison
         Func<string, string, ShippedLoader.Choice?>? shippedLoader = null,
         Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null,
         Func<string, NativeDependencyLock, string, CancellationToken, string?, Task<string>>? buildAdapter = null,
-        Func<string[], ServerLoad.Seams, Task<int>>? runArmWithSeams = null)
+        Func<string[], ServerLoad.Seams, Task<int>>? runArmWithSeams = null,
+        bool freezeInputs = false)
     {
+        // Real arms always use one frozen environment. A scripted arm may opt in to
+        // exercise that path without launching the game.
+        freezeInputs |= runArm == null && runArmWithSeams == null;
         shippedLoader ??= ShippedLoader.Instead;
         resolve ??= NativeDependencyResolver.Resolve;
         buildAdapter ??= SmokeAdapter.BuildAsync;
@@ -63,6 +67,14 @@ internal static class ServerLoadComparison
             }
             before.RequireSameExceptRemovedMod(after, removed);
 
+            string? frozenInventory = null;
+            if (freezeInputs)
+            {
+                var selected = ServerLoad.Choose(parsed, Path.Combine(output, "choice"));
+                frozenInventory = SmokeInputResolver.RecordSelected(selected.Inventory,
+                    Path.Combine(output, "selection"),
+                    new[] { selected.Server, selected.Client }.OfType<EnvironmentRecipe>());
+            }
             Directory.CreateDirectory(output);
             string adapter = options.TryGetValue("--adapter", out string? chosenAdapter)
                 ? Path.GetFullPath(chosenAdapter)
@@ -76,6 +88,7 @@ internal static class ServerLoadComparison
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Manifest, StringComparer.Ordinal);
             var fileInputs = new[] { cliManifest, adapter, loaderManifest }.OfType<string>()
+                .Concat(frozenInventory == null ? [] : [frozenInventory])
                 .Concat(parsed.Configs.Concat(parsed.PluginFiles).Select(Path.GetFullPath))
                 .Concat(new[] { "--client-loader-package" }
                     .Where(options.ContainsKey).Select(key => Path.GetFullPath(options[key])))
@@ -93,7 +106,11 @@ internal static class ServerLoadComparison
                 }
                 // Rebuild from the validated parse, not raw tokens: flags never consume the next option.
                 foreach (var (key, value) in options)
+                {
+                    if (frozenInventory != null && key is "--server" or "--client" or "--inventory") continue;
                     Add(key, [key == "--output" ? Path.Combine(output, name) : value]);
+                }
+                if (frozenInventory != null) Add("--inventory", [frozenInventory]);
                 // Freeze the environment or shipped-package decision for both arms. No arm can silently
                 // compile against one core and run against a different one.
                 if (!options.ContainsKey("--loader-package") && loaderManifest != null)
