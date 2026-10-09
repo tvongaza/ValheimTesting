@@ -36,6 +36,7 @@ public sealed class BindingCheckOptions
 /// </summary>
 public static class BindingCheck
 {
+    /// <summary>Reads the mod assembly and checks its references against the supplied game files; missing inputs are refused.</summary>
     public static BindingReport Check(string modPath, BindingCheckOptions options)
     {
         if (modPath == null) throw new ArgumentNullException(nameof(modPath));
