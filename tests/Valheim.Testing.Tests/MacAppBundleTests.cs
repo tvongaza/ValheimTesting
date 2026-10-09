@@ -10,6 +10,13 @@ public sealed class MacAppBundleTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("mac-bundle-").FullName;
     public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch (IOException) { } }
 
+    [Fact] public void HostedBundleAssessmentGetsTheDefaultClientStartBudget()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(ClientTimeouts.DefaultStartSeconds),
+            HostedTimeouts.MacBundleAssessment(HostedTimeouts.Quick));
+        Assert.Equal(TimeSpan.FromSeconds(600), HostedTimeouts.MacBundleAssessment(TimeSpan.FromSeconds(600)));
+    }
+
     [Fact] public async Task AnAddedFileIsRemovedFromTheCopyAndAChangedFileRefuses()
     {
         if (!OperatingSystem.IsMacOS()) return;
@@ -97,6 +104,17 @@ public sealed class MacAppBundleTests : IDisposable
         var verdict = await MacAppBundle.InspectAsync(host, _root, TimeSpan.FromSeconds(3));
         Assert.Equal(MacBundleInspection.State.Unknown, verdict.State);
         Assert.Contains(reason, MacBundleInspection.SourceRefusal(verdict), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact] public async Task HostedBundleCheckKeepsHostOutputWhenVerdictIsMissing()
+    {
+        var host = new FakeServerHost("mac", _root);
+        host.Failures["mac-bundle"] = new HostResult(HostOutcome.Exited, 0,
+            "codesign produced no verdict\n", "spctl could not assess this app\n", TimeSpan.Zero, false);
+        var verdict = await MacAppBundle.InspectAsync(host, _root, TimeSpan.FromSeconds(3));
+        string refusal = MacBundleInspection.SourceRefusal(verdict)!;
+        Assert.Contains("codesign produced no verdict", refusal);
+        Assert.Contains("spctl could not assess this app", refusal);
     }
 
     // Each refusal names the fix that works: Steam's verify restores changed or missing files, but cannot help a bundle macOS

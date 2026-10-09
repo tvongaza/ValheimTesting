@@ -81,8 +81,9 @@ internal static class ServerLoad
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or JsonException or OperationCanceledException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
-            // Only before anything was copied or launched, and never into a folder that was itself refused as protected.
-            if (state.OutputChecked && !state.Started) SmokeOutput.MarkRefused(output, "server-load", [failure.Message]);
+            // The marker means no passing result was established; a copy or launch may already have occurred.
+            // Never write into a folder that was itself refused as protected.
+            if (state.OutputChecked) SmokeOutput.MarkRefused(output, "server-load", [failure.Message]);
             return 3;
         }
         finally { Console.CancelKeyPress -= onCancel; }

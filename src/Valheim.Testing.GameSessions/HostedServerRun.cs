@@ -17,7 +17,7 @@ namespace Valheim.Testing.GameSessions;
 internal sealed class HostedServerRun : IServerPlacement
 {
     internal const string BepInExLog = "BepInEx/LogOutput.log", UnityLog = "toolkit-unity.log";
-        private readonly IHostedRunHooks _hooks;
+    private readonly IHostedRunHooks _hooks;
     private readonly string _owner;
     // The campaign's clients, their leases and their hosts' locks: owned by CampaignClients, as in a campaign without a server.
     private readonly CampaignClients _clientActors;

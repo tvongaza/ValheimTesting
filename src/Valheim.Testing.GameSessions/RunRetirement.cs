@@ -15,7 +15,7 @@ namespace Valheim.Testing.GameSessions;
 /// </summary>
 internal sealed class RunRetirement(ScenarioReport? report, string output)
 {
-        private readonly HashSet<string> _done = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _done = new(StringComparer.Ordinal);
     private readonly HashSet<string> _kept = new(StringComparer.Ordinal);
 
     /// <summary>Whether a person asked to keep every runtime copy (<see cref="PinnedServerRun.KeepRuntimeVariable"/>=1).</summary>

@@ -67,6 +67,17 @@ internal static class MacBundleInspection
         return new(state, count, detail.Trim());
     }
 
+    internal static Verdict ParseReport(string stdout, string stderr)
+    {
+        string? line = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .LastOrDefault(text => text.StartsWith("VT-BUNDLE ", StringComparison.Ordinal));
+        if (line != null) return Parse(line);
+        string diagnostics = Shorten(string.Join("\n", new[] { stdout, stderr }.Where(text => !string.IsNullOrWhiteSpace(text))));
+        return new(State.Unknown, 0, diagnostics.Length == 0
+            ? "the bundle check returned no verdict"
+            : "the bundle check returned no verdict; host output: " + diagnostics);
+    }
+
     private static Verdict Run(string install, bool repair, TimeSpan timeout)
     {
         if (!OperatingSystem.IsMacOS()) return new(State.None, 0, "not macOS");
@@ -94,8 +105,7 @@ internal static class MacBundleInspection
         string output = outputTask.GetAwaiter().GetResult();
         string error = errorTask.GetAwaiter().GetResult();
         if (process.ExitCode != 0) throw new IOException($"macOS bundle assessment failed before launch: {error.Trim()}");
-        string? line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault(text => text.StartsWith("VT-BUNDLE ", StringComparison.Ordinal));
-        return Parse(line);
+        return ParseReport(output, error);
     }
 
     internal static readonly string Bash = """

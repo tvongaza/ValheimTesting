@@ -518,7 +518,10 @@ public static class HostedCampaignPreparation
                     if (item.Name != "server" && sourceListings.TryGetValue(item.Name, out var listed) && MacAppBundle.IsMacClient(listed))
                         try
                         {
-                            var bundle = await MacAppBundle.InspectAsync(host, item.Role.Install, timeout, cancellation).ConfigureAwait(false);
+                            // Bundle assessment can take longer than an ordinary host probe. Use the same
+                            // default client-start budget as the local one-shot path.
+                            var bundle = await MacAppBundle.InspectAsync(host, item.Role.Install,
+                                HostedTimeouts.MacBundleAssessment(timeout), cancellation).ConfigureAwait(false);
                             if (MacBundleInspection.SourceRefusal(bundle) is { } refusal) failures.Add(new(item.Name, "macOS app bundle", refusal));
                         }
                         catch (Exception error) when (HostCheckRefusal(error))

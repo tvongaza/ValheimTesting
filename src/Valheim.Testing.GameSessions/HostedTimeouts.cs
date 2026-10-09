@@ -10,4 +10,8 @@ internal static class HostedTimeouts
 
     internal static TimeSpan ClientStart(ClientRunPlan plan) =>
         TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds));
+
+    internal static TimeSpan MacBundleAssessment(TimeSpan hostProbe) =>
+        hostProbe > TimeSpan.FromSeconds(ClientTimeouts.DefaultStartSeconds)
+            ? hostProbe : TimeSpan.FromSeconds(ClientTimeouts.DefaultStartSeconds);
 }

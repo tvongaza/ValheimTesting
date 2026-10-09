@@ -212,6 +212,19 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
+    public async Task ARefusalAfterCampaignStartHasTheSameEvidenceMarkerAsOtherSmokeCommands()
+    {
+        string output = Path.Combine(_rig.Root, "post-start-refusal");
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only"),
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+                Campaign: (_, _, _, _, _) => throw new InvalidDataException("campaign setup failed after launch")));
+        Assert.Equal(3, result);
+        string refusal = File.ReadAllText(Path.Combine(output, "REFUSED.txt"));
+        Assert.Contains("campaign setup failed after launch", refusal);
+        Assert.Contains("no passing result was established", refusal);
+    }
+
+    [Fact]
     public async Task BadWorldFixtureIsRefusedBeforeBuildingTheAdapter()
     {
         string output = Path.Combine(_rig.Root, "bad-world");

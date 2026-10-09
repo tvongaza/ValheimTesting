@@ -33,7 +33,7 @@ internal static class MacAppBundle
         var result = (await host.RunAsync(Bash, new Dictionary<string, string>
             { ["app"] = HostPath.Join(root, GameLaunch.ClientMacBundle), ["repair"] = repair ? "1" : "" }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Checking {GameLaunch.ClientMacBundle}'s signature on {host.Name}");
-        return MacBundleInspection.Parse(InteractiveClient.Line(result.Stdout, "VT-BUNDLE "));
+        return MacBundleInspection.ParseReport(result.Stdout, result.Stderr);
     }
 
     // Shared with the one-shot runner. Variables: app (the bundle), repair ("1" on a disposable copy).
