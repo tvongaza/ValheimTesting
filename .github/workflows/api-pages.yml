@@ -13,11 +13,14 @@ on:
       - 'docs/getting-started.md'
       - 'toolkit-versions.json'
       - 'scripts/api-docs.cs'
+      - 'scripts/versioned-api-docs.py'
       - 'scripts/bootstrap-cli.cs'
       - 'scripts/validate.cs'
       - 'src/**'
       - 'tests/Valheim.Testing.Adapter.CompileCheck/**'
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -34,6 +37,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          ref: main
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
@@ -41,6 +45,10 @@ jobs:
       - run: dotnet run scripts/validate.cs
       - run: dotnet tool restore
       - run: dotnet run scripts/api-docs.cs
+      - name: Add published 0.1 reference snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/versioned-api-docs.py assemble docs/reference/_site
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

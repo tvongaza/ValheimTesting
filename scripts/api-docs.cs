@@ -144,7 +144,7 @@ foreach (string file in Directory.EnumerateFiles(site, "*", SearchOption.AllDire
             throw new InvalidOperationException($"Generated reference contains a build-machine path in {Path.GetRelativePath(site, file)}.");
 }
 
-Console.WriteLine("Preview API reference ready: docs/reference/_site/index.html");
+Console.WriteLine("API reference ready: docs/reference/_site/index.html");
 return 0;
 
 // The repository's package guides are the single source of truth. DocFX publishes copies beside the generated types;
@@ -153,6 +153,9 @@ void PreparePackagePages()
 {
     string source = Path.Combine(root, "docs", "packages"), destination = Path.Combine(root, "docs", "reference", "packages");
     string revision = Git("rev-parse", "HEAD");
+    string? releaseVersion = Environment.GetEnvironmentVariable("VALHEIM_DOCS_RELEASE_VERSION");
+    if (releaseVersion != null && !Regex.IsMatch(releaseVersion, @"^0\.1\.0(?:-rc\.[1-9][0-9]*)?$"))
+        throw new InvalidDataException("VALHEIM_DOCS_RELEASE_VERSION must name a coordinated 0.1 RC or final release.");
     Directory.CreateDirectory(destination);
     string[] guides = Directory.GetFiles(source, "*.md").Select(path => Path.GetFileNameWithoutExtension(path)!).Order(StringComparer.Ordinal).ToArray();
     if (!guides.SequenceEqual(packagePages.Order(StringComparer.Ordinal)))
@@ -163,6 +166,9 @@ void PreparePackagePages()
         string file = Path.Combine(source, package + ".md");
         if (!File.Exists(file)) throw new FileNotFoundException("A published package has no guide.", file);
         string content = File.ReadAllText(file);
+        if (releaseVersion != null)
+            content = content.Replace("[Current preview API reference](https://tvongaza.github.io/ValheimTesting/)",
+                "[This release's API reference](https://tvongaza.github.io/ValheimTesting/versions/" + releaseVersion + "/)");
         content = Regex.Replace(content, @"(?<=\]\()(?<target>(?!https?://|#)[^)\r\n]+)(?=\))", match =>
         {
             string target = match.Groups["target"].Value;
@@ -185,9 +191,12 @@ void PreparePackagePages()
         int headingEnd = content.IndexOf('\n');
         if (headingEnd < 0 || !content.StartsWith("# " + package + "\n", StringComparison.Ordinal))
             throw new InvalidDataException($"The {package} guide needs its package heading first.");
-        content = content[..(headingEnd + 1)] + "\n> Reference source: [`" + revision[..12] + "`](" + sourceLink +
-            "). For the installed package version, use the [published package table](" + versionsLink + ").\n" +
-            content[(headingEnd + 1)..];
+        string banner = releaseVersion == null
+            ? "> Reference source: [`" + revision[..12] + "`](" + sourceLink +
+                "). For the installed package version, use the [published package table](" + versionsLink + ")."
+            : "> Release `" + releaseVersion + "` from source [`" + revision[..12] + "`](" + sourceLink +
+                "); [this package on NuGet.org](https://www.nuget.org/packages/" + package + "/" + releaseVersion + ").";
+        content = content[..(headingEnd + 1)] + "\n" + banner + "\n" + content[(headingEnd + 1)..];
         File.WriteAllText(Path.Combine(destination, package + ".md"), content);
     }
 }
