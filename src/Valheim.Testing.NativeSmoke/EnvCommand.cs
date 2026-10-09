@@ -76,13 +76,26 @@ internal static class EnvCommand
             catch (Exception failure) when (failure is InteractiveSessionException or HostOperationException)
             { problems.Add(new CampaignPreflightProblem("this-machine", "client desktop", failure.Message)); }
         }
+        foreach (var recipe in inventory.Environments.Where(recipe => preflight && recipe.Roles.Contains("client") &&
+            inventory.Hosts[recipe.Host].Kind == "local" && inventory.Hosts[recipe.Host].Platform == "macos"))
+        {
+            try
+            {
+                string? loader = recipe.LoaderPackage == null ? null : BepInExLoaderPackage.Read(recipe.LoaderPackage).Root;
+                GameLaunch.RequireClientArchitecture(recipe.Install,
+                    recipe.Architecture == "arm64" ? ClientArchitecture.Arm64 : ClientArchitecture.X64, loader);
+            }
+            catch (Exception failure) when (failure is IOException or InvalidOperationException or ArgumentException)
+            { problems.Add(new CampaignPreflightProblem(recipe.Name, "client architecture", failure.Message)); }
+        }
         bool ready = missingRoles.Length == 0 && problems.Count == 0;
         if (json)
         {
             var listing = new Dictionary<string, object?>
             {
                 ["Detected"] = inventory.Detected, ["Missing"] = inventory.Missing,
-                ["Environments"] = inventory.Environments.Select(recipe => new { recipe.Name, recipe.Host, recipe.Roles, recipe.Install, recipe.Runtime, recipe.CliPort, recipe.GamePort }),
+                ["Environments"] = inventory.Environments.Select(recipe => new { recipe.Name, recipe.Host, recipe.Roles, recipe.Install, recipe.Runtime, recipe.CliPort, recipe.GamePort,
+                    recipe.Architecture, AvailableArchitectures = AvailableSlices(inventory, recipe) }),
             };
             if (preflight) { listing["Problems"] = problems; listing["Ready"] = ready; }
             output.WriteLine(JsonSerializer.Serialize(listing, new JsonSerializerOptions { WriteIndented = true }));
@@ -92,7 +105,8 @@ internal static class EnvCommand
         foreach (string line in inventory.Missing) output.WriteLine("NOT FOUND: " + line);
         foreach (var recipe in inventory.Environments)
             output.WriteLine($"{recipe.Name}: {string.Join(" and ", recipe.Roles)} on {recipe.Host}; install {recipe.Install}; runtime {recipe.Runtime}; " +
-                $"ValheimCLI port {recipe.CliPort}" + (recipe.Roles.Contains("server") ? $", game port {recipe.GamePort}" : ""));
+                $"ValheimCLI port {recipe.CliPort}" + (recipe.Roles.Contains("server") ? $", game port {recipe.GamePort}" :
+                    $"; selected architecture {recipe.Architecture}; available slices {string.Join(", ", AvailableSlices(inventory, recipe))}"));
         if (!preflight) return 0;
         foreach (var problem in problems) output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
         output.WriteLine(missingRoles.Length != 0 ? "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment."
@@ -103,6 +117,20 @@ internal static class EnvCommand
               (OperatingSystem.IsWindows() ? "This process is not inside a packaged app. " : "") +
               "A session's inputs and host readiness are checked by valheim-test session check SESSION [--hosts].");
         return ready ? 0 : 3;
+    }
+
+    private static IReadOnlyList<string> AvailableSlices(EnvironmentInventory inventory, EnvironmentRecipe recipe)
+    {
+        if (!recipe.Roles.Contains("client")) return [];
+        if (inventory.Hosts[recipe.Host].Kind != "local") return ["remote; inspect on host"];
+        try
+        {
+            string? loader = recipe.LoaderPackage == null ? null : BepInExLoaderPackage.Read(recipe.LoaderPackage).Root;
+            return GameLaunch.ClientLaunchArchitectures(recipe.Install, loader)
+                .Select(architecture => architecture == ClientArchitecture.Arm64 ? "arm64" : "x64").ToArray();
+        }
+        catch (Exception failure) when (failure is IOException or InvalidOperationException or ArgumentException)
+        { return ["unavailable: " + failure.Message]; }
     }
 
     // From each host's run journal: status (what earlier runs left; changes nothing), recover (clear what one run provably

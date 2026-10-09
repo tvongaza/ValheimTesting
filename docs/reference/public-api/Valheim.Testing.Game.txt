@@ -560,6 +560,7 @@ sealed class Valheim.Testing.Game.EnvironmentRecipe
   property System.Int32 CliPort { get; set; }
   property System.Int32 GamePort { get; set; }
   property System.Int32 LocalCliPort { get; set; }
+  property System.String Architecture { get; set; }
   property System.String Host { get; set; }
   property System.String Install { get; set; }
   property System.String LoaderPackage { get; set; }
@@ -764,7 +765,7 @@ sealed class Valheim.Testing.Game.GameLaunch
   method static System.String RequireClientExecutable(System.String installDirectory)
   method static System.String RequireServerExecutable(System.String runtimeDirectory)
   method static Valheim.Testing.Game.ClientPlatform DetectClient(System.String installDirectory)
-  method static Valheim.Testing.Game.GameLaunch ForClient(System.String install, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, System.Nullable`1<Valheim.Testing.Game.ClientPlatform> hostPlatform = null, Valheim.Testing.Game.ClientArchitecture architecture = 0, System.Boolean console = true, System.Collections.Generic.IEnumerable`1<System.String> secretVariables = null)
+  method static Valheim.Testing.Game.GameLaunch ForClient(System.String install, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, System.Nullable`1<Valheim.Testing.Game.ClientPlatform> hostPlatform = null, System.Nullable`1<Valheim.Testing.Game.ClientArchitecture> architecture = null, System.Boolean console = true, System.Collections.Generic.IEnumerable`1<System.String> secretVariables = null)
   method static Valheim.Testing.Game.GameLaunch ForServer(System.String runtime, System.Collections.Generic.IEnumerable`1<System.String> arguments, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> environment = null, System.Nullable`1<Valheim.Testing.Game.ServerPlatform> hostPlatform = null)
   method static Valheim.Testing.Game.ServerPlatform DetectServer(System.String runtimeDirectory)
   property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> Environment { get; }
@@ -1469,6 +1470,7 @@ sealed class Valheim.Testing.Game.RegressionClient
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Environment { get; set; }
   property System.Int32 JoinSeconds { get; set; }
   property System.Int32 StartSeconds { get; set; }
+  property System.String Architecture { get; set; }
   property System.String Character { get; set; }
   property System.String CharacterStore { get; set; }
   property System.String[] LaunchArguments { get; set; }
@@ -1889,6 +1891,7 @@ sealed class Valheim.Testing.Game.TargetedRegression
   property System.Collections.Generic.IReadOnlyList`1<System.String> Detected { get; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> LiveOnlyCapabilities { get; }
   property System.Int32 Port { get; }
+  property System.String Architecture { get; }
   property System.String ClientEnvironment { get; }
   property System.String Game { get; }
   property System.String Install { get; }

@@ -16,7 +16,7 @@ using Valheim.Testing.GameSessions;
 internal static class ServerLoad
 {
     internal const string Usage = "valheim-test server-load --mod DLL [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
-        "[--server-env NAME] [--client-env NAME] [--server-only] [--join HOST:PORT] [--preflight-only] [--hold] [--loader-package FILE] [--client-loader-package FILE] " +
+        "[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--join HOST:PORT] [--preflight-only] [--hold] [--loader-package FILE] [--client-loader-package FILE] " +
         "[--adapter DLL] [--cli-manifest FILE --cli-files DIR] [--search-root DIR ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
     private static readonly string[] Session = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"];
@@ -41,7 +41,8 @@ internal static class ServerLoad
         Func<string, ServerRunPlan, Func<ServerRunPlan, IReadOnlyDictionary<string, ClientRunPlan>>, string, PinnedServerRunOptions<ServerRunPlan>, Task<int>>? Campaign = null,
         // The shipped-loader decision reads the real install on this machine, so it is on only for a real run (no seams)
         // and for a test that passes one.
-        Func<string, string, ShippedLoader.Choice?>? Loader = null);
+        Func<string, string, ShippedLoader.Choice?>? Loader = null,
+        Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null);
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
@@ -180,6 +181,8 @@ internal static class ServerLoad
         if (parsed.ServerOnly) return new Choice(inventory, file, serverRecipe, serverReason, null, null, null);
 
         var clientRecipe = Pick("client", "--client-env", "Give --client DIR, add a client environment, or use --server-only to skip the client's join.");
+        if (inventory.Hosts[clientRecipe.Host] is { Platform: "macos", Kind: not "local" })
+            throw new ArgumentException($"Client environment {clientRecipe.Name} is on a remote macOS host; owned Mac clients need this runner's local GUI session.");
         string clientReason = parsed.Options.ContainsKey("--client-env") ? "named by --client-env" : "default; --server-only to skip";
         if (parsed.Options.TryGetValue("--join", out string? joinOption) &&
             !joinOption.EndsWith(":" + serverRecipe.GamePort.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
@@ -197,8 +200,10 @@ internal static class ServerLoad
         foreach (string line in choice.Inventory.Detected) Console.WriteLine("detected: " + line);
         var server = choice.Server;
         Console.WriteLine($"server: {server.Name} on {server.Host} ({choice.ServerReason}): install {server.Install}; ValheimCLI port {server.CliPort}, game port {server.GamePort}");
+        string? clientArchitecture = choice.Client is { } selectedClient
+            ? ClientArchitectureChoice.Select(parsed.Options.GetValueOrDefault("--client-architecture"), selectedClient) : null;
         Console.WriteLine(choice.Client is { } chosen
-            ? $"client: {chosen.Name} on {chosen.Host} ({choice.ClientReason}): install {chosen.Install}; ValheimCLI port {chosen.CliPort}; joins {choice.Join}"
+            ? $"client: {chosen.Name} on {chosen.Host} ({choice.ClientReason}): install {chosen.Install}; ValheimCLI port {chosen.CliPort}; joins {choice.Join}; architecture {clientArchitecture}"
             : "client: none (--server-only)");
 
         string serverInstall = server.Install;
@@ -213,6 +218,11 @@ internal static class ServerLoad
             ? shipped("client", localClient.Install) : null;
         serverLoader ??= serverAuto?.Manifest;
         clientLoader ??= clientAuto?.Manifest;
+        if (choice.Client is { } architectureClient)
+        {
+            if (seams.ClientArchitecture is { } check) check(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
+            else ClientArchitectureChoice.RequireLocal(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
+        }
         string core = Path.Combine(serverLoader == null ? serverInstall : BepInExLoaderPackage.Read(serverLoader).Root, InstallPins.CoreDirectory);
         if (!Directory.Exists(core))
             throw new DirectoryNotFoundException($"The server install {serverInstall} has no BepInEx ({InstallPins.CoreDirectory}). Install BepInExPack_Valheim into it, " +
@@ -288,6 +298,7 @@ internal static class ServerLoad
             campaign.Clients["client"] = new HostedCampaignRole
             {
                 DependencyLock = clientLockFile, EnvironmentCandidates = [clientRecipe.Name], LoaderPackage = clientLoader,
+                Architecture = clientArchitecture!,
                 Character = new HostedCampaignCharacter
                 {
                     Store = store.Root, RegisteredName = DefaultSmokeCharacter.Name,
@@ -321,6 +332,7 @@ internal static class ServerLoad
         ClientRunPlan? clientPlan = choice.Client == null ? null : new ClientRunPlan
         {
             Mode = "owned", PasswordVariable = SmokeSessionContract.PasswordVariable, Capabilities = [.. Session],
+            Architecture = clientArchitecture!,
             // The clean client loads none of the server's plugins.
             Pins = serverGuids.ToDictionary(guid => guid, _ => "absent", StringComparer.Ordinal),
         };
@@ -430,7 +442,7 @@ internal static class ServerLoad
 
     private static readonly HashSet<string> Single = new(StringComparer.Ordinal)
     {
-        "--output", "--inventory", "--server", "--client", "--server-env", "--client-env", "--join", "--adapter", "--cli-manifest", "--cli-files",
+        "--output", "--inventory", "--server", "--client", "--server-env", "--client-env", "--client-architecture", "--join", "--adapter", "--cli-manifest", "--cli-files",
         "--loader-package", "--client-loader-package", "--expected-log-error", "--expected-log-reason",
     };
     private static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "--server-only", "--preflight-only", "--hold" };
@@ -461,8 +473,10 @@ internal static class ServerLoad
         if (result.Options.ContainsKey("--expected-log-error") != result.Options.ContainsKey("--expected-log-reason"))
         { error = "An expected log error needs its full header and a written reason."; return false; }
         if (result.ServerOnly && (result.Options.ContainsKey("--client") || result.Options.ContainsKey("--client-env") ||
-            result.Options.ContainsKey("--client-loader-package") || result.Options.ContainsKey("--join")))
-        { error = "--server-only runs no client: leave out --client, --client-env, --client-loader-package and --join."; return false; }
+            result.Options.ContainsKey("--client-loader-package") || result.Options.ContainsKey("--client-architecture") || result.Options.ContainsKey("--join")))
+        { error = "--server-only runs no client: leave out --client, --client-env, --client-loader-package, --client-architecture and --join."; return false; }
+        if (result.Options.TryGetValue("--client-architecture", out string? architecture) && architecture is not ("x64" or "arm64"))
+        { error = "--client-architecture must be x64 or arm64."; return false; }
         parsed = result;
         return true;
     }

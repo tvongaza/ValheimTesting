@@ -26,6 +26,7 @@ public sealed class LocalClientCopyTests : IDisposable
     private ClientRunPlan Plan(string install) => new()
     {
         Mode = "owned", Install = install, Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
+        Architecture = "x64", // The synthetic Mac install has only the stock x64 Doorstop.
         Pins = new() { ["valheimCLI.valheimCLI"] = OwnedRunPreflightTests.Md5("an older ValheimCLI core"), ["example.unrelated"] = "absent" },
         InstallPins = InstallPins.Of(install),
     };

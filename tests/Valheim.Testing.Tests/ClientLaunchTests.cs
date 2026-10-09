@@ -262,6 +262,16 @@ public class ClientLaunchTests
         Assert.Contains("request x64 to run under Rosetta", error.Message);
         Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
     }
+    [Fact] public void SourceArchitectureCheckUsesTheSelectedLoaderBeforeCopy()
+    {
+        using var game = Install.Mac();
+        using var loader = Install.Mac(universalDoorstop: true, core: NativeDetour);
+        Assert.DoesNotContain(ClientArchitecture.Arm64, GameLaunch.ClientLaunchArchitectures(game.Root));
+        Assert.Contains(ClientArchitecture.Arm64, GameLaunch.ClientLaunchArchitectures(game.Root, loader.Root));
+        GameLaunch.RequireClientArchitecture(game.Root, ClientArchitecture.Arm64, loader.Root);
+        Assert.Contains("arm64 slice", Assert.Throws<InvalidOperationException>(() =>
+            GameLaunch.RequireClientArchitecture(game.Root, ClientArchitecture.Arm64)).Message);
+    }
     // What a native install looks like: an arm64-only (or universal) Doorstop at the root, the pack's x64 library removed.
     [Fact] public void MacArm64OnlyDoorstopLaunchesNativelyAndRefusesX64()
     {
@@ -381,10 +391,18 @@ public class ClientLaunchTests
     [Fact] public void PublicOverloadsUseTheCurrentHost()
     {
         var host = GameLaunch.CurrentClientHost;
-        using (var own = Install.For(host))
+        bool appleSilicon = host == ClientPlatform.MacOS &&
+            System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
+        using (var own = appleSilicon ? Install.Mac(universalDoorstop: true, core: NativeDetour) : Install.For(host))
         {
             Assert.Equal(own.Executable, GameLaunch.RequireClientExecutable(own.Root));
-            Assert.Equal(own.Root, GameLaunch.ForClient(own.Root, []).ToStartInfo().WorkingDirectory);
+            var launch = GameLaunch.ForClient(own.Root, []).ToStartInfo();
+            Assert.Equal(own.Root, launch.WorkingDirectory);
+            if (appleSilicon)
+            {
+                Assert.Equal("-arm64", launch.ArgumentList[0]);
+                Assert.Equal("-x86_64", GameLaunch.ForClient(own.Root, [], architecture: ClientArchitecture.X64).ToStartInfo().ArgumentList[0]);
+            }
         }
         using var other = Install.For(host == ClientPlatform.Windows ? ClientPlatform.Linux : ClientPlatform.Windows);
         Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClient(other.Root, []).ToStartInfo());

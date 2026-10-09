@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.InteropServices;
 using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -39,6 +40,58 @@ public sealed class EnvironmentInventoryTests : IDisposable
         Server = new(),
         Clients = new() { ["client-a"] = new(), ["client-b"] = new() },
     };
+
+    [Fact]
+    public void AppleSiliconDefaultsToNativeAndOtherClientsDefaultToX64()
+    {
+        Assert.Equal("arm64", EnvironmentInventory.DefaultClientArchitecture("macos", Architecture.Arm64));
+        Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("macos", Architecture.X64));
+        Assert.Equal("arm64", EnvironmentInventory.DefaultClientArchitecture("macos", null));
+        Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("windows", Architecture.Arm64));
+        Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("linux", Architecture.Arm64));
+    }
+
+    [Theory]
+    [InlineData(Architecture.Arm64, ClientArchitecture.Arm64)]
+    [InlineData(Architecture.X64, ClientArchitecture.X64)]
+    public void PlansAndDirectLaunchesUseTheSameMachineArchitectureAsTheInventory(Architecture cpu, ClientArchitecture expected)
+    {
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine("macos") { OsArchitecture = cpu });
+        Assert.Equal(expected, new ClientRunPlan { Mode = "owned" }.LaunchArchitecture);
+        Assert.Equal(GameLaunch.PlanName(expected), EnvironmentInventory.DefaultClientArchitecture(
+            EnvironmentInventory.ThisMachine.Platform, EnvironmentInventory.ThisMachine.OsArchitecture));
+        if (!OperatingSystem.IsMacOS()) return; // A direct Mac launch itself can run only on a Mac.
+        using var install = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
+        Assert.Equal(expected == ClientArchitecture.Arm64 ? "-arm64" : "-x86_64",
+            GameLaunch.ForClient(install.Root, []).ToStartInfo().ArgumentList[0]);
+    }
+
+    [Fact]
+    public void InventoryAllowsArm64OnlyForAMacClient()
+    {
+        var inventory = Inventory();
+        var mac = inventory.Hosts["mac"];
+        mac.Platform = "macos";
+        mac.Shell = "bash";
+        mac.Lock = "/tmp/test.lock";
+        var client = inventory.Environments.Single(recipe => recipe.Name == "client-mac");
+        client.Install = "/opt/valheim";
+        client.Runtime = "/tmp/runs";
+        client.Architecture = "arm64";
+        inventory.Validate(_root);
+        Assert.Equal("", inventory.Environments.Single(recipe => recipe.Name == "server-pc").Architecture);
+        Assert.Equal("arm64", inventory.Resolve(Campaign()).Environment.Clients["client-b"].Architecture);
+        client.Architecture = "";
+        inventory.Validate(_root);
+        Assert.Equal("arm64", client.Architecture); // Prefer native on an unknown remote Mac.
+        client.Architecture = "x64";
+        inventory.Validate(_root); // Rosetta is an explicit choice on a remote Mac too.
+        client.Architecture = "native";
+        Assert.Contains("architecture", Assert.Throws<ArgumentException>(() => inventory.Validate(_root)).Message);
+        client.Architecture = "arm64";
+        mac.Platform = "windows";
+        Assert.Contains("arm64", Assert.Throws<ArgumentException>(() => inventory.Validate(_root)).Message);
+    }
 
     [Fact]
     public void AssignsServerAndClientOnOneHostThenAnotherClientElsewhere()

@@ -11,7 +11,7 @@ public enum ClientPlatform { Windows, Linux, MacOS }
 // Windows and Linux clients are x64 only. The macOS client is universal, so its slice is chosen at launch and the Doorstop
 // library inserted into it must contain the same one. X64 runs under Rosetta on Apple Silicon, with BepInExPack_Valheim's own
 // loader and core: the compatibility path. Arm64 runs natively, with a Doorstop library that has an arm64 slice and a
-// BepInEx core whose MonoMod can hook on arm64. Both are modded paths; neither is chosen for the caller.
+// BepInEx core whose MonoMod can hook on arm64. Both are modded paths; Apple Silicon defaults to arm64.
 [ResultShape]
 public enum ClientArchitecture { X64, Arm64 }
 
@@ -72,17 +72,31 @@ public sealed partial class GameLaunch
 
     /// <summary>
     /// The architectures this install can be launched as, host aside: x64 for Windows and Linux; on macOS, the slices
-    /// both the game executable and one of its Doorstop libraries contain, arm64 only when the BepInEx core also runs
+    /// both the game executable and one of the install's Doorstop libraries contain, arm64 only when that core also runs
     /// natively (<see cref="GameLaunch.ForClient"/> explains the rule). Empty when no Doorstop library matches.
     /// </summary>
-    public static IReadOnlyList<ClientArchitecture> ClientLaunchArchitectures(string installDirectory)
+    public static IReadOnlyList<ClientArchitecture> ClientLaunchArchitectures(string installDirectory) => ClientLaunchArchitectures(installDirectory, null);
+
+    // A one-shot run may select a loader package that replaces the install's own loader in its disposable copy.
+    internal static IReadOnlyList<ClientArchitecture> ClientLaunchArchitectures(string installDirectory, string? loaderDirectory)
     {
         string install = FullInstall(installDirectory);
         if (DetectClient(install) != ClientPlatform.MacOS) return [ClientArchitecture.X64];
         var game = MachOArchitectures(Path.Combine(FindMacBundle(install)!, MacClientExecutable));
-        var doorstops = MacDoorstops.Select(relative => Path.Combine(install, relative)).Where(File.Exists).SelectMany(MachOArchitectures).ToHashSet();
+        string loader = loaderDirectory == null ? install : FullInstall(loaderDirectory);
+        var doorstops = MacDoorstops.Select(relative => Path.Combine(loader, relative)).Where(File.Exists).SelectMany(MachOArchitectures).ToHashSet();
         return Enum.GetValues<ClientArchitecture>().Where(architecture => game.Contains(architecture) && doorstops.Contains(architecture)
-            && (architecture != ClientArchitecture.Arm64 || MacNativeCoreProblem(install) == null)).ToList();
+            && (architecture != ClientArchitecture.Arm64 || MacNativeCoreProblem(loader) == null)).ToList();
+    }
+
+    /// <summary>Checks a source game and the loader that will be staged into its disposable copy, before copying either.</summary>
+    internal static void RequireClientArchitecture(string installDirectory, ClientArchitecture architecture, string? loaderDirectory = null)
+    {
+        string install = FullInstall(installDirectory);
+        if (DetectClient(install) == ClientPlatform.MacOS)
+            _ = RequireMacArchitecture(install, architecture, loaderDirectory);
+        else if (architecture != ClientArchitecture.X64)
+            throw new ArgumentException("arm64 requires a macOS Valheim client; this install is x64 only.");
     }
 
     internal static (ClientPlatform Platform, string Executable) ResolveClient(string install, ClientPlatform host)
@@ -132,12 +146,13 @@ public sealed partial class GameLaunch
     // The launch's architecture check for a macOS install, shared with plan validation (ClientRunPlan.Validate) so a plan the
     // launch would refuse is refused before a runner starts anything: the game's and a Doorstop library's slice, and for arm64
     // a native core. Returns the Doorstop library to insert.
-    internal static string RequireMacArchitecture(string install, ClientArchitecture architecture)
+    internal static string RequireMacArchitecture(string install, ClientArchitecture architecture, string? loaderDirectory = null)
     {
         string executable = Path.Combine(FindMacBundle(install) ?? throw new FileNotFoundException($"Install contains no {ClientMacBundle}.", install), MacClientExecutable);
         if (!File.Exists(executable)) throw new FileNotFoundException($"{ClientMacBundle} has no executable: {MacClientExecutable}", executable);
-        string doorstop = MacDoorstop(install, executable, architecture);
-        if (architecture == ClientArchitecture.Arm64 && MacNativeCoreProblem(install) is { } problem) throw new InvalidOperationException(problem);
+        string loader = loaderDirectory ?? install;
+        string doorstop = MacDoorstop(loader, executable, architecture);
+        if (architecture == ClientArchitecture.Arm64 && MacNativeCoreProblem(loader) is { } problem) throw new InvalidOperationException(problem);
         return doorstop;
     }
 

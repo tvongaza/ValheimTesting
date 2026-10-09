@@ -127,6 +127,11 @@ internal sealed class CampaignClients
         if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
         var hostProfile = Profile.Hosts[role.Host];
         var platform = hostProfile.Platform switch { "windows" => ClientPlatform.Windows, "linux" => ClientPlatform.Linux, _ => ClientPlatform.MacOS };
+        // A plan without a slice follows the assigned client's host, not the machine driving this campaign.
+        // An unknown remote Mac prefers arm64; x64/Rosetta is an explicit choice.
+        if (plan.Owned && plan.Architecture.Length == 0)
+            plan.Architecture = EnvironmentInventory.DefaultClientArchitecture(hostProfile.Platform,
+                hostProfile.Kind == "local" ? EnvironmentInventory.ThisMachine.OsArchitecture : null);
         if (platform == ClientPlatform.MacOS)
             return await OpenLocalMacClientAsync(report, output, plan, name, role, hostProfile, cancellation).ConfigureAwait(false);
         // Remote Windows and Linux clients are x64 only.

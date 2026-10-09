@@ -84,43 +84,11 @@ internal static class MacAppBundle
         }
     }
 
-    // Variables: app (the bundle), repair ("1" on a disposable copy). One line: VT-BUNDLE none | tools | accepted <removed> <b64> |
+    // Shared with the one-shot runner. Variables: app (the bundle), repair ("1" on a disposable copy).
+    // One line: VT-BUNDLE none | tools | accepted <removed> <b64> |
     // fixable <added> <b64 list> | broken <n> <b64 codesign report> | rejected <removed> <b64 report>. The removal is limited to
     // regular files codesign names as added, inside this bundle; nothing outside it is read or written.
-    internal static readonly string Bash = """
-        set -u
-        if [ "$(uname -s)" != Darwin ] || [ ! -d "$app" ]; then echo "VT-BUNDLE none"; exit 0; fi
-        command -v codesign > /dev/null && command -v spctl > /dev/null || { echo "VT-BUNDLE tools"; exit 0; }
-        # codesign names files by their physical path (/tmp is /private/tmp), so compare against that.
-        app=$(cd "$app" && pwd -P) || { echo "VT-BUNDLE none"; exit 0; }
-        b64() { base64 | tr -d '\n'; }
-        added=""; other=""
-        if ! report=$(codesign --verify --deep --strict -vvvv "$app" 2>&1); then
-          added=$(printf '%s\n' "$report" | sed -n 's/^file added: //p')
-          # Anything but added files (a changed or missing sealed file, a nested component's signature) no repair can fix.
-          other=$(printf '%s\n' "$report" | grep -vE '^(file added: |--prepared:|--validated:)|: a sealed resource is missing or invalid$' | grep . || true)
-          [ -n "$added" ] || [ -n "$other" ] || other=$report
-        fi
-        if [ -n "$other" ]; then echo "VT-BUNDLE broken $(printf '%s\n' "$other" | grep -c .) $(printf '%s\n' "$other" | head -20 | b64)"; exit 0; fi
-        removed=0
-        if [ -n "${repair:-}" ]; then
-          xattr -dr com.apple.quarantine "$app" 2> /dev/null || true
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            case "$file" in "$app"/*) ;; *) continue;; esac
-            if [ -f "$file" ] && [ ! -L "$file" ]; then rm -f -- "$file" && removed=$((removed + 1)); fi
-          done <<< "$added"
-        elif [ -n "$added" ]; then
-          relative=""
-          while IFS= read -r file; do relative+="${file#"$app"/}"$'\n'; done <<< "$added"
-          echo "VT-BUNDLE fixable $(printf '%s\n' "$added" | grep -c .) $(printf '%s' "$relative" | head -20 | b64)"; exit 0
-        fi
-        if verify=$(codesign --verify --deep --strict "$app" 2>&1) && assess=$(spctl -a -t exec -vv "$app" 2>&1); then
-          echo "VT-BUNDLE accepted $removed $(printf '%s' "${assess:-}" | b64)"
-        else
-          echo "VT-BUNDLE rejected $removed $(printf '%s\n%s\n' "${verify:-}" "${assess:-}" | head -20 | b64)"
-        fi
-        """.ReplaceLineEndings("\n");
+    internal static readonly string Bash = MacBundleInspection.Bash;
 }
 
 /// <summary>macOS's verdict on a client bundle (<see cref="MacAppBundle"/>).</summary>

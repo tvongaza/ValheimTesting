@@ -12,6 +12,17 @@ public sealed class ServerLoadOneOffTests : IDisposable
     public void Dispose() => _rig.Dispose();
 
     private static readonly CampaignPreflightReport Ready = new([]);
+    [Fact]
+    public void JoinedClientArchitectureOverridesTheInventoryAndServerOnlyRejectsIt()
+    {
+        var recipe = new EnvironmentRecipe { Architecture = "x64" };
+        Assert.Equal("arm64", ClientArchitectureChoice.Select("arm64", recipe));
+        Assert.Equal("x64", ClientArchitectureChoice.Select(null, recipe));
+        Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "arm64"], out var parsed, out _));
+        Assert.Equal("arm64", parsed!.Options["--client-architecture"]);
+        Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--server-only", "--client-architecture", "arm64"], out _, out _));
+        Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "native"], out _, out _));
+    }
     private string Adapter() => _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
         RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
 
@@ -56,8 +67,9 @@ public sealed class ServerLoadOneOffTests : IDisposable
     {
         string output = Path.Combine(_rig.Root, "one-off");
         string? campaignFile = null; ServerRunPlan? plan = null; IReadOnlyDictionary<string, ClientRunPlan>? clients = null;
+        EnvironmentRecipe? architectureClient = null; string? selectedArchitecture = null; string? selectedLoader = null;
         int result;
-        using (EnvironmentInventory.UseMachine(WithValheim(out string game)))
+        using (EnvironmentInventory.UseMachine(WithValheim(out _)))
             result = await ServerLoad.RunAsync(Arguments(output), new ServerLoad.Seams(
                 Inspect: _ => Task.FromResult(Ready),
                 Campaign: (file, runPlan, bind, evidence, options) =>
@@ -65,14 +77,20 @@ public sealed class ServerLoadOneOffTests : IDisposable
                     campaignFile = file; plan = runPlan; clients = bind(runPlan);
                     Assert.Equal(Path.Combine(output, "evidence"), evidence);
                     return Task.FromResult(0);
-                }));
+                }, ClientArchitecture: (_, recipe, architecture, loader) =>
+                { architectureClient = recipe; selectedArchitecture = architecture; selectedLoader = loader; }));
         Assert.Equal(0, result);
+        Assert.NotNull(architectureClient);
+        Assert.Equal("local-client", architectureClient.Name);
+        Assert.Equal(architectureClient.Architecture, selectedArchitecture);
+        Assert.Null(selectedLoader);
         Assert.Equal(Path.Combine(output, "campaign.json"), campaignFile);
         var campaign = JsonDocument.Parse(File.ReadAllText(campaignFile!)).RootElement;
         // --server is written as this machine's override; the client is this machine's detected Valheim.
         Assert.Equal(Path.Combine(output, "environments.json"), campaign.GetProperty("inventory").GetString());
         var inventory = EnvironmentInventory.Read(Path.Combine(output, "environments.json"), WithValheim(out _));
         Assert.Equal(["local-server", "local-client"], inventory.Environments.Select(recipe => recipe.Name));
+        Assert.Equal(inventory.Environments.Single(recipe => recipe.Name == "local-client").Install, architectureClient.Install);
         Assert.Equal(["local-server"], campaign.GetProperty("server").GetProperty("environmentCandidates").EnumerateArray().Select(name => name.GetString()));
         var client = campaign.GetProperty("clients").GetProperty("client");
         Assert.Equal(["local-client"], client.GetProperty("environmentCandidates").EnumerateArray().Select(name => name.GetString()));
@@ -122,7 +140,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
                     new("client", "Steam identity", "No Steam account is signed in on local."),
                     new("client", "game and loader", "The source install on local's winhttp.dll is Doorstop 4 (file version 4.4.0), which reads only [General] in doorstop_config.ini, but that file is written for Doorstop 3 ([UnityDoorstop])."),
                 ])),
-                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); }));
+                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); },
+                ClientArchitecture: (_, _, _, _) => { }));
         Assert.Equal(3, result);
         Assert.False(ran);
         string refusal = File.ReadAllText(Path.Combine(checkedOutput, "REFUSED.txt"));
@@ -136,11 +155,16 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string package = Path.Combine(_rig.Root, "client-loader.json");
         BepInExLoaderPackage.Capture(_rig.Game, "reviewed", "1").Write(package);
         string packagedOutput = Path.Combine(_rig.Root, "client-package-refused");
+        string? checkedArchitecture = null; string? checkedLoader = null;
         using (EnvironmentInventory.UseMachine(WithValheim(out _)))
-            result = await ServerLoad.RunAsync(Arguments(packagedOutput, "--client-loader-package", package), new ServerLoad.Seams(
+            result = await ServerLoad.RunAsync(Arguments(packagedOutput, "--client-loader-package", package, "--client-architecture", "arm64"), new ServerLoad.Seams(
                 Inspect: _ => Task.FromResult(new CampaignPreflightReport([new("client", "game and loader", "The reviewed loader package does not match the host platform.")])),
-                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); }));
+                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); },
+                ClientArchitecture: (_, recipe, architecture, loader) =>
+                { Assert.Equal("local-client", recipe.Name); checkedArchitecture = architecture; checkedLoader = loader; }));
         Assert.Equal(3, result);
+        Assert.Equal("arm64", checkedArchitecture);
+        Assert.Equal(package, checkedLoader);
         Assert.False(ran);
         refusal = File.ReadAllText(Path.Combine(packagedOutput, "REFUSED.txt"));
         Assert.Contains("does not match the host platform", refusal);

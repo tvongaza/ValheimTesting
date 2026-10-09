@@ -87,7 +87,8 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         }
         object? exit = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
         {
-            "start", "--game", _rig.Game, "--mod", _rig.Parent, "--cli-manifest", _rig.CliManifest(save: true),
+            "start", "--game", _rig.Game, "--mod", _rig.Parent, "--client-architecture", "x64", // Synthetic Mac loader is x64-only.
+            "--cli-manifest", _rig.CliManifest(save: true),
             "--cli-files", Path.Combine(_rig.Root, "cli"), "--search-root", Path.Combine(_rig.Root, "deps"), "--output", output,
         }]);
         if (unavailableMacGui)

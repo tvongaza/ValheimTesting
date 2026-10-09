@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -7,6 +8,7 @@ using Valheim.Testing.GameSessions;
 internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
 {
     public string Platform { get; } = platform;
+    public Architecture OsArchitecture { get; set; } = Architecture.X64;
     public string Home { get; init; } = platform == "windows" ? @"C:\Users\tester" : platform == "macos" ? "/Users/tester" : "/home/tester";
     public string DataRoot { get; init; } = platform == "windows" ? @"C:\Users\tester\AppData\Local\ValheimTesting"
         : platform == "macos" ? "/Users/tester/Library/Application Support/ValheimTesting" : "/home/tester/.local/share/ValheimTesting";
@@ -42,6 +44,7 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
     {
         EnvironmentInventory.ThisMachine = new FakeMachine(HostProfile.CurrentPlatform)
         {
+            OsArchitecture = RuntimeInformation.OSArchitecture,
             Home = Path.Combine(Path.GetTempPath(), "vt-no-steam-home"), DataRoot = Path.Combine(Path.GetTempPath(), "vt-no-steam-data"),
         };
         // Every copy a test makes is journalled here, never in the test machine's own ValheimTesting folder.
@@ -161,12 +164,14 @@ public sealed class ThisMachineTests : IDisposable
         Assert.Equal(["local-server", "local-client"], inventory.Environments.Select(recipe => recipe.Name));
         Assert.Equal("bash", inventory.Hosts["local"].Shell);
 
-        var mac = new FakeMachine("macos");
+        var mac = new FakeMachine("macos") { OsArchitecture = Architecture.Arm64 };
         mac.App("/Users/tester/Library/Application Support/Steam", "892970", "Valheim", "Valheim.app/Contents/MacOS/Valheim");
         mac.App("/Users/tester/Library/Application Support/Steam", "896660", "Valheim dedicated server", "valheim_server/Valheim");
         var macInventory = EnvironmentInventory.Read(null, mac);
         Assert.Equal(["local-server", "local-client"], macInventory.Environments.Select(recipe => recipe.Name));
         Assert.Equal("/Users/tester/Library/Application Support/Steam/steamapps/common/Valheim dedicated server", macInventory.Environments[0].Install);
+        Assert.Equal("arm64", macInventory.Environments[1].Architecture);
+        Assert.Contains(macInventory.Detected, line => line.Contains("assumed client architecture arm64", StringComparison.Ordinal));
 
         if (OperatingSystem.IsMacOS())
         {

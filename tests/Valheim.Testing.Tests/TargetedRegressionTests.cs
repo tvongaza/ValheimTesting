@@ -56,6 +56,82 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.True(Directory.Exists(_rig.Install));
     }
 
+    [Fact] public void RegressionClientArchitectureMustBeASupportedSlice()
+    {
+        var client = new RegressionClient { Character = "Tester", Architecture = "arm64" };
+        client.Validate();
+        client.Architecture = "native";
+        Assert.Contains("client.architecture", Assert.Throws<ArgumentException>(client.Validate).Message);
+    }
+
+    [Fact] public void RegressionInputsOverrideTheInventorySlice()
+    {
+        var inventory = _rig.Inventory();
+        inventory.Hosts["local"].Platform = "macos";
+        inventory.Environments[0].Architecture = "arm64";
+        var inputs = _rig.Manifest();
+        Assert.Equal("arm64", new TargetedRegression(inputs, inventory: inventory).Architecture);
+        inputs.Client.Architecture = "x64";
+        Assert.Equal("x64", new TargetedRegression(inputs, inventory: inventory).Architecture);
+    }
+
+    [Fact] public void ARejectedMacSourceStopsBeforeTheDisposableCopy()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        {
+            SaveDirectory = _rig.Save,
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
+        };
+        Assert.Contains("Verify the game in Steam", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
+        Assert.False(Directory.Exists(runner.Install));
+    }
+
+    [Fact] public void AnX64RegressionWithAnArm64OnlyLoaderStopsBeforeTheDisposableCopy()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        using var native = ClientLaunchTests.Install.Mac(packDoorstop: false, arm64Doorstop: true, core: new Version(25, 3, 4));
+        var inventory = _rig.Inventory();
+        inventory.Environments[0].Install = native.Root;
+        inventory.Environments[0].Architecture = "x64";
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: inventory) { SaveDirectory = _rig.Save };
+
+        Assert.Contains("x86_64 slice", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
+        Assert.False(Directory.Exists(runner.Install));
+    }
+
+    [Fact] public void ARejectedMacCopyIsRemovedBeforeAnyClientLaunch()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        {
+            SaveDirectory = _rig.Save,
+            BundleInspection = (_, repair) => repair
+                ? new(MacBundleInspection.State.Rejected, 0, "Gatekeeper refused the copy")
+                : new(MacBundleInspection.State.Fixable, 1, "old preloader log"),
+        };
+        Assert.Contains("No client was launched", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
+        Assert.False(Directory.Exists(runner.Install));
+        Assert.True(Directory.Exists(_rig.Game));
+    }
+
+    [Fact] public void AReusedMacCopyIsAssessedAgainBeforeTheNextArm()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        int repairs = 0;
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        {
+            SaveDirectory = _rig.Save,
+            BundleInspection = (_, repair) => !repair || ++repairs == 1
+                ? new(MacBundleInspection.State.Accepted, 0, "")
+                : new(MacBundleInspection.State.Rejected, 0, "copy changed after first arm"),
+        };
+        runner.Stage("parent");
+        Assert.Contains("No client was launched", Assert.Throws<InvalidOperationException>(() => runner.Stage("candidate")).Message);
+        Assert.Equal(2, repairs);
+        runner.Remove();
+    }
+
     [Fact] public void ATargetedRunValidatesItsExpectedErrorLinesBeforeStaging()
     {
         var manifest = _rig.Manifest();
@@ -539,7 +615,8 @@ internal sealed class RegressionRig : IDisposable
     public EnvironmentInventory Inventory() => new()
     {
         Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = OperatingSystem.IsWindows() ? "powershell" : "bash", Lock = Path.Combine(Root, "lock") } },
-        Environments = [new EnvironmentRecipe { Name = "rig-client", Host = "local", Roles = ["client"], Install = Game, Runtime = Runtime, CliPort = 5560, LoaderPackage = LoaderPackage }],
+        // The synthetic Mac install uses the stock x64-only Doorstop. Select Rosetta explicitly, as a real consumer must.
+        Environments = [new EnvironmentRecipe { Name = "rig-client", Host = "local", Roles = ["client"], Install = Game, Runtime = Runtime, CliPort = 5560, LoaderPackage = LoaderPackage, Architecture = "x64" }],
         LeaseHost = "local", LeaseDirectory = Path.Combine(Root, "leases"),
     };
 
@@ -550,6 +627,7 @@ internal sealed class RegressionRig : IDisposable
             SaveDirectory = Save, SteamUserData = SteamUserData,
             // This rig stages fake files without a desktop. Tests of the SSH refusal override this explicitly.
             DirectClientSession = () => (OperatingSystem.IsWindows(), 1),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
         };
 
     public RegressionInputs Manifest(string? fixture = null, string? worldUid = null) => new()

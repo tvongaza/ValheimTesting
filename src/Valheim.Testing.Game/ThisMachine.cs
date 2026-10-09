@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
@@ -11,6 +12,8 @@ internal interface ISteamLocator
 {
     /// <summary><c>windows</c>, <c>linux</c> or <c>macos</c>.</summary>
     string Platform { get; }
+    /// <summary>The machine's CPU architecture, even when this process runs under translation.</summary>
+    Architecture OsArchitecture { get; }
     /// <summary>The user's home folder.</summary>
     string Home { get; }
     /// <summary>ValheimTesting's own folder on this machine: runs, leases and the host lock live under it.</summary>
@@ -34,6 +37,7 @@ internal interface ISteamLocator
 internal sealed class LocalSteamLocator : ISteamLocator
 {
     public string Platform => HostProfile.CurrentPlatform;
+    public Architecture OsArchitecture => RuntimeInformation.OSArchitecture;
     public string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     // Set only by Fakes.FakeDataRoot: the innermost open scope, whose folder a no-game test uses as ValheimTesting's own.
     // scripts/validate.cs watches the real folder with the same platform rules: change both together.

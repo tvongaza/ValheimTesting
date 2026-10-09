@@ -280,6 +280,7 @@ sealed class Valheim.Testing.GameSessions.HostedCampaignRole
   property System.Collections.Generic.List`1<System.String> DifferentHostFrom { get; set; }
   property System.Collections.Generic.List`1<System.String> EnvironmentCandidates { get; set; }
   property System.Collections.Generic.List`1<Valheim.Testing.GameSessions.HostedRuntimeFile> Files { get; set; }
+  property System.String Architecture { get; set; }
   property System.String DependencyLock { get; set; }
   property System.String LoaderPackage { get; set; }
   property Valheim.Testing.GameSessions.HostedCampaignCharacter Character { get; set; }
