@@ -6,8 +6,9 @@
 #
 # x86-64 only: the server, SteamCMD (32-bit x86) and Doorstop have no arm64 builds. The platform is pinned so
 # an arm64 host (Apple Silicon) builds the amd64 image under emulation instead of a broken arm64 one; that path
-# is experimental. See README.md.
-FROM --platform=linux/amd64 ubuntu:24.04
+# is experimental. See README.md. The base is Canonical's Ubuntu image in ECR Public, so the build does not depend on
+# Docker Hub's anonymous pull limit.
+FROM --platform=linux/amd64 public.ecr.aws/ubuntu/ubuntu:24.04
 
 ARG DOTNET_CHANNEL=10.0
 ARG VALHEIM_SERVER_APP=896660

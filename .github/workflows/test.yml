@@ -393,7 +393,8 @@ jobs:
       - name: Start a throwaway sshd on 127.0.0.1:2222 and a virtual X display
         run: bash .github/scripts/game-hosts.sh start
       - name: Start a throwaway container on the host network
-        run: docker run -d --rm --name vt-game-host --network host ubuntu:24.04 sleep 1800
+        # Docker Hub's anonymous pull limit can fail this job before any tests run. Use Canonical's Ubuntu image in ECR Public.
+        run: docker run -d --rm --name vt-game-host --network host public.ecr.aws/ubuntu/ubuntu:24.04 sleep 1800
       - run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release --filter Category=GameHosts
       - name: Stop the sshd, the display and the container
         if: always()
