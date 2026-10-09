@@ -61,12 +61,13 @@ try
         recordSelection: false);
     string architecture = SmokeInputResolver.SelectClientArchitecture(options.GetValueOrDefault("--client-architecture"), client, inventory);
     SmokeInputResolver.RequireClientArchitecture(inventory, client, architecture, client.LoaderPackage);
+    var localProblems = await LocalHostPreflight.InspectAsync(inventory,
+        [new LocalHostPreflight.Actor("client", client)], TimeSpan.FromSeconds(60), cancel.Token);
+    if (localProblems.Count != 0)
+        throw new InvalidOperationException(string.Join("; ", localProblems.Select(problem =>
+            $"{problem.Actor} {problem.Input}: {problem.Message}")));
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
     Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}; architecture {architecture}");
-    // An SSH-launched Windows runner is in session 0. Check the desktop before copying the fixture or disposable game;
-    // DesktopClientSession repeats the check and starts the client in that session after staging.
-    if (OperatingSystem.IsWindows())
-        await DesktopClientSession.PreflightAsync(cancel.Token);
     string game = client.Install;
     string mod = selectedMods[0];
     var (cliManifest, cliFiles) = SmokeInputs.Cli(options);

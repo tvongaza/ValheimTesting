@@ -491,6 +491,20 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(File.Exists(Path.Combine(output, "dependencies.lock.json")));
     }
 
+    [Fact] public async Task ALocalHostRefusalStopsBeforeAnyAdapterOrFixtureIsWritten()
+    {
+        string output = Path.Combine(_rig.Root, "local-preflight-refused");
+        bool campaignInspected = false;
+        var args = Arguments(output, "--server-only", "--preflight-only");
+        int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(
+            Inspect: _ => { campaignInspected = true; return Task.FromResult(Ready); },
+            LocalPreflight: _ => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>(
+                [new("server", "ValheimCLI port", "port already in use")])));
+        Assert.Equal(3, result);
+        Assert.False(campaignInspected);
+        Assert.False(Path.Exists(output));
+    }
+
     // A Mac now writes and runs the same campaign as Windows and Linux, with the inventory's ports.
     [Fact] public async Task AMacUsesTheHostedCampaign()
     {

@@ -414,6 +414,28 @@ public static class HostedCampaignPreparation
         var loaders = new ConcurrentDictionary<string, ShippedLoader.Choice>(StringComparer.Ordinal);
         // The run journal of every host the campaign touches (#257): no other run is going there or left something it owns.
         var owners = await InspectJournalsAsync(inputs, failures, timeout, hostFactory, cancellation).ConfigureAwait(false);
+        // The same local-host gate used by start, server-load and env preflight. Journal reading above still covers remote
+        // actors and supplies process ownership; this call does not read the local journal a second time.
+        var localActors = inputs.Roles.Where(item => inputs.Profile.Hosts[item.Role.Host].Kind == "local")
+            .Select(item => new LocalHostPreflight.Actor(item.Name, new EnvironmentRecipe
+            {
+                Name = item.Name, Host = item.Role.Host, Install = item.Role.Install, Runtime = item.Role.Runtime,
+                CliPort = item.Role.CliPort, Roles = [item.Name == "server" ? "server" : "client"],
+            })).ToArray();
+        if (localActors.Length != 0)
+        {
+            var localInventory = new EnvironmentInventory { Hosts = inputs.Profile.Hosts,
+                Environments = localActors.Select(actor => actor.Recipe).ToList() };
+            var localProblems = await LocalHostPreflight.InspectAsync(localInventory, localActors, timeout, cancellation,
+                hostFactory: name => hostFactory?.Invoke(name) ?? inputs.Profile.CreateHost(name),
+                probes: new LocalHostPreflight.Probes(
+                    Processes: (host, client, limit, token) => HostedRuntimeStage.RequireStoppedAsync(host, limit, token,
+                        clientSession: client, owners: owners.GetValueOrDefault(host.Name)),
+                    // A fake host in a controlled test represents its own Steam state; no test process owns that Steam.
+                    SteamRunning: hostFactory == null ? null : () => true),
+                includeJournal: false).ConfigureAwait(false);
+            foreach (var problem in localProblems) failures.Add(problem);
+        }
         var hostChecks = inputs.Roles.GroupBy(role => role.Role.Host, StringComparer.Ordinal).Select(async group =>
         {
             IGameHost host;
@@ -423,27 +445,15 @@ public static class HostedCampaignPreparation
                 failures.Add(new(group.Key, "host", error.Message));
                 return;
             }
-            if (group.Any(role => role.Name != "server") &&
-                inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" })
-            {
-                try { MacGuiSession.Require(); }
+            bool localHost = inputs.Profile.Hosts[group.Key].Kind == "local";
+            if (!localHost)
+                try
+                {
+                    await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation,
+                        clientSession: group.Any(role => role.Name != "server"), owners: owners.GetValueOrDefault(group.Key)).ConfigureAwait(false);
+                }
                 catch (Exception error) when (HostCheckRefusal(error))
-                { failures.Add(new(group.Key, "desktop session", error.Message)); }
-            }
-            // A packaged runner's AppData writes land in its package, where this host's server task and game cannot see them (#406).
-            if (inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "windows" })
-            {
-                try { PackagedApp.Require(); }
-                catch (Exception error) when (HostCheckRefusal(error))
-                { failures.Add(new(group.Key, "packaged app", error.Message)); }
-            }
-            try
-            {
-                await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation,
-                    clientSession: group.Any(role => role.Name != "server"), owners: owners.GetValueOrDefault(group.Key)).ConfigureAwait(false);
-            }
-            catch (Exception error) when (HostCheckRefusal(error))
-            { failures.Add(new(group.Key, "session", error.Message)); }
+                { failures.Add(new(group.Key, "session", error.Message)); }
             if (group.Any(role => role.Name == "server"))
             {
                 try { await HostServer.RequireTaskLogonAsync(host, timeout, cancellation).ConfigureAwait(false); }
@@ -453,12 +463,13 @@ public static class HostedCampaignPreparation
             var capacities = new ConcurrentBag<(string Actor, HostCopyCapacity Capacity)>();
             await Task.WhenAll(group.Select(async item =>
             {
-                try
-                {
-                    await HostInstall.RequirePortFreeAsync(host, item.Role.CliPort, timeout, cancellation).ConfigureAwait(false);
-                }
-                catch (Exception error) when (HostCheckRefusal(error))
-                { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
+                if (!localHost)
+                    try
+                    {
+                        await HostInstall.RequirePortFreeAsync(host, item.Role.CliPort, timeout, cancellation).ConfigureAwait(false);
+                    }
+                    catch (Exception error) when (HostCheckRefusal(error))
+                    { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
                 try
                 {
                     capacities.Add((item.Name, await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,

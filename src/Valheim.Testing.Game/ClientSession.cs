@@ -344,7 +344,7 @@ public sealed class ClientSession : IDisposable
         return path;
     }
 
-    private static bool SteamRunning()
+    internal static bool SteamRunning()
     {
         string name = OperatingSystem.IsMacOS() ? "steam_osx" : "steam";
         var found = Process.GetProcessesByName(name);

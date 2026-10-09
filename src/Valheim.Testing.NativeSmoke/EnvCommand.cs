@@ -61,21 +61,12 @@ internal static class EnvCommand
             return 3;
         }
         var missingRoles = new[] { "server", "client" }.Where(role => !inventory.Environments.Any(recipe => recipe.Roles.Contains(role))).ToArray();
-        string? packaged = null;
-        if (preflight)
-            try { packaged = packagedRefusal(); }
-            catch (InvalidOperationException unread) { packaged = unread.Message; } // an identity Windows would not report refuses too
         List<CampaignPreflightProblem> problems = preflight
-            ? [.. packaged == null ? [] : new[] { new CampaignPreflightProblem("this-machine", "packaged app", packaged) },
-               .. await inventory.LocalJournalProblemsAsync().ConfigureAwait(false)]
+            ? [.. await LocalHostPreflight.InspectAsync(inventory,
+                inventory.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
+                TimeSpan.FromSeconds(60), probes: new LocalHostPreflight.Probes(Packaged: packagedRefusal)).ConfigureAwait(false)]
             : [];
-        if (preflight && OperatingSystem.IsWindows() && inventory.Environments.Any(recipe => recipe.Roles.Contains("client") &&
-            inventory.Hosts.TryGetValue(recipe.Host, out var host) && host.Kind == "local"))
-        {
-            try { await DesktopClientSession.PreflightAsync().ConfigureAwait(false); }
-            catch (Exception failure) when (failure is InteractiveSessionException or HostOperationException)
-            { problems.Add(new CampaignPreflightProblem("this-machine", "client desktop", failure.Message)); }
-        }
+        bool packaged = problems.Any(problem => problem.Input == "packaged app");
         foreach (var recipe in inventory.Environments.Where(recipe => preflight && recipe.Roles.Contains("client") &&
             inventory.Hosts[recipe.Host].Kind == "local" && inventory.Hosts[recipe.Host].Platform == "macos"))
         {
@@ -110,9 +101,10 @@ internal static class EnvCommand
         if (!preflight) return 0;
         foreach (var problem in problems) output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
         output.WriteLine(missingRoles.Length != 0 ? "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment."
-            : packaged != null ? "REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal."
+            : packaged ? "REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal."
             : problems.Any(problem => problem.Input == "client desktop") ? "REFUSED: the client desktop is unavailable; see the reason above."
-            : problems.Count != 0 ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
+            : problems.Any(problem => problem.Input == "run journal") ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
+            : problems.Count != 0 ? "REFUSED: a local preflight check failed; see the reason above."
             : "ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered. " +
               (OperatingSystem.IsWindows() ? "This process is not inside a packaged app. " : "") +
               "A session's inputs and host readiness are checked by valheim-test session check SESSION [--hosts].");
