@@ -57,7 +57,8 @@ try
     var selectedMods = modSelection.Mods.ToList();
     Console.WriteLine("mod selection: " + modSelection.Reason);
     // The client: the inventory's (this machine's Valheim with no --inventory); --game overrides the install and --client-loader-package the loader.
-    var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead);
+    var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead,
+        recordSelection: false);
     string architecture = SmokeInputResolver.SelectClientArchitecture(options.GetValueOrDefault("--client-architecture"), client);
     SmokeInputResolver.RequireClientArchitecture(inventory, client, architecture, client.LoaderPackage);
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
@@ -73,6 +74,7 @@ try
     foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
     SmokeOutput.RefuseInside(output, new[] { game, cliFiles, inventory.SteamUserData }.OfType<string>().ToArray());
+    SmokeInputs.RecordClient(inventory, client, output);
     foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
         if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
     if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--client-loader-package file does not exist: " + loader, loader);

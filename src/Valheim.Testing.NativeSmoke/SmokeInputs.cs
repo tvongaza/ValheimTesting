@@ -70,7 +70,8 @@ internal static class SmokeInputs
     /// so a test leaves it out).
     /// </summary>
     internal static (EnvironmentInventory Inventory, EnvironmentRecipe Client, ShippedLoader.Choice? ShippedLoader) Client(IReadOnlyDictionary<string, string> options, string output,
-        Func<string, string, ShippedLoader.Choice?>? shippedLoader = null, Action? requireMacGui = null)
+        Func<string, string, ShippedLoader.Choice?>? shippedLoader = null, Action? requireMacGui = null,
+        bool recordSelection = true)
     {
         EnvironmentInventory inventory;
         string? file;
@@ -96,6 +97,12 @@ internal static class SmokeInputs
         var (clientManifest, shipped) = SmokeInputResolver.Loader("client", client,
             options.GetValueOrDefault("--client-loader-package"), shippedLoader);
         client.LoaderPackage = clientManifest;
+        if (recordSelection) RecordClient(inventory, client, output);
+        return (inventory, client, shipped);
+    }
+
+    internal static void RecordClient(EnvironmentInventory inventory, EnvironmentRecipe client, string output)
+    {
         // The machine the run uses, as a one-environment inventory beside its inputs.
         var recorded = new EnvironmentInventory
         {
@@ -104,6 +111,5 @@ internal static class SmokeInputs
                 : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(client.Runtime))!, "leases"),
         };
         SmokeInputResolver.RecordSelected(recorded, output, [client]);
-        return (inventory, client, shipped);
     }
 }

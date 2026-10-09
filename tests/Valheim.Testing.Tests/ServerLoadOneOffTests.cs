@@ -311,6 +311,16 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--server", server, "--server-only"], out var inside, out _));
         Assert.Contains("outside the prepared install", Assert.Throws<ArgumentException>(() => ServerLoad.Choose(inside!, Path.Combine(server, "run"))).Message);
         Assert.False(Directory.Exists(server));
+
+        // An override must not write its temporary inventory inside a different,
+        // detected source install before the selected client is checked.
+        using (EnvironmentInventory.UseMachine(WithValheim(out string clientGame)))
+        {
+            Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--server", server], out var selected, out _));
+            string unsafeOutput = Path.Combine(clientGame, "run");
+            ServerLoad.Choose(selected!, unsafeOutput);
+            Assert.False(Directory.Exists(unsafeOutput));
+        }
     }
 
     // Options from the removed Mac-only staged path are refused before anything is copied.
@@ -416,5 +426,27 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("macOS console session is locked", failure.Message);
         Assert.False(inspectedLoader);
         Assert.False(Directory.Exists(output));
+    }
+
+    [Fact] public void StartCanDeferRecordingUntilOutputPassesSourceProtection()
+    {
+        string output = Path.Combine(_rig.Game, "accidental-output");
+        string inventoryFile = Path.Combine(_rig.Root, "client-inventory.json");
+        File.WriteAllText(inventoryFile, JsonSerializer.Serialize(new
+        {
+            environments = new[] { new { name = "local-client", roles = new[] { "client" },
+                install = _rig.Game, runtime = Path.Combine(_rig.Root, "runs"), cliPort = 5701 } },
+        }));
+        var (inventory, client, _) = SmokeInputs.Client(
+            new Dictionary<string, string> { ["--inventory"] = inventoryFile }, output,
+            requireMacGui: () => { }, recordSelection: false);
+        Assert.False(Directory.Exists(output));
+        Assert.Throws<ArgumentException>(() => SmokeOutput.RefuseInside(output, _rig.Game));
+        Assert.False(Directory.Exists(output));
+
+        string safe = Path.Combine(_rig.Root, "safe-output");
+        SmokeOutput.RefuseInside(safe, _rig.Game);
+        SmokeInputs.RecordClient(inventory, client, safe);
+        Assert.True(File.Exists(Path.Combine(safe, "environments.json")));
     }
 }

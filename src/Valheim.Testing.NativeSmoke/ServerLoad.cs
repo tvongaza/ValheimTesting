@@ -154,7 +154,7 @@ internal static class ServerLoad
             if (!parsed.ServerOnly)
                 local.Add(new("local-client", "client", parsed.Options.GetValueOrDefault("--client")));
             (inventory, file) = SmokeInputResolver.ReadInventory(parsed.Options, output, local,
-                ["--server", "--client"], keepOverrideFile: true,
+                ["--server", "--client"], keepOverrideFile: false,
                 "--server and --client override this machine's environments; with --inventory, list the installs in the file.");
         }
         catch (ArgumentException failure) when (!parsed.Options.ContainsKey("--inventory") || overrides)
