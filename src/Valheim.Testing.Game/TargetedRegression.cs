@@ -604,7 +604,8 @@ public sealed class TargetedRegression
     internal ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure,
         CancellationToken cancellation, Action<ScenarioReport>? afterPinnedClientOpened,
         Func<ClientRunPlan, string, ICollection<RunLog>, CancellationToken, ClientSession>? openClient,
-        Action? afterStaged)
+        Action? afterStaged,
+        Action<CharacterStageEvent, string, string, string>? characterJournal = null)
     {
         ArgumentNullException.ThrowIfNull(measure);
         if (openClient == null) RequireDirectClientDesktop();
@@ -625,7 +626,7 @@ public sealed class TargetedRegression
                 report.Step(StepPhase.Setup, "stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
                     store, Inputs.Client.Character, Path.Combine(save, "characters_local"),
                     SteamUserData ?? throw new DirectoryNotFoundException("No Steam userdata was detected on this machine; a registered character is checked against it for a same-named Steam Cloud character."),
-                    Inputs.Client.Character));
+                    Inputs.Client.Character, characterJournal));
                 report.Provenance["characterSource"] = "registered disposable store";
             }
             StagedArm? stagedArm = null;

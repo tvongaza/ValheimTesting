@@ -257,6 +257,11 @@ internal static class RunRecovery
                     string what = $"character {character.What}";
                     try
                     {
+                        // An interrupted local copy that recorded intent but not completion may never have
+                        // created the file. A same-named save could now be personal: refuse rather than delete it.
+                        if (character.Fields.GetValueOrDefault("characterKind") == "regression" &&
+                            character.Fields.GetValueOrDefault("staged") != "true")
+                            throw new InvalidDataException("the registered character copy did not record completion; its filename is not proof of ownership");
                         await HostedCharacterStage.RetireAsync(host, new HostedCampaignCharacter
                         {
                             FileName = character.Fields["fileName"], CharactersLocalDirectory = character.Fields["characters"], SteamUserDataDirectory = character.Fields["userData"],

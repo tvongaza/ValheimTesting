@@ -38,8 +38,8 @@ if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, 
 using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); };
 bool holdRequested = options!.ContainsKey("--hold");
-string? holdRunId = holdRequested ? RunJournal.NewRunId() : null;
-using var holdJournal = holdRunId == null ? null : RunJournal.UseRun(holdRunId);
+string runId = RunJournal.NewRunId();
+using var runJournal = RunJournal.UseRun(runId);
 var elapsed = Stopwatch.StartNew();
 TargetedRegression? runner = null;
 ScenarioReport? lastArm = null; string? lastArmOutput = null;
@@ -136,34 +136,32 @@ try
     inputs.Write(Path.Combine(output, "regression.json"));
     runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
     Console.WriteLine($"disposable install: {runner.Install}");
-    if (holdRunId != null)
-    {
-        if (Directory.Exists(runner.Install)) throw new IOException("The disposable install already exists: " + runner.Install);
-        RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyIntended,
-            ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", output)));
-        copyJournalled = true;
-    }
+    if (Directory.Exists(runner.Install)) throw new IOException("The disposable install already exists: " + runner.Install);
+    RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyIntended,
+        ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", output)));
+    copyJournalled = true;
+    Console.WriteLine("run ID: " + runId);
     bool passed = true;
     foreach (string arm in inputs.Mod.Arms.Keys)
     {
         string armOutput = Path.Combine(output, "evidence", arm);
         LocalClientJournal? processJournal = null;
+        bool characterPending = false;
         var report = runner.Run(arm, armOutput, "selected plugin loads in a hosted fixture",
             ["first"], round =>
             {
-                if (holdRunId != null && arm == inputs.Mod.Arms.Keys.Last())
+                if (holdRequested && arm == inputs.Mod.Arms.Keys.Last())
                     round.Step("keep the owned client running until finish", () =>
-                        ForegroundHold.HoldAsync(holdRunId, armOutput, cancel.Token,
+                        ForegroundHold.HoldAsync(runId, armOutput, cancel.Token,
                             [("client", processJournal?.Process ?? throw new InvalidOperationException("The owned client process was not recorded."))])
                             .GetAwaiter().GetResult());
             }, cancel.Token, afterPinnedClientOpened: ready =>
             {
-                if (holdRunId != null) ready.Provenance["runId"] = holdRunId;
+                ready.Provenance["runId"] = runId;
                 ready.Provenance["firstModLoadedSecondsFromCommand"] =
                     elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
                 if (shippedLoader != null) ready.Provenance["bepInExPackageShipped"] = shippedLoader.Reason;
-            }, openClient: holdRunId == null ? (OperatingSystem.IsWindows() ? DesktopClientSession.Open : null)
-                : (plan, directory, logs, token) =>
+            }, openClient: (plan, directory, logs, token) =>
                 {
                     bool desktopTask = OperatingSystem.IsWindows() &&
                         DesktopClientSession.NeedsDesktopTask(Process.GetCurrentProcess().SessionId);
@@ -177,7 +175,22 @@ try
                     RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyDone,
                         ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression")));
                     copyDone = true;
+                }, characterJournal: (point, characters, userData, name) =>
+                {
+                    var entry = point switch
+                    {
+                        CharacterStageEvent.Intended => JournalEntry.Of(JournalEntry.CharacterIntended,
+                            ("characters", characters), ("userData", userData), ("fileName", name),
+                            ("characterKind", "regression"), ("local", "true")),
+                        CharacterStageEvent.Done => JournalEntry.Of(JournalEntry.CharacterDone,
+                            ("fileName", name), ("staged", "true")),
+                        _ => JournalEntry.Of(JournalEntry.CharacterRetired, ("fileName", name)),
+                    };
+                    RunJournal.ThisProcess.AppendLocal("client", entry);
+                    if (point == CharacterStageEvent.Intended) characterPending = true;
+                    if (point == CharacterStageEvent.Retired) characterPending = false;
                 });
+        if (characterPending) journalClean = false;
         if (processJournal != null)
             try { processJournal.Complete(); }
             catch (Exception failure)
@@ -186,6 +199,9 @@ try
                 report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", failure);
                 report.Write(armOutput);
             }
+        // Even a setup failure before the client opens has a journalled run ID in its result.
+        report.Provenance["runId"] = runId;
+        report.Write(armOutput);
         lastArm = report; lastArmOutput = armOutput; // Only an arm whose report was written records the removal.
         passed &= report.Passed;
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.
@@ -202,10 +218,10 @@ finally
 {
     if (runner != null && !journalClean)
     {
-        Console.Error.WriteLine("CLEANUP REFUSED: the owned client stop is unproven; the disposable install stays at " + runner.Install + ". Inspect valheim-test env status before recovery.");
+        Console.Error.WriteLine("CLEANUP REFUSED: the owned client stop or staged character cleanup is unproven; the disposable install stays at " + runner.Install + ". Inspect valheim-test env status before recovery.");
         if (lastArm != null && lastArmOutput != null)
         {
-            lastArm.Provenance["disposableInstall"] = "kept: owned client stop unproven";
+            lastArm.Provenance["disposableInstall"] = "kept: owned client or character cleanup unproven";
             lastArm.Write(lastArmOutput);
         }
         exitCode = 1;
@@ -226,7 +242,7 @@ finally
             Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + runner.Install);
             if (exitCode == 0) exitCode = 1;
         }
-    if (holdRunId != null && journalClean)
+    if (journalClean)
         try
         {
             RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.RunEnded,

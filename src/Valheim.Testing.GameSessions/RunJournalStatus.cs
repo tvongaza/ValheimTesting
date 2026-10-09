@@ -120,7 +120,11 @@ internal static class RunJournalStatus
                             Open($"character {Field("fileName")}", "character", $"{Field("fileName")} in {Field("characters")}", "staging started, never finished"); break;
                         case JournalEntry.CharacterDone:
                             if (left.TryGetValue($"character {Field("fileName")}", out var staged))
-                                left[$"character {Field("fileName")}"] = staged with { Status = "staged, not retired" };
+                            {
+                                var characterFields = staged.Fields.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                                foreach (var (name, value) in fields) characterFields[name] = value;
+                                left[$"character {Field("fileName")}"] = staged with { Status = "staged, not retired", Fields = characterFields };
+                            }
                             break;
                         case JournalEntry.CharacterRetired: left.Remove($"character {Field("fileName")}"); break;
                         case JournalEntry.ProcessIntended:
