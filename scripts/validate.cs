@@ -2,6 +2,7 @@
 //
 //   dotnet run scripts/validate.cs
 //   dotnet run scripts/validate.cs -- --skip-ci-shell   CI only: shell integration runs in its own job
+//   dotnet run scripts/validate.cs -- --only-ci-shell   CI only: run that shard with the same data-root guard
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
@@ -21,7 +22,9 @@ using System.Xml.Linq;
 
 string root = FindRoot();
 bool skipCiShell = args.SequenceEqual(["--skip-ci-shell"]);
-if (args.Length != 0 && !skipCiShell) throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell]");
+bool onlyCiShell = args.SequenceEqual(["--only-ci-shell"]);
+if (args.Length != 0 && !skipCiShell && !onlyCiShell)
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell]");
 string results = Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
@@ -29,6 +32,13 @@ File.WriteAllText(transcript, "");
 var started = Stopwatch.StartNew();
 string dataRoot = DataRoot();
 var dataBefore = Snapshot(dataRoot);
+
+if (onlyCiShell)
+{
+    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category=CiShell", "--", "RunConfiguration.TreatNoTestsAsError=true");
+    Note("Local-shell integration validation passed; the data-root guard found no changes.");
+    return 0;
+}
 
 // CI runs the slower local-shell integration tests in their own three-OS job. Plain local validation still runs all tests.
 if (skipCiShell) Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category!=CiShell");

@@ -39,7 +39,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 2 # a pull request's merge commit and its base (HEAD^1), for the public-api check
           persist-credentials: false
       - uses: ./.github/actions/setup
       # Packages from NuGet.org, reused across runs. Never this repository's own packages (Valheim.Testing*, and the CLI
@@ -124,6 +123,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
+      # Keep the Windows desktop test seam consistent with the broad test job if a shell test later uses it.
+      VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
       VT_NUGET_CACHE_PATHS: |
         ~/.nuget/packages
         !~/.nuget/packages/valheim.testing*
@@ -140,13 +141,13 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet run scripts/bootstrap-cli.cs
       - name: Run the local-shell integration tests
-        run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release -m:1 --filter Category=CiShell --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory artifacts/ci-shell -- RunConfiguration.TreatNoTestsAsError=true
+        run: dotnet run scripts/validate.cs -- --only-ci-shell
       - name: Keep shell-test evidence on failure
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: ci-shell-${{ matrix.os }}
-          path: artifacts/ci-shell
+          path: artifacts/validate
           if-no-files-found: ignore
           retention-days: 14
   api-reference:
