@@ -48,6 +48,7 @@ string? outcome = null;
 bool journalClean = true;
 bool copyJournalled = false;
 bool copyDone = false;
+bool characterPending = false;
 try
 {
     string output = Path.GetFullPath(options!["--output"]);
@@ -146,7 +147,6 @@ try
     {
         string armOutput = Path.Combine(output, "evidence", arm);
         LocalClientJournal? processJournal = null;
-        bool characterPending = false;
         var report = runner.Run(arm, armOutput, "selected plugin loads in a hosted fixture",
             ["first"], round =>
             {
@@ -175,13 +175,13 @@ try
                     RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyDone,
                         ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression")));
                     copyDone = true;
-                }, characterJournal: (point, characters, userData, name) =>
+                }, characterJournal: (point, characters, userData, name, expectedSha256) =>
                 {
                     var entry = point switch
                     {
                         CharacterStageEvent.Intended => JournalEntry.Of(JournalEntry.CharacterIntended,
                             ("characters", characters), ("userData", userData), ("fileName", name),
-                            ("characterKind", "regression"), ("local", "true")),
+                            ("characterKind", "regression"), ("local", "true"), ("expectedSha256", expectedSha256)),
                         CharacterStageEvent.Done => JournalEntry.Of(JournalEntry.CharacterDone,
                             ("fileName", name), ("staged", "true")),
                         _ => JournalEntry.Of(JournalEntry.CharacterRetired, ("fileName", name)),
@@ -190,7 +190,6 @@ try
                     if (point == CharacterStageEvent.Intended) characterPending = true;
                     if (point == CharacterStageEvent.Retired) characterPending = false;
                 });
-        if (characterPending) journalClean = false;
         if (processJournal != null)
             try { processJournal.Complete(); }
             catch (Exception failure)
@@ -216,6 +215,8 @@ catch (Exception failure) when (failure is ArgumentException or IOException or I
 }
 finally
 {
+    // A thrown runner error must not claim cleanup was verified if the character never retired.
+    if (characterPending) journalClean = false;
     if (runner != null && !journalClean)
     {
         Console.Error.WriteLine("CLEANUP REFUSED: the owned client stop or staged character cleanup is unproven; the disposable install stays at " + runner.Install + ". Inspect valheim-test env status before recovery.");

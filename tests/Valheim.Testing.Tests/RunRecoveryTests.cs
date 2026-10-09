@@ -43,17 +43,65 @@ public sealed class RunRecoveryTests : IDisposable
     public async Task RegressionCharacterIntentWithoutCompletionCannotDeleteASameNamedSave()
     {
         const string run = "run-character-intent";
+        string personal = _host.Local(Characters + "/vt01.fch");
+        Directory.CreateDirectory(Path.GetDirectoryName(personal)!);
+        File.WriteAllText(personal, "personal save");
         Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
             ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
-            ("characterKind", "regression"), ("local", "true"));
+            ("characterKind", "regression"), ("local", "true"),
+            ("expectedSha256", FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes("registered save"))));
 
         var report = await RecoverAsync(run);
 
         Assert.False(report.Recovered);
         Assert.Contains(report.Steps, step => step.What.StartsWith("character vt01", StringComparison.Ordinal) &&
-            step.Failed && step.Outcome.Contains("did not record completion", StringComparison.Ordinal));
+            step.Failed && step.Outcome.Contains("differs from its journalled SHA-256", StringComparison.Ordinal));
         Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
+        Assert.Equal("personal save", File.ReadAllText(personal));
         Assert.Equal(JournalRunState.Recoverable, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RegressionCharacterIntentCanRecoverWhenFileIsMissingOrMatchesItsSource(bool copyFinished)
+    {
+        const string run = "run-character-intent-recoverable";
+        byte[] source = System.Text.Encoding.UTF8.GetBytes("registered save");
+        string local = _host.Local(Characters);
+        Directory.CreateDirectory(local);
+        if (copyFinished) File.WriteAllBytes(Path.Combine(local, "vt01.fch"), source);
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "regression"), ("local", "true"), ("expectedSha256", FileHash.Sha256(source)));
+
+        var report = await RecoverAsync(run);
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.False(File.Exists(Path.Combine(local, "vt01.fch")));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+        Assert.Equal(copyFinished, _host.Runs.Any(call => call.Script == "character-retire"));
+    }
+
+    [Fact]
+    public async Task RegressionCharacterIntentRefusesAnUnexpectedBackupEvenWhenTheMainFileMatches()
+    {
+        const string run = "run-character-intent-extra";
+        byte[] source = System.Text.Encoding.UTF8.GetBytes("registered save");
+        string local = _host.Local(Characters);
+        Directory.CreateDirectory(local);
+        File.WriteAllBytes(Path.Combine(local, "vt01.fch"), source);
+        File.WriteAllText(Path.Combine(local, "vt01.fch.old"), "personal backup");
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+            ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
+            ("characterKind", "regression"), ("local", "true"), ("expectedSha256", FileHash.Sha256(source)));
+
+        var report = await RecoverAsync(run);
+
+        Assert.False(report.Recovered);
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
+        Assert.True(File.Exists(Path.Combine(local, "vt01.fch")));
+        Assert.Equal("personal backup", File.ReadAllText(Path.Combine(local, "vt01.fch.old")));
     }
 
     [Fact]

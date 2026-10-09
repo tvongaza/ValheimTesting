@@ -7,7 +7,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>valheim-test</ToolCommandName>
     <PackageId>Valheim.Testing.NativeSmoke</PackageId>
-    <Version>0.1.0-preview.19</Version>
+    <Version>0.1.0-preview.17</Version>
     <Authors>Tys von Gaza</Authors>
     <Copyright>Copyright (c) 2026 Tys von Gaza</Copyright>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>

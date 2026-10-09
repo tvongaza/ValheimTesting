@@ -605,7 +605,7 @@ public sealed class TargetedRegression
         CancellationToken cancellation, Action<ScenarioReport>? afterPinnedClientOpened,
         Func<ClientRunPlan, string, ICollection<RunLog>, CancellationToken, ClientSession>? openClient,
         Action? afterStaged,
-        Action<CharacterStageEvent, string, string, string>? characterJournal = null)
+        Action<CharacterStageEvent, string, string, string, string>? characterJournal = null)
     {
         ArgumentNullException.ThrowIfNull(measure);
         if (openClient == null) RequireDirectClientDesktop();

@@ -383,7 +383,9 @@ internal sealed class FakeServerHost : IGameHost
                 string root = Local(v["root"]);
                 if (!Directory.Exists(root)) return Ok("VT-LIST missing\n");
                 var text = new StringBuilder();
-                foreach (var (relative, sha) in WorldFixture.Manifest(root)) text.Append(sha).Append("  ./").Append(relative.Replace('\\', '/')).Append('\n');
+                // The real host listing accepts an empty directory; WorldFixture.Manifest is stricter.
+                if (Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Any())
+                    foreach (var (relative, sha) in WorldFixture.Manifest(root)) text.Append(sha).Append("  ./").Append(relative.Replace('\\', '/')).Append('\n');
                 if (File.Exists(Path.Combine(root, GameLaunch.ServerLinuxExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerLinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }

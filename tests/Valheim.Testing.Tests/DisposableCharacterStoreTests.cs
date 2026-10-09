@@ -63,10 +63,11 @@ public sealed class DisposableCharacterStoreTests : IDisposable
         var store = DisposableCharacterStore.Create(StoreDirectory);
         store.Register("tester", Local("seed", 11));
         var events = new List<CharacterStageEvent>();
-        void Record(CharacterStageEvent point, string local, string steam, string name)
+        void Record(CharacterStageEvent point, string local, string steam, string name, string expectedSha256)
         {
             Assert.Equal(_local, local);
             Assert.Equal("smoke-only", name);
+            if (point != CharacterStageEvent.Retired) Assert.Matches("^[0-9a-f]{64}$", expectedSha256);
             events.Add(point);
         }
         File.WriteAllText(Path.Combine(_local, "smoke-only.fch"), "personal");

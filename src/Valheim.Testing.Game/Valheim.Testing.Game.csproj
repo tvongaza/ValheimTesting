@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
-    <Version>0.1.0-preview.54</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Fixtures and typed assertions for Valheim integration tests using the shared CLI transport. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
+    <Version>0.1.0-preview.53</Version><Authors>Tys von Gaza</Authors><Copyright>Copyright (c) 2026 Tys von Gaza</Copyright><PackageLicenseFile>LICENSE</PackageLicenseFile><PackageReadmeFile>README.md</PackageReadmeFile><Description>Fixtures and typed assertions for Valheim integration tests using the shared CLI transport. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.</Description>
     <PackageProjectUrl>https://github.com/tvongaza/ValheimTesting</PackageProjectUrl><RepositoryUrl>https://github.com/tvongaza/ValheimTesting.git</RepositoryUrl><RepositoryType>git</RepositoryType><PackageTags>valheim;modding;testing;bepinex;valheimcli</PackageTags>
   </PropertyGroup>
   <ItemGroup><PackageReference Include="Valheim.Testing.Cli" Version="[0.1.0-preview.14]" /><ProjectReference Include="../Valheim.Testing/Valheim.Testing.csproj" /></ItemGroup>

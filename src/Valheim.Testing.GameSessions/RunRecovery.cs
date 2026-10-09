@@ -258,10 +258,29 @@ internal static class RunRecovery
                     try
                     {
                         // An interrupted local copy that recorded intent but not completion may never have
-                        // created the file. A same-named save could now be personal: refuse rather than delete it.
+                        // created the file. Clear a missing file; delete only the one exact source copy.
                         if (character.Fields.GetValueOrDefault("characterKind") == "regression" &&
                             character.Fields.GetValueOrDefault("staged") != "true")
-                            throw new InvalidDataException("the registered character copy did not record completion; its filename is not proof of ownership");
+                        {
+                            string expected = character.Fields.GetValueOrDefault("expectedSha256") ?? "";
+                            if (expected.Length != 64 || !expected.All(Uri.IsHexDigit))
+                                throw new InvalidDataException("the registered character copy did not record completion or its expected SHA-256; its filename is not proof of ownership");
+                            HostListing? listing;
+                            try { listing = await HostInstall.ListAsync(host, character.Fields["characters"], timeout, cancellation: cancellation).ConfigureAwait(false); }
+                            catch (DirectoryNotFoundException) { listing = null; }
+                            string fileName = character.Fields["fileName"];
+                            var owned = listing?.Files.Where(file => DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file.Key), fileName)).ToArray() ?? [];
+                            if (owned.Length == 0)
+                            {
+                                Step(group.Key, what, "no character copy was written");
+                                await Note(group.Key, JournalEntry.Of(JournalEntry.CharacterRetired, ("fileName", fileName))).ConfigureAwait(false);
+                                continue;
+                            }
+                            if (owned.Length != 1 || !owned[0].Key.Equals(DisposableCharacterStore.SaveFile(fileName),
+                                    host.Shell.Kind == HostShellKind.PowerShell ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
+                                !owned[0].Value.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                                throw new InvalidDataException("the registered character copy did not record completion and the file differs from its journalled SHA-256; inspect it without deleting it");
+                        }
                         await HostedCharacterStage.RetireAsync(host, new HostedCampaignCharacter
                         {
                             FileName = character.Fields["fileName"], CharactersLocalDirectory = character.Fields["characters"], SteamUserDataDirectory = character.Fields["userData"],
