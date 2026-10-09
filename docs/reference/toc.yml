@@ -2,5 +2,25 @@
   href: index.md
 - name: Candidate compatibility policy
   href: compatibility.md
+- name: Packages and examples
+  items:
+  - name: Valheim.Testing
+    href: packages/Valheim.Testing.md
+  - name: Valheim.Testing.Doubles
+    href: packages/Valheim.Testing.Doubles.md
+  - name: Valheim.Testing.Cli
+    href: packages/Valheim.Testing.Cli.md
+  - name: Valheim.Testing.Game
+    href: packages/Valheim.Testing.Game.md
+  - name: Valheim.Testing.GameSessions
+    href: packages/Valheim.Testing.GameSessions.md
+  - name: Valheim.Testing.NativeSmoke
+    href: packages/Valheim.Testing.NativeSmoke.md
+  - name: Valheim.Testing.Adapter
+    href: packages/Valheim.Testing.Adapter.md
+  - name: Valheim.Testing.Bindings
+    href: packages/Valheim.Testing.Bindings.md
+  - name: Valheim.Testing.Bindings.Tool
+    href: packages/Valheim.Testing.Bindings.Tool.md
 - name: Current public surface
   href: api/

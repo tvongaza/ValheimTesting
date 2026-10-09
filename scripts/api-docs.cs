@@ -21,6 +21,9 @@ using System.Text;
 using System.Text.RegularExpressions;
 
 string root = FindRoot();
+string[] packagePages = ["Valheim.Testing", "Valheim.Testing.Doubles", "Valheim.Testing.Cli", "Valheim.Testing.Game",
+    "Valheim.Testing.GameSessions", "Valheim.Testing.NativeSmoke", "Valheim.Testing.Adapter",
+    "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool"];
 // Each package's release build. Every public type in it is the package's surface (Doubles' game stand-ins included), except
 // in the Adapter's compile check, which also holds the stubs it compiles against: only its own namespace counts there.
 // Classified: each public type must be an operation, a labelled result shape or an operation's input (#292).
@@ -56,6 +59,7 @@ if (args.Length > 0 && args[0] == "check")
 }
 if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/api-docs.cs [-- surface | -- check [--base REV]]");
 
+PreparePackagePages();
 var info = new ProcessStartInfo("dotnet")
 {
     UseShellExecute = false,
@@ -96,6 +100,9 @@ foreach (string page in new[]
 })
     if (!File.Exists(Path.Combine(site, page)))
         throw new InvalidOperationException($"DocFX omitted a package's reference page: {page}");
+foreach (string package in packagePages)
+    if (!File.Exists(Path.Combine(site, "packages", package + ".html")))
+        throw new InvalidOperationException($"DocFX omitted the {package} package guide.");
 
 // These selected examples explain the order of operations. A successful metadata build alone does not prove that
 // DocFX rendered an XML <example> on the page a mod author will read.
@@ -139,6 +146,51 @@ foreach (string file in Directory.EnumerateFiles(site, "*", SearchOption.AllDire
 
 Console.WriteLine("Preview API reference ready: docs/reference/_site/index.html");
 return 0;
+
+// The repository's package guides are the single source of truth. DocFX publishes copies beside the generated types;
+// a link outside that set points at this exact source revision, never at a moving main branch or a build-machine path.
+void PreparePackagePages()
+{
+    string source = Path.Combine(root, "docs", "packages"), destination = Path.Combine(root, "docs", "reference", "packages");
+    string revision = Git("rev-parse", "HEAD");
+    Directory.CreateDirectory(destination);
+    string[] guides = Directory.GetFiles(source, "*.md").Select(path => Path.GetFileNameWithoutExtension(path)!).Order(StringComparer.Ordinal).ToArray();
+    if (!guides.SequenceEqual(packagePages.Order(StringComparer.Ordinal)))
+        throw new InvalidDataException("The API site package list and docs/packages guides differ: " + string.Join(", ", guides));
+    foreach (string generated in Directory.GetFiles(destination, "*.md")) File.Delete(generated);
+    foreach (string package in packagePages)
+    {
+        string file = Path.Combine(source, package + ".md");
+        if (!File.Exists(file)) throw new FileNotFoundException("A published package has no guide.", file);
+        string content = File.ReadAllText(file);
+        content = Regex.Replace(content, @"(?<=\]\()(?<target>(?!https?://|#)[^)\r\n]+)(?=\))", match =>
+        {
+            string target = match.Groups["target"].Value;
+            int fragment = target.IndexOf('#');
+            string path = fragment < 0 ? target : target[..fragment];
+            if (path.Length == 0) return target;
+            string full = Path.GetFullPath(Path.Combine(source, path));
+            bool directory = Directory.Exists(full);
+            if (!File.Exists(full) && !directory) throw new FileNotFoundException($"The {package} guide links to a missing file: {target}", full);
+            if (Path.GetDirectoryName(full) == source && packagePages.Contains(Path.GetFileNameWithoutExtension(full)))
+                return target;
+            string relative = Path.GetRelativePath(root, full).Replace('\\', '/');
+            if (relative.StartsWith("../", StringComparison.Ordinal)) throw new InvalidDataException($"Package guide link leaves the repository: {target}");
+            return "https://github.com/tvongaza/ValheimTesting/" + (directory ? "tree/" : "blob/") + revision + "/" + relative +
+                (fragment < 0 ? "" : target[fragment..]);
+        });
+        string sourceLink = "https://github.com/tvongaza/ValheimTesting/tree/" + revision;
+        string versionsLink = "https://github.com/tvongaza/ValheimTesting/blob/" + revision +
+            "/docs/getting-started.md#package-versions-and-feeds";
+        int headingEnd = content.IndexOf('\n');
+        if (headingEnd < 0 || !content.StartsWith("# " + package + "\n", StringComparison.Ordinal))
+            throw new InvalidDataException($"The {package} guide needs its package heading first.");
+        content = content[..(headingEnd + 1)] + "\n> Reference source: [`" + revision[..12] + "`](" + sourceLink +
+            "). For the installed package version, use the [published package table](" + versionsLink + ").\n" +
+            content[(headingEnd + 1)..];
+        File.WriteAllText(Path.Combine(destination, package + ".md"), content);
+    }
+}
 
 // The committed lists against the builds; then, given the base revision a pull request starts from, its description.
 int CheckLists(string? baseRevision)

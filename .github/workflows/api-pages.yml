@@ -9,11 +9,13 @@ on:
       - '.config/dotnet-tools.json'
       - 'cli-dependency.json'
       - 'docs/reference/**'
+      - 'docs/packages/**'
+      - 'docs/getting-started.md'
+      - 'toolkit-versions.json'
       - 'scripts/api-docs.cs'
       - 'scripts/bootstrap-cli.cs'
       - 'scripts/validate.cs'
       - 'src/**'
-      - '!src/Valheim.Testing.NativeSmoke/**'
       - 'tests/Valheim.Testing.Adapter.CompileCheck/**'
   workflow_dispatch:
 
