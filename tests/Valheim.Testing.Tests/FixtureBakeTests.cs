@@ -37,6 +37,18 @@ public sealed class FixtureBakeTests : IDisposable
         Assert.DoesNotContain(Directory.EnumerateDirectories(root), path => Path.GetFileName(path).StartsWith(".baked.tmp-", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void ACancelledExportDoesNotPublishAFixture()
+    {
+        var input = Source();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        string output = Path.Combine(root, "baked");
+        Assert.Throws<OperationCanceledException>(() =>
+            FixtureBake.Export(Evidence("2", "true"), output, input, EmptyBuild(), cancelled.Token));
+        Assert.False(Path.Exists(output));
+    }
+
     [Theory]
     [InlineData(null, "true", "save")]
     [InlineData("2", "false", "stop cleanly")]

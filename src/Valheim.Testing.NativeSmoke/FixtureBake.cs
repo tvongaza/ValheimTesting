@@ -147,8 +147,13 @@ internal static class FixtureBake
         }
     }
 
-    internal static void Export(string evidence, string destination, Input input, BuildInputs build, params string[] protectedPaths)
+    internal static void Export(string evidence, string destination, Input input, BuildInputs build, params string[] protectedPaths) =>
+        Export(evidence, destination, input, build, CancellationToken.None, protectedPaths);
+
+    internal static void Export(string evidence, string destination, Input input, BuildInputs build, CancellationToken cancellation,
+        params string[] protectedPaths)
     {
+        cancellation.ThrowIfCancellationRequested();
         destination = PhysicalPath(destination);
         RefuseOutput(destination, new[] { input.Source, evidence }.Concat(protectedPaths).ToArray());
         using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(evidence, "result.json")));
@@ -190,7 +195,7 @@ internal static class FixtureBake
         {
             string copy = Path.Combine(temporary, "worlds_local");
             Directory.CreateDirectory(copy);
-            CopyFiles(world, copy, files);
+            CopyFiles(world, copy, files, cancellation);
             WorldFixture.Verify(world, files);
             WorldFixture.Verify(copy, files);
             var outputIdentity = WorldIdentity.Read(copy);
@@ -208,6 +213,7 @@ internal static class FixtureBake
             };
             File.WriteAllText(Path.Combine(temporary, "fixture-manifest.json"),
                 JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }) + "\n");
+            cancellation.ThrowIfCancellationRequested();
             RefuseOutput(destination, new[] { input.Source, evidence }.Concat(protectedPaths).ToArray());
             Directory.Move(temporary, destination); // same parent: a complete fixture appears at once
         }
@@ -226,10 +232,12 @@ internal static class FixtureBake
     private static string Sha256(string file)
         => FileHash.Sha256(file);
 
-    private static void CopyFiles(string source, string target, IReadOnlyDictionary<string, string> expected)
+    private static void CopyFiles(string source, string target, IReadOnlyDictionary<string, string> expected,
+        CancellationToken cancellation = default)
     {
         foreach (var (relative, hash) in expected.OrderBy(file => file.Key, StringComparer.Ordinal))
         {
+            cancellation.ThrowIfCancellationRequested();
             string destination = Path.Combine(target, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(Path.Combine(source, relative), destination);

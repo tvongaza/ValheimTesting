@@ -409,9 +409,14 @@ internal static class ServerLoad
         {
             try
             {
-                FixtureBake.Export(Path.Combine(output, "evidence"), bakeDestination, fixture, bakedBuild!,
+                FixtureBake.Export(Path.Combine(output, "evidence"), bakeDestination, fixture, bakedBuild!, cancellation,
                     output, serverInstall, choice.Client?.Install ?? output);
                 Console.WriteLine("Baked fixture: " + bakeDestination);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                Console.Error.WriteLine("Fixture export cancelled after the game run; no fixture was published.");
+                result = 1;
             }
             catch (Exception error)
             {
