@@ -81,9 +81,9 @@ internal static class EnvCommand
         {
             try
             {
-                string? loader = recipe.LoaderPackage == null ? null : BepInExLoaderPackage.Read(recipe.LoaderPackage).Root;
-                GameLaunch.RequireClientArchitecture(recipe.Install,
-                    recipe.Architecture == "arm64" ? ClientArchitecture.Arm64 : ClientArchitecture.X64, loader);
+                string selected = ClientArchitectureChoice.Select(null, recipe.Architecture, "macos",
+                    EnvironmentInventory.ThisMachine.OsArchitecture);
+                ClientArchitectureChoice.Require(recipe.Install, selected, recipe.LoaderPackage);
             }
             catch (Exception failure) when (failure is IOException or InvalidOperationException or ArgumentException)
             { problems.Add(new CampaignPreflightProblem(recipe.Name, "client architecture", failure.Message)); }

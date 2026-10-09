@@ -120,7 +120,7 @@ internal static class ServerLoad
         problem.Input != "game and loader" ? "" // an unreadable --loader-package is the "loader" input
             : problem.Actor == "server" && serverLoader == null ? " (--loader-package FILE gives the server's disposable copy a reviewed loader)"
             : problem.Actor == "client" && clientLoader == null ? " (--client-loader-package FILE gives the client's disposable copy a reviewed loader)" : "";
-    // --output, or a new timestamped directory under ./valheim-test-runs. Never an existing one.
+    // --output, or a new timestamped directory under ValheimTesting's data root. Never an existing one.
     private static string Output(Arguments parsed)
         => SmokeCommandOptions.Output(parsed.Options);
 
@@ -195,7 +195,7 @@ internal static class ServerLoad
         var server = choice.Server;
         Console.WriteLine($"server: {server.Name} on {server.Host} ({choice.ServerReason}): install {server.Install}; ValheimCLI port {server.CliPort}, game port {server.GamePort}");
         string? clientArchitecture = choice.Client is { } selectedClient
-            ? SmokeInputResolver.SelectClientArchitecture(parsed.Options.GetValueOrDefault("--client-architecture"), selectedClient) : null;
+            ? SmokeInputResolver.SelectClientArchitecture(parsed.Options.GetValueOrDefault("--client-architecture"), selectedClient, choice.Inventory) : null;
         Console.WriteLine(choice.Client is { } chosen
             ? $"client: {chosen.Name} on {chosen.Host} ({choice.ClientReason}): install {chosen.Install}; ValheimCLI port {chosen.CliPort}; joins {choice.Join}; architecture {clientArchitecture}"
             : "client: none (--server-only)");

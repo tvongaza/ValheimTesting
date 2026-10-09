@@ -59,7 +59,7 @@ try
     // The client: the inventory's (this machine's Valheim with no --inventory); --game overrides the install and --client-loader-package the loader.
     var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead,
         recordSelection: false);
-    string architecture = SmokeInputResolver.SelectClientArchitecture(options.GetValueOrDefault("--client-architecture"), client);
+    string architecture = SmokeInputResolver.SelectClientArchitecture(options.GetValueOrDefault("--client-architecture"), client, inventory);
     SmokeInputResolver.RequireClientArchitecture(inventory, client, architecture, client.LoaderPackage);
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
     Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}; architecture {architecture}");

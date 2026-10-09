@@ -5,10 +5,9 @@ internal static class SmokeModInput
 {
     internal sealed record Selection(IReadOnlyList<string> Mods, string Reason);
 
-    internal static Selection Select(IReadOnlyList<string> given, string directory, bool requireExplicit = false)
+    internal static Selection Select(IReadOnlyList<string> given, string directory)
     {
         if (given.Count != 0) return new(given.Select(Path.GetFullPath).ToArray(), "explicit --mod");
-        if (requireExplicit) throw new ArgumentException("server-load-ab needs at least two explicit --mod DLLs and one --remove-mod DLL.");
         directory = Path.GetFullPath(directory);
         string[] projects = Directory.GetFiles(directory, "*.csproj", SearchOption.TopDirectoryOnly).Order(StringComparer.Ordinal).ToArray();
         if (projects.Length != 1)
@@ -42,7 +41,7 @@ internal static class SmokeModInput
         string selected = chosen[0];
         DateTime latestSource = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
             .Where(file => !Path.GetRelativePath(directory, file).Split(Path.DirectorySeparatorChar)
-                .Any(part => part is "bin" or "obj"))
+                .Any(part => part is "bin" or "obj" or "valheim-test-runs"))
             .Select(File.GetLastWriteTimeUtc).Append(File.GetLastWriteTimeUtc(projects[0])).Max();
         if (latestSource > File.GetLastWriteTimeUtc(selected))
             throw new ArgumentException($"The newest source file in {directory} is newer than built plugin {selected}; rebuild the project or give --mod DLL explicitly.");

@@ -35,9 +35,11 @@ internal static class ServerLoadComparison
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
                 throw new ArgumentException("--remove-mod must name exactly one of at least two selected --mod DLLs.");
             // The server install both arms resolve against: given, or the inventory's server environment on this machine.
-            var serverRecipe = options.TryGetValue("--server", out string? serverOption)
-                ? new EnvironmentRecipe { Install = Path.GetFullPath(serverOption) }
-                : ServerLoad.Choose(parsed, Path.Combine(output, "choice")).Server;
+            // Freeze the first environment decision. The dependency locks and both arms
+            // must use the same choice even if the inventory changes before launch.
+            var selected = freezeInputs || !options.ContainsKey("--server")
+                ? ServerLoad.Choose(parsed, Path.Combine(output, "choice")) : null;
+            var serverRecipe = selected?.Server ?? new EnvironmentRecipe { Install = Path.GetFullPath(options["--server"]) };
             string server = serverRecipe.Install;
             var (loaderManifest, automaticLoader) = ServerLoad.SelectServerLoader(parsed, serverRecipe, shippedLoader);
             var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Instead, FrozenServerLoader: automaticLoader);
@@ -70,8 +72,7 @@ internal static class ServerLoadComparison
             string? frozenInventory = null;
             if (freezeInputs)
             {
-                var selected = ServerLoad.Choose(parsed, Path.Combine(output, "choice"));
-                frozenInventory = SmokeInputResolver.RecordSelected(selected.Inventory,
+                frozenInventory = SmokeInputResolver.RecordSelected(selected!.Inventory,
                     Path.Combine(output, "selection"),
                     new[] { selected.Server, selected.Client }.OfType<EnvironmentRecipe>());
             }

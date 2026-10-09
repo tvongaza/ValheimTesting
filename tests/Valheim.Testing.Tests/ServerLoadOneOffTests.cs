@@ -15,9 +15,10 @@ public sealed class ServerLoadOneOffTests : IDisposable
     [Fact]
     public void JoinedClientArchitectureOverridesTheInventoryAndServerOnlyRejectsIt()
     {
-        var recipe = new EnvironmentRecipe { Architecture = "x64" };
-        Assert.Equal("arm64", SmokeInputResolver.SelectClientArchitecture("arm64", recipe));
-        Assert.Equal("x64", SmokeInputResolver.SelectClientArchitecture(null, recipe));
+        var recipe = new EnvironmentRecipe { Host = "local", Architecture = "x64" };
+        var inventory = new EnvironmentInventory { Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = "macos" } } };
+        Assert.Equal("arm64", SmokeInputResolver.SelectClientArchitecture("arm64", recipe, inventory));
+        Assert.Equal("x64", SmokeInputResolver.SelectClientArchitecture(null, recipe, inventory));
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--client-architecture", "arm64"], out var parsed, out _));
         Assert.Equal("arm64", parsed!.Options["--client-architecture"]);
         Assert.False(ServerLoad.TryRead(["--mod", "a.dll", "--server-only", "--client-architecture", "arm64"], out _, out _));

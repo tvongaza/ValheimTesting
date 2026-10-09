@@ -151,6 +151,35 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.Single(EnvironmentInventory.Read(frozen).Environments);
     }
 
+    [Fact]
+    public async Task FrozenArmsKeepTheServerChosenBeforeDependencyResolution()
+    {
+        string inventory = Path.Combine(_rig.Root, "mutable-inventory.json");
+        void Inventory(string install) => File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            environments = new[] { new { name = "local-server", roles = new[] { "server" }, install } },
+        }));
+        Inventory(_rig.Game);
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "frozen-choice-ab");
+        var arguments = Arguments(output, _rig.Parent, companion).ToList();
+        arguments.RemoveRange(0, 2); // The inventory supplies the server.
+        arguments.AddRange(["--inventory", inventory, "--server-only"]);
+        int resolved = 0;
+        int result = await ServerLoadComparison.RunAsync([.. arguments],
+            resolve: request =>
+            {
+                if (++resolved == 1) Inventory(Path.Combine(_rig.Root, "changed-after-selection"));
+                return NativeDependencyResolver.Resolve(request);
+            },
+            runArm: _ => Task.FromResult(0), freezeInputs: true);
+
+        Assert.Equal(0, result);
+        Assert.Equal(2, resolved);
+        string frozen = Path.Combine(output, "selection", "environments.json");
+        Assert.Equal(_rig.Game, Assert.Single(EnvironmentInventory.Read(frozen).Environments).Install);
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, false)]

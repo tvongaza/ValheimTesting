@@ -64,7 +64,9 @@ public sealed class SmokeCommandOptionsTests
         Assert.True(ServerLoad.TryRead(["--mod", "mod.dll"], out var server, out _));
         Assert.False(start!.ContainsKey("--output"));
         Assert.False(server!.Options.ContainsKey("--output"));
-        Assert.Contains("valheim-test-runs", SmokeCommandOptions.Output(start));
+        string automatic = SmokeCommandOptions.Output(start);
+        Assert.StartsWith(Path.Combine(Valheim.Testing.Game.EnvironmentInventory.ThisMachine.DataRoot, "valheim-test-runs") +
+            Path.DirectorySeparatorChar, automatic, StringComparison.Ordinal);
         string existing = Directory.CreateTempSubdirectory("smoke-output-").FullName;
         try
         {
@@ -72,6 +74,30 @@ public sealed class SmokeCommandOptionsTests
                 new Dictionary<string, string> { ["--output"] = existing })).Message);
         }
         finally { Directory.Delete(existing); }
+    }
+
+    [Fact]
+    public void OutputCannotLeaveGeneratedSourcesInsideTheModProject()
+    {
+        string project = Directory.CreateTempSubdirectory("smoke-output-project-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(project, "MyMod.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            string nested = Path.Combine(project, "valheim-test-runs", "one");
+            Assert.Contains("outside the mod project", Assert.Throws<ArgumentException>(() =>
+                SmokeCommandOptions.Output(new Dictionary<string, string> { ["--output"] = nested }, project)).Message);
+            string sibling = Path.Combine(Path.GetDirectoryName(project)!, "sibling-" + Guid.NewGuid().ToString("N"));
+            Assert.Equal(sibling, SmokeCommandOptions.Output(new Dictionary<string, string> { ["--output"] = sibling }, project));
+        }
+        finally { Directory.Delete(project, recursive: true); }
+    }
+
+    [Fact]
+    public void StartNamesTheRenamedClientLoaderOption()
+    {
+        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--loader-package", "loader.json"],
+            out _, out _, out _, out _, out string error));
+        Assert.Contains("--client-loader-package", error);
     }
 
     [Fact]

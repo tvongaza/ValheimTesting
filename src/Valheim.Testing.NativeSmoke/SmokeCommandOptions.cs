@@ -1,4 +1,5 @@
 using System.Globalization;
+using Valheim.Testing.Game;
 
 /// <summary>The option contract shared by the one-shot hosted and dedicated-server commands.</summary>
 internal static class SmokeCommandOptions
@@ -53,7 +54,9 @@ internal static class SmokeCommandOptions
             { error = "--preflight-only runs no arm; preflight each arm with server-load instead."; return false; }
             if (!Table.TryGetValue(key, out var spec) || !(command switch
                 { Command.Start => spec.Start, Command.ServerLoad => spec.ServerLoad, _ => spec.ServerLoadAb }))
-            { error = "Unknown option: " + key; return false; }
+            { error = command == Command.Start && key == "--loader-package"
+                ? "start uses --client-loader-package (not --loader-package)."
+                : "Unknown option: " + key; return false; }
             if (spec.Kind == Kind.Switch)
             {
                 if (!result.Switches.Add(key)) { error = "Repeated option: " + key; return false; }
@@ -93,11 +96,19 @@ internal static class SmokeCommandOptions
         return true;
     }
 
-    internal static string Output(IReadOnlyDictionary<string, string> options)
+    internal static string Output(IReadOnlyDictionary<string, string> options, string? projectDirectory = null)
     {
         string output = options.TryGetValue("--output", out string? given) ? Path.GetFullPath(given)
-            : Path.GetFullPath(Path.Combine("valheim-test-runs", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) +
+            : Path.GetFullPath(Path.Combine(EnvironmentInventory.ThisMachine.DataRoot, "valheim-test-runs", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) +
                 "Z-" + Guid.NewGuid().ToString("N")[..8]));
+        string project = Path.GetFullPath(projectDirectory ?? Environment.CurrentDirectory);
+        if (Directory.Exists(project) && Directory.EnumerateFiles(project, "*.csproj", SearchOption.TopDirectoryOnly).Any())
+        {
+            string relative = Path.GetRelativePath(project, output);
+            if (relative == "." || (!Path.IsPathRooted(relative) && relative != ".." &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
+                throw new ArgumentException("--output must be outside the mod project; generated adapter .cs files would be compiled into the mod: " + output);
+        }
         if (Path.Exists(output)) throw new IOException("--output must be new; existing evidence will not be overwritten: " + output);
         return output;
     }

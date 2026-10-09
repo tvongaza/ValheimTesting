@@ -109,11 +109,13 @@ public sealed class SmokeModInputTests : IDisposable
     }
 
     [Fact]
-    public void ComparisonRequiresExplicitModInputs()
+    public void LegacyRunSourcesDoNotInvalidateAnUnchangedBuild()
     {
         Project("MyMod.csproj");
-        Plugin("bin/Release/net10.0/MyMod.dll", "one");
-        Assert.Contains("explicit --mod", Assert.Throws<ArgumentException>(() => SmokeModInput.Select([], _root, requireExplicit: true)).Message);
+        string plugin = Plugin("bin/Release/net10.0/MyMod.dll", "one");
+        File.SetLastWriteTimeUtc(plugin, DateTime.UtcNow.AddMinutes(-1));
+        Write("valheim-test-runs/old/adapter/TestAdapter.cs", "class TestAdapter { }");
+        Assert.Equal(plugin, Assert.Single(SmokeModInput.Select([], _root).Mods));
     }
 
     private void Project(string name)
