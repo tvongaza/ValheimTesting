@@ -198,6 +198,7 @@ internal static class HostedRuntimeStage
             if (!selected.TryAdd(file.RelativePath, (local, FileHash.Sha256(local))))
                 throw new ArgumentException("Two selected runtime files have the same target path: " + file.RelativePath, nameof(files));
         }
+        bool explicitlySelectedSettings = selected.ContainsKey(BepInExSettings.RelativePath);
         // Use the existing reviewed package contract, not a hand-repaired source install.
         loaderPackage?.Validate();
         if (loaderPackage != null)
@@ -215,6 +216,13 @@ internal static class HostedRuntimeStage
         // A shared campaign preflight already hashed and inspected this source. Reuse that exact listing, then compare
         // the copied runtime against it: if the source changed before or during the copy, the mismatch is refused.
         var sourceListing = inspectedSource ?? await InspectSourceAsync(host, kind, source, loaderPackage, timeout, cancellation).ConfigureAwait(false);
+        const string settings = BepInExSettings.RelativePath;
+        // Clearing config must not discard the source loader's entrypoint settings. An explicit staged
+        // config or a reviewed loader package takes precedence over the source file.
+        bool preserveSourceSettings = BepInExSettings.Choose(
+            sourceListing.Files.ContainsKey(settings),
+            loaderPackage?.Files.ContainsKey(settings) == true,
+            explicitlySelectedSettings) == BepInExSettingsOrigin.Source;
         string payload = Path.Combine(Path.GetTempPath(), "valheim-host-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(payload);
         bool shipped = false, copied = false;
@@ -257,7 +265,8 @@ internal static class HostedRuntimeStage
             string names = string.Join('\n', selected.Keys.Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name))));
             var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsApply : BashApply,
                 new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["files"] = names,
-                    ["loader"] = loaderPackage == null ? "" : string.Join('\n', InstallPins.LoaderEntries) }, timeout, cancellation).ConfigureAwait(false);
+                    ["loader"] = loaderPackage == null ? "" : string.Join('\n', InstallPins.LoaderEntries),
+                    ["preserveConfig"] = preserveSourceSettings ? "true" : "false" }, timeout, cancellation).ConfigureAwait(false);
             result.EnsureSuccess($"Staging selected plugins on {host.Name}");
             if (InteractiveClient.Line(result.Stdout, "VT-STAGED") == null)
                 throw new HostOperationException($"Unexpected reply while staging plugins on {host.Name}", result);
@@ -265,10 +274,14 @@ internal static class HostedRuntimeStage
             foreach (var (relative, value) in selected)
                 if (!runtime.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException($"The prepared runtime file {relative} on {host.Name} differs from its pinned source.");
+            if (preserveSourceSettings && (!runtime.Files.TryGetValue(settings, out string? configHash) ||
+                !configHash.Equals(sourceListing.Files[settings], StringComparison.OrdinalIgnoreCase)))
+                throw new IOException($"The prepared runtime's {settings} on {host.Name} differs from its pinned source.");
             foreach (string directory in new[] { "plugins", "scripts", "config", "patchers" })
             {
                 string prefix = "BepInEx/" + directory + "/";
                 var expected = selected.Keys.Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToHashSet(HostNames);
+                if (directory == "config" && preserveSourceSettings) expected.Add(settings);
                 if (runtime.Files.Keys.Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Any(name => !expected.Contains(name)))
                     throw new IOException($"The prepared runtime on {host.Name} retained an unselected {directory} file.");
             }
@@ -341,6 +354,9 @@ internal static class HostedRuntimeStage
 
     internal static readonly string WindowsApply = """
         $utf8 = New-Object Text.UTF8Encoding $false
+        if ($preserveConfig -eq 'true') {
+            [IO.File]::Copy((Join-Path $runtime 'BepInEx\config\BepInEx.cfg'), (Join-Path $stage 'source-BepInEx.cfg'))
+        }
         foreach ($name in @('plugins', 'scripts', 'config', 'patchers')) {
             $dir = Join-Path $runtime ('BepInEx\' + $name)
             if ([IO.Directory]::Exists($dir)) { [IO.Directory]::Delete($dir, $true) }
@@ -361,12 +377,18 @@ internal static class HostedRuntimeStage
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to))
             [IO.File]::Copy($from, $to, $true)
         }
+        if ($preserveConfig -eq 'true') {
+            [IO.File]::Copy((Join-Path $stage 'source-BepInEx.cfg'), (Join-Path $runtime 'BepInEx\config\BepInEx.cfg'))
+        }
         [IO.Directory]::Delete($stage, $true)
         'VT-STAGED selected files only'
         """.ReplaceLineEndings("\n");
 
     internal static readonly string BashApply = """
         set -eu
+        if [ "$preserveConfig" = true ]; then
+          cp "$runtime/BepInEx/config/BepInEx.cfg" "$stage/source-BepInEx.cfg"
+        fi
         for name in plugins scripts config patchers; do
           rm -rf -- "$runtime/BepInEx/$name"
           mkdir -p -- "$runtime/BepInEx/$name"
@@ -382,6 +404,9 @@ internal static class HostedRuntimeStage
           mkdir -p "$(dirname "$runtime/$relative")"
           cp "$stage/$relative" "$runtime/$relative"
         done <<< "$files"
+        if [ "$preserveConfig" = true ]; then
+          cp "$stage/source-BepInEx.cfg" "$runtime/BepInEx/config/BepInEx.cfg"
+        fi
         rm -rf -- "$stage"
         echo 'VT-STAGED selected files only'
         """.ReplaceLineEndings("\n");

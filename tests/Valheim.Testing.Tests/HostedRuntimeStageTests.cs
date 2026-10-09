@@ -134,6 +134,9 @@ public sealed class HostedRuntimeStageTests : IDisposable
         string old = Path.Combine(source, "BepInEx", "plugins", "old.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(old)!);
         File.WriteAllText(old, "old plugin");
+        string sourceConfig = Path.Combine(source, "BepInEx", "config", "BepInEx.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceConfig)!);
+        File.WriteAllText(sourceConfig, "[Preloader.Entrypoint]\nType = GameObject\n");
         string chosen = Path.Combine(_root, "selected.dll");
         File.WriteAllText(chosen, "selected plugin");
         string run = Path.Combine(_root, "vt-one");
@@ -144,6 +147,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal("1", Assert.Single(host.BundleChecks)["repair"]);
         Assert.StartsWith(run, Assert.Single(host.BundleChecks)["app"]);
         Assert.False(listing.Files.ContainsKey("BepInEx/plugins/old.dll"));
+        Assert.Equal(FileHash.Sha256(sourceConfig), listing.Files["BepInEx/config/BepInEx.cfg"]);
+        Assert.Equal(File.ReadAllBytes(sourceConfig), File.ReadAllBytes(Path.Combine(run, "runtime", "BepInEx", "config", "BepInEx.cfg")));
         Assert.True(File.Exists(old));
         Assert.False(Directory.Exists(Path.Combine(run, "staging")));
         var inspected = await HostedRuntimeStage.InspectSourceAsync(host, HostedRuntimeKind.Client, source, null,
@@ -174,6 +179,9 @@ public sealed class HostedRuntimeStageTests : IDisposable
         File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core");
         File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "preloader");
         FakeInstalls.MacLoader(source);
+        string sourceConfig = Path.Combine(source, "BepInEx", "config", "BepInEx.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceConfig)!);
+        File.WriteAllText(sourceConfig, "[Preloader.Entrypoint]\nType = GameObject\n");
         string selected = Path.Combine(_root, "mac-server-mod.dll");
         File.WriteAllText(selected, "selected mod");
         var before = WorldFixture.Manifest(source);
@@ -186,6 +194,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal(ServerPlatform.MacOS, HostInstall.DetectServer(listing));
         Assert.Contains(GameLaunch.ServerMacExecutable, listing.Executables);
         Assert.Equal(FileHash.Sha256(selected), listing.Files["BepInEx/plugins/mac-server-mod.dll"]);
+        Assert.Equal(File.ReadAllBytes(sourceConfig), File.ReadAllBytes(Path.Combine(run, "runtime", "BepInEx", "config", "BepInEx.cfg")));
         Assert.Equal(before, WorldFixture.Manifest(source));
         Assert.False(File.Exists(Path.Combine(source, "BepInEx", "plugins", "mac-server-mod.dll")));
         Assert.False(Directory.Exists(Path.Combine(run, "staging")));
@@ -238,6 +247,9 @@ public sealed class HostedRuntimeStageTests : IDisposable
         FakeInstalls.Server(install);
         File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
         StageLoader(install);
+        string sourceConfig = Path.Combine(install, "BepInEx", "config", "BepInEx.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceConfig)!);
+        File.WriteAllText(sourceConfig, "source settings");
         string old = Path.Combine(install, "BepInEx", "plugins", "unrelated.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(old)!);
         File.WriteAllText(old, "unrelated");
@@ -250,6 +262,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
             [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen.dll")], TimeSpan.FromSeconds(30));
         Assert.Equal(FileHash.Sha256(chosen), listing.Files["BepInEx/plugins/chosen.dll"]);
+        Assert.Equal(File.ReadAllBytes(sourceConfig), File.ReadAllBytes(Path.Combine(host.Local(runtime), "BepInEx", "config", "BepInEx.cfg")));
         Assert.True(File.Exists(old));
         Assert.False(File.Exists(Path.Combine(host.Local(runtime), "BepInEx", "plugins", "unrelated.dll")));
         Assert.False(Directory.Exists(host.Local(staging)));
@@ -262,9 +275,48 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.DoesNotContain(listing.Files.Keys, file => file.StartsWith("logs/", StringComparison.OrdinalIgnoreCase));
         // A nested logs folder is the game's own: only the install's top level is left out.
         Assert.True(File.Exists(Path.Combine(host.Local(runtime), "BepInEx", "logs", "kept.txt")));
+
+        string explicitConfig = Path.Combine(_root, "explicit-BepInEx.cfg");
+        File.WriteAllText(explicitConfig, "explicit settings");
+        const string explicitRuntime = @"C:\runs\explicit\runtime", explicitStaging = @"C:\runs\explicit\staging";
+        var explicitListing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Server, source,
+            explicitRuntime, explicitStaging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen.dll"),
+                new HostedRuntimeFile(explicitConfig, BepInExSettings.RelativePath)], TimeSpan.FromSeconds(30));
+        Assert.Equal("explicit settings", File.ReadAllText(Path.Combine(host.Local(explicitRuntime),
+            "BepInEx", "config", "BepInEx.cfg")));
+        Assert.Equal(FileHash.Sha256(explicitConfig), explicitListing.Files[BepInExSettings.RelativePath]);
+        Assert.Equal("source settings", File.ReadAllText(sourceConfig));
     }
 
-    [Fact] public async Task ReviewedLoaderReplacesAnIncoherentSourceOnlyInTheDisposableRuntime()
+    [Fact] public async Task ASourceBepInExConfigChangedDuringStagingFailsItsPin()
+    {
+        var host = new FakeServerHost("windows-server", Mirror, windows: true);
+        const string source = @"C:\game\server", runtime = @"C:\runs\config-pin\runtime", staging = @"C:\runs\config-pin\staging";
+        string install = host.Local(source);
+        FakeInstalls.Server(install);
+        File.WriteAllText(Path.Combine(install, GameLaunch.ServerWindowsExecutable), "server");
+        StageLoader(install);
+        string config = Path.Combine(install, "BepInEx", "config", "BepInEx.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+        File.WriteAllText(config, "pinned source settings");
+        string chosen = Path.Combine(_root, "config-pin.dll");
+        File.WriteAllText(chosen, "selected plugin");
+        host.AfterApply = copy => File.AppendAllText(Path.Combine(copy, "BepInEx", "config", "BepInEx.cfg"), "changed");
+
+        var failure = await Assert.ThrowsAsync<IOException>(() => HostedRuntimeStage.PrepareAsync(host,
+            HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/config-pin.dll")], TimeSpan.FromSeconds(30)));
+
+        Assert.Contains("differs from its pinned source", failure.Message);
+        Assert.Equal("pinned source settings", File.ReadAllText(config));
+        Assert.False(Directory.Exists(host.Local(runtime)));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReviewedLoaderReplacesAnIncoherentSourceOnlyInTheDisposableRuntime(bool packageHasSettings)
     {
         var host = new FakeServerHost("windows-client", Mirror, windows: true);
         const string source = @"C:\game\client", runtime = @"C:\runs\loader\runtime", staging = @"C:\runs\loader\staging";
@@ -277,6 +329,15 @@ public sealed class HostedRuntimeStageTests : IDisposable
         File.WriteAllText(Path.Combine(packageRoot, BepInExLoader.Core), "core");
         File.WriteAllText(Path.Combine(packageRoot, BepInExLoader.Preloader), "preloader");
         StageLoader(packageRoot);
+        string sourceConfig = Path.Combine(install, "BepInEx", "config", "BepInEx.cfg");
+        string packageConfig = Path.Combine(packageRoot, "BepInEx", "config", "BepInEx.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceConfig)!);
+        File.WriteAllText(sourceConfig, "source settings");
+        if (packageHasSettings)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(packageConfig)!);
+            File.WriteAllText(packageConfig, "package settings");
+        }
         var package = BepInExLoaderPackage.Capture(packageRoot, "test-loader", "1");
         File.WriteAllText(Path.Combine(install, "winhttp.dll"), "target_assembly");
         File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), "[General]\nenabled=true\ntargetAssembly=BepInEx/core/BepInEx.Preloader.dll\n");
@@ -291,6 +352,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
             files, TimeSpan.FromSeconds(30), loaderPackage: package);
         foreach (var file in package.Files) Assert.Equal(file.Value, listing.Files[file.Key]);
+        Assert.Equal(File.ReadAllBytes(packageHasSettings ? packageConfig : sourceConfig),
+            File.ReadAllBytes(Path.Combine(host.Local(runtime), "BepInEx", "config", "BepInEx.cfg")));
         Assert.False(listing.Files.ContainsKey("BepInEx/core/stale.dll"));
         Assert.Equal(package.Loader, HostInstall.Pins(listing).Loader);
         WorldFixture.Verify(install, before);

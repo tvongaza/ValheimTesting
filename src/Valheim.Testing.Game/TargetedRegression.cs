@@ -811,9 +811,18 @@ public sealed class TargetedRegression
             if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
         }
         foreach (string folder in new[] { "plugins", "patchers", "config" }) Directory.CreateDirectory(Path.Combine(install, "BepInEx", folder));
-        string settings = package == null ? Path.Combine(game, "BepInEx", "config", BepInExConfig)
-            : Path.Combine(package.Root, "BepInEx", "config", BepInExConfig);
-        if (File.Exists(settings)) File.Copy(settings, Path.Combine(install, "BepInEx", "config", BepInExConfig));
+        string sourceSettings = Path.Combine(game, "BepInEx", "config", BepInExConfig);
+        string? packageSettings = package == null ? null : Path.Combine(package.Root, "BepInEx", "config", BepInExConfig);
+        // An explicit regression config is staged later, after this copy, and therefore wins over either source.
+        var settingsOrigin = BepInExSettings.Choose(File.Exists(sourceSettings),
+            packageSettings != null && File.Exists(packageSettings), explicitExists: false);
+        string? settings = settingsOrigin switch
+        {
+            BepInExSettingsOrigin.Source => sourceSettings,
+            BepInExSettingsOrigin.LoaderPackage => packageSettings,
+            _ => null,
+        };
+        if (settings != null) File.Copy(settings, Path.Combine(install, "BepInEx", "config", BepInExConfig));
         var copied = InstallPins.Of(install);
         if (copied.Game != pins.Game || copied.Loader != pins.Loader)
             throw new InvalidOperationException($"The disposable install {install} does not match the selected game and loader after copying (game {copied.Game} vs {pins.Game}, loader {copied.Loader} vs {pins.Loader}). Remove it and stage again.");
