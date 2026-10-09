@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
@@ -104,9 +103,7 @@ internal static class SmokeInputs
             LeaseHost = client.Host, LeaseDirectory = inventory.LeaseHost == client.Host && inventory.LeaseDirectory.Length != 0 ? inventory.LeaseDirectory
                 : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(client.Runtime))!, "leases"),
         };
-        Directory.CreateDirectory(output);
-        File.WriteAllText(Path.Combine(output, "environments.json"), JsonSerializer.Serialize(recorded,
-            new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull }) + "\n");
+        SmokeInputResolver.RecordSelected(recorded, output, [client]);
         return (inventory, client, shipped);
     }
 }

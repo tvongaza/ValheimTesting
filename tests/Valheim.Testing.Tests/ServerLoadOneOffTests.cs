@@ -53,6 +53,38 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
+    public async Task NamedInventoryChoiceIsFrozenForTheDerivedCampaign()
+    {
+        var machine = WithValheim(out string clientInstall);
+        string inventoryFile = Path.Combine(_rig.Root, "chosen-inventory.json");
+        File.WriteAllText(inventoryFile, JsonSerializer.Serialize(new
+        {
+            environments = new object[]
+            {
+                new { name = "server-choice", roles = new[] { "server" }, install = _rig.Game },
+                new { name = "first-client", roles = new[] { "client" }, install = clientInstall },
+                new { name = "chosen-client", roles = new[] { "client" }, install = clientInstall },
+            },
+        }));
+        string output = Path.Combine(_rig.Root, "frozen-choice");
+        var args = Arguments(output).Skip(2).Concat(["--inventory", inventoryFile,
+            "--client-env", "chosen-client", "--preflight-only"]).ToArray();
+        using (EnvironmentInventory.UseMachine(machine))
+            Assert.Equal(0, await ServerLoad.RunAsync(args, new ServerLoad.Seams(
+                Inspect: _ => Task.FromResult(Ready),
+                ClientArchitecture: (_, _, _, _) => { })));
+
+        string frozenFile = Path.Combine(output, "environments.json");
+        var campaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "campaign.json"))).RootElement;
+        Assert.Equal(frozenFile, campaign.GetProperty("inventory").GetString());
+        Assert.Equal(["server-choice", "chosen-client"],
+            EnvironmentInventory.Read(frozenFile, machine).Environments.Select(recipe => recipe.Name));
+        File.WriteAllText(inventoryFile, "{ broken source inventory");
+        Assert.Equal(["server-choice", "chosen-client"],
+            EnvironmentInventory.Read(frozenFile, machine).Environments.Select(recipe => recipe.Name));
+    }
+
+    [Fact]
     public async Task HoldNeedsAnActualRunRatherThanPreflightOnly()
     {
         string output = Path.Combine(_rig.Root, "hold-refused");

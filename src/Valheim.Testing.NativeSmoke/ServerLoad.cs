@@ -231,6 +231,11 @@ internal static class ServerLoad
             if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
         SmokeOutput.RefuseInside(output, new[] { serverInstall, cliFiles, choice.Client?.Install }.OfType<string>().ToArray());
         state.OutputChecked = true;
+        // The later campaign reads this exact chosen set, even if an inventory file or
+        // Steam detection changes before its preflight. It cannot choose another actor.
+        string selectedInventory = SmokeInputResolver.RecordSelected(choice.Inventory, output,
+            new[] { server, choice.Client }.OfType<EnvironmentRecipe>());
+        choice = choice with { InventoryFile = selectedInventory };
 
         var dependencies = NativeDependencyResolver.Resolve(SmokeDependencyInputs.Request(parsed.Mods, serverInstall, core,
             cliManifest, cliFiles, parsed.Roots, parsed.Optional,

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
@@ -7,6 +8,29 @@ using Valheim.Testing.GameSessions;
 internal static class SmokeInputResolver
 {
     internal sealed record LocalOverride(string Name, string Role, string? Install, string? Loader = null);
+
+    // A one-shot command records only the recipes it selected. Campaign and regression
+    // consumers read this frozen choice; a changed source inventory cannot select again.
+    internal static string RecordSelected(EnvironmentInventory inventory, string output,
+        IEnumerable<EnvironmentRecipe> selected)
+    {
+        string path = Path.Combine(output, "environments.json");
+        var recorded = new EnvironmentInventory
+        {
+            Hosts = inventory.Hosts,
+            Environments = selected.ToList(),
+            LeaseHost = inventory.LeaseHost,
+            LeaseDirectory = inventory.LeaseDirectory,
+        };
+        Directory.CreateDirectory(output);
+        File.WriteAllText(path, JsonSerializer.Serialize(recorded, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        }) + "\n");
+        return path;
+    }
 
     internal static (EnvironmentInventory Inventory, string? File) ReadInventory(
         IReadOnlyDictionary<string, string> options, string output, IReadOnlyList<LocalOverride> overrides,
