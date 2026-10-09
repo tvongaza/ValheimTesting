@@ -102,6 +102,16 @@ jobs:
         run: |
           dotnet tool restore
           dotnet run scripts/api-docs.cs
+          # Prove the selected-entrypoint gate refuses a missing rendered summary.
+          page=docs/reference/api/Valheim.Testing.ITerrain.yml
+          cp "$page" "$RUNNER_TEMP/ITerrain.yml"
+          sed -i '0,/^  summary:/s/^  summary:/  omitted-summary:/' "$page"
+          if out=$(dotnet run scripts/api-docs.cs -- check-docs 2>&1); then
+            echo "$out"; echo "::error::An undocumented entrypoint passed the documentation gate."; exit 1
+          fi
+          case "$out" in *'has no XML summary: Valheim.Testing.ITerrain'*) ;; *) echo "$out"; exit 1 ;; esac
+          cp "$RUNNER_TEMP/ITerrain.yml" "$page"
+          dotnet run scripts/api-docs.cs -- check-docs
       # The committed public-api lists match the builds; a pull request that changes them says why on a line starting
       # "public-api:" in its description, read here rather than from the event, so editing it and re-running the job is enough.
       - name: Public API lists

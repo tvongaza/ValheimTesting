@@ -28,6 +28,8 @@ namespace Valheim.Testing.Adapter
         /// <summary>How long to wait for ValheimCLI's extension API before giving up; the adapter then stays inert.</summary>
         public static float ApiWaitSeconds = 30f;
 
+        /// <summary>Waits for ValheimCLI's extension API, then registers the session identity and the mod's commands;
+        /// a timeout logs an error and leaves the adapter inert.</summary>
         public static IEnumerator Register(string id, string version, string tokenVariable, Func<bool> modReady,
             Action<ExtensionRegistration> registered, Action<string> logError, params ExtensionCommand[] commands)
         {

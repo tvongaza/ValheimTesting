@@ -17,8 +17,11 @@ namespace Valheim.Testing.Game;
 /// </example>
 public sealed class WorldFixture : IDisposable
 {
+    /// <summary>The full path of this disposable copy, never the source fixture directory.</summary>
     public string DirectoryPath { get; }
+    /// <summary>The source file SHA-256s pinned or recorded when this copy was made, by relative path.</summary>
     public IReadOnlyDictionary<string, string> SourceHashes { get; }
+    /// <summary>When true, <see cref="Dispose"/> leaves the copy for inspection; the caller then owns its cleanup.</summary>
     public bool Preserve { get; set; }
     private bool _disposed;
     // The journal run the copy was made under, kept for its later lines: they land in the same run whatever flow retires it.

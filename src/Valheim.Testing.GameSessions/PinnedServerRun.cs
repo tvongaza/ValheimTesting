@@ -181,6 +181,7 @@ public static class PinnedServerRun
     /// </summary>
     internal static (long PerFile, long Total) RetainLimits(bool passed) => passed ? (64L << 20, 256L << 20) : (1L << 30, 2L << 30);
 
+    /// <summary>Runs the pinned dedicated-server plan named by <paramref name="args"/> and returns a process exit code after owned cleanup.</summary>
     public static async Task<int> MainAsync<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
     {
         string[] modes = ["validate", "run"];

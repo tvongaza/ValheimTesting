@@ -32,6 +32,7 @@ namespace Valheim.Testing.Game;
 /// </example>
 public sealed class DisposableCharacterStore
 {
+    /// <summary>The file name of this store's own manifest, inside <see cref="Root"/>.</summary>
     public const string ManifestFile = "disposable-characters.json";
     private const int Format = 1;
     private static readonly Regex Name = new("^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", RegexOptions.CultureInvariant);

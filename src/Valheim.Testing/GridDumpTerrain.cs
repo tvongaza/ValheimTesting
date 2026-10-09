@@ -29,15 +29,25 @@ public sealed class GridDumpTerrain : ITerrain
     private readonly float[]? _riverWeights;
     private readonly float[]? _riverWidths;
 
+    /// <summary>The caller's source label, included in out-of-range and missing-layer errors.</summary>
     public string Provenance { get; }
+    /// <summary>Horizontal x coordinate of the first grid column, in metres.</summary>
     public float OriginX { get; }
+    /// <summary>Horizontal z coordinate of the first grid row, in metres.</summary>
     public float OriginZ { get; }
+    /// <summary>Distance between adjacent nodes on either horizontal axis, in metres.</summary>
     public float Spacing { get; }
+    /// <summary>Number of nodes along x; at least two.</summary>
     public int CountX { get; }
+    /// <summary>Number of nodes along z; at least two.</summary>
     public int CountZ { get; }
+    /// <summary>Inclusive x coordinate of the last column.</summary>
     public float MaxX => (float)(OriginX + (double)(CountX - 1) * Spacing);
+    /// <summary>Inclusive z coordinate of the last row.</summary>
     public float MaxZ => (float)(OriginZ + (double)(CountZ - 1) * Spacing);
+    /// <summary>Whether biome samples were supplied; otherwise <see cref="GetBiome"/> throws.</summary>
     public bool HasBiome => _biomes != null;
+    /// <summary>Whether both river layers were supplied; otherwise <see cref="GetRiverWeight"/> throws.</summary>
     public bool HasRiver => _riverWeights != null;
     /// <summary>Whether the dump includes Valheim's unitless `GetBaseHeight` samples, distinct from metre-valued height.</summary>
     public bool HasBaseHeight => _baseHeights != null;
@@ -88,6 +98,7 @@ public sealed class GridDumpTerrain : ITerrain
         Cell(x, OriginX, CountX, out double fx) && Cell(z, OriginZ, CountZ, out double fz) &&
         fx == Math.Round(fx) && fz == Math.Round(fz);
 
+    /// <summary>Returns exact node height or bilinear height between nodes, in metres; outside the grid throws.</summary>
     public float GetHeight(float x, float z) => Sample(_heights, x, z);
 
     /// <summary>
@@ -101,6 +112,7 @@ public sealed class GridDumpTerrain : ITerrain
         return Sample(_baseHeights, x, z);
     }
 
+    /// <summary>Returns the nearest node's biome; ties choose the node at larger x or z. A missing layer or outside coordinate throws.</summary>
     public TerrainBiome GetBiome(float x, float z)
     {
         Check(x, z);
@@ -109,6 +121,7 @@ public sealed class GridDumpTerrain : ITerrain
         return _biomes[j * CountX + i];
     }
 
+    /// <summary>Returns exact node river facts or bilinear facts between nodes. A missing layer or outside coordinate throws.</summary>
     public void GetRiverWeight(float x, float z, out float weight, out float width)
     {
         Check(x, z);
