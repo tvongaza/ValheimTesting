@@ -70,8 +70,7 @@ public sealed class RunRecoveryTests : IDisposable
         File.WriteAllText(personal, "personal save");
         Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
             ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
-            ("characterKind", "hosted"),
-            ("expectedSha256", FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes("registered save"))));
+            ("characterKind", "hosted"));
 
         var report = await RecoverAsync(run);
 
@@ -91,9 +90,13 @@ public sealed class RunRecoveryTests : IDisposable
         string local = _host.Local(Characters);
         Directory.CreateDirectory(local);
         if (copyFinished) File.WriteAllBytes(Path.Combine(local, "vt01.fch"), source);
-        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
+        var fields = new List<(string, string)>
+        {
             ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
-            ("characterKind", kind), ("local", "true"), ("expectedSha256", FileHash.Sha256(source)));
+            ("characterKind", kind), ("local", "true"),
+        };
+        if (kind == "regression") fields.Add(("expectedSha256", FileHash.Sha256(source)));
+        Line(_host, run, "client", Gone, JournalEntry.CharacterIntended, [.. fields]);
 
         var report = await RecoverAsync(run);
 
@@ -113,7 +116,7 @@ public sealed class RunRecoveryTests : IDisposable
         File.WriteAllBytes(Path.Combine(local, "vt01.fch"), bytes);
         Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
             ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
-            ("characterKind", "hosted"), ("expectedSha256", FileHash.Sha256(bytes)));
+            ("characterKind", "hosted"));
 
         var report = await RecoverAsync(run);
 

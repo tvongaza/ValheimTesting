@@ -868,7 +868,7 @@ public static class HostedCampaignPreparation
                         var character = selected with { Input = selected.Input.WithDirectories(folders.Characters!, folders.UserData!) };
                         await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CharacterIntended,
                             ("characters", folders.Characters!), ("userData", folders.UserData!), ("fileName", character.Input.FileName),
-                            ("characterKind", "hosted"), ("expectedSha256", character.Handle.Sha256)), timeout, cancellation).ConfigureAwait(false);
+                            ("characterKind", "hosted")), timeout, cancellation).ConfigureAwait(false);
                         await HostedCharacterStage.StageAsync(host, character, HostPath.Join(parent, "character-stage"), timeout, cancellation).ConfigureAwait(false);
                         stagedCharacters.Add((hostName, name, character.Input));
                         await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CharacterDone,
