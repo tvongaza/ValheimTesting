@@ -49,11 +49,13 @@ jobs:
       - name: Pack release packages
         run: |
           mkdir -p release
+          dotnet run scripts/tool-pack.cs -- clean
           for project in src/Valheim.Testing*/Valheim.Testing*.csproj; do
             dir=$(dirname "$project")
             test "$(basename "$dir").csproj" = "$(basename "$project")" || continue
             dotnet pack "$project" -c Release -o release "-p:RepositoryCommit=$GITHUB_SHA" -p:ContinuousIntegrationBuild=true -p:ValheimTestingRelease=true
           done
+          dotnet run scripts/tool-pack.cs -- verify release
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
           (cd release && sha256sum *.nupkg)
       # Before the push, so "new" means this run publishes it. A version already on NuGet.org is skipped by the
