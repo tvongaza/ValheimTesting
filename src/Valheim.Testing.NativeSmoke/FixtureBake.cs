@@ -134,9 +134,10 @@ internal static class FixtureBake
                 root.GetProperty("world").GetProperty("Name").GetString() != identity.Name)
                 throw new InvalidDataException("The baked fixture manifest names another world or schema: " + path);
             var pinned = root.GetProperty("filesSha256").EnumerateObject()
-                .ToDictionary(file => file.Name, file => file.Value.GetString() ??
+                .ToDictionary(file => PortablePath(file.Name), file => file.Value.GetString() ??
                     throw new InvalidDataException("The baked fixture manifest has a null file hash."), StringComparer.Ordinal);
-            if (pinned.Count != actual.Count || actual.Any(file => !pinned.TryGetValue(file.Key, out string? hash) ||
+            var present = Sorted(actual);
+            if (pinned.Count != present.Count || present.Any(file => !pinned.TryGetValue(file.Key, out string? hash) ||
                     !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException("The baked fixture's world files differ from its manifest: " + path);
         }
@@ -218,7 +219,9 @@ internal static class FixtureBake
     }
 
     private static SortedDictionary<string, string> Sorted(IReadOnlyDictionary<string, string> files) =>
-        new(files.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal);
+        new(files.ToDictionary(pair => PortablePath(pair.Key), pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal);
+
+    private static string PortablePath(string relative) => relative.Replace('\\', '/');
 
     private static string Sha256(string file)
         => FileHash.Sha256(file);

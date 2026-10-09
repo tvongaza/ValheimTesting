@@ -154,7 +154,12 @@ public sealed class ServerLoadOneOffTests : IDisposable
             "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO");
         AddObservationCapabilities(args);
         Assert.Equal(1, await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
-            Campaign: (_, plan, _, _, _) => { Assert.Equal(300, plan.QuitSeconds); return Task.FromResult(1); })));
+            Campaign: (_, plan, _, _, options) =>
+            {
+                Assert.Equal(300, plan.QuitSeconds);
+                Assert.Equal(TimeSpan.FromMinutes(10), options.CleanupBudget);
+                return Task.FromResult(1);
+            })));
         Assert.Equal(300, ServerRunPlan.Read<ServerRunPlan>(Path.Combine(output, "plan.json")).QuitSeconds);
     }
 

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Valheim.Testing.Game;
 using Xunit;
 
@@ -135,6 +136,24 @@ public sealed class FixtureBakeTests : IDisposable
         Assert.Equal(input.Identity.Uid, reused.Identity.Uid);
         File.AppendAllText(Path.Combine(baked, "worlds_local", DefaultSmokeWorld.Name, "_main.2.fwl2"), "changed");
         Assert.Throws<InvalidDataException>(() => FixtureBake.Prepare(baked, Path.Combine(root, "tampered")));
+    }
+
+    [Fact]
+    public void BakedFixtureManifestUsesPortableNamesAndAcceptsTheOtherPlatformsSeparators()
+    {
+        var input = Source();
+        string baked = Path.Combine(root, "baked");
+        FixtureBake.Export(Evidence("2", "true"), baked, input, EmptyBuild());
+        string path = Path.Combine(baked, "fixture-manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        var files = manifest["filesSha256"]!.AsObject();
+        Assert.All(files, entry => Assert.DoesNotContain('\\', entry.Key));
+        var otherPlatform = new JsonObject();
+        foreach (var entry in files)
+            otherPlatform[entry.Key.Replace('/', '\\')] = entry.Value?.DeepClone();
+        manifest["filesSha256"] = otherPlatform;
+        File.WriteAllText(path, manifest.ToJsonString());
+        Assert.Equal(input.Identity.Uid, FixtureBake.Prepare(baked, Path.Combine(root, "reuse-other-os")).Identity.Uid);
     }
 
     [Fact]

@@ -31,6 +31,8 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// server has started (<c>session.Server.Game</c>), with its report, output and cancellation.
     /// </summary>
     public required Func<GameSession, TPlan, Task> Scenario { get; init; }
+    /// <summary>Optional cleanup budget for a run whose final server save needs longer than the usual five minutes.</summary>
+    public TimeSpan? CleanupBudget { get; init; }
     /// <summary>Test seam: the owned server's session (scripted) instead of launching the copied runtime.</summary>
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
@@ -696,7 +698,7 @@ public static class PinnedServerRun
         {
             // Cleanup runs on its own bounded token, never the run's (which a Ctrl+C cancelled), from the first stop on; a second
             // Ctrl+C from here abandons what it can still give up (the stop itself is bounded by the plan's own quit and kill).
-            var cleanup = cancellation.BeginCleanup();
+            var cleanup = cancellation.BeginCleanup(options.CleanupBudget);
             bool stopped = true;
             if (game?.Server is { } session)
             {
