@@ -27,7 +27,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read # the public-api check reads the pull request's current description
     env:
       # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
       # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
@@ -66,9 +65,10 @@ jobs:
         run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
       - name: Seed stale publish files for the packaging regression
         run: dotnet run scripts/tool-pack.cs -- seed
-      # Normal runs take 3-6 minutes; the step timeout bounds a stuck one. The transcript and test results are kept when the
+      # CI runs the two slower, local-shell integration classes in a separate three-OS job. Plain local validate still runs
+      # them. Normal runs take 3-6 minutes; the step timeout bounds a stuck one. The transcript and test results are kept when the
       # step fails or is cancelled (#171), and a test run with no progress for five minutes names its unfinished tests.
-      - run: dotnet run scripts/validate.cs
+      - run: dotnet run scripts/validate.cs -- --skip-ci-shell
         timeout-minutes: 20
       - name: Keep the validation transcript
         if: failure() || cancelled()
@@ -107,9 +107,77 @@ jobs:
           dotnet run scripts/pwsh-startup-stress.cs -- --starts 8 --parallel 4 --guard
           code=0; dotnet run --file tools/dev-loop/dev-loop.cs || code=$?
           if [ "$code" != 4 ]; then echo "::error::dev-loop.cs with no arguments exited $code, not 4 (usage)"; exit 1; fi
+      - name: Save the NuGet package cache
+        if: steps.nuget-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.VT_NUGET_CACHE_PATHS }}
+          key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
+  ci-shell:
+    name: local shell integration (${{ matrix.os }})
+    # These tests start real bash/pwsh processes. They accounted for over half of the toolkit-suite wall time in a local
+    # measurement, so run them beside package validation without dropping any platform or test coverage.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      VT_NUGET_CACHE_PATHS: |
+        ~/.nuget/packages
+        !~/.nuget/packages/valheim.testing*
+        !~/.nuget/packages/valheim.cli*
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VT_NUGET_CACHE_PATHS }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Run the local-shell integration tests
+        run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release -m:1 --filter Category=CiShell --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory artifacts/ci-shell -- RunConfiguration.TreatNoTestsAsError=true
+      - name: Keep shell-test evidence on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-shell-${{ matrix.os }}
+          path: artifacts/ci-shell
+          if-no-files-found: ignore
+          retention-days: 14
+  api-reference:
+    name: API reference and public surface
+    # Independent of the three-OS test/package matrix; the former serial placement added about 45 seconds to its critical path.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read # the public-api check reads the pull request's current description
+    env:
+      VT_NUGET_CACHE_PATHS: |
+        ~/.nuget/packages
+        !~/.nuget/packages/valheim.testing*
+        !~/.nuget/packages/valheim.cli*
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2 # a pull request's merge commit and base, for the public-api check
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Restore the NuGet package cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VT_NUGET_CACHE_PATHS }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - run: dotnet run scripts/bootstrap-cli.cs
       - name: Build candidate API reference
-        if: runner.os == 'Linux'
         run: |
+          dotnet build docs/reference/ValheimTesting.Api.sln -c Release -m:1
           dotnet tool restore
           dotnet run scripts/api-docs.cs
           dotnet run scripts/versioned-api-docs.cs -- archive docs/reference/_site 0.1.0-rc.1 "$GITHUB_SHA" "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz"
@@ -128,7 +196,6 @@ jobs:
       # The committed public-api lists match the builds; a pull request that changes them says why on a line starting
       # "public-api:" in its description, read here rather than from the event, so editing it and re-running the job is enough.
       - name: Public API lists
-        if: runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -166,12 +233,6 @@ jobs:
           dotnet build -c Release src/Valheim.Testing.Game --no-restore -v q
           dotnet run scripts/api-docs.cs -- check
           git diff --exit-code
-      - name: Save the NuGet package cache
-        if: steps.nuget-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
   mod-example:
     name: mod example (published packages)
     # Keep in step with examples/ModWithTests/.github/workflows/tests.yml. A copy outside the checkout leaves this

@@ -207,6 +207,7 @@ internal static class GameHostChecks
 }
 
 // Every local shell this machine has: bash on macOS and Linux, Windows PowerShell on Windows, pwsh wherever it is installed.
+[Trait("Category", "CiShell")]
 public class LocalGameHostShellTests
 {
     public static TheoryData<string> Shells

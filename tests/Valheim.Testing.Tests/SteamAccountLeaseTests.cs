@@ -272,6 +272,7 @@ internal static class LeaseChecks
     });
 }
 
+[Trait("Category", "CiShell")]
 public class LocalLeaseShellTests
 {
     public static TheoryData<string> Shells => LocalGameHostShellTests.Shells;
