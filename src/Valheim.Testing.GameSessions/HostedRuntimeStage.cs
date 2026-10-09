@@ -198,6 +198,7 @@ internal static class HostedRuntimeStage
             if (!selected.TryAdd(file.RelativePath, (local, FileHash.Sha256(local))))
                 throw new ArgumentException("Two selected runtime files have the same target path: " + file.RelativePath, nameof(files));
         }
+        bool explicitlySelectedSettings = selected.ContainsKey(BepInExSettings.RelativePath);
         // Use the existing reviewed package contract, not a hand-repaired source install.
         loaderPackage?.Validate();
         if (loaderPackage != null)
@@ -215,11 +216,13 @@ internal static class HostedRuntimeStage
         // A shared campaign preflight already hashed and inspected this source. Reuse that exact listing, then compare
         // the copied runtime against it: if the source changed before or during the copy, the mismatch is refused.
         var sourceListing = inspectedSource ?? await InspectSourceAsync(host, kind, source, loaderPackage, timeout, cancellation).ConfigureAwait(false);
-        const string settings = "BepInEx/config/BepInEx.cfg";
+        const string settings = BepInExSettings.RelativePath;
         // Clearing config must not discard the source loader's entrypoint settings. An explicit staged
         // config or a reviewed loader package takes precedence over the source file.
-        bool preserveSourceSettings = loaderPackage == null && !selected.ContainsKey(settings) &&
-            sourceListing.Files.ContainsKey(settings);
+        bool preserveSourceSettings = BepInExSettings.Choose(
+            sourceListing.Files.ContainsKey(settings),
+            loaderPackage?.Files.ContainsKey(settings) == true,
+            explicitlySelectedSettings) == BepInExSettingsOrigin.Source;
         string payload = Path.Combine(Path.GetTempPath(), "valheim-host-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(payload);
         bool shipped = false, copied = false;

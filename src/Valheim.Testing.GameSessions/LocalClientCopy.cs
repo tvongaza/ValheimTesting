@@ -139,6 +139,10 @@ internal sealed class LocalClientCopy
         var selection = new List<HostedRuntimeFile>();
         replaced = [];
         config = null;
+        var settingsOrigin = BepInExSettings.Choose(
+            File.Exists(Path.Combine(source, "BepInEx", "config", "BepInEx.cfg")),
+            loader?.Files.ContainsKey(BepInExSettings.RelativePath) == true,
+            explicitExists: false);
         foreach (string folder in new[] { "plugins", "scripts", "config", "patchers" })
         {
             string directory = Path.Combine(source, "BepInEx", folder);
@@ -147,6 +151,8 @@ internal sealed class LocalClientCopy
             {
                 if (FileHash.IsMacMetadata(file)) continue;
                 string relative = Path.GetRelativePath(source, file).Replace('\\', '/');
+                if (relative.Equals(BepInExSettings.RelativePath, StringComparison.OrdinalIgnoreCase) &&
+                    settingsOrigin != BepInExSettingsOrigin.Source) continue;
                 if (loader != null && loader.Files.Keys.Any(path => path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
                 if (folder is "plugins" or "scripts" && file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
                     && (names.Contains(Path.GetFileName(file)) || CliBuildManifest.Plugins(file)?.Any(CliBuildManifest.IsCliPlugin) == true))
