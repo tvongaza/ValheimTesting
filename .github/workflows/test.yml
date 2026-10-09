@@ -55,7 +55,15 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet --info
+      - name: Seed an obsolete CLI package for the local-feed cleanup regression
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p .packages
+          printf 'obsolete CLI package' > .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
       - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Confirm the obsolete CLI package was removed
+        if: runner.os == 'Linux'
+        run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
       # Normal runs take 3-6 minutes; the step timeout bounds a stuck one. The transcript and test results are kept when the
       # step fails or is cancelled (#171), and a test run with no progress for five minutes names its unfinished tests.
       - run: dotnet run scripts/validate.cs
