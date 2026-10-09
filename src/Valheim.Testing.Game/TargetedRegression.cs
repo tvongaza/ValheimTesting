@@ -493,8 +493,8 @@ public sealed class TargetedRegression
             throw new InvalidOperationException($"probe: {env.Probe.File} declares no [BepInPlugin]; a probe is a plugin.");
 
         // A direct regression.json consumer gets the same refusal as valheim-test start, before its large game copy.
-        if (Architecture == "arm64")
-            GameLaunch.RequireClientArchitecture(Game, ClientArchitecture.Arm64,
+        if (Architecture is "arm64" or "x64")
+            GameLaunch.RequireClientArchitecture(Game, Architecture == "arm64" ? ClientArchitecture.Arm64 : ClientArchitecture.X64,
                 LoaderPackage == null ? null : BepInExLoaderPackage.Read(LoaderPackage).Root);
         // The one-shot path makes its own copy rather than using HostedRuntimeStage. Check the signed app here as well:
         // otherwise an old preloader log inside the source bundle becomes a Gatekeeper "damaged" dialog at launch.

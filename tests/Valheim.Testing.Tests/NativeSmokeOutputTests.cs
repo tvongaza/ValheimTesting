@@ -15,6 +15,9 @@ public sealed class NativeSmokeOutputTests
         Assert.Contains("arm64 slice", refusal);
         recipe.Install = native.Root;
         ClientArchitectureChoice.RequireLocal(inventory, recipe, "arm64", null);
+        string x64Refusal = Assert.Throws<InvalidOperationException>(() =>
+            ClientArchitectureChoice.RequireLocal(inventory, recipe, "x64", null)).Message;
+        Assert.Contains("x86_64 slice", x64Refusal);
     }
     [Fact]
     public void StartArchitectureAcceptsOnlyTheTwoSupportedSlices()

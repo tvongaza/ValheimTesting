@@ -76,7 +76,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
                     campaignFile = file; plan = runPlan; clients = bind(runPlan);
                     Assert.Equal(Path.Combine(output, "evidence"), evidence);
                     return Task.FromResult(0);
-                }));
+                }, ClientArchitecture: (_, _, _, _) => { }));
         Assert.Equal(0, result);
         Assert.Equal(Path.Combine(output, "campaign.json"), campaignFile);
         var campaign = JsonDocument.Parse(File.ReadAllText(campaignFile!)).RootElement;
@@ -133,7 +133,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
                     new("client", "Steam identity", "No Steam account is signed in on local."),
                     new("client", "game and loader", "The source install on local's winhttp.dll is Doorstop 4 (file version 4.4.0), which reads only [General] in doorstop_config.ini, but that file is written for Doorstop 3 ([UnityDoorstop])."),
                 ])),
-                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); }));
+                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); },
+                ClientArchitecture: (_, _, _, _) => { }));
         Assert.Equal(3, result);
         Assert.False(ran);
         string refusal = File.ReadAllText(Path.Combine(checkedOutput, "REFUSED.txt"));
@@ -150,7 +151,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
         using (EnvironmentInventory.UseMachine(WithValheim(out _)))
             result = await ServerLoad.RunAsync(Arguments(packagedOutput, "--client-loader-package", package), new ServerLoad.Seams(
                 Inspect: _ => Task.FromResult(new CampaignPreflightReport([new("client", "game and loader", "The reviewed loader package does not match the host platform.")])),
-                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); }));
+                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(0); },
+                ClientArchitecture: (_, _, _, _) => { }));
         Assert.Equal(3, result);
         Assert.False(ran);
         refusal = File.ReadAllText(Path.Combine(packagedOutput, "REFUSED.txt"));

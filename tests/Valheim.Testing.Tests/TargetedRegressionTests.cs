@@ -87,6 +87,19 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(Directory.Exists(runner.Install));
     }
 
+    [Fact] public void AnX64RegressionWithAnArm64OnlyLoaderStopsBeforeTheDisposableCopy()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        using var native = ClientLaunchTests.Install.Mac(packDoorstop: false, arm64Doorstop: true, core: new Version(25, 3, 4));
+        var inventory = _rig.Inventory();
+        inventory.Environments[0].Install = native.Root;
+        inventory.Environments[0].Architecture = "x64";
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: inventory) { SaveDirectory = _rig.Save };
+
+        Assert.Contains("x86_64 slice", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
+        Assert.False(Directory.Exists(runner.Install));
+    }
+
     [Fact] public void ARejectedMacCopyIsRemovedBeforeAnyClientLaunch()
     {
         if (!OperatingSystem.IsMacOS()) return;

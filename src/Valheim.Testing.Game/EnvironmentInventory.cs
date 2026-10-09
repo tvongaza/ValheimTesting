@@ -188,7 +188,7 @@ public sealed class EnvironmentInventory
             if (string.IsNullOrEmpty(recipe.Architecture))
             {
                 recipe.Architecture = recipe.Roles.Contains("client")
-                    ? DefaultClientArchitecture(machine.Platform, machine.OsArchitecture) : "x64";
+                    ? DefaultClientArchitecture(machine.Platform, machine.OsArchitecture) : "";
                 if (recipe.Roles.Contains("client")) assumed.Add("client architecture " + recipe.Architecture);
             }
             if (string.IsNullOrEmpty(recipe.Install))
@@ -261,9 +261,9 @@ public sealed class EnvironmentInventory
             if (!NamePattern.IsMatch(recipe.Name ?? "")) errors.Add("Invalid environment name: " + recipe.Name);
             if (recipe.Host == null || !Hosts.TryGetValue(recipe.Host, out var host))
             { errors.Add($"Environment {recipe.Name} names unknown host {recipe.Host}."); continue; }
-            if (string.IsNullOrEmpty(recipe.Architecture))
-                recipe.Architecture = host.Kind == "local" && recipe.Roles.Contains("client")
-                    ? DefaultClientArchitecture(host.Platform, RuntimeInformation.OSArchitecture) : "x64";
+            if (string.IsNullOrEmpty(recipe.Architecture) && recipe.Roles.Contains("client"))
+                recipe.Architecture = host.Kind == "local"
+                    ? DefaultClientArchitecture(host.Platform, ThisMachine.OsArchitecture) : "x64";
             if (recipe.Roles is not (["server"] or ["client"]))
                 errors.Add($"Environment {recipe.Name} needs roles [\"server\"] or [\"client\"]: a dedicated server recipe cannot also be a client process.");
             if (!host.IsAbsolutePath(recipe.Install) || !host.IsAbsolutePath(recipe.Runtime))
@@ -272,9 +272,10 @@ public sealed class EnvironmentInventory
             if (recipe.CliPort is < 1024 or > 65535 || recipe.LocalCliPort is < 0 or > 65535)
                 errors.Add($"Environment {recipe.Name} needs valid ValheimCLI ports.");
             bool serves = recipe.Roles.Contains("server");
-            if (recipe.Architecture is not ("x64" or "arm64") ||
-                (recipe.Architecture == "arm64" && (serves || host.Platform != "macos")))
-                errors.Add($"Environment {recipe.Name}: architecture is x64, or arm64 for a macOS client only.");
+            bool validArchitecture = serves ? recipe.Architecture.Length == 0 :
+                (recipe.Architecture is "x64" or "arm64") && (recipe.Architecture != "arm64" || host.Platform == "macos");
+            if (!validArchitecture)
+                errors.Add($"Environment {recipe.Name}: architecture is client-only: x64, or arm64 for a macOS client.");
             if (serves ? recipe.GamePort is < 1024 or > 65534 : recipe.GamePort != 0)
                 errors.Add($"Environment {recipe.Name} needs a gamePort only when it serves a world.");
             foreach (string role in recipe.Roles)

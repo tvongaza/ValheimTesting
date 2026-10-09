@@ -74,12 +74,14 @@ internal static class MacBundleInspection
         # codesign names files by their physical path (/tmp is /private/tmp), so compare against that.
         app=$(cd "$app" && pwd -P) || { echo "VT-BUNDLE none"; exit 0; }
         b64() { base64 | tr -d '\n'; }
-        added=""; other=""
+        added=""; other=""; initial_valid=0
         if ! report=$(codesign --verify --deep --strict -vvvv "$app" 2>&1); then
           added=$(printf '%s\n' "$report" | sed -n 's/^file added: //p')
           # Anything but added files (a changed or missing sealed file, a nested component's signature) no repair can fix.
           other=$(printf '%s\n' "$report" | grep -vE '^(file added: |--prepared:|--validated:)|: a sealed resource is missing or invalid$' | grep . || true)
           [ -n "$added" ] || [ -n "$other" ] || other=$report
+        else
+          initial_valid=1
         fi
         if [ -n "$other" ]; then echo "VT-BUNDLE broken $(printf '%s\n' "$other" | grep -c .) $(printf '%s\n' "$other" | head -20 | b64)"; exit 0; fi
         removed=0
@@ -98,7 +100,14 @@ internal static class MacBundleInspection
           while IFS= read -r file; do relative+="${file#"$app"/}"$'\n'; done <<< "$added"
           echo "VT-BUNDLE fixable $(printf '%s\n' "$added" | grep -c .) $(printf '%s' "$relative" | head -20 | b64)"; exit 0
         fi
-        if verify=$(codesign --verify --deep --strict "$app" 2>&1) && assess=$(spctl -a -t exec -vv "$app" 2>&1); then
+        # The first verification already proved an unchanged bundle. Recheck only after removing added files.
+        verify=""
+        if [ "$initial_valid" -eq 0 ] || [ "$removed" -ne 0 ]; then
+          if ! verify=$(codesign --verify --deep --strict "$app" 2>&1); then
+            echo "VT-BUNDLE rejected $removed $(printf '%s' "$verify" | head -20 | b64)"; exit 0
+          fi
+        fi
+        if assess=$(spctl -a -t exec -vv "$app" 2>&1); then
           echo "VT-BUNDLE accepted $removed $(printf '%s' "${assess:-}" | b64)"
         else
           echo "VT-BUNDLE rejected $removed $(printf '%s\n%s\n' "${verify:-}" "${assess:-}" | head -20 | b64)"

@@ -76,10 +76,9 @@ internal static class EnvCommand
             catch (Exception failure) when (failure is InteractiveSessionException or HostOperationException)
             { problems.Add(new CampaignPreflightProblem("this-machine", "client desktop", failure.Message)); }
         }
-        foreach (var recipe in inventory.Environments.Where(recipe => recipe.Roles.Contains("client") &&
+        foreach (var recipe in inventory.Environments.Where(recipe => preflight && recipe.Roles.Contains("client") &&
             inventory.Hosts[recipe.Host].Kind == "local" && inventory.Hosts[recipe.Host].Platform == "macos"))
         {
-            if (!preflight) continue;
             try
             {
                 string? loader = recipe.LoaderPackage == null ? null : BepInExLoaderPackage.Read(recipe.LoaderPackage).Root;

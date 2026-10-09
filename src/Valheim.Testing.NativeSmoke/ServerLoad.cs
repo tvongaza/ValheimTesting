@@ -41,7 +41,8 @@ internal static class ServerLoad
         Func<string, ServerRunPlan, Func<ServerRunPlan, IReadOnlyDictionary<string, ClientRunPlan>>, string, PinnedServerRunOptions<ServerRunPlan>, Task<int>>? Campaign = null,
         // The shipped-loader decision reads the real install on this machine, so it is on only for a real run (no seams)
         // and for a test that passes one.
-        Func<string, string, ShippedLoader.Choice?>? Loader = null);
+        Func<string, string, ShippedLoader.Choice?>? Loader = null,
+        Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null);
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
@@ -199,16 +200,16 @@ internal static class ServerLoad
         foreach (string line in choice.Inventory.Detected) Console.WriteLine("detected: " + line);
         var server = choice.Server;
         Console.WriteLine($"server: {server.Name} on {server.Host} ({choice.ServerReason}): install {server.Install}; ValheimCLI port {server.CliPort}, game port {server.GamePort}");
+        string? clientArchitecture = choice.Client is { } selectedClient
+            ? ClientArchitectureChoice.Select(parsed.Options.GetValueOrDefault("--client-architecture"), selectedClient) : null;
         Console.WriteLine(choice.Client is { } chosen
-            ? $"client: {chosen.Name} on {chosen.Host} ({choice.ClientReason}): install {chosen.Install}; ValheimCLI port {chosen.CliPort}; joins {choice.Join}; architecture {ClientArchitectureChoice.Select(parsed.Options.GetValueOrDefault("--client-architecture"), chosen)}"
+            ? $"client: {chosen.Name} on {chosen.Host} ({choice.ClientReason}): install {chosen.Install}; ValheimCLI port {chosen.CliPort}; joins {choice.Join}; architecture {clientArchitecture}"
             : "client: none (--server-only)");
 
         string serverInstall = server.Install;
         // A loader package given, or the chosen environment's own (which the campaign applies too); else the install's BepInEx.
         var serverLoader = parsed.Options.TryGetValue("--loader-package", out string? serverLoaderFile) ? Path.GetFullPath(serverLoaderFile) : server.LoaderPackage;
         var clientLoader = parsed.Options.TryGetValue("--client-loader-package", out string? clientLoaderFile) ? Path.GetFullPath(clientLoaderFile) : choice.Client?.LoaderPackage;
-        string? clientArchitecture = choice.Client is { } selectedClient
-            ? ClientArchitectureChoice.Select(parsed.Options.GetValueOrDefault("--client-architecture"), selectedClient) : null;
         // An install on this machine whose own Doorstop proxy and configuration do not match (a mod manager swapped the proxy)
         // gets the BepInExPack this tool ships in its disposable copy, with one printed line; every other loader fault still refuses.
         var shipped = seams.Loader ?? ((_, _) => null);
@@ -218,7 +219,10 @@ internal static class ServerLoad
         serverLoader ??= serverAuto?.Manifest;
         clientLoader ??= clientAuto?.Manifest;
         if (choice.Client is { } architectureClient)
-            ClientArchitectureChoice.RequireLocal(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
+        {
+            if (seams.ClientArchitecture is { } check) check(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
+            else ClientArchitectureChoice.RequireLocal(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
+        }
         string core = Path.Combine(serverLoader == null ? serverInstall : BepInExLoaderPackage.Read(serverLoader).Root, InstallPins.CoreDirectory);
         if (!Directory.Exists(core))
             throw new DirectoryNotFoundException($"The server install {serverInstall} has no BepInEx ({InstallPins.CoreDirectory}). Install BepInExPack_Valheim into it, " +

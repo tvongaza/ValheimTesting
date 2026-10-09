@@ -63,6 +63,7 @@ public sealed class EnvironmentInventoryTests : IDisposable
         client.Runtime = "/tmp/runs";
         client.Architecture = "arm64";
         inventory.Validate(_root);
+        Assert.Equal("", inventory.Environments.Single(recipe => recipe.Name == "server-pc").Architecture);
         Assert.Equal("arm64", inventory.Resolve(Campaign()).Environment.Clients["client-b"].Architecture);
         client.Architecture = "native";
         Assert.Contains("architecture", Assert.Throws<ArgumentException>(() => inventory.Validate(_root)).Message);
