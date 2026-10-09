@@ -301,7 +301,10 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(Directory.Exists(host.Local(runtime)));
     }
 
-    [Fact] public async Task ReviewedLoaderReplacesAnIncoherentSourceOnlyInTheDisposableRuntime()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReviewedLoaderReplacesAnIncoherentSourceOnlyInTheDisposableRuntime(bool packageHasSettings)
     {
         var host = new FakeServerHost("windows-client", Mirror, windows: true);
         const string source = @"C:\game\client", runtime = @"C:\runs\loader\runtime", staging = @"C:\runs\loader\staging";
@@ -317,9 +320,12 @@ public sealed class HostedRuntimeStageTests : IDisposable
         string sourceConfig = Path.Combine(install, "BepInEx", "config", "BepInEx.cfg");
         string packageConfig = Path.Combine(packageRoot, "BepInEx", "config", "BepInEx.cfg");
         Directory.CreateDirectory(Path.GetDirectoryName(sourceConfig)!);
-        Directory.CreateDirectory(Path.GetDirectoryName(packageConfig)!);
         File.WriteAllText(sourceConfig, "source settings");
-        File.WriteAllText(packageConfig, "package settings");
+        if (packageHasSettings)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(packageConfig)!);
+            File.WriteAllText(packageConfig, "package settings");
+        }
         var package = BepInExLoaderPackage.Capture(packageRoot, "test-loader", "1");
         File.WriteAllText(Path.Combine(install, "winhttp.dll"), "target_assembly");
         File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), "[General]\nenabled=true\ntargetAssembly=BepInEx/core/BepInEx.Preloader.dll\n");
@@ -334,7 +340,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
         var listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
             files, TimeSpan.FromSeconds(30), loaderPackage: package);
         foreach (var file in package.Files) Assert.Equal(file.Value, listing.Files[file.Key]);
-        Assert.Equal(File.ReadAllBytes(packageConfig), File.ReadAllBytes(Path.Combine(host.Local(runtime), "BepInEx", "config", "BepInEx.cfg")));
+        Assert.Equal(File.ReadAllBytes(packageHasSettings ? packageConfig : sourceConfig),
+            File.ReadAllBytes(Path.Combine(host.Local(runtime), "BepInEx", "config", "BepInEx.cfg")));
         Assert.False(listing.Files.ContainsKey("BepInEx/core/stale.dll"));
         Assert.Equal(package.Loader, HostInstall.Pins(listing).Loader);
         WorldFixture.Verify(install, before);
