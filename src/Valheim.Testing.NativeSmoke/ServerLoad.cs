@@ -16,7 +16,7 @@ using Valheim.Testing.GameSessions;
 internal static class ServerLoad
 {
     internal const string Usage = "valheim-test server-load [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
-        "[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--loader-package FILE] [--client-loader-package FILE] " +
+        "[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--loader-package FILE] [--client-loader-package FILE] " +
         "[--adapter DLL] [--cli-manifest FILE --cli-files DIR] [--search-root DIR ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
     private static readonly string[] Session = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"];
@@ -201,6 +201,12 @@ internal static class ServerLoad
             : "client: none (--server-only)");
 
         string serverInstall = server.Install;
+        string? bakeDestination = parsed.Options.TryGetValue("--bake-fixture", out string? requestedBake)
+            ? Path.GetFullPath(requestedBake) : null;
+        string? fixtureSource = parsed.Options.TryGetValue("--world-fixture", out string? requestedFixture)
+            ? Path.GetFullPath(requestedFixture) : null;
+        if (bakeDestination != null)
+            FixtureBake.RefuseOutput(bakeDestination, new[] { output, serverInstall, choice.Client?.Install, fixtureSource }.OfType<string>().ToArray());
         // A loader package given, or the chosen environment's own (which the campaign applies too); else the install's BepInEx.
         var (serverLoader, serverAuto) = SelectServerLoader(parsed, server, seams.Loader);
         if (seams.FrozenServerLoader is { } frozen)
@@ -237,9 +243,19 @@ internal static class ServerLoad
             new[] { server, choice.Client }.OfType<EnvironmentRecipe>());
         choice = choice with { InventoryFile = selectedInventory };
 
+        var required = choice.Client == null ? new List<string> { "valheim.session/state" } : [.. Session];
+        if (bakeDestination != null) required.Add("valheim.session/save");
+        // A user-supplied command can be a legacy command (such as cli_zdos_at) that the
+        // capability manifest cannot name. Stage both pinned observation packs for scripted
+        // server commands so the one-shot run does not fail after launch for a missing pack.
+        if (parsed.Options.ContainsKey("--before-save-command") || parsed.Options.ContainsKey("--assert-command"))
+        {
+            required.Add("valheim.world/terrain");
+            required.Add("valheim.observe/zones");
+        }
         var dependencies = NativeDependencyResolver.Resolve(SmokeDependencyInputs.Request(parsed.Mods, serverInstall, core,
             cliManifest, cliFiles, parsed.Roots, parsed.Optional,
-            choice.Client == null ? ["valheim.session/state"] : Session));
+            required));
         Directory.CreateDirectory(output);
         string serverLock = Path.Combine(output, "dependencies.lock.json");
         dependencies.Write(serverLock);
@@ -278,12 +294,12 @@ internal static class ServerLoad
         if (selectedGuids.Count == 0) throw new InvalidDataException("No deliberately selected server plugin GUID was found: each --mod must declare a BepInEx plugin.");
         if (selectedGuids.Any(guid => guid.Contains(';'))) throw new InvalidDataException("A selected server plugin GUID contains the session list separator.");
 
-        // The packaged world and, for the client, the packaged disposable character under a fresh file name.
-        string worldRoot = Path.Combine(output, "world-source");
-        DefaultSmokeWorld.PrepareServerSaveRoot(worldRoot);
+        // A pinned copy of the chosen world; only the copy can be changed by this run.
+        var fixture = FixtureBake.Prepare(fixtureSource, output);
+        string worldUid = fixture.Identity.UidText, worldName = fixture.Identity.Name;
         var campaign = new HostedCampaignManifest
         {
-            Inventory = choice.InventoryFile ?? "", World = Path.Combine(worldRoot, "worlds_local"), WorldUid = DefaultSmokeWorld.Uid,
+            Inventory = choice.InventoryFile ?? "", World = Path.Combine(output, "world-source", "worlds_local"), WorldUid = worldUid,
             Join = choice.Join ?? "127.0.0.1:" + server.GamePort.ToString(CultureInfo.InvariantCulture),
             Server = new HostedCampaignRole { DependencyLock = serverLock, EnvironmentCandidates = [server.Name], LoaderPackage = serverLoader, Files = files },
         };
@@ -319,8 +335,8 @@ internal static class ServerLoad
             {
                 "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux,
             }),
-            Arguments = ["-batchmode", "-nographics", "-name", DefaultSmokeWorld.Name, "-port", server.GamePort.ToString(CultureInfo.InvariantCulture),
-                "-world", DefaultSmokeWorld.Name, "-password", password, "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"],
+            Arguments = ["-batchmode", "-nographics", "-name", worldName, "-port", server.GamePort.ToString(CultureInfo.InvariantCulture),
+                "-world", worldName, "-password", password, "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"],
             Environment = new Dictionary<string, string> { [SmokeSessionContract.SelectedGuidsVariable] = string.Join(";", selectedGuids) },
             Port = server.CliPort,
             QuitSeconds = 20, // a disposable load smoke: no save-on-quit or crossplay retirement is asserted
@@ -377,42 +393,68 @@ internal static class ServerLoad
                         SmokeInputResolver.RecordLoader(record, "client", clientLoader, clientAuto);
                         record["modSelection"] = parsed.ModSelection;
                     },
-                    Scenario = (session, plan) => Scenario(session, clientPlan, clock, parsed.Switches.Contains("--hold")),
+                    Scenario = (session, plan) => Scenario(session, clientPlan, clock, parsed.Switches.Contains("--hold"), worldUid,
+                        bakeDestination != null, parsed.Options.GetValueOrDefault("--before-save-command"), parsed.Options.GetValueOrDefault("--before-save-line"),
+                        parsed.Options.GetValueOrDefault("--assert-command"), parsed.Options.GetValueOrDefault("--assert-line")),
                 }).ConfigureAwait(false);
         }
         finally
         {
             if (clientPlan != null) Environment.SetEnvironmentVariable(SmokeSessionContract.PasswordVariable, previousPassword);
         }
+        if (result == 0 && bakeDestination != null)
+        {
+            try
+            {
+                FixtureBake.Export(Path.Combine(output, "evidence"), bakeDestination, fixture, parsed.Mods, serverLock);
+                Console.WriteLine("Baked fixture: " + bakeDestination);
+            }
+            catch (Exception error) when (error is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or JsonException)
+            {
+                Console.Error.WriteLine("Fixture export failed after the game run: " + error.Message);
+                // The game report is already final: keep the post-run export failure beside it.
+                try { File.WriteAllText(Path.Combine(output, "evidence", "fixture-export-failed.txt"), error + "\n"); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                result = 1;
+            }
+        }
         Finish(result, parsed.Mods.Count, clientPlan != null, clock, output);
         return result;
     }
 
     // Loaded with the packaged world, joinable, and (with a client) a clean client reading that world.
-    private static Task Scenario(GameSession session, ClientRunPlan? client, Stopwatch clock, bool hold)
+    private static Task Scenario(GameSession session, ClientRunPlan? client, Stopwatch clock, bool hold, string worldUid, bool bake,
+        string? beforeSaveCommand, string? beforeSaveLine, string? assertCommand, string? assertLine)
     {
         var server = session.Server!;
         session.Report.Step("selected server mods loaded and world identity matches", () =>
         {
             var worlds = server.Game.Execute("cli_world").Output.Select(Expectations.ParseWorld).OfType<WorldFacts>().ToArray();
-            if (worlds.Length != 1 || worlds[0].Uid != DefaultSmokeWorld.Uid)
-                throw new InvalidDataException("The dedicated server did not load the packaged smoke world UID.");
+            if (worlds.Length != 1 || worlds[0].Uid != worldUid)
+                throw new InvalidDataException("The dedicated server did not load the chosen fixture world UID.");
         });
         session.Report.Provenance["firstModLoadedSecondsFromCommand"] = clock.Elapsed.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture);
         session.Report.Step("dedicated server accepts a game connection", () => server.WaitUntilJoinable(server.Game));
+        if (beforeSaveCommand != null)
+            session.Report.Step("one pinned mod command completes before the fixture save", () =>
+                server.Game.Execute(beforeSaveCommand).RequireLine(beforeSaveLine!, "The mod did not confirm its one-time bake command"));
+        if (assertCommand != null)
+            session.Report.Step("server observation matches the declared assertion", () =>
+                server.Game.Execute(assertCommand).RequireLine(assertLine!, "The server observation did not match the declared assertion"));
         if (client != null)
         {
             ClientSession? opened = null;
             new ClientRounds
             {
-                Client = client, WorldUid = DefaultSmokeWorld.Uid, Report = session.Report, Output = session.Output,
+                Client = client, WorldUid = worldUid, Report = session.Report, Output = session.Output,
                 OwnedServer = server, Rounds = ["first"], ProtectPlayer = false, Cancellation = session.Cancellation,
             }.Run(server.Game, () => opened = session.OpenClient(client), round =>
             {
                 round.Step("clean client can read the joined world", () =>
                 {
                     var state = new SessionControl(round.Client).Read();
-                    if (!state.WorldReady || !state.PlayerReady || state.WorldUid != DefaultSmokeWorld.Uid)
+                    if (!state.WorldReady || !state.PlayerReady || state.WorldUid != worldUid)
                         throw new InvalidDataException("The clean client has no ready player in the pinned world.");
                 });
                 if (hold)
@@ -429,6 +471,10 @@ internal static class ServerLoad
                 ForegroundHold.HoldAsync(session.Report.Provenance["runId"], session.Output, session.Cancellation,
                     [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing."))], client: false)
                     .GetAwaiter().GetResult());
+        if (bake)
+            session.Report.Step("confirm an advancing save before exporting the fixture", () =>
+                session.Report.Provenance["bakeSaveNumber"] = new SessionControl(server.Game)
+                    .Save(worldUid, TimeSpan.FromSeconds(90)).ToString(CultureInfo.InvariantCulture));
         return Task.CompletedTask;
     }
 

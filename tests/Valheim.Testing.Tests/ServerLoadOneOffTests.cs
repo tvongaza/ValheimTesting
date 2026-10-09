@@ -105,6 +105,63 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("--hold", parsed!.Switches);
     }
 
+    [Fact]
+    public async Task ServerOnlyCanPrepareACustomPinnedWorldWithoutChangingItsSource()
+    {
+        string source = Path.Combine(_rig.Root, "chosen-world");
+        DefaultSmokeWorld.PrepareServerSaveRoot(source);
+        var hashes = WorldFixture.Manifest(Path.Combine(source, "worlds_local"));
+        string output = Path.Combine(_rig.Root, "custom-world-run");
+        Assert.Equal(0, await ServerLoad.RunAsync(Arguments(output, "--server-only", "--world-fixture", source,
+            "--preflight-only"), new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready))));
+        var campaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "campaign.json"))).RootElement;
+        Assert.Equal(DefaultSmokeWorld.Uid, campaign.GetProperty("worldUid").GetString());
+        Assert.Equal(Path.Combine(output, "world-source", "worlds_local"), campaign.GetProperty("world").GetString());
+        WorldFixture.Verify(Path.Combine(source, "worlds_local"), hashes);
+        WorldFixture.Verify(Path.Combine(output, "world-source", "worlds_local"), hashes);
+    }
+
+    [Fact]
+    public async Task BakeRefusesAnExistingTargetBeforeItPreparesAnything()
+    {
+        string output = Path.Combine(_rig.Root, "bake-refusal-run");
+        string baked = Path.Combine(_rig.Root, "existing-bake");
+        Directory.CreateDirectory(baked);
+        Assert.Equal(3, await ServerLoad.RunAsync(Arguments(output, "--server-only", "--bake-fixture", baked,
+            "--assert-command", "cli_world", "--assert-line", "WORLD"),
+            new ServerLoad.Seams(Inspect: _ => throw new Exception("preflight must not run"))));
+        Assert.False(Path.Exists(output));
+        Assert.True(Directory.Exists(baked));
+    }
+
+    [Fact]
+    public void BakeRequiresAnExplicitGeneratedStateAssertion()
+    {
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--server-only", "--bake-fixture", "new-fixture"], out _, out string error));
+        Assert.Contains("--assert-command", error);
+        Assert.True(ServerLoad.TryRead(["--mod", "mod.dll", "--server-only", "--bake-fixture", "new-fixture",
+            "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO wood_pole2"], out _, out error), error);
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--server-only", "--bake-fixture", "new-fixture",
+            "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", " "], out _, out error));
+        Assert.Contains("Option needs a value: --assert-line", error);
+    }
+
+    [Fact]
+    public async Task ScriptedServerObservationRequiresThePinnedObservationPacksBeforeLaunch()
+    {
+        string output = Path.Combine(_rig.Root, "missing-observation-pack");
+        bool launched = false;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only",
+            "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO wood_pole2"),
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+                Campaign: (_, _, _, _, _) => { launched = true; return Task.FromResult(0); }));
+        Assert.Equal(3, result);
+        Assert.False(launched);
+        string refusal = File.ReadAllText(Path.Combine(output, "REFUSED.txt"));
+        Assert.Contains("valheim.world/terrain", refusal);
+        Assert.Contains("valheim.observe/zones", refusal);
+    }
+
     [Fact] public async Task TheDefaultIsAServerAndOneCleanClientAsADerivedCampaign()
     {
         string output = Path.Combine(_rig.Root, "one-off");
