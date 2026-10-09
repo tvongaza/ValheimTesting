@@ -102,10 +102,9 @@ jobs:
         run: |
           dotnet tool restore
           dotnet run scripts/api-docs.cs
-          python3 -m unittest discover -s tests/tools -p test_versioned_api_docs.py
-          python3 scripts/versioned-api-docs.py archive docs/reference/_site 0.1.0-rc.1 "$GITHUB_SHA" "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz"
+          dotnet run scripts/versioned-api-docs.cs -- archive docs/reference/_site 0.1.0-rc.1 "$GITHUB_SHA" "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz"
           sha=$(sha256sum "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz" | cut -d ' ' -f 1)
-          python3 scripts/versioned-api-docs.py install "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz" "$sha" 0.1.0-rc.1 "$RUNNER_TEMP/api-site"
+          dotnet run scripts/versioned-api-docs.cs -- install "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz" "$sha" 0.1.0-rc.1 "$RUNNER_TEMP/api-site"
       # The committed public-api lists match the builds; a pull request that changes them says why on a line starting
       # "public-api:" in its description, read here rather than from the event, so editing it and re-running the job is enough.
       - name: Public API lists

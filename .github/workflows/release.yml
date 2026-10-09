@@ -60,14 +60,14 @@ jobs:
       # The snapshot is built from this tag's XML/source, before any package is pushed.
       - name: Build versioned API reference before publication
         run: |
-          version=$(python3 scripts/versioned-api-docs.py version release/*.nupkg)
+          version=$(dotnet run scripts/versioned-api-docs.cs -- version release/*.nupkg)
           if [ -z "$version" ]; then
             echo "No coordinated 0.1 RC/final version; current preview docs remain on Pages."
             exit 0
           fi
           dotnet tool restore
           VALHEIM_DOCS_RELEASE_VERSION="$version" dotnet run scripts/api-docs.cs
-          python3 scripts/versioned-api-docs.py archive docs/reference/_site "$version" "$GITHUB_SHA" "release/api-reference-$version.tgz"
+          dotnet run scripts/versioned-api-docs.cs -- archive docs/reference/_site "$version" "$GITHUB_SHA" "release/api-reference-$version.tgz"
       # Before the push, so "new" means this run publishes it. A version already on NuGet.org is skipped by the
       # push, and its package here is a rebuild with different bytes, so it is not attached to the GitHub
       # release. The exact package URL answers at once; the search index is not consulted.
